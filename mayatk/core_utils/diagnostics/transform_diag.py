@@ -1,12 +1,14 @@
 # !/usr/bin/python
 # coding=utf-8
 from __future__ import annotations
-import logging
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError:
-    pass
+    cmds = None
+
+import logging
+
 
 from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.node_utils._node_utils import NodeUtils
@@ -24,14 +26,14 @@ class TransformDiagnostics:
             dry_run: If True, only reports what would be fixed without making changes.
         """
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True) or []
 
-        objects = pm.ls(objects, transforms=True)
+        objects = cmds.ls(objects, transforms=True)
 
         fixed_objects = []
         for obj in objects:
             # Check for shear
-            shear = pm.xform(obj, q=True, shear=True)
+            shear = cmds.xform(obj, q=True, shear=True)
             # shear returns [xy, xz, yz]
             if any(abs(s) > 1e-6 for s in shear):
                 print(f"Fixing non-orthogonal axes on {obj} (Shear: {shear})")
@@ -47,17 +49,17 @@ class TransformDiagnostics:
                             f"Object {obj} is an instance. Uninstancing before freezing."
                         )
                         # Uninstance by duplicating and replacing
-                        orig_name = obj.name()
-                        parent = obj.getParent()
-                        dup = pm.duplicate(obj)[0]
+                        orig_name = obj.split("|")[-1]
+                        parents = cmds.listRelatives(obj, parent=True, fullPath=True)
+                        parent = parents[0] if parents else None
+                        dup = cmds.duplicate(obj)[0]
                         # Move dup to same parent
                         if parent:
-                            pm.parent(dup, parent)
+                            cmds.parent(dup, parent)
                         # Delete original
-                        pm.delete(obj)
+                        cmds.delete(obj)
                         # Rename dup
-                        dup.rename(orig_name)
-                        obj = dup
+                        obj = cmds.rename(dup, orig_name)
                         print(f"Uninstanced to {obj}")
 
                     # Freezing transforms (especially rotation and scale) bakes the shear
@@ -67,14 +69,14 @@ class TransformDiagnostics:
                     )
 
                     # Verify if shear is gone
-                    new_shear = pm.xform(obj, q=True, shear=True)
+                    new_shear = cmds.xform(obj, q=True, shear=True)
                     if any(abs(s) > 1e-6 for s in new_shear):
                         print(
                             f"Warning: freeze_transforms failed to fix shear on {obj}. Remaining: {new_shear}"
                         )
                         print("Attempting direct makeIdentity...")
                         try:
-                            pm.makeIdentity(obj, apply=True, t=1, r=1, s=1, n=0, pn=1)
+                            cmds.makeIdentity(obj, apply=True, t=1, r=1, s=1, n=0, pn=1)
                             print("Direct makeIdentity succeeded.")
                             fixed_objects.append(obj)
                         except Exception as e:

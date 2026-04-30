@@ -101,13 +101,14 @@ class MayaUiHandler(UiHandler):
             tags={"maya", "menu"},
             overwrite=overwrite,
             add_footer=False,
+            restore_window_size=False,
             parent=maya_window,
         )
 
-        # Force floating behavior.
-        # When a QMainWindow has a parent, Qt treats it as an embedded child by default.
-        # We must set the Window flag to keep it a floating tool window.
-        ui.setWindowFlags(self.sb.QtCore.Qt.Window)
+        # Add Window flag without clobbering anything MainWindow already set.
+        # When a QMainWindow has a parent, Qt treats it as an embedded child;
+        # the Window flag keeps it a floating tool window.
+        ui.set_flags(Window=True)
 
         if header:
             ui.header = self.sb.registered_widgets.Header()
@@ -126,5 +127,9 @@ class MayaUiHandler(UiHandler):
         # Maya native menus don't have the 'mayatk' tag, so they get the
         # default pin button from DEFAULT_STYLE.
         self.apply_styles(ui)
+
+        # Menu is fully populated (synchronous in get_menu); lock the
+        # window to exact content size before it is ever shown.
+        menu_widget.fit_to_window()
 
         return ui

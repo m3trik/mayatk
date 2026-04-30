@@ -22,6 +22,7 @@ if mayatk_dir not in sys.path:
 
 try:
     import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError as error:
     print(__file__, error)
 
@@ -37,6 +38,7 @@ GameShader = mtk.GameShader
 import logging
 
 
+import maya.mel as mel
 class ListLogHandler(logging.Handler):
     """Log handler that appends records to a list."""
 
@@ -47,6 +49,15 @@ class ListLogHandler(logging.Handler):
     def emit(self, record):
         msg = self.format(record)
         self.log_list.append(msg)
+
+
+def _write_test_image(path: str, color=(128, 128, 128)) -> str:
+    """Write a 16x16 RGBA image at *path*. Format inferred from extension."""
+    from PIL import Image
+
+    img = Image.new("RGBA", (16, 16), color + (255,))
+    img.save(path)
+    return path
 
 
 class QuickTestCase(unittest.TestCase):
@@ -61,10 +72,13 @@ class QuickTestCase(unittest.TestCase):
         # Capture logs
         self.log_handler = ListLogHandler(self.test_messages)
         self.shader.logger.addHandler(self.log_handler)
-        print(f"DEBUG: Attached handler to logger: {self.shader.logger.name}")
+        self._tmp_dir = tempfile.mkdtemp(prefix="gs_test_")
 
     def tearDown(self):
         self.shader.logger.removeHandler(self.log_handler)
+        import shutil
+
+        shutil.rmtree(self._tmp_dir, ignore_errors=True)
 
     def _test_callback(self, msg, progress=None):
         # Legacy support if needed, but prefer logs
@@ -143,8 +157,29 @@ class GameShaderLogicTest(QuickTestCase):
         self.assertNotIn("model_Metallic.png", result)
 
     def test_filter_metallic_roughness_combine(self):
-        """Test combining metallic and roughness maps."""
-        self.skipTest("Combined map creation not fully implemented")
+        """Combine separate Metallic + Roughness maps into MetallicSmoothness."""
+        metallic = _write_test_image(
+            os.path.join(self._tmp_dir, "model_Metallic.png"), (200, 200, 200)
+        )
+        roughness = _write_test_image(
+            os.path.join(self._tmp_dir, "model_Roughness.png"), (50, 50, 50)
+        )
+        result = self.shader.filter_for_correct_metallic_map(
+            [metallic, roughness],
+            use_metallic_smoothness=True,
+            output_extension="png",
+        )
+
+        # Original split maps are dropped, combined map is added.
+        self.assertFalse(any(p.endswith("Metallic.png") for p in result))
+        self.assertFalse(any(p.endswith("Roughness.png") for p in result))
+        combined = next(
+            (p for p in result if p.endswith("MetallicSmoothness.png")), None
+        )
+        self.assertIsNotNone(
+            combined, f"Combined map missing in result: {result}"
+        )
+        self.assertTrue(os.path.isfile(combined), "Combined map not on disk")
 
     def test_filter_remove_smoothness_maps(self):
         """Test removal of smoothness maps when not using metallic smoothness."""
@@ -160,13 +195,31 @@ class GameShaderLogicTest(QuickTestCase):
         self.assertNotIn("model_Smoothness.png", result)
         self.assertIn("model_Metallic.png", result)
 
+    def _combine_with_extension(self, ext: str) -> str:
+        metallic = _write_test_image(
+            os.path.join(self._tmp_dir, f"e_{ext}_Metallic.png"), (200, 200, 200)
+        )
+        roughness = _write_test_image(
+            os.path.join(self._tmp_dir, f"e_{ext}_Roughness.png"), (50, 50, 50)
+        )
+        result = self.shader.filter_for_correct_metallic_map(
+            [metallic, roughness],
+            use_metallic_smoothness=True,
+            output_extension=ext,
+        )
+        return next((p for p in result if "MetallicSmoothness" in p), "")
+
     def test_output_extension_jpg(self):
-        """Test that JPG extension is used correctly."""
-        self.skipTest("Combined map creation not fully implemented")
+        """Combined map honours the JPG output extension."""
+        combined = self._combine_with_extension("jpg")
+        self.assertTrue(combined.endswith(".jpg"), f"got {combined!r}")
+        self.assertTrue(os.path.isfile(combined))
 
     def test_output_extension_tga(self):
-        """Test that TGA extension is used correctly."""
-        self.skipTest("Combined map creation not fully implemented")
+        """Combined map honours the TGA output extension."""
+        combined = self._combine_with_extension("tga")
+        self.assertTrue(combined.endswith(".tga"), f"got {combined!r}")
+        self.assertTrue(os.path.isfile(combined))
 
     # -------------------------------------------------------------------------
     # Test Base Color Map Filtering
@@ -188,8 +241,31 @@ class GameShaderLogicTest(QuickTestCase):
         self.assertNotIn("model_Opacity.png", result)
 
     def test_filter_albedo_transparency_combine(self):
-        """Test combining albedo and opacity maps."""
-        self.skipTest("Combined map creation not fully implemented")
+        """Combine Albedo + Opacity into Albedo_Transparency."""
+        albedo = _write_test_image(
+            os.path.join(self._tmp_dir, "model_Albedo.png"), (180, 100, 60)
+        )
+        opacity = _write_test_image(
+            os.path.join(self._tmp_dir, "model_Opacity.png"), (255, 255, 255)
+        )
+        result = self.shader.filter_for_correct_base_color_map(
+            [albedo, opacity], use_albedo_transparency=True
+        )
+        # Production drops the underscore: model_Albedo + model_Opacity →
+        # model_AlbedoTransparency.<ext>.
+        combined = next(
+            (
+                p
+                for p in result
+                if "AlbedoTransparency" in p or "Albedo_Transparency" in p
+            ),
+            None,
+        )
+        self.assertIsNotNone(
+            combined, f"Combined Albedo_Transparency map missing: {result}"
+        )
+        self.assertTrue(os.path.isfile(combined), "Combined map not on disk")
+        self.assertFalse(any(p.endswith("Opacity.png") for p in result))
 
     def test_filter_no_albedo_transparency(self):
         """Test when not using albedo transparency."""
@@ -249,7 +325,7 @@ class GameShaderTest(unittest.TestCase):
 
     def setUp(self):
         """Set up clean Maya scene for each test."""
-        pm.mel.file(new=True, force=True)
+        cmds.file(new=True, force=True)
         self.test_messages = []
 
         # Setup logging capture
@@ -267,7 +343,7 @@ class GameShaderTest(unittest.TestCase):
             self.logger.removeHandler(self.log_handler)
 
         # Clean up any created nodes
-        pm.mel.file(new=True, force=True)
+        cmds.file(new=True, force=True)
 
     def _test_callback(self, msg, progress=None):
         """Mock callback function for testing."""
@@ -286,8 +362,8 @@ class GameShaderTest(unittest.TestCase):
         result = self.shader.setup_stringray_node("test_material", opacity=False)
 
         self.assertIsNotNone(result)
-        self.assertTrue(pm.objExists(result))
-        self.assertEqual(pm.nodeType(result), "StingrayPBS")
+        self.assertTrue(cmds.objExists(result))
+        self.assertEqual(cmds.nodeType(result), "StingrayPBS")
 
     def test_setup_arnold_nodes(self):
         """Test Arnold shader nodes creation."""
@@ -300,14 +376,14 @@ class GameShaderTest(unittest.TestCase):
         self.assertIsNotNone(mult_node)
         self.assertIsNotNone(bump_node)
 
-        self.assertTrue(pm.objExists(ai_node))
-        self.assertTrue(pm.objExists(mult_node))
-        self.assertTrue(pm.objExists(bump_node))
+        self.assertTrue(cmds.objExists(ai_node))
+        self.assertTrue(cmds.objExists(mult_node))
+        self.assertTrue(cmds.objExists(bump_node))
 
         # Check node types
-        self.assertEqual(pm.nodeType(ai_node), "aiStandardSurface")
-        self.assertEqual(pm.nodeType(mult_node), "aiMultiply")  # Arnold uses aiMultiply
-        self.assertEqual(pm.nodeType(bump_node), "bump2d")
+        self.assertEqual(cmds.nodeType(ai_node), "aiStandardSurface")
+        self.assertEqual(cmds.nodeType(mult_node), "aiMultiply")  # Arnold uses aiMultiply
+        self.assertEqual(cmds.nodeType(bump_node), "bump2d")
 
     # -------------------------------------------------------------------------
     # Test Connection Methods
@@ -388,20 +464,20 @@ class GameShaderTest(unittest.TestCase):
 
         self.assertTrue(success)
         # Verify all three connections exist (metallic, AO, roughness/smoothness)
-        metallic_conn = pm.listConnections(sr_node.TEX_metallic_map)
+        metallic_conn = cmds.listConnections(f"{sr_node}.TEX_metallic_map")
         if not metallic_conn:
             # Check children if parent is empty (Maya behavior for compound attributes)
-            metallic_conn = pm.listConnections(
-                sr_node.TEX_metallic_mapX
-            ) or pm.listConnections(sr_node.TEX_metallic_mapR)
+            metallic_conn = cmds.listConnections(
+                f"{sr_node}.TEX_metallic_mapX"
+            ) or cmds.listConnections(f"{sr_node}.TEX_metallic_mapR")
 
-        ao_conn = pm.listConnections(sr_node.TEX_ao_map)
+        ao_conn = cmds.listConnections(f"{sr_node}.TEX_ao_map")
         if not ao_conn:
-            ao_conn = pm.listConnections(sr_node.TEX_ao_mapX) or pm.listConnections(
-                sr_node.TEX_ao_mapR
+            ao_conn = cmds.listConnections(f"{sr_node}.TEX_ao_mapX") or cmds.listConnections(
+                f"{sr_node}.TEX_ao_mapR"
             )
 
-        roughness_conn = pm.listConnections(sr_node.TEX_roughness_mapX)
+        roughness_conn = cmds.listConnections(f"{sr_node}.TEX_roughness_mapX")
 
         self.assertIsNotNone(metallic_conn, "Metallic connection missing")
         self.assertIsNotNone(ao_conn, "AO connection missing")
@@ -411,7 +487,7 @@ class GameShaderTest(unittest.TestCase):
         self.assertEqual(len(metallic_conn), 1)
         self.assertEqual(len(ao_conn), 1)
         # Both should connect to same file node
-        self.assertEqual(metallic_conn[0].name(), ao_conn[0].name())
+        self.assertEqual(metallic_conn[0], ao_conn[0])
 
     def test_connect_stingray_metallic_smoothness(self):
         """Test connecting Metallic_Smoothness packed texture to Stingray node."""
@@ -424,13 +500,13 @@ class GameShaderTest(unittest.TestCase):
 
         self.assertTrue(success)
         # Verify metallic uses color, roughness uses alpha
-        metallic_conn = pm.listConnections(sr_node.TEX_metallic_map)
+        metallic_conn = cmds.listConnections(f"{sr_node}.TEX_metallic_map")
         if not metallic_conn:
-            metallic_conn = pm.listConnections(
-                sr_node.TEX_metallic_mapX
-            ) or pm.listConnections(sr_node.TEX_metallic_mapR)
+            metallic_conn = cmds.listConnections(
+                f"{sr_node}.TEX_metallic_mapX"
+            ) or cmds.listConnections(f"{sr_node}.TEX_metallic_mapR")
 
-        roughness_conn = pm.listConnections(sr_node.TEX_roughness_mapX)
+        roughness_conn = cmds.listConnections(f"{sr_node}.TEX_roughness_mapX")
 
         self.assertIsNotNone(metallic_conn)
         self.assertIsNotNone(roughness_conn)
@@ -450,7 +526,7 @@ class GameShaderTest(unittest.TestCase):
         result = self.shader.create_network(textures, name="test_basic_network")
 
         # Check that shader was created
-        self.assertTrue(pm.objExists("test_basic_network"))
+        self.assertTrue(cmds.objExists("test_basic_network"))
 
     def test_create_network_with_arnold(self):
         """Test shader network creation with Arnold."""
@@ -467,9 +543,9 @@ class GameShaderTest(unittest.TestCase):
         )
 
         # Check that both Stingray and Arnold shaders exist
-        self.assertTrue(pm.objExists("test_arnold_network"))
+        self.assertTrue(cmds.objExists("test_arnold_network"))
         # Arnold shader should have same base name
-        arnold_shaders = pm.ls(type="aiStandardSurface")
+        arnold_shaders = cmds.ls(type="aiStandardSurface")
         self.assertTrue(len(arnold_shaders) > 0)
 
     def test_create_network_pbr_metal_roughness(self):
@@ -490,7 +566,7 @@ class GameShaderTest(unittest.TestCase):
             output_extension="png",
         )
 
-        self.assertTrue(pm.objExists("test_pbr"))
+        self.assertTrue(cmds.objExists("test_pbr"))
 
     def test_create_network_unity_urp(self):
         """Test Unity URP workflow (with albedo transparency and metallic smoothness)."""
@@ -509,7 +585,7 @@ class GameShaderTest(unittest.TestCase):
             mask_map=False,
         )
 
-        self.assertTrue(pm.objExists("test_unity_urp"))
+        self.assertTrue(cmds.objExists("test_unity_urp"))
 
     def test_create_network_unity_hdrp(self):
         """Test Unity HDRP workflow (with mask map)."""
@@ -528,7 +604,7 @@ class GameShaderTest(unittest.TestCase):
             mask_map=True,
         )
 
-        self.assertTrue(pm.objExists("test_unity_hdrp"))
+        self.assertTrue(cmds.objExists("test_unity_hdrp"))
 
     def test_create_network_unreal_engine(self):
         """Test Unreal Engine workflow."""
@@ -547,7 +623,7 @@ class GameShaderTest(unittest.TestCase):
             mask_map=False,
         )
 
-        self.assertTrue(pm.objExists("test_unreal"))
+        self.assertTrue(cmds.objExists("test_unreal"))
 
     def test_create_network_gltf(self):
         """Test glTF 2.0 workflow."""
@@ -565,7 +641,7 @@ class GameShaderTest(unittest.TestCase):
             mask_map=False,
         )
 
-        self.assertTrue(pm.objExists("test_gltf"))
+        self.assertTrue(cmds.objExists("test_gltf"))
 
     def test_create_network_godot(self):
         """Test Godot workflow."""
@@ -580,7 +656,7 @@ class GameShaderTest(unittest.TestCase):
             name="test_godot",
         )
 
-        self.assertTrue(pm.objExists("test_godot"))
+        self.assertTrue(cmds.objExists("test_godot"))
 
     def test_create_network_specular_glossiness(self):
         """Test Specular/Glossiness workflow."""
@@ -603,7 +679,7 @@ class GameShaderTest(unittest.TestCase):
             metallic_smoothness=True,
         )
 
-        self.assertTrue(pm.objExists("test_specgloss"))
+        self.assertTrue(cmds.objExists("test_specgloss"))
 
     def test_create_network_empty_textures(self):
         """Test error handling for empty texture list."""
@@ -640,7 +716,7 @@ class GameShaderTest(unittest.TestCase):
                     callback=self._test_callback,
                 )
 
-                self.assertTrue(pm.objExists(f"test_{ext}_network"))
+                self.assertTrue(cmds.objExists(f"test_{ext}_network"))
 
     # -------------------------------------------------------------------------
     # Test Edge Cases and Error Handling
@@ -672,7 +748,7 @@ class GameShaderTest(unittest.TestCase):
         # Note: MapFactory may split unknown types into separate batches,
         # ignoring the 'name' parameter. We check if the valid part ("model") was created.
         self.assertTrue(
-            pm.objExists("model") or pm.objExists("test_unknown"),
+            cmds.objExists("model") or cmds.objExists("test_unknown"),
             f"Shader 'model' (or 'test_unknown') was not created. Messages: {self.test_messages}",
         )
 
@@ -707,7 +783,7 @@ class GameShaderTest(unittest.TestCase):
         )
 
         # Should still create shader with just base color
-        self.assertTrue(pm.objExists("test_minimal"))
+        self.assertTrue(cmds.objExists("test_minimal"))
 
     def test_shader_name_auto_generation(self):
         """Test automatic shader name generation from texture."""
@@ -728,7 +804,7 @@ class GameShaderTest(unittest.TestCase):
         )
 
         # Should create shader with auto-generated name
-        shaders = pm.ls(type="StingrayPBS")
+        shaders = cmds.ls(type="StingrayPBS")
         self.assertTrue(len(shaders) > 0)
 
     # -------------------------------------------------------------------------
@@ -742,8 +818,8 @@ class GameShaderTest(unittest.TestCase):
         )
 
         self.assertIsNotNone(std_node)
-        self.assertTrue(pm.objExists(std_node))
-        self.assertEqual(pm.nodeType(std_node), "standardSurface")
+        self.assertTrue(cmds.objExists(std_node))
+        self.assertEqual(cmds.nodeType(std_node), "standardSurface")
 
     def test_setup_standard_surface_with_opacity(self):
         """Test Standard Surface with transparency enabled."""
@@ -752,9 +828,9 @@ class GameShaderTest(unittest.TestCase):
         self.assertIsNotNone(std_node)
         # Updated Logic: Opacity map should NOT enable transmission (glass)
         # It should only be used for alpha cutout (geometry opacity)
-        self.assertEqual(std_node.transmission.get(), 0.0)
+        self.assertEqual(cmds.getAttr(f"{std_node}.transmission"), 0.0)
         # Thin walled is still good for foliage/decals, but transmission should be off
-        self.assertTrue(std_node.thinWalled.get())
+        self.assertTrue(cmds.getAttr(f"{std_node}.thinWalled"))
 
     def test_create_network_standard_surface(self):
         """Test shader network creation with Standard Surface."""
@@ -779,8 +855,8 @@ class GameShaderTest(unittest.TestCase):
         )
 
         # Check that Standard Surface shader exists
-        self.assertTrue(pm.objExists("test_std_network"))
-        self.assertEqual(pm.nodeType("test_std_network"), "standardSurface")
+        self.assertTrue(cmds.objExists("test_std_network"))
+        self.assertEqual(cmds.nodeType("test_std_network"), "standardSurface")
 
     def test_create_network_standard_surface_with_arnold(self):
         """Test Standard Surface with Arnold rendering shader."""
@@ -806,8 +882,8 @@ class GameShaderTest(unittest.TestCase):
         )
 
         # Check both Standard Surface and Arnold shaders exist
-        self.assertTrue(pm.objExists("test_std_arnold"))
-        arnold_shaders = pm.ls(type="aiStandardSurface")
+        self.assertTrue(cmds.objExists("test_std_arnold"))
+        arnold_shaders = cmds.ls(type="aiStandardSurface")
         self.assertTrue(len(arnold_shaders) > 0)
 
     def test_connect_standard_surface_base_color(self):
@@ -823,7 +899,7 @@ class GameShaderTest(unittest.TestCase):
 
         self.assertTrue(success)
         # Check connection exists
-        connections = pm.listConnections(std_node.baseColor)
+        connections = cmds.listConnections(f"{std_node}.baseColor")
         self.assertIsNotNone(connections)
 
     def test_connect_standard_surface_metallic(self):
@@ -838,7 +914,7 @@ class GameShaderTest(unittest.TestCase):
         )
 
         self.assertTrue(success)
-        connections = pm.listConnections(std_node.metalness)
+        connections = cmds.listConnections(f"{std_node}.metalness")
         self.assertIsNotNone(connections)
 
     def test_connect_standard_surface_roughness(self):
@@ -853,7 +929,7 @@ class GameShaderTest(unittest.TestCase):
         )
 
         self.assertTrue(success)
-        connections = pm.listConnections(std_node.specularRoughness)
+        connections = cmds.listConnections(f"{std_node}.specularRoughness")
         self.assertIsNotNone(connections)
 
     def test_connect_standard_surface_normal(self):
@@ -868,7 +944,7 @@ class GameShaderTest(unittest.TestCase):
         )
 
         self.assertTrue(success)
-        connections = pm.listConnections(std_node.normalCamera)
+        connections = cmds.listConnections(f"{std_node}.normalCamera")
         self.assertIsNotNone(connections)
 
     def test_connect_standard_surface_msao(self):
@@ -884,15 +960,15 @@ class GameShaderTest(unittest.TestCase):
 
         self.assertTrue(success)
         # Verify metallic connection (from red channel)
-        metallic_conn = pm.listConnections(std_node.metalness)
+        metallic_conn = cmds.listConnections(f"{std_node}.metalness")
         self.assertIsNotNone(metallic_conn, "Metallic connection missing")
 
         # Verify roughness connection (smoothness inverted from alpha)
-        roughness_conn = pm.listConnections(std_node.specularRoughness)
+        roughness_conn = cmds.listConnections(f"{std_node}.specularRoughness")
         self.assertIsNotNone(roughness_conn, "Roughness connection missing")
 
         # Should have a reverse node for smoothness->roughness conversion
-        reverse_nodes = pm.ls(type="reverse")
+        reverse_nodes = cmds.ls(type="reverse")
         self.assertTrue(
             len(reverse_nodes) > 0, "Reverse node for smoothness inversion missing"
         )
@@ -900,9 +976,9 @@ class GameShaderTest(unittest.TestCase):
     def test_connect_arnold_msao(self):
         """Test connecting MSAO mask map to Arnold shader."""
         # Create Arnold nodes
-        ai_node = pm.shadingNode("aiStandardSurface", asShader=True)
-        aiMult_node = pm.shadingNode("aiMultiply", asShader=True)
-        bump_node = pm.shadingNode("bump2d", asShader=True)
+        ai_node = cmds.shadingNode("aiStandardSurface", asShader=True)
+        aiMult_node = cmds.shadingNode("aiMultiply", asShader=True)
+        bump_node = cmds.shadingNode("bump2d", asShader=True)
 
         texture_path = os.path.join(self.test_assets, "model_MaskMap.png")
 
@@ -912,19 +988,19 @@ class GameShaderTest(unittest.TestCase):
 
         self.assertTrue(success)
         # Verify metallic connection (from red channel)
-        metallic_conn = pm.listConnections(ai_node.metalness)
+        metallic_conn = cmds.listConnections(f"{ai_node}.metalness")
         self.assertIsNotNone(metallic_conn, "Arnold metallic connection missing")
 
         # Verify roughness connection (smoothness inverted)
-        roughness_conn = pm.listConnections(ai_node.specularRoughness)
+        roughness_conn = cmds.listConnections(f"{ai_node}.specularRoughness")
         self.assertIsNotNone(roughness_conn, "Arnold roughness connection missing")
 
         # Verify AO multiplication (texture color to aiMultiply input2)
-        ao_conn = pm.listConnections(aiMult_node.input2)
+        ao_conn = cmds.listConnections(f"{aiMult_node}.input2")
         self.assertIsNotNone(ao_conn, "Arnold AO multiply connection missing")
 
         # Should have a reverse node for smoothness->roughness conversion
-        reverse_nodes = pm.ls(type="reverse")
+        reverse_nodes = cmds.ls(type="reverse")
         self.assertTrue(
             len(reverse_nodes) > 0,
             "Arnold reverse node for smoothness inversion missing",
@@ -951,7 +1027,7 @@ class GameShaderTest(unittest.TestCase):
             callback=self._test_callback,
         )
 
-        self.assertTrue(pm.objExists("test_factory_hdrp"))
+        self.assertTrue(cmds.objExists("test_factory_hdrp"))
 
         # Check that callback was invoked with mask map message
         has_mask_map_msg = any("Mask Map" in msg for msg in self.test_messages)
@@ -961,24 +1037,24 @@ class GameShaderTest(unittest.TestCase):
         )
 
         # CRITICAL: Verify MSAO connections were actually made
-        shader_node = pm.PyNode("test_factory_hdrp")
+        shader_node = "test_factory_hdrp"
 
         # Check metallic connection exists
-        metallic_conn = pm.listConnections(shader_node.TEX_metallic_map)
+        metallic_conn = cmds.listConnections(f"{shader_node}.TEX_metallic_map")
         if not metallic_conn:
-            metallic_conn = pm.listConnections(
-                shader_node.TEX_metallic_mapX
-            ) or pm.listConnections(shader_node.TEX_metallic_mapR)
+            metallic_conn = cmds.listConnections(
+                f"{shader_node}.TEX_metallic_mapX"
+            ) or cmds.listConnections(f"{shader_node}.TEX_metallic_mapR")
 
         self.assertIsNotNone(
             metallic_conn, "MSAO->Metallic connection missing in Unity HDRP workflow"
         )
 
         # Check AO connection exists
-        ao_conn = pm.listConnections(shader_node.TEX_ao_map)
+        ao_conn = cmds.listConnections(f"{shader_node}.TEX_ao_map")
         if not ao_conn:
-            ao_conn = pm.listConnections(shader_node.TEX_ao_mapX) or pm.listConnections(
-                shader_node.TEX_ao_mapR
+            ao_conn = cmds.listConnections(f"{shader_node}.TEX_ao_mapX") or cmds.listConnections(
+                f"{shader_node}.TEX_ao_mapR"
             )
 
         self.assertIsNotNone(
@@ -986,15 +1062,15 @@ class GameShaderTest(unittest.TestCase):
         )
 
         # Check roughness/smoothness connection exists
-        roughness_conn = pm.listConnections(shader_node.TEX_roughness_mapX)
+        roughness_conn = cmds.listConnections(f"{shader_node}.TEX_roughness_mapX")
         self.assertIsNotNone(
             roughness_conn, "MSAO->Roughness connection missing in Unity HDRP workflow"
         )
 
         # Verify it's the SAME texture connected to metallic and AO (full color output)
         self.assertEqual(
-            metallic_conn[0].name(),
-            ao_conn[0].name(),
+            metallic_conn[0],
+            ao_conn[0],
             "Metallic and AO should connect to same texture node for MSAO",
         )
 
@@ -1015,7 +1091,7 @@ class GameShaderTest(unittest.TestCase):
             callback=self._test_callback,
         )
 
-        self.assertTrue(pm.objExists("test_with_normal"))
+        self.assertTrue(cmds.objExists("test_with_normal"))
 
         # Verify normal map was mentioned in output
         self.assertTrue(
@@ -1024,8 +1100,8 @@ class GameShaderTest(unittest.TestCase):
         )
 
         # Verify normal map connection
-        shader_node = pm.PyNode("test_with_normal")
-        normal_conn = pm.listConnections(shader_node.TEX_normal_map)
+        shader_node = "test_with_normal"
+        normal_conn = cmds.listConnections(f"{shader_node}.TEX_normal_map")
         self.assertIsNotNone(normal_conn, "Normal map should be connected to shader")
 
     def test_texture_factory_integration_complete_pbr_set(self):
@@ -1045,21 +1121,21 @@ class GameShaderTest(unittest.TestCase):
             callback=self._test_callback,
         )
 
-        self.assertTrue(pm.objExists("test_complete_pbr"))
-        shader_node = pm.PyNode("test_complete_pbr")
+        self.assertTrue(cmds.objExists("test_complete_pbr"))
+        shader_node = "test_complete_pbr"
 
         # Verify all critical connections
         connections_to_verify = {
-            "Base_Color": shader_node.TEX_color_map,
-            "Metallic": shader_node.TEX_metallic_map,
-            "Roughness": shader_node.TEX_roughness_mapX,
-            "AO": shader_node.TEX_ao_map,
-            "Normal": shader_node.TEX_normal_map,
+            "Base_Color": f"{shader_node}.TEX_color_map",
+            "Metallic": f"{shader_node}.TEX_metallic_map",
+            "Roughness": f"{shader_node}.TEX_roughness_map",
+            "AO": f"{shader_node}.TEX_ao_map",
+            "Normal": f"{shader_node}.TEX_normal_map",
         }
 
         for map_name, attr in connections_to_verify.items():
             with self.subTest(map_type=map_name):
-                conn = pm.listConnections(attr)
+                conn = cmds.listConnections(attr)
                 self.assertIsNotNone(conn, f"{map_name} should be connected to shader")
                 # Verify it's mentioned in callback
                 search_terms = [map_name]
@@ -1095,21 +1171,21 @@ class GameShaderTest(unittest.TestCase):
             callback=self._test_callback,
         )
 
-        self.assertTrue(pm.objExists("test_hdrp_std"))
+        self.assertTrue(cmds.objExists("test_hdrp_std"))
 
         # Find the Standard Surface shader
-        std_shaders = pm.ls(type="standardSurface")
+        std_shaders = cmds.ls(type="standardSurface")
         self.assertTrue(len(std_shaders) > 0, "Standard Surface shader not created")
 
         shader_node = std_shaders[-1]  # Get most recently created
 
         # Verify MSAO connections
-        metallic_conn = pm.listConnections(shader_node.metalness)
+        metallic_conn = cmds.listConnections(f"{shader_node}.metalness")
         self.assertIsNotNone(
             metallic_conn, "MSAO->Metallic missing in Standard Surface"
         )
 
-        roughness_conn = pm.listConnections(shader_node.specularRoughness)
+        roughness_conn = cmds.listConnections(f"{shader_node}.specularRoughness")
         self.assertIsNotNone(
             roughness_conn, "MSAO->Roughness missing in Standard Surface"
         )
@@ -1131,19 +1207,19 @@ class GameShaderTest(unittest.TestCase):
             callback=self._test_callback,
         )
 
-        self.assertTrue(pm.objExists("test_hdrp_arnold"))
+        self.assertTrue(cmds.objExists("test_hdrp_arnold"))
 
         # Find Arnold shader
-        ai_shaders = pm.ls(type="aiStandardSurface")
+        ai_shaders = cmds.ls(type="aiStandardSurface")
         self.assertTrue(len(ai_shaders) > 0, "Arnold shader not created")
 
         ai_shader = ai_shaders[-1]
 
         # Verify MSAO connections to Arnold
-        metallic_conn = pm.listConnections(ai_shader.metalness)
+        metallic_conn = cmds.listConnections(f"{ai_shader}.metalness")
         self.assertIsNotNone(metallic_conn, "MSAO->Metallic missing in Arnold shader")
 
-        roughness_conn = pm.listConnections(ai_shader.specularRoughness)
+        roughness_conn = cmds.listConnections(f"{ai_shader}.specularRoughness")
         self.assertIsNotNone(roughness_conn, "MSAO->Roughness missing in Arnold shader")
 
     def test_texture_factory_integration_unity_urp(self):
@@ -1162,7 +1238,7 @@ class GameShaderTest(unittest.TestCase):
             callback=self._test_callback,
         )
 
-        self.assertTrue(pm.objExists("test_factory_urp"))
+        self.assertTrue(cmds.objExists("test_factory_urp"))
 
     def test_texture_factory_normal_conversion(self):
         """Test MapFactory normal map format conversion."""
@@ -1179,11 +1255,11 @@ class GameShaderTest(unittest.TestCase):
             callback=self._test_callback,
         )
 
-        self.assertTrue(pm.objExists("test_normal_convert"))
+        self.assertTrue(cmds.objExists("test_normal_convert"))
 
         # Verify normal map connection exists
-        shader_node = pm.PyNode("test_normal_convert")
-        normal_conn = pm.listConnections(shader_node.TEX_normal_map)
+        shader_node = "test_normal_convert"
+        normal_conn = cmds.listConnections(f"{shader_node}.TEX_normal_map")
         self.assertIsNotNone(
             normal_conn, "Normal map should be connected after conversion"
         )
@@ -1214,11 +1290,11 @@ class GameShaderTest(unittest.TestCase):
             callback=self._test_callback,
         )
 
-        self.assertTrue(pm.objExists("test_normal_passthrough"))
-        shader_node = pm.PyNode("test_normal_passthrough")
+        self.assertTrue(cmds.objExists("test_normal_passthrough"))
+        shader_node = "test_normal_passthrough"
 
         # Verify normal connection
-        normal_conn = pm.listConnections(shader_node.TEX_normal_map)
+        normal_conn = cmds.listConnections(f"{shader_node}.TEX_normal_map")
         self.assertIsNotNone(normal_conn, "Generic normal map should be connected")
 
         # Verify it was processed
@@ -1245,8 +1321,8 @@ class GameShaderTest(unittest.TestCase):
             callback=self._test_callback,
         )
 
-        self.assertTrue(pm.objExists("test_explicit_stingray"))
-        self.assertEqual(pm.nodeType("test_explicit_stingray"), "StingrayPBS")
+        self.assertTrue(cmds.objExists("test_explicit_stingray"))
+        self.assertEqual(cmds.nodeType("test_explicit_stingray"), "StingrayPBS")
 
     def test_shader_type_standard_surface_explicit(self):
         """Test explicitly requesting Standard Surface shader."""
@@ -1262,8 +1338,8 @@ class GameShaderTest(unittest.TestCase):
             callback=self._test_callback,
         )
 
-        self.assertTrue(pm.objExists("test_explicit_standard"))
-        self.assertEqual(pm.nodeType("test_explicit_standard"), "standardSurface")
+        self.assertTrue(cmds.objExists("test_explicit_standard"))
+        self.assertEqual(cmds.nodeType("test_explicit_standard"), "standardSurface")
 
     def test_shader_type_default(self):
         """Test default shader type (should be Stingray PBS)."""
@@ -1277,8 +1353,8 @@ class GameShaderTest(unittest.TestCase):
             callback=self._test_callback,
         )
 
-        self.assertTrue(pm.objExists("test_default_type"))
-        self.assertEqual(pm.nodeType("test_default_type"), "StingrayPBS")
+        self.assertTrue(cmds.objExists("test_default_type"))
+        self.assertEqual(cmds.nodeType("test_default_type"), "StingrayPBS")
 
     # -------------------------------------------------------------------------
     # Test Arnold Integration with Both Shader Types
@@ -1300,11 +1376,11 @@ class GameShaderTest(unittest.TestCase):
         )
 
         # Check Stingray node exists
-        self.assertTrue(pm.objExists("test_stingray_arnold"))
-        self.assertEqual(pm.nodeType("test_stingray_arnold"), "StingrayPBS")
+        self.assertTrue(cmds.objExists("test_stingray_arnold"))
+        self.assertEqual(cmds.nodeType("test_stingray_arnold"), "StingrayPBS")
 
         # Check Arnold nodes exist
-        arnold_shaders = pm.ls(type="aiStandardSurface")
+        arnold_shaders = cmds.ls(type="aiStandardSurface")
         self.assertGreater(len(arnold_shaders), 0)
 
     def test_arnold_with_standard_surface(self):
@@ -1323,11 +1399,11 @@ class GameShaderTest(unittest.TestCase):
         )
 
         # Check Standard Surface node exists
-        self.assertTrue(pm.objExists("test_standard_arnold"))
-        self.assertEqual(pm.nodeType("test_standard_arnold"), "standardSurface")
+        self.assertTrue(cmds.objExists("test_standard_arnold"))
+        self.assertEqual(cmds.nodeType("test_standard_arnold"), "standardSurface")
 
         # Check Arnold nodes exist
-        arnold_shaders = pm.ls(type="aiStandardSurface")
+        arnold_shaders = cmds.ls(type="aiStandardSurface")
         self.assertGreater(len(arnold_shaders), 0)
 
     def test_setup_arnold_nodes_parameter_name(self):
@@ -1341,10 +1417,10 @@ class GameShaderTest(unittest.TestCase):
         )
 
         self.assertIsNotNone(ai_node)
-        self.assertTrue(pm.objExists(ai_node))
+        self.assertTrue(cmds.objExists(ai_node))
 
         # Clean up
-        pm.mel.file(new=True, force=True)
+        cmds.file(new=True, force=True)
 
         # Test with Standard Surface
         std_node = self.shader.setup_standard_surface_node(
@@ -1355,7 +1431,7 @@ class GameShaderTest(unittest.TestCase):
         )
 
         self.assertIsNotNone(ai_node2)
-        self.assertTrue(pm.objExists(ai_node2))
+        self.assertTrue(cmds.objExists(ai_node2))
 
     # -------------------------------------------------------------------------
     # MapFactory Integration Edge Cases
@@ -1490,10 +1566,10 @@ class GameShaderTest(unittest.TestCase):
 
         # Verify network created successfully
         self.assertIsNotNone(network)
-        self.assertTrue(pm.objExists(network))
+        self.assertTrue(cmds.objExists(network))
 
         # Verify all expected connections were made
-        shader_node = pm.listConnections(f"{network}.surfaceShader")[0]
+        shader_node = cmds.listConnections(f"{network}.surfaceShader")[0]
         self.assertIsNotNone(shader_node)
 
     def test_texture_factory_callback_propagation(self):
@@ -1592,8 +1668,8 @@ class GameShaderFBXTest(QuickTestCase):
         self.assertTrue(success, "MSAO connection should succeed")
 
         # Check connection to TEX_metallic_map
-        connections = pm.listConnections(
-            sr_node.TEX_metallic_map, plugs=True, source=True
+        connections = cmds.listConnections(
+            f"{sr_node}.TEX_metallic_map", plugs=True, source=True
         )
         self.assertTrue(connections, "TEX_metallic_map should be connected")
 
@@ -1602,8 +1678,8 @@ class GameShaderFBXTest(QuickTestCase):
 
         # source_plug should be 'fileX.outColor', not 'fileX.outColorR'
         self.assertTrue(
-            source_plug.name().endswith(".outColor"),
-            f"Should connect outColor (RGB) directly, got {source_plug.name()}",
+            source_plug.endswith(".outColor"),
+            f"Should connect outColor (RGB) directly, got {source_plug}",
         )
 
 

@@ -8,10 +8,7 @@ resize, move, lock, and range-highlight interactions.
 """
 from __future__ import annotations
 
-try:
-    import pymel.core as pm
-except ImportError:
-    pm = None
+from mayatk.core_utils._core_utils import CoreUtils
 
 # Threshold for detecting meaningful time deltas (frame-level tolerance).
 TIME_SNAP_EPS = 1e-3
@@ -67,7 +64,7 @@ class GapManagerMixin:
         if abs(ds - de) < TIME_SNAP_EPS and abs(ds) > TIME_SNAP_EPS:
             self._syncing = True
             try:
-                with pm.UndoChunk():
+                with CoreUtils.undo_chunk():
                     self.sequencer.move_shot(self.active_shot_id, start)
             finally:
                 self._syncing = False
@@ -77,7 +74,7 @@ class GapManagerMixin:
         # Edge resize
         self._syncing = True
         try:
-            with pm.UndoChunk():
+            with CoreUtils.undo_chunk():
                 if shift_held:
                     self.sequencer.store.update_shot(
                         self.active_shot_id, start=start, end=end
@@ -145,7 +142,7 @@ class GapManagerMixin:
         self._save_shot_state()
         self._syncing = True
         try:
-            with pm.UndoChunk():
+            with CoreUtils.undo_chunk():
                 if shift_held:
                     self.sequencer.store.update_shot(
                         target.shot_id, start=target.start + delta
@@ -201,7 +198,7 @@ class GapManagerMixin:
         self._save_shot_state()
         self._syncing = True
         try:
-            with pm.UndoChunk():
+            with CoreUtils.undo_chunk():
                 if shift_held:
                     self.sequencer.store.update_shot(
                         target.shot_id, end=new_prev_end
@@ -265,7 +262,7 @@ class GapManagerMixin:
         self._save_shot_state()
         self._syncing = True
         try:
-            with pm.UndoChunk():
+            with CoreUtils.undo_chunk():
                 # Determine which shot is inner (active, gets scaled)
                 # and which is outer (gets slid intact).
                 # Order: slide the outer shot first, then resize the

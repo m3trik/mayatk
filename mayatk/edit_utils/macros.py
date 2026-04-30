@@ -3,8 +3,11 @@
 from typing import Set
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
+    import maya.mel as mel
 except ImportError as error:
+    cmds = None
+    mel = None
     print(__file__, error)
 import pythontk as ptk
 
@@ -29,19 +32,19 @@ class MacroManager(ptk.HelpMixin):
             def m_back_face_culling():
                     '''Toggle Back-Face Culling.
                     '''
-                    sel = pm.ls(selection=True)
+                    sel = cmds.ls(selection=True)
                     if sel:
                             currentPanel = getPanel(withFocus=True)
-                            state = pm.polyOptions(sel, query=True, wireBackCulling=True)[0]
+                            state = cmds.polyOptions(sel, query=True, wireBackCulling=True)[0]
 
                             if not state:
-                                    pm.polyOptions(sel, gl=True, wireBackCulling=True)
+                                    cmds.polyOptions(sel, gl=True, wireBackCulling=True)
                                     Macros.setWireframeOnShadedOption(currentPanel, 0)
-                                    pm.inViewMessage(status_message="Back-Face Culling is now <hl>OFF</hl>.>", pos='topCenter', fade=True)
+                                    cmds.inViewMessage(status_message="Back-Face Culling is now <hl>OFF</hl>.>", pos='topCenter', fade=True)
                             else:
-                                    pm.polyOptions(sel, gl=True, backCulling=True)
+                                    cmds.polyOptions(sel, gl=True, backCulling=True)
                                     Macros.setWireframeOnShadedOption(currentPanel, 1)
-                                    pm.inViewMessage(status_message="Back-Face Culling is now <hl>ON</hl>.", pos='topCenter', fade=True)
+                                    cmds.inViewMessage(status_message="Back-Face Culling is now <hl>ON</hl>.", pos='topCenter', fade=True)
                     else:
                             print(" Warning: Nothing selected. ")
 
@@ -117,16 +120,16 @@ class MacroManager(ptk.HelpMixin):
             method = getattr(cls, name)
             ann = method.__doc__.split("\n")[0]  # use only the first line.
 
-        if pm.runTimeCommand(name, exists=True):
-            if pm.runTimeCommand(name, query=True, default=True):
+        if cmds.runTimeCommand(name, exists=True):
+            if cmds.runTimeCommand(name, query=True, default=True):
                 return  # can not delete default runtime commands.
             elif (
                 delete_existing
             ):  # delete any existing (non-default) runtime commands of that name.
-                pm.runTimeCommand(name, edit=True, delete=True)
+                cmds.runTimeCommand(name, edit=True, delete=True)
 
         try:  # set runTimeCommand
-            pm.runTimeCommand(
+            cmds.runTimeCommand(
                 name,
                 annotation=ann,
                 category=cat,
@@ -138,7 +141,7 @@ class MacroManager(ptk.HelpMixin):
             return error
 
         # set command
-        nameCommand = pm.nameCommand(
+        nameCommand = cmds.nameCommand(
             "{0}Command".format(name),
             annotation=ann,
             command=name,
@@ -160,7 +163,7 @@ class MacroManager(ptk.HelpMixin):
                 key = char
 
         # print(name, char, ctl, alt, sht)
-        pm.hotkey(
+        cmds.hotkey(
             keyShortcut=key, name=nameCommand, ctl=ctl, alt=alt, sht=sht
         )  # set only the key press.
 
@@ -172,7 +175,7 @@ class DisplayMacros:
     def m_component_id_display():
         """Toggle Component Id Display through vertices, edges, faces, UVs, and off."""
         # Query the current state of component ID display settings for vertices, edges, faces, and UVs
-        current_state = pm.polyOptions(q=True, displayItemNumbers=True)[:4]
+        current_state = cmds.polyOptions(q=True, displayItemNumbers=True)[:4]
 
         # Determine the next state to switch to
         if True not in current_state:
@@ -195,10 +198,10 @@ class DisplayMacros:
         labels = ["vertex IDs", "edge IDs", "face IDs", "UV IDs", "Off"]
 
         # Apply the selected configuration
-        pm.polyOptions(activeObjects=True, **configurations[next_state_index])
+        cmds.polyOptions(activeObjects=True, **configurations[next_state_index])
 
         # Display message in the viewport
-        pm.inViewMessage(
+        cmds.inViewMessage(
             amg=f"Component ID Display: <hl>{labels[next_state_index]}</hl>.",
             pos="topCenter",
             fade=True,
@@ -208,10 +211,10 @@ class DisplayMacros:
     def m_normals_display():
         """Toggle face normals, vertex normals, tangents, and off."""
         # Query the current state
-        current_tangent = pm.polyOptions(q=True, displayTangent=True)[0]
-        current_normal = pm.polyOptions(q=True, displayNormal=True)[0]
-        is_facet = pm.polyOptions(q=True, facet=True)[0]
-        is_vertex = pm.polyOptions(q=True, point=True)[0]
+        current_tangent = cmds.polyOptions(q=True, displayTangent=True)[0]
+        current_normal = cmds.polyOptions(q=True, displayNormal=True)[0]
+        is_facet = cmds.polyOptions(q=True, facet=True)[0]
+        is_vertex = cmds.polyOptions(q=True, point=True)[0]
 
         # Define the current state based on queries
         if current_tangent:
@@ -228,9 +231,9 @@ class DisplayMacros:
 
         # Configuration for each state
         if next_state == 0:
-            pm.polyOptions(displayNormal=False, displayTangent=False)
+            cmds.polyOptions(displayNormal=False, displayTangent=False)
         elif next_state == 1:
-            pm.polyOptions(
+            cmds.polyOptions(
                 displayNormal=True,
                 facet=True,
                 point=False,
@@ -238,7 +241,7 @@ class DisplayMacros:
                 sizeNormal=1,
             )
         elif next_state == 2:
-            pm.polyOptions(
+            cmds.polyOptions(
                 displayNormal=True,
                 point=True,
                 facet=False,
@@ -246,7 +249,7 @@ class DisplayMacros:
                 sizeNormal=1,
             )
         elif next_state == 3:
-            pm.polyOptions(displayTangent=True, displayNormal=False)
+            cmds.polyOptions(displayTangent=True, displayNormal=False)
 
         # Messages for each state
         messages = [
@@ -257,57 +260,57 @@ class DisplayMacros:
         ]
 
         # Display message in the viewport using inViewMessage
-        pm.inViewMessage(amg=messages[next_state], pos="topCenter", fade=True)
+        cmds.inViewMessage(amg=messages[next_state], pos="topCenter", fade=True)
 
     @staticmethod
     def m_soft_edge_display():
         """Toggle Soft Edge Display."""
         # Query the current setting for all edges display
-        all_edges_visible = pm.polyOptions(q=True, ae=True)[0]
+        all_edges_visible = cmds.polyOptions(q=True, ae=True)[0]
 
         # Toggle the edge display based on the current state
         if all_edges_visible:
             # If all edges are currently visible, switch to soft edges only
-            pm.polyOptions(ae=False, se=True)
+            cmds.polyOptions(ae=False, se=True)
             message = "Soft Edge Display <hl>On</hl>"
         else:
             # If not all edges are visible, it implies soft edges are active; switch to show all edges
-            pm.polyOptions(se=False, ae=True)
+            cmds.polyOptions(se=False, ae=True)
             message = "All Edges Display <hl>On</hl>"
 
         # Display message in the viewport using inViewMessage
-        pm.inViewMessage(amg=message, pos="topCenter", fade=True)
+        cmds.inViewMessage(amg=message, pos="topCenter", fade=True)
 
     @staticmethod
     def m_toggle_visibility():
         """Toggle Visibility"""
-        pm.mel.ToggleVisibilityAndKeepSelection()
+        mel.eval("ToggleVisibilityAndKeepSelection")
 
     @staticmethod
     @CoreUtils.selected
     def m_toggle_uv_border_edges(objects):
         """Toggle the display of UV border edges for the given objects."""
         if not objects:
-            pm.inViewMessage(
+            cmds.inViewMessage(
                 statusMessage="Operation requires at least one selected object.",
                 pos="topCenter",
                 fade=True,
             )
             return
 
-        for obj in pm.ls(objects, flatten=True):
+        for obj in cmds.ls(objects, flatten=True):
             # Use MEL command to toggle UV border edges visibility
-            state = pm.polyOptions(obj, query=True, displayMapBorder=True)[0]
+            state = cmds.polyOptions(obj, query=True, displayMapBorder=True)[0]
             if state:  # Turn it off
-                pm.polyOptions(obj, displayMapBorder=False)
-                pm.inViewMessage(
+                cmds.polyOptions(obj, displayMapBorder=False)
+                cmds.inViewMessage(
                     statusMessage="UV Border Edges <hl>Hidden</hl>.",
                     pos="topCenter",
                     fade=True,
                 )
             else:  # If not displaying UV borders, turn it on
-                pm.polyOptions(obj, displayMapBorder=True)
-                pm.inViewMessage(
+                cmds.polyOptions(obj, displayMapBorder=True)
+                cmds.inViewMessage(
                     statusMessage=f"UV Border Edges <hl>Shown</hl>.",
                     pos="topCenter",
                     fade=True,
@@ -317,23 +320,23 @@ class DisplayMacros:
     @CoreUtils.selected
     def m_back_face_culling(objects) -> None:
         """Toggle Back-Face Culling on selected objects, or on all objects if none are selected."""
-        objects = objects or pm.ls(type="mesh")
+        objects = objects or cmds.ls(type="mesh")
         if objects:
-            state: bool = pm.polyOptions(objects, query=True, wireBackCulling=True)[0]
+            state: bool = cmds.polyOptions(objects, query=True, wireBackCulling=True)[0]
             if state:
-                pm.polyOptions(objects, wireBackCulling=False, backCulling=True)
+                cmds.polyOptions(objects, wireBackCulling=False, backCulling=True)
                 message = "OFF"
             else:
-                pm.polyOptions(objects, wireBackCulling=True, backCulling=False)
+                cmds.polyOptions(objects, wireBackCulling=True, backCulling=False)
                 message = "ON"
 
-            pm.inViewMessage(
+            cmds.inViewMessage(
                 statusMessage=f"Back-Face Culling is now <hl>{message}</hl>.",
                 pos="topCenter",
                 fade=True,
             )
         else:  # Feedback if there are no meshes at all in the scene
-            pm.inViewMessage(
+            cmds.inViewMessage(
                 statusMessage="<hl>No mesh objects found in the scene.</hl>",
                 pos="topCenter",
                 fade=True,
@@ -343,13 +346,13 @@ class DisplayMacros:
     def m_isolate_selected() -> None:
         """Isolate the current selection."""
         currentPanel = UiUtils.get_panel(withFocus=1)
-        state = pm.isolateSelect(currentPanel, query=1, state=1)
+        state = cmds.isolateSelect(currentPanel, query=1, state=1)
         if state:
-            pm.isolateSelect(currentPanel, state=0)
-            pm.isolateSelect(currentPanel, removeSelected=1)
+            cmds.isolateSelect(currentPanel, state=0)
+            cmds.isolateSelect(currentPanel, removeSelected=1)
         else:
-            pm.isolateSelect(currentPanel, state=1)
-            pm.isolateSelect(currentPanel, addSelected=1)
+            cmds.isolateSelect(currentPanel, state=1)
+            cmds.isolateSelect(currentPanel, addSelected=1)
 
     @staticmethod
     @CoreUtils.selected
@@ -360,7 +363,7 @@ class DisplayMacros:
         try:  # Determine the state of the first object
             first_obj = sel[0]
         except IndexError:
-            pm.inViewMessage(
+            cmds.inViewMessage(
                 statusMessage="No objects selected. Please select at least one object.",
                 pos="topCenter",
                 fade=True,
@@ -372,17 +375,17 @@ class DisplayMacros:
         is_templated = (
             getattr(first_obj, "template", False) and first_obj.template.get()
         )
-        xray_query_result = pm.displaySurface(first_obj, xRay=True, query=True)
+        xray_query_result = cmds.displaySurface(first_obj, xRay=True, query=True)
         is_xray = xray_query_result[0] if xray_query_result else False
 
         # Define the next state and action based on the initial state
         if is_visible and not is_templated and not is_xray:
             next_state = "XRay"
-            action = lambda obj: pm.displaySurface(obj, xRay=True)
+            action = lambda obj: cmds.displaySurface(obj, xRay=True)
         elif is_xray:
             next_state = "Templated"
             action = lambda obj: (
-                pm.displaySurface(obj, xRay=False),
+                cmds.displaySurface(obj, xRay=False),
                 obj.template.set(True),
             )
         elif is_templated:
@@ -396,7 +399,7 @@ class DisplayMacros:
         for obj in sel:
             action(obj)
 
-        pm.inViewMessage(
+        cmds.inViewMessage(
             statusMessage=f"Display: <hl>{next_state}</hl>.",
             pos="topCenter",
             fade=True,
@@ -406,19 +409,19 @@ class DisplayMacros:
     @CoreUtils.selected
     def m_wireframe_toggle(objects) -> None:
         """Toggle Wireframe Display on selected objects, or on all objects if none are selected."""
-        objects = objects or pm.ls(type="mesh")
+        objects = objects or cmds.ls(type="mesh")
         if objects:
             # Check the current state of the first object in the list
-            current_state: bool = pm.getAttr(objects[0].overrideShading) == 1
+            current_state: bool = cmds.getAttr(objects[0].overrideShading) == 1
             # Toggle the overrideDisplayType attribute for all objects
             for obj in objects:
-                pm.setAttr(f"{obj}.overrideEnabled", 1)
+                cmds.setAttr(f"{obj}.overrideEnabled", 1)
                 new_state = 0 if current_state else 1  # 0: Normal, 1: Wireframe
-                pm.setAttr(f"{obj}.overrideShading", new_state)
+                cmds.setAttr(f"{obj}.overrideShading", new_state)
 
             # Provide feedback message
             message = "Wireframe" if not current_state else "Shaded"
-            pm.inViewMessage(
+            cmds.inViewMessage(
                 statusMessage=f"Display mode is now <hl>{message}</hl>.",
                 pos="topCenter",
                 fade=True,
@@ -427,20 +430,20 @@ class DisplayMacros:
     @staticmethod
     def m_grid_and_image_planes() -> None:
         """Toggle grid and image plane visibility."""
-        image_plane = pm.ls(exactType="imagePlane")
+        image_plane = cmds.ls(exactType="imagePlane")
 
         for obj in image_plane:
             attr = obj + ".displayMode"
-            if not pm.getAttr(attr) == 2:
-                pm.setAttr(attr, 2)
-                pm.grid(toggle=1)
-                pm.inViewMessage(
+            if not cmds.getAttr(attr) == 2:
+                cmds.setAttr(attr, 2)
+                cmds.grid(toggle=1)
+                cmds.inViewMessage(
                     statusMessage="Grid is now <hl>ON</hl>.", pos="topCenter", fade=True
                 )
             else:
-                pm.setAttr(attr, 0)
-                pm.grid(toggle=0)
-                pm.inViewMessage(
+                cmds.setAttr(attr, 0)
+                cmds.grid(toggle=0)
+                cmds.inViewMessage(
                     statusMessage="Grid is now <hl>OFF</hl>.",
                     pos="topCenter",
                     fade=True,
@@ -450,11 +453,12 @@ class DisplayMacros:
     @CoreUtils.selected
     def m_frame(objects) -> None:
         """Frame selected by a set amount with three toggle states."""
-        pm.melGlobals.initVar("int", "toggleFrame_")
-        mode = pm.selectMode(q=True, component=True)
-        maskVertex = pm.selectType(q=True, vertex=True)
-        maskEdge = pm.selectType(q=True, edge=True)
-        maskFacet = pm.selectType(q=True, facet=True)
+        # Initialise the MEL global variable used to track the toggle state.
+        mel.eval('global int $toggleFrame_; if (!`exists "toggleFrame_"`) {$toggleFrame_=0;}')
+        mode = cmds.selectMode(q=True, component=True)
+        maskVertex = cmds.selectType(q=True, vertex=True)
+        maskEdge = cmds.selectType(q=True, edge=True)
+        maskFacet = cmds.selectType(q=True, facet=True)
 
         # Define toggle states and fit factors
         toggle_states = {
@@ -465,15 +469,24 @@ class DisplayMacros:
             "object": [(0.75, 1), (0.99, 2), (0.5, 0)],
         }
 
+        def _get_toggle() -> int:
+            try:
+                return int(mel.eval("$tmp=$toggleFrame_;") or 0)
+            except Exception:
+                return 0
+
+        def _set_toggle(val: int) -> None:
+            mel.eval(f"global int $toggleFrame_; $toggleFrame_={val};")
+
         def frame_element(element_type):
-            current_toggle = pm.melGlobals["toggleFrame_"]
+            current_toggle = _get_toggle()
             fitFactorVal, next_toggle = toggle_states[element_type][current_toggle]
-            pm.viewFit(fitFactor=fitFactorVal)
-            pm.melGlobals["toggleFrame_"] = next_toggle
-            print(f"frame {element_type} {pm.melGlobals['toggleFrame_']}")
+            cmds.viewFit(fitFactor=fitFactorVal)
+            _set_toggle(next_toggle)
+            print(f"frame {element_type} {next_toggle}")
 
         if len(objects) == 0:
-            pm.viewFit(allObjects=1)
+            cmds.viewFit(allObjects=1)
         else:
             if mode == 1:
                 if maskVertex == 1:
@@ -495,40 +508,40 @@ class DisplayMacros:
         """Toggle smooth mesh preview."""
         objs = NodeUtils.get_unique_children(objects)
         for obj in objs:
-            if pm.getAttr(obj.displaySmoothMesh) != 2:
-                pm.setAttr(obj.displaySmoothMesh, 2)  # smooth preview on
-                pm.displayPref(wireframeOnShadedActive="none")
-                pm.inViewMessage(
+            if cmds.getAttr(obj.displaySmoothMesh) != 2:
+                cmds.setAttr(obj.displaySmoothMesh, 2)  # smooth preview on
+                cmds.displayPref(wireframeOnShadedActive="none")
+                cmds.inViewMessage(
                     position="topCenter",
                     fade=1,
                     statusMessage="S-Div Preview <hl>ON</hl>.<br>Wireframe <hl>Off</hl>.",
                 )
 
             elif (
-                pm.getAttr(obj.displaySmoothMesh) == 2
-                and pm.displayPref(query=1, wireframeOnShadedActive=1) == "none"
+                cmds.getAttr(obj.displaySmoothMesh) == 2
+                and cmds.displayPref(query=1, wireframeOnShadedActive=1) == "none"
             ):
-                pm.setAttr(obj.displaySmoothMesh, 2)  # smooth preview on
-                shapes = pm.listRelatives(objects, children=1, shapes=1)
-                [pm.setAttr(s.displaySubdComps, 1) for s in shapes]
-                pm.displayPref(wireframeOnShadedActive="full")
-                pm.inViewMessage(
+                cmds.setAttr(obj.displaySmoothMesh, 2)  # smooth preview on
+                shapes = cmds.listRelatives(objects, children=1, shapes=1)
+                [cmds.setAttr(s.displaySubdComps, 1) for s in shapes]
+                cmds.displayPref(wireframeOnShadedActive="full")
+                cmds.inViewMessage(
                     position="topCenter",
                     fade=1,
                     statusMessage="S-Div Preview <hl>ON</hl>.<br>Wireframe <hl>Full</hl>.",
                 )
 
             else:
-                pm.setAttr(obj.displaySmoothMesh, 0)  # smooth preview off
-                pm.displayPref(wireframeOnShadedActive="full")
-                pm.inViewMessage(
+                cmds.setAttr(obj.displaySmoothMesh, 0)  # smooth preview off
+                cmds.displayPref(wireframeOnShadedActive="full")
+                cmds.inViewMessage(
                     position="topCenter",
                     fade=1,
                     statusMessage="S-Div Preview <hl>OFF</hl>.<br>Wireframe <hl>Full</hl>.",
                 )
 
-            if pm.getAttr(obj.smoothLevel) != 1:
-                pm.setAttr(obj.smoothLevel, 1)
+            if cmds.getAttr(obj.smoothLevel) != 1:
+                cmds.setAttr(obj.smoothLevel, 1)
 
     @staticmethod
     def m_wireframe() -> None:
@@ -537,42 +550,42 @@ class DisplayMacros:
         """
         focused_panel = UiUtils.get_panel(withFocus=True)
         # Check if focused_panel is a modelPanel to avoid errors when it's not
-        if not focused_panel or not pm.modelEditor(
+        if not focused_panel or not cmds.modelEditor(
             focused_panel, query=True, exists=True
         ):
             print("No focused model panel found.")
             return
 
         # Query the current wireframe on shaded setting
-        state = pm.displayPref(q=True, wireframeOnShadedActive=True)
+        state = cmds.displayPref(q=True, wireframeOnShadedActive=True)
 
         if state == "none":  # Full Wireframe
-            pm.displayPref(wireframeOnShadedActive="full")
-            pm.modelEditor(focused_panel, e=True, wireframeOnShaded=True)
+            cmds.displayPref(wireframeOnShadedActive="full")
+            cmds.modelEditor(focused_panel, e=True, wireframeOnShaded=True)
             message = "Wireframe <hl>Full</hl>."
         elif state == "full":  # Wireframe Selected
-            pm.displayPref(wireframeOnShadedActive="reduced")
-            pm.modelEditor(focused_panel, e=True, wireframeOnShaded=False)
+            cmds.displayPref(wireframeOnShadedActive="reduced")
+            cmds.modelEditor(focused_panel, e=True, wireframeOnShaded=False)
             message = "Wireframe <hl>Reduced</hl>."
         elif state == "reduced":  # Wireframe Off
-            pm.displayPref(wireframeOnShadedActive="none")
-            pm.modelEditor(focused_panel, e=True, wireframeOnShaded=False)
+            cmds.displayPref(wireframeOnShadedActive="none")
+            cmds.modelEditor(focused_panel, e=True, wireframeOnShaded=False)
             message = "Wireframe <hl>None</hl>."
         else:  # Fallback or error condition, you might want to log an error or set a default state
             print(f"Unexpected wireframe state encountered: {state}")
             return
 
         # Display the message
-        pm.inViewMessage(position="topCenter", fade=True, statusMessage=message)
+        cmds.inViewMessage(position="topCenter", fade=True, statusMessage=message)
 
     @staticmethod
     def m_material_override():
         """Toggle Material Override"""
-        currentPanel = pm.playblast(
+        currentPanel = cmds.playblast(
             activeEditor=True
         )  # Use playblast to get the active panel with focus
         if not currentPanel:
-            pm.inViewMessage(
+            cmds.inViewMessage(
                 statusMessage="No active panel with focus found.",
                 pos="topCenter",
                 fade=True,
@@ -580,13 +593,13 @@ class DisplayMacros:
             return
 
         # Query the current state of default material usage
-        state = pm.modelEditor(currentPanel, q=True, useDefaultMaterial=True)
+        state = cmds.modelEditor(currentPanel, q=True, useDefaultMaterial=True)
 
         # Toggle the state of the default material
-        pm.modelEditor(currentPanel, edit=True, useDefaultMaterial=not state)
+        cmds.modelEditor(currentPanel, edit=True, useDefaultMaterial=not state)
 
         # Display the toggle state in the viewport
-        pm.inViewMessage(
+        cmds.inViewMessage(
             statusMessage=f"Default Material Override: <hl>{'On' if not state else 'Off'}</hl>.",
             pos="topCenter",
             fade=True,
@@ -598,42 +611,42 @@ class DisplayMacros:
         and smooth shaded with textures on. The transitions occur in the order mentioned.
         """
         currentPanel = UiUtils.get_panel(withFocus=True)
-        displayAppearance = pm.modelEditor(currentPanel, q=True, displayAppearance=True)
-        displayTextures = pm.modelEditor(currentPanel, q=True, displayTextures=True)
+        displayAppearance = cmds.modelEditor(currentPanel, q=True, displayAppearance=True)
+        displayTextures = cmds.modelEditor(currentPanel, q=True, displayTextures=True)
 
-        if pm.modelEditor(currentPanel, exists=1):
+        if cmds.modelEditor(currentPanel, exists=1):
             if displayAppearance == "wireframe":
-                pm.modelEditor(
+                cmds.modelEditor(
                     currentPanel,
                     edit=True,
                     displayAppearance="smoothShaded",
                     displayTextures=False,
                 )
-                pm.inViewMessage(
+                cmds.inViewMessage(
                     statusMessage="smoothShaded <hl>True</hl>\ndisplayTextures <hl>False</hl>.",
                     fade=True,
                     position="topCenter",
                 )
             elif displayAppearance == "smoothShaded" and not displayTextures:
-                pm.modelEditor(
+                cmds.modelEditor(
                     currentPanel,
                     edit=True,
                     displayAppearance="smoothShaded",
                     displayTextures=True,
                 )
-                pm.inViewMessage(
+                cmds.inViewMessage(
                     statusMessage="smoothShaded <hl>True</hl>\ndisplayTextures <hl>True</hl>.",
                     fade=True,
                     position="topCenter",
                 )
             else:
-                pm.modelEditor(
+                cmds.modelEditor(
                     currentPanel,
                     edit=True,
                     displayAppearance="wireframe",
                     displayTextures=False,
                 )
-                pm.inViewMessage(
+                cmds.inViewMessage(
                     statusMessage="wireframe <hl>True</hl>.",
                     fade=True,
                     position="topCenter",
@@ -645,33 +658,33 @@ class DisplayMacros:
         and flat lighting. If the lighting mode is not one of these states, it resets to the default state.
         """
         currentPanel = UiUtils.get_panel(withFocus=True)
-        displayLights = pm.modelEditor(currentPanel, query=1, displayLights=1)
+        displayLights = cmds.modelEditor(currentPanel, query=1, displayLights=1)
 
-        if pm.modelEditor(currentPanel, exists=1):
+        if cmds.modelEditor(currentPanel, exists=1):
             if displayLights == "default":
-                pm.modelEditor(currentPanel, edit=1, displayLights="all")
-                pm.inViewMessage(
+                cmds.modelEditor(currentPanel, edit=1, displayLights="all")
+                cmds.inViewMessage(
                     statusMessage="displayLights <hl>all</hl>.",
                     fade=True,
                     position="topCenter",
                 )
             elif displayLights == "all":
-                pm.modelEditor(currentPanel, edit=1, displayLights="active")
-                pm.inViewMessage(
+                cmds.modelEditor(currentPanel, edit=1, displayLights="active")
+                cmds.inViewMessage(
                     statusMessage="displayLights <hl>active</hl>.",
                     fade=True,
                     position="topCenter",
                 )
             elif displayLights == "active":
-                pm.modelEditor(currentPanel, edit=1, displayLights="flat")
-                pm.inViewMessage(
+                cmds.modelEditor(currentPanel, edit=1, displayLights="flat")
+                cmds.inViewMessage(
                     statusMessage="displayLights <hl>flat</hl>.",
                     fade=True,
                     position="topCenter",
                 )
             else:
-                pm.modelEditor(currentPanel, edit=1, displayLights="default")
-                pm.inViewMessage(
+                cmds.modelEditor(currentPanel, edit=1, displayLights="default")
+                cmds.inViewMessage(
                     statusMessage="displayLights <hl>default</hl>.",
                     fade=True,
                     position="topCenter",
@@ -723,10 +736,10 @@ class EditMacros:
     @CoreUtils.reparent
     @DisplayUtils.add_to_isolation
     def m_boolean(objects, repair_mesh=True, keep_boolean=True, **kwargs):
-        """Perform a boolean operation on two meshes using PyMel, managing shorthand and full parameter names dynamically."""
+        """Perform a boolean operation on two meshes using cmds, managing shorthand and full parameter names dynamically."""
         a, *b = objects
         if not a or not b:
-            pm.inViewMessage(
+            cmds.inViewMessage(
                 statusMessage="<hl>Insufficient selection.</hl> Operation requires at least two objects",
                 fade=True,
                 position="topCenter",
@@ -734,10 +747,10 @@ class EditMacros:
             return None
 
         if keep_boolean:
-            b = pm.duplicate(b, rr=True)
+            b = cmds.duplicate(b, rr=True)
 
         if len(b) > 1:  # Combine multiple meshes
-            b = pm.polyUnite(b, centerPivot=True, ch=False)[0]
+            b = cmds.polyUnite(b, centerPivot=True, ch=False)[0]
 
         if repair_mesh:  # Clean any n-gons before running the boolean
             from mayatk import MeshDiagnostics
@@ -760,7 +773,7 @@ class EditMacros:
         ch = kwargs.pop("constructionHistory", kwargs.pop("ch", False))
 
         # Perform the boolean operation
-        result = pm.polyCBoolOp(a, b, op=operation, n=name, ch=ch, **kwargs)[0]
+        result = cmds.polyCBoolOp(a, b, op=operation, n=name, ch=ch, **kwargs)[0]
 
         return result
 
@@ -769,7 +782,7 @@ class EditMacros:
     def m_lock_vertex_normals(objects):
         """Toggle lock/unlock vertex normals."""
         if not objects:
-            pm.inViewMessage(
+            cmds.inViewMessage(
                 statusMessage="Operation requires at least one selected object.",
                 pos="topCenter",
                 fade=True,
@@ -777,31 +790,31 @@ class EditMacros:
             return
 
         # Check if the current selection mode is object mode
-        is_object_mode = pm.selectMode(q=True, object=True)
+        is_object_mode = cmds.selectMode(q=True, object=True)
 
         if is_object_mode:  # Use the .vtx[:] notation directly
             objs = [f"{obj}.vtx[:]" for obj in objects]
         else:  # Convert selected components to vertices if in component mode
-            converted = pm.polyListComponentConversion(objects, toVertex=True)
-            objs = pm.ls(converted, flatten=True) if converted else []
+            converted = cmds.polyListComponentConversion(objects, toVertex=True)
+            objs = cmds.ls(converted, flatten=True) if converted else []
 
         if not objs:
             print("No valid objects or components given.")
             return
 
         # Determine the current normal state by querying the first vertex
-        current_state = all(pm.polyNormalPerVertex(objs, q=True, freezeNormal=True))
+        current_state = all(cmds.polyNormalPerVertex(objs, q=True, freezeNormal=True))
 
         if current_state:
             # If normals are currently locked, unlock them
-            pm.polyNormalPerVertex(objs, unFreezeNormal=True)
-            pm.inViewMessage(
+            cmds.polyNormalPerVertex(objs, unFreezeNormal=True)
+            cmds.inViewMessage(
                 statusMessage="Normals <hl>UnLocked</hl>.", pos="topCenter", fade=True
             )
         else:
             # If normals are currently unlocked, lock them
-            pm.polyNormalPerVertex(objs, freezeNormal=True)
-            pm.inViewMessage(
+            cmds.polyNormalPerVertex(objs, freezeNormal=True)
+            cmds.inViewMessage(
                 statusMessage="Normals <hl>Locked</hl>.", pos="topCenter", fade=True
             )
 
@@ -811,13 +824,13 @@ class EditMacros:
         and handle grouping for the pasted objects elegantly.
         """
         # Get a list of all nodes in the scene before pasting
-        before_paste = set(pm.ls())
+        before_paste = set(cmds.ls())
 
         # Perform the paste operation
         try:
-            pm.mel.cutCopyPaste("paste")
+            mel.eval("cutCopyPaste paste")
         except Exception:
-            pm.inViewMessage(
+            cmds.inViewMessage(
                 statusMessage="<hl>Nothing to paste from</hl>.",
                 pos="topCenter",
                 fade=True,
@@ -825,53 +838,58 @@ class EditMacros:
             return
 
         # Get a list of all nodes in the scene after pasting and find the difference
-        after_paste = set(pm.ls())
+        after_paste = set(cmds.ls())
         pasted_nodes = list(after_paste - before_paste)
         if not pasted_nodes:
             return
 
-        def strip_names(nodes: Set[pm.PyNode]) -> None:
-            """Strip 'pasted__' prefix and reference file names from node names."""
-            for node in nodes:
-                base_name = node.nodeName()
-                new_name = base_name.replace("pasted__", "").split(":")[-1]
+        # Track by UUID — survives the rename/reparent operations below.
+        pasted_uuids = cmds.ls(pasted_nodes, uuid=True) or []
 
-                # Attempt to rename the node with the new name
-                try:
-                    node.rename(new_name)
-                except RuntimeError as e:
-                    print(f"Error renaming {node}: {e}")
+        def resolve(uuid: str):
+            found = cmds.ls(uuid) or []
+            return found[0] if found else None
 
-        # Call strip_names on the pasted nodes
-        strip_names(set(pasted_nodes))
+        # Identify the topmost new transform among the pasted nodes (names still valid here).
+        top_level_uuid = None
+        for uid in pasted_uuids:
+            node = resolve(uid)
+            if not node or cmds.objectType(node) != "transform":
+                continue
+            if cmds.listRelatives(node, parent=True, fullPath=True):
+                continue
+            top_level_uuid = uid
+            break
 
-        # Identify the topmost new group among the pasted nodes
-        top_level_group = next(
-            (
-                node
-                for node in pasted_nodes
-                if isinstance(node, pm.nt.Transform)
-                and not node in before_paste
-                and node.getParent() is None
-            ),
-            None,
-        )
-
-        if top_level_group:
-            children = top_level_group.getChildren()
-
+        if top_level_uuid:
+            top = resolve(top_level_uuid)
+            children = cmds.listRelatives(top, children=True, fullPath=True) or []
             if len(children) == 1:
-                # Unparent the single child to the world (top level of the scene)
-                pm.parent(children, world=True)
-                pm.delete(top_level_group)  # Delete the now-empty top-level group
-            else:  # Rename the top-level group to 'pasted' if there are multiple children
-                top_level_group.rename("pasted")
+                # Unparent the single child and discard the wrapper group.
+                cmds.parent(children, world=True)
+                cmds.delete(top)
+            else:
+                cmds.rename(top, "pasted")
+
+        # Strip 'pasted__' prefix and reference namespaces from remaining pasted nodes.
+        for uid in pasted_uuids:
+            node = resolve(uid)
+            if not node:
+                continue
+            base_name = node.split("|")[-1]
+            new_name = base_name.replace("pasted__", "").split(":")[-1]
+            if new_name == base_name:
+                continue
+            try:
+                cmds.rename(node, new_name)
+            except RuntimeError as e:
+                print(f"Error renaming {node}: {e}")
 
     @staticmethod
     def m_multi_component() -> None:
         """Multi-Component Selection."""
-        pm.mel.SelectMultiComponentMask()
-        pm.inViewMessage(
+        mel.eval("SelectMultiComponentMask")
+        cmds.inViewMessage(
             statusMessage="<hl>Multi-Component Selection Mode</hl><br>Mask is now <hl>ON</hl>.",
             fade=True,
             position="topCenter",
@@ -881,10 +899,10 @@ class EditMacros:
     @CoreUtils.selected
     def m_merge_vertices(objects, tolerance=0.001) -> None:
         """Merge Vertices."""
-        objects = pm.ls(objects, objectsOnly=True)
+        objects = cmds.ls(objects, objectsOnly=True)
 
         if not objects:
-            pm.inViewMessage(
+            cmds.inViewMessage(
                 statusMessage="Warning: <hl>Nothing selected</hl>.<br>Must select an object or component.",
                 pos="topCenter",
                 fade=True,
@@ -892,22 +910,22 @@ class EditMacros:
 
         else:
             for obj in objects:
-                if pm.selectMode(q=True, component=True):  # Merge selected components.
-                    if pm.filterExpand(selectionMask=31):  # Vertices
-                        pm.polyMergeVertex(
+                if cmds.selectMode(q=True, component=True):  # Merge selected components.
+                    if cmds.filterExpand(selectionMask=31):  # Vertices
+                        cmds.polyMergeVertex(
                             distance=tolerance,
                             alwaysMergeTwoVertices=True,
                             constructionHistory=True,
                         )
                     else:  # If selection type is edges or facets:
-                        pm.mel.MergeToCenter()
+                        mel.eval("MergeToCenter")
 
                 else:  # If object mode. merge all vertices on the selected object.
                     for n, obj in enumerate(objects):
                         # Get number of vertices
-                        count = pm.polyEvaluate(obj, vertex=True)
+                        count = cmds.polyEvaluate(obj, vertex=True)
                         vertices = str(obj) + ".vtx [0:" + str(count) + "]"
-                        pm.polyMergeVertex(
+                        cmds.polyMergeVertex(
                             vertices,
                             distance=tolerance,
                             alwaysMergeTwoVertices=False,
@@ -915,9 +933,9 @@ class EditMacros:
                         )
 
                     # Return to original state
-                    pm.select(clear=True)
+                    cmds.select(clear=True)
                     for obj in objects:
-                        pm.select(obj, add=True)
+                        cmds.select(obj, add=True)
 
 
 class SelectionMacros:
@@ -926,41 +944,42 @@ class SelectionMacros:
     @staticmethod
     def m_object_selection() -> None:
         """Set object selection mask."""
-        object_mode = pm.selectMode(query=True, object=True)
-        pm.selectMode(co=object_mode)
-        pm.selectMode(object=True)
-        pm.selectType(allObjects=True)
+        object_mode = cmds.selectMode(query=True, object=True)
+        cmds.selectMode(co=object_mode)
+        cmds.selectMode(object=True)
+        cmds.selectType(allObjects=True)
 
     @staticmethod
     def m_vertex_selection() -> None:
         """Set vertex selection mask."""
-        pm.selectMode(component=True)
-        pm.selectType(vertex=True)
+        cmds.selectMode(component=True)
+        cmds.selectType(vertex=True)
 
     @staticmethod
     def m_edge_selection() -> None:
         """Set edge selection mask."""
-        pm.selectMode(component=True)
-        pm.selectType(edge=True)
+        cmds.selectMode(component=True)
+        cmds.selectType(edge=True)
 
     @staticmethod
     def m_face_selection() -> None:
         """Set face selection mask."""
-        pm.selectMode(component=True)
-        pm.selectType(facet=True)
+        cmds.selectMode(component=True)
+        cmds.selectType(facet=True)
 
     @staticmethod
     def m_invert_selection() -> None:
         """Invert the current selection of geometry or components."""
-        objects = pm.ls(selection=True, flatten=True)
+        objects = cmds.ls(selection=True, flatten=True)
 
         if not objects:
-            pm.warning("No valid objects selected to invert.")
+            cmds.warning("No valid objects selected to invert.")
             return
 
-        first = objects[0]
+        first = str(objects[0])
 
-        if isinstance(first, (pm.MeshVertex, pm.MeshEdge, pm.MeshFace)):
+        # Components have a "node.type[index]" format; bare nodes don't.
+        if "." in first and "[" in first:
             EditUtils.invert_components(select=True)
         else:
             EditUtils.invert_geometry(select=True)
@@ -970,39 +989,39 @@ class SelectionMacros:
     def m_toggle_selectability(objects):
         """Toggle selectability of the given objects."""
         if not objects:
-            pm.inViewMessage(
+            cmds.inViewMessage(
                 statusMessage="Operation requires at least one selected object.",
                 pos="topCenter",
                 fade=True,
             )
             return
 
-        for obj in pm.ls(objects, flatten=True):
+        for obj in cmds.ls(objects, flatten=True):
             try:
                 # Ensure attributes exist and are not locked or connected before modifying
-                if not obj.hasAttr("overrideEnabled") or obj.overrideEnabled.isLocked():
-                    pm.warning(
+                if not cmds.attributeQuery("overrideEnabled", node=str(obj), exists=True) or obj.overrideEnabled.isLocked():
+                    cmds.warning(
                         f"Cannot modify overrideEnabled for {obj}: Attribute is locked."
                     )
                     continue
                 if (
-                    not obj.hasAttr("overrideDisplayType")
+                    not cmds.attributeQuery("overrideDisplayType", node=str(obj), exists=True)
                     or obj.overrideDisplayType.isLocked()
                 ):
-                    pm.warning(
+                    cmds.warning(
                         f"Cannot modify overrideDisplayType for {obj}: Attribute is locked."
                     )
                     continue
                 if (
-                    not obj.hasAttr("useOutlinerColor")
+                    not cmds.attributeQuery("useOutlinerColor", node=str(obj), exists=True)
                     or obj.useOutlinerColor.isLocked()
                 ):
-                    pm.warning(
+                    cmds.warning(
                         f"Cannot modify useOutlinerColor for {obj}: Attribute is locked."
                     )
                     continue
-                if not obj.hasAttr("outlinerColor") or obj.outlinerColor.isLocked():
-                    pm.warning(
+                if not cmds.attributeQuery("outlinerColor", node=str(obj), exists=True) or obj.outlinerColor.isLocked():
+                    cmds.warning(
                         f"Cannot modify outlinerColor for {obj}: Attribute is locked."
                     )
                     continue
@@ -1014,7 +1033,7 @@ class SelectionMacros:
                     # Object is currently non-selectable, make it selectable
                     obj.overrideDisplayType.set(0)  # Normal mode
                     obj.useOutlinerColor.set(0)  # Disable custom outliner color
-                    pm.inViewMessage(
+                    cmds.inViewMessage(
                         statusMessage=f"{obj} <hl>Selectable</hl>.",
                         pos="topCenter",
                         fade=True,
@@ -1026,14 +1045,14 @@ class SelectionMacros:
                     obj.outlinerColor.set(
                         0.3, 0.6, 0.6
                     )  # Set color to desaturated teal
-                    pm.inViewMessage(
+                    cmds.inViewMessage(
                         statusMessage=f"{obj} <hl>Non-selectable</hl>.",
                         pos="topCenter",
                         fade=True,
                     )
 
             except RuntimeError as e:
-                pm.warning(f"Failed to modify selectability for {obj}: {e}")
+                cmds.warning(f"Failed to modify selectability for {obj}: {e}")
 
     @staticmethod
     def m_toggle_UV_select_type() -> None:
@@ -1041,19 +1060,19 @@ class SelectionMacros:
         Always switches to UV shell mode unless already in UV shell mode,
         then switches to UV component mode.
         """
-        inUVShellMode: bool = pm.selectType(query=True, meshUVShell=True)
-        pm.selectMode(component=True)
+        inUVShellMode: bool = cmds.selectType(query=True, meshUVShell=True)
+        cmds.selectMode(component=True)
 
         if inUVShellMode:  # Switch to UV component mode
-            pm.selectType(polymeshUV=True)
-            pm.inViewMessage(
+            cmds.selectType(polymeshUV=True)
+            cmds.inViewMessage(
                 statusMessage="Select Type: <hl>Polymesh UV</hl>",
                 fade=True,
                 position="topCenter",
             )
         else:  # Switch to UV shell mode
-            pm.selectType(meshUVShell=True)
-            pm.inViewMessage(
+            cmds.selectType(meshUVShell=True)
+            cmds.inViewMessage(
                 statusMessage="Select Type: <hl>UV Shell</hl>",
                 fade=True,
                 position="topCenter",
@@ -1062,32 +1081,32 @@ class SelectionMacros:
     @staticmethod
     def m_invert_component_selection() -> None:
         """Invert the component selection on the currently selected objects."""
-        if not pm.selectMode(query=1, component=1):  # component select mode
+        if not cmds.selectMode(query=1, component=1):  # component select mode
             return "Error: Selection must be at the component level."
 
-        objects = pm.ls(sl=1, objectsOnly=1)
-        selection = pm.ls(sl=1)
+        objects = cmds.ls(sl=1, objectsOnly=1)
+        selection = cmds.ls(sl=1)
 
         invert = []
         for obj in objects:
-            if pm.selectType(query=1, vertex=1):  # vertex
-                selectedVertices = pm.filterExpand(
+            if cmds.selectType(query=1, vertex=1):  # vertex
+                selectedVertices = cmds.filterExpand(
                     selection, selectionMask=31, expand=1
                 )
-                allVertices = pm.filterExpand(obj + ".v[*]", sm=31)
+                allVertices = cmds.filterExpand(obj + ".v[*]", sm=31)
                 invert += {v for v in allVertices if v not in selectedVertices}
 
-            elif pm.selectType(query=1, edge=1):  # edge
-                edges = pm.filterExpand(selection, selectionMask=32, expand=1)
-                allEdges = pm.filterExpand(obj + ".e[*]", sm=32)
+            elif cmds.selectType(query=1, edge=1):  # edge
+                edges = cmds.filterExpand(selection, selectionMask=32, expand=1)
+                allEdges = cmds.filterExpand(obj + ".e[*]", sm=32)
                 invert += {e for e in allEdges if e not in edges}
 
-            elif pm.selectType(query=1, facet=1):  # face
-                selectedFaces = pm.filterExpand(selection, selectionMask=34, expand=1)
-                allFaces = pm.filterExpand(obj + ".f[*]", sm=34)
+            elif cmds.selectType(query=1, facet=1):  # face
+                selectedFaces = cmds.filterExpand(selection, selectionMask=34, expand=1)
+                allFaces = cmds.filterExpand(obj + ".f[*]", sm=34)
                 invert += {f for f in allFaces if f not in selectedFaces}
 
-        pm.select(invert, replace=1)
+        cmds.select(invert, replace=1)
 
 
 class UiMacros:
@@ -1120,10 +1139,10 @@ class UiMacros:
 
         # Toggle the panels based on the new state
         if toggle_panels:
-            panels = pm.getPanel(allPanels=True)
+            panels = cmds.getPanel(allPanels=True)
             for panel in panels:
-                pm.panel(panel, edit=True, menuBarVisible=new_state)
-            pm.mel.ToggleModelEditorBars(new_state)
+                cmds.panel(panel, edit=True, menuBarVisible=new_state)
+            mel.eval(f"ToggleModelEditorBars {new_state}")
 
 
 class AnimationMacros:
@@ -1137,7 +1156,7 @@ class AnimationMacros:
             attrs = Attributes.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
-                pm.setKeyframe(attr_)
+                cmds.setKeyframe(attr_)
                 # cutKey -cl -t ":" -f ":" -at "tx" -at "ty" -at "tz" pSphere1; #remove keys
 
     @staticmethod
@@ -1148,8 +1167,8 @@ class AnimationMacros:
             attrs = Attributes.get_selected_channels()
             for attr in attrs:
                 attr_ = getattr(obj, attr)
-                pm.setKeyframe(attr_)
-                pm.cutKey(attr_, cl=True)  # remove keys
+                cmds.setKeyframe(attr_)
+                cmds.cutKey(attr_, cl=True)  # remove keys
 
     # ========================================================================================
 
@@ -1179,24 +1198,24 @@ class Macros(
 # mel.createMelWrapper(method)
 
 # #set command
-# pm.nameCommand('name', annotation='', command=<>)
-# pm.hotkey(key='1', altModifier=True, name='name')
+# cmds.nameCommand('name', annotation='', command=<>)
+# cmds.hotkey(key='1', altModifier=True, name='name')
 
 
 # #clear keyboard shortcut
-# pm.hotkey(keyShortcut=key, name='', releaseName='', ctl=ctl, alt=alt, sht=sht) #unset the key press name and releaseName.
+# cmds.hotkey(keyShortcut=key, name='', releaseName='', ctl=ctl, alt=alt, sht=sht) #unset the key press name and releaseName.
 
 
 # #query runTimeCommand
-# if pm.runTimeCommand('name', exists=True):
+# if cmds.runTimeCommand('name', exists=True):
 
 
 # #delete runTimeCommand
-# pm.runTimeCommand('name', edit=True, delete=True)
+# cmds.runTimeCommand('name', edit=True, delete=True)
 
 
 # #set runTimeCommand
-# pm.runTimeCommand(
+# cmds.runTimeCommand(
 #             'name',
 #             annotation=string,
 #             category=string,

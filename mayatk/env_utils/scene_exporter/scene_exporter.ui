@@ -31,19 +31,19 @@
    </property>
    <layout class="QVBoxLayout" name="verticalLayout_2">
     <property name="spacing">
-     <number>1</number>
+     <number>2</number>
     </property>
     <property name="leftMargin">
-     <number>6</number>
+     <number>2</number>
     </property>
     <property name="topMargin">
-     <number>6</number>
+     <number>2</number>
     </property>
     <property name="rightMargin">
-     <number>6</number>
+     <number>2</number>
     </property>
     <property name="bottomMargin">
-     <number>6</number>
+     <number>2</number>
     </property>
     <item>
      <layout class="QVBoxLayout" name="verticalLayout">
@@ -51,7 +51,7 @@
        <number>0</number>
       </property>
       <item>
-       <widget class="Header" name="header">
+       <widget class="Header" name="header" native="true">
         <property name="minimumSize">
          <size>
           <width>0</width>
@@ -64,7 +64,7 @@
           <bold>true</bold>
          </font>
         </property>
-        <property name="text">
+        <property name="text" stdset="0">
          <string>SCENE EXPORTER</string>
         </property>
        </widget>
@@ -347,8 +347,13 @@
  <customwidgets>
   <customwidget>
    <class>Header</class>
-   <extends>QLabel</extends>
-   <header>uitk.widgets.header.Header.h</header>
+   <extends>QWidget</extends>
+   <header>uitk.widgets.header</header>
+  </customwidget>
+  <customwidget>
+   <class>LineEdit</class>
+   <extends>QLineEdit</extends>
+   <header>uitk.widgets.lineEdit</header>
   </customwidget>
   <customwidget>
    <class>ComboBox</class>
@@ -360,11 +365,6 @@
    <extends>QGroupBox</extends>
    <header>uitk.widgets.collapsableGroup.CollapsableGroup.h</header>
    <container>1</container>
-  </customwidget>
-  <customwidget>
-   <class>LineEdit</class>
-   <extends>QLineEdit</extends>
-   <header>widgets.lineedit.h</header>
   </customwidget>
   <customwidget>
    <class>WidgetComboBox</class>

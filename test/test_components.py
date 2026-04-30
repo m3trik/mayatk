@@ -12,12 +12,13 @@ Tests for Components class functionality including:
 - Normal operations (angles, hardness, averaging)
 - Topology modification (bridge)
 """
+import math
 import unittest
-import pymel.core as pm
 import mayatk as mtk
 from mayatk.core_utils.components import Components
 
 from base_test import MayaTkTestCase
+import maya.cmds as cmds
 
 
 class TestComponents(MayaTkTestCase):
@@ -26,9 +27,9 @@ class TestComponents(MayaTkTestCase):
     def setUp(self):
         """Set up test scene with geometry."""
         super().setUp()
-        self.cube = pm.polyCube(name="test_comp_cube")[0]
-        self.sphere = pm.polySphere(name="test_comp_sphere")[0]
-        self.plane = pm.polyPlane(name="test_comp_plane", sx=5, sy=5)[0]
+        self.cube = cmds.polyCube(name="test_comp_cube")[0]
+        self.sphere = cmds.polySphere(name="test_comp_sphere")[0]
+        self.plane = cmds.polyPlane(name="test_comp_plane", sx=5, sy=5)[0]
 
     def tearDown(self):
         """Clean up."""
@@ -38,8 +39,8 @@ class TestComponents(MayaTkTestCase):
             "test_comp_plane",
             "test_comp_cube2",
         ]:
-            if pm.objExists(obj):
-                pm.delete(obj)
+            if cmds.objExists(obj):
+                cmds.delete(obj)
         super().tearDown()
 
     # -------------------------------------------------------------------------
@@ -144,8 +145,8 @@ class TestComponents(MayaTkTestCase):
         """Test getting contiguous edges."""
         # Select two edges that share a vertex
         vtx = f"{self.plane}.vtx[0]"
-        edges = pm.polyListComponentConversion(vtx, toEdge=True)
-        edges = pm.ls(edges, flatten=True)
+        edges = cmds.polyListComponentConversion(vtx, toEdge=True)
+        edges = cmds.ls(edges, flatten=True)
 
         groups = Components.get_contigious_edges(edges)
         self.assertEqual(
@@ -169,14 +170,14 @@ class TestComponents(MayaTkTestCase):
     def test_get_islands(self):
         """Test getting islands from object."""
         # Create combined object with 2 shells
-        c2 = pm.polyCube(name="test_comp_cube2")[0]
-        pm.move(c2, 5, 0, 0)
-        combined = pm.polyUnite(self.cube, c2, ch=False)[0]
+        c2 = cmds.polyCube(name="test_comp_cube2")[0]
+        cmds.move(5, 0, 0, c2)
+        combined = cmds.polyUnite(self.cube, c2, ch=False)[0]
 
         islands = list(Components.get_islands(combined))
         self.assertEqual(len(islands), 2)
 
-        pm.delete(combined)
+        cmds.delete(combined)
 
     def test_get_border_components(self):
         """Test getting border components."""
@@ -202,25 +203,27 @@ class TestComponents(MayaTkTestCase):
         v1, v2 = Components.get_furthest_vertices(
             f"{self.cube}.vtx[:]", f"{self.cube}.vtx[:]"
         )
-        dist = (pm.pointPosition(v1) - pm.pointPosition(v2)).length()
+        p1 = cmds.pointPosition(v1)
+        p2 = cmds.pointPosition(v2)
+        dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(p1, p2)))
         self.assertAlmostEqual(dist, 1.732, places=2)
 
     def test_get_closest_verts(self):
         """Test getting closest vertices between sets."""
         # Create another cube near the first
-        c2 = pm.polyCube()[0]
-        pm.move(c2, 2, 0, 0)
+        c2 = cmds.polyCube()[0]
+        cmds.move(2, 0, 0, c2)
 
         pairs = Components.get_closest_verts(f"{self.cube}.vtx[:]", f"{c2}.vtx[:]")
         self.assertTrue(len(pairs) > 0)
 
         v1, v2 = pairs[0]
-        p1 = pm.pointPosition(v1)
-        p2 = pm.pointPosition(v2)
-        dist = (p1 - p2).length()
+        p1 = cmds.pointPosition(v1)
+        p2 = cmds.pointPosition(v2)
+        dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(p1, p2)))
         self.assertAlmostEqual(dist, 1.0, places=2)
 
-        pm.delete(c2)
+        cmds.delete(c2)
 
     def test_get_closest_vertex(self):
         """Test getting closest vertex on object."""
@@ -269,12 +272,12 @@ class TestComponents(MayaTkTestCase):
 
     def test_get_normal(self):
         """Test getting face normal."""
-        normal = Components.get_normal(self.cube.f[0])
+        normal = Components.get_normal(f"{self.cube}.f[0]")
         self.assertEqual(len(normal), 3)
 
     def test_get_normal_angle(self):
         """Test getting normal angle."""
-        angle = Components.get_normal_angle(self.cube.e[0])
+        angle = Components.get_normal_angle(f"{self.cube}.e[0]")
         # Returns float for single edge
         self.assertAlmostEqual(angle, 90.0, places=1)
 
@@ -311,8 +314,8 @@ class TestComponents(MayaTkTestCase):
 
         # The filtered edges should have their names in the angles dict
         for edge in edges:
-            self.assertIn(edge.name(), angles)
-            self.assertTrue(80 <= angles[edge.name()] <= 100)
+            self.assertIn(edge, angles)
+            self.assertTrue(80 <= angles[edge] <= 100)
 
     def test_set_edge_hardness(self):
         """Test setting edge hardness based on angle threshold."""
@@ -323,7 +326,7 @@ class TestComponents(MayaTkTestCase):
         )
 
         # Verify the cube still exists and is valid
-        self.assertTrue(pm.objExists(self.cube))
+        self.assertTrue(cmds.objExists(self.cube))
 
     def test_set_edge_hardness_no_values(self):
         """Test set_edge_hardness early exit when no hardness values provided."""
@@ -333,12 +336,12 @@ class TestComponents(MayaTkTestCase):
     def test_set_edge_hardness_upper_only(self):
         """Test setting only upper hardness."""
         Components.set_edge_hardness(self.cube, 45, upper_hardness=0)
-        self.assertTrue(pm.objExists(self.cube))
+        self.assertTrue(cmds.objExists(self.cube))
 
     def test_set_edge_hardness_lower_only(self):
         """Test setting only lower hardness."""
         Components.set_edge_hardness(self.cube, 45, lower_hardness=180)
-        self.assertTrue(pm.objExists(self.cube))
+        self.assertTrue(cmds.objExists(self.cube))
 
     def test_average_normals(self):
         """Test averaging normals."""
@@ -348,24 +351,24 @@ class TestComponents(MayaTkTestCase):
     def test_transfer_normals_basic(self):
         """Test transferring normals from source to target mesh.
 
-        Bug: pm.ls(objects, type='mesh') filtered out transform nodes,
+        Bug: cmds.ls(objects, type='mesh') filtered out transform nodes,
         so the function always raised ValueError. Also, polySoftEdge at
         the end overwrote the transferred normals and the tentacle call
         site passed args incorrectly.
         Fixed: 2026-02-27
         """
         # Create two cubes at the same position (same topology)
-        source = pm.polyCube(name="src_cube")[0]
-        target = pm.polyCube(name="tgt_cube")[0]
+        source = cmds.polyCube(name="src_cube")[0]
+        target = cmds.polyCube(name="tgt_cube")[0]
 
         # Rotate source so its normals differ from target
-        pm.rotate(source, 45, 0, 0)
-        pm.makeIdentity(source, apply=True, t=1, r=1, s=1, n=0)
+        cmds.rotate(45, 0, 0, source)
+        cmds.makeIdentity(source, apply=True, t=1, r=1, s=1, n=0)
 
         # Get target normals before transfer
         before = [
-            pm.polyNormalPerVertex(f"{target}.vtx[{i}]", q=True, xyz=True)
-            for i in range(target.numVertices())
+            cmds.polyNormalPerVertex(f"{target}.vtx[{i}]", q=True, xyz=True)
+            for i in range(cmds.polyEvaluate(target, vertex=True))
         ]
 
         # Transfer normals using transform nodes (the typical user workflow)
@@ -373,8 +376,8 @@ class TestComponents(MayaTkTestCase):
 
         # Get target normals after transfer
         after = [
-            pm.polyNormalPerVertex(f"{target}.vtx[{i}]", q=True, xyz=True)
-            for i in range(target.numVertices())
+            cmds.polyNormalPerVertex(f"{target}.vtx[{i}]", q=True, xyz=True)
+            for i in range(cmds.polyEvaluate(target, vertex=True))
         ]
 
         # Normals should have changed
@@ -386,8 +389,8 @@ class TestComponents(MayaTkTestCase):
 
     def test_transfer_normals_rejects_non_mesh(self):
         """Test that transfer_normals raises for non-mesh objects."""
-        grp1 = pm.group(empty=True, name="empty_grp1")
-        grp2 = pm.group(empty=True, name="empty_grp2")
+        grp1 = cmds.group(empty=True, name="empty_grp1")
+        grp2 = cmds.group(empty=True, name="empty_grp2")
         with self.assertRaises(ValueError):
             Components.transfer_normals([grp1, grp2])
 
@@ -401,7 +404,7 @@ class TestComponents(MayaTkTestCase):
             Components.bridge_connected_edges(
                 [f"{self.plane}.e[0]", f"{self.plane}.e[1]"]
             )
-            self.assertTrue(self.plane.numFaces() > 25)
+            self.assertTrue(cmds.polyEvaluate(self.plane, face=True) > 25)
         except Exception as e:
             print(f"Bridge failed: {e}")
 
@@ -411,13 +414,13 @@ class TestComponentsEdgeCases(MayaTkTestCase):
 
     def test_get_components_empty_object(self):
         """Test getting components from object with no geometry."""
-        empty_group = pm.group(empty=True, name="test_empty_group")
+        empty_group = cmds.group(empty=True, name="test_empty_group")
         try:
             result = Components.get_components(empty_group, "vertex")
             self.assertTrue(not result)
         finally:
-            if pm.objExists("test_empty_group"):
-                pm.delete("test_empty_group")
+            if cmds.objExists("test_empty_group"):
+                cmds.delete("test_empty_group")
 
     def test_filter_components_empty_list(self):
         """Test filtering with empty component list."""
@@ -426,10 +429,10 @@ class TestComponentsEdgeCases(MayaTkTestCase):
 
     def test_get_shortest_path_invalid(self):
         """Test shortest path with invalid inputs."""
-        cube = pm.polyCube()[0]
+        cube = cmds.polyCube()[0]
         with self.assertRaises(ValueError):
             Components.get_shortest_path([f"{cube}.vtx[0]"])  # Only 1
-        pm.delete(cube)
+        cmds.delete(cube)
 
 
 if __name__ == "__main__":

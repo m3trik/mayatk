@@ -5,13 +5,14 @@ from __future__ import annotations
 from typing import Optional, Sequence, Union
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
+    import maya.mel as mel
 except ImportError as error:  # pragma: no cover - Maya runtime specific
     print(__file__, error)
 
 # Type aliases keep Maya stubs optional during static analysis
-PyNodeLike = Union[str, object]
-PyNodeSeq = Union[PyNodeLike, Sequence[PyNodeLike]]
+NodeLike = Union[str, object]
+NodeSeq = Union[NodeLike, Sequence[NodeLike]]
 
 
 class MeshDiagnostics:
@@ -19,7 +20,7 @@ class MeshDiagnostics:
 
     @staticmethod
     def clean_geometry(
-        objects: PyNodeSeq,
+        objects: NodeSeq,
         allMeshes: bool = False,
         repair: bool = False,
         quads: bool = False,
@@ -43,7 +44,7 @@ class MeshDiagnostics:
         """Select or remove unwanted geometry from a mesh via ``polyCleanupArgList``."""
 
         if allMeshes:
-            objects = pm.ls(geometry=True)
+            objects = cmds.ls(geometry=True)
         elif not isinstance(objects, (list, tuple, set)):
             objects = [objects]
 
@@ -54,9 +55,9 @@ class MeshDiagnostics:
             )
 
         if bakePartialHistory:
-            pm.bakePartialHistory(objects, prePostDeformers=True)
+            cmds.bakePartialHistory(objects, prePostDeformers=True)
 
-        pm.select(objects)
+        cmds.select(objects)
 
         options = [
             int(allMeshes),
@@ -82,21 +83,21 @@ class MeshDiagnostics:
         arg_list = ",".join([f'"{option}"' for option in options])
         command = f"polyCleanupArgList 4 {{{arg_list}}}"
 
-        pm.mel.eval(command)
-        pm.select(objects)
+        mel.eval(command)
+        cmds.select(objects)
 
     @staticmethod
-    def get_ngons(objects: Optional[PyNodeSeq], repair: bool = False):
+    def get_ngons(objects: Optional[NodeSeq], repair: bool = False):
         """Find N-gons and optionally convert them to quads."""
 
-        pm.select(objects)
-        pm.mel.changeSelectMode(1)
-        pm.selectType(smp=0, sme=1, smf=0, smu=0, pv=0, pe=1, pf=0, puv=0)
-        pm.polySelectConstraint(mode=3, type=0x0008, size=3)
-        n_gons = pm.ls(sl=1)
-        pm.polySelectConstraint(disable=1)
+        cmds.select(objects)
+        mel.eval("changeSelectMode 1")
+        cmds.selectType(smp=0, sme=1, smf=0, smu=0, pv=0, pe=1, pf=0, puv=0)
+        cmds.polySelectConstraint(mode=3, type=0x0008, size=3)
+        n_gons = cmds.ls(sl=1)
+        cmds.polySelectConstraint(disable=1)
 
         if repair:
-            pm.polyQuad(n_gons, angle=30, kgb=1, ktb=1, khe=1, ws=1)
+            cmds.polyQuad(n_gons, angle=30, kgb=1, ktb=1, khe=1, ws=1)
 
         return n_gons

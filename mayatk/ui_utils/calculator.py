@@ -1,11 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+import maya.cmds as cmds
+import maya.mel as mel
 import math
 
-try:
-    import pymel.core as pm
-except ImportError:
-    pm = None
 
 from qtpy import QtWidgets, QtCore
 
@@ -38,11 +36,11 @@ class CalculatorController:
 
     @staticmethod
     def get_fps_value():
-        if not pm:
+        if not cmds:
             return 24.0
         try:
             # currentTimeUnitToFPS is a MEL command that returns the float FPS
-            return pm.mel.currentTimeUnitToFPS()
+            return float(mel.eval("currentTimeUnitToFPS"))
         except Exception:
             # Fallback map if MEL fails
             fps_map = {
@@ -57,14 +55,14 @@ class CalculatorController:
                 "30fps": 30.0,
                 "60fps": 60.0,
             }
-            unit = pm.currentUnit(q=True, time=True)
+            unit = cmds.currentUnit(q=True, time=True)
             return fps_map.get(unit, 24.0)
 
     @staticmethod
     def get_current_time():
-        if not pm:
+        if not cmds:
             return "0"
-        return str(pm.currentTime(q=True))
+        return str(cmds.currentTime(q=True))
 
     @classmethod
     def frames_to_sec(cls, frames):

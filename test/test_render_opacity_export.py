@@ -2,8 +2,8 @@
 # coding=utf-8
 import os
 import unittest
-import pymel.core as pm
 import maya.cmds as cmds
+import maya.mel as mel
 from mayatk.mat_utils.render_opacity._render_opacity import RenderOpacity
 from base_test import MayaTkTestCase
 
@@ -13,16 +13,16 @@ class TestRenderOpacityExport(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        self.cube = pm.polyCube(name="export_cube")[0]
+        self.cube = cmds.polyCube(name="export_cube")[0]
         # Use workspace path for debugging visibility
         self.fbx_path = os.path.join(
             r"O:/Cloud/Code/_scripts/mayatk/test", "debug_opacity.fbx"
         )
 
         # Ensure FBX plugin is loaded
-        if not pm.pluginInfo("fbxmaya", query=True, loaded=True):
+        if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
             try:
-                pm.loadPlugin("fbxmaya")
+                cmds.loadPlugin("fbxmaya")
             except Exception:
                 self.skipTest("fbxmaya plugin not available")
 
@@ -40,7 +40,7 @@ class TestRenderOpacityExport(MayaTkTestCase):
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
         # Select object to export
-        pm.select(self.cube)
+        cmds.select(self.cube)
 
         # Configure FBX for ASCII export (human readable)
         # Note: Options string format depends on plugin version, but 'Ascii' is standard
@@ -49,8 +49,8 @@ class TestRenderOpacityExport(MayaTkTestCase):
         # -type "FBX export"
 
         # Set FBX settings via MEL (most reliable method)
-        pm.mel.eval("FBXExportInAscii -v true")
-        pm.mel.eval(f'FBXExport -f "{self.fbx_path.replace(os.sep, "/")}" -s')
+        mel.eval("FBXExportInAscii -v true")
+        mel.eval(f'FBXExport -f "{self.fbx_path.replace(os.sep, "/")}" -s')
 
         self.assertTrue(os.path.exists(self.fbx_path), "FBX file was not created")
 
@@ -86,15 +86,15 @@ class TestRenderOpacityExport(MayaTkTestCase):
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
         # Keyframe it
-        self.cube.opacity.set(1.0)
-        pm.setKeyframe(self.cube, attribute="opacity", t=1)
-        self.cube.opacity.set(0.0)
-        pm.setKeyframe(self.cube, attribute="opacity", t=10)
+        cmds.setAttr(f"{self.cube}.opacity", 1.0)
+        cmds.setKeyframe(self.cube, attribute="opacity", t=1)
+        cmds.setAttr(f"{self.cube}.opacity", 0.0)
+        cmds.setKeyframe(self.cube, attribute="opacity", t=10)
 
-        pm.select(self.cube)
-        pm.mel.eval("FBXExportInAscii -v true")
-        pm.mel.eval("FBXExportBakeComplexAnimation -v false")  # Export curves directly
-        pm.mel.eval(f'FBXExport -f "{self.fbx_path.replace(os.sep, "/")}" -s')
+        cmds.select(self.cube)
+        mel.eval("FBXExportInAscii -v true")
+        mel.eval("FBXExportBakeComplexAnimation -v false")  # Export curves directly
+        mel.eval(f'FBXExport -f "{self.fbx_path.replace(os.sep, "/")}" -s')
 
         with open(self.fbx_path, "r") as f:
             content = f.read()
@@ -130,24 +130,24 @@ class TestSharedMaterialExport(MayaTkTestCase):
         )
 
         # Ensure FBX plugin
-        if not pm.pluginInfo("fbxmaya", query=True, loaded=True):
+        if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
             try:
-                pm.loadPlugin("fbxmaya")
+                cmds.loadPlugin("fbxmaya")
             except Exception:
                 self.skipTest("fbxmaya plugin not available")
 
         # Create three objects sharing one lambert material and UV set
-        self.mat = pm.shadingNode("lambert", asShader=True, name="shared_mat")
-        self.sg = pm.sets(
+        self.mat = cmds.shadingNode("lambert", asShader=True, name="shared_mat")
+        self.sg = cmds.sets(
             renderable=True, noSurfaceShader=True, empty=True, name="shared_sg"
         )
-        pm.connectAttr(self.mat.outColor, self.sg.surfaceShader)
+        cmds.connectAttr(f"{self.mat}.outColor", f"{self.sg}.surfaceShader")
 
         self.objects = []
         for i, name in enumerate(["piece_A", "piece_B", "piece_C"]):
-            obj = pm.polyCube(name=name)[0]
-            pm.move(obj, i * 3, 0, 0)
-            pm.sets(self.sg, forceElement=obj)
+            obj = cmds.polyCube(name=name)[0]
+            cmds.move(i * 3, 0, 0, obj)
+            cmds.sets(obj, edit=True, forceElement=self.sg)
             self.objects.append(obj)
 
     def tearDown(self):
@@ -159,16 +159,16 @@ class TestSharedMaterialExport(MayaTkTestCase):
 
         if animate:
             for i, obj in enumerate(objects):
-                obj.opacity.set(1.0)
-                pm.setKeyframe(obj, attribute="opacity", t=1)
-                obj.opacity.set(0.0)
-                pm.setKeyframe(obj, attribute="opacity", t=10 + i * 5)
+                cmds.setAttr(f"{obj}.opacity", 1.0)
+                cmds.setKeyframe(obj, attribute="opacity", t=1)
+                cmds.setAttr(f"{obj}.opacity", 0.0)
+                cmds.setKeyframe(obj, attribute="opacity", t=10 + i * 5)
 
-        pm.select(objects)
-        pm.mel.eval("FBXExportInAscii -v true")
+        cmds.select(objects)
+        mel.eval("FBXExportInAscii -v true")
         if animate:
-            pm.mel.eval("FBXExportBakeComplexAnimation -v false")
-        pm.mel.eval(f'FBXExport -f "{self.fbx_path.replace(os.sep, "/")}" -s')
+            mel.eval("FBXExportBakeComplexAnimation -v false")
+        mel.eval(f'FBXExport -f "{self.fbx_path.replace(os.sep, "/")}" -s')
         self.assertTrue(os.path.exists(self.fbx_path), "FBX was not created")
 
         with open(self.fbx_path, "r") as f:
@@ -223,9 +223,9 @@ class TestSharedMaterialExport(MayaTkTestCase):
         for obj in self.objects:
             # FBX Model names include the short node name
             self.assertIn(
-                obj.nodeName(),
+                obj.split('|')[-1].split(':')[-1],
                 content,
-                f"Object '{obj.nodeName()}' missing from FBX",
+                f"Object '{obj.split('|')[-1].split(':')[-1]}' missing from FBX",
             )
 
         # At least one UV layer element should exist per mesh
@@ -256,7 +256,7 @@ class TestSharedMaterialExport(MayaTkTestCase):
 
         # The third object should not appear
         self.assertNotIn(
-            self.objects[2].nodeName(),
+            self.objects[2],
             content,
             "Non-selected object should not appear in exported FBX",
         )
@@ -276,13 +276,13 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
         self.fbx_path = os.path.join(
             r"O:/Cloud/Code/_scripts/mayatk/test", "debug_dual_key.fbx"
         )
-        if not pm.pluginInfo("fbxmaya", query=True, loaded=True):
+        if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
             try:
-                pm.loadPlugin("fbxmaya")
+                cmds.loadPlugin("fbxmaya")
             except Exception:
                 self.skipTest("fbxmaya plugin not available")
 
-        self.cube = pm.polyCube(name="dual_key_cube")[0]
+        self.cube = cmds.polyCube(name="dual_key_cube")[0]
 
     def tearDown(self):
         super().tearDown()
@@ -293,10 +293,10 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
                 pass
 
     def _export_ascii_fbx(self):
-        pm.select(self.cube)
-        pm.mel.eval("FBXExportInAscii -v true")
-        pm.mel.eval("FBXExportBakeComplexAnimation -v false")
-        pm.mel.eval(f'FBXExport -f "{self.fbx_path.replace(os.sep, "/")}" -s')
+        cmds.select(self.cube)
+        mel.eval("FBXExportInAscii -v true")
+        mel.eval("FBXExportBakeComplexAnimation -v false")
+        mel.eval(f'FBXExport -f "{self.fbx_path.replace(os.sep, "/")}" -s')
         with open(self.fbx_path, "r") as f:
             return f.read()
 
@@ -314,9 +314,9 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
         # Key opacity 1→0→1
-        pm.setKeyframe(self.cube, attribute="opacity", time=1, value=1.0)
-        pm.setKeyframe(self.cube, attribute="opacity", time=15, value=0.0)
-        pm.setKeyframe(self.cube, attribute="opacity", time=30, value=1.0)
+        cmds.setKeyframe(self.cube, attribute="opacity", time=1, value=1.0)
+        cmds.setKeyframe(self.cube, attribute="opacity", time=15, value=0.0)
+        cmds.setKeyframe(self.cube, attribute="opacity", time=30, value=1.0)
 
         # Mirror to visibility
         OpacityAttributeMode.sync_visibility_from_opacity([self.cube])
@@ -349,11 +349,11 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
         # Apply the fade_in behavior (template targets 'visibility')
-        apply_behavior(self.cube.name(), "fade_in", start=1, end=30)
+        apply_behavior(self.cube, "fade_in", start=1, end=30)
 
         # Verify both channels are keyed in Maya
-        opacity_keys = pm.keyframe(self.cube, attribute="opacity", q=True, tc=True)
-        vis_keys = pm.keyframe(self.cube, attribute="visibility", q=True, tc=True)
+        opacity_keys = cmds.keyframe(self.cube, attribute="opacity", q=True, tc=True)
+        vis_keys = cmds.keyframe(self.cube, attribute="visibility", q=True, tc=True)
         self.assertTrue(opacity_keys, "Opacity should have keyframes")
         self.assertTrue(vis_keys, "Visibility should have keyframes")
         # Visibility is boolean-typed; Maya may store keys differently
@@ -390,19 +390,19 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
         from mayatk.anim_utils.shots.shot_manifest.behaviors import apply_behavior
 
         # No RenderOpacity.create — start from a plain object
-        self.assertFalse(self.cube.hasAttr("opacity"))
+        self.assertFalse(cmds.attributeQuery("opacity", node=str(self.cube), exists=True))
 
-        apply_behavior(self.cube.name(), "fade_in", start=1, end=30)
+        apply_behavior(self.cube, "fade_in", start=1, end=30)
 
         # Auto-promotion must have occurred
         self.assertTrue(
-            self.cube.hasAttr("opacity"),
+            cmds.attributeQuery("opacity", node=str(self.cube), exists=True),
             "Visibility-targeting behavior must auto-create the opacity attr "
             "so the FBX gets a smooth opacity curve for the Unity controller",
         )
 
-        opacity_keys = pm.keyframe(self.cube, attribute="opacity", q=True, tc=True)
-        vis_keys = pm.keyframe(self.cube, attribute="visibility", q=True, tc=True)
+        opacity_keys = cmds.keyframe(self.cube, attribute="opacity", q=True, tc=True)
+        vis_keys = cmds.keyframe(self.cube, attribute="visibility", q=True, tc=True)
         self.assertTrue(opacity_keys, "Opacity should have keyframes")
         self.assertTrue(vis_keys, "Visibility should have keyframes")
 

@@ -5,8 +5,8 @@ import logging
 from typing import Optional, Dict, Any, List
 
 try:
-    import pymel.core as pm
-    from maya import cmds
+    import maya.cmds as cmds
+    import maya.mel as mel
 except ImportError:
     pass
 
@@ -40,11 +40,11 @@ class FbxUtils(ptk.HelpMixin):
         """
         for option, value in options.items():
             if isinstance(value, bool):
-                pm.mel.eval(f"{option} -v {'true' if value else 'false'}")
+                mel.eval(f"{option} -v {'true' if value else 'false'}")
             elif isinstance(value, int):
-                pm.mel.eval(f"{option} -v {value}")
+                mel.eval(f"{option} -v {value}")
             else:
-                pm.mel.eval(f'{option} "{value}"')
+                mel.eval(f'{option} "{value}"')
 
     @staticmethod
     def load_preset(preset_path: str):
@@ -60,7 +60,7 @@ class FbxUtils(ptk.HelpMixin):
         if not os.path.isfile(preset_path):
             raise FileNotFoundError(f"FBX preset not found: {preset_path}")
         formatted = preset_path.replace("\\", "/")
-        pm.mel.eval(f'FBXLoadExportPresetFile -f "{formatted}"')
+        mel.eval(f'FBXLoadExportPresetFile -f "{formatted}"')
         logger.info(f"Loaded FBX export preset: {formatted}")
 
     @classmethod

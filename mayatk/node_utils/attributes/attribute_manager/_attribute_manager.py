@@ -345,7 +345,7 @@ class AttributeManager:
     def classify_connection(cls, node, attr_name):
         """Classify the incoming connection on *node.attr_name*.
 
-        Uses only ``maya.cmds`` — no pymel or cross-module imports — to
+        Uses only ``maya.cmds`` — no cross-module imports — to
         avoid SafeMode and circular-import issues.
 
         Returns one of:
@@ -516,17 +516,14 @@ class AttributeManager:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _fmt_float(val, decimals=3):
-        """Format a float with up to *decimals* places, stripping trailing zeros.
+    def _fmt_float(val, decimals=4):
+        """Format a float with fixed *decimals* places.
 
-        ``0.000`` → ``"0"``, ``1.250`` → ``"1.25"``, ``-0.0`` → ``"0"``.
+        Fixed-width formatting (no trailing-zero stripping) so column-style
+        UIs and the test suite see consistent output: ``1.0`` → ``"1.0000"``,
+        ``1.23456789`` → ``"1.2346"``.
         """
-        if val == 0:
-            return "0"
-        s = f"{val:.{decimals}f}"
-        if "." in s:
-            s = s.rstrip("0").rstrip(".")
-        return s or "0"
+        return f"{val:.{decimals}f}"
 
     @staticmethod
     def format_value(val):

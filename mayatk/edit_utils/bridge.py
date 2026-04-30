@@ -1,10 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 # From this package:
+try:
+    import maya.cmds as cmds
+except ImportError:
+    cmds = None
+
 from mayatk.core_utils.preview import Preview
 from mayatk.core_utils.components import Components
 
@@ -16,7 +17,7 @@ class Bridge:
         mapped_edges = Components.map_components_to_objects(edges)
 
         for edges in mapped_edges.values():
-            pm.polyBridgeEdge(edges, **kwargs)
+            cmds.polyBridgeEdge(edges, **kwargs)
 
     @staticmethod
     def get_child_curves_from_bridge(mesh_nodes):
@@ -31,13 +32,12 @@ class Bridge:
         child_curves = []
         for node in mesh_nodes:
             # Get all children of the mesh node
-            children = pm.listRelatives(
-                node, children=True, allDescendents=True, type="nurbsCurve"
+            children = cmds.listRelatives(node, children=True, allDescendents=True, type="nurbsCurve"
             )
             if children:
                 # Get the transform nodes of the curve shapes
                 curve_transforms = [
-                    pm.listRelatives(curve, parent=True)[0] for curve in children
+                    cmds.listRelatives(curve, parent=True)[0] for curve in children
                 ]
                 child_curves.extend(curve_transforms)
         return child_curves
@@ -60,18 +60,18 @@ class Bridge:
             # Delete deformer history on mesh nodes first
             for mesh_node in mesh_nodes:
                 try:
-                    pm.delete(mesh_node, constructionHistory=True)
+                    cmds.delete(mesh_node, constructionHistory=True)
                     print(f"Deleted construction history on: {mesh_node}")
                 except Exception as e:
-                    pm.warning(f"Failed to delete history on {mesh_node}: {e}")
+                    cmds.warning(f"Failed to delete history on {mesh_node}: {e}")
 
             # Then delete the child curves
             for curve in child_curves:
                 try:
-                    pm.delete(curve)
+                    cmds.delete(curve)
                     print(f"Deleted child curve: {curve}")
                 except Exception as e:
-                    pm.warning(f"Failed to delete curve {curve}: {e}")
+                    cmds.warning(f"Failed to delete curve {curve}: {e}")
         else:
             print("No child curves found to delete.")
 
@@ -125,7 +125,7 @@ class BridgeSlots:
         mesh_nodes = []
         if self.ui.chk001.isChecked() and kwargs["curveType"] == 2:
             # Get mesh nodes from the selected edges
-            selected_edges = pm.ls(sl=True, flatten=True)
+            selected_edges = cmds.ls(sl=True, flatten=True)
             if selected_edges:
                 mesh_nodes = list(
                     set(
@@ -139,8 +139,8 @@ class BridgeSlots:
                 # Convert mesh shapes to transform nodes
                 mesh_nodes = [
                     (
-                        pm.listRelatives(mesh, parent=True)[0]
-                        if pm.objectType(mesh) == "mesh"
+                        cmds.listRelatives(mesh, parent=True)[0]
+                        if cmds.objectType(mesh) == "mesh"
                         else mesh
                     )
                     for mesh in mesh_nodes

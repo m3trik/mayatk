@@ -1,27 +1,31 @@
+try:
+    import maya.cmds as cmds
+    import maya.api.OpenMaya as om
+except ImportError:
+    cmds = None
+    om = None
+
 from typing import List, Union
 
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 # From this package
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.node_utils._node_utils import NodeUtils
 
 
 class Curve:
     def __init__(self, **kwargs):
-        self.node = pm.curve(**kwargs)
-        self.shape_node = self.node.getShape()
+        self.node = cmds.curve(**kwargs)
+        self.shape_node = NodeUtils.get_shape(self.node)
 
     def __getattr__(self, attr):
-        """Delegate attribute access to the underlying PyNode when not found in Curve."""
+        """Delegate attribute access to the underlying node when not found in Curve."""
         try:
             return getattr(super(), attr)
         except AttributeError:
             return getattr(self.node, attr)
 
     def __setattr__(self, attr, value):
-        """Delegate attribute setting to the underlying PyNode unless specifically handled."""
+        """Delegate attribute setting to the underlying node unless specifically handled."""
         if attr in ["node", "shape_node"]:
             super().__setattr__(attr, value)
         else:
@@ -30,33 +34,33 @@ class Curve:
     @property
     def length(self):
         """Get the length of the curve."""
-        return pm.arclen(self.shape_node)
+        return cmds.arclen(self.shape_node)
 
     @length.setter
     def length(self, new_length):
         """Set the curve to a new length, adjusting its scale proportionally."""
         current_length = self.length
         scale_factor = new_length / current_length
-        pm.scale(self.node.cv[:], scale_factor, scale_factor, scale_factor, r=True)
+        cmds.scale(self.node.cv[:], scale_factor, scale_factor, scale_factor, r=True)
 
     def add_point(self, position):
         """Dynamically add a point to the curve."""
-        pm.curve(self.node, a=True, p=[position])
+        cmds.curve(self.node, a=True, p=[position])
 
     def update_point(self, index, new_position):
         """Update the position of a point on the curve."""
-        cvs = pm.ls(self.node.cv, fl=True)
+        cvs = cmds.ls(self.node.cv, fl=True)
         if 0 <= index < len(cvs):
-            pm.xform(cvs[index], ws=True, t=new_position)
+            cmds.xform(cvs[index], ws=True, t=new_position)
 
     def update_curve_cv(self, index, position):
         """Update the position of a curve control vertex."""
         cv_index = index * 3  # Adjust as needed based on the curve's structure
-        pm.xform(self.shape_node.cv[cv_index], ws=True, t=position)
+        cmds.xform(self.shape_node.cv[cv_index], ws=True, t=position)
 
     def get_param_at_point(self, point):
         """Get the curve parameter at a given point."""
-        return self.shape_node.getParamAtPoint(pm.datatypes.Point(point), space="world")
+        return self.shape_node.getParamAtPoint(om.MPoint(point), space="world")
 
     def get_point_at_param(self, param):
         """Get the point on the curve at a given parameter."""
@@ -145,8 +149,8 @@ class CurveRig:
         result = []
         for i in range(len(locators) - 1):
             self.locators.append(locators[i])
-            start_pos = pm.xform(locators[i], q=True, ws=True, t=True)
-            end_pos = pm.xform(locators[i + 1], q=True, ws=True, t=True)
+            start_pos = cmds.xform(locators[i], q=True, ws=True, t=True)
+            end_pos = cmds.xform(locators[i + 1], q=True, ws=True, t=True)
             step_vector = [
                 (end_pos[j] - start_pos[j]) / (num_inbetween + 1) for j in range(3)
             ]
@@ -161,16 +165,16 @@ class CurveRig:
         return result
 
     def create_curve_from_locators(self, locators):
-        points = [pm.xform(loc, q=True, ws=True, t=True) for loc in locators]
+        points = [cmds.xform(loc, q=True, ws=True, t=True) for loc in locators]
         return BezierCurve(p=points, bezier=True)
 
     def setup_clusters(self):
-        cvs = pm.ls(self.curve.shape_node.cv, fl=True)
+        cvs = cmds.ls(self.curve.shape_node.cv, fl=True)
         for i, cv in enumerate(cvs):
-            cluster = pm.cluster(cv)[1]
+            cluster = cmds.cluster(cv)[1]
             self.components["clusters"].append(cluster)
             if i < len(self.locators):
-                pm.pointConstraint(self.locators[i], cluster, mo=False)
+                cmds.pointConstraint(self.locators[i], cluster, mo=False)
 
     def orient_locators(self):
         for i, locator in enumerate(self.locators):
@@ -189,13 +193,13 @@ class CurveRig:
             next_loc.getTranslation(space="world")
             - self.locators[index].getTranslation(space="world")
         ).normal()
-        aim_locator = pm.spaceLocator()
-        pm.xform(
+        aim_locator = cmds.spaceLocator()
+        cmds.xform(
             aim_locator,
             ws=True,
             t=self.locators[index].getTranslation(space="world") + direction,
         )
-        constraint = pm.aimConstraint(
+        constraint = cmds.aimConstraint(
             aim_locator,
             self.locators[index],
             aimVector=[1, 0, 0],
@@ -203,7 +207,7 @@ class CurveRig:
             worldUpType="vector",
             worldUpVector=direction,
         )
-        pm.delete(constraint, aim_locator)
+        cmds.delete(constraint, aim_locator)
 
     def orient_middle_locators(self, index):
         prev_dir = (
@@ -216,13 +220,13 @@ class CurveRig:
         ).normal()
         average_dir = (prev_dir + next_dir).normal()
         up_vector = next_dir.cross(prev_dir).normal()
-        aim_locator = pm.spaceLocator()
-        pm.xform(
+        aim_locator = cmds.spaceLocator()
+        cmds.xform(
             aim_locator,
             ws=True,
             t=self.locators[index].getTranslation(space="world") + average_dir,
         )
-        constraint = pm.aimConstraint(
+        constraint = cmds.aimConstraint(
             aim_locator,
             self.locators[index],
             aimVector=[1, 0, 0],
@@ -230,7 +234,7 @@ class CurveRig:
             worldUpType="vector",
             worldUpVector=up_vector,
         )
-        pm.delete(constraint, aim_locator)
+        cmds.delete(constraint, aim_locator)
 
     def create_inbetween_locators(self, num_inbetween):
         new_locators = []
@@ -250,30 +254,30 @@ class CurveRig:
 
     def create_nurbs_circles_at_locators(self):
         for locator in self.locators:
-            circle = pm.circle(normal=(1, 0, 0), constructionHistory=False)[0]
-            pm.matchTransform(circle, locator)
+            circle = cmds.circle(normal=(1, 0, 0), constructionHistory=False)[0]
+            cmds.matchTransform(circle, locator)
             circle.overrideEnabled.set(1)
             circle.overrideDisplayType.set(2)
-            pm.parent(circle, locator)
+            cmds.parent(circle, locator)
             self.components["circles"].append(circle)
 
     def add_circles_between_points(self, start_parameter, end_parameter, num_circles):
-        circle = pm.circle(normal=(1, 0, 0), constructionHistory=False)[0]
+        circle = cmds.circle(normal=(1, 0, 0), constructionHistory=False)[0]
         new_circles = self.curve.add_along_curve(
             circle, start_parameter, end_parameter, num_circles
         )
-        pm.delete(circle)
+        cmds.delete(circle)
         self.components["circles"].extend(new_circles)
 
     def update_locator_position(self, index, new_position):
         if index < len(self.locators):
             locator = self.locators[index]
-            pm.xform(locator, ws=True, t=new_position)
+            cmds.xform(locator, ws=True, t=new_position)
             self.update_curve_cv(index, new_position)
 
     def update_curve_cv(self, index, position):
         cv_index = index * 3
-        pm.xform(self.curve.shape_node.cv[cv_index], ws=True, t=position)
+        cmds.xform(self.curve.shape_node.cv[cv_index], ws=True, t=position)
 
     def add_locator(self, position):
         locator = self.create_locator_at_position(position)
@@ -282,19 +286,19 @@ class CurveRig:
         self.setup_clusters()
 
     def create_locator_at_position(self, position):
-        locator = pm.spaceLocator(p=position)
-        pm.xform(locator, ws=True, t=position, piv=position)
+        locator = cmds.spaceLocator(p=position)
+        cmds.xform(locator, ws=True, t=position, piv=position)
         return locator
 
     def remove_locator(self, locator_index):
         if 0 <= locator_index < len(self.locators):
-            pm.delete(self.locators.pop(locator_index))
+            cmds.delete(self.locators.pop(locator_index))
             self.curve.node.deleteCV(locator_index * 3)
             self.curve.rebuild_curve()
             self.setup_clusters()
 
     def position_and_orient_object(self, obj, locator):
-        pos = pm.xform(locator, q=True, ws=True, t=True)
+        pos = cmds.xform(locator, q=True, ws=True, t=True)
         self.align_and_orient_to_curve(obj, pos)
 
     def align_and_orient_to_curve(self, obj, position):
@@ -315,7 +319,7 @@ class CurveRig:
         if direction.length() > 0:
             direction.normalize()
             obj.setRotation(
-                pm.datatypes.Vector(direction).rotateTo(pm.datatypes.Vector(1, 0, 0))
+                om.MVector(direction).rotateTo(om.MVector(1, 0, 0))
             )
 
     def add_path_locators(self, locators_per_segment):
@@ -334,8 +338,8 @@ class CurveRig:
             self.components["pathLocators"].append(locator)
 
     def get_segment_param_range(self, start_index, end_index):
-        start_pos = pm.xform(self.locators[start_index], q=True, ws=True, t=True)
-        end_pos = pm.xform(self.locators[end_index], q=True, ws=True, t=True)
+        start_pos = cmds.xform(self.locators[start_index], q=True, ws=True, t=True)
+        end_pos = cmds.xform(self.locators[end_index], q=True, ws=True, t=True)
         return self.curve.get_param_at_point(start_pos), self.curve.get
 
 
@@ -351,23 +355,23 @@ class DynamicPipe:
     def create_nurbs_circles_at_locators(self, locators):
         circles = []
         for locator in locators:
-            circle = pm.circle(normal=(1, 0, 0), constructionHistory=False)[0]
-            pm.matchTransform(circle, locator)
+            circle = cmds.circle(normal=(1, 0, 0), constructionHistory=False)[0]
+            cmds.matchTransform(circle, locator)
             # Make the circle not selectable
             circle.overrideEnabled.set(1)
             circle.overrideDisplayType.set(2)
             # Parent the circle to the locator
-            pm.parent(circle, locator)
+            cmds.parent(circle, locator)
             circles.append(circle)
         return circles
 
     def add_circles_between_points(self, start_parameter, end_parameter, num_circles):
         # Create a circle to be duplicated
-        circle = pm.circle(normal=(1, 0, 0), constructionHistory=False)[0]
+        circle = cmds.circle(normal=(1, 0, 0), constructionHistory=False)[0]
         # Add circles along the curve
         self.rig.add_along_curve(circle, start_parameter, end_parameter, num_circles)
         # Delete the original circle
-        pm.delete(circle)
+        cmds.delete(circle)
 
     def create_pipe_geometry(self, segments_to_loft):
         if not all(isinstance(item, int) for item in segments_to_loft):
@@ -379,7 +383,7 @@ class DynamicPipe:
                 self.pipe_segments.append(pipe_segment)
 
     def loft_between_circles(self, circles):
-        lofted_surface = pm.loft(
+        lofted_surface = cmds.loft(
             circles,
             ch=True,
             u=True,
@@ -418,12 +422,12 @@ class DynamicPipeSlots:
 
     def b000(self):
         """Create Dynamic Pipe"""
-        pm.undoInfo(openChunk=True)
-        locators = pm.ls(orderedSelection=True, exactType="transform")
+        cmds.undoInfo(openChunk=True)
+        locators = cmds.ls(orderedSelection=True, exactType="transform")
         self.pipe = DynamicPipe(locators)
         segments_to_loft = list(range(len(self.pipe.circles) - 1))
         self.pipe.create_pipe_geometry(segments_to_loft)
-        pm.undoInfo(closeChunk=True)
+        cmds.undoInfo(closeChunk=True)
 
 
 # -----------------------------------------------------------------------------

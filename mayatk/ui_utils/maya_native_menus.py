@@ -1,14 +1,10 @@
 # !/usr/bin/python
 # coding=utf-8
-import time
-import traceback
-import maya.utils
-import functools
+import maya.cmds as cmds
+import maya.mel as mel
 from typing import Optional
 from qtpy import QtWidgets, QtCore
-import pymel.core as pm
 import pythontk as ptk
-import uitk
 from uitk.widgets.mainWindow import MainWindow
 
 # From this package:
@@ -25,168 +21,184 @@ class PersistentMenu(QtWidgets.QMenu):
 
 
 class EmbeddedMenuWidget(QtWidgets.QWidget):
+    """Embeds a Maya QMenu into a sizeable widget that fits content exactly.
+
+    Native Maya menus have fixed-height action rows, so the wrapper is
+    rigid-fit to content (no resize handle, no dead space).
+    """
+
+    # Per-row pixel estimate for action / separator rows when QMenu's own
+    # geometry is unavailable (e.g. before first show, in offscreen tests).
+    _ACTION_ROW_PX = 26
+    _SEPARATOR_PX = 8
+    _MIN_WIDTH = 200
+    _EMPTY_HEIGHT_FLOOR = 100
+
     def __init__(self, menu, parent=None):
         super(EmbeddedMenuWidget, self).__init__(parent)
         self.menu = menu
         self.init_ui()
 
     def init_ui(self):
-        # Use a layout to support uitk's automatic header/footer injection
+        # Layout exists so uitk's header attach_to() can insert at index 0.
+        # The QMenu is positioned manually (not added to layout) because
+        # QMenu-in-layout misbehaves with item painting and popup logic.
+        # 2 px contents margin so the parent QSS border (translucentBgWithBorder)
+        # is visible around layout-managed children — without it the header
+        # sits flush against the painted border.
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
 
-        # Prepare the menu for embedding as a regular widget
         self.menu.setParent(self)
-        # Using Qt.Widget + FramelessWindowHint helps it behave like a panel
         self.menu.setWindowFlags(QtCore.Qt.Widget | QtCore.Qt.FramelessWindowHint)
-
-        # Apply stylesheet to ensure items look correct and fill space
-        # Apply to self (container) to avoid overriding global styles on the menu instance directly
-        self.setStyleSheet(
-            """
-            QMenu::item {
-                padding: 1px 20px 1px 20px;
-                margin-left: 1px;
-                margin-right: 1px;
-            }
-            """
-        )
-
-        # Allow menu to expand
-        # Use Ignored for horizontal to force it to fill width regardless of content size
         self.menu.setSizePolicy(
             QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Expanding
         )
 
-        # Do NOT add menu to layout. We will manage its geometry manually to ensure it fills space.
-        # layout.addWidget(self.menu)
-
-        # Add stretch to push footer (injected by MainWindow) to the bottom
+        # Stretch keeps any later header pinned to the top while the manually
+        # positioned QMenu fills the remaining height.
         layout.addStretch(1)
 
-        # Set size policies for this container
         self.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+            QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred
         )
 
-        # Ensure menu is visible (QMenu defaults to hidden)
         self.menu.show()
-        # Disable tear-off to prevent redundant header/footer controls
         self.menu.setTearOffEnabled(False)
 
-        # Enable stylesheet background painting
-        from qtpy.QtCore import Qt
+        # Required for the parent QSS class (translucentBgWithBorder) to
+        # actually paint background/border on this plain QWidget — without
+        # this the rule is matched but no painting happens.
+        self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
+        self.menu.setAttribute(QtCore.Qt.WA_StyledBackground, True)
 
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.menu.setAttribute(Qt.WA_StyledBackground, True)
-
-    def _get_layout_reserved_space(self):
-        """Calculate space reserved by layout items (headers/footers) excluding the menu.
-
-        Returns:
-            tuple: (reserved_top, reserved_bottom) heights in pixels
-        """
-        reserved_top = 0
-        reserved_bottom = 0
+    def _reserved_top(self):
+        """Height of layout widgets above the menu (e.g. attached header)."""
         layout = self.layout()
-
         if not layout:
-            return reserved_top, reserved_bottom
-
-        half_height = self.height() / 2
+            return 0
+        total = 0
         for i in range(layout.count()):
-            item = layout.itemAt(i)
-            widget = item.widget()
-            if widget and widget.isVisible() and widget is not self.menu:
-                if item.geometry().y() > half_height:
-                    reserved_bottom += item.geometry().height()
-                else:
-                    reserved_top += item.geometry().height()
+            w = layout.itemAt(i).widget()
+            if w and w is not self.menu:
+                hint = w.sizeHint()
+                if hint.isValid() and hint.height() > 0:
+                    total += hint.height()
+                elif w.height() > 0:
+                    total += w.height()
+        return total
 
-        return reserved_top, reserved_bottom
+    def _menu_content_height(self):
+        """Sum of action geometries; falls back to per-row estimate."""
+        actions = self.menu.actions()
+        if not actions:
+            return 0
+
+        self.menu.ensurePolished()
+        total = 0
+        for action in actions:
+            if not action.isVisible():
+                continue
+            rect = self.menu.actionGeometry(action)
+            if rect.isValid() and rect.height() > 0:
+                total += rect.height()
+            else:
+                total += (
+                    self._SEPARATOR_PX
+                    if action.isSeparator()
+                    else self._ACTION_ROW_PX
+                )
+        margins = self.menu.contentsMargins()
+        total += margins.top() + margins.bottom()
+        return total
+
+    def content_size(self):
+        """Exact size needed for header + populated menu, no dead space."""
+        self.menu.ensurePolished()
+
+        menu_hint = self.menu.sizeHint()
+        width = max(self._MIN_WIDTH, menu_hint.width() if menu_hint.isValid() else 0)
+
+        height = self._menu_content_height()
+        height += self._reserved_top()
+
+        layout = self.layout()
+        if layout:
+            lm = layout.contentsMargins()
+            width += lm.left() + lm.right()
+            height += lm.top() + lm.bottom()
+
+        # Floor when menu is empty so the wrapper is still visible during
+        # the (now rare) window-shown-before-populate race.
+        return QtCore.QSize(width, max(height, self._EMPTY_HEIGHT_FLOOR))
+
+    def sizeHint(self):
+        return self.content_size()
+
+    def minimumSizeHint(self):
+        return self.content_size()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self.menu:
-            reserved_top, reserved_bottom = self._get_layout_reserved_space()
-            self.menu.setGeometry(
-                0,
-                reserved_top,
-                self.width(),
-                self.height() - reserved_bottom - reserved_top,
-            )
-            self.menu.setMinimumWidth(self.width())
-            # Ensure menu stays behind header/footer after geometry changes
-            self.menu.lower()
-            # Also explicitly raise header if present
-            self._raise_header_footer()
+        if not self.menu:
+            return
+        layout = self.layout()
+        if layout:
+            lm = layout.contentsMargins()
+            left, top, right, bottom = lm.left(), lm.top(), lm.right(), lm.bottom()
+        else:
+            left = top = right = bottom = 0
+        reserved_top = self._reserved_top() + top
+        menu_x = left
+        menu_w = max(0, self.width() - left - right)
+        menu_y = reserved_top
+        menu_h = max(0, self.height() - reserved_top - bottom)
+        self.menu.setGeometry(menu_x, menu_y, menu_w, menu_h)
+        self.menu.setMinimumWidth(menu_w)
+        self.menu.lower()
+        self._raise_layout_widgets()
 
-    def _raise_header_footer(self):
-        """Explicitly raise header and footer above the menu in z-order."""
+    def _raise_layout_widgets(self):
         layout = self.layout()
         if not layout:
             return
         for i in range(layout.count()):
-            item = layout.itemAt(i)
-            widget = item.widget()
-            if widget and widget is not self.menu:
-                widget.raise_()
+            w = layout.itemAt(i).widget()
+            if w and w is not self.menu:
+                w.raise_()
 
     def showEvent(self, event):
-        """Ensure menu z-order is correct when shown.
-
-        The header is attached AFTER init_ui() completes, so the menu's z-order
-        (established by self.menu.show()) puts it above the header. We fix this
-        by lowering the menu and raising layout widgets (header/footer) on show.
-        """
         super().showEvent(event)
         if self.menu:
             self.menu.lower()
-            self._raise_header_footer()
-
-    def minimumSizeHint(self):
-        """Allow horizontal contraction while preserving minimum usability."""
-        return QtCore.QSize(200, self.sizeHint().height())
-
-    def sizeHint(self):
-        """Calculate preferred size based on menu content plus layout overhead."""
-        if not self.menu:
-            return super().sizeHint()
-
-        self.menu.ensurePolished()
-        s_hint = self.menu.sizeHint()
-
-        if s_hint.isValid() and s_hint.height() > 50:
-            menu_height = s_hint.height()
-            menu_width = max(200, s_hint.width())
-        else:
-            # Fallback for menus that haven't been populated yet
-            action_count = len(self.menu.actions())
-            menu_height = max(100, (action_count * 26) + 10)
-            menu_width = 200
-
-        # Add overhead from headers/footers
-        reserved_top, reserved_bottom = self._get_layout_reserved_space()
-        overhead = reserved_top + reserved_bottom
-
-        layout = self.layout()
-        if layout:
-            margins = layout.contentsMargins()
-            overhead += margins.top() + margins.bottom()
-
-        return QtCore.QSize(menu_width, menu_height + overhead)
+            self._raise_layout_widgets()
 
     def fit_to_window(self):
-        """Resize the parent window to fit menu content."""
+        """Resize and lock the parent window to exact content size."""
         self.updateGeometry()
         window = self.window()
-        if window:
-            if window.layout():
-                window.layout().activate()
-            # Use sizeHint for preferred size (fits content)
-            # minimumSizeHint stays small to allow user resizing
-            window.resize(window.sizeHint())
+        if not window or window is self:
+            return
+
+        if window.layout():
+            window.layout().activate()
+
+        target = self.content_size()
+
+        # Account for window chrome (header/footer added by MainWindow).
+        # adjustSize would compute this for us, but we want a precise lock —
+        # so derive chrome by comparing existing window size against this
+        # widget's current size, then add it to the target.
+        cw = window.centralWidget() if hasattr(window, "centralWidget") else None
+        if cw is self and window.size().isValid() and self.size().isValid():
+            chrome_w = max(0, window.width() - self.width())
+            chrome_h = max(0, window.height() - self.height())
+            target = QtCore.QSize(target.width() + chrome_w, target.height() + chrome_h)
+
+        window.setMinimumSize(target)
+        window.setMaximumSize(target)
+        window.resize(target)
 
 
 class MayaNativeMenus(ptk.LoggingMixin):
@@ -396,12 +408,17 @@ class MayaNativeMenus(ptk.LoggingMixin):
         self.logger.setLevel(log_level)
 
     def get_menu(self, menu_key: str) -> Optional[QtWidgets.QWidget]:
-        """Retrieves a Maya menu and embeds it in a UI component."""
+        """Retrieve a Maya menu, populated synchronously, and return its wrapper.
+
+        Synchronous population is important so that callers (e.g. the marking
+        menu) can fit-to-content the wrapping window before it is ever shown.
+        Deferred population caused the window to first appear at the empty
+        floor size, then resize a frame later.
+        """
         menu_key = menu_key.lower()
         if menu_key in self.menus:
             return self.menus[menu_key]
 
-        # Retrieve menu details from MENU_MAPPING
         menu_data = self.MENU_MAPPING.get(menu_key)
         if not menu_data:
             self.logger.error(f"No mapping found for menu '{menu_key}'")
@@ -415,32 +432,94 @@ class MayaNativeMenus(ptk.LoggingMixin):
             self.logger.error(f"No initialization command found for menu '{menu_key}'")
             return None
 
-        orig_menu_set = pm.menuSet(q=True, label=True)
-
+        orig_menu_set = cmds.menuSet(q=True, label=True)
         self.logger.debug(
             f"Switching menu mode to '{target_menu_set}' (original: {orig_menu_set})"
         )
-        pm.setMenuMode(target_menu_set)
+        cmds.setMenuMode(target_menu_set)
         try:
-            pm.mel.eval(init_command)
+            mel.eval(init_command)
         except Exception as e:
             self.logger.warning(f"Menu init command for '{menu_key}' raised: {e}")
-        pm.refresh()
+        cmds.refresh()
 
-        # Create a placeholder menu UI
         placeholder_menu = PersistentMenu(maya_menu_name, UiUtils.get_main_window())
         placeholder_widget = EmbeddedMenuWidget(placeholder_menu)
         placeholder_widget.setObjectName(menu_key)
         self.menus[menu_key] = placeholder_widget
 
-        # Defer actual menu population
-        maya.utils.executeDeferred(
-            lambda: self.deferred_duplicate_menu(
-                menu_key, maya_menu_name, orig_menu_set, placeholder_widget
-            )
-        )
-
+        self._populate_menu(menu_key, maya_menu_name, orig_menu_set, placeholder_widget)
         return placeholder_widget
+
+    def _populate_menu(
+        self,
+        menu_key: str,
+        maya_menu_name: str,
+        orig_menu_set: str,
+        placeholder_widget: "EmbeddedMenuWidget",
+    ) -> None:
+        """Synchronously copy actions from Maya's source menu into the wrapper."""
+        main_window = UiUtils.get_main_window()
+        menu_bar = main_window.menuBar()
+
+        target_menu = None
+        previous_action_count = -1
+        stable_iterations = 0
+        required_stable_iterations = 2
+        max_attempts = 15
+        attempt = 0
+
+        while attempt < max_attempts:
+            attempt += 1
+
+            for action in menu_bar.actions():
+                if action.text() == maya_menu_name:
+                    target_menu = action.menu()
+                    break
+
+            if target_menu:
+                current_action_count = len(target_menu.actions())
+
+                if (
+                    current_action_count == previous_action_count
+                    and current_action_count > 0
+                ):
+                    stable_iterations += 1
+                else:
+                    stable_iterations = 0
+
+                previous_action_count = current_action_count
+
+                if stable_iterations >= required_stable_iterations:
+                    self.logger.debug(
+                        f"Menu '{maya_menu_name}' stabilized with {current_action_count} actions."
+                    )
+                    break
+                self.logger.debug(
+                    f"Waiting for menu '{maya_menu_name}' to stabilize... "
+                    f"Currently {current_action_count} actions."
+                )
+            else:
+                self.logger.debug(f"Menu '{maya_menu_name}' not found yet...")
+
+            QtWidgets.QApplication.processEvents()
+
+        cmds.setMenuMode(orig_menu_set)
+        self.logger.debug(f"Restored original menu mode: {orig_menu_set}")
+
+        if target_menu and previous_action_count > 0:
+            placeholder_widget.menu.clear()
+            for action in target_menu.actions():
+                placeholder_widget.menu.addAction(action)
+            self.logger.debug(
+                f"Populated menu '{menu_key}' with {previous_action_count} actions."
+            )
+            placeholder_widget.menu.lower()
+            placeholder_widget._raise_layout_widgets()
+        else:
+            self.logger.warning(
+                f"Failed to fully initialize menu '{menu_key}' after {attempt} attempts."
+            )
 
     def display_menu(self, menu_key: str):
         """Displays the specified Maya menu in a standalone window."""
@@ -452,106 +531,17 @@ class MayaNativeMenus(ptk.LoggingMixin):
             name=f"MayaMenu_{menu_key}",
             switchboard_instance=None,
             central_widget=widget,
-            add_footer=True,
+            add_footer=False,
             restore_window_size=False,
         )
-        window.setWindowFlags(
-            QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint
+        window.set_flags(
+            Window=True,
+            FramelessWindowHint=True,
+            WindowStaysOnTopHint=True,
         )
-        window.setAttribute(QtCore.Qt.WA_TranslucentBackground)
-
-        # Apply standard border styling
+        window.set_attributes(WA_TranslucentBackground=True)
         window.setProperty("class", "translucentBgWithBorder")
 
+        widget.fit_to_window()
         window.show(pos="screen", app_exec=True)
         return window
-
-    def deferred_duplicate_menu(
-        self,
-        menu_key: str,
-        maya_menu_name: str,
-        orig_menu_set: str,
-        placeholder_widget: EmbeddedMenuWidget,
-    ):
-        """Properly deferred function to duplicate and populate a Maya menu in UI."""
-
-        def _populate_menu():
-            main_window = UiUtils.get_main_window()
-            menu_bar = main_window.menuBar()
-
-            target_menu = None
-            previous_action_count = -1
-            stable_iterations = 0
-            required_stable_iterations = 2  # Require 2 stable checks
-            max_attempts = 15  # Prevent infinite loops
-            attempt = 0
-
-            while attempt < max_attempts:
-                attempt += 1
-
-                # Locate the target menu
-                for action in menu_bar.actions():
-                    if action.text() == maya_menu_name:
-                        target_menu = action.menu()
-                        break
-
-                if target_menu:
-                    current_action_count = len(target_menu.actions())
-
-                    if (
-                        current_action_count == previous_action_count
-                        and current_action_count > 0
-                    ):
-                        stable_iterations += 1
-                    else:
-                        stable_iterations = 0  # Reset if count changes
-
-                    previous_action_count = current_action_count
-
-                    if stable_iterations >= required_stable_iterations:
-                        self.logger.debug(
-                            f"Menu '{maya_menu_name}' stabilized with {current_action_count} actions."
-                        )
-                        break
-                    else:
-                        self.logger.debug(
-                            f"Waiting for menu '{maya_menu_name}' to stabilize... "
-                            f"Currently {current_action_count} actions."
-                        )
-                else:
-                    self.logger.debug(f"Menu '{maya_menu_name}' not found yet...")
-
-                # Process UI events (prevents freezing)
-                QtWidgets.QApplication.processEvents()
-
-            # Restore the original menu mode
-            pm.setMenuMode(orig_menu_set)
-            self.logger.debug(f"Restored original menu mode: {orig_menu_set}")
-
-            if target_menu and previous_action_count > 0:
-                placeholder_widget.menu.clear()
-                for action in target_menu.actions():
-                    placeholder_widget.menu.addAction(action)
-                self.logger.debug(
-                    f"Populated menu '{menu_key}' with {previous_action_count} actions."
-                )
-
-                # Ensure menu z-order is correct after population
-                placeholder_widget.menu.lower()
-                placeholder_widget._raise_header_footer()
-
-                # Resize the hosting window to accommodate new items
-                QtCore.QTimer.singleShot(50, placeholder_widget.fit_to_window)
-            else:
-                self.logger.warning(
-                    f"Failed to fully initialize menu '{menu_key}' after {attempt} attempts."
-                )
-
-        # Properly defer execution using Maya's deferred queue
-        maya.utils.executeDeferred(_populate_menu)
-
-
-# --------------------------------------------------------------------------------------------
-if __name__ == "__main__":
-    handler = MayaMenuHandler()
-    handler.display_menu("skin")

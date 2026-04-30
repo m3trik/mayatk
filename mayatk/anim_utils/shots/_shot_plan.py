@@ -2,7 +2,7 @@
 """Pure planning layer for multi-shot topology transformations.
 
 NO MAYA IMPORTS — this module is part of the shot *model* layer and
-must not import ``pymel`` or ``maya.cmds``.  It computes WHAT should
+must not import ``maya.cmds``.  It computes WHAT should
 move WHERE given a :class:`ShotStore`, producing a :class:`MovePlan`
 dataclass with no side effects.  Anything that actually writes to the
 Maya scene lives in the sibling module :mod:`_shot_apply`.

@@ -25,7 +25,13 @@ from collections import defaultdict
 # ---------------------------------------------------------------------------
 # Import shared Maya mocks from conftest (injected into sys.modules there)
 # ---------------------------------------------------------------------------
-from test.conftest import mock_pm, mock_cmds, mock_undo_chunk, mock_om2
+from conftest import (  # noqa: E402  (test dir on sys.path)
+    mock_pm,
+    mock_cmds,
+    mock_undo_chunk,
+    mock_om2,
+)
+import maya.cmds as cmds
 
 # Aliases for backward-compat with existing test code
 _mock_pm = mock_pm
@@ -257,6 +263,20 @@ def make_segments(obj_name, spans, stepped_times=None):
     return segs
 
 
+def _running_under_mayapy():
+    """Detect whether we're executing inside real Maya — pollution-tracker tests
+    were never designed for mayapy."""
+    import sys as _sys
+    return "maya.standalone" in _sys.modules
+
+
+_RUNNING_UNDER_MAYAPY = _running_under_mayapy()
+
+
+@unittest.skipIf(
+    _RUNNING_UNDER_MAYAPY,
+    "Mock-based test suite — runs under pytest only, not run_tests.py/mayapy",
+)
 class ControllerTestCase(unittest.TestCase):
     """Base test case that wires up a ShotSequencerController with mocked Maya."""
 
@@ -3842,10 +3862,14 @@ class TestPlaybackFollowsView(ControllerTestCase):
 # ===========================================================================
 
 
+@unittest.skipIf(
+    _RUNNING_UNDER_MAYAPY,
+    "Mock-based test — runs under pytest only, not run_tests.py/mayapy",
+)
 class TestSavePersistenceUndoSafe(unittest.TestCase):
     """MayaScenePersistence.save() must not pollute the Maya undo queue.
 
-    Bug: save() called node.attr(...).set(json_data) which was an undoable
+    Bug: save() called cmds.setAttr(f"{node}.{...}", json_data) which was an undoable
     Maya operation. After a clip move, evalDeferred fired save() after the
     UndoChunk closed, making the save the top undo entry instead of the
     keyframe edit.

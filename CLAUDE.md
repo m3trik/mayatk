@@ -19,23 +19,47 @@ No exceptions for convenience, speed, or retries. If a run is slow, **wait** —
 
 `_launch_maya_gui()` delegates to `pythontk.AppLauncher` — do not bypass with raw `subprocess`.
 
+## API surface
+
+Before writing a new helper, **check the registry first** — duplicates undermine the SSoT goal.
+
+- This package: [`API_REGISTRY.md`](API_REGISTRY.md) · [`API_CHANGES.md`](API_CHANGES.md) (diff vs last refresh)
+- Upstream: [`pythontk` API](../pythontk/API_REGISTRY.md) · [`uitk` API](../uitk/API_REGISTRY.md)
+- Cross-package shadows: [`m3trik/docs/API_SHADOWS.md`](../m3trik/docs/API_SHADOWS.md) — `AudioUtils` / `CoreUtils` shadow pythontk by design (mayatk extends; do not duplicate logic).
+
+Refresh manually: `python m3trik/scripts/generate_api_registry.py mayatk` — otherwise auto-refreshed bi-weekly.
+
 ## Imports
 
 ```python
-import maya.cmds as cmds          # preferred for performance
-import maya.api.OpenMaya as om    # API 2.0 over 1.0
-import pymel.core as pm           # sparingly — avoid in hot loops
+import maya.cmds as cmds          # primary command API
+import maya.api.OpenMaya as om    # API 2.0 over 1.0; use for object refs and math
 ```
 
-Use type hints (essential for PyMEL/OpenMaya interop).
+- Use `cmds.*` directly. A few cmds names don't exist — use `om.MGlobal.displayInfo` (no `cmds.displayInfo`) and `cmds.file(query=True, sceneName=True)` (no `cmds.sceneName`).
+- Common node-handling helpers live on canonical classes/modules:
+  - Names / coercion: `short_name`, `leaf_name`, `as_strings` — module-level in `mayatk/core_utils/_core_utils.py`. `BoundingBox` + `get_bounding_box` also live there.
+  - Hierarchy / type checks: `NodeUtils.get_parent`, `get_children`, `get_shapes`, `get_shape`, `is_intermediate`, `list_transforms`, `node_is`.
+  - Attributes: `Attributes.has_attr`, `Attributes.set_plug`.
+  - Matrices: `get_matrix` / `set_matrix` in `xform_utils/matrices.py`; `get_translation` / `get_object_matrix` / `set_object_matrix` in `xform_utils/_xform_utils.py`.
+- Coerce inputs to strings at production entry points: `cmds.X(str(node), ...)` — Maya 2025 cmds reject some non-string node args.
+- Use type hints (essential for OpenMaya interop).
 
 ## Test infrastructure
 
-Tests require Maya runtime (`pymel` / `maya.cmds`) — cannot run under plain `pytest` or workspace `.venv`.
+Tests require Maya runtime (`maya.cmds`) — cannot run under plain `pytest` or workspace `.venv`.
 
 **Syntax-only check** (no Maya needed):
 ```powershell
 .\.venv\Scripts\python.exe -c "import ast, os; c=0; [((ast.parse(open(os.path.join(r,f),encoding='utf-8').read()), c:=c+1) if f.endswith('.py') else None) for r,_,fs in os.walk(r'mayatk\mayatk') for f in fs]; print(f'{c} files OK')"
+```
+
+**maya.cmds / mel.eval command name check** (requires mayapy — validates names against the live Maya registry):
+```powershell
+& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" mayatk\test\check_cmds_syntax.py            # mayatk only (default)
+& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" mayatk\test\check_cmds_syntax.py --all      # all packages
+& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" mayatk\test\check_cmds_syntax.py --report   # write report file
+& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" mayatk\test\check_cmds_syntax.py mayatk/mayatk tentacle/tentacle
 ```
 
 **Test base classes**: `test/base_test.py` → `MayaTkTestCase` (full cleanup) or `QuickTestCase` (fast).

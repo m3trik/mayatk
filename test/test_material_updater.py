@@ -11,7 +11,7 @@ Tests for MaterialUpdater class functionality including:
 import os
 import unittest
 from unittest.mock import MagicMock, patch
-import pymel.core as pm
+import maya.cmds as cmds
 import pythontk as ptk
 
 from base_test import MayaTkTestCase
@@ -25,8 +25,8 @@ class TestMatUpdater(MayaTkTestCase):
         super().setUp()
         # Load Stingray plugin if available (optional, but good for completeness)
         try:
-            if not pm.pluginInfo("shaderFXPlugin", query=True, loaded=True):
-                pm.loadPlugin("shaderFXPlugin")
+            if not cmds.pluginInfo("shaderFXPlugin", query=True, loaded=True):
+                cmds.loadPlugin("shaderFXPlugin")
         except Exception:
             pass
 
@@ -37,13 +37,13 @@ class TestMatUpdater(MayaTkTestCase):
             f.write("dummy")
 
         # Use standardSurface which is always available and supported
-        self.mat = pm.shadingNode("standardSurface", asShader=True, name="test_mat")
-        self.file_node = pm.shadingNode("file", asTexture=True, name="test_file")
-        self.file_node.fileTextureName.set(self.temp_tex)
+        self.mat = cmds.shadingNode("standardSurface", asShader=True, name="test_mat")
+        self.file_node = cmds.shadingNode("file", asTexture=True, name="test_file")
+        cmds.setAttr(f"{self.file_node}.fileTextureName", self.temp_tex, type="string")
 
         # Connect to baseColor
-        if hasattr(self.mat, "baseColor"):
-            pm.connectAttr(self.file_node.outColor, self.mat.baseColor)
+        if cmds.attributeQuery("baseColor", node=self.mat, exists=True):
+            cmds.connectAttr(f"{self.file_node}.outColor", f"{self.mat}.baseColor")
 
         self.updater = MatUpdater()
 
@@ -153,10 +153,12 @@ class TestMatUpdater(MayaTkTestCase):
         results = self.updater.update_materials(materials=[self.mat], verbose=False)
 
         self.assertIsInstance(results, dict)
-        self.assertIn(self.mat.name(), results)
-        self.assertIn("textures", results[self.mat.name()])
-        self.assertIn("connected", results[self.mat.name()])
-        self.assertEqual(results[self.mat.name()]["textures"], [self.temp_tex])
+        # Production keys results dict by material name (string), not PyNode.
+        mat_key = str(self.mat).split("|")[-1].split(":")[-1]
+        self.assertIn(mat_key, results)
+        self.assertIn("textures", results[mat_key])
+        self.assertIn("connected", results[mat_key])
+        self.assertEqual(results[mat_key]["textures"], [self.temp_tex])
 
     def test_relative_path_resolution(self):
         """Test that relative move_to_folder paths are resolved to sourceimages."""
@@ -168,7 +170,7 @@ class TestMatUpdater(MayaTkTestCase):
 
         # Mock EnvUtils.get_env_info
         with patch(
-            "mayatk.mat_utils.material_updater.EnvUtils.get_env_info"
+            "mayatk.mat_utils.mat_updater.EnvUtils.get_env_info"
         ) as mock_env:
             mock_env.return_value = fake_sourceimages
 
@@ -200,7 +202,9 @@ class TestMatUpdater(MayaTkTestCase):
         results = self.updater.update_materials(materials=None, verbose=False)
 
         self.assertIsInstance(results, dict)
-        self.assertIn(self.mat.name(), results)
+        # Production keys results dict by material name (string), not PyNode.
+        mat_key = str(self.mat).split("|")[-1].split(":")[-1]
+        self.assertIn(mat_key, results)
 
     def test_move_to_folder_behavior(self):
         """Test if unmodified files are moved to the output folder."""
@@ -222,7 +226,7 @@ class TestMatUpdater(MayaTkTestCase):
         )
 
         # Get the connected texture path
-        mat_results = results.get(self.mat.name(), {})
+        mat_results = results.get(self.mat, {})
         connected = mat_results.get("connected", {})
 
         # Since we have a standardSurface with a file connected to baseColor,
@@ -240,9 +244,9 @@ class TestMatUpdater(MayaTkTestCase):
             self.assertFalse(path.startswith(output_folder))
 
     @patch(
-        "mayatk.mat_utils.material_updater.MaterialUpdater.disconnect_associated_attributes"
+        "mayatk.mat_utils.mat_updater.MatUpdater.disconnect_associated_attributes"
     )
-    @patch("mayatk.mat_utils.material_updater.MaterialUpdater.update_network")
+    @patch("mayatk.mat_utils.mat_updater.MatUpdater.update_network")
     @patch("pythontk.MapFactory.prepare_maps")
     def test_max_size_resize_logic(self, mock_prepare, mock_update, mock_disconnect):
         """Test that resize flag is correctly derived from max_size."""
@@ -275,9 +279,9 @@ class TestMatUpdater(MayaTkTestCase):
         self.assertEqual(config_obj.get("max_size"), 1024, "max_size should be 1024")
 
     @patch(
-        "mayatk.mat_utils.material_updater.MaterialUpdater.disconnect_associated_attributes"
+        "mayatk.mat_utils.mat_updater.MatUpdater.disconnect_associated_attributes"
     )
-    @patch("mayatk.mat_utils.material_updater.MaterialUpdater.update_network")
+    @patch("mayatk.mat_utils.mat_updater.MatUpdater.update_network")
     @patch("pythontk.MapFactory.prepare_maps")
     def test_copy_all_parameter_passing(
         self, mock_prepare, mock_update, mock_disconnect
@@ -315,17 +319,17 @@ class TestMaterialUpdaterStingray(MayaTkTestCase):
         super().setUp()
         # Load Stingray plugin
         try:
-            if not pm.pluginInfo("shaderFXPlugin", query=True, loaded=True):
-                pm.loadPlugin("shaderFXPlugin")
+            if not cmds.pluginInfo("shaderFXPlugin", query=True, loaded=True):
+                cmds.loadPlugin("shaderFXPlugin")
         except Exception:
             pass
 
         # Create Stingray Material
-        self.mat = pm.shadingNode(
+        self.mat = cmds.shadingNode(
             "StingrayPBS", asShader=True, name="test_stingray_mat"
         )
         try:
-            self.mat.initgraph.set(True)
+            cmds.setAttr(f"{self.mat}.initgraph", True)
         except Exception:
             pass
 
@@ -354,7 +358,7 @@ class TestMaterialUpdaterStingray(MayaTkTestCase):
 
     def test_explicit_args_mapping(self):
         """Test that explicit arguments 'convert' and 'optimize' are handled."""
-        updater = MaterialUpdater()
+        updater = MatUpdater()
 
         with patch("pythontk.MapFactory.prepare_maps") as mock_prepare:
             mock_prepare.return_value = list(self.textures.values())
@@ -380,7 +384,7 @@ class TestMaterialUpdaterStingray(MayaTkTestCase):
 
     def test_msao_connection(self):
         """Test that MSAO map is connected correctly for Unity HDRP."""
-        updater = MaterialUpdater()
+        updater = MatUpdater()
 
         msao_path = os.path.join(self.temp_dir, "test_texture_MSAO.png")
         with open(msao_path, "w") as f:
@@ -396,12 +400,12 @@ class TestMaterialUpdaterStingray(MayaTkTestCase):
             updater.update_materials(materials=[self.mat], config="Unity HDRP")
 
             # Check Metallic (R of MSAO)
-            conn_metal = pm.listConnections(
-                self.mat.TEX_metallic_map, plugs=True, source=True
+            conn_metal = cmds.listConnections(
+                f"{self.mat}.TEX_metallic_map", plugs=True, source=True
             )
             if not conn_metal:
-                conn_metal = pm.listConnections(
-                    self.mat.TEX_metallic_mapX, plugs=True, source=True
+                conn_metal = cmds.listConnections(
+                    f"{self.mat}.TEX_metallic_mapX", plugs=True, source=True
                 )
 
             self.assertTrue(
@@ -409,30 +413,30 @@ class TestMaterialUpdaterStingray(MayaTkTestCase):
             )
             self.assertIn(
                 "MSAO",
-                conn_metal[0].node().fileTextureName.get(),
+                cmds.getAttr(f"{conn_metal[0].split('.')[0]}.fileTextureName"),
                 "MSAO not connected to Metallic",
             )
 
             # Check AO (G of MSAO)
-            conn_ao = pm.listConnections(self.mat.TEX_ao_map, plugs=True, source=True)
+            conn_ao = cmds.listConnections(f"{self.mat}.TEX_ao_map", plugs=True, source=True)
             if not conn_ao:
-                conn_ao = pm.listConnections(
-                    self.mat.TEX_ao_mapX, plugs=True, source=True
+                conn_ao = cmds.listConnections(
+                    f"{self.mat}.TEX_ao_mapX", plugs=True, source=True
                 )
             self.assertTrue(conn_ao, "Nothing connected to TEX_ao_map")
             self.assertIn(
                 "MSAO",
-                conn_ao[0].node().fileTextureName.get(),
+                cmds.getAttr(f"{conn_ao[0].split('.')[0]}.fileTextureName"),
                 "MSAO not connected to AO",
             )
 
             # Check Roughness (Reverse of Alpha of MSAO)
-            conn_rough = pm.listConnections(
-                self.mat.TEX_roughness_map, plugs=True, source=True
+            conn_rough = cmds.listConnections(
+                f"{self.mat}.TEX_roughness_map", plugs=True, source=True
             )
             if not conn_rough:
-                conn_rough = pm.listConnections(
-                    self.mat.TEX_roughness_mapX, plugs=True, source=True
+                conn_rough = cmds.listConnections(
+                    f"{self.mat}.TEX_roughness_mapX", plugs=True, source=True
                 )
             self.assertTrue(conn_rough, "Nothing connected to TEX_roughness_map")
 
@@ -440,7 +444,7 @@ class TestMaterialUpdaterStingray(MayaTkTestCase):
 class TestMaterialUpdaterMoveLogic(MayaTkTestCase):
     def setUp(self):
         super().setUp()
-        self.mat = pm.shadingNode("standardSurface", asShader=True, name="test_mat")
+        self.mat = cmds.shadingNode("standardSurface", asShader=True, name="test_mat")
         self.temp_dir = os.path.normpath(
             os.path.join(os.environ["TEMP"], "test_move_logic")
         )
@@ -451,10 +455,10 @@ class TestMaterialUpdaterMoveLogic(MayaTkTestCase):
         with open(self.source_file, "w") as f:
             f.write("dummy")
 
-        self.file_node = pm.shadingNode("file", asTexture=True, name="test_file")
-        self.file_node.fileTextureName.set(self.source_file)
-        if hasattr(self.mat, "baseColor"):
-            pm.connectAttr(self.file_node.outColor, self.mat.baseColor)
+        self.file_node = cmds.shadingNode("file", asTexture=True, name="test_file")
+        cmds.setAttr(f"{self.file_node}.fileTextureName", self.source_file, type="string")
+        if cmds.attributeQuery("baseColor", node=self.mat, exists=True):
+            cmds.connectAttr(f"{self.file_node}.outColor", f"{self.mat}.baseColor")
 
     def tearDown(self):
         super().tearDown()
@@ -473,7 +477,7 @@ class TestMaterialUpdaterMoveLogic(MayaTkTestCase):
         # Config: move_to_folder is the temp dir (where source file is)
         config = {"move_to_folder": self.temp_dir, "copy_all": True}
 
-        MaterialUpdater.update_materials([self.mat], config=config)
+        MatUpdater.update_materials([self.mat], config=config)
 
         # Verify move_file was NOT called because file is already there
         mock_move.assert_not_called()
@@ -495,7 +499,7 @@ class TestMaterialUpdaterMoveLogic(MayaTkTestCase):
         # Config: move_to_folder is the temp dir
         config = {"move_to_folder": self.temp_dir, "copy_all": True}
 
-        MaterialUpdater.update_materials([self.mat], config=config)
+        MatUpdater.update_materials([self.mat], config=config)
 
         # Verify move_file WAS called
         mock_move.assert_called()

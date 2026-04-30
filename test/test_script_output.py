@@ -23,9 +23,23 @@ class TestScriptOutput(unittest.TestCase):
             cls._app = None
 
     def _import_script_output(self):
-        """Import script_output with Maya/PyMel modules mocked."""
+        """Import script_output with Maya/PyMel modules mocked when needed."""
         if not self._qt_available:
             self.skipTest("qtpy not available")
+
+        from qtpy import QtWidgets
+        import importlib
+
+        # When real Maya is available (run_tests.py path), import directly —
+        # mocking sys.modules would corrupt downstream imports walked by
+        # mayatk's package resolver and trip shibokensupport's import hook.
+        real_maya_available = (
+            "maya.cmds" in sys.modules
+            and not isinstance(sys.modules["maya.cmds"], MagicMock)
+        )
+        if real_maya_available:
+            module = importlib.import_module("mayatk.env_utils.script_output")
+            return importlib.reload(module)
 
         # Mock Maya + PyMel modules so we can import outside Maya
         mock_maya = MagicMock()
@@ -34,8 +48,6 @@ class TestScriptOutput(unittest.TestCase):
         mock_maya_app = MagicMock()
         mock_maya_app.general = MagicMock()
         mock_maya_app.general.mayaMixin = MagicMock()
-
-        from qtpy import QtWidgets
 
         class DummyMixin(QtWidgets.QWidget):
             pass
@@ -54,8 +66,6 @@ class TestScriptOutput(unittest.TestCase):
         }
 
         with unittest.mock.patch.dict(sys.modules, modules):
-            import importlib
-
             module = importlib.import_module("mayatk.env_utils.script_output")
             return importlib.reload(module)
 

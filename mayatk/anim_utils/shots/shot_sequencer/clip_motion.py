@@ -11,12 +11,10 @@ standalone helpers:
 """
 from __future__ import annotations
 
+from mayatk.core_utils._core_utils import CoreUtils
+
 from typing import TYPE_CHECKING
 
-try:
-    import pymel.core as pm
-except ImportError:
-    pm = None
 
 try:
     import maya.cmds as cmds
@@ -132,7 +130,7 @@ class ClipMotionMixin:
         new_end = new_start + new_duration
 
         attr_name = clip.data.get("attr_name")
-        with pm.UndoChunk():
+        with CoreUtils.undo_chunk():
             if attr_name:
                 scale_attribute_keys(
                     obj_name, attr_name, orig_start, orig_end, new_start, new_end
@@ -190,7 +188,7 @@ class ClipMotionMixin:
             orig_end = clip.data.get("orig_end")
             if not obj_name or orig_start is None or orig_end is None:
                 return False
-            if not pm.objExists(obj_name):
+            if not cmds.objExists(obj_name):
                 return False
             delta = new_start - orig_start
             if abs(delta) < FLOAT_ZERO_EPS:
@@ -362,7 +360,7 @@ class ClipMotionMixin:
         obj_name = clip.data.get("obj", "") if clip else ""
 
         self._save_shot_state()
-        with pm.UndoChunk():
+        with CoreUtils.undo_chunk():
             if self._apply_clip_move(clip_id, new_start):
                 self.logger.debug(
                     "[CLIP MOVED] sync triggered — cache_keys=%s shifted_out=%s",
@@ -384,7 +382,7 @@ class ClipMotionMixin:
                 if clip:
                     shot_id = clip.data.get("shot_id")
         self._save_shot_state()
-        with pm.UndoChunk():
+        with CoreUtils.undo_chunk():
             needs_sync = False
             for clip_id, new_start in moves:
                 if self._apply_clip_move(clip_id, new_start):
@@ -427,7 +425,7 @@ class ClipMotionMixin:
         # landing on old_t of another would corrupt the later query).
         # Pass 1 — snapshot values and tangents, then delete old keys.
         snapshots: list = []  # (crv, new_t, val, itt, ott)
-        with pm.UndoChunk():
+        with CoreUtils.undo_chunk():
             for old_t, new_t in changes:
                 if abs(new_t - old_t) < 1e-6:
                     continue
@@ -516,7 +514,7 @@ class ClipMotionMixin:
             return
 
         deleted = False
-        with pm.UndoChunk():
+        with CoreUtils.undo_chunk():
             for t in times:
                 for crv in curves:
                     cmds.cutKey(str(crv), time=(t, t), clear=True)

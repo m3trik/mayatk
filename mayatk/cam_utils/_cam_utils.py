@@ -1,13 +1,17 @@
 # !/usr/bin/python
 # coding=utf-8
+from __future__ import annotations
+
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
+    import maya.api.OpenMaya as om
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils._core_utils import CoreUtils, short_name, as_strings
+from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.ui_utils._ui_utils import UiUtils
 
 
@@ -44,38 +48,39 @@ class CamUtils(ptk.HelpMixin):
                 hide_group (bool, optional): If True, the newly created group will be hidden. Default is False.
 
         Returns:
-                PyNode: The created group node containing the cameras.
+                str: The created group node containing the cameras.
         """
-        if pm.objExists(name):  # Check if the group already exists
-            pm.error(f"Group '{name}' already exists.")
+        if cmds.objExists(name):
+            cmds.error(f"Group '{name}' already exists.")
             return
 
-        # Create the group and set it's visibility
-        group = pm.group(empty=True, name=name)
-        group.visibility.set(not hide_group)
+        # Create the group and set its visibility
+        group = cmds.group(empty=True, name=name)
+        cmds.setAttr(f"{group}.visibility", not hide_group)
 
-        all_cameras = pm.ls(type="camera")  # Get all cameras in the scene
-        all_camera_transforms = [
-            cam.getParent() for cam in all_cameras
-        ]  # Get the parent transform nodes of the cameras
+        all_cameras = cmds.ls(type="camera") or []
+        all_camera_transforms = []
+        for cam in all_cameras:
+            parent = NodeUtils.get_parent(cam)
+            if parent:
+                all_camera_transforms.append(parent)
 
-        if root_only:  # Filter cameras based on the root_only flag
+        if root_only:
             all_camera_transforms = [
-                cam for cam in all_camera_transforms if cam.getParent() is None
+                cam for cam in all_camera_transforms if NodeUtils.get_parent(cam) is None
             ]
 
         # Parent cameras to the group based on the non_default flag
         for cam in all_camera_transforms:
             if non_default:
+                cam_short = short_name(cam)
                 if not any(
-                    [
-                        cam.name().endswith(def_cam)
-                        for def_cam in CamUtils.DEFAULT_CAMERAS
-                    ]
+                    cam_short.endswith(def_cam)
+                    for def_cam in CamUtils.DEFAULT_CAMERAS
                 ):
-                    pm.parent(cam, group)
+                    cmds.parent(cam, group)
             else:
-                pm.parent(cam, group)
+                cmds.parent(cam, group)
 
         return group
 
@@ -84,9 +89,9 @@ class CamUtils(ptk.HelpMixin):
         """Toggle display of the film gate for the current camera."""
         camera = cls.get_current_cam()
 
-        state = pm.camera(camera, q=True, displayResolution=1)
+        state = cmds.camera(camera, q=True, displayResolution=1)
         if state:
-            pm.camera(
+            cmds.camera(
                 camera,
                 edit=1,
                 displayFilmGate=False,
@@ -94,7 +99,7 @@ class CamUtils(ptk.HelpMixin):
                 overscan=1.0,
             )
         else:
-            pm.camera(
+            cmds.camera(
                 camera,
                 edit=1,
                 displayFilmGate=False,
@@ -129,10 +134,10 @@ class CamUtils(ptk.HelpMixin):
 
         if current_panel:
             if UiUtils.get_panel(typeOf=current_panel) == "modelPanel":
-                camera = pm.modelPanel(current_panel, q=1, cam=1)
-                new_camera = pm.duplicate(camera)[0]
-                pm.showHidden(new_camera)
-                new_camera = pm.rename(new_camera, name)
+                camera = cmds.modelPanel(current_panel, q=1, cam=1)
+                new_camera = cmds.duplicate(camera)[0]
+                cmds.showHidden(new_camera)
+                new_camera = cmds.rename(new_camera, name)
                 print(f"# Result: {new_camera} #")
                 return new_camera
         else:
@@ -159,25 +164,27 @@ class CamUtils(ptk.HelpMixin):
         # Resolve camera shapes
         target_cameras = []
         if camera:
-            raw_cameras = pm.ls(camera)
+
+            raw_cameras = cmds.ls(*as_strings(camera)) or []
             for cam in raw_cameras:
-                if hasattr(cam, "getShape"):  # Transform
-                    shape = cam.getShape()
-                    if shape and shape.nodeType() == "camera":
-                        target_cameras.append(shape)
-                elif cam.nodeType() == "camera":  # Shape
+                node_type = cmds.nodeType(cam)
+                if node_type == "transform":
+                    shapes = NodeUtils.get_shapes(cam)
+                    if shapes and cmds.nodeType(shapes[0]) == "camera":
+                        target_cameras.append(shapes[0])
+                elif node_type == "camera":
                     target_cameras.append(cam)
         else:
             # If no camera specified, use the current viewport camera
             current_cam = cls.get_current_cam()
-            if current_cam:
-                cam_node = pm.PyNode(current_cam)
-                if cam_node.nodeType() == "camera":
-                    target_cameras.append(cam_node)
-                elif hasattr(cam_node, "getShape"):
-                    shape = cam_node.getShape()
-                    if shape and shape.nodeType() == "camera":
-                        target_cameras.append(shape)
+            if current_cam and cmds.objExists(current_cam):
+                node_type = cmds.nodeType(current_cam)
+                if node_type == "camera":
+                    target_cameras.append(current_cam)
+                elif node_type == "transform":
+                    shapes = NodeUtils.get_shapes(current_cam)
+                    if shapes and cmds.nodeType(shapes[0]) == "camera":
+                        target_cameras.append(shapes[0])
 
         if not target_cameras:
             return
@@ -190,19 +197,19 @@ class CamUtils(ptk.HelpMixin):
         bbox_points = None
 
         if needs_auto:
-            all_geo = pm.ls(dag=True, geometry=True, visible=True)
+            all_geo = cmds.ls(dag=True, geometry=True, visible=True) or []
             if not all_geo:
-                all_geo = pm.ls(dag=True, geometry=True)
+                all_geo = cmds.ls(dag=True, geometry=True) or []
 
             if all_geo:
-                bbox = pm.exactWorldBoundingBox(all_geo)
+                bbox = cmds.exactWorldBoundingBox(all_geo)
                 # bbox is [xmin, ymin, zmin, xmax, ymax, zmax]
-                min_pt = pm.dt.Vector(bbox[0], bbox[1], bbox[2])
-                max_pt = pm.dt.Vector(bbox[3], bbox[4], bbox[5])
+                min_pt = om.MVector(bbox[0], bbox[1], bbox[2])
+                max_pt = om.MVector(bbox[3], bbox[4], bbox[5])
 
                 # Calculate 8 corners for far clip calculation
                 bbox_points = [
-                    pm.dt.Vector(x, y, z)
+                    om.MVector(x, y, z)
                     for x in (min_pt.x, max_pt.x)
                     for y in (min_pt.y, max_pt.y)
                     for z in (min_pt.z, max_pt.z)
@@ -214,10 +221,12 @@ class CamUtils(ptk.HelpMixin):
             max_dist = 0  # Distance to furthest point of bbox
 
             if needs_auto:
-                cam_transform = cam.getParent()
-                cam_pos = pm.dt.Vector(pm.xform(cam_transform, q=True, ws=True, t=True))
+                cam_transform = NodeUtils.get_parent(cam)
+                if cam_transform:
+                    pos = cmds.xform(cam_transform, q=True, ws=True, t=True)
+                    cam_pos = om.MVector(pos[0], pos[1], pos[2])
 
-                if bbox_points:
+                if bbox_points and cam_pos is not None:
                     for pt in bbox_points:
                         d = (pt - cam_pos).length()
                         if d > max_dist:
@@ -229,7 +238,7 @@ class CamUtils(ptk.HelpMixin):
                 if near_clip == "reset":
                     new_near = 0.1
                 elif near_clip == "auto":
-                    if bbox and cam_pos:
+                    if bbox and cam_pos is not None:
                         # Use a safe ratio of the far distance to maintain Z-buffer precision
                         # while ensuring we don't clip foreground objects excessively.
                         # Ratio of 3000 is conservative (e.g. Far=3000 -> Near=1.0)
@@ -243,7 +252,7 @@ class CamUtils(ptk.HelpMixin):
                     new_near = near_clip
 
                 if new_near is not None:
-                    cam.nearClipPlane.set(new_near)
+                    cmds.setAttr(f"{cam}.nearClipPlane", new_near)
 
             # Determine Far Clip
             if far_clip is not None:
@@ -251,7 +260,7 @@ class CamUtils(ptk.HelpMixin):
                 if far_clip == "reset":
                     new_far = 10000.0
                 elif far_clip == "auto":
-                    if bbox_points and cam_pos:
+                    if bbox_points and cam_pos is not None:
                         new_far = max_dist * 1.2
                     else:
                         new_far = 10000.0
@@ -259,7 +268,7 @@ class CamUtils(ptk.HelpMixin):
                     new_far = far_clip
 
                 if new_far is not None:
-                    cam.farClipPlane.set(new_far)
+                    cmds.setAttr(f"{cam}.farClipPlane", new_far)
 
     @staticmethod
     def _get_default_camera(camera_name):
@@ -271,17 +280,15 @@ class CamUtils(ptk.HelpMixin):
         Returns:
             str or None: The actual camera name to use with lookThru, or None if not found
         """
-        # Get all startup cameras in the scene
         try:
-            all_cameras = pm.ls(type="camera")
+            all_cameras = cmds.ls(type="camera") or []
             startup_cameras = []
 
             for cam in all_cameras:
                 try:
-                    # Check if this is a startup camera
-                    if pm.camera(cam, q=True, startupCamera=True):
+                    if cmds.camera(cam, q=True, startupCamera=True):
                         startup_cameras.append(cam)
-                except:
+                except Exception:
                     continue
 
             # Find the camera that matches our desired view
@@ -296,9 +303,9 @@ class CamUtils(ptk.HelpMixin):
 
             # Look for matching startup camera
             for cam in startup_cameras:
-                cam_name = str(cam)
-                transform = cam.getParent() if hasattr(cam, "getParent") else None
-                transform_name = str(transform) if transform else ""
+                cam_name = cam
+                transform = NodeUtils.get_parent(cam)
+                transform_name = transform if transform else ""
 
                 # Check if camera shape or transform matches our search names
                 for search_name in search_names:
@@ -308,12 +315,11 @@ class CamUtils(ptk.HelpMixin):
                         or cam_name.endswith(search_name)
                         or transform_name.endswith(search_name)
                     ):
-                        # Return the shape name for lookThru (preferred)
-                        return str(cam)
+                        return cam
 
             # If no startup camera found, try by name existence
             for search_name in search_names:
-                if pm.objExists(search_name):
+                if cmds.objExists(search_name):
                     return search_name
 
         except Exception as e:
@@ -332,7 +338,7 @@ class CamUtils(ptk.HelpMixin):
             str or None: The camera that was switched to, or None if switching failed
         """
         # Store initial selection to restore later
-        initial_selection = pm.ls(selection=True)
+        initial_selection = cmds.ls(selection=True) or []
 
         # Camera configuration - simplified approach
         camera_config = {
@@ -348,35 +354,35 @@ class CamUtils(ptk.HelpMixin):
 
         if config and not config["default"]:
             # Handle custom cameras (create if missing)
-            if pm.objExists(camera_name):
-                pm.lookThru(camera_name)
+            if cmds.objExists(camera_name):
+                cmds.lookThru(camera_name)
                 camera_used = camera_name
             else:
                 # Create the custom camera
-                cam, camShape = pm.camera()
-                pm.rename(cam, camera_name)
-                pm.lookThru(camera_name)
-                pm.hide(camera_name)
+                cam, camShape = cmds.camera()
+                cmds.rename(cam, camera_name)
+                cmds.lookThru(camera_name)
+                cmds.hide(camera_name)
                 camera_used = camera_name
 
                 # Apply view setting if specified
                 view_set = config.get("view_set")
                 if view_set:
-                    pm.viewSet(**{view_set: 1})
+                    cmds.viewSet(**{view_set: 1})
         else:
             # Handle default Maya cameras
             default_cam = cls._get_default_camera(camera_name)
             if default_cam:
-                pm.lookThru(default_cam)
+                cmds.lookThru(default_cam)
                 camera_used = default_cam
             else:
                 print(f"Warning: Default camera '{camera_name}' not found in scene")
 
         # Restore initial selection
         if initial_selection:
-            pm.select(initial_selection)
+            cmds.select(initial_selection)
         else:
-            pm.select(clear=True)
+            cmds.select(clear=True)
 
         return camera_used
 

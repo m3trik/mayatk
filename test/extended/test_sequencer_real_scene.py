@@ -17,6 +17,7 @@ import unittest
 import sys
 import os
 from collections import defaultdict
+import maya.cmds as cmds
 
 scripts_dir = r"O:\Cloud\Code\_scripts"
 for p in (
@@ -76,7 +77,6 @@ except Exception:
 # ---------------------------------------------------------------------------
 if HAS_MAYA:
     import pymel.core as pm
-    import maya.cmds as cmds
 
 if HAS_MAYA and HAS_QT:
     from uitk.widgets.sequencer._sequencer import SequencerWidget
@@ -203,7 +203,7 @@ class TestSceneDiscovery(unittest.TestCase):
         for r in self.regions:
             for obj in r["objects"]:
                 self.assertTrue(
-                    cmds.objExists(obj),
+                    cmds.objExists(str(obj)),
                     f"Region {r['name']} references non-existent object: {obj}",
                 )
 
@@ -327,7 +327,7 @@ class TestEngineSegments(unittest.TestCase):
             segs = self.seq.collect_object_segments(shot.shot_id)
             seg_objs = {s["obj"] for s in segs}
             for obj in shot.objects:
-                if not cmds.objExists(obj):
+                if not cmds.objExists(str(obj)):
                     continue
                 kr = _get_keyframe_range(obj)
                 if kr is None:
@@ -387,7 +387,7 @@ class TestWidgetPopulation(unittest.TestCase):
         # Build tracks for all objects
         all_objs = sorted(set(shot.objects) | set(by_obj.keys()))
         for obj in all_objs:
-            if not cmds.objExists(obj):
+            if not cmds.objExists(str(obj)):
                 continue
             short_name = obj.split("|")[-1]
             tid = self.widget.add_track(short_name)
@@ -477,7 +477,7 @@ class TestWidgetPopulation(unittest.TestCase):
             clips = self.widget.clips()
             for clip in clips:
                 obj = clip.data.get("obj")
-                if not obj or not cmds.objExists(obj):
+                if not obj or not cmds.objExists(str(obj)):
                     continue
                 # Clip range should be within shot range
                 self.assertGreaterEqual(
@@ -610,7 +610,7 @@ class TestSubRowExpansion(unittest.TestCase):
         shot = self.store.shots[0]
         # Pick the first object with animation
         for obj in shot.objects:
-            if not cmds.objExists(obj):
+            if not cmds.objExists(str(obj)):
                 continue
             sub_data = self._get_sub_row_data(shot, obj)
             if not sub_data:
@@ -665,7 +665,7 @@ class TestSubRowExpansion(unittest.TestCase):
         for shot in self.store.shots:
             self.widget.clear()
             for obj in shot.objects:
-                if not cmds.objExists(obj):
+                if not cmds.objExists(str(obj)):
                     continue
                 sub_data = self._get_sub_row_data(shot, obj)
                 if not sub_data:
@@ -716,7 +716,7 @@ class TestKeyboardNavigation(unittest.TestCase):
             by_obj[s["obj"]].append(s)
 
         for obj, obj_segs in by_obj.items():
-            if not cmds.objExists(obj):
+            if not cmds.objExists(str(obj)):
                 continue
             short = obj.split("|")[-1]
             tid = self.widget.add_track(short)
@@ -757,7 +757,7 @@ class TestKeyboardNavigation(unittest.TestCase):
             by_obj[s["obj"]].append(s)
 
         for obj, obj_segs in by_obj.items():
-            if not cmds.objExists(obj):
+            if not cmds.objExists(str(obj)):
                 continue
             short = obj.split("|")[-1]
             tid = self.widget.add_track(short)
@@ -829,7 +829,7 @@ class TestUndoWithRealData(unittest.TestCase):
             by_obj[s["obj"]].append(s)
         track_ids = {}
         for obj in sorted(set(shot.objects) | set(by_obj.keys())):
-            if not cmds.objExists(obj):
+            if not cmds.objExists(str(obj)):
                 continue
             tid = self.widget.add_track(obj.split("|")[-1])
             track_ids[obj] = tid

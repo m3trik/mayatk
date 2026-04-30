@@ -4,13 +4,13 @@ from typing import Any, Union, List, Callable
 from functools import wraps
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils._core_utils import CoreUtils, as_strings
 from mayatk.node_utils._node_utils import NodeUtils
 
 
@@ -43,17 +43,10 @@ class DisplayUtils(ptk.HelpMixin):
 
     @staticmethod
     def is_templated(obj: Union[str, object]) -> bool:
-        """Check if a given object is templated.
-
-        Parameters:
-            obj (Union[str, pm.PyNode]): The name of the node or a PyNode object.
-
-        Returns:
-            bool: True if the node is templated, False otherwise.
-        """
+        """Check if a given object is templated."""
         try:
-            return pm.getAttr(f"{obj}.template")
-        except AttributeError:
+            return cmds.getAttr(f"{obj}.template")
+        except Exception:
             return False
 
     @classmethod
@@ -67,12 +60,12 @@ class DisplayUtils(ptk.HelpMixin):
     ) -> None:
         """Sets the visibility of specified elements in the Maya scene.
         It accepts a wide variety of inputs for the elements parameter, including strings,
-        PyMEL objects, or lists of objects. It can also optionally affect the visibility of layers
+        Maya nodes, or lists of nodes. It can also optionally affect the visibility of layers
         and ancestor nodes.
 
         Parameters:
-            elements (str, pm.nt.DependNode, list): A string that represents a Maya object type,
-                           a wildcard expression, a single PyMEL object, or a list of PyMEL objects.
+            elements (str, object, list): A string that represents a Maya object type,
+                           a wildcard expression, a single object, or a list of objects.
             visibility (bool): The visibility state to apply. If True, elements are shown; if False, elements are hidden.
             include_ancestors (bool): If True, will also set visibility for all ancestor transform nodes of the elements.
             affect_layers (bool): If True, will ensure that all layers except the default layer have their visibility set.
@@ -85,40 +78,47 @@ class DisplayUtils(ptk.HelpMixin):
             set_visibility('pCube*', visibility=True)  # Shows all objects with names starting with 'pCube'.
         """
         if affect_layers:
-            # Set visibility for all layers except the default layer
-            for layer in pm.ls(type="displayLayer"):
-                if layer.name() != "defaultLayer" and not layer.isReferenced():
+            for layer in cmds.ls(type="displayLayer") or []:
+                layer_name = layer.split("|")[-1].split(":")[-1]
+                try:
+                    is_ref = cmds.referenceQuery(layer, isNodeReferenced=True)
+                except Exception:
+                    is_ref = False
+                if layer_name != "defaultLayer" and not is_ref:
                     try:
-                        layer.visibility.set(visibility)
-                    except pm.MayaAttributeError:
-                        pass  # Skip the layer if visibility cannot be set
+                        cmds.setAttr(f"{layer}.visibility", visibility)
+                    except Exception:
+                        pass
 
-        elements = [elements] if isinstance(elements, str) else elements
+        elements = as_strings(elements)
         if set(elements).intersection(cls.NODES_WITH_VISIBILITY):
-            scene_elements = pm.ls(type=elements)
+            scene_elements = cmds.ls(type=elements) or []
         else:
-            # Use it as a search pattern or type name
-            scene_elements = pm.ls(elements)
+            scene_elements = cmds.ls(*elements) if elements else []
 
         for element in scene_elements:
             if include_ancestors:
-                # Set visibility for ancestor transform nodes
-                ancestors = [
-                    ancestor
-                    for ancestor in element.getAllParents()
-                    if isinstance(ancestor, pm.nt.Transform)
-                ]
+                # Walk up the hierarchy collecting transform ancestors
+                ancestors = []
+                current = element
+                while True:
+                    parents = cmds.listRelatives(current, parent=True, fullPath=True)
+                    if not parents:
+                        break
+                    parent = parents[0]
+                    if cmds.nodeType(parent) == "transform":
+                        ancestors.append(parent)
+                    current = parent
                 for ancestor in ancestors:
                     try:
-                        ancestor.visibility.set(visibility)
-                    except pm.MayaAttributeError:
-                        pass  # Skip the ancestor if visibility cannot be set
+                        cmds.setAttr(f"{ancestor}.visibility", visibility)
+                    except Exception:
+                        pass
 
-            # Set the visibility of the element
             try:
-                element.visibility.set(visibility)
-            except pm.MayaAttributeError:
-                pass  # Skip the element if visibility cannot be set
+                cmds.setAttr(f"{element}.visibility", visibility)
+            except Exception:
+                pass
 
     @classmethod
     def get_visible_geometry(
@@ -127,7 +127,7 @@ class DisplayUtils(ptk.HelpMixin):
         consider_templated_visible: bool = False,
         inherit_parent_visibility: bool = False,
         consider_animated_visible: bool = False,
-    ) -> List[object]:
+    ) -> List[str]:
         """Get a list of visible geometry.
 
         Parameters:
@@ -142,49 +142,41 @@ class DisplayUtils(ptk.HelpMixin):
                 frames is included in the result.
 
         Returns:
-            List[pm.PyNode]: A list of visible nodes of the specified type.
+            List[str]: A list of visible node names of the specified type.
         """
 
-        def is_node_visible(node: pm.PyNode) -> bool:
+        def is_node_visible(node: str) -> bool:
             """Check visibility of node and its parents, ignoring templated status unless it is not included."""
-            while node:
-                # Check if node is visible
-                if not node.visibility.get():
-                    # If animated visibility should be treated as visible,
-                    # skip this check when the attribute has a driver.
-                    if consider_animated_visible and node.visibility.isConnected():
+            current = node
+            while current:
+                if not cmds.getAttr(f"{current}.visibility"):
+                    if consider_animated_visible and cmds.listConnections(
+                        f"{current}.visibility", source=True, destination=False
+                    ):
                         pass  # Treat as visible — animation will be baked
                     else:
                         return False
-                # Check if node is templated and should be excluded
-                if not consider_templated_visible and cls.is_templated(node):
+                if not consider_templated_visible and cls.is_templated(current):
                     return False
-                node = node.getParent()
+                parents = cmds.listRelatives(current, parent=True, fullPath=True)
+                current = parents[0] if parents else None
             return True
 
         result = []
 
-        # Iterate through nodes, considering if they are shapes or transforms
-        for node in pm.ls(type="transform" if not shapes else "geometry"):
-            # Skip nodes if templated and not included
+        for node in cmds.ls(type="transform" if not shapes else "geometry") or []:
             if not consider_templated_visible and cls.is_templated(node):
                 continue
 
-            # Check if parent visibility check is enabled and node visibility is validated
             if inherit_parent_visibility and not is_node_visible(node):
                 continue
 
-            # Append nodes based on whether shapes or transforms are requested
-            if shapes and node.nodeType() == "geometry":
+            if shapes and cmds.nodeType(node) == "geometry":
                 result.append(node)
             elif not shapes:
-                # Only include transforms with renderable geometry shapes
-                # (mesh, nurbsSurface, subdiv). Exclude locators,
-                # cameras, lights, etc. which have shape nodes but no
-                # exportable geometry.
                 _RENDERABLE = {"mesh", "nurbsSurface", "subdiv"}
-                for s in node.getShapes():
-                    if s.nodeType() in _RENDERABLE:
+                for s in cmds.listRelatives(node, shapes=True, fullPath=True) or []:
+                    if cmds.nodeType(s) in _RENDERABLE:
                         result.append(node)
                         break
 
@@ -197,21 +189,21 @@ class DisplayUtils(ptk.HelpMixin):
         Parameters:
             objects (str, obj, list): Transform objects to be added to the isolation set.
         """
-        # Use pm.ls to ensure all inputs are converted to PyMel transform nodes, even if passed as strings
-        objects = pm.ls(objects, type="transform")
+        # Coerce to plain strings + drop missing nodes. ``cmds.ls`` raises
+        # ``TypeError`` when passed a node that wraps a deleted MObject
+        # (common when callers mirror/delete then forward the originals).
 
-        # Get the currently active model panel
-        currentPanel = pm.paneLayout("viewPanes", q=True, pane1=True)
+        names = [n for n in as_strings(objects) if cmds.objExists(n)]
+        objects = cmds.ls(*names, type="transform") if names else []
 
-        # Check if isolation mode is active
-        if pm.modelEditor(currentPanel, q=True, viewSelected=True):
-            # Retrieve the isolation set associated with the current panel
-            isoSet = pm.modelEditor(currentPanel, q=True, viewObjects=True)
+        currentPanel = cmds.paneLayout("viewPanes", q=True, pane1=True)
 
-            # Add the specified transform nodes to the isolation set
+        if cmds.modelEditor(currentPanel, q=True, viewSelected=True):
+            isoSet = cmds.modelEditor(currentPanel, q=True, viewObjects=True)
+
             for obj in objects:
-                if pm.objExists(obj.name()):  # Ensure the object exists in the scene
-                    pm.sets(isoSet, add=obj)
+                if cmds.objExists(obj):
+                    cmds.sets(obj, add=isoSet)
         else:
             pass  # print("Isolation mode is not active in the current view panel.")
 
@@ -222,18 +214,12 @@ class DisplayUtils(ptk.HelpMixin):
         This flushes the GPU memory and restarts the OGS renderer.
         It also sets the Max Texture Resolution to prevent clamping.
         """
-        import maya.cmds as cmds
-
         try:
-            # Prevent texture clamping which causes the "green" look
             if cmds.objExists("hardwareRenderingGlobals"):
-                # Check if we should force a high limit
                 cmds.setAttr("hardwareRenderingGlobals.textureMaxResolution", max_res)
 
             print("Resetting Viewport 2.0...")
-            # Reset the scheduler
             cmds.ogs(reset=True)
-            # Force refresh
             cmds.refresh(force=True)
             print("Viewport reset complete.")
 

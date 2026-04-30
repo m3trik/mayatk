@@ -1,7 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
+try:
+    import maya.cmds as cmds
+except ImportError:
+    cmds = None
+
 from typing import List, Dict, Optional, Union
-import pymel.core as pm
 
 
 def unbake_animation(objects=None, threshold=0.001):
@@ -17,25 +21,25 @@ def unbake_animation(objects=None, threshold=0.001):
         int: Number of keys removed
     """
     if objects is None:
-        objects = pm.selected()
+        objects = cmds.ls(selection=True) or []
 
     if not objects:
-        pm.warning("No objects selected or provided")
+        cmds.warning("No objects selected or provided")
         return 0
 
-    objects = pm.ls(objects)
+    objects = cmds.ls(objects)
     keys_removed = 0
 
     for obj in objects:
         # Get all keyable attributes
-        keyable_attrs = pm.listAttr(obj, keyable=True) or []
+        keyable_attrs = cmds.listAttr(obj, keyable=True) or []
 
         for attr_name in keyable_attrs:
             try:
-                attr = obj.attr(attr_name)
+                attr = f"{obj}.{attr_name}"
 
                 # Check if attribute has animation curves
-                anim_curves = pm.listConnections(attr, type="animCurve")
+                anim_curves = cmds.listConnections(attr, type="animCurve")
                 if not anim_curves:
                     continue
 
@@ -95,7 +99,7 @@ def unbake_animation(objects=None, threshold=0.001):
                     keys_removed += 1
 
             except Exception as e:
-                pm.warning(f"Error processing {obj}.{attr_name}: {str(e)}")
+                cmds.warning(f"Error processing {obj}.{attr_name}: {str(e)}")
                 continue
 
     print(f"Removed {keys_removed} unnecessary keyframes")
@@ -111,22 +115,22 @@ def unbake_animation_direction_based(objects=None, threshold=0.01):
         threshold (float): Minimum value change to consider significant (default: 0.01)
     """
     if objects is None:
-        objects = pm.selected()
+        objects = cmds.ls(selection=True) or []
 
     if not objects:
-        pm.warning("No objects selected or provided")
+        cmds.warning("No objects selected or provided")
         return 0
 
-    objects = pm.ls(objects)
+    objects = cmds.ls(objects)
     keys_removed = 0
 
     for obj in objects:
-        keyable_attrs = pm.listAttr(obj, keyable=True) or []
+        keyable_attrs = cmds.listAttr(obj, keyable=True) or []
 
         for attr_name in keyable_attrs:
             try:
-                attr = obj.attr(attr_name)
-                anim_curves = pm.listConnections(attr, type="animCurve")
+                attr = f"{obj}.{attr_name}"
+                anim_curves = cmds.listConnections(attr, type="animCurve")
                 if not anim_curves:
                     continue
 
@@ -161,7 +165,7 @@ def unbake_animation_direction_based(objects=None, threshold=0.01):
                         keys_removed += 1
 
             except Exception as e:
-                pm.warning(f"Error processing {obj}.{attr_name}: {str(e)}")
+                cmds.warning(f"Error processing {obj}.{attr_name}: {str(e)}")
                 continue
 
     print(f"Removed {keys_removed} unnecessary keyframes")
@@ -182,22 +186,22 @@ def unbake_animation_smart(objects=None, threshold=0.001):
         int: Number of keys removed
     """
     if objects is None:
-        objects = pm.selected()
+        objects = cmds.ls(selection=True) or []
 
     if not objects:
-        pm.warning("No objects selected or provided")
+        cmds.warning("No objects selected or provided")
         return 0
 
-    objects = pm.ls(objects)
+    objects = cmds.ls(objects)
     keys_removed = 0
 
     for obj in objects:
-        keyable_attrs = pm.listAttr(obj, keyable=True) or []
+        keyable_attrs = cmds.listAttr(obj, keyable=True) or []
 
         for attr_name in keyable_attrs:
             try:
-                attr = obj.attr(attr_name)
-                anim_curves = pm.listConnections(attr, type="animCurve")
+                attr = f"{obj}.{attr_name}"
+                anim_curves = cmds.listConnections(attr, type="animCurve")
                 if not anim_curves:
                     continue
 
@@ -239,7 +243,7 @@ def unbake_animation_smart(objects=None, threshold=0.001):
                     keys_removed += 1
 
             except Exception as e:
-                pm.warning(f"Error processing {obj}.{attr_name}: {str(e)}")
+                cmds.warning(f"Error processing {obj}.{attr_name}: {str(e)}")
                 continue
 
     print(f"Removed {keys_removed} unnecessary keyframes")
@@ -338,7 +342,7 @@ def _preserve_hold_boundaries(keys_data, essential, threshold):
 # --------------------------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    objects = pm.selected()
+    objects = cmds.ls(selection=True) or []
     keys_removed = unbake_animation_smart(objects, threshold=0.01)
     print(f"Smart unbaking complete. Removed {keys_removed} keys.")
 

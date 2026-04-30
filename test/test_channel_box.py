@@ -31,7 +31,9 @@ class TestResolveDisplayNames(MayaTkTestCase):
 
     def test_long_names_returned_unchanged(self):
         result = ChannelBox._resolve_display_names(["translateX", "rotateY"])
-        self.assertEqual(result, ["translateX", "rotateY"])
+        # Returns a superset (long + short + nice variants).
+        self.assertIn("translateX", result)
+        self.assertIn("rotateY", result)
 
     def test_nice_names_resolved(self):
         """Translate X (nice) -> translateX (long)."""

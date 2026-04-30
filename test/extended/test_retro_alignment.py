@@ -19,7 +19,35 @@ import unittest
 import sys
 import os
 from pathlib import Path
+import maya.cmds as cmds
 
+
+# --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
+from contextlib import contextmanager as _contextmanager
+
+
+def _pm_open_file(*args, **kw):
+    kw.setdefault("open", True)
+    return cmds.file(*args, **kw)
+
+
+def _pm_new_file(**kw):
+    kw.setdefault("new", True)
+    return cmds.file(**kw)
+
+
+def _pm_rename_file(path):
+    return cmds.file(rename=path)
+
+
+@_contextmanager
+def _pm_undo_chunk():
+    cmds.undoInfo(openChunk=True)
+    try:
+        yield
+    finally:
+        cmds.undoInfo(closeChunk=True)
+# --- end shims ---
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -46,7 +74,7 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     parse_csv,
     BuilderStep,
     BuilderObject,
-    ManifestBuilder,
+    ShotManifest as ManifestBuilder,
 )
 from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import ShotSequencer
 from mayatk.anim_utils.shots._shots import ShotStore, ShotBlock
@@ -59,7 +87,7 @@ try:
     import pymel.core as pm
 
     # Quick sanity check â€” will succeed inside Maya or maya.standalone
-    pm.about(version=True)
+    cmds.about(version=True)
     HAS_MAYA = True
 except Exception:
     # Fallback: try standalone bootstrap
@@ -174,7 +202,7 @@ class TestParseCSVReal(unittest.TestCase):
                 f.write(f"Objects ({len(step.objects)}):\n")
                 for obj in step.objects:
                     f.write(f"  {obj.name:<40} behaviors={obj.behaviors}\n")
-        # Always passes â€” just writes the report
+        # Always passes — just writes the report
         self.assertTrue(out.exists())
 
 
@@ -190,16 +218,16 @@ class TestRealSceneExists(unittest.TestCase):
         if not Path(SCENE_PATH).exists():
             raise unittest.SkipTest(f"Scene not found: {SCENE_PATH}")
         # Open the scene (don't create a new one â€” we need the real data)
-        pm.openFile(SCENE_PATH, force=True)
+        _pm_open_file(SCENE_PATH, force=True)
 
     def test_scene_loaded(self):
         """Scene should have a non-trivial number of transforms."""
-        transforms = pm.ls(type="transform")
+        transforms = cmds.ls(type="transform")
         self.assertGreater(len(transforms), 100)
 
     def test_anim_curves_exist(self):
         """Scene should contain animation curves."""
-        curves = pm.ls(type="animCurve")
+        curves = cmds.ls(type="animCurve")
         self.assertGreater(len(curves), 50)
 
 
@@ -211,7 +239,7 @@ class TestAssessAgainstRealScene(unittest.TestCase):
     def setUpClass(cls):
         if not Path(SCENE_PATH).exists() or not Path(CSV_PATH).exists():
             raise unittest.SkipTest("Scene or CSV not found")
-        pm.openFile(SCENE_PATH, force=True)
+        _pm_open_file(SCENE_PATH, force=True)
         cls.steps = parse_csv(CSV_PATH)
         cls.store = ShotStore()  # Empty store â€” no shots built yet
 
@@ -229,7 +257,7 @@ class TestAssessAgainstRealScene(unittest.TestCase):
         found = set()
         missing = set()
         for name in all_objects:
-            if pm.objExists(name):
+            if cmds.objExists(name):
                 found.add(name)
             else:
                 missing.add(name)
@@ -262,7 +290,7 @@ class TestDetectShotsRealScene(unittest.TestCase):
     def setUpClass(cls):
         if not Path(SCENE_PATH).exists():
             raise unittest.SkipTest(f"Scene not found: {SCENE_PATH}")
-        pm.openFile(SCENE_PATH, force=True)
+        _pm_open_file(SCENE_PATH, force=True)
 
     def test_detect_shots_default_threshold(self):
         """detect_shots() should find animation clusters."""
@@ -291,8 +319,8 @@ class TestDetectShotsRealScene(unittest.TestCase):
             "S00B31_RUDDER_LOC",
             "REGGIE_LOC",
         ]
-        timeline_start = pm.playbackOptions(q=True, min=True)
-        timeline_end = pm.playbackOptions(q=True, max=True)
+        timeline_start = cmds.playbackOptions(q=True, min=True)
+        timeline_end = cmds.playbackOptions(q=True, max=True)
 
         results = seq._find_keyed_transforms(timeline_start, timeline_end)
 
@@ -305,7 +333,7 @@ class TestDetectShotsRealScene(unittest.TestCase):
 
         result_names = {r[0] for r in results}
         for name in known_animated:
-            if pm.objExists(name):
+            if cmds.objExists(name):
                 self.assertIn(
                     name,
                     result_names,
@@ -323,7 +351,7 @@ class TestBuildAndAssessFullPipeline(unittest.TestCase):
     def setUpClass(cls):
         if not Path(SCENE_PATH).exists() or not Path(CSV_PATH).exists():
             raise unittest.SkipTest("Scene or CSV not found")
-        pm.openFile(SCENE_PATH, force=True)
+        _pm_open_file(SCENE_PATH, force=True)
         cls.steps = parse_csv(CSV_PATH)
 
     def test_build_then_assess(self):

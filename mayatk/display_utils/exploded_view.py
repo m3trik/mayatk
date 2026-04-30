@@ -5,7 +5,7 @@ import functools
 from typing import Optional
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ModuleNotFoundError as error:
     print(__file__, error)
 
@@ -26,7 +26,7 @@ class ExplodedView:
     @property
     def objects(self) -> list:
         """Return assigned objects or fallback to current selection."""
-        return self._objects if self._objects is not None else pm.ls(sl=True)
+        return self._objects if self._objects is not None else cmds.ls(sl=True)
 
     @objects.setter
     def objects(self, value: list):
@@ -58,7 +58,7 @@ class ExplodedView:
             list: Filtered list of child objects.
         """
         if not self.objects:
-            pm.warning("No objects provided or selected.")
+            cmds.warning("No objects provided or selected.")
             return []
 
         children = NodeUtils.get_unique_children(self.objects)
@@ -67,13 +67,13 @@ class ExplodedView:
             result = [
                 obj
                 for obj in children
-                if pm.attributeQuery("original_position", node=obj, exists=True)
+                if cmds.attributeQuery("original_position", node=obj, exists=True)
             ]
         elif unexploded:
             result = [
                 obj
                 for obj in children
-                if not pm.attributeQuery("original_position", node=obj, exists=True)
+                if not cmds.attributeQuery("original_position", node=obj, exists=True)
             ]
         else:
             result = children
@@ -82,7 +82,7 @@ class ExplodedView:
             state = (
                 "exploded" if exploded else "unexploded" if unexploded else "filtered"
             )
-            pm.warning(f"No {state} target objects found.")
+            cmds.warning(f"No {state} target objects found.")
 
         return result
 
@@ -112,14 +112,14 @@ class ExplodedView:
     ) -> int:
         """Arranges a list of objects in 3D space to avoid overlap."""
         if not nodes:
-            pm.warning("arrange_objects: no nodes to arrange.")
+            cmds.warning("arrange_objects: no nodes to arrange.")
             return 0
 
         node_group_key = tuple(sorted([node.name() for node in nodes]))
         if node_group_key in self.exploded_objects:
             for node in nodes:
                 cached_position = self.exploded_objects[node_group_key][node.name()]
-                pm.move(
+                cmds.move(
                     cached_position[0],
                     cached_position[1],
                     cached_position[2],
@@ -143,7 +143,7 @@ class ExplodedView:
             positions += movements
 
             for idx, node in enumerate(nodes):
-                pm.move(
+                cmds.move(
                     movements[idx][0],
                     movements[idx][1],
                     movements[idx][2],
@@ -157,7 +157,7 @@ class ExplodedView:
             iteration_count += 1
 
         self.exploded_objects[node_group_key] = {
-            node.name(): pm.xform(node, query=True, translation=True, worldSpace=True)
+            node.name(): cmds.xform(node, query=True, translation=True, worldSpace=True)
             for node in nodes
         }
         return iteration_count
@@ -173,7 +173,7 @@ class ExplodedView:
         objects = self._get_target_objects(unexploded=True)
 
         for obj in objects:
-            pos = pm.xform(obj, query=True, translation=True, worldSpace=True)
+            pos = cmds.xform(obj, query=True, translation=True, worldSpace=True)
             Attributes.set_attributes(obj, create=True, original_position=pos)
 
         self.arrange_objects(objects)
@@ -189,9 +189,9 @@ class ExplodedView:
         objects = self._get_target_objects(exploded=True)
 
         for obj in objects:
-            pos = pm.getAttr(obj.original_position)
-            pm.move(pos[0], pos[1], pos[2], obj, absolute=True)
-            pm.deleteAttr(obj, attribute="original_position")
+            pos = cmds.getAttr(obj.original_position)
+            cmds.move(pos[0], pos[1], pos[2], obj, absolute=True)
+            cmds.deleteAttr(obj, attribute="original_position")
 
     @_inject_objects_if_given
     def toggle_explode(self):
@@ -203,7 +203,7 @@ class ExplodedView:
         objects = self._get_target_objects()
 
         if all(
-            pm.attributeQuery("original_position", node=obj, exists=True)
+            cmds.attributeQuery("original_position", node=obj, exists=True)
             for obj in objects
         ):
             self.un_explode()
@@ -213,12 +213,12 @@ class ExplodedView:
     @CoreUtils.undoable
     def un_explode_all(self):
         """Un-explode all"""
-        all_objects_with_original_position = pm.ls("*.original_position")
+        all_objects_with_original_position = cmds.ls("*.original_position")
         for obj_attr in all_objects_with_original_position:
             obj = obj_attr.node()
-            pos = pm.getAttr(obj.original_position)
-            pm.move(pos[0], pos[1], pos[2], obj, absolute=True)
-            pm.deleteAttr(obj, attribute="original_position")
+            pos = cmds.getAttr(obj.original_position)
+            cmds.move(pos[0], pos[1], pos[2], obj, absolute=True)
+            cmds.deleteAttr(obj, attribute="original_position")
 
 
 class ExplodedViewSlots(ExplodedView):

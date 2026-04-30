@@ -1,11 +1,13 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
+import socket
 import sys
 from typing import Dict, ClassVar, Optional, Union, Any
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
+    import maya.mel as mel
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
@@ -42,61 +44,65 @@ class EnvUtils(ptk.HelpMixin):
         available_keys = {
             "install_path": lambda: os.environ.get("MAYA_LOCATION"),
             "presets_path": lambda: os.path.normpath(
-                pm.internalVar(userPresetsDir=True)
+                cmds.internalVar(userPresetsDir=True)
             ),
-            "user_app_path": lambda: os.path.normpath(pm.internalVar(userAppDir=True)),
-            "version": lambda: pm.about(version=True),
-            "renderer": lambda: pm.getAttr("defaultRenderGlobals.currentRenderer"),
-            "workspace": lambda: pm.workspace(q=True, rd=True),
+            "user_app_path": lambda: os.path.normpath(cmds.internalVar(userAppDir=True)),
+            "version": lambda: cmds.about(version=True),
+            "renderer": lambda: cmds.getAttr("defaultRenderGlobals.currentRenderer"),
+            "workspace": lambda: cmds.workspace(q=True, rd=True),
             "workspace_dir": lambda: ptk.format_path(
-                pm.workspace(q=True, rd=True), "dir"
+                cmds.workspace(q=True, rd=True), "dir"
             ),
             "workspace_path": lambda: ptk.format_path(
-                pm.workspace(q=True, rd=True), "path"
+                cmds.workspace(q=True, rd=True), "path"
             ),
             "sourceimages": lambda: os.path.normpath(
-                os.path.join(pm.workspace(q=True, rd=True), "sourceimages")
+                os.path.join(cmds.workspace(q=True, rd=True), "sourceimages")
             ),
-            "scene": lambda: pm.sceneName(),
-            "scene_name": lambda: ptk.format_path(pm.sceneName(), "name"),
-            "scene_path": lambda: ptk.format_path(pm.sceneName(), "path"),
-            "scene_modified": lambda: bool(pm.mel.eval("file -q -modified")),
-            "user_name": lambda: pm.optionVar(q="PTglobalUserName"),
-            "ui_language": lambda: pm.about(uiLanguage=True),
-            "os_type": lambda: pm.about(os=True),
-            "linear_units": lambda: pm.currentUnit(q=True, fullName=True),
-            "time_units": lambda: pm.currentUnit(q=True, t=True),
-            "loaded_plugins": lambda: pm.pluginInfo(q=True, listPlugins=True),
-            "api_version": lambda: pm.about(api=True),
-            "host_name": lambda: pm.about(hostName=True),
-            "batch_mode": lambda: pm.about(batch=True),
-            "build_path": lambda: pm.about(buildDirectory=True),
-            "build_version": lambda: pm.about(buildVersion=True),
-            "build_varient": lambda: pm.about(buildVariant=True),
-            "api_version": lambda: pm.about(apiVersion=True),
-            "application": lambda: pm.about(application=True),
-            "current_frame": lambda: pm.currentTime(q=True),
+            "scene": lambda: cmds.file(q=True, sceneName=True) or "",
+            "scene_name": lambda: ptk.format_path(
+                cmds.file(q=True, sceneName=True) or "", "name"
+            ),
+            "scene_path": lambda: ptk.format_path(
+                cmds.file(q=True, sceneName=True) or "", "path"
+            ),
+            "scene_modified": lambda: bool(mel.eval("file -q -modified")),
+            "user_name": lambda: cmds.optionVar(q="PTglobalUserName"),
+            "ui_language": lambda: cmds.about(uiLanguage=True),
+            "os_type": lambda: cmds.about(os=True),
+            "linear_units": lambda: cmds.currentUnit(q=True, fullName=True),
+            "time_units": lambda: cmds.currentUnit(q=True, t=True),
+            "loaded_plugins": lambda: cmds.pluginInfo(q=True, listPlugins=True),
+            "api_version": lambda: cmds.about(api=True),
+            "host_name": lambda: socket.gethostname(),
+            "batch_mode": lambda: cmds.about(batch=True),
+            "build_path": lambda: cmds.about(buildDirectory=True),
+            "build_version": lambda: cmds.about(version=True),
+            "build_varient": lambda: cmds.about(buildVariant=True),
+            "api_version": lambda: cmds.about(apiVersion=True),
+            "application": lambda: cmds.about(application=True),
+            "current_frame": lambda: cmds.currentTime(q=True),
             "frame_range": lambda: (
-                pm.playbackOptions(q=True, min=True),
-                pm.playbackOptions(q=True, max=True),
+                cmds.playbackOptions(q=True, min=True),
+                cmds.playbackOptions(q=True, max=True),
             ),
-            "viewport_renderer": lambda: pm.modelEditor(
+            "viewport_renderer": lambda: cmds.modelEditor(
                 "modelPanel4", q=True, rendererName=True
             ),
-            "current_camera": lambda: pm.modelEditor(
+            "current_camera": lambda: cmds.modelEditor(
                 "modelPanel4", q=True, camera=True
             ),
-            "available_cameras": lambda: pm.listCameras(),
+            "available_cameras": lambda: cmds.listCameras(),
             "active_layers": lambda: [
-                layer.name()
-                for layer in pm.ls(type="displayLayer")
-                if not layer.attr("visibility").isLocked()
+                layer
+                for layer in (cmds.ls(type="displayLayer") or [])
+                if not cmds.getAttr(f"{layer}.visibility", lock=True)
             ],
-            "current_tool": lambda: pm.currentCtx(),
-            "up_axis": lambda: pm.upAxis(q=True, axis=True),
-            "maya_uptime": lambda: pm.timerX(),
-            "total_polys": lambda: pm.polyEvaluate(scene=True, triangle=True),
-            "total_nodes": lambda: len(pm.ls(dag=True)),
+            "current_tool": lambda: cmds.currentCtx(),
+            "up_axis": lambda: cmds.upAxis(q=True, axis=True),
+            "maya_uptime": lambda: cmds.timerX(),
+            "total_polys": lambda: sum(cmds.polyEvaluate(m, triangle=True) or 0 for m in (cmds.ls(type="mesh") or [])),
+            "total_nodes": lambda: len(cmds.ls(dag=True) or []),
         }
 
         if key not in available_keys:
@@ -122,7 +128,7 @@ class EnvUtils(ptk.HelpMixin):
         Parameters:
         maya_version (int, str, optional): The version of Maya to add the paths for.
                                           If None, the function will query the version
-                                          using PyMel. Defaults to None.
+                                          using cmds. Defaults to None.
         Raises:
         EnvironmentError: If the MAYA_LOCATION environment variable is not set.
 
@@ -138,7 +144,7 @@ class EnvUtils(ptk.HelpMixin):
         """
         # Query Maya version if not provided
         if maya_version is None:
-            maya_version = pm.about(version=True)
+            maya_version = cmds.about(version=True)
 
         maya_install_path = os.environ.get("MAYA_LOCATION")
         if not maya_install_path:
@@ -165,12 +171,6 @@ class EnvUtils(ptk.HelpMixin):
             os.path.join(
                 maya_install_path, "Python", str(maya_version), "lib", "site-packages"
             ),
-            os.path.join(
-                maya_install_path, "devkit", "other", "pymel", "extras", "modules"
-            ),
-            os.path.join(
-                maya_install_path, "devkit", "other", "pymel", "extras", "completion"
-            ),
         ]
 
         # Append paths only if they are not already in sys.path
@@ -192,9 +192,9 @@ class EnvUtils(ptk.HelpMixin):
         Raises:
             ValueError: If the plugin is not found or fails to load.
         """
-        if not pm.pluginInfo(plugin_name, query=True, loaded=True):
+        if not cmds.pluginInfo(plugin_name, query=True, loaded=True):
             try:
-                pm.loadPlugin(plugin_name, quiet=True)
+                cmds.loadPlugin(plugin_name, quiet=True)
             except RuntimeError as e:
                 raise ValueError(f"Failed to load plugin {plugin_name}: {e}")
 
@@ -209,7 +209,7 @@ class EnvUtils(ptk.HelpMixin):
         """
 
         def is_loaded(plugin="vrayformaya.mll"):
-            return True if pm.pluginInfo(plugin, q=True, loaded=True) else False
+            return True if cmds.pluginInfo(plugin, q=True, loaded=True) else False
 
         if query:
             return is_loaded()
@@ -219,11 +219,11 @@ class EnvUtils(ptk.HelpMixin):
             if load:
                 for plugin in vray:
                     if not is_loaded(plugin):
-                        pm.loadPlugin(plugin)
+                        cmds.loadPlugin(plugin)
             if unload:
                 for plugin in vray:
                     if is_loaded(plugin):
-                        pm.unloadPlugin(plugin)
+                        cmds.unloadPlugin(plugin)
         except Exception as error:
             print(error)
 
@@ -244,7 +244,7 @@ class EnvUtils(ptk.HelpMixin):
             get_recent_files(0) --> Returns the most recent file
             get_recent_files(slice(0, 5)) --> Returns the 5 most recent files
         """
-        files = pm.optionVar(query="RecentFilesList")
+        files = cmds.optionVar(q="RecentFilesList")
         if not files:
             return []
 
@@ -297,7 +297,7 @@ class EnvUtils(ptk.HelpMixin):
             get_recent_projects(format='timestamp') --> Returns all recent projects in timestamp format.
             get_recent_projects(format='standard|timestamp') --> Returns a dictionary with standard paths as keys and timestamped paths as values.
         """
-        dirs = pm.optionVar(query="RecentProjectsList")
+        dirs = cmds.optionVar(q="RecentProjectsList")
         if not dirs:
             return []
 
@@ -336,7 +336,7 @@ class EnvUtils(ptk.HelpMixin):
         # Directories to check for autosave files
         potential_dirs = [
             os.path.join(
-                pm.workspace(q=True, rd=True), "autosave"
+                cmds.workspace(q=True, rd=True), "autosave"
             ),  # Workspace autosave
             os.environ.get("MAYA_AUTOSAVE_FOLDER"),  # Environment variable autosave
             os.path.expanduser("~/maya/autosave"),  # Home directory autosave
@@ -495,7 +495,7 @@ class EnvUtils(ptk.HelpMixin):
         """
         import re
 
-        root_dir = root_dir or str(pm.workspace(q=True, rd=True))
+        root_dir = root_dir or str(cmds.workspace(q=True, rd=True))
 
         files = ptk.get_dir_contents(
             root_dir,
@@ -548,7 +548,7 @@ class EnvUtils(ptk.HelpMixin):
             file_path (str): The path to the Maya scene file to reference.
         """
         if os.path.exists(file_path):
-            pm.system.createReference(file_path)
+            cmds.file(file_path, reference=True)
         else:
             raise FileNotFoundError(f"No such file: '{file_path}'")
 
@@ -559,9 +559,12 @@ class EnvUtils(ptk.HelpMixin):
         Parameters:
             file_path (str): The path to the Maya scene file to remove the reference to.
         """
-        ref_node = pm.system.FileReference(file_path)
-        if ref_node.isReferenced():
-            ref_node.remove()
+        try:
+            rn = cmds.file(file_path, q=True, referenceNode=True)
+            if rn:
+                cmds.file(file_path, removeReference=True)
+        except RuntimeError:
+            pass
 
     @staticmethod
     def is_referenced(file_path):
@@ -573,8 +576,10 @@ class EnvUtils(ptk.HelpMixin):
         Returns:
             (bool): True if the scene is referenced, False otherwise.
         """
-        ref_node = pm.system.FileReference(file_path)
-        return ref_node.isReferenced()
+        try:
+            return bool(cmds.file(file_path, q=True, referenceNode=True))
+        except RuntimeError:
+            return False
 
     @staticmethod
     def get_reference_nodes(file_path):
@@ -586,11 +591,13 @@ class EnvUtils(ptk.HelpMixin):
         Returns:
             (list): A list of nodes in the referenced scene.
         """
-        ref_node = pm.system.FileReference(file_path)
-        if ref_node.isReferenced():
-            return ref_node.nodes()
-        else:
-            return []
+        try:
+            rn = cmds.file(file_path, q=True, referenceNode=True)
+            if rn:
+                return cmds.referenceQuery(rn, nodes=True) or []
+        except RuntimeError:
+            pass
+        return []
 
     @staticmethod
     def list_references():
@@ -599,7 +606,15 @@ class EnvUtils(ptk.HelpMixin):
         Returns:
             (list): A list of all references in the current Maya scene.
         """
-        return [ref.filePath() for ref in pm.system.listReferences()]
+        result = []
+        for rn in (cmds.ls(type="reference") or []):
+            if rn == "sharedReferenceNode":
+                continue
+            try:
+                result.append(cmds.referenceQuery(rn, filename=True))
+            except RuntimeError:
+                pass
+        return result
 
     @staticmethod
     def export_scene_as_fbx(file_path: str = None, **fbx_options: Any) -> None:
@@ -633,10 +648,10 @@ class EnvUtils(ptk.HelpMixin):
             "FBXExportApplyConstantKeyReducer": False,  # Apply constant key reducer
             "FBXExportBakeComplexAnimation": False,  # Bake complex animations
             "FBXExportBakeComplexStart": int(
-                pm.playbackOptions(q=True, min=True)
+                cmds.playbackOptions(q=True, min=True)
             ),  # Start frame for baking
             "FBXExportBakeComplexEnd": int(
-                pm.playbackOptions(q=True, max=True)
+                cmds.playbackOptions(q=True, max=True)
             ),  # End frame for baking
         }
 
@@ -650,13 +665,13 @@ class EnvUtils(ptk.HelpMixin):
                 value_str = (
                     "true" if value is True else "false" if value is False else value
                 )
-                pm.mel.eval(f"{option} -v {value_str}")
+                mel.eval(f"{option} -v {value_str}")
             else:
-                pm.mel.eval(f"{option} {value}")
+                mel.eval(f"{option} {value}")
 
         # Determine the file path if not provided
         if not file_path:
-            scene_name = pm.sceneName()
+            scene_name = cmds.file(q=True, sceneName=True) or ""
             if not scene_name:
                 raise ValueError(
                     "Scene has not been saved yet.\nPlease save the scene first, or specify a file path."
@@ -665,7 +680,7 @@ class EnvUtils(ptk.HelpMixin):
 
         try:
             # Export the entire scene using FBXExportAll
-            pm.mel.eval(f'FBXExport -f "{file_path}"')
+            mel.eval(f'FBXExport -f "{file_path}"')
             print(f"Scene successfully exported as FBX to {file_path}")
         except Exception as e:
             print(f"Failed to export scene as FBX: {str(e)}")
@@ -797,8 +812,6 @@ class EnvUtils(ptk.HelpMixin):
             >>> # Skip backup
             >>> path = EnvUtils.save_scene_backup(False)  # Returns None
         """
-        import maya.cmds as cmds
-
         if not backup_path:
             return None
 

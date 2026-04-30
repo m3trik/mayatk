@@ -1,4 +1,3 @@
-import pymel.core as pm
 import maya.cmds as cmds
 import numpy as np
 import unittest
@@ -25,7 +24,7 @@ class SceneAuditor:
         # Get world space points
         try:
             pts = cmds.xform(
-                f"{shape_node.name()}.vtx[*]",
+                f"{shape_node}.vtx[*]",
                 query=True,
                 translation=True,
                 worldSpace=True,
@@ -73,31 +72,31 @@ class SceneAuditor:
         Returns a flat list of all transform nodes under the root,
         including their world matrices and geometry signatures.
         """
-        if not pm.objExists(root_node):
+        if not cmds.objExists(root_node):
             return {}
 
-        root = pm.PyNode(root_node)
+        root = root_node
         data = {}
 
         # Get all transforms (including root if it's a transform)
-        transforms = root.listRelatives(allDescendents=True, type="transform")
-        if root.nodeType() == "transform":
+        transforms = cmds.listRelatives(root, allDescendents=True, type="transform") or []
+        if cmds.nodeType(root) == "transform":
             transforms.append(root)
 
         # Filter out intermediate groups if necessary, or keep them to check structure
         # For now, let's focus on the leaf nodes (meshes)
-        mesh_transforms = [t for t in transforms if t.getShape()]
+        mesh_transforms = [t for t in transforms if (cmds.listRelatives(str(t), shapes=True, ni=True) or [None])[0]]
 
         for tf in mesh_transforms:
-            shape = tf.getShape()
+            shape = (cmds.listRelatives(str(tf), shapes=True, ni=True) or [None])[0]
 
             # Get geometry signature (vertex count + area + material)
-            poly_count = pm.polyEvaluate(shape, vertex=True)
-            area = pm.polyEvaluate(shape, worldArea=True)
+            poly_count = cmds.polyEvaluate(shape, vertex=True)
+            area = cmds.polyEvaluate(shape, worldArea=True)
 
-            # Get material
-            shading_groups = shape.listConnections(type="shadingEngine")
-            mat = shading_groups[0].name() if shading_groups else "None"
+            # Get material — shape is a string from cmds.listRelatives.
+            shading_groups = cmds.listConnections(shape, type="shadingEngine") or []
+            mat = shading_groups[0] if shading_groups else "None"
 
             # Create a signature
             signature = (poly_count, round(area, 4), mat)
@@ -110,10 +109,10 @@ class SceneAuditor:
                 data[signature] = []
             data[signature].append(
                 {
-                    "name": tf.name(),
-                    "matrix": [round(v, 4) for v in tf.getMatrix(worldSpace=True)],
+                    "name": tf,
+                    "matrix": [round(v, 4) for v in cmds.xform(str(tf), q=True, m=True, ws=True)],
                     "geo_hash": geo_hash,
-                    "is_instanced": shape.isInstanced(),
+                    "is_instanced": (len(cmds.ls(shape, allPaths=True)) > 1),
                 }
             )
 
@@ -196,72 +195,72 @@ class TestAutoInstancerScene(MayaTkTestCase):
         self.create_input_scene()
 
     def create_mats(self):
-        if pm.objExists("MatA"):
-            mat_a = pm.PyNode("MatA")
-            sg_a = pm.PyNode("MatA_SG")
+        if cmds.objExists("MatA"):
+            mat_a = "MatA"
+            sg_a = "MatA_SG"
         else:
-            mat_a = pm.shadingNode("lambert", asShader=True, name="MatA")
-            sg_a = pm.sets(
+            mat_a = cmds.shadingNode("lambert", asShader=True, name="MatA")
+            sg_a = cmds.sets(
                 renderable=True, noSurfaceShader=True, empty=True, name="MatA_SG"
             )
-            mat_a.outColor.connect(sg_a.surfaceShader)
+            cmds.connectAttr(f"{mat_a}.outColor", f"{sg_a}.surfaceShader")
 
-        if pm.objExists("MatB"):
-            mat_b = pm.PyNode("MatB")
-            sg_b = pm.PyNode("MatB_SG")
+        if cmds.objExists("MatB"):
+            mat_b = "MatB"
+            sg_b = "MatB_SG"
         else:
-            mat_b = pm.shadingNode("lambert", asShader=True, name="MatB")
-            mat_b.color.set(1, 0, 0)  # Red
-            sg_b = pm.sets(
+            mat_b = cmds.shadingNode("lambert", asShader=True, name="MatB")
+            cmds.setAttr(f"{mat_b}.color", 1, 0, 0)  # Red
+            sg_b = cmds.sets(
                 renderable=True, noSurfaceShader=True, empty=True, name="MatB_SG"
             )
-            mat_b.outColor.connect(sg_b.surfaceShader)
+            cmds.connectAttr(f"{mat_b}.outColor", f"{sg_b}.surfaceShader")
 
         return (mat_a, sg_a), (mat_b, sg_b)
 
     def create_input_scene(self):
         """Generates the input combined mesh."""
         print("Generating input scene...")
-        if pm.objExists("original_combined_mesh"):
-            pm.delete("original_combined_mesh")
+        if cmds.objExists("original_combined_mesh"):
+            cmds.delete("original_combined_mesh")
 
         (mat_a, sg_a), (mat_b, sg_b) = self.create_mats()
 
         # Create Temp Prototypes
-        cube_proto = pm.polyCube(w=1, h=1, d=1)[0]
-        pm.sets(sg_a, forceElement=cube_proto)
+        cube_proto = cmds.polyCube(w=1, h=1, d=1)[0]
+        cmds.sets(cube_proto, edit=True, forceElement=sg_a)
 
-        sphere_proto = pm.polySphere(r=1)[0]
-        pm.sets(sg_b, forceElement=sphere_proto)
+        sphere_proto = cmds.polySphere(r=1)[0]
+        cmds.sets(sphere_proto, edit=True, forceElement=sg_b)
 
-        cone_proto = pm.polyCone(r=1, h=2, sx=8, sy=1, sz=0)[0]
-        pm.sets(sg_a, forceElement=cone_proto)
+        cone_proto = cmds.polyCone(r=1, h=2, sx=8, sy=1, sz=0)[0]
+        cmds.sets(cone_proto, edit=True, forceElement=sg_a)
 
         to_combine = []
 
         # Cubes at (0,0,0), (10,0,0), (20,0,0)
         for i in range(3):
-            dup = pm.duplicate(cube_proto)[0]
-            pm.move(dup, i * 10, 0, 0)
+            dup = cmds.duplicate(cube_proto)[0]
+            cmds.move(i * 10, 0, 0, dup)
             to_combine.append(dup)
 
         # Spheres at (0,0,10), (10,0,10)
         for i in range(2):
-            dup = pm.duplicate(sphere_proto)[0]
-            pm.move(dup, i * 10, 0, 10)
+            dup = cmds.duplicate(sphere_proto)[0]
+            cmds.move(i * 10, 0, 10, dup)
             to_combine.append(dup)
 
         # Cones at (0,0,20), (10,0,20)
         for i in range(2):
-            dup = pm.duplicate(cone_proto)[0]
-            pm.move(dup, i * 10, 0, 20)
+            dup = cmds.duplicate(cone_proto)[0]
+            cmds.move(i * 10, 0, 20, dup)
             to_combine.append(dup)
 
         # Combine
-        pm.polyUnite(to_combine, name="original_combined_mesh", ch=False)
+        cmds.polyUnite(to_combine, name="original_combined_mesh", ch=False)
 
         # Cleanup
-        pm.delete(cube_proto, sphere_proto, cone_proto)
+        cmds.delete(cube_proto, sphere_proto, cone_proto)
         print("Input scene generated.")
 
     def create_reference_scene(self):
@@ -269,17 +268,17 @@ class TestAutoInstancerScene(MayaTkTestCase):
         print("Generating reference scene...")
         (mat_a, sg_a), (mat_b, sg_b) = self.create_mats()
 
-        final_grp = pm.group(em=True, name="final_instanced_result_GRP")
+        final_grp = cmds.group(em=True, name="final_instanced_result_GRP")
 
         # Create Prototypes
-        cube_proto = pm.polyCube(w=1, h=1, d=1, name="CubeProto")[0]
-        pm.sets(sg_a, forceElement=cube_proto)
+        cube_proto = cmds.polyCube(w=1, h=1, d=1, name="CubeProto")[0]
+        cmds.sets(cube_proto, edit=True, forceElement=sg_a)
 
-        sphere_proto = pm.polySphere(r=1, name="SphereProto")[0]
-        pm.sets(sg_b, forceElement=sphere_proto)
+        sphere_proto = cmds.polySphere(r=1, name="SphereProto")[0]
+        cmds.sets(sphere_proto, edit=True, forceElement=sg_b)
 
-        cone_proto = pm.polyCone(r=1, h=2, sx=8, sy=1, sz=0, name="ConeProto")[0]
-        pm.sets(sg_a, forceElement=cone_proto)
+        cone_proto = cmds.polyCone(r=1, h=2, sx=8, sy=1, sz=0, name="ConeProto")[0]
+        cmds.sets(cone_proto, edit=True, forceElement=sg_a)
 
         # Cubes
         cubes = []
@@ -287,9 +286,9 @@ class TestAutoInstancerScene(MayaTkTestCase):
             if i == 0:
                 inst = cube_proto
             else:
-                inst = pm.instance(cube_proto)[0]
-                inst.rename(f"CubeProto{i}")
-            pm.move(inst, i * 10, 0, 0)
+                inst = cmds.instance(cube_proto)[0]
+                cmds.rename(inst, f"CubeProto{i}")
+            cmds.move(i * 10, 0, 0, inst)
             cubes.append(inst)
 
         # Spheres
@@ -298,9 +297,9 @@ class TestAutoInstancerScene(MayaTkTestCase):
             if i == 0:
                 inst = sphere_proto
             else:
-                inst = pm.instance(sphere_proto)[0]
-                inst.rename(f"SphereProto{i}")
-            pm.move(inst, i * 10, 0, 10)
+                inst = cmds.instance(sphere_proto)[0]
+                cmds.rename(inst, f"SphereProto{i}")
+            cmds.move(i * 10, 0, 10, inst)
             spheres.append(inst)
 
         # Cones
@@ -309,12 +308,12 @@ class TestAutoInstancerScene(MayaTkTestCase):
             if i == 0:
                 inst = cone_proto
             else:
-                inst = pm.instance(cone_proto)[0]
-                inst.rename(f"ConeProto{i}")
-            pm.move(inst, i * 10, 0, 20)
+                inst = cmds.instance(cone_proto)[0]
+                cmds.rename(inst, f"ConeProto{i}")
+            cmds.move(i * 10, 0, 20, inst)
             cones.append(inst)
 
-        pm.parent(cubes + spheres + cones, final_grp)
+        cmds.parent(cubes + spheres + cones, final_grp)
         print("Reference scene generated.")
 
     def test_auto_instancer_scene_match(self):
@@ -322,12 +321,12 @@ class TestAutoInstancerScene(MayaTkTestCase):
         Runs AutoInstancer on 'original_combined_mesh' and verifies it matches 'final_instanced_result_GRP'.
         """
         input_mesh = "original_combined_mesh"
-        self.assertTrue(pm.objExists(input_mesh), "Input mesh not created")
+        self.assertTrue(cmds.objExists(input_mesh), "Input mesh not created")
 
         # DEBUG: Manually separate to inspect shells and signatures
         print(f"DEBUG: Manually separating {input_mesh} for inspection...")
-        shells = pm.polySeparate(input_mesh, ch=False)
-        shells = [pm.PyNode(s) for s in shells]
+        shells = cmds.polySeparate(input_mesh, ch=False)
+        shells = [s for s in shells]
 
         matcher = GeometryMatcher(verbose=True)
         debug_log = []
@@ -336,9 +335,9 @@ class TestAutoInstancerScene(MayaTkTestCase):
         sigs = []
         for s in shells:
             sig = matcher.get_mesh_signature(s)
-            sigs.append((s.name(), sig))
+            sigs.append((s, sig))
             debug_log.append(
-                f"  Shell {s.name()}: V={sig[0]}, A={sig[3]}, PCA={sig[4]}"
+                f"  Shell {s}: V={sig[0]}, A={sig[3]}, PCA={sig[4]}"
             )
 
         # Check if signatures match for expected groups
@@ -356,10 +355,10 @@ class TestAutoInstancerScene(MayaTkTestCase):
             )
 
         # Re-combine for the actual test
-        pm.delete(shells)
+        cmds.delete(shells)
         self.create_input_scene()  # Recreate fresh
 
-        combined_node = pm.PyNode(input_mesh)
+        combined_node = input_mesh
 
         print(f"Running AutoInstancer on {input_mesh}...")
         instancer = AutoInstancer(
@@ -374,9 +373,9 @@ class TestAutoInstancerScene(MayaTkTestCase):
         results = instancer.run([combined_node])
 
         # Group the results
-        result_grp = pm.group(em=True, name="generated_results_GRP")
+        result_grp = cmds.group(em=True, name="generated_results_GRP")
         if results:
-            pm.parent(results, result_grp)
+            cmds.parent(results, result_grp)
         else:
             debug_log.append("WARNING: AutoInstancer returned no results!")
 

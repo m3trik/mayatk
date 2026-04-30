@@ -36,7 +36,7 @@ This documentation suite provides everything you need to use, understand, and co
 
 mayatk is a comprehensive collection of backend utilities and tools for Autodesk Maya, designed to streamline 3D workflow development and automation. It provides:
 
-- **Comprehensive Maya API Integration**: Seamless integration with Maya's Python API and PyMEL
+- **Comprehensive Maya API Integration**: Seamless integration with Maya's Python (cmds + OpenMaya 2.0) APIs
 - **Modular Architecture**: Organized into specialized utility modules for different Maya operations
 - **Dynamic Attribute Resolution**: Advanced attribute resolver for accessing package components efficiently
 - **Production-Ready Tools**: Battle-tested utilities used in professional 3D production environments
@@ -228,7 +228,7 @@ def robust_function(objects):
     if not objects:
         return []
     
-    valid_objects = [obj for obj in objects if pm.objExists(obj)]
+    valid_objects = [obj for obj in objects if cmds.objExists(obj)]
     return process_objects(valid_objects)
 ```
 
@@ -255,7 +255,6 @@ def robust_function(objects):
 **Author**: Ryan Simpson (m3trik@outlook.com)
 
 **Dependencies**: 
-- PyMEL (Maya Python API)
 - NumPy (numerical operations)
 - PyYAML (configuration)
 - pythontk (Python utilities)

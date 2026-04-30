@@ -8,9 +8,9 @@ from contextlib import contextmanager
 from typing import List, Dict, Optional, Any
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError as error:
-    pm = None
+    cmds = None
     print(__file__, error)
 
 
@@ -175,8 +175,8 @@ class ShotSequencer:
         Returns:
             A new :class:`ShotSequencer` with a single shot.
         """
-        start = pm.playbackOptions(q=True, min=True)
-        end = pm.playbackOptions(q=True, max=True)
+        start = cmds.playbackOptions(q=True, min=True)
+        end = cmds.playbackOptions(q=True, max=True)
         if objects is None:
             objects = cls._find_keyed_transforms(start, end)
         block = ShotBlock(
@@ -190,16 +190,18 @@ class ShotSequencer:
 
     @staticmethod
     def _shot_nodes(shot: ShotBlock) -> list:
-        """Return long DAG path strings for a shot's objects.
+        """Return validated names for a shot's objects.
 
-        Uses ``cmds.ls`` with ``long=True`` to validate each name exists
-        in the scene and return unambiguous DAG paths.
+        Filters out non-existent names while preserving the form stored on
+        the shot (callers historically pass short names; downstream
+        consumers like SegmentKeys roundtrip those names back into segment
+        dicts).
         """
         import maya.cmds as cmds
 
         if not shot.objects:
             return []
-        return cmds.ls(shot.objects, long=True) or []
+        return [n for n in shot.objects if cmds.objExists(n)]
 
     @staticmethod
     def _reconcile_stale_paths(shot: ShotBlock) -> bool:
@@ -314,9 +316,40 @@ class ShotSequencer:
             motion_rate=motion_rate,
         )
         # Normalise obj to str — defensive; values are already strings
-        # post-cmds migration, but callers historically passed PyNodes.
+        # post-cmds migration, but callers historically passed nodes.
         for seg in segments:
             seg["obj"] = str(seg["obj"])
+
+        # Sequencer GUI invariant: every keyed object on the shot deserves
+        # a track marker even when its keys are static-value only or its
+        # motion sits below ``motion_rate``.  ``SegmentKeys.collect_segments``
+        # filters those out under ignore_holds=True; backfill a single
+        # span-of-keys segment for any node that has keys in range but
+        # produced no segment.
+        if ignore_holds and nodes:
+            covered = {s["obj"] for s in segments}
+            for n in nodes:
+                if n in covered:
+                    continue
+                kt = (
+                    cmds.keyframe(
+                        n, q=True, time=(shot.start, shot.end)
+                    )
+                    or []
+                )
+                if not kt:
+                    continue
+                segments.append(
+                    {
+                        "obj": n,
+                        "curves": [],
+                        "keyframes": sorted(set(kt)),
+                        "start": min(kt),
+                        "end": max(kt),
+                        "duration": max(kt) - min(kt),
+                        "segment_range": (min(kt), max(kt)),
+                    }
+                )
         return segments
 
     # ---- unified sequence model (anim + audio) ---------------------------
@@ -334,7 +367,7 @@ class ShotSequencer:
         read once and reused across calls; outside, every call reads
         fresh (safe default — no staleness risk from external writers).
         """
-        if pm is None:
+        if cmds is None:
             return []
         all_events = self._audio_events_cache
         if all_events is None:
@@ -476,7 +509,7 @@ class ShotSequencer:
         shot = self.shot_by_id(shot_id)
         if shot is None:
             return
-        if pm is None:
+        if cmds is None:
             return
         anim_objs = {
             seg["obj"] for seg in self.collect_object_segments(shot_id)
@@ -638,11 +671,41 @@ class ShotSequencer:
             raise ValueError(f"No shot with id {shot_id}")
 
         sequences = self.collect_shot_sequences(shot_id)
-        if not sequences:
+
+        # For "extend" / "fit", we must include content that lies *outside*
+        # the current shot range — collect_shot_sequences clips to the
+        # current bounds so it never reveals overrun. Sample shot.objects'
+        # keyframe extents directly to find true min/max.
+        outer_start = outer_end = None
+        if mode in ("extend", "fit") and shot.objects:
+            for obj in shot.objects:
+                kt = cmds.keyframe(obj, q=True) or []
+                if not kt:
+                    continue
+                lo, hi = min(kt), max(kt)
+                # Only consider keys outside the current shot bounds —
+                # in-bounds keys are already covered by ``sequences`` and
+                # double-counting causes spurious ripples.
+                if lo < shot.start:
+                    outer_start = lo if outer_start is None else min(outer_start, lo)
+                if hi > shot.end:
+                    outer_end = hi if outer_end is None else max(outer_end, hi)
+
+        if not sequences and outer_start is None and outer_end is None:
             return 0.0, 0.0
 
-        content_start = min(s["start"] for s in sequences)
-        content_end = max(s["end"] for s in sequences)
+        seq_start = min(s["start"] for s in sequences) if sequences else None
+        seq_end = max(s["end"] for s in sequences) if sequences else None
+
+        def _combine(a, b, agg):
+            vals = [v for v in (a, b) if v is not None]
+            return agg(vals) if vals else None
+
+        content_start = _combine(seq_start, outer_start, min)
+        content_end = _combine(seq_end, outer_end, max)
+
+        if content_start is None or content_end is None:
+            return 0.0, 0.0
 
         if mode == "trim":
             new_start = max(shot.start, content_start)
@@ -822,20 +885,48 @@ class ShotSequencer:
         eps = 1e-3
         tr = (old_start - eps, old_end + eps)
 
+        # Maya's `keyframe(edit=True, relative=True, timeChange=...)` silently
+        # snaps shifted keys to (just before) the first existing key in their
+        # path — i.e. it refuses to slide over a populated frame, so a 4-key
+        # curve with a target slot occupied collapses keys against the
+        # obstruction instead of moving past it. Use cut-and-recreate to
+        # bypass that quirk: capture each key's value and tangents, delete
+        # them, then re-key at the shifted time.
         for crv in curves:
-            # Skip curves that have no keys in this range
-            if not cmds.keyframe(crv, q=True, time=tr):
+            times = cmds.keyframe(crv, q=True, time=tr) or []
+            if not times:
                 continue
-            try:
-                cmds.keyframe(
-                    crv,
-                    edit=True,
-                    relative=True,
-                    timeChange=delta,
-                    time=tr,
-                )
-            except RuntimeError:
-                pass
+            vals = cmds.keyframe(crv, q=True, time=tr, valueChange=True) or []
+            in_tans = cmds.keyTangent(crv, q=True, time=tr, inTangentType=True) or []
+            out_tans = cmds.keyTangent(crv, q=True, time=tr, outTangentType=True) or []
+
+            conns = cmds.listConnections(crv, plugs=True, d=True, s=False) or []
+            plug = conns[0] if conns else None
+
+            cmds.cutKey(crv, time=tr, clear=True)
+            target = crv if cmds.objExists(crv) else plug
+            if not target:
+                continue
+
+            # Re-key in order; if collisions remain after the shift, Maya's
+            # setKeyframe overwrites — but the moved cluster itself never
+            # contains internal duplicates so this is safe.
+            for i, t in enumerate(times):
+                new_t = t + delta
+                v = vals[i] if i < len(vals) else 0.0
+                cmds.setKeyframe(target, time=new_t, value=v)
+                itt = in_tans[i] if i < len(in_tans) else None
+                ott = out_tans[i] if i < len(out_tans) else None
+                if itt or ott:
+                    kw = {"time": (new_t, new_t)}
+                    if itt:
+                        kw["inTangentType"] = itt
+                    if ott:
+                        kw["outTangentType"] = ott
+                    try:
+                        cmds.keyTangent(target, **kw)
+                    except RuntimeError:
+                        pass
 
     def move_stepped_keys(
         self,
@@ -1014,9 +1105,7 @@ class ShotSequencer:
 
         duration = old_end - old_start
 
-        if pm is not None:
-            import maya.cmds as cmds
-
+        if cmds is not None:
             self._batch_move_keys(cmds, shot.objects, old_start, old_end, new_start)
             self._shift_audio(cmds, old_start, old_end, delta, shifted_audio)
 
@@ -1299,10 +1388,10 @@ class ShotSequencer:
         This is called automatically after every timeline-modifying
         operation so that gaps never contain interpolated motion.
         """
-        if pm is None:
+        try:
+            import maya.cmds as cmds
+        except ImportError:
             return
-
-        import maya.cmds as cmds
         from mayatk.anim_utils._anim_utils import AnimUtils
 
         sorted_s = self.sorted_shots()
@@ -1583,7 +1672,7 @@ class ShotSequencer:
 
         with audio_utils.batch():
             # Move keyframes (only when Maya is available)
-            if pm is not None:
+            if cmds is not None:
                 # 1) Park first shot's keys at temp offset
                 for obj in a.objects:
                     self.move_object_keys(obj, first_start, first_end, _PARK)
@@ -1621,7 +1710,7 @@ class ShotSequencer:
                     if s.shot_id in (a.shot_id, b.shot_id):
                         continue
                     if s.start >= second_end:
-                        if pm is not None:
+                        if cmds is not None:
                             for obj in s.objects:
                                 self.move_object_keys(
                                     obj, s.start, s.end, s.start + delta
@@ -1695,7 +1784,7 @@ class ShotSequencer:
         from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
         with audio_utils.batch():
-            if pm is not None:
+            if cmds is not None:
                 park_offset = _PARK_BASE
                 parked = {}
                 for s in new_order:

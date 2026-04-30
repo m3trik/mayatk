@@ -11,9 +11,9 @@ from __future__ import annotations
 from typing import Optional
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError:
-    pm = None
+    cmds = None
 
 __all__ = ["ShotNavMixin"]
 
@@ -48,17 +48,15 @@ class ShotNavMixin:
         if not self.sequencer.store.select_on_load:
             return
 
-        import maya.cmds as cmds
-
         long_names = []
         for o in shot.objects:
             resolved = cmds.ls(o, long=True)
             if resolved:
                 long_names.extend(resolved)
         if long_names:
-            pm.select(long_names)
+            cmds.select(long_names)
         else:
-            pm.select(clear=True)
+            cmds.select(clear=True)
 
     def _apply_view_playback_range(self, shot=None) -> None:
         """Set Maya's playback range based on the current playback-range mode.
@@ -84,7 +82,7 @@ class ShotNavMixin:
         else:
             rng_start, rng_end = shot.start, shot.end
 
-        pm.playbackOptions(min=rng_start, max=rng_end)
+        cmds.playbackOptions(min=rng_start, max=rng_end)
 
     def _sync_combobox(self) -> None:
         """Populate the shot combobox and update prev/next action state."""

@@ -1,32 +1,35 @@
+from __future__ import annotations
+
 from typing import List, Tuple, Optional
 import random
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ModuleNotFoundError as error:
     print(__file__, error)
 
 # from this package:
 from mayatk.mat_utils._mat_utils import MatUtils
+from mayatk.node_utils.attributes._attributes import Attributes
 
 
 class ColorUtils:
     @staticmethod
-    def assign_material(obj: object, color: Tuple[float, float, float]) -> object:
+    def assign_material(obj: str, color: Tuple[float, float, float]) -> str:
         """Assigns a material to an object based on the RGB value. Creates the material if it does not exist."""
         # Convert the RGB tuple to a hex string for the material name
         color_name = "_".join(f"{int(c * 255):02X}" for c in color)
         material_name = f"ID_{color_name}"
 
         # Check if the material already exists
-        if not pm.objExists(material_name):
+        if not cmds.objExists(material_name):
             # Create a new material and shading group
             material = MatUtils.create_mat("lambert", prefix="ID_", name=color_name)
-            pm.setAttr(
+            cmds.setAttr(
                 f"{material}.color", color[0], color[1], color[2], type="double3"
             )
         else:
-            material = pm.PyNode(material_name)
+            material = material_name
 
         # Assign the material to the object
         MatUtils.assign_mat(obj, material_name)
@@ -35,135 +38,116 @@ class ColorUtils:
     @classmethod
     def set_color_attribute(
         cls,
-        obj: object,
+        obj: str,
         color: Tuple[float, float, float],
         attr_type: str,
         force: bool = False,
     ) -> None:
         """Applies color based on the attribute type specified, optionally overriding attribute locks."""
-
-        def handle_attribute(
-            attribute: pm.general.Attribute,
-            value: Optional[Tuple[float, float, float]] = None,
-            action: str = "set",
-        ) -> None:
-            """Handles attribute modification with optional lock override."""
-            if not attribute.exists():
-                return
-
-            locked = attribute.get(lock=True)
-            if locked and force:
-                attribute.set(lock=False)
-
-            if action == "set" and value is not None:
-                if isinstance(value, tuple) and attribute.type() == "float3":
-                    attribute.set(value, type="double3")
-                else:
-                    attribute.set(value)
-
-            if locked and force:
-                attribute.set(lock=True)
-
         try:
             if attr_type == "outliner":
-                if obj.hasAttr("useOutlinerColor"):
-                    handle_attribute(obj.attr("useOutlinerColor"), 1)
+                if Attributes.has_attr(obj, "useOutlinerColor"):
+                    Attributes.set_plug(f"{obj}.useOutlinerColor", 1, force=force)
                 else:
-                    pm.warning(f"{obj} has no attribute 'useOutlinerColor'.")
+                    cmds.warning(f"{obj} has no attribute 'useOutlinerColor'.")
 
-                if obj.hasAttr("outlinerColor"):
-                    handle_attribute(obj.attr("outlinerColor"), color)
+                if Attributes.has_attr(obj, "outlinerColor"):
+                    Attributes.set_plug(f"{obj}.outlinerColor", color, force=force)
                 else:
-                    pm.warning(f"{obj} has no attribute 'outlinerColor'.")
+                    cmds.warning(f"{obj} has no attribute 'outlinerColor'.")
 
             elif attr_type == "vertex":
-                shapes = pm.listRelatives(obj, shapes=True, type="mesh")
+                shapes = cmds.listRelatives(obj, shapes=True, type="mesh")
                 if not shapes:
-                    pm.warning(
+                    cmds.warning(
                         f"{obj} does not have a mesh shape for vertex color assignment."
                     )
                     return
                 try:
-                    pm.polyColorPerVertex(obj, rgb=color, colorDisplayOption=True)
+                    cmds.polyColorPerVertex(obj, rgb=color, colorDisplayOption=True)
                 except RuntimeError as e:
-                    pm.warning(f"Error applying vertex color to {obj}: {e}")
+                    cmds.warning(f"Error applying vertex color to {obj}: {e}")
 
             elif attr_type == "material":
                 cls.assign_material(obj, color)
 
             elif attr_type == "wireframe":
-                if pm.nodeType(obj) == "lambert":
-                    pm.warning(f"{obj} is a material, not a mesh.")
+                if cmds.nodeType(obj) == "lambert":
+                    cmds.warning(f"{obj} is a material, not a mesh.")
                     return
 
-                if obj.hasAttr("overrideEnabled"):
-                    handle_attribute(obj.attr("overrideEnabled"), 1)
+                if Attributes.has_attr(obj, "overrideEnabled"):
+                    Attributes.set_plug(f"{obj}.overrideEnabled", 1, force=force)
                 else:
-                    pm.warning(f"{obj} has no attribute 'overrideEnabled'.")
+                    cmds.warning(f"{obj} has no attribute 'overrideEnabled'.")
 
-                if obj.hasAttr("overrideRGBColors"):
-                    handle_attribute(obj.attr("overrideRGBColors"), 1)
+                if Attributes.has_attr(obj, "overrideRGBColors"):
+                    Attributes.set_plug(f"{obj}.overrideRGBColors", 1, force=force)
                 else:
-                    pm.warning(f"{obj} has no attribute 'overrideRGBColors'.")
+                    cmds.warning(f"{obj} has no attribute 'overrideRGBColors'.")
 
-                if obj.hasAttr("overrideColorRGB"):
-                    handle_attribute(obj.attr("overrideColorRGB"), color)
+                if Attributes.has_attr(obj, "overrideColorRGB"):
+                    Attributes.set_plug(f"{obj}.overrideColorRGB", color, force=force)
                 else:
-                    pm.warning(f"{obj} has no attribute 'overrideColorRGB'.")
+                    cmds.warning(f"{obj} has no attribute 'overrideColorRGB'.")
 
         except Exception as e:
-            pm.warning(f"Color assignment failed on {obj}: {e}")
+            cmds.warning(f"Color assignment failed on {obj}: {e}")
 
     @staticmethod
-    def get_material_color(obj: object) -> Optional[Tuple[float, float, float]]:
+    def get_material_color(obj: str) -> Optional[Tuple[float, float, float]]:
         """Gets the color of the object's material."""
-        shading_groups = pm.listConnections(obj, type="shadingEngine")
+        shading_groups = cmds.listConnections(obj, type="shadingEngine") or []
         if not shading_groups:
             return None
-        materials = pm.ls(pm.listConnections(shading_groups[0]), materials=True)
+        connected = cmds.listConnections(shading_groups[0]) or []
+        materials = cmds.ls(connected, materials=True) or []
         if not materials:
             return None
-        return pm.getAttr(f"{materials[0]}.color")[0]
+        return cmds.getAttr(f"{materials[0]}.color")[0]
 
     @staticmethod
     def get_wireframe_color(
-        obj: object,
+        obj: str,
         normalize: bool = False,
     ) -> Optional[Tuple[float, float, float]]:
         """Gets the wireframe color of the given object."""
-        if not obj.hasAttr("overrideEnabled") or not obj.attr("overrideEnabled").get():
-            return None
-        if (
-            not obj.hasAttr("overrideRGBColors")
-            or not obj.attr("overrideRGBColors").get()
+        if not Attributes.has_attr(obj, "overrideEnabled") or not cmds.getAttr(
+            f"{obj}.overrideEnabled"
         ):
             return None
-        if not obj.hasAttr("overrideColorRGB"):
+        if not Attributes.has_attr(obj, "overrideRGBColors") or not cmds.getAttr(
+            f"{obj}.overrideRGBColors"
+        ):
+            return None
+        if not Attributes.has_attr(obj, "overrideColorRGB"):
             return None
 
-        color = obj.attr("overrideColorRGB").get()
+        color = cmds.getAttr(f"{obj}.overrideColorRGB")[0]
         if not normalize:
             color = tuple(int(c * 255) for c in color)
         return color
 
     @staticmethod
     def get_vertex_color(
-        obj: object, vertex_id: int
+        obj: str, vertex_id: int
     ) -> Optional[Tuple[float, float, float]]:
         """Gets the color of a specific vertex on the object."""
-        colors = pm.polyColorPerVertex(f"{obj}.vtx[{vertex_id}]", query=True, rgb=True)
+        colors = cmds.polyColorPerVertex(
+            f"{obj}.vtx[{vertex_id}]", query=True, rgb=True
+        )
         return colors if colors else None
 
     @staticmethod
     def set_vertex_color(
-        objects: List[object], color: Tuple[float, float, float]
+        objects: List[str], color: Tuple[float, float, float]
     ) -> None:
         """Applies the specified color to the object's vertices."""
-        for obj in pm.ls(objects, long=True):
-            shapes = pm.listRelatives(obj, shapes=True, type="mesh")
+        for obj in cmds.ls(objects, long=True) or []:
+            shapes = cmds.listRelatives(obj, shapes=True, type="mesh")
             if shapes:
                 try:
-                    pm.polyColorPerVertex(obj, rgb=color, colorDisplayOption=True)
+                    cmds.polyColorPerVertex(obj, rgb=color, colorDisplayOption=True)
                 except RuntimeError as e:
                     print(f"Error applying vertex color to {obj}: {e}")
 
@@ -179,7 +163,7 @@ class ColorManager(ColorUtils):
     @classmethod
     def apply_color(
         cls,
-        objects: List[object],
+        objects: List[str],
         color: Optional[Tuple[float, float, float]] = None,
         apply_to_material: bool = False,
         apply_to_vertex: bool = False,
@@ -189,7 +173,7 @@ class ColorManager(ColorUtils):
         """Applies color based on given criteria to objects."""
         if color is None:
             color = (random.random(), random.random(), random.random())
-        for obj in pm.ls(objects, long=True):
+        for obj in cmds.ls(objects, long=True) or []:
             if apply_to_vertex:
                 cls.set_color_attribute(obj, color, attr_type="vertex", force=True)
             if apply_to_wireframe:
@@ -208,21 +192,34 @@ class ColorManager(ColorUtils):
         check_vertex_color: bool = False,
         check_wireframe_color: bool = False,
         check_outliner_color: bool = False,
-    ) -> List[object]:
+    ) -> List[str]:
         """Select objects by color, with optional checks for material, vertex, wireframe, and outliner colors."""
         matching_objects = []
 
-        for obj in pm.ls(geometry=True, type="transform", long=True):
+        candidates = cmds.ls(geometry=True, long=True) or []
+        # Walk to transforms
+        transforms = []
+        seen = set()
+        for shape in candidates:
+            parents = cmds.listRelatives(shape, parent=True, fullPath=True) or []
+            for p in parents:
+                if p not in seen:
+                    seen.add(p)
+                    transforms.append(p)
+
+        for obj in transforms:
             matched = False
             if check_material_color and not matched:
-                for shading_engine in obj.listConnections(type="shadingEngine"):
+                shading_engines = cmds.listConnections(obj, type="shadingEngine") or []
+                for shading_engine in shading_engines:
                     if matched:
                         break
-                    for material in shading_engine.listConnections():
-                        if material.hasAttr("color"):
-                            material_color = material.color.get()
+                    materials = cmds.listConnections(shading_engine) or []
+                    for material in materials:
+                        if Attributes.has_attr(material, "color"):
+                            mat_color = cmds.getAttr(f"{material}.color")[0]
                             if (
-                                cls.get_color_difference(material_color, target_color)
+                                cls.get_color_difference(mat_color, target_color)
                                 <= threshold
                             ):
                                 matched = True
@@ -230,38 +227,39 @@ class ColorManager(ColorUtils):
             if (
                 check_wireframe_color
                 and not matched
-                and obj.hasAttr("overrideEnabled")
-                and obj.overrideEnabled.get()
-                and obj.hasAttr("overrideRGBColors")
-                and obj.overrideRGBColors.get()
-                and obj.hasAttr("overrideColorRGB")
+                and Attributes.has_attr(obj, "overrideEnabled")
+                and cmds.getAttr(f"{obj}.overrideEnabled")
+                and Attributes.has_attr(obj, "overrideRGBColors")
+                and cmds.getAttr(f"{obj}.overrideRGBColors")
+                and Attributes.has_attr(obj, "overrideColorRGB")
             ):
-                wireframe_color = obj.overrideColorRGB.get()
+                wireframe_color = cmds.getAttr(f"{obj}.overrideColorRGB")[0]
                 if cls.get_color_difference(wireframe_color, target_color) <= threshold:
                     matched = True
             if (
                 check_outliner_color
                 and not matched
-                and obj.hasAttr("useOutlinerColor")
-                and obj.useOutlinerColor.get()
-                and obj.hasAttr("outlinerColor")
+                and Attributes.has_attr(obj, "useOutlinerColor")
+                and cmds.getAttr(f"{obj}.useOutlinerColor")
+                and Attributes.has_attr(obj, "outlinerColor")
             ):
-                outliner_color = obj.outlinerColor.get()
+                outliner_color = cmds.getAttr(f"{obj}.outlinerColor")[0]
                 if cls.get_color_difference(outliner_color, target_color) <= threshold:
                     matched = True
             if check_vertex_color and not matched:
-                vtx_colors = pm.polyColorPerVertex(
-                    obj, query=True, allVertices=True, rgb=True
+                vtx_colors = cmds.polyColorPerVertex(
+                    obj, query=True, rgb=True
                 )
                 if vtx_colors:
-                    average_vtx_color = [
-                        sum(c) / len(vtx_colors) for c in zip(*vtx_colors)
-                    ]
-                    if (
-                        cls.get_color_difference(average_vtx_color, target_color)
-                        <= threshold
-                    ):
-                        matched = True
+                    # vtx_colors is flat [r,g,b,r,g,b,...]; group into triples
+                    triples = list(zip(vtx_colors[0::3], vtx_colors[1::3], vtx_colors[2::3]))
+                    if triples:
+                        average_vtx_color = [sum(c) / len(triples) for c in zip(*triples)]
+                        if (
+                            cls.get_color_difference(average_vtx_color, target_color)
+                            <= threshold
+                        ):
+                            matched = True
             if matched:
                 matching_objects.append(obj)
 
@@ -270,25 +268,25 @@ class ColorManager(ColorUtils):
     @classmethod
     def reset_colors(
         cls,
-        objects: List[object],
+        objects: List[str],
         reset_outliner: bool = True,
         reset_wireframe: bool = True,
         reset_vertex: bool = True,
         reset_material: bool = True,
     ) -> None:
         """Resets colors to default for given objects, with options to specify which color types to reset."""
-        for obj in pm.ls(objects, long=True):
+        for obj in cmds.ls(objects, long=True) or []:
             if reset_outliner:
-                if obj.hasAttr("useOutlinerColor"):
-                    obj.attr("useOutlinerColor").set(0)
+                if Attributes.has_attr(obj, "useOutlinerColor"):
+                    cmds.setAttr(f"{obj}.useOutlinerColor", 0)
                 else:
-                    pm.warning(f"{obj} has no attribute 'useOutlinerColor'.")
+                    cmds.warning(f"{obj} has no attribute 'useOutlinerColor'.")
 
             if reset_wireframe:
-                if obj.hasAttr("overrideEnabled"):
-                    obj.attr("overrideEnabled").set(0)
+                if Attributes.has_attr(obj, "overrideEnabled"):
+                    cmds.setAttr(f"{obj}.overrideEnabled", 0)
                 else:
-                    pm.warning(f"{obj} has no attribute 'overrideEnabled'.")
+                    cmds.warning(f"{obj} has no attribute 'overrideEnabled'.")
 
             if reset_material:
                 mats = MatUtils.get_mats(obj)
@@ -300,23 +298,22 @@ class ColorManager(ColorUtils):
             cls.reset_vertex_colors(objects)
 
     @staticmethod
-    def reset_vertex_colors(objects: List[object]) -> None:
+    def reset_vertex_colors(objects: List[str]) -> None:
         """Resets vertex colors for the given object(s), handling potential errors gracefully."""
-        transforms = pm.ls(objects, type="transform", long=True)
-        shapes = pm.listRelatives(transforms, children=True, shapes=True)
+        transforms = cmds.ls(objects, type="transform", long=True) or []
+        shapes = cmds.listRelatives(transforms, children=True, shapes=True) or []
 
-        if shapes:
-            for shape in shapes:
-                if pm.nodeType(shape) == "mesh":
-                    try:
-                        colorSets = pm.polyColorSet(
-                            shape, query=True, allColorSets=True
-                        )
-                        if colorSets:
-                            for colorSet in colorSets:
-                                pm.polyColorSet(shape, delete=True, colorSet=colorSet)
-                    except RuntimeError as e:
-                        print(f"Error removing vertex colors from {shape}: {e}")
+        for shape in shapes:
+            if cmds.nodeType(shape) == "mesh":
+                try:
+                    color_sets = cmds.polyColorSet(
+                        shape, query=True, allColorSets=True
+                    )
+                    if color_sets:
+                        for color_set in color_sets:
+                            cmds.polyColorSet(shape, delete=True, colorSet=color_set)
+                except RuntimeError as e:
+                    print(f"Error removing vertex colors from {shape}: {e}")
 
     # Desaturated defaults so swatches aren't all white on first launch.
     DEFAULT_SWATCH_COLORS = [
@@ -369,9 +366,9 @@ class ColorManagerSlots(ColorManager):
         )
 
     @property
-    def selected_objects(self) -> List[object]:
+    def selected_objects(self) -> List[str]:
         """Return the currently selected objects, or an empty list if no objects are selected."""
-        objects = pm.selected()
+        objects = cmds.ls(selection=True) or []
         if not objects:
             self.sb.message_box("No objects selected.")
         return objects
@@ -398,7 +395,7 @@ class ColorManagerSlots(ColorManager):
     def b000(self) -> None:
         """Reset Colors"""
         if self.sb.app.keyboardModifiers() == self.sb.QtCore.Qt.ControlModifier:
-            objects = pm.ls(geometry=True, type="transform", long=True)
+            objects = cmds.ls(geometry=True, long=True) or []
         else:
             objects = self.selected_objects
         if not objects:
@@ -432,7 +429,10 @@ class ColorManagerSlots(ColorManager):
             check_outliner_color=self.ui.chk013.isChecked(),
             check_material_color=self.ui.chk014.isChecked(),
         )
-        pm.select(found_objects)
+        if found_objects:
+            cmds.select(found_objects)
+        else:
+            cmds.select(clear=True)
 
     def b003(self) -> None:
         objects = self.selected_objects

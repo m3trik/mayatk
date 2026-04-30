@@ -24,7 +24,7 @@ except ImportError:
 if QApplication and not QApplication.instance():
     app = QApplication(sys.argv)
 
-import pymel.core as pm
+import maya.cmds as cmds
 import mayatk as mtk
 
 from base_test import MayaTkTestCase
@@ -32,10 +32,10 @@ from base_test import MayaTkTestCase
 
 class TestControls(MayaTkTestCase):
     def tearDown(self):
-        for obj in pm.ls("*_CTRL", "*_CTRL_GRP", type="transform"):
+        for obj in cmds.ls("*_CTRL", "*_CTRL_GRP", type="transform"):
             try:
-                if pm.objExists(obj):
-                    pm.delete(obj)
+                if cmds.objExists(obj):
+                    cmds.delete(obj)
             except Exception:
                 pass
         super().tearDown()
@@ -49,12 +49,12 @@ class TestControls(MayaTkTestCase):
     def test_dynamic_preset_box_no_group(self):
         ctrl = mtk.Controls.box(name="testBox", offset_group=False)
         self.assertNodeExists("testBox_CTRL")
-        self.assertFalse(pm.objExists("testBox_CTRL_GRP"))
+        self.assertFalse(cmds.objExists("testBox_CTRL_GRP"))
         self.assertNodeType(ctrl, "transform")
 
     def test_match_to_object(self):
-        cube = pm.polyCube(name="matchTarget")[0]
-        pm.xform(cube, ws=True, t=(5, 6, 7), ro=(10, 20, 30))
+        cube = cmds.polyCube(name="matchTarget")[0]
+        cmds.xform(cube, ws=True, t=(5, 6, 7), ro=(10, 20, 30))
 
         nodes = mtk.Controls.create(
             "diamond",
@@ -65,7 +65,7 @@ class TestControls(MayaTkTestCase):
         grp = nodes.group
         self.assertIsNotNone(grp)
 
-        pos = pm.xform(grp, q=True, ws=True, t=True)
+        pos = cmds.xform(grp, q=True, ws=True, t=True)
         self.assertAlmostEqual(pos[0], 5.0, places=3)
         self.assertAlmostEqual(pos[1], 6.0, places=3)
         self.assertAlmostEqual(pos[2], 7.0, places=3)
@@ -78,7 +78,7 @@ class TestControls(MayaTkTestCase):
                 (0.0, 0.0, 1.25),
                 (-1.0, 0.0, -1.0),
             ]
-            return pm.curve(name=name, p=pts, d=1)
+            return cmds.curve(name=name, p=pts, d=1)
 
         mtk.Controls.register_preset("triangle", _build_triangle)
 
@@ -95,7 +95,7 @@ class TestControls(MayaTkTestCase):
         self.assertNodeType(b, "transform")
 
     def test_attached_text_merges_into_control(self):
-        if pm.about(batch=True):
+        if cmds.about(batch=True):
             print("Skipping text test in batch mode (textCurves unavailable)")
             return
 
@@ -108,7 +108,7 @@ class TestControls(MayaTkTestCase):
         self.assertNodeType(combined, "transform")
 
     def test_text_standalone(self):
-        if pm.about(batch=True):
+        if cmds.about(batch=True):
             print("Skipping text test in batch mode (textCurves unavailable)")
             return
 
@@ -136,7 +136,7 @@ class TestControls(MayaTkTestCase):
         ]
 
         for preset, kwargs in presets:
-            if preset == "text" and pm.about(batch=True):
+            if preset == "text" and cmds.about(batch=True):
                 print("Skipping text preset in batch mode")
                 continue
 
@@ -153,10 +153,10 @@ class TestControlsExtended(MayaTkTestCase):
     """Extended tests for Controls parameters and edge cases."""
 
     def tearDown(self):
-        for obj in pm.ls("*_CTRL", "*_CTRL_GRP", "test*", type="transform"):
+        for obj in cmds.ls("*_CTRL", "*_CTRL_GRP", "test*", type="transform"):
             try:
-                if pm.objExists(obj):
-                    pm.delete(obj)
+                if cmds.objExists(obj):
+                    cmds.delete(obj)
             except Exception:
                 pass
         super().tearDown()
@@ -164,8 +164,8 @@ class TestControlsExtended(MayaTkTestCase):
     def test_create_with_color_int(self):
         """Test creating a control with an integer color index."""
         ctrl = mtk.Controls.diamond(name="testColorInt", color=17)
-        self.assertTrue(ctrl.overrideEnabled.get())
-        self.assertEqual(ctrl.overrideColor.get(), 17)
+        self.assertTrue(cmds.getAttr(f"{ctrl}.overrideEnabled"))
+        self.assertEqual(cmds.getAttr(f"{ctrl}.overrideColor"), 17)
 
     def test_create_with_color_tuple(self):
         """Test creating a control with an RGB tuple color."""
@@ -173,11 +173,11 @@ class TestControlsExtended(MayaTkTestCase):
         ctrl = mtk.Controls.diamond(name="testColorTuple", color=color)
 
         # RGB colors use overrideRGBColors=True (Maya 2016+)
-        self.assertTrue(ctrl.overrideEnabled.get())
-        self.assertTrue(ctrl.overrideRGBColors.get())
+        self.assertTrue(cmds.getAttr(f"{ctrl}.overrideEnabled"))
+        self.assertTrue(cmds.getAttr(f"{ctrl}.overrideRGBColors"))
 
         # Check color values (approximate float comparison)
-        actual_color = ctrl.overrideColorRGB.get()
+        actual_color = cmds.getAttr(f"{ctrl}.overrideColorRGB")[0]
         self.assertAlmostEqual(actual_color[0], 1.0)
         self.assertAlmostEqual(actual_color[1], 0.0)
         self.assertAlmostEqual(actual_color[2], 0.0)
@@ -187,7 +187,7 @@ class TestControlsExtended(MayaTkTestCase):
         ctrl_z = mtk.Controls.diamond(name="testAxisZ", axis="z")
 
         ctrl_x_nofreeze = mtk.Controls.diamond(name="testAxisX", axis="x", freeze=False)
-        rot = ctrl_x_nofreeze.getRotation()
+        rot = cmds.xform(ctrl_x_nofreeze, q=True, ro=True)
         # X axis usually means -90 on Z or similar depending on implementation
         # Implementation: x -> (0, 0, -90)
         self.assertAlmostEqual(rot[2], -90.0)
@@ -196,31 +196,33 @@ class TestControlsExtended(MayaTkTestCase):
         """Test creating a control with a specific size."""
         ctrl = mtk.Controls.diamond(name="testSize", size=2.0, freeze=False)
         # Scale should be 2.0 if not frozen
-        self.assertAlmostEqual(ctrl.sx.get(), 2.0)
-        self.assertAlmostEqual(ctrl.sy.get(), 2.0)
-        self.assertAlmostEqual(ctrl.sz.get(), 2.0)
+        self.assertAlmostEqual(cmds.getAttr(f"{ctrl}.sx"), 2.0)
+        self.assertAlmostEqual(cmds.getAttr(f"{ctrl}.sy"), 2.0)
+        self.assertAlmostEqual(cmds.getAttr(f"{ctrl}.sz"), 2.0)
 
     def test_create_with_parent(self):
         """Test creating a control parented to another node."""
-        parent_node = pm.group(em=True, n="testParent")
+        parent_node = cmds.group(em=True, n="testParent")
 
         # Case 1: With offset group (default)
         ctrl = mtk.Controls.diamond(name="testChild", parent=parent_node)
         # ctrl is the control, its parent is the group, group's parent is parent_node
-        grp = ctrl.getParent()
-        self.assertEqual(grp.getParent(), parent_node)
+        grp = (cmds.listRelatives(ctrl, parent=True, fullPath=True) or [None])[0]
+        grp_parent = (cmds.listRelatives(grp, parent=True, fullPath=True) or [None])[0]
+        self.assertEqual(str(grp_parent).split("|")[-1], str(parent_node).split("|")[-1])
 
         # Case 2: Without offset group
         ctrl2 = mtk.Controls.diamond(
             name="testChild2", parent=parent_node, offset_group=False
         )
-        self.assertEqual(ctrl2.getParent(), parent_node)
+        ctrl2_parent = (cmds.listRelatives(ctrl2, parent=True, fullPath=True) or [None])[0]
+        self.assertEqual(str(ctrl2_parent).split("|")[-1], str(parent_node).split("|")[-1])
 
     def test_create_no_freeze(self):
         """Test creating a control without freezing transforms."""
         ctrl = mtk.Controls.diamond(name="testNoFreeze", size=2.0, freeze=False)
-        self.assertNotAlmostEqual(ctrl.sx.get(), 1.0)
-        self.assertAlmostEqual(ctrl.sx.get(), 2.0)
+        self.assertNotAlmostEqual(cmds.getAttr(f"{ctrl}.sx"), 1.0)
+        self.assertAlmostEqual(cmds.getAttr(f"{ctrl}.sx"), 2.0)
 
     def test_return_nodes_dataclass(self):
         """Verify return_nodes=True returns a ControlNodes object."""
@@ -231,8 +233,8 @@ class TestControlsExtended(MayaTkTestCase):
         self.assertTrue(hasattr(result, "group"))
 
         self.assertNodeExists("testReturnNodes_CTRL")
-        self.assertEqual(result.control.name(), "testReturnNodes_CTRL")
-        self.assertEqual(result.group.name(), "testReturnNodes_CTRL_GRP")
+        self.assertEqual(result.control, "testReturnNodes_CTRL")
+        self.assertEqual(result.group, "testReturnNodes_CTRL_GRP")
 
     def test_combine_controls(self):
         """Test combining multiple controls into one."""
@@ -240,18 +242,18 @@ class TestControlsExtended(MayaTkTestCase):
         c2 = mtk.Controls.arrow(name="c2", offset_group=False)
 
         # Move c2 so we can distinguish shapes if needed
-        pm.move(c2, 2, 0, 0)
+        cmds.move(2, 0, 0, c2)
 
         combined = mtk.Controls.combine([c1, c2], name="combined")
 
         self.assertNodeExists("combined_CTRL")
         # Should have multiple shapes (circle has 1, square has 1)
-        shapes = combined.getShapes()
+        shapes = cmds.listRelatives(combined, shapes=True, ni=True) or []
         self.assertGreaterEqual(len(shapes), 2)
 
         # Sources should be deleted by default
-        self.assertFalse(pm.objExists("c1_CTRL"))
-        self.assertFalse(pm.objExists("c2_CTRL"))
+        self.assertFalse(cmds.objExists("c1_CTRL"))
+        self.assertFalse(cmds.objExists("c2_CTRL"))
 
     def test_invalid_axis_raises_error(self):
         """Verify invalid axis raises ValueError."""
@@ -260,7 +262,7 @@ class TestControlsExtended(MayaTkTestCase):
 
     def test_empty_text_raises_error(self):
         """Verify empty text raises ValueError."""
-        if pm.about(batch=True):
+        if cmds.about(batch=True):
             return
 
         with self.assertRaises(ValueError):

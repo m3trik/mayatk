@@ -6,9 +6,12 @@ import math
 from typing import Optional, Dict, Any, List
 
 try:
-    import pymel.core as pm
-    from maya import cmds
+    import maya.cmds as cmds
+    import maya.mel as mel
+    import maya.api.OpenMaya as om
 except ImportError as error:
+    cmds = None
+    mel = None
     print(__file__, error)
 import pythontk as ptk
 
@@ -73,12 +76,12 @@ class _TaskActionsMixin(_TaskDataMixin):
 
     def set_workspace(self, enable=True):
         """Manage temporary workspace change."""
-        original_workspace = pm.workspace(query=True, rootDirectory=True)
+        original_workspace = cmds.workspace(query=True, rootDirectory=True)
 
         if enable:
             new_workspace = EnvUtils.find_workspace_using_path()
             if new_workspace and new_workspace != original_workspace:
-                pm.workspace(new_workspace, openWorkspace=True)
+                cmds.workspace(new_workspace, openWorkspace=True)
                 self.logger.debug(
                     f"Changed workspace from {original_workspace} to {new_workspace}"
                 )
@@ -94,15 +97,15 @@ class _TaskActionsMixin(_TaskDataMixin):
 
     def revert_workspace(self, original_workspace):
         """Revert to the original workspace."""
-        pm.workspace(original_workspace, openWorkspace=True)
+        cmds.workspace(original_workspace, openWorkspace=True)
         self.logger.debug(f"Reverted workspace to: {original_workspace}")
 
     def set_linear_unit(self, linear_unit):
         """Manage temporary linear unit change."""
-        original_linear_unit = pm.currentUnit(query=True, linear=True)
+        original_linear_unit = cmds.currentUnit(query=True, linear=True)
 
         if linear_unit and linear_unit != "OFF":
-            pm.currentUnit(linear=linear_unit)
+            cmds.currentUnit(linear=linear_unit)
             self.logger.debug(
                 f"Changed linear unit from {original_linear_unit} to {linear_unit}"
             )
@@ -113,15 +116,15 @@ class _TaskActionsMixin(_TaskDataMixin):
 
     def revert_linear_unit(self, original_linear_unit):
         """Revert to the original linear unit."""
-        pm.currentUnit(linear=original_linear_unit)
+        cmds.currentUnit(linear=original_linear_unit)
         self.logger.debug(f"Reverted linear unit to: {original_linear_unit}")
 
     def convert_to_relative_paths(self):
         """Convert absolute material paths to relative paths."""
         self.logger.debug("Converting absolute paths to relative")
         materials = self._get_all_materials()
-        # Pass silent=True and as_strings=True to avoid pm.displayInfo
-        # and pm.PyNode overhead.  Do NOT disable undo here — the
+        # Pass silent=True and as_strings=True to avoid om.MGlobal.displayInfo
+        # and cmds.node overhead.  Do NOT disable undo here — the
         # perform_export undo chunk needs to capture these changes so
         # the scene can be restored after export.
         MatUtils.remap_texture_paths(materials, silent=True, as_strings=True)
@@ -283,15 +286,15 @@ class _TaskActionsMixin(_TaskDataMixin):
             self.logger.debug("No keyframes found. Skipping frame range setting.")
             return
 
-        if not pm.mel.eval("FBXExportBakeComplexAnimation -q"):
+        if not mel.eval("FBXExportBakeComplexAnimation -q"):
             self.logger.info(
                 "Baking complex animation is disabled. Skipping frame range setting."
             )
             return
 
         first_key, last_key = all_keyframes[0], all_keyframes[-1]
-        pm.mel.eval(f"FBXExportBakeComplexStart -v {int(first_key)}")
-        pm.mel.eval(f"FBXExportBakeComplexEnd -v {int(last_key)}")
+        mel.eval(f"FBXExportBakeComplexStart -v {int(first_key)}")
+        mel.eval(f"FBXExportBakeComplexEnd -v {int(last_key)}")
 
         self.logger.info(
             f"Set animation range to start: {int(first_key)}, end: {int(last_key)}"
@@ -487,7 +490,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         for mat, typ, pth in material_paths:
             if typ == "Absolute":
                 all_relative = False
-                mat_name = mat.name() if hasattr(mat, "name") else str(mat)
+                mat_name = mat.split("|")[-1].split(":")[-1] if hasattr(mat, "name") else str(mat)
                 link = self._obj_link(mat_name, "select")
                 log_messages.append(f"Absolute path - {link} - {pth}")
 
@@ -502,7 +505,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         all_valid = True
 
         # 1. Texture Paths
-        # Use cmds to avoid PyNodes
+        # Use cmds to avoid nodes
         file_nodes = cmds.ls(type="file") or []
         for node in file_nodes:
             if not cmds.attributeQuery("fileTextureName", node=node, exists=True):
@@ -641,7 +644,7 @@ class _TaskChecksMixin(_TaskDataMixin):
             self.logger.debug("No keyframes found. Skipping framerate check.")
             return True, []
 
-        current_time_unit = pm.currentUnit(query=True, time=True)
+        current_time_unit = cmds.currentUnit(query=True, time=True)
         if current_time_unit != target_framerate:
             return False, [
                 f"Framerate mismatch: Current time unit is {current_time_unit}, expected {target_framerate}."

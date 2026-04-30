@@ -37,7 +37,6 @@ import os
 import pythontk as ptk
 
 try:
-    import pymel.core as pm
     import maya.cmds as cmds
 except ImportError:
     pass
@@ -136,7 +135,7 @@ class EventTriggers(ptk.LoggingMixin):
             Per-object results dict with ``attrs_created`` and ``events``.
         """
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True) or []
         if not objects:
             cls.logger.warning("No objects selected.")
             return {}
@@ -159,9 +158,9 @@ class EventTriggers(ptk.LoggingMixin):
         )
         Attributes.create_attributes(objects, template)
 
-        for obj in pm.ls(objects):
-            results[obj.name()] = {
-                "attrs_created": [f"{obj.name()}.{trigger_attr}"],
+        for obj in (cmds.ls(objects) or []):
+            results[obj] = {
+                "attrs_created": [f"{obj}.{trigger_attr}"],
                 "events": event_list,
                 "category": category or cls.DEFAULT_CATEGORY,
             }
@@ -209,15 +208,16 @@ class EventTriggers(ptk.LoggingMixin):
             Per-object results dict.
         """
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True) or []
         if not objects:
             cls.logger.warning("No objects selected.")
             return {}
 
         trigger_attr, _ = cls.attr_names(category)
+        obj_list = cmds.ls(objects) or []
 
-        needs_create = [o for o in pm.ls(objects) if not o.hasAttr(trigger_attr)]
-        needs_update = [o for o in pm.ls(objects) if o.hasAttr(trigger_attr)]
+        needs_create = [o for o in obj_list if not cmds.attributeQuery(trigger_attr, node=o, exists=True)]
+        needs_update = [o for o in obj_list if cmds.attributeQuery(trigger_attr, node=o, exists=True)]
 
         results = {}
         if needs_create:
@@ -225,7 +225,7 @@ class EventTriggers(ptk.LoggingMixin):
         if needs_update and events:
             cls.add_events(needs_update, events=events, category=category)
             for obj in needs_update:
-                results[obj.name()] = {
+                results[obj] = {
                     "events": cls.get_events(obj, category=category),
                     "category": category or cls.DEFAULT_CATEGORY,
                 }
@@ -252,14 +252,14 @@ class EventTriggers(ptk.LoggingMixin):
             category: Attribute prefix (default ``"event"``).
         """
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True) or []
         if not objects or not events:
             return
 
         trigger_attr, _ = cls.attr_names(category)
 
-        for obj in pm.ls(objects):
-            if not obj.hasAttr(trigger_attr):
+        for obj in (cmds.ls(objects) or []):
+            if not cmds.attributeQuery(trigger_attr, node=obj, exists=True):
                 cls.logger.warning(
                     f"{obj} has no '{trigger_attr}'. Run create() first."
                 )
@@ -267,11 +267,11 @@ class EventTriggers(ptk.LoggingMixin):
 
             # Append each new event via the centralised helper.
             for event in events:
-                Attributes.add_enum_field(str(obj), trigger_attr, event)
+                Attributes.add_enum_field(obj, trigger_attr, event)
 
             cls.logger.info(
                 f"Updated events on {obj}.{trigger_attr}: "
-                f"{Attributes.get_enum_fields(str(obj), trigger_attr)}"
+                f"{Attributes.get_enum_fields(obj, trigger_attr)}"
             )
 
         # Auto-bake manifest so it stays current.
@@ -293,10 +293,10 @@ class EventTriggers(ptk.LoggingMixin):
             List of event names (index 0 is always "None").
         """
         trigger_attr, _ = cls.attr_names(category)
-        obj = pm.PyNode(obj)
-        if not obj.hasAttr(trigger_attr):
+        obj = str(obj)
+        if not cmds.attributeQuery(trigger_attr, node=obj, exists=True):
             return []
-        return Attributes.get_enum_fields(str(obj), trigger_attr)
+        return Attributes.get_enum_fields(obj, trigger_attr)
 
     # Keep old name as alias for compatibility
     get_manifest = get_events
@@ -339,7 +339,7 @@ class EventTriggers(ptk.LoggingMixin):
             True if the key was set, False if the event was not found.
         """
         trigger_attr, _ = cls.attr_names(category)
-        obj = pm.PyNode(obj)
+        obj = str(obj)
         idx = cls.event_index(obj, event, category=category)
         if idx < 0:
             cls.logger.warning(
@@ -352,13 +352,13 @@ class EventTriggers(ptk.LoggingMixin):
         if time is not None:
             kwargs["time"] = time
         else:
-            time = pm.currentTime(query=True)
+            time = cmds.currentTime(query=True)
 
         if auto_clear and idx != 0 and time > 1:
             # Guard: only insert the "None" clear-key when the trigger
             # is at frame 2+, so we never write a key at frame 0 which
             # would conflict with the default rest pose.
-            pm.setKeyframe(
+            cmds.setKeyframe(
                 obj,
                 attribute=trigger_attr,
                 time=time - 1,
@@ -367,7 +367,7 @@ class EventTriggers(ptk.LoggingMixin):
                 ott="step",
             )
 
-        pm.setKeyframe(obj, itt="stepnext", ott="step", **kwargs)
+        cmds.setKeyframe(obj, itt="stepnext", ott="step", **kwargs)
         cls.logger.info(f"Keyed '{event}' (idx={idx}) on {obj} at frame {time}")
         return True
 
@@ -386,11 +386,11 @@ class EventTriggers(ptk.LoggingMixin):
             category: Attribute prefix (default ``"event"``).
         """
         trigger_attr, _ = cls.attr_names(category)
-        obj = pm.PyNode(obj)
+        obj = str(obj)
         kwargs = {"attribute": trigger_attr}
         if time is not None:
             kwargs["time"] = (time, time)
-        pm.cutKey(obj, **kwargs)
+        cmds.cutKey(obj, **kwargs)
 
     # ------------------------------------------------------------------
     # Key Iteration (shared primitive)
@@ -417,24 +417,24 @@ class EventTriggers(ptk.LoggingMixin):
             Only non-zero (non-"None") events are included.
         """
         trigger_attr, _ = cls.attr_names(category)
-        obj = pm.PyNode(obj)
+        obj = str(obj)
 
-        if not obj.hasAttr(trigger_attr):
+        if not cmds.attributeQuery(trigger_attr, node=obj, exists=True):
             return []
 
         # Build index -> label map (handles gapped indices).
-        pairs = Attributes.parse_enum_def(str(obj), trigger_attr)
+        pairs = Attributes.parse_enum_def(obj, trigger_attr)
         idx_to_label = {idx: label for label, idx in pairs}
 
-        key_times = pm.keyframe(
+        key_times = cmds.keyframe(
             obj, attribute=trigger_attr, query=True, timeChange=True
-        )
+        ) or []
         if not key_times:
             return []
 
         result = []
         for t in sorted(key_times):
-            val = pm.keyframe(
+            val = cmds.keyframe(
                 obj,
                 attribute=trigger_attr,
                 query=True,
@@ -481,7 +481,7 @@ class EventTriggers(ptk.LoggingMixin):
             Dict mapping object name -> baked manifest string.
         """
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True) or []
         if not objects:
             cls.logger.warning("No objects selected.")
             return {}
@@ -489,8 +489,8 @@ class EventTriggers(ptk.LoggingMixin):
         trigger_attr, manifest_attr = cls.attr_names(category)
         results = {}
 
-        for obj in pm.ls(objects):
-            if not obj.hasAttr(trigger_attr):
+        for obj in (cmds.ls(objects) or []):
+            if not cmds.attributeQuery(trigger_attr, node=obj, exists=True):
                 cls.logger.warning(f"{obj} has no '{trigger_attr}'. Skipping.")
                 continue
 
@@ -503,11 +503,11 @@ class EventTriggers(ptk.LoggingMixin):
             manifest_str = ",".join(entries) if entries else ""
 
             # Create or update the manifest string attribute
-            if not obj.hasAttr(manifest_attr):
-                pm.addAttr(obj, ln=manifest_attr, dt="string")
-            obj.attr(manifest_attr).set(manifest_str)
+            if not cmds.attributeQuery(manifest_attr, node=obj, exists=True):
+                cmds.addAttr(obj, ln=manifest_attr, dt="string")
+            cmds.setAttr(f"{obj}.{manifest_attr}", manifest_str, type="string")
 
-            results[obj.name()] = manifest_str
+            results[obj] = manifest_str
             cls.logger.info(
                 f"Baked manifest on {obj}.{manifest_attr}: "
                 f"{manifest_str or '(empty)'}"
@@ -540,7 +540,7 @@ class EventTriggers(ptk.LoggingMixin):
                 owner-scoped removal).
         """
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True) or []
         if not objects:
             return
 
@@ -551,20 +551,20 @@ class EventTriggers(ptk.LoggingMixin):
         trigger_attr, manifest_attr = cls.attr_names(category)
         cat = category or cls.DEFAULT_CATEGORY
 
-        for obj in pm.ls(objects):
-            if obj.hasAttr(trigger_attr):
-                curves = pm.listConnections(obj.attr(trigger_attr), type="animCurve")
+        for obj in (cmds.ls(objects) or []):
+            if cmds.attributeQuery(trigger_attr, node=obj, exists=True):
+                curves = cmds.listConnections(f"{obj}.{trigger_attr}", type="animCurve") or []
                 if curves:
-                    pm.delete(curves)
-                obj.deleteAttr(trigger_attr)
+                    cmds.delete(curves)
+                cmds.deleteAttr(f"{obj}.{trigger_attr}")
 
-            if obj.hasAttr(manifest_attr):
-                obj.deleteAttr(manifest_attr)
+            if cmds.attributeQuery(manifest_attr, node=obj, exists=True):
+                cmds.deleteAttr(f"{obj}.{manifest_attr}")
 
             # Clean up persisted file map from AudioClipsSlots
             file_map_attr = f"{cat}_file_map" if cat != "audio" else "audio_file_map"
-            if obj.hasAttr(file_map_attr):
-                obj.deleteAttr(file_map_attr)
+            if cmds.attributeQuery(file_map_attr, node=obj, exists=True):
+                cmds.deleteAttr(f"{obj}.{file_map_attr}")
 
             cls.logger.info(f"Removed {trigger_attr}/{manifest_attr} from {obj}")
 
@@ -582,28 +582,28 @@ class EventTriggers(ptk.LoggingMixin):
     @classmethod
     def _remove_all_categories(cls, objects) -> None:
         """Scan objects for any ``*_trigger``/``*_manifest`` pairs and remove."""
-        for obj in pm.ls(objects):
-            all_attrs = pm.listAttr(obj, userDefined=True) or []
+        for obj in (cmds.ls(objects) or []):
+            all_attrs = cmds.listAttr(obj, userDefined=True) or []
             triggers = [a for a in all_attrs if a.endswith("_trigger")]
             for trigger_attr in triggers:
                 cat = trigger_attr.rsplit("_trigger", 1)[0]
                 manifest_attr = f"{cat}_manifest"
-                if obj.hasAttr(trigger_attr):
-                    curves = pm.listConnections(
-                        obj.attr(trigger_attr), type="animCurve"
-                    )
+                if cmds.attributeQuery(trigger_attr, node=obj, exists=True):
+                    curves = cmds.listConnections(
+                        f"{obj}.{trigger_attr}", type="animCurve"
+                    ) or []
                     if curves:
-                        pm.delete(curves)
-                    obj.deleteAttr(trigger_attr)
-                if obj.hasAttr(manifest_attr):
-                    obj.deleteAttr(manifest_attr)
+                        cmds.delete(curves)
+                    cmds.deleteAttr(f"{obj}.{trigger_attr}")
+                if cmds.attributeQuery(manifest_attr, node=obj, exists=True):
+                    cmds.deleteAttr(f"{obj}.{manifest_attr}")
 
                 # Clean up persisted file map
                 file_map_attr = (
                     f"{cat}_file_map" if cat != "audio" else "audio_file_map"
                 )
-                if obj.hasAttr(file_map_attr):
-                    obj.deleteAttr(file_map_attr)
+                if cmds.attributeQuery(file_map_attr, node=obj, exists=True):
+                    cmds.deleteAttr(f"{obj}.{file_map_attr}")
 
                 # Reconcile: remove audio set + preview/synced nodes,
                 # then sync compositor DG nodes.
@@ -640,7 +640,7 @@ class EventTriggers(ptk.LoggingMixin):
 
         Already-populated transforms (meshes, joints, etc.) are skipped.
         """
-        for obj in pm.ls(objects, type="transform"):
+        for obj in (cmds.ls(objects, type="transform") or []):
             shapes = cmds.listRelatives(str(obj), shapes=True, fullPath=True) or []
             if shapes:
                 continue  # already has shape children — safe

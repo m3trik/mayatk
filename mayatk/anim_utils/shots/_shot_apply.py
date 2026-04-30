@@ -11,17 +11,17 @@ commit shot transformations without reaching up into the sequencer
 package.  Downstream consumers (sequencer orchestrator, dry-run tools,
 undo stacks) call :func:`apply` instead of re-implementing Maya writes.
 
-Maya-soft: mirrors :mod:`_shots` in using a ``try: import pymel``
-guard.  When Maya is unavailable only in-memory shot bounds are
-committed, matching the graceful-degradation contract of the rest of
-the shot model.
+Maya-soft: mirrors :mod:`_shots` in guarding the ``maya.cmds`` import.
+When Maya is unavailable only in-memory shot bounds are committed,
+matching the graceful-degradation contract of the rest of the shot
+model.
 """
 from typing import Iterable
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError as error:
-    pm = None
+    cmds = None
     print(__file__, error)
 
 from mayatk.anim_utils.shots._shots import ShotStore
@@ -124,8 +124,7 @@ def apply(store: ShotStore, plan: MovePlan) -> None:
     if not plan.sequence:
         return
 
-    if pm is not None:
-        import maya.cmds as cmds
+    if cmds is not None:
         from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
         with audio_utils.batch() as b:

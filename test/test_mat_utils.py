@@ -13,7 +13,7 @@ Tests for MatUtils class functionality including:
 """
 import os
 import unittest
-import pymel.core as pm
+import maya.cmds as cmds
 import mayatk as mtk
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils._node_utils import NodeUtils
@@ -28,23 +28,23 @@ class TestMatUtils(MayaTkTestCase):
         """Set up test scene with geometries and materials."""
         super().setUp()
         # Create test geometries
-        self.sphere = pm.polySphere(name="test_sphere")[0]
-        self.cube = pm.polyCube(name="test_cube")[0]
+        self.sphere = cmds.polySphere(name="test_sphere")[0]
+        self.cube = cmds.polyCube(name="test_cube")[0]
 
         # Create test materials
-        self.lambert1 = pm.shadingNode("lambert", asShader=True, name="test_lambert1")
-        self.lambert2 = pm.shadingNode("lambert", asShader=True, name="test_lambert2")
+        self.lambert1 = cmds.shadingNode("lambert", asShader=True, name="test_lambert1")
+        self.lambert2 = cmds.shadingNode("lambert", asShader=True, name="test_lambert2")
 
         # Create shading groups
-        self.sg1 = pm.sets(
+        self.sg1 = cmds.sets(
             renderable=True, noSurfaceShader=True, empty=True, name="test_sg1"
         )
-        self.lambert1.outColor.connect(self.sg1.surfaceShader)
+        cmds.connectAttr(f"{self.lambert1}.outColor", f"{self.sg1}.surfaceShader")
 
-        self.sg2 = pm.sets(
+        self.sg2 = cmds.sets(
             renderable=True, noSurfaceShader=True, empty=True, name="test_sg2"
         )
-        self.lambert2.outColor.connect(self.sg2.surfaceShader)
+        cmds.connectAttr(f"{self.lambert2}.outColor", f"{self.sg2}.surfaceShader")
 
     def tearDown(self):
         """Clean up test materials and geometry."""
@@ -56,15 +56,15 @@ class TestMatUtils(MayaTkTestCase):
 
     def test_get_mats_from_object(self):
         """Test getting materials assigned to an object."""
-        pm.sets(self.sg1, forceElement=self.sphere)
+        cmds.sets(self.sphere, edit=True, forceElement=self.sg1)
         mats = MatUtils.get_mats(self.sphere)
         self.assertIn(self.lambert1, mats)
 
     def test_get_mats_from_face(self):
         """Test getting materials from a face component."""
         # Assign to face explicitly to ensure component-level assignment is tested
-        pm.sets(self.sg1, forceElement=self.sphere.f[0])
-        face = self.sphere.f[0]
+        cmds.sets(f"{self.sphere}.f[0]", edit=True, forceElement=self.sg1)
+        face = f"{self.sphere}.f[0]"
         face_mats = MatUtils.get_mats(face)
         self.assertIn(self.lambert1, face_mats)
 
@@ -73,8 +73,8 @@ class TestMatUtils(MayaTkTestCase):
         # Cube has initialShadingGroup by default
         mats = MatUtils.get_mats(self.cube)
         self.assertTrue(len(mats) > 0)
-        # Check that we got a valid material node
-        self.assertTrue(isinstance(mats[0], pm.nt.ShadingDependNode))
+        # Production returns strings; verify it is a shader-graph node.
+        self.assertTrue(cmds.objExists(mats[0]))
 
     def test_get_scene_mats(self):
         """Test getting all materials in the scene."""
@@ -102,21 +102,21 @@ class TestMatUtils(MayaTkTestCase):
     def test_create_mat_random(self):
         """Test creating a random material type."""
         random_mat = MatUtils.create_mat(mat_type="random", name="random_mat")
-        self.assertTrue(pm.objExists(random_mat))
+        self.assertTrue(cmds.objExists(random_mat))
         # Handle both string and PyNode return types
-        mat_name = random_mat.name() if hasattr(random_mat, "name") else random_mat
+        mat_name = random_mat if hasattr(random_mat, "name") else random_mat
         self.assertTrue(mat_name.startswith("random_mat"))
 
     def test_create_mat_specific(self):
         """Test creating specific material types."""
         blinn = MatUtils.create_mat("blinn", name="test_blinn")
-        self.assertEqual(pm.nodeType(blinn), "blinn")
+        self.assertEqual(cmds.nodeType(blinn), "blinn")
 
         # Test standardSurface if available (Maya 2020+)
         try:
             std = MatUtils.create_mat("standardSurface", name="test_std")
-            self.assertEqual(pm.nodeType(std), "standardSurface")
-        except pm.MayaNodeError:
+            self.assertEqual(cmds.nodeType(std), "standardSurface")
+        except RuntimeError:
             pass  # standardSurface might not be available in older Maya versions
 
     def test_assign_mat(self):
@@ -128,9 +128,9 @@ class TestMatUtils(MayaTkTestCase):
 
         # Assign new material (should be created)
         MatUtils.assign_mat(self.cube, "new_created_mat")
-        self.assertTrue(pm.objExists("new_created_mat"))
+        self.assertTrue(cmds.objExists("new_created_mat"))
         mats = MatUtils.get_mats(self.cube)
-        self.assertEqual(mats[0].name(), "new_created_mat")
+        self.assertEqual(mats[0], "new_created_mat")
 
     def test_is_connected(self):
         """Test checking if material is connected to shading group."""
@@ -139,14 +139,14 @@ class TestMatUtils(MayaTkTestCase):
         self.assertFalse(MatUtils.is_connected(self.lambert1))
 
         # Create unconnected material
-        unconnected = pm.shadingNode("blinn", asShader=True, name="unconnected_mat")
+        unconnected = cmds.shadingNode("blinn", asShader=True, name="unconnected_mat")
         self.assertTrue(MatUtils.is_connected(unconnected))
 
         # Test delete option
         self.assertTrue(
             MatUtils.is_connected(unconnected, delete=True)
         )  # Returns True if deleted
-        self.assertFalse(pm.objExists("unconnected_mat"))
+        self.assertFalse(cmds.objExists("unconnected_mat"))
 
     # -------------------------------------------------------------------------
     # Texture & File Node Tests
@@ -154,39 +154,39 @@ class TestMatUtils(MayaTkTestCase):
 
     def test_get_connected_shaders(self):
         """Test retrieving shaders connected to file nodes."""
-        file_node = pm.shadingNode("file", asTexture=True, name="test_file")
-        pm.connectAttr(file_node.outColor, self.lambert1.color, force=True)
+        file_node = cmds.shadingNode("file", asTexture=True, name="test_file")
+        cmds.connectAttr(f"{file_node}.outColor", f"{self.lambert1}.color", force=True)
 
         shaders = MatUtils.get_connected_shaders(file_node)
         self.assertIn(self.lambert1, shaders)
 
     def test_get_file_nodes(self):
         """Test retrieving file nodes from materials."""
-        file_node = pm.shadingNode("file", asTexture=True, name="test_file_node")
-        file_node.fileTextureName.set("c:/test/texture.jpg")
-        pm.connectAttr(file_node.outColor, self.lambert1.color, force=True)
+        file_node = cmds.shadingNode("file", asTexture=True, name="test_file_node")
+        cmds.setAttr(f"{file_node}.fileTextureName", "c:/test/texture.jpg", type="string")
+        cmds.connectAttr(f"{file_node}.outColor", f"{self.lambert1}.color", force=True)
 
         # Test basic retrieval
-        nodes = MatUtils.get_file_nodes(materials=[self.lambert1.name()])
+        nodes = MatUtils.get_file_nodes(materials=[self.lambert1])
         # Default return type is 'fileNode' (object)
         self.assertIn(file_node, nodes)
 
         # Test return types
         info = MatUtils.get_file_nodes(
-            materials=[self.lambert1.name()], return_type="shaderName|fileNodeName"
+            materials=[self.lambert1], return_type="shaderName|fileNodeName"
         )
         self.assertTrue(len(info) > 0)
-        self.assertEqual(info[0], (self.lambert1.name(), file_node.name()))
+        self.assertEqual(info[0], (self.lambert1, file_node))
 
     def test_collect_material_paths(self):
         """Test collecting file paths from materials."""
-        file_node = pm.shadingNode("file", asTexture=True, name="path_test_file")
+        file_node = cmds.shadingNode("file", asTexture=True, name="path_test_file")
         test_path = "c:/textures/test.jpg"
-        file_node.fileTextureName.set(test_path)
-        pm.connectAttr(file_node.outColor, self.lambert1.color, force=True)
+        cmds.setAttr(f"{file_node}.fileTextureName", test_path, type="string")
+        cmds.connectAttr(f"{file_node}.outColor", f"{self.lambert1}.color", force=True)
 
         # Test collection
-        paths = MatUtils.collect_material_paths(materials=[self.lambert1.name()])
+        paths = MatUtils.collect_material_paths(materials=[self.lambert1])
         # Note: Paths might be normalized/resolved, so check for substring or basename
         # collect_material_paths returns a list of tuples
         self.assertTrue(any("test.jpg" in p[0] for p in paths))
@@ -197,46 +197,49 @@ class TestMatUtils(MayaTkTestCase):
 
     def test_find_by_mat_id(self):
         """Test finding objects by material assignment."""
-        pm.sets(self.sg1, forceElement=self.sphere)
-        pm.sets(self.sg2, forceElement=self.cube)
+        cmds.sets(self.sphere, edit=True, forceElement=self.sg1)
+        cmds.sets(self.cube, edit=True, forceElement=self.sg2)
 
         # Find sphere by lambert1
-        found = MatUtils.find_by_mat_id(self.lambert1.name())
+        found = MatUtils.find_by_mat_id(self.lambert1)
         # Result might be faces or transforms depending on assignment
         # Since we assigned to whole object, it might return the transform or shape
         transforms = [NodeUtils.get_transform_node(x) for x in found]
         self.assertIn(self.sphere, transforms)
 
         # Test shell=True (should return transforms)
-        found_shell = MatUtils.find_by_mat_id(self.lambert1.name(), shell=True)
-        self.assertIn(self.sphere, found_shell)
+        found_shell = MatUtils.find_by_mat_id(self.lambert1, shell=True)
+        # Normalize to short leaf names: production may return long DAG paths.
+        leaves = [str(x).split("|")[-1] for x in found_shell]
+        self.assertIn(str(self.sphere).split("|")[-1], leaves)
 
         # Test face assignment
-        pm.sets(self.sg2, forceElement=self.sphere.f[0])
+        cmds.sets(f"{self.sphere}.f[0]", edit=True, forceElement=self.sg2)
         found_faces = MatUtils.find_by_mat_id(
-            self.lambert2.name(), objects=[self.sphere.name()], shell=False
+            self.lambert2, objects=[self.sphere], shell=False
         )
         self.assertTrue(len(found_faces) > 0)
-        self.assertTrue(isinstance(found_faces[0], pm.MeshFace))
+        # Production returns strings like "node.f[N]".
+        self.assertIn(".f[", str(found_faces[0]))
 
     def test_module_exposure(self):
         """Test that MatUtils methods are exposed at the module level."""
         # Test assign_mat exposure
         mtk.assign_mat(self.cube, "exposed_mat")
-        self.assertTrue(pm.objExists("exposed_mat"))
+        self.assertTrue(cmds.objExists("exposed_mat"))
 
         # Test create_mat exposure
         mat = mtk.create_mat("blinn", name="exposed_blinn")
-        self.assertTrue(pm.objExists("exposed_blinn"))
+        self.assertTrue(cmds.objExists("exposed_blinn"))
 
         # Test get_mats exposure
         mats = mtk.get_mats(self.cube)
         self.assertTrue(mats)
-        self.assertEqual(mats[0].name(), "exposed_mat")
+        self.assertEqual(mats[0], "exposed_mat")
 
         # Test find_by_mat_id exposure
         # Ensure we pass the name string, as find_by_mat_id expects a string name or we need to verify PyNode support
-        found = mtk.find_by_mat_id(mats[0].name(), [self.cube])
+        found = mtk.find_by_mat_id(mats[0], [self.cube])
         self.assertTrue(found)
 
     def test_assign_mat_with_pynode(self):
@@ -400,7 +403,7 @@ class TestMatUtils(MayaTkTestCase):
 
     def test_get_file_nodes_batch_type_filter(self):
         """Verify get_file_nodes correctly filters file nodes using batch
-        cmds.ls(type='file') instead of per-node cmds.nodeType() calls.
+        cmds.ls(type='file') instead of per-node cmds.nodeType(cmds) calls.
 
         Bug: Per-node nodeType calls were O(N) in the shader history size
         and added massive overhead in heavy scenes. Replaced with batch

@@ -11,7 +11,8 @@ from typing import List, Dict, Optional, Set, Any, Tuple, Callable
 import math
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
+    import maya.api.OpenMaya as om
 except ImportError as error:  # pragma: no cover - Maya runtime specific
     print(__file__, error)
 import pythontk as ptk
@@ -56,7 +57,7 @@ class SceneDiagnostics:
         notes: list[str] = []
 
         def _cm_prefs(*args, **kwargs):
-            return pm.colorManagementPrefs(*args, **kwargs)
+            return cmds.colorManagementPrefs(*args, **kwargs)
 
         def _try_cm_query(flag: str):
             try:
@@ -217,7 +218,7 @@ class SceneDiagnostics:
 
         if chosen is None:
             if verbose:
-                pm.warning("OCIO repair: no valid config found; no changes made.")
+                cmds.warning("OCIO repair: no valid config found; no changes made.")
             return {
                 "changed": False,
                 "previous_config": str(previous_config) if previous_config else None,
@@ -364,7 +365,6 @@ class SceneDiagnostics:
             - raw_space (str): Raw fallback used
             - globals_fixed (bool): Whether global CM settings were fixed
         """
-        import maya.cmds as cmds
 
         result: Dict[str, Any] = {
             "fixed_count": 0,
@@ -381,12 +381,12 @@ class SceneDiagnostics:
         available_spaces = cls._get_available_color_spaces()
         if not available_spaces:
             if verbose:
-                pm.warning("No valid color spaces available in current OCIO config.")
+                cmds.warning("No valid color spaces available in current OCIO config.")
             return result
 
         available_set = set(available_spaces)
         if verbose:
-            pm.displayInfo(
+            print(
                 f"Available spaces ({len(available_spaces)} total): "
                 f"{available_spaces[:5]}..."
             )
@@ -409,12 +409,12 @@ class SceneDiagnostics:
                     elif cmds.objExists(n):
                         nodes_to_fix.add(n)
                 if verbose:
-                    pm.displayInfo(
+                    print(
                         f"missingColorSpaceNodes returned {len(missing)} node(s)"
                     )
         except Exception as exc:
             if verbose:
-                pm.warning(f"missingColorSpaceNodes query failed: {exc}")
+                cmds.warning(f"missingColorSpaceNodes query failed: {exc}")
 
         # Method 2: Scan all file nodes for colour spaces not in the config.
         if scan_all or force_update:
@@ -428,16 +428,16 @@ class SceneDiagnostics:
                             scan_found += 1
             except Exception as exc:
                 if verbose:
-                    pm.warning(f"File-node scan failed: {exc}")
+                    cmds.warning(f"File-node scan failed: {exc}")
             if verbose and scan_found:
-                pm.displayInfo(
+                print(
                     f"Scan found {scan_found} additional node(s) "
                     f"(force_update={force_update})"
                 )
 
         if not nodes_to_fix:
             if verbose:
-                pm.displayInfo("No nodes with missing color spaces found.")
+                print("No nodes with missing color spaces found.")
             return result
 
         # ------------------------------------------------------------------
@@ -451,23 +451,23 @@ class SceneDiagnostics:
         result["raw_space"] = raw_space
 
         if color_space not in available_set:
-            pm.warning(
+            cmds.warning(
                 f"Color space fallback '{color_space}' not in available spaces! "
                 f"Available: {available_spaces[:10]}..."
             )
         if raw_space not in available_set:
-            pm.warning(
+            cmds.warning(
                 f"Raw space fallback '{raw_space}' not in available spaces! "
                 f"Available: {available_spaces[:10]}..."
             )
 
         if verbose:
             tag = "(dry-run) " if dry_run else ""
-            pm.displayInfo(
+            print(
                 f"{tag}Found {len(nodes_to_fix)} node(s) with invalid color spaces"
             )
-            pm.displayInfo(f"{tag}Color space fallback: {color_space}")
-            pm.displayInfo(f"{tag}Raw/Data space fallback: {raw_space}")
+            print(f"{tag}Color space fallback: {color_space}")
+            print(f"{tag}Raw/Data space fallback: {raw_space}")
 
         # ------------------------------------------------------------------
         # 4. Pre-compute the target colour space for every node (read-only).
@@ -529,7 +529,7 @@ class SceneDiagnostics:
 
                 if target not in available_set:
                     if verbose:
-                        pm.warning(
+                        cmds.warning(
                             f"Cannot fix '{node_name}': target '{target}' invalid"
                         )
                     continue
@@ -537,11 +537,11 @@ class SceneDiagnostics:
                 plan.append((node_name, current_space, target, detection_source))
             except Exception as exc:
                 if verbose:
-                    pm.warning(f"Plan failed for '{node_name}': {exc}")
+                    cmds.warning(f"Plan failed for '{node_name}': {exc}")
 
         if not plan:
             if verbose:
-                pm.displayInfo("No actionable nodes after planning.")
+                print("No actionable nodes after planning.")
             return result
 
         # ------------------------------------------------------------------
@@ -557,12 +557,12 @@ class SceneDiagnostics:
                 if cm_was_enabled:
                     cmds.colorManagementPrefs(edit=True, cmEnabled=False)
                     if verbose:
-                        pm.displayInfo(
+                        print(
                             "Temporarily disabled color management for safe edits"
                         )
             except Exception as exc:
                 if verbose:
-                    pm.warning(f"Could not disable CM: {exc}")
+                    cmds.warning(f"Could not disable CM: {exc}")
 
         # ------------------------------------------------------------------
         # 6. Apply colour-space changes (CM is OFF — no OCIO crash risk).
@@ -596,12 +596,12 @@ class SceneDiagnostics:
 
                 if verbose:
                     tag = "Would fix" if dry_run else "Fixed"
-                    pm.displayInfo(
+                    print(
                         f"{tag} '{node_name}': '{current_space}' -> '{target_space}'"
                         f" [{change.get('source', '?')}]"
                     )
             except Exception as exc:
-                pm.warning(f"Failed to set colorSpace on '{node_name}': {exc}")
+                cmds.warning(f"Failed to set colorSpace on '{node_name}': {exc}")
 
         # ------------------------------------------------------------------
         # 7. RE-ENABLE colour management & fix globals (deferred so the DG
@@ -629,7 +629,7 @@ class SceneDiagnostics:
             except Exception as exc:
                 # If evalDeferred itself fails, try a direct re-enable as last resort.
                 if verbose:
-                    pm.warning(f"evalDeferred failed ({exc}); re-enabling CM directly")
+                    cmds.warning(f"evalDeferred failed ({exc}); re-enabling CM directly")
                 try:
                     cmds.colorManagementPrefs(edit=True, cmEnabled=True)
                 except Exception:
@@ -639,35 +639,11 @@ class SceneDiagnostics:
 
         if verbose:
             tag = "Would fix" if dry_run else "Fixed"
-            pm.displayInfo(
+            print(
                 f"{tag} {result['fixed_count']} node(s) with missing color spaces."
             )
 
         return result
-
-    @classmethod
-    def _detect_color_space_for_node(
-        cls,
-        node,
-        color_space: str,
-        raw_space: str,
-    ) -> str:
-        """Detect appropriate color space based on texture filename (PyMEL)."""
-        if not node.hasAttr("fileTextureName"):
-            return color_space
-
-        file_path = node.fileTextureName.get() or ""
-        if not file_path:
-            return color_space
-
-        try:
-            map_type = ptk.TextureMapFactory.resolve_map_type(file_path)
-            if map_type:
-                return color_space if map_type in cls.COLOR_MAP_TYPES else raw_space
-        except Exception:
-            pass
-
-        return color_space
 
     @staticmethod
     def _unescape_fbx_ascii(name: str) -> str:
@@ -694,7 +670,7 @@ class SceneDiagnostics:
         """Detect appropriate color space based on texture filename (maya.cmds).
 
         Pure ``maya.cmds`` variant used during the crash-safe fix path where
-        PyMEL must be avoided.
+        Heavy object wrappers must be avoided.
 
         Resolution order:
         1. ``fileTextureName`` attribute (the actual file path).
@@ -703,7 +679,6 @@ class SceneDiagnostics:
            names embed the original filename, e.g.
            ``pasted__CargoWall_CCPanelsStickers_NORMFBXASC046jpg``).
         """
-        import maya.cmds as cmds
 
         candidates: list[str] = []
 
@@ -845,14 +820,13 @@ class SceneDiagnostics:
 
         Returns True if any changes were made.
         """
-        import maya.cmds as cmds
 
         changed = False
         gn = "defaultColorMgtGlobals"
 
         if not cmds.objExists(gn):
             if verbose:
-                pm.warning(f"CM globals node '{gn}' not found")
+                cmds.warning(f"CM globals node '{gn}' not found")
             return False
 
         # 1. cmEnabled
@@ -861,10 +835,10 @@ class SceneDiagnostics:
                 cmds.colorManagementPrefs(edit=True, cmEnabled=True)
                 changed = True
                 if verbose:
-                    pm.displayInfo("Enabled color management")
+                    print("Enabled color management")
         except Exception as exc:
             if verbose:
-                pm.warning(f"Cannot enable CM: {exc}")
+                cmds.warning(f"Cannot enable CM: {exc}")
             return changed
 
         # 2. configFileEnabled
@@ -873,10 +847,10 @@ class SceneDiagnostics:
                 cmds.setAttr(f"{gn}.configFileEnabled", True)
                 changed = True
                 if verbose:
-                    pm.displayInfo(f"Set {gn}.configFileEnabled = True")
+                    print(f"Set {gn}.configFileEnabled = True")
         except Exception as exc:
             if verbose:
-                pm.warning(f"Cannot set configFileEnabled: {exc}")
+                cmds.warning(f"Cannot set configFileEnabled: {exc}")
             return changed
 
         # 3. Sync config path with prefs
@@ -887,17 +861,16 @@ class SceneDiagnostics:
                 cmds.setAttr(f"{gn}.configFilePath", prefs, type="string")
                 changed = True
                 if verbose:
-                    pm.displayInfo(f"Updated {gn}.configFilePath to: {prefs}")
+                    print(f"Updated {gn}.configFilePath to: {prefs}")
         except Exception as exc:
             if verbose:
-                pm.warning(f"Cannot update configFilePath: {exc}")
+                cmds.warning(f"Cannot update configFilePath: {exc}")
 
         return changed
 
     @staticmethod
     def _get_available_color_spaces() -> List[str]:
         """Get a list of all available input color spaces."""
-        import maya.cmds as cmds
 
         try:
             return cmds.colorManagementPrefs(query=True, inputSpaceNames=True) or []
@@ -916,7 +889,7 @@ class SceneDiagnostics:
         """
         # Delete unknown nodes
         try:
-            unknown_nodes = pm.ls(type="unknown")
+            unknown_nodes = cmds.ls(type="unknown")
             if unknown_nodes:
                 if verbose:
                     action = "Would delete" if dry_run else "Deleting"
@@ -925,13 +898,13 @@ class SceneDiagnostics:
                         print(f"  - {node}")
 
                 if not dry_run:
-                    pm.delete(unknown_nodes)
+                    cmds.delete(unknown_nodes)
         except Exception as e:
-            pm.warning(f"Error deleting unknown nodes: {e}")
+            cmds.warning(f"Error deleting unknown nodes: {e}")
 
         # Remove unknown plugins
         try:
-            unknown_plugins = pm.unknownPlugin(query=True, list=True)
+            unknown_plugins = cmds.unknownPlugin(query=True, list=True)
             if unknown_plugins:
                 if verbose:
                     action = "Would remove" if dry_run else "Removing"
@@ -942,14 +915,14 @@ class SceneDiagnostics:
                 if not dry_run:
                     for plugin in unknown_plugins:
                         try:
-                            pm.unknownPlugin(plugin, remove=True)
+                            cmds.unknownPlugin(plugin, remove=True)
                         except Exception as e:
                             if verbose:
-                                pm.warning(
+                                cmds.warning(
                                     f"Failed to remove unknown plugin '{plugin}': {e}"
                                 )
         except Exception as e:
-            pm.warning(f"Error querying unknown plugins: {e}")
+            cmds.warning(f"Error querying unknown plugins: {e}")
 
         if (
             verbose
@@ -969,7 +942,7 @@ class SceneDiagnostics:
         nodes_to_delete = []
 
         # Common XGen expression that causes issues when plugin is missing
-        if pm.objExists("xgmRefreshPreview"):
+        if cmds.objExists("xgmRefreshPreview"):
             nodes_to_delete.append("xgmRefreshPreview")
 
         if not nodes_to_delete:
@@ -979,14 +952,14 @@ class SceneDiagnostics:
 
         count = len(nodes_to_delete)
         try:
-            pm.delete(nodes_to_delete)
+            cmds.delete(nodes_to_delete)
             if not quiet:
                 print(
                     f"Deleted {count} XGen expression nodes: {', '.join(nodes_to_delete)}"
                 )
         except Exception as e:
             if not quiet:
-                pm.warning(f"Failed to delete XGen nodes: {e}")
+                cmds.warning(f"Failed to delete XGen nodes: {e}")
             return 0
 
         return count
@@ -1271,7 +1244,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
             if progress_callback:
                 # Map 20-100% to shape analysis
                 pct = 20 + int((i / total_shapes) * 80)
-                progress_callback(pct, 100, f"Analyzing {shape.name()}")
+                progress_callback(pct, 100, f"Analyzing {shape}")
 
             mesh_rec = self._analyze_mesh(shape)
             mat_rec = self._analyze_material(shape)
@@ -2078,74 +2051,100 @@ class SceneAnalyzer(ptk.LoggingMixin):
 
     def _resolve_targets(
         self, objects: Optional[List[Any]]
-    ) -> Dict[pm.nt.Mesh, List[str]]:
-        """Resolves inputs to a map of {MeshShape: [TransformNames]}."""
+    ) -> Dict[str, List[str]]:
+        """Resolves inputs to a map of {mesh_shape_path: [transform_paths]}."""
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True, long=True) or []
             if not objects:
                 return {}
 
-        shape_map = {}  # shape -> list of transform names
+        shape_map: Dict[str, List[str]] = {}  # shape full path -> list of transform paths
 
-        def add_shape(shape, transform_node):
-            if shape.intermediateObject.get():
-                return
+        def _shape_of(transform: str) -> Optional[str]:
+            shapes = (
+                cmds.listRelatives(
+                    transform, shapes=True, fullPath=True, noIntermediate=True
+                )
+                or []
+            )
+            return shapes[0] if shapes else None
+
+        def _parent_of(node: str) -> Optional[str]:
+            parents = cmds.listRelatives(node, parent=True, fullPath=True) or []
+            return parents[0] if parents else None
+
+        def add_shape(shape: str, transform: str):
+            try:
+                if cmds.getAttr(f"{shape}.intermediateObject"):
+                    return
+            except Exception:
+                pass
             if shape not in shape_map:
                 shape_map[shape] = []
-            shape_map[shape].append(transform_node.name())
+            shape_map[shape].append(transform)
 
+        # Normalize inputs to long-name strings
+        normalized: List[str] = []
         for obj in objects:
-            if isinstance(obj, str):
-                try:
-                    obj = pm.PyNode(obj)
-                except pm.MayaNodeError:
-                    continue
+            name = str(obj)
+            if not cmds.objExists(name):
+                continue
+            longs = cmds.ls(name, long=True) or []
+            if longs:
+                normalized.extend(longs)
+            else:
+                normalized.append(name)
 
-            if isinstance(obj, pm.nt.Transform):
-                # Get shapes
-                s = obj.getShape()
-                if s and isinstance(s, pm.nt.Mesh):
+        for obj in normalized:
+            try:
+                node_type = cmds.nodeType(obj)
+            except Exception:
+                continue
+
+            if node_type == "transform":
+                s = _shape_of(obj)
+                if s and cmds.objectType(s) == "mesh":
                     add_shape(s, obj)
-
-                # Also check children if it's a group?
-                # The prompt says "Accept: transforms, groups, sets".
-                # Let's do a recursive check or listRelatives.
-                # Note: listRelatives returns transforms or shapes depending on flags.
-                # We want all descendant meshes.
-                # But we need their transforms to count instances correctly.
-                # listRelatives(allDescendents=True, type="mesh") returns shapes.
-                # From shape, we can get parent transform.
-
-                # If the user selected a group, we want all meshes inside.
-                # If the user selected a mesh transform, we handled it above.
-                # If it's a group (transform with no shape or non-mesh shape), recurse.
-                if not s:
-                    descendants = obj.listRelatives(allDescendents=True, type="mesh")
+                else:
+                    # Group: collect descendant mesh shapes
+                    descendants = (
+                        cmds.listRelatives(
+                            obj, allDescendents=True, type="mesh", fullPath=True
+                        )
+                        or []
+                    )
                     for ds in descendants:
-                        parent = ds.getParent()
+                        parent = _parent_of(ds)
                         if parent:
                             add_shape(ds, parent)
 
-            elif isinstance(obj, pm.nt.Mesh):
-                parent = obj.getParent()
+            elif node_type == "mesh":
+                parent = _parent_of(obj)
                 if parent:
                     add_shape(obj, parent)
-            elif isinstance(obj, pm.nt.ObjectSet):
-                # Handle sets
-                members = obj.flatten()
-                for m in members:
-                    if isinstance(m, pm.nt.Transform):
-                        s = m.getShape()
-                        if s and isinstance(s, pm.nt.Mesh):
-                            add_shape(s, m)
-                    elif isinstance(m, pm.nt.Mesh):
-                        parent = m.getParent()
+
+            elif node_type == "objectSet":
+                members = cmds.sets(obj, q=True) or []
+                # Flatten nested sets / components down to leaf nodes
+                flat = cmds.ls(members, long=True, flatten=True) or []
+                for m in flat:
+                    # Strip component suffix if present
+                    node = m.split(".")[0]
+                    if not cmds.objExists(node):
+                        continue
+                    nt = cmds.nodeType(node)
+                    if nt == "transform":
+                        s = _shape_of(node)
+                        if s and cmds.objectType(s) == "mesh":
+                            add_shape(s, node)
+                    elif nt == "mesh":
+                        parent = _parent_of(node)
                         if parent:
-                            add_shape(m, parent)
+                            add_shape(node, parent)
 
         return shape_map
 
-    def _build_material_caches(self, shape_map: Dict[pm.nt.Mesh, List[str]]):
+    def _build_material_caches(self, shape_map: Dict[str, List[str]]):
         """
         Builds shared caches for material lookups to avoid per-object graph walks.
         Inverts the relationship: Iterates Shading Engines -> Members.
@@ -2155,27 +2154,27 @@ class SceneAnalyzer(ptk.LoggingMixin):
         self._material_flags.clear()
         self._global_texture_usage.clear()
 
-        shading_engines = pm.ls(type="shadingEngine")
+        shading_engines = cmds.ls(type="shadingEngine") or []
 
+        # target_shapes uses full DAG paths; build a leaf-name lookup for matching SE members
         target_shapes = set(shape_map.keys())
-        target_names = {s.name() for s in target_shapes}
+        target_leaf_to_full = {s.split("|")[-1]: s for s in target_shapes}
 
         for se in shading_engines:
-            # Get members
-            # pm.sets(se, q=True) returns list of objects/components
-            members = pm.sets(se, q=True)
+            members = cmds.sets(se, q=True) or []
             if not members:
                 continue
 
-            # Resolve members to shapes
-            # Members can be transforms, shapes, or faces (mesh.f[0:10])
-            se_name = se.name()
+            se_name = se
 
             # Find the surface shader
-            surface_shader = se.surfaceShader.inputs()
-            mat_name = (
-                surface_shader[0].name() if surface_shader else "lambert1"
-            )  # Default fallback
+            surface_shader = (
+                cmds.listConnections(
+                    f"{se}.surfaceShader", source=True, destination=False
+                )
+                or []
+            )
+            mat_name = surface_shader[0] if surface_shader else "lambert1"
             self._material_map[se_name] = mat_name
 
             # Cache material flags if not done
@@ -2184,57 +2183,60 @@ class SceneAnalyzer(ptk.LoggingMixin):
                     surface_shader[0] if surface_shader else None
                 )
 
-            # Get textures for this material
             mat_textures = self._material_flags[mat_name].get("textures", [])
 
-            # Track unique objects using this SE
             se_objects = set()
             se_instance_count = 0
 
-            for member in members:
-                # Handle component assignments (mesh.f[*])
-                node = member.node() if hasattr(member, "node") else member
+            # Flatten components / nested sets to leaf nodes
+            flat_members = cmds.ls(members, long=True, flatten=True) or []
 
-                # If it's a transform, get shape
-                if isinstance(node, pm.nt.Transform):
-                    shape = node.getShape()
-                    if shape:
-                        node = shape
-
-                # If node is not a mesh (e.g. nurbs), skip if we only care about meshes
-                if not isinstance(node, pm.nt.Mesh):
+            for member in flat_members:
+                # Strip component suffix
+                node = member.split(".")[0]
+                if not cmds.objExists(node):
                     continue
 
-                node_name = node.name()
-                se_objects.add(node_name)
+                node_type = cmds.nodeType(node)
+                if node_type == "transform":
+                    shapes = (
+                        cmds.listRelatives(
+                            node, shapes=True, fullPath=True, noIntermediate=True
+                        )
+                        or []
+                    )
+                    if shapes:
+                        node = shapes[0]
+                        node_type = cmds.nodeType(node)
 
-                # Count instances if this is one of our target shapes
-                # If it's not in our target list, we might still want to count it for global usage?
-                # Yes, global usage should reflect the whole scene if possible, or at least the scope.
-                # But shape_map only contains the scope.
-                # For "Used by X meshes", we probably want the scope.
+                if node_type != "mesh":
+                    continue
 
-                # Find the shape object to look up instances
-                # We can't easily look up by name in shape_map keys (objects).
-                # But we can check if node is in target_shapes.
-                # Since 'node' is a PyNode, equality check works.
+                # Resolve to canonical full path so equality works against shape_map keys
+                full_paths = cmds.ls(node, long=True) or []
+                if not full_paths:
+                    continue
+                node_full = full_paths[0]
+                node_leaf = node_full.split("|")[-1]
+                se_objects.add(node_full)
 
                 instances = 1
-                if node in shape_map:
-                    instances = len(shape_map[node])
-                else:
-                    # Fallback for non-scope objects
-                    p = node.getParent()
-                    if p:
-                        # This is rough, assumes 1 if not in scope map
-                        instances = 1
+                if node_full in shape_map:
+                    instances = len(shape_map[node_full])
+                elif node_leaf in target_leaf_to_full:
+                    instances = len(shape_map[target_leaf_to_full[node_leaf]])
 
                 se_instance_count += instances
 
-                if node_name in target_names:
-                    if node_name not in self._shading_map:
-                        self._shading_map[node_name] = set()
-                    self._shading_map[node_name].add(se_name)
+                if node_full in target_shapes or node_leaf in target_leaf_to_full:
+                    key = (
+                        node_full
+                        if node_full in target_shapes
+                        else target_leaf_to_full[node_leaf]
+                    )
+                    if key not in self._shading_map:
+                        self._shading_map[key] = set()
+                    self._shading_map[key].add(se_name)
 
             # Update global texture usage
             obj_count = len(se_objects)
@@ -2256,68 +2258,84 @@ class SceneAnalyzer(ptk.LoggingMixin):
                 self._global_texture_usage[path]["meshes"].update(se_objects)
                 self._global_texture_usage[path]["instances"] += se_instance_count
 
-    def _analyze_material_node(self, mat_node: Optional[pm.PyNode]) -> Dict[str, Any]:
+    def _analyze_material_node(self, mat_node: Optional[str]) -> Dict[str, Any]:
         """Analyzes a single material node for flags (transparency, etc)."""
         flags = {"transparent": False, "type": "Unknown"}
         if not mat_node:
             return flags
 
-        flags["type"] = mat_node.type()
+        flags["type"] = cmds.nodeType(mat_node)
+
+        def _has_attr(node: str, attr: str) -> bool:
+            try:
+                return bool(cmds.attributeQuery(attr, node=node, exists=True))
+            except Exception:
+                return False
+
+        def _attr_inputs(node: str, attr: str) -> List[str]:
+            try:
+                return (
+                    cmds.listConnections(
+                        f"{node}.{attr}", source=True, destination=False
+                    )
+                    or []
+                )
+            except Exception:
+                return []
+
+        def _attr_get(node: str, attr: str):
+            try:
+                v = cmds.getAttr(f"{node}.{attr}")
+            except Exception:
+                return None
+            # cmds.getAttr returns [(r,g,b)] for color3 / double3 — unwrap
+            if isinstance(v, list) and len(v) == 1 and isinstance(v[0], tuple):
+                return v[0]
+            return v
 
         is_transparent = False
 
-        # Group 1: 0 = Opaque, >0 = Transparent
-        # transparency (Color), transmission (Float)
         transparency_attrs = ["transparency", "transmission"]
 
         for attr in transparency_attrs:
-            if mat_node.hasAttr(attr):
-                if mat_node.attr(attr).inputs():
+            if _has_attr(mat_node, attr):
+                if _attr_inputs(mat_node, attr):
                     is_transparent = True
                     break
-                val = mat_node.attr(attr).get()
+                val = _attr_get(mat_node, attr)
                 if isinstance(val, (float, int)):
                     if val > 0.001:
                         is_transparent = True
                         break
-                elif isinstance(val, (tuple, list, pm.dt.Vector, pm.dt.Color)):
+                elif isinstance(val, (tuple, list)):
                     if any(c > 0.001 for c in val):
                         is_transparent = True
                         break
 
         if not is_transparent:
-            # Group 2: 1 = Opaque, <1 = Transparent
-            # opacity (Color), cutout_opacity (Float)
             opacity_attrs = ["opacity", "cutout_opacity"]
 
             for attr in opacity_attrs:
-                if mat_node.hasAttr(attr):
-                    if mat_node.attr(attr).inputs():
+                if _has_attr(mat_node, attr):
+                    if _attr_inputs(mat_node, attr):
                         is_transparent = True
                         break
-                    val = mat_node.attr(attr).get()
+                    val = _attr_get(mat_node, attr)
                     if isinstance(val, (float, int)):
                         if val < 0.999:
                             is_transparent = True
                             break
-                    elif isinstance(val, (tuple, list, pm.dt.Vector, pm.dt.Color)):
-                        # If any channel is < 0.999, it's transparent
+                    elif isinstance(val, (tuple, list)):
                         if any(c < 0.999 for c in val):
                             is_transparent = True
                             break
 
         flags["transparent"] = is_transparent
 
-        # PBR Packing Check
-        # Check if Metallic and Roughness are fed by different file nodes (Inefficient)
-        # or if they are fed by the same file node (Efficient/Packed)
         unpacked_pbr = False
         if mat_node:
             try:
-                # Map attributes to source file nodes
                 pbr_sources = {}
-                # Common PBR attributes to check for packing
-                # (StandardSurface, StingrayPBS, aiStandardSurface)
                 check_attrs = {
                     "metallic": ["metalness", "metallic"],
                     "roughness": ["specularRoughness", "roughness"],
@@ -2326,17 +2344,12 @@ class SceneAnalyzer(ptk.LoggingMixin):
 
                 for key, attrs in check_attrs.items():
                     for attr in attrs:
-                        if mat_node.hasAttr(attr):
-                            inputs = mat_node.attr(attr).inputs()
+                        if _has_attr(mat_node, attr):
+                            inputs = _attr_inputs(mat_node, attr)
                             if inputs:
-                                # Trace back to file node
-                                # Simple check: is input a file node?
                                 src = inputs[0]
-                                if src.type() == "file":
-                                    pbr_sources[key] = src.name()
-                                # If it's a reverse/luminance/etc, we could trace further,
-                                # but for now let's stick to direct connections or simple chains.
-                                # If we can't find a file, we ignore it.
+                                if cmds.nodeType(src) == "file":
+                                    pbr_sources[key] = src
                             break
 
                 # If we have both Metallic and Roughness, check if they are different
@@ -2367,19 +2380,29 @@ class SceneAnalyzer(ptk.LoggingMixin):
         missing_count = 0
         missing_paths = []
         if mat_node:
-            # Use future=False to only look upstream
             try:
-                file_nodes = mat_node.listHistory(type="file")
+                history = cmds.listHistory(mat_node) or []
+                file_nodes = cmds.ls(history, type="file") or []
                 for fn in file_nodes:
-                    path = fn.fileTextureName.get()
+                    path = (
+                        cmds.getAttr(f"{fn}.fileTextureName")
+                        if _has_attr(fn, "fileTextureName")
+                        else ""
+                    )
                     if path:
-                        # Resolve path (handles project relative paths)
-                        resolved_path = pm.workspace.expandName(path)
+                        resolved_path = cmds.workspace(expandName=path)
 
-                        # Get resolution
-                        # fn.outSize.get() returns [w, h]
-                        res = fn.outSize.get()
-                        # Get file size
+                        # outSize is double2; cmds returns [(w,h)]
+                        out_size = cmds.getAttr(f"{fn}.outSize")
+                        if (
+                            isinstance(out_size, list)
+                            and out_size
+                            and isinstance(out_size[0], tuple)
+                        ):
+                            res = (out_size[0][0], out_size[0][1])
+                        else:
+                            res = out_size
+
                         size_mb = 0.0
                         if os.path.exists(resolved_path):
                             size_mb = os.path.getsize(resolved_path) / (1024 * 1024)
@@ -2387,39 +2410,48 @@ class SceneAnalyzer(ptk.LoggingMixin):
                             missing_count += 1
                             missing_paths.append(resolved_path)
 
-                        # Guess Type
                         tex_type = "Unknown"
                         has_alpha = False
 
-                        # Check for alpha connection
-                        if (
-                            fn.hasAttr("outTransparency")
-                            and fn.outTransparency.inputs()
+                        if _has_attr(fn, "outTransparency") and _attr_inputs(
+                            fn, "outTransparency"
                         ):
                             has_alpha = True
-                        elif fn.hasAttr("outAlpha") and fn.outAlpha.inputs():
+                        elif _has_attr(fn, "outAlpha") and _attr_inputs(fn, "outAlpha"):
                             has_alpha = True
 
-                        # 1. Check connections to material (Priority)
                         connected_channels = set()
                         try:
-                            # Check outputs of file node
-                            # We look for connections to the material node, possibly via bump nodes
-                            for dest_plug in fn.outputs(plugs=True):
-                                dest_node = dest_plug.node()
+                            dest_plugs = (
+                                cmds.listConnections(
+                                    fn,
+                                    source=False,
+                                    destination=True,
+                                    plugs=True,
+                                )
+                                or []
+                            )
+                            for dest_plug in dest_plugs:
+                                dest_node, _, attr_path = dest_plug.partition(".")
 
-                                # Direct connection
                                 if dest_node == mat_node:
-                                    attr_name = dest_plug.attrName(
-                                        longName=True
-                                    ).lower()
-                                    connected_channels.add(attr_name)
+                                    connected_channels.add(attr_path.lower())
 
-                                # Via Bump/Normal node
-                                elif dest_node.type() in ["bump2d", "bump3d"]:
-                                    # Check if bump node connects to mat_node
-                                    for b_plug in dest_node.outputs(plugs=True):
-                                        if b_plug.node() == mat_node:
+                                elif cmds.nodeType(dest_node) in [
+                                    "bump2d",
+                                    "bump3d",
+                                ]:
+                                    bump_dests = (
+                                        cmds.listConnections(
+                                            dest_node,
+                                            source=False,
+                                            destination=True,
+                                            plugs=True,
+                                        )
+                                        or []
+                                    )
+                                    for b_plug in bump_dests:
+                                        if b_plug.split(".")[0] == mat_node:
                                             connected_channels.add("normal")
                                             break
                         except Exception:
@@ -2532,7 +2564,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
                                 "path": resolved_path,
                                 "res": res,
                                 "size_mb": size_mb,
-                                "node": fn.name(),
+                                "node": fn,
                                 "type": tex_type,
                                 "has_alpha": has_alpha,
                             }
@@ -2545,72 +2577,62 @@ class SceneAnalyzer(ptk.LoggingMixin):
         flags["missing_paths"] = missing_paths
         return flags
 
-    def _analyze_mesh(self, shape: pm.nt.Mesh) -> MeshRecord:
+    def _analyze_mesh(self, shape: str) -> MeshRecord:
         """Fast mesh analysis."""
-        # Tris/Verts
-        # polyEvaluate is fast
-        # Split calls to avoid mixed return type error
-        counts = pm.polyEvaluate(shape, triangle=True, vertex=True)
-        bbox = pm.polyEvaluate(shape, boundingBox=True)
+        counts = cmds.polyEvaluate(shape, triangle=True, vertex=True)
+        bbox = cmds.polyEvaluate(shape, boundingBox=True)
 
-        tris = counts.get("triangle", 0)
-        verts = counts.get("vertex", 0)
+        if isinstance(counts, dict):
+            tris = counts.get("triangle", 0)
+            verts = counts.get("vertex", 0)
+        else:
+            tris = 0
+            verts = 0
 
-        # UV Sets
-        uv_sets = shape.getUVSetNames()
-        uv_count = len(uv_sets) if uv_sets else 0
-        uv_set_names = uv_sets if uv_sets else []
+        uv_sets = cmds.polyUVSet(shape, q=True, allUVSets=True) or []
+        uv_count = len(uv_sets)
+        uv_set_names = list(uv_sets)
 
-        # Vertex Colors
-        has_colors = len(shape.getColorSetNames()) > 0
+        color_sets = cmds.polyColorSet(shape, q=True, allColorSets=True) or []
+        has_colors = len(color_sets) > 0
 
-        # Skinning
         has_skin = False
         try:
-            history = pm.listHistory(shape, type="skinCluster")
-            if history:
+            history = cmds.listHistory(shape) or []
+            if cmds.ls(history, type="skinCluster"):
                 has_skin = True
         except Exception:
             pass
 
-        # Instanced
-        instanced = shape.isInstanced()
+        # Instanced if shape has more than one parent transform
+        instanced = len(cmds.listRelatives(shape, allParents=True) or []) > 1
 
         # Bounds
-        # bbox is ((xmin, xmax), (ymin, ymax), (zmin, zmax))
         dx = bbox[0][1] - bbox[0][0]
         dy = bbox[1][1] - bbox[1][0]
         dz = bbox[2][1] - bbox[2][0]
         diag = math.sqrt(dx * dx + dy * dy + dz * dz)
 
-        # Ngons and Non-Manifold Edges
         ngons = 0
         non_manifold_edges = 0
+        lamina_faces = 0
         try:
-            import maya.api.OpenMaya as om
-
             sel = om.MSelectionList()
-            sel.add(shape.name())
+            sel.add(shape)
             dag_path = sel.getDagPath(0)
             mesh_fn = om.MFnMesh(dag_path)
 
-            # Count Ngons
             vertex_counts, _ = mesh_fn.getVertices()
             ngons = sum(1 for count in vertex_counts if count > 4)
 
-            # Non-manifold edges
-            nme = pm.polyInfo(shape, nonManifoldEdges=True)
+            nme = cmds.polyInfo(shape, nonManifoldEdges=True)
             if nme:
                 non_manifold_edges = len(nme)
 
-            # Lamina faces
-            lf = pm.polyInfo(shape, laminaFaces=True)
+            lf = cmds.polyInfo(shape, laminaFaces=True)
             if lf:
                 lamina_faces = len(lf)
-            else:
-                lamina_faces = 0
         except Exception:
-            lamina_faces = 0
             pass
 
         # Vertex Payload Estimate
@@ -2633,7 +2655,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
         v_breakdown = ", ".join(breakdown_parts)
 
         return MeshRecord(
-            shape_name=shape.name(),
+            shape_name=shape,
             tris=tris,
             verts=verts,
             uv_sets=uv_count,
@@ -2648,10 +2670,9 @@ class SceneAnalyzer(ptk.LoggingMixin):
             vertex_byte_breakdown=v_breakdown,
         )
 
-    def _analyze_material(self, shape: pm.nt.Mesh) -> MaterialRecord:
+    def _analyze_material(self, shape: str) -> MaterialRecord:
         """Fast material analysis using cache."""
-        shape_name = shape.name()
-        assigned_ses = self._shading_map.get(shape_name, set())
+        assigned_ses = self._shading_map.get(shape, set())
 
         # If no SE found in map, it might be using default shader or not in a set?
         # If empty, try direct connection as fallback?

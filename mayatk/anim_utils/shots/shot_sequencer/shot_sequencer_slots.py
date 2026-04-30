@@ -12,11 +12,13 @@ from typing import Optional, List
 from qtpy import QtWidgets, QtCore, QtGui
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
+    import maya.mel as mel
     import maya.api.OpenMaya as om2
     import maya.api.OpenMayaAnim as oma
 except ImportError:
-    pm = None
+    cmds = None
+    mel = None
     om2 = None
     oma = None
 
@@ -290,9 +292,7 @@ class ShotSequencerController(
             return
         # Skip during playback — avoid stalling the viewport
         try:
-            import maya.cmds as _cmds
-
-            if _cmds.play(q=True, state=True):
+            if cmds is not None and cmds.play(q=True, state=True):
                 return
         except Exception:
             pass
@@ -346,8 +346,6 @@ class ShotSequencerController(
         ``shot.objects``.  Returns ``True`` if objects were added
         (triggering a store event and widget sync), ``False`` otherwise.
         """
-        import maya.cmds as cmds
-
         if self.sequencer is None:
             return False
         shot = self.sequencer.shot_by_id(shot_id)
@@ -481,10 +479,12 @@ class ShotSequencerController(
 
     def _trim_shot(self, shot_id: int) -> None:
         """Trim empty space from *shot_id*, undoable, then refresh the widget."""
-        if self.sequencer is None or pm is None:
+        if self.sequencer is None:
             return
         self._save_shot_state()
-        with pm.UndoChunk():
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        with CoreUtils.undo_chunk():
             self.sequencer.trim_shot_to_content(shot_id)
         self._segment_cache.clear()
         self._sub_row_cache.clear()
@@ -613,7 +613,7 @@ class ShotSequencerController(
 
     def on_undo(self) -> None:
         """Handle undo_requested from the widget — delegate to Maya undo."""
-        if pm is None:
+        if cmds is None:
             return
         self._syncing = True
         try:
@@ -621,7 +621,7 @@ class ShotSequencerController(
                 self._restore_shot_state()
             except Exception:
                 self.logger.debug("on_undo: _restore_shot_state failed", exc_info=True)
-            pm.undo()
+            cmds.undo()
         except RuntimeError:
             pass
         finally:
@@ -632,11 +632,11 @@ class ShotSequencerController(
 
     def on_redo(self) -> None:
         """Handle redo_requested from the widget — delegate to Maya redo."""
-        if pm is None:
+        if cmds is None:
             return
         self._syncing = True
         try:
-            pm.redo()
+            cmds.redo()
         except RuntimeError:
             pass
         finally:
@@ -657,7 +657,7 @@ class ShotSequencerController(
         them.  The *clip_id* parameter identifies the right-clicked clip
         for actions that need a single target (e.g. "Lock Others").
         """
-        if pm is None:
+        if cmds is None:
             return
         widget = self._get_sequencer_widget()
         if widget is None:
@@ -751,10 +751,12 @@ class ShotSequencerController(
 
     def _move_clips_to_shot(self, sequences, dest_shot_id):
         """Run move_sequences_to_shot, undoable, then refresh."""
-        if self.sequencer is None or pm is None or not sequences:
+        if self.sequencer is None or not sequences:
             return
         self._save_shot_state()
-        with pm.UndoChunk():
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        with CoreUtils.undo_chunk():
             self.sequencer.move_sequences_to_shot(sequences, dest_shot_id)
         self._segment_cache.clear()
         self._sub_row_cache.clear()
@@ -816,7 +818,6 @@ class ShotSequencerController(
             return cls._node_icons_cls_cache
         try:
             from mayatk.ui_utils.node_icons import NodeIcons
-            import maya.cmds  # noqa: F401 — availability check
             cls._node_icons_cls_cache = NodeIcons
         except ImportError:
             cls._node_icons_cls_cache = None
@@ -884,10 +885,8 @@ class ShotSequencerController(
         displays them as tracks/clips so the user can inspect animation
         before defining any shots.
         """
-        if pm is None:
+        if cmds is None:
             return
-        import maya.cmds as cmds
-
         start = cmds.playbackOptions(q=True, min=True)
         end = cmds.playbackOptions(q=True, max=True)
 
@@ -1052,10 +1051,8 @@ class ShotSequencerController(
     def _rebuild_decoration(self, widget, shot, visible_shots) -> None:
         """Recreate overlays, markers, gap indicators, and active-shot tint."""
         try:
-            import maya.cmds as _cmds
-
-            current_time = _cmds.currentTime(q=True)
-        except ImportError:
+            current_time = cmds.currentTime(q=True) if cmds is not None else shot.start
+        except Exception:
             current_time = shot.start
         widget.set_playhead(current_time)
         widget.set_hidden_tracks(sorted(self.sequencer.hidden_objects))
@@ -1206,7 +1203,6 @@ class ShotSequencerController(
         skipped.  Pinned objects (e.g. from a manifest) are kept with a
         'missing' icon so users can see them and re-import.
         """
-        import maya.cmds as cmds
         from mayatk.anim_utils.shots._shots import SHOT_PALETTE
 
         node_icons_cls = self._try_load_maya_icons()
@@ -1502,7 +1498,7 @@ class ShotSequencerController(
         Also opens the Graph Editor so the selected object's animation
         curves are immediately visible.
         """
-        if not clip_ids or pm is None:
+        if not clip_ids or cmds is None:
             return
         widget = self._get_sequencer_widget()
         if widget is None:
@@ -1517,7 +1513,7 @@ class ShotSequencerController(
             obj = clip.data.get("obj")
             if obj:
                 full = self._resolve_full_name(obj)
-                if pm.objExists(full):
+                if cmds.objExists(full):
                     resolved.append(full)
                 attrs = clip.data.get("attributes", [])
                 if not attrs:
@@ -1545,12 +1541,12 @@ class ShotSequencerController(
 
     def on_track_selected(self, track_names: list) -> None:
         """Select Maya objects when track labels are clicked in the header."""
-        if not track_names or pm is None:
+        if not track_names or cmds is None:
             return
         resolved = []
         for name in track_names:
             full = self._resolve_full_name(name)
-            if pm.objExists(full):
+            if cmds.objExists(full):
                 resolved.append(full)
         self._select_and_show(resolved)
 
@@ -1586,14 +1582,14 @@ class ShotSequencerController(
         if not track_names:
             return
 
-        if pm is None:
+        if cmds is None:
             return
 
         menu.addSeparator()
         resolved = []
         for name in track_names:
             full = self._resolve_full_name(name)
-            if pm.objExists(full):
+            if cmds.objExists(full):
                 resolved.append(full)
         if resolved:
             menu.addAction(
@@ -1631,12 +1627,12 @@ class ShotSequencerController(
         resolved = []
         for name in track_names:
             full = self._resolve_full_name(name)
-            if pm.objExists(full):
+            if cmds.objExists(full):
                 resolved.append(full)
         if resolved:
-            pm.select(resolved, replace=True)
+            cmds.select(resolved, replace=True)
         try:
-            pm.mel.eval("SpreadSheetEditor")
+            mel.eval("SpreadSheetEditor")
         except Exception:
             pass
 
@@ -1645,12 +1641,12 @@ class ShotSequencerController(
         if not objects:
             return
         # Resolve to long DAG paths to avoid ambiguous short-name errors
-        long_names = pm.ls(objects, long=True)
+        long_names = cmds.ls(objects, long=True)
         if not long_names:
             return
-        pm.select(long_names, replace=True)
+        cmds.select(long_names, replace=True)
         try:
-            pm.mel.eval("GraphEditor")
+            mel.eval("GraphEditor")
         except Exception:
             pass
 
@@ -1663,10 +1659,8 @@ class ShotSequencerController(
             ``[{clip_id, times}, ...]`` — one entry per clip with
             selected :class:`KeyframeItem` children.
         """
-        if pm is None:
+        if cmds is None:
             return
-
-        import maya.cmds as cmds
 
         widget = self._get_sequencer_widget()
         if widget is None:
@@ -1705,15 +1699,13 @@ class ShotSequencerController(
 
     def _delete_clip_keys(self, clip_ids: list) -> None:
         """Delete Maya keyframes for the given clip IDs and refresh."""
-        if pm is None:
-            self.logger.debug("_delete_clip_keys: pm is None, skipping.")
+        if cmds is None:
+            self.logger.debug("_delete_clip_keys: cmds is None, skipping.")
             return
         widget = self._get_sequencer_widget()
         if widget is None:
             self.logger.debug("_delete_clip_keys: no widget, skipping.")
             return
-
-        import maya.cmds as cmds
 
         # Collect all operations first so we can wrap in a single UndoChunk.
         ops: list = []
@@ -1730,7 +1722,7 @@ class ShotSequencerController(
                 self.logger.debug("_delete_clip_keys: clip %s has no obj.", cid)
                 continue
             full = self._resolve_full_name(obj)
-            if not pm.objExists(full):
+            if not cmds.objExists(full):
                 self.logger.debug("_delete_clip_keys: '%s' does not exist.", full)
                 continue
 
@@ -1758,8 +1750,10 @@ class ShotSequencerController(
         if not ops:
             return
 
+        from mayatk.core_utils._core_utils import CoreUtils
+
         deleted = False
-        with pm.UndoChunk():
+        with CoreUtils.undo_chunk():
             for plug, start, end in ops:
                 try:
                     cmds.cutKey(plug, time=(start, end), clear=True)
@@ -1806,14 +1800,13 @@ class ShotSequencerController(
 
         if by_clip:
             # Batch-delete all selected keyframes in a single undo chunk.
-            import maya.cmds as cmds
-
             from mayatk.anim_utils.shots.shot_sequencer.clip_motion import (
                 curves_for_attr,
             )
+            from mayatk.core_utils._core_utils import CoreUtils
 
             deleted = 0
-            with pm.UndoChunk():
+            with CoreUtils.undo_chunk():
                 for clip_id, times in by_clip.items():
                     clip = widget.get_clip(clip_id)
                     if clip is None:
@@ -1862,11 +1855,11 @@ class ShotSequencerController(
                 if obj.split("|")[-1] == short_name:
                     return obj
         # Check audio source nodes
-        if pm is not None:
+        if cmds is not None:
             try:
-                matches = pm.ls(short_name, long=True)
+                matches = cmds.ls(short_name, long=True)
                 if matches:
-                    return str(matches[0])
+                    return matches[0]
             except Exception:
                 pass
         return short_name
@@ -1891,7 +1884,7 @@ class ShotSequencerController(
             ``[(attr_name, [(start, dur, label, color, extra), ...]), ...]``
             where *extra* is a dict of kwargs passed through to ``add_clip``.
         """
-        if self.sequencer is None or pm is None:
+        if self.sequencer is None or cmds is None:
             return []
 
         shot_id = self.active_shot_id
@@ -1908,8 +1901,6 @@ class ShotSequencerController(
         cached = self._sub_row_cache.get(cache_key)
         if cached is not None:
             return cached
-        import maya.cmds as cmds
-
         # Resolve to long DAG path to avoid ambiguous short-name errors
         long_names = cmds.ls(obj_name, long=True)
         if not long_names:
@@ -2080,7 +2071,7 @@ class ShotSequencerController(
         self._syncing_playhead = True
         try:
             self._ensure_sound_on_timeline()
-            pm.currentTime(frame, update=True)
+            cmds.currentTime(frame, update=True)
         finally:
             self._syncing_playhead = False
 
@@ -2089,12 +2080,12 @@ class ShotSequencerController(
         sequencer widget's :class:`ScrubPlayer`.
 
         Maya's Time Slider handles playback/loop audio; the widget's
-        scrub player handles drag-scrub (since ``pm.currentTime(
+        scrub player handles drag-scrub (since ``cmds.currentTime(
         update=True)`` does not emit audio).  Both are refreshed together
         so they stay in lockstep.
         """
         cached = getattr(self, "_active_sound", None)
-        if cached and pm.objExists(cached):
+        if cached and cmds.objExists(cached):
             node = cached
         else:
             node = self._resolve_preferred_audio_node()
@@ -2102,8 +2093,8 @@ class ShotSequencerController(
                 self._active_sound = ""
                 return
             try:
-                slider = pm.mel.eval("$tmp = $gPlayBackSlider")
-                pm.timeControl(slider, e=True, sound=node, displaySound=True)
+                slider = mel.eval("$tmp = $gPlayBackSlider")
+                cmds.timeControl(slider, e=True, sound=node, displaySound=True)
             except Exception:
                 pass
             self._active_sound = node
@@ -2131,13 +2122,13 @@ class ShotSequencerController(
         try:
             from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
             comp = AudioClips._find_composite_node()
-            if comp and pm.objExists(comp):
+            if comp and cmds.objExists(comp):
                 return comp
         except Exception:
             pass
         for track_id in audio_utils.list_tracks():
             dg = audio_utils.find_dg_node_for_track(track_id)
-            if dg and pm.objExists(dg):
+            if dg and cmds.objExists(dg):
                 return dg
         return ""
 
@@ -2145,7 +2136,6 @@ class ShotSequencerController(
     def _get_composite_wav_path() -> str:
         """Return the composite WAV file path, or empty string."""
         try:
-            import maya.cmds as cmds
             from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
             node = AudioClips._find_composite_node()
             if not node:
@@ -2208,8 +2198,8 @@ class ShotSequencerController(
     @staticmethod
     def _playback_range() -> tuple:
         try:
-            lo = float(pm.playbackOptions(q=True, min=True))
-            hi = float(pm.playbackOptions(q=True, max=True))
+            lo = float(cmds.playbackOptions(q=True, min=True))
+            hi = float(cmds.playbackOptions(q=True, max=True))
         except Exception:
             lo, hi = 1.0, 120.0
         return lo, hi
@@ -2227,7 +2217,6 @@ class ShotSequencerController(
         if not node:
             return ""
         try:
-            import maya.cmds as cmds
             path = cmds.getAttr(f"{node}.filename") or ""
             return path.replace("\\", "/")
         except Exception:
@@ -2240,7 +2229,7 @@ class ShotSequencerController(
 
 
 class _MayaPlayController:
-    """:class:`PlayController` adapter driving Maya's timeline via ``pm.play``.
+    """:class:`PlayController` adapter driving Maya's timeline via ``cmds.play``.
 
     Ensures audio is bound to the Time Slider before starting playback.
     Tracks direction so ``TransportControls`` can resume the right way.
@@ -2252,7 +2241,7 @@ class _MayaPlayController:
 
     def is_playing(self) -> bool:
         try:
-            return bool(pm.play(q=True, state=True))
+            return bool(cmds.play(q=True, state=True))
         except Exception:
             return False
 
@@ -2264,15 +2253,15 @@ class _MayaPlayController:
             pass
         try:
             if self.is_playing():
-                pm.play(state=False)
-            pm.play(forward=bool(forward))
+                cmds.play(state=False)
+            cmds.play(forward=bool(forward))
         except Exception:
             pass
 
     def stop(self) -> None:
         try:
             if self.is_playing():
-                pm.play(state=False)
+                cmds.play(state=False)
         except Exception:
             pass
 
@@ -2637,7 +2626,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
 
     def _detect_next_shot(self) -> None:
         """Generate a shot from the next unregistered animation cluster."""
-        if self.controller.sequencer is None or pm is None:
+        if self.controller.sequencer is None or cmds is None:
             return
         widget = self.controller._get_sequencer_widget()
         store = self.controller.sequencer.store if self.controller.sequencer else None
@@ -2645,7 +2634,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             gap_threshold=(store.detection_threshold if store else 5.0),
         )
         if cand is None:
-            pm.displayInfo("No additional animation clusters found.")
+            om2.MGlobal.displayInfo("No additional animation clusters found.")
             return
         result = ShotEditDialog.show(
             parent=self.ui,

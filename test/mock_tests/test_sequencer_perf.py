@@ -17,7 +17,8 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 # Import shared mocks from conftest (injected into sys.modules there)
-from test.conftest import mock_pm, mock_cmds, mock_undo_chunk
+from conftest import mock_pm, mock_cmds, mock_undo_chunk  # noqa: E402  (test dir on sys.path)
+import maya.cmds as cmds
 
 _mock_pm = mock_pm
 _mock_cmds = mock_cmds
@@ -87,7 +88,7 @@ def _generate_segments_for_shot(shot_def, n_segments_per_obj=2):
     return segments
 
 
-from test.test_sequencer_controller import FakeSlotsInstance  # noqa: E402
+from test_sequencer_controller import FakeSlotsInstance  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +96,13 @@ from test.test_sequencer_controller import FakeSlotsInstance  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
+_RUNNING_UNDER_MAYAPY = "maya.standalone" in sys.modules
+
+
+@unittest.skipIf(
+    _RUNNING_UNDER_MAYAPY,
+    "Mock-based test suite — runs under pytest only, not run_tests.py/mayapy",
+)
 class TestSequencerPerf(unittest.TestCase):
     """Performance regression tests at C130H scene scale.
 

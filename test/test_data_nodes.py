@@ -31,7 +31,7 @@ class TestEnsureInternal(MayaTkTestCase):
 
     def test_creates_network_node(self):
         node = DataNodes.ensure_internal()
-        self.assertTrue(pm.objExists(DataNodes.INTERNAL))
+        self.assertTrue(cmds.objExists(DataNodes.INTERNAL))
         self.assertEqual(cmds.nodeType(str(node)), "network")
 
     def test_idempotent(self):
@@ -52,7 +52,7 @@ class TestEnsureInternal(MayaTkTestCase):
 
     def test_migrates_fully_locked_node(self):
         """Old scenes may have the node fully locked — ensure_internal unlocks."""
-        node = pm.createNode("network", name=DataNodes.INTERNAL)
+        node = cmds.createNode("network", name=DataNodes.INTERNAL)
         cmds.lockNode(str(node), lock=True)
         result = DataNodes.ensure_internal()
         locked = cmds.lockNode(str(result), q=True, lock=True)[0]
@@ -67,7 +67,7 @@ class TestEnsureExport(MayaTkTestCase):
 
     def test_creates_transform(self):
         node = DataNodes.ensure_export()
-        self.assertTrue(pm.objExists(DataNodes.EXPORT))
+        self.assertTrue(cmds.objExists(DataNodes.EXPORT))
         self.assertEqual(cmds.nodeType(str(node)), "transform")
 
     def test_idempotent(self):
@@ -230,8 +230,8 @@ class TestMigrateLegacyCarriers(MayaTkTestCase):
         migrated = DataNodes.migrate_legacy_carriers()
 
         self.assertEqual(migrated, [carrier])
-        self.assertFalse(cmds.objExists(carrier), "Old carrier should be deleted")
-        self.assertTrue(pm.objExists(DataNodes.INTERNAL))
+        self.assertFalse(cmds.objExists(str(carrier)), "Old carrier should be deleted")
+        self.assertTrue(cmds.objExists(DataNodes.INTERNAL))
         self.assertTrue(
             cmds.attributeQuery("audio_trigger", node=DataNodes.INTERNAL, exists=True)
         )
@@ -280,16 +280,16 @@ class TestMigrateLegacyCarriers(MayaTkTestCase):
         migrated = DataNodes.migrate_legacy_carriers()
 
         self.assertEqual(len(migrated), 2)
-        self.assertFalse(cmds.objExists(c1))
-        self.assertFalse(cmds.objExists(c2))
-        self.assertTrue(pm.objExists(DataNodes.INTERNAL))
+        self.assertFalse(cmds.objExists(str(c1)))
+        self.assertFalse(cmds.objExists(str(c2)))
+        self.assertTrue(cmds.objExists(DataNodes.INTERNAL))
 
     def test_creates_proxy_on_export(self):
         """Migration should set up the mirror_attr proxy."""
         self._make_legacy_carrier()
         DataNodes.migrate_legacy_carriers()
 
-        self.assertTrue(pm.objExists(DataNodes.EXPORT))
+        self.assertTrue(cmds.objExists(DataNodes.EXPORT))
         self.assertTrue(
             cmds.attributeQuery("audio_trigger", node=DataNodes.EXPORT, exists=True),
             "Proxy should exist on export node after migration",

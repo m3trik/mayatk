@@ -1,10 +1,11 @@
+try:
+    import maya.cmds as cmds
+except ImportError:
+    cmds = None
+
 import heapq
 from math import inf
 
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 
 
 class Graph:
@@ -152,7 +153,7 @@ class Graph:
 class MeshGraph(Graph):
     def __init__(self, mesh_name):
         super().__init__()
-        self.mesh = pm.PyNode(mesh_name)
+        self.mesh = mesh_name
         self.heuristic_cache = {}
         self.build_graph()
 
@@ -201,7 +202,7 @@ if __name__ == "__main__":
     mesh_graph = MeshGraph(mesh_name)
 
     # Vertex indices for which to find the shortest path
-    selection = pm.selected()
+    selection = cmds.ls(selection=True) or []
     start_vertex, end_vertex = Components.convert_component_type(
         selection[:2], "vtx", "int"
     )
@@ -220,4 +221,4 @@ if __name__ == "__main__":
     )
 
     # Optionally, select the path in Maya
-    pm.select(maya_path)
+    cmds.select(maya_path)

@@ -1,15 +1,18 @@
 # !/usr/bin/python
 # coding=utf-8
+from __future__ import annotations
+
 from typing import List, Union, Set
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
 # From this package
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.node_utils.attributes._attributes import Attributes
 
 
 class Selection(ptk.LoggingMixin, ptk.HelpMixin):
@@ -18,30 +21,30 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
     _SELECTION_CONFIG = {
         "Animation": {
             "Animated Objects": lambda objs: Selection._select_animated_objects(objs),
-            "Clusters": lambda objs: pm.listTransforms(objs, type="clusterHandle"),
-            "Constraints": lambda objs: pm.ls(objs, type="constraint"),
-            "IK Handles": lambda objs: pm.ls(objs, type=["ikHandle", "hikEffector"]),
-            "Joints": lambda objs: pm.ls(objs, type="joint"),
+            "Clusters": lambda objs: NodeUtils.list_transforms(objs, type="clusterHandle"),
+            "Constraints": lambda objs: cmds.ls(objs, type="constraint") or [],
+            "IK Handles": lambda objs: cmds.ls(objs, type=["ikHandle", "hikEffector"]) or [],
+            "Joints": lambda objs: cmds.ls(objs, type="joint") or [],
         },
         "Dynamics": {
-            "Brushes": lambda objs: pm.ls(objs, type="brush"),
-            "Dynamic Constraints": lambda objs: pm.listTransforms(
+            "Brushes": lambda objs: cmds.ls(objs, type="brush") or [],
+            "Dynamic Constraints": lambda objs: NodeUtils.list_transforms(
                 objs, type="dynamicConstraint"
             ),
-            "Fluids": lambda objs: pm.listTransforms(objs, type="fluidShape"),
-            "Follicles": lambda objs: pm.listTransforms(objs, type="follicle"),
-            "Lattices": lambda objs: pm.listTransforms(objs, type="lattice"),
-            "nCloths": lambda objs: pm.listTransforms(objs, type="nCloth"),
-            "nParticles": lambda objs: pm.listTransforms(objs, type="nParticle"),
-            "nRigids": lambda objs: pm.listTransforms(objs, type="nRigid"),
-            "Particles": lambda objs: pm.listTransforms(objs, type="particle"),
-            "Rigid Bodies": lambda objs: pm.listTransforms(objs, type="rigidBody"),
-            "Rigid Constraints": lambda objs: pm.ls(objs, type="rigidConstraint"),
-            "Sculpts": lambda objs: pm.listTransforms(
+            "Fluids": lambda objs: NodeUtils.list_transforms(objs, type="fluidShape"),
+            "Follicles": lambda objs: NodeUtils.list_transforms(objs, type="follicle"),
+            "Lattices": lambda objs: NodeUtils.list_transforms(objs, type="lattice"),
+            "nCloths": lambda objs: NodeUtils.list_transforms(objs, type="nCloth"),
+            "nParticles": lambda objs: NodeUtils.list_transforms(objs, type="nParticle"),
+            "nRigids": lambda objs: NodeUtils.list_transforms(objs, type="nRigid"),
+            "Particles": lambda objs: NodeUtils.list_transforms(objs, type="particle"),
+            "Rigid Bodies": lambda objs: NodeUtils.list_transforms(objs, type="rigidBody"),
+            "Rigid Constraints": lambda objs: cmds.ls(objs, type="rigidConstraint") or [],
+            "Sculpts": lambda objs: NodeUtils.list_transforms(
                 objs, type=["implicitSphere", "sculpt"]
             ),
-            "Strokes": lambda objs: pm.listTransforms(objs, type="stroke"),
-            "Wires": lambda objs: pm.ls(objs, type="wire"),
+            "Strokes": lambda objs: NodeUtils.list_transforms(objs, type="stroke"),
+            "Wires": lambda objs: cmds.ls(objs, type="wire") or [],
         },
         "Geometry": {
             "All Geometry": lambda objs: Selection._select_geometry(objs),
@@ -49,9 +52,9 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
             "Non-Selectable Geometry": lambda objs: Selection._select_unselectable_geometry(
                 objs
             ),
-            "NURBS Curves": lambda objs: pm.listTransforms(objs, type="nurbsCurve"),
-            "NURBS Surfaces": lambda objs: pm.ls(objs, type="nurbsSurface"),
-            "Polygon Meshes": lambda objs: pm.listTransforms(objs, type="mesh"),
+            "NURBS Curves": lambda objs: NodeUtils.list_transforms(objs, type="nurbsCurve"),
+            "NURBS Surfaces": lambda objs: cmds.ls(objs, type="nurbsSurface") or [],
+            "Polygon Meshes": lambda objs: NodeUtils.list_transforms(objs, type="mesh"),
             "Single-Instance Geometry": lambda objs: Selection._select_single_instance_geometry(
                 objs
             ),
@@ -66,13 +69,13 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
             "Groups": lambda objs: [obj for obj in objs if NodeUtils.is_group(obj)],
         },
         "Scene": {
-            "Assets": lambda objs: pm.ls(objs, type=["container", "dagContainer"]),
-            "Cameras": lambda objs: pm.listTransforms(objs, cameras=1),
-            "Image Planes": lambda objs: pm.ls(objs, type="imagePlane"),
-            "Lights": lambda objs: pm.listTransforms(objs, lights=1),
+            "Assets": lambda objs: cmds.ls(objs, type=["container", "dagContainer"]) or [],
+            "Cameras": lambda objs: NodeUtils.list_transforms(objs, cameras=True),
+            "Image Planes": lambda objs: cmds.ls(objs, type="imagePlane") or [],
+            "Lights": lambda objs: NodeUtils.list_transforms(objs, lights=True),
             "Locators": lambda objs: Selection._select_locators(objs),
             "Keyed Locators": lambda objs: Selection._select_keyed_locators(objs),
-            "Transforms": lambda objs: pm.ls(objs, type="transform"),
+            "Transforms": lambda objs: cmds.ls(objs, type="transform") or [],
         },
     }
 
@@ -93,7 +96,7 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
             List[object]: Selected objects
         """
         if objects is None:
-            objects = pm.selected() or pm.ls()
+            objects = cmds.ls(selection=True) or cmds.ls()
 
         if not objects:
             return []
@@ -144,7 +147,7 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         """
         result = set()
         for obj in objects:
-            children = pm.listRelatives(obj, children=True, type="transform")
+            children = cmds.listRelatives(obj, children=True, type="transform")
             if children:
                 result.update(children)
         return result
@@ -163,7 +166,7 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         for obj in objects:
             current = obj
             while current:
-                parent = pm.listRelatives(current, parent=True, type="transform")
+                parent = cmds.listRelatives(current, parent=True, type="transform")
                 if parent:
                     parent = parent[0]
                     result.add(parent)
@@ -184,7 +187,7 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         """
         result = set()
         for obj in objects:
-            children = pm.listRelatives(obj, allDescendents=True, type="transform")
+            children = cmds.listRelatives(obj, allDescendents=True, type="transform")
             if children:
                 result.update(children)
         return result
@@ -192,73 +195,83 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
     @staticmethod
     def _select_geometry(objects: List[Union[str, object]]) -> List[object]:
         """Select all geometry excluding locators."""
-        shapes = pm.ls(objects, geometry=True)
-        rel = pm.listRelatives(shapes, parent=True, path=True)
+        shapes = cmds.ls(objects, geometry=True) or []
+        rel = cmds.listRelatives(shapes, parent=True, path=True) or []
         return [obj for obj in rel if not NodeUtils.is_locator(obj)]
 
     @staticmethod
     def _select_locators(objects: List[Union[str, object]]) -> Set[object]:
         """Select locator objects."""
-        shapes = pm.ls(objects, exactType="locator")
-        return set(pm.listRelatives(shapes, parent=True, path=True))
+        shapes = cmds.ls(objects, exactType="locator") or []
+        parents = cmds.listRelatives(shapes, parent=True, path=True) or []
+        return set(parents)
 
     @staticmethod
     def _select_keyed_locators(objects: List[Union[str, object]]) -> Set[object]:
         """Select locators that have animation keys."""
-        shapes = pm.ls(objects, exactType="locator")
-        return {
-            obj.getParent()
-            for obj in shapes
-            if pm.keyframe(obj.getParent(), query=True, keyframeCount=True) > 0
-        }
+        shapes = cmds.ls(objects, exactType="locator") or []
+        result = set()
+        for shape in shapes:
+            parent = NodeUtils.get_parent(shape)
+            if parent and (cmds.keyframe(parent, query=True, keyframeCount=True) or 0) > 0:
+                result.add(parent)
+        return result
 
     @staticmethod
     def _select_hidden_geometry(objects: List[Union[str, object]]) -> Set[object]:
         """Select hidden geometry."""
-        geometry = pm.ls(objects, geometry=True)
-        return {
-            geo.getParent() for geo in geometry if not geo.getParent().visibility.get()
-        }
+        geometry = cmds.ls(objects, geometry=True) or []
+        result = set()
+        for geo in geometry:
+            parent = NodeUtils.get_parent(geo)
+            if parent and not cmds.getAttr(f"{parent}.visibility"):
+                result.add(parent)
+        return result
 
     @staticmethod
     def _select_templated_geometry(objects: List[Union[str, object]]) -> Set[object]:
         """Select templated geometry."""
-        geometry = pm.ls(objects, geometry=True)
-        return {
-            geo.getParent()
-            for geo in geometry
-            if hasattr(geo.getParent(), "template") and geo.getParent().template.get()
-        }
+        geometry = cmds.ls(objects, geometry=True) or []
+        result = set()
+        for geo in geometry:
+            parent = NodeUtils.get_parent(geo)
+            if parent and Attributes.has_attr(parent, "template") and cmds.getAttr(f"{parent}.template"):
+                result.add(parent)
+        return result
 
     @staticmethod
     def _select_unselectable_geometry(
         objects: List[Union[str, object]],
     ) -> Set[object]:
         """Select unselectable geometry."""
-        geometry = pm.ls(objects, geometry=True)
-        return {
-            geo.getParent()
-            for geo in geometry
-            if geo.getParent().overrideEnabled.get()
-            and geo.getParent().overrideDisplayType.get() == 2
-        }
+        geometry = cmds.ls(objects, geometry=True) or []
+        result = set()
+        for geo in geometry:
+            parent = NodeUtils.get_parent(geo)
+            if (
+                parent
+                and cmds.getAttr(f"{parent}.overrideEnabled")
+                and cmds.getAttr(f"{parent}.overrideDisplayType") == 2
+            ):
+                result.add(parent)
+        return result
 
     @staticmethod
     def _select_single_instance_geometry(
         objects: List[Union[str, object]],
     ) -> List[object]:
         """Select geometry that has single instances."""
-        geometry = pm.ls(objects, geometry=True)
+        geometry = cmds.ls(objects, geometry=True) or []
         return NodeUtils.filter_duplicate_instances(geometry)
 
     @staticmethod
     def _select_animated_objects(objects: List[Union[str, object]]) -> Set[object]:
         """Select objects with animation keys."""
-        transforms = pm.ls(objects, type="transform")
+        transforms = cmds.ls(objects, type="transform") or []
         return {
             obj
             for obj in transforms
-            if pm.keyframe(obj, query=True, keyframeCount=True) > 0
+            if (cmds.keyframe(obj, query=True, keyframeCount=True) or 0) > 0
         }
 
     @staticmethod
@@ -271,12 +284,17 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
             objects: Objects to select
             mode (str): Selection mode - "replace", "add", or "remove"
         """
+        objs = list(objects)
+        if not objs:
+            if mode == "replace":
+                cmds.select(clear=True)
+            return
         if mode == "add":
-            pm.select(objects, add=True)
+            cmds.select(objs, add=True)
         elif mode == "remove":
-            pm.select(objects, deselect=True)
+            cmds.select(objs, deselect=True)
         else:  # replace
-            pm.select(objects, replace=True)
+            cmds.select(objs, replace=True)
 
     @staticmethod
     def get_available_selection_types() -> List[str]:

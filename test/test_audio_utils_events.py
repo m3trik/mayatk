@@ -58,8 +58,10 @@ class TestEnsureTrackAttr(MayaTkTestCase):
             listEnum=True,
         )
         self.assertIsNotNone(labels)
+        # Per-track enum label is "off:on" — the track_id ("footstep") lives
+        # in the attribute name itself (audio_clip_footstep), not the enum.
         self.assertIn("off", labels[0])
-        self.assertIn("footstep", labels[0])
+        self.assertIn("on", labels[0])
 
     def test_rejects_invalid_track_id(self):
         with self.assertRaises(ValueError):

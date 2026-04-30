@@ -1,18 +1,89 @@
 # !/usr/bin/python
 # coding=utf-8
-import os
-import sys
-from typing import Union, List, Callable, Any, Tuple, Optional
+from typing import List, Callable, Any, Tuple, Optional
 from functools import wraps
 import contextlib
 
 try:
-    import pymel.core as pm
-except ImportError as error:
+    import maya.cmds as cmds
+    import maya.mel as mel
+except Exception as error:
+    cmds = None
+    mel = None
     print(__file__, error)
 import pythontk as ptk
 
 # Import package modules at class level to avoid circular imports.
+
+
+def as_strings(nodes) -> List[str]:
+    """Coerce a node-or-iterable-of-nodes to a list of plain DAG-path strings.
+
+    Single string / non-container input is wrapped in a one-element list.
+    Drops empty entries; preserves order.
+
+    Note: only ``list`` / ``tuple`` / ``set`` are treated as containers — never
+    duck-typed via ``__iter__``. ``cmds.*`` always returns a ``list`` or
+    ``None``, so this is sufficient and avoids accidentally iterating a single
+    string into characters or a node-like object into something nonsensical.
+    """
+    if nodes is None:
+        return []
+    if isinstance(nodes, (list, tuple, set)):
+        return [str(n) for n in nodes if n is not None and str(n)]
+    return [str(nodes)] if str(nodes) else []
+
+
+def short_name(node) -> str:
+    """Leaf name with namespace stripped: ``"|grp|ns:obj"`` -> ``"obj"``."""
+    return str(node).split("|")[-1].split(":")[-1]
+
+
+def leaf_name(node) -> str:
+    """Leaf name with namespace preserved: ``"|grp|ns:obj"`` -> ``"ns:obj"``."""
+    return str(node).split("|")[-1]
+
+
+class BoundingBox:
+    """Plain-data bounding box with ``MVector`` extents.
+
+    ``min``, ``max``, ``center`` are ``om.MVector`` instances. ``size`` is
+    ``max - min``; ``diagonal`` is ``size.length()``.
+    """
+
+    __slots__ = ("min", "max", "center", "size", "diagonal")
+
+    def __init__(self, mn, mx):
+        import maya.api.OpenMaya as om
+
+        self.min = om.MVector(mn[0], mn[1], mn[2])
+        self.max = om.MVector(mx[0], mx[1], mx[2])
+        self.center = om.MVector(
+            (mn[0] + mx[0]) * 0.5,
+            (mn[1] + mx[1]) * 0.5,
+            (mn[2] + mx[2]) * 0.5,
+        )
+        self.size = self.max - self.min
+        self.diagonal = self.size.length()
+
+
+def get_bounding_box(node, world: bool = True) -> BoundingBox:
+    """Return a :class:`BoundingBox` for *node*.
+
+    Uses ``cmds.exactWorldBoundingBox`` for world space. For object space,
+    falls back to ``cmds.polyEvaluate(boundingBox=True)`` when available
+    (mesh nodes), else to the world bbox.
+    """
+    node = str(node)
+    if world:
+        bb = cmds.exactWorldBoundingBox(node)
+        return BoundingBox(bb[:3], bb[3:])
+    bb = cmds.polyEvaluate(node, boundingBox=True)
+    if bb and len(bb) == 3:
+        (xmn, xmx), (ymn, ymx), (zmn, zmx) = bb
+        return BoundingBox((xmn, ymn, zmn), (xmx, ymx, zmx))
+    bb = cmds.exactWorldBoundingBox(node)
+    return BoundingBox(bb[:3], bb[3:])
 
 
 class _CoreUtilsInternal(object):
@@ -21,107 +92,92 @@ class _CoreUtilsInternal(object):
     @staticmethod
     def _prepare_reparent(
         nodes: List[object],
-    ) -> Tuple[Optional[object], Optional[object]]:
+    ) -> Tuple[Optional[str], Optional[str]]:
         """Prepare reparenting by using a temporary null if needed.
 
         Creates a temporary null under any parent that would become childless
         after the operation consumes the given nodes (e.g. polyUnite deletes
         all children of a group, causing Maya to auto-delete the group).
         """
-        parent = pm.listRelatives(nodes[0], parent=True, fullPath=True) or None
-        temp_null = None
+        node_strs = [str(n) for n in nodes]
+        first_parent_list = (
+            cmds.listRelatives(node_strs[0], parent=True, fullPath=True) or None
+        )
+        parent = first_parent_list[0] if first_parent_list else None
+        temp_null: Optional[str] = None
 
-        node_set = set(str(n) for n in nodes)
+        node_set = set(node_strs)
 
-        # Check each unique parent to see if all its children are in the
-        # node list.  If so the parent would be auto-deleted after the
-        # operation, so we keep it alive with a temporary null.
         seen_parents = set()
-        for node in nodes:
-            node_parent = pm.listRelatives(node, parent=True, fullPath=True) or None
+        for node in node_strs:
+            node_parent = cmds.listRelatives(node, parent=True, fullPath=True) or []
             if not node_parent:
                 continue
-            parent_key = str(node_parent[0])
+            parent_key = node_parent[0]
             if parent_key in seen_parents:
                 continue
             seen_parents.add(parent_key)
 
-            children = pm.listRelatives(node_parent[0], children=True) or []
-            # A temp null is needed when every child of this parent is
-            # part of the operation (the parent would end up empty).
-            remaining = [c for c in children if str(c) not in node_set]
+            children = cmds.listRelatives(parent_key, children=True) or []
+            remaining = [c for c in children if c not in node_set]
             if not remaining:
-                temp_null = pm.createNode("transform", n="tempTempNull")
-                pm.parent(temp_null, node_parent[0])
-                break  # Only the first-node's parent matters for reparenting
+                temp_null = cmds.createNode("transform", n="tempTempNull")
+                cmds.parent(temp_null, parent_key)
+                break
 
         return parent, temp_null
 
     @staticmethod
     def _finalize_reparent(
-        new_node: Optional[object],
-        parent: Optional[object],
-        temp_null: Optional[object],
+        new_node,
+        parent: Optional[str],
+        temp_null: Optional[str],
     ) -> None:
         """Clean up reparenting, handling the parent and temporary null."""
         if parent and new_node:
-            # parent comes from pm.listRelatives which returns a list
             target = parent[0] if isinstance(parent, (list, tuple)) else parent
             try:
-                nodes = new_node if isinstance(new_node, (list, tuple)) else [new_node]
+                nodes = (
+                    new_node if isinstance(new_node, (list, tuple)) else [new_node]
+                )
                 for n in nodes:
-                    pm.parent(n, target)
-            except pm.general.MayaNodeError as e:
-                pm.warning(f"Failed to re-parent combined mesh: {e}")
+                    cmds.parent(str(n), target)
+            except Exception as e:
+                cmds.warning(f"Failed to re-parent combined mesh: {e}")
         if temp_null:
             try:
-                pm.delete(temp_null)
-            except pm.general.MayaNodeError as e:
-                pm.warning(f"Failed to delete temporary null: {e}")
+                cmds.delete(temp_null)
+            except Exception as e:
+                cmds.warning(f"Failed to delete temporary null: {e}")
 
     @staticmethod
-    def _calculate_mesh_similarity(mesh1: object, mesh2: object) -> float:
-        """Calculates a similarity score between two meshes based on their bounding box sizes and vertex counts.
+    def _calculate_mesh_similarity(mesh1, mesh2) -> float:
+        """Calculate similarity between two meshes from their bounding-box volume + vertex counts."""
+        m1 = str(mesh1)
+        m2 = str(mesh2)
 
-        Parameters:
-            mesh1: The first mesh to compare.
-            mesh2: The second mesh to compare.
+        # Bounding box volume (world space)
+        def _bb_volume(node: str) -> float:
+            bb = cmds.exactWorldBoundingBox(node)
+            return (bb[3] - bb[0]) * (bb[4] - bb[1]) * (bb[5] - bb[2])
 
-        Returns:
-            A float representing the similarity score, where higher means more similar.
-        """
-        # Get bounding box sizes
-        bbox1 = mesh1.getBoundingBox()
-        bbox2 = mesh2.getBoundingBox()
+        volume1 = _bb_volume(m1)
+        volume2 = _bb_volume(m2)
 
-        # Calculate volume of bounding boxes
-        volume1 = bbox1.width() * bbox1.height() * bbox1.depth()
-        volume2 = bbox2.width() * bbox2.height() * bbox2.depth()
+        vertex_count1 = cmds.polyEvaluate(m1, vertex=True) or 0
+        vertex_count2 = cmds.polyEvaluate(m2, vertex=True) or 0
 
-        # Get vertex counts
-        vertex_count1 = len(mesh1.getVertices())
-        vertex_count2 = len(mesh2.getVertices())
+        denom_v = max(volume1, volume2) or 1.0
+        denom_n = max(vertex_count1, vertex_count2) or 1
+        volume_similarity = 1 - abs(volume1 - volume2) / denom_v
+        vertex_similarity = 1 - abs(vertex_count1 - vertex_count2) / denom_n
 
-        # Calculate similarity score (simple approach based on bounding box volume and vertex count)
-        volume_similarity = 1 - abs(volume1 - volume2) / max(volume1, volume2)
-        vertex_similarity = 1 - abs(vertex_count1 - vertex_count2) / max(
-            vertex_count1, vertex_count2
-        )
-
-        # Combine similarities (here, equally weighted for simplicity)
-        similarity_score = (volume_similarity + vertex_similarity) / 2
-
-        return similarity_score
+        return (volume_similarity + vertex_similarity) / 2
 
     @staticmethod
     @contextlib.contextmanager
     def _temp_reparent(nodes):
-        """
-        Context manager to maintain hierarchy for nodes during operations that might reparent them.
-
-        Yields a container object with a 'result' attribute that should be set to the
-        resulting node of the operation if it needs to be reparented to the original parent.
-        """
+        """Context manager to maintain hierarchy for nodes during operations that might reparent them."""
         parent, temp_null = _CoreUtilsInternal._prepare_reparent(nodes)
 
         class Result:
@@ -141,19 +197,24 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
 
     @staticmethod
     @contextlib.contextmanager
-    def temporarily_unlock_attributes(objects, attributes=None):
-        """Context manager to temporarily unlock attributes on objects and restore their state afterwards.
+    def undo_chunk(name: str = ""):
+        """Group operations into a single Maya undo chunk.
 
-        .. deprecated:: Use ``Attributes.temporarily_unlock`` instead.
-
-        Parameters:
-            objects (str/obj/list): The object(s) to unlock attributes on.
-            attributes (list): List of specific attributes to unlock (e.g. ['tx', 'ry']).
-                             If None, unlocks all standard transform attributes.
+        Drop-in replacement for ``pm.UndoChunk()`` using ``cmds.undoInfo``.
         """
-        from mayatk.node_utils.attributes._attributes import (
-            Attributes,
+        cmds.undoInfo(openChunk=True, chunkName=name) if name else cmds.undoInfo(
+            openChunk=True
         )
+        try:
+            yield
+        finally:
+            cmds.undoInfo(closeChunk=True)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def temporarily_unlock_attributes(objects, attributes=None):
+        """.. deprecated:: Use ``Attributes.temporarily_unlock`` instead."""
+        from mayatk.node_utils.attributes._attributes import Attributes
 
         with Attributes.temporarily_unlock(objects, attributes) as ctx:
             yield ctx
@@ -163,18 +224,15 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
 
         @wraps(func)
         def wrapped(*args, **kwargs) -> Any:
-            # Check if it's a method (class or regular) by looking at the first argument
             if args and (hasattr(args[0], "__class__") or isinstance(args[0], type)):
-                if (
-                    len(args) < 2 or args[1] is None
-                ):  # Skip the 'cls' or 'self' parameter for class/regular methods
-                    selection = pm.selected()
+                if len(args) < 2 or args[1] is None:
+                    selection = cmds.ls(selection=True) or []
                     if not selection:
                         return []
                     args = (args[0], selection) + args[2:]
             else:
                 if not args or args[0] is None:
-                    selection = pm.selected()
+                    selection = cmds.ls(selection=True) or []
                     if not selection:
                         return []
                     args = (selection,) + args[1:]
@@ -184,16 +242,11 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         return wrapped
 
     def undoable(fn):
-        """A decorator to place a function into Maya's undo chunk.
-        Prevents the undo queue from breaking entirely if an exception is raised within the given function.
-
-        Parameters:
-            fn (obj): The decorated python function that will be placed into the undo que as a single entry.
-        """
+        """A decorator to place a function into Maya's undo chunk."""
 
         @wraps(fn)
         def wrapper(*args, **kwargs):
-            with pm.UndoChunk():
+            with CoreUtils.undo_chunk():
                 if args and hasattr(args[0], "__class__"):
                     self = args[0]
                     return fn(self, *args[1:], **kwargs)
@@ -217,11 +270,10 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
 
             mesh_nodes = []
             for arg in args[0]:
-                try:
-                    node = pm.PyNode(arg)
-                    mesh_nodes.append(node)
-                except pm.MayaNodeError:
+                arg_str = str(arg)
+                if not cmds.objExists(arg_str):
                     raise ValueError(f"No valid Maya node found for the name: {arg}")
+                mesh_nodes.append(arg_str)
 
             if not mesh_nodes:
                 raise ValueError("No valid Maya nodes provided.")
@@ -237,35 +289,20 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
 
     @staticmethod
     def wrap_control(control_name, container):
-        """Embed a Maya Native UI Object.
-
-        Parameters:
-            control_name (str): The name of an existing maya control. ie. 'cmdScrollFieldReporter1'
-            container (obj): A widget instance in which to wrap the control.
-
-        Example:
-            modelPanelName = pm.modelPanel("embeddedModelPanel#", cam='persp')
-            wrap_control(modelPanelName, QtWidgets.QtWidget())
-        """
+        """Embed a Maya Native UI Object."""
         from qtpy import QtWidgets
-
-        # import wrapInstance
         from shiboken6 import wrapInstance
         from maya.OpenMayaUI import MQtUtil
 
         layout = QtWidgets.QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layoutName = ptk.set_case(
-            container.objectName() + "Layout", "camel"
-        )  # results in '<objectName>Layout' or 'layout' if container objectName is ''
+        layoutName = ptk.set_case(container.objectName() + "Layout", "camel")
         layout.setObjectName(layoutName)
-        pm.setParent(layoutName)
+        cmds.setParent(layoutName)
 
         derivedClass = ptk.get_derived_type(container)
 
-        ptr = MQtUtil.findControl(
-            control_name
-        )  # get a pointer to the maya api paneLayout.
+        ptr = MQtUtil.findControl(control_name)
         control = wrapInstance(int(ptr), derivedClass)
         layout.addWidget(control)
 
@@ -273,20 +310,12 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
 
     @staticmethod
     def confirm_existence(objects: List[str]) -> Tuple[List[str], List[str]]:
-        """Confirms the existence of each object in the provided list in Maya.
-
-        Parameters:
-            objects (List[str]): List of object names to confirm existence.
-
-        Returns:
-            Tuple[List[str], List[str]]: A tuple containing two lists - the first list
-            contains names of existing objects, and the second list contains names of non-existing objects.
-        """
+        """Confirms the existence of each object in the provided list in Maya."""
         existing = []
         non_existing = []
 
         for obj in objects:
-            if pm.objExists(obj):
+            if cmds.objExists(str(obj)):
                 existing.append(obj)
             else:
                 non_existing.append(obj)
@@ -297,29 +326,23 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
     def get_mfn_mesh(objects, api_version: int = 2):
         """Get MFnMesh function set(s) from transform or shape node(s).
 
-        Parameters:
-            objects: A mesh transform, shape node, string name, or list of these.
-            api_version: Which Maya API to use:
-                - 1: Maya API 1.0 (maya.OpenMaya) - legacy, returns generator
-                - 2: Maya API 2.0 (maya.api.OpenMaya) - modern, better performance
-
         Returns:
-            If api_version=1: Generator yielding MFnMesh objects (API 1.0)
-            If api_version=2: Single MFnMesh (API 2.0) if single object passed,
-                             or list of MFnMesh if multiple objects passed.
-
-        Raises:
-            RuntimeError: If the node is not a valid mesh.
-            ValueError: If api_version is not 1 or 2.
+            api_version=1: Generator yielding MFnMesh objects (API 1.0)
+            api_version=2: Single MFnMesh (API 2.0) if a single object passed,
+                           else a list of MFnMesh.
         """
         from mayatk.node_utils._node_utils import NodeUtils
 
         if api_version == 1:
             import maya.OpenMaya as om
 
+            shapes = NodeUtils.get_shape_node(cmds.ls(as_strings(objects)) or [])
+            if not isinstance(shapes, list):
+                shapes = [shapes] if shapes else []
+
             selectionList = om.MSelectionList()
-            for mesh in NodeUtils.get_shape_node(pm.ls(objects)):
-                selectionList.add(mesh)
+            for mesh in shapes:
+                selectionList.add(str(mesh))
 
             def _generator():
                 for i in range(selectionList.length()):
@@ -333,15 +356,16 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
             import maya.api.OpenMaya as om2
 
             def _get_single(node):
-                node = pm.PyNode(node)
-                if node.type() == "transform":
-                    shapes = node.getShapes(noIntermediate=True)
+                node = str(node)
+                if cmds.objectType(node) == "transform":
+                    shapes = (
+                        cmds.listRelatives(node, shapes=True, noIntermediate=True) or []
+                    )
                     if shapes:
                         node = shapes[0]
-                dag = om2.MGlobal.getSelectionListByName(str(node)).getDagPath(0)
+                dag = om2.MGlobal.getSelectionListByName(node).getDagPath(0)
                 return om2.MFnMesh(dag)
 
-            # Handle single vs multiple objects
             if isinstance(objects, (list, tuple)):
                 return [_get_single(obj) for obj in objects]
             else:
@@ -353,57 +377,68 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
     @staticmethod
     def get_array_type(array):
         """Determine the given element(s) type.
-        Samples only the first element.
 
-        Parameters:
-            array (str/obj/list): The components(s) to query.
-
-        Returns:
-            (list) 'str', 'int'(valid only at sub-object level), or maya object type as string.
+        For a bare string or int, returns "str" / "int" (legacy behavior).
+        For an iterable (list / tuple / set / generator), inspects the first
+        element via NodeUtils.get_type — so a list of component strings such
+        as ``["cube.vtx[0]"]`` returns ``"vtx"`` rather than ``"str"``.
         """
         from mayatk.node_utils._node_utils import NodeUtils
+
+        if isinstance(array, str):
+            return "str"
+        if isinstance(array, int):
+            return "int"
 
         try:
             o = ptk.make_iterable(array)[0]
         except IndexError:
-            # print (f'# Error: {__file__} in get_array_type:\n#\tOperation requires at least one object.\n#\t{error}')
             return ""
 
-        return (
-            "str"
-            if isinstance(o, str)
-            else "int" if isinstance(o, int) else NodeUtils.get_type(o)
-        )
+        return NodeUtils.get_type(o)
 
     @staticmethod
     def convert_array_type(lst, returned_type="str", flatten=False):
         """Convert the given element(s) to <obj>, 'str', or int values.
 
-        Parameters:
-            lst (str/obj/list): The components(s) to convert.
-            returned_type (str): The desired returned array element type.
-                    valid: 'str'(default), 'obj', 'int'(valid only at sub-object level).
-            flatten (bool): Flattens the returned list of objects so that each component is it's own element.
-
-        Returns:
-            (list)(dict) return a dict only with a return type of 'int' and more that one object given.
-
-        Example:
-        convert_array_type('obj.vtx[:2]', 'str') #returns: ['objShape.vtx[0:2]']
-        convert_array_type('obj.vtx[:2]', 'str', True) #returns: ['objShape.vtx[0]', 'objShape.vtx[1]', 'objShape.vtx[2]']
-        convert_array_type('obj.vtx[:2]', 'obj') #returns: [MeshVertex('objShape.vtx[0:2]')]
-        convert_array_type('obj.vtx[:2]', 'obj', True) #returns: [MeshVertex('objShape.vtx[0]'), MeshVertex('objShape.vtx[1]'), MeshVertex('objShape.vtx[2]')]
-        convert_array_type('obj.vtx[:2]', 'int')) #returns: {nt.Mesh('objShape'): [(0, 2)]}
-        convert_array_type('obj.vtx[:2]', 'int', True)) #returns: {nt.Mesh('objShape'): [0, 1, 2]}
+        Components are returned with their owning **shape** as the prefix
+        (``cmds.ls`` keeps the transform name; this helper substitutes in the shape).
         """
-        lst = pm.ls(lst, flatten=flatten)
-        if not lst or isinstance(lst[0], int):
+        lst = cmds.ls(as_strings(lst), flatten=flatten) or []
+        if not lst:
             return []
+        if isinstance(lst[0], int):
+            return []
+
+        # Normalize transform-prefixed components to shape-prefixed.
+        def _to_shape_prefixed(comp: str) -> str:
+            if "." not in comp:
+                return comp
+            node, rest = comp.split(".", 1)
+            if not cmds.objExists(node):
+                return comp
+            try:
+                if cmds.objectType(node) == "transform":
+                    shapes = (
+                        cmds.listRelatives(node, shapes=True, noIntermediate=True)
+                        or []
+                    )
+                    if shapes:
+                        shape_leaf = shapes[0].split("|")[-1].split(":")[-1]
+                        return f"{shape_leaf}.{rest}"
+            except Exception:
+                pass
+            return comp
+
+        lst = [_to_shape_prefixed(c) for c in lst]
 
         if returned_type == "int":
             result = {}
             for c in lst:
-                obj = pm.ls(c, objectsOnly=1)[0]
+                obj_list = cmds.ls(c, objectsOnly=True) or []
+                if not obj_list:
+                    continue
+                obj = obj_list[0]
                 num = c.split("[")[-1].rstrip("]")
 
                 try:
@@ -413,20 +448,18 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
                         n = [int(n) for n in num.split(":")]
                         componentNum = tuple(n) if len(n) > 1 else n[0]
 
-                    if obj in result:  # append to existing object key.
+                    if obj in result:
                         result[obj].append(componentNum)
                     else:
                         result[obj] = [componentNum]
-                except ValueError as error:  # incompatible object type.
+                except ValueError as error:
                     print(
                         f"# Error: {__file__} in convert_array_type\n#\tunable to convert {obj} {num} to int.\n#\t{error}"
                     )
                     break
 
-            objects = set(pm.ls(lst, objectsOnly=True))
-            if (
-                len(objects) == 1
-            ):  # flatten the dict values from 'result' and remove any duplicates.
+            objects = set(cmds.ls(lst, objectsOnly=True) or [])
+            if len(objects) == 1:
                 flattened = ptk.flatten(result.values())
                 result = ptk.remove_duplicates(flattened)
 
@@ -440,65 +473,33 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
 
     @staticmethod
     def get_parameter_mapping(node, cmd, parameters):
-        """Queries a specified Maya command and returns a dictionary mapping the provided parameters to their values.
-
-        This function helps to retrieve the values of different parameters or attributes associated with a given Maya node (like transformLimits). The node can be a string name, an object or a list of nodes.
-
-        Parameters:
-            node (str/obj): The node for which the attributes need to be queried.
-            cmd (str): The name of the Maya command that is to be executed. For example, 'transformLimits'.
-            parameters (list): A list of strings representing the parameters of the command to query. For example, ['enableTranslationX','translationX'].
-
-        Returns:
-            dict: A dictionary where each key is a queried parameter name and the corresponding value is the returned attribute value from the query. For example, {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]}.
-
-        Example:
-            >>> get_parameter_mapping(obj, 'transformLimits', ['enableTranslationX','translationX'])
-            {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]}
-        """
-        cmd = getattr(pm, cmd)
-        node = pm.ls(node)[0]
-
-        return {p: cmd(node, **{"q": True, p: True}) for p in parameters}
+        """Query a specified Maya command and return a dict mapping parameters to their values."""
+        cmd_fn = getattr(cmds, cmd)
+        node_list = cmds.ls(str(node)) or []
+        if not node_list:
+            return {}
+        node = node_list[0]
+        return {p: cmd_fn(node, **{"q": True, p: True}) for p in parameters}
 
     @staticmethod
     def set_parameter_mapping(node, cmd, parameters):
-        """Applies a set of parameter values to a specified Maya node using a given Maya command.
-
-        Parameters:
-            node (str/obj/list): The object to query attributes of.
-            parameters (dict): The command's parameters and their desired values. ie. {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]}
-
-        Example:
-            >>> apply_parameter_mapping(obj, 'transformLimits', {'enableTranslationX': [False, False], 'translationX': [-1.0, 1.0]})
-        """
-        cmd = getattr(pm, cmd)
-        node = pm.ls(node)[0]
-
+        """Apply a set of parameter values to a specified Maya node using a given Maya command."""
+        cmd_fn = getattr(cmds, cmd)
+        node_list = cmds.ls(str(node)) or []
+        if not node_list:
+            return
+        node = node_list[0]
         for p, v in parameters.items():
-            cmd(node, **{p: v})
+            cmd_fn(node, **{p: v})
 
     @classmethod
     def build_mesh_similarity_mapping(
         cls,
-        source: Union[str, object, List[Union[str, object]]],
-        target: Union[str, object, List[Union[str, object]]],
+        source,
+        target,
         tolerance: float = 0.1,
     ) -> dict:
-        """Builds a mapping of source meshes to target meshes based on geometric similarity within a specified tolerance.
-        This method identifies the most similar target mesh for each source mesh to facilitate targeted UV transfer.
-
-        Parameters:
-            source (Union[str, pm.nt.Transform, List[Union[str, pm.nt.Transform]]]): The source mesh(es) for
-                which to find matching target mesh(es). Can be a string name, a PyNode object, or a list of these.
-            target (Union[str, pm.nt.Transform, List[Union[str, pm.nt.Transform]]]): The target mesh(es) to be
-                matched with the source mesh(es). Can be a string name, a PyNode object, or a list of these.
-            tolerance (float): The similarity tolerance within which two meshes are considered similar.
-                Defaults to 0.1.
-
-        Returns:
-            dict: A dictionary mapping the names of source meshes to their most similar target mesh names.
-        """
+        """Build a mapping of source meshes to target meshes based on geometric similarity."""
         from mayatk.node_utils._node_utils import NodeUtils
 
         source_group = NodeUtils.get_unique_children(source)
@@ -515,16 +516,19 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
                     best_match = target_child
 
             if best_match:
-                mapping[source_child.name()] = best_match.name()
+                mapping[short_name(source_child)] = short_name(best_match)
 
         return mapping
 
     @staticmethod
     def get_mel_globals(keyword=None, ignore_case=True):
         """Get global MEL variables."""
+        env_listing = mel.eval("env") or []
+        if isinstance(env_listing, str):
+            env_listing = env_listing.split()
         variables = [
             v
-            for v in sorted(pm.mel.eval("env"))
+            for v in sorted(env_listing)
             if not keyword
             or (
                 v.count(keyword)
@@ -536,165 +540,118 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
 
     @staticmethod
     def reorder_objects(objects=None, method="name", reverse=False):
-        """Reorder a given set of objects using various sorting methods.
-
-        Parameters:
-            objects (str, list, pm.PyNode, None): Objects to reorder.
-                Can be a string, list, PyNode, or None. If None, uses current selection.
-            method (str): Sorting method to use. Options:
-                'name' - Sort alphabetically by object name
-                'hierarchy' - Sort by hierarchy depth (root to leaf)
-                'x', 'y', 'z' - Sort by position along specified axis
-                'distance' - Sort by distance from origin
-                'volume' - Sort by bounding box volume
-                'vertex_count' - Sort by number of vertices
-                'random' - Randomize order
-                'creation_time' - Sort by creation time (oldest to newest)
-            reverse (bool): If True, reverse the sorting order. Default is False.
-
-        Returns:
-            list: List of reordered PyMEL objects
-
-        Example:
-            # Sort selected objects by name
-            sorted_objs = reorder_objects()
-
-            # Sort specific objects by Y position, reversed
-            sorted_objs = reorder_objects(['pCube1', 'pSphere1', 'pCylinder1'], method='y', reverse=True)
-
-            # Sort by hierarchy depth
-            sorted_objs = reorder_objects(method='hierarchy')
-
-            # Randomize selection order
-            sorted_objs = reorder_objects(method='random')
-        """
-        # Get objects - use pm.ls to handle strings, lists, etc.
+        """Reorder a given set of objects using various sorting methods."""
         if objects is None:
-            obj_list = pm.ls(selection=True, flatten=True)
+            obj_list = cmds.ls(selection=True, flatten=True) or []
             if not obj_list:
-                pm.warning("No objects provided and nothing selected.")
+                cmds.warning("No objects provided and nothing selected.")
                 return []
         else:
-            obj_list = pm.ls(objects, flatten=True)
+            obj_list = cmds.ls(as_strings(objects), flatten=True) or []
 
         if not obj_list:
-            pm.warning("No valid objects to reorder.")
+            cmds.warning("No valid objects to reorder.")
             return []
 
-        # Sort based on method
         if method == "name":
-            sorted_objs = sorted(obj_list, key=lambda x: x.nodeName())
+            sorted_objs = sorted(obj_list, key=leaf_name)
 
         elif method == "hierarchy":
-            # Sort by hierarchy depth (number of parents)
             def get_hierarchy_depth(obj):
-                depth = 0
-                parent = obj.getParent()
-                while parent:
-                    depth += 1
-                    parent = parent.getParent()
-                return depth
+                long_paths = cmds.ls(obj, long=True) or [obj]
+                return long_paths[0].count("|")
 
             sorted_objs = sorted(obj_list, key=get_hierarchy_depth)
 
         elif method in ["x", "y", "z"]:
-            # Sort by position along specified axis
             axis_map = {"x": 0, "y": 1, "z": 2}
             axis_index = axis_map[method]
 
             def get_position(obj):
                 try:
-                    # Try to get world space translation
-                    if hasattr(obj, "getTranslation"):
-                        return obj.getTranslation(space="world")[axis_index]
-                    else:
-                        return 0
-                except:
+                    pos = cmds.xform(obj, q=True, ws=True, t=True) or [0, 0, 0]
+                    return pos[axis_index]
+                except Exception:
                     return 0
 
             sorted_objs = sorted(obj_list, key=get_position)
 
         elif method == "distance":
-            # Sort by distance from origin
             def get_distance(obj):
                 try:
-                    if hasattr(obj, "getTranslation"):
-                        pos = obj.getTranslation(space="world")
-                        return (pos.x**2 + pos.y**2 + pos.z**2) ** 0.5
-                    else:
-                        return 0
-                except:
+                    pos = cmds.xform(obj, q=True, ws=True, t=True) or [0, 0, 0]
+                    return (pos[0] ** 2 + pos[1] ** 2 + pos[2] ** 2) ** 0.5
+                except Exception:
                     return 0
 
             sorted_objs = sorted(obj_list, key=get_distance)
 
         elif method == "volume":
-            # Sort by bounding box volume
             def get_volume(obj):
                 try:
-                    if hasattr(obj, "getBoundingBox"):
-                        bbox = obj.getBoundingBox(space="world")
-                        width = bbox.width()
-                        height = bbox.height()
-                        depth = bbox.depth()
-                        return width * height * depth
-                    else:
-                        return 0
-                except:
+                    bb = cmds.exactWorldBoundingBox(obj)
+                    return (bb[3] - bb[0]) * (bb[4] - bb[1]) * (bb[5] - bb[2])
+                except Exception:
                     return 0
 
             sorted_objs = sorted(obj_list, key=get_volume)
 
         elif method == "vertex_count":
-            # Sort by number of vertices
             def get_vertex_count(obj):
                 try:
-                    # Try to get shape node if this is a transform
                     shapes = []
-                    if hasattr(obj, "getShapes"):
-                        shapes = obj.getShapes()
-                    elif obj.nodeType() in ["mesh", "nurbsCurve", "nurbsSurface"]:
+                    if cmds.objectType(obj) == "transform":
+                        shapes = (
+                            cmds.listRelatives(obj, shapes=True, noIntermediate=True)
+                            or []
+                        )
+                    elif cmds.nodeType(obj) in ("mesh", "nurbsCurve", "nurbsSurface"):
                         shapes = [obj]
 
                     if shapes:
-                        # Get vertex count from first shape
                         shape = shapes[0]
-                        if shape.nodeType() == "mesh":
-                            return shape.numVertices()
-                        elif shape.nodeType() == "nurbsCurve":
-                            return shape.numCVs()
-                        elif shape.nodeType() == "nurbsSurface":
-                            return shape.numCVsInU() * shape.numCVsInV()
+                        node_type = cmds.nodeType(shape)
+                        if node_type == "mesh":
+                            return cmds.polyEvaluate(shape, vertex=True) or 0
+                        elif node_type == "nurbsCurve":
+                            spans = cmds.getAttr(f"{shape}.spans")
+                            degree = cmds.getAttr(f"{shape}.degree")
+                            form = cmds.getAttr(f"{shape}.form")
+                            # form 2 = closed, form 0/1 = open/periodic open
+                            return spans + degree if form != 2 else spans
+                        elif node_type == "nurbsSurface":
+                            # numCVsInU = spansU + degreeU
+                            spans_u = cmds.getAttr(f"{shape}.spansU") or 0
+                            spans_v = cmds.getAttr(f"{shape}.spansV") or 0
+                            degree_u = cmds.getAttr(f"{shape}.degreeU") or 0
+                            degree_v = cmds.getAttr(f"{shape}.degreeV") or 0
+                            return (spans_u + degree_u) * (spans_v + degree_v)
                     return 0
-                except:
+                except Exception:
                     return 0
 
             sorted_objs = sorted(obj_list, key=get_vertex_count)
 
         elif method == "random":
-            # Randomize order
             import random
 
             sorted_objs = list(obj_list)
             random.shuffle(sorted_objs)
 
         elif method == "creation_time":
-            # Sort by creation time (oldest to newest)
             def get_creation_time(obj):
                 try:
-                    # Use the object's UUID as a proxy for creation order
-                    # Objects created earlier typically have lower UUID values
-                    return obj.uuid()
-                except:
+                    uuids = cmds.ls(obj, uuid=True) or []
+                    return uuids[0] if uuids else ""
+                except Exception:
                     return ""
 
             sorted_objs = sorted(obj_list, key=get_creation_time)
 
         else:
-            pm.warning(f"Unknown sorting method: '{method}'. Using 'name' instead.")
-            sorted_objs = sorted(obj_list, key=lambda x: x.nodeName())
+            cmds.warning(f"Unknown sorting method: '{method}'. Using 'name' instead.")
+            sorted_objs = sorted(obj_list, key=leaf_name)
 
-        # Reverse if requested
         if reverse:
             sorted_objs = sorted_objs[::-1]
 

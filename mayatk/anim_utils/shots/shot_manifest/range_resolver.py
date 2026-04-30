@@ -140,14 +140,23 @@ def resolve_ranges(
             # steps that have no corresponding detected region.
             if use_selected_keys:
                 continue
-            # Sequential placement from cursor.
-            # In use_default mode, still consult compute_duration so audio
-            # (from_source) and behavior-derived durations drive per-step
-            # sizing; default_duration is only the fallback for steps with
-            # no resolvable behavior duration.
+            # Sequential placement from cursor.  In use_default mode the
+            # caller opts into uniform sizing.  Audio steps still consult
+            # compute_duration so clips render at their real length;
+            # purely template-driven steps (e.g. fade_in/out) take the
+            # uniform default so authoring isn't penalised for declaring
+            # behaviors.
             start = cursor
             if use_default:
-                dur = compute_duration(step.objects, fallback=default_duration)
+                has_audio = any(
+                    getattr(o, "kind", "") == "audio" for o in step.objects
+                )
+                if has_audio:
+                    dur = compute_duration(
+                        step.objects, fallback=default_duration
+                    )
+                else:
+                    dur = default_duration
             else:
                 dur = compute_duration(step.objects)
             resolved.append((step.step_id, start, None, False))
@@ -164,9 +173,15 @@ def resolve_ranges(
                 step_obj = step_by_id.get(step_id)
                 objs = step_obj.objects if step_obj else []
                 if use_default:
-                    end = start + compute_duration(
-                        objs, fallback=default_duration
+                    has_audio = any(
+                        getattr(o, "kind", "") == "audio" for o in objs
                     )
+                    if has_audio:
+                        end = start + compute_duration(
+                            objs, fallback=default_duration
+                        )
+                    else:
+                        end = start + default_duration
                 else:
                     end = start + compute_duration(objs)
         resolved[i] = (step_id, start, end, is_user)

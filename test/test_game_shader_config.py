@@ -7,7 +7,7 @@ import sys
 import pythontk as ptk
 import mayatk as mtk
 from base_test import MayaTkTestCase
-import pymel.core as pm
+import maya.cmds as cmds
 
 
 class GameShaderConfigTest(MayaTkTestCase):
@@ -47,8 +47,8 @@ class GameShaderConfigTest(MayaTkTestCase):
             # Check if standard surface was created
             self.assertEqual(mtk.NodeUtils.get_type(node), "shadingEngine")
 
-            surface_shader = pm.listConnections(
-                node.surfaceShader, source=True, destination=False
+            surface_shader = cmds.listConnections(
+                f"{node}.surfaceShader", source=True, destination=False
             )
             self.assertTrue(surface_shader)
             self.assertEqual(
@@ -56,9 +56,9 @@ class GameShaderConfigTest(MayaTkTestCase):
             )
 
             # Check if Arnold nodes were created
-            if hasattr(node, "aiSurfaceShader"):
-                ai_shader = pm.listConnections(
-                    node.aiSurfaceShader, source=True, destination=False
+            if cmds.attributeQuery("aiSurfaceShader", node=str(node), exists=True):
+                ai_shader = cmds.listConnections(
+                    f"{node}.aiSurfaceShader", source=True, destination=False
                 )
                 self.assertTrue(ai_shader)
                 self.assertEqual(
@@ -81,8 +81,8 @@ class GameShaderConfigTest(MayaTkTestCase):
             self.assertTrue(call_kwargs.get("mask_map"))
 
             # Check if StingrayPBS was created (default)
-            surface_shader = pm.listConnections(
-                node.surfaceShader, source=True, destination=False
+            surface_shader = cmds.listConnections(
+                f"{node}.surfaceShader", source=True, destination=False
             )
             self.assertTrue(surface_shader)
             self.assertEqual(mtk.NodeUtils.get_type(surface_shader[0]), "StingrayPBS")
@@ -104,8 +104,8 @@ class GameShaderConfigTest(MayaTkTestCase):
                 shader_type="stingray",
             )
 
-            surface_shader = pm.listConnections(
-                node.surfaceShader, source=True, destination=False
+            surface_shader = cmds.listConnections(
+                f"{node}.surfaceShader", source=True, destination=False
             )
             self.assertTrue(surface_shader)
             self.assertEqual(mtk.NodeUtils.get_type(surface_shader[0]), "StingrayPBS")
@@ -127,8 +127,8 @@ class GameShaderConfigTest(MayaTkTestCase):
                 shader_type="stingray",
             )
 
-            surface_shader = pm.listConnections(
-                node.surfaceShader, source=True, destination=False
+            surface_shader = cmds.listConnections(
+                f"{node}.surfaceShader", source=True, destination=False
             )
             self.assertTrue(surface_shader)
             self.assertEqual(mtk.NodeUtils.get_type(surface_shader[0]), "StingrayPBS")

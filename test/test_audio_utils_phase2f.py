@@ -134,7 +134,9 @@ class TestRenameTrack(MayaTkTestCase):
         enum_str = cmds.attributeQuery(
             "audio_clip_step", node=_schema.CARRIER_NODE, listEnum=True
         )[0]
-        self.assertEqual(enum_str, "off:step")
+        # Per-track enums use the unified "off:on" label since the per-track
+        # ID is encoded in the attribute name (audio_clip_<track_id>).
+        self.assertEqual(enum_str, "off:on")
 
     def test_updates_file_map(self):
         _events.ensure_track_attr("footstep")
@@ -304,7 +306,7 @@ class TestMigrateLegacyTriggers(MayaTkTestCase):
         cmds.lockNode(obj, lock=True, lockName=True)
         _migrate.migrate_legacy_triggers(obj)
         # The obj still exists (wasn't deleted) and is still locked.
-        self.assertTrue(cmds.objExists(obj))
+        self.assertTrue(cmds.objExists(str(obj)))
         self.assertTrue(cmds.lockNode(obj, q=True, lock=True)[0])
 
 

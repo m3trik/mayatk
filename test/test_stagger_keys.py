@@ -28,11 +28,11 @@ except ImportError:
     except ImportError:
         pass
 
-import pymel.core as pm
 import mayatk as mtk
 from mayatk.anim_utils.stagger_keys import StaggerKeys
 
 from base_test import MayaTkTestCase
+import maya.cmds as cmds
 
 
 class TestStaggerKeyframes(MayaTkTestCase):
@@ -47,24 +47,24 @@ class TestStaggerKeyframes(MayaTkTestCase):
 
         # Create animation:
         # Cube 1: 0-10
-        pm.setKeyframe(self.cube1, t=0, v=0, at="tx")
-        pm.setKeyframe(self.cube1, t=10, v=10, at="tx")
+        cmds.setKeyframe(self.cube1, t=0, v=0, at="tx")
+        cmds.setKeyframe(self.cube1, t=10, v=10, at="tx")
 
         # Cube 2: 0-10 (same duration)
-        pm.setKeyframe(self.cube2, t=0, v=0, at="tx")
-        pm.setKeyframe(self.cube2, t=10, v=10, at="tx")
+        cmds.setKeyframe(self.cube2, t=0, v=0, at="tx")
+        cmds.setKeyframe(self.cube2, t=10, v=10, at="tx")
 
         # Cube 3: 0-10 (same duration)
-        pm.setKeyframe(self.cube3, t=0, v=0, at="tx")
-        pm.setKeyframe(self.cube3, t=10, v=10, at="tx")
+        cmds.setKeyframe(self.cube3, t=0, v=0, at="tx")
+        cmds.setKeyframe(self.cube3, t=10, v=10, at="tx")
 
     def test_sequential_stagger_gap(self):
         """Test sequential stagger with 5 frame gap."""
         StaggerKeys.stagger_keys(self.objects, spacing=5)
 
-        c1_start = pm.keyframe(self.cube1, q=True, tc=True)[0]
-        c2_start = pm.keyframe(self.cube2, q=True, tc=True)[0]
-        c3_start = pm.keyframe(self.cube3, q=True, tc=True)[0]
+        c1_start = cmds.keyframe(self.cube1, q=True, tc=True)[0]
+        c2_start = cmds.keyframe(self.cube2, q=True, tc=True)[0]
+        c3_start = cmds.keyframe(self.cube3, q=True, tc=True)[0]
 
         self.assertAlmostEqual(c1_start, 0)
         self.assertAlmostEqual(c2_start, 15)  # 10 + 5
@@ -74,9 +74,9 @@ class TestStaggerKeyframes(MayaTkTestCase):
         """Test sequential stagger with 2 frame overlap (-2)."""
         StaggerKeys.stagger_keys(self.objects, spacing=-2)
 
-        c1_start = pm.keyframe(self.cube1, q=True, tc=True)[0]
-        c2_start = pm.keyframe(self.cube2, q=True, tc=True)[0]
-        c3_start = pm.keyframe(self.cube3, q=True, tc=True)[0]
+        c1_start = cmds.keyframe(self.cube1, q=True, tc=True)[0]
+        c2_start = cmds.keyframe(self.cube2, q=True, tc=True)[0]
+        c3_start = cmds.keyframe(self.cube3, q=True, tc=True)[0]
 
         self.assertAlmostEqual(c1_start, 0)
         self.assertAlmostEqual(c2_start, 8)  # 10 - 2
@@ -86,9 +86,9 @@ class TestStaggerKeyframes(MayaTkTestCase):
         """Test interval stagger with 20 frame interval."""
         StaggerKeys.stagger_keys(self.objects, spacing=20, use_intervals=True)
 
-        c1_start = pm.keyframe(self.cube1, q=True, tc=True)[0]
-        c2_start = pm.keyframe(self.cube2, q=True, tc=True)[0]
-        c3_start = pm.keyframe(self.cube3, q=True, tc=True)[0]
+        c1_start = cmds.keyframe(self.cube1, q=True, tc=True)[0]
+        c2_start = cmds.keyframe(self.cube2, q=True, tc=True)[0]
+        c3_start = cmds.keyframe(self.cube3, q=True, tc=True)[0]
 
         self.assertAlmostEqual(c1_start, 0)
         self.assertAlmostEqual(c2_start, 20)
@@ -101,9 +101,9 @@ class TestStaggerKeyframes(MayaTkTestCase):
             self.objects, spacing=5, use_intervals=True, avoid_overlap=True
         )
 
-        c1_start = pm.keyframe(self.cube1, q=True, tc=True)[0]
-        c2_start = pm.keyframe(self.cube2, q=True, tc=True)[0]
-        c3_start = pm.keyframe(self.cube3, q=True, tc=True)[0]
+        c1_start = cmds.keyframe(self.cube1, q=True, tc=True)[0]
+        c2_start = cmds.keyframe(self.cube2, q=True, tc=True)[0]
+        c3_start = cmds.keyframe(self.cube3, q=True, tc=True)[0]
 
         self.assertAlmostEqual(c1_start, 0)
         self.assertAlmostEqual(c2_start, 10)  # Skips 5 because 5 < 10
@@ -114,14 +114,14 @@ class TestStaggerKeyframes(MayaTkTestCase):
         # Setup overlapping objects
         # Cube 1: 0-10
         # Cube 2: 5-15 (overlaps with Cube 1)
-        pm.cutKey(self.cube2)
-        pm.setKeyframe(self.cube2, t=5, v=0, at="tx")
-        pm.setKeyframe(self.cube2, t=15, v=10, at="tx")
+        cmds.cutKey(self.cube2)
+        cmds.setKeyframe(self.cube2, t=5, v=0, at="tx")
+        cmds.setKeyframe(self.cube2, t=15, v=10, at="tx")
 
         # Cube 3: 16-26 (does NOT overlap with Group 1 which ends at 15)
-        pm.cutKey(self.cube3)
-        pm.setKeyframe(self.cube3, t=16, v=0, at="tx")
-        pm.setKeyframe(self.cube3, t=26, v=10, at="tx")
+        cmds.cutKey(self.cube3)
+        cmds.setKeyframe(self.cube3, t=16, v=0, at="tx")
+        cmds.setKeyframe(self.cube3, t=26, v=10, at="tx")
 
         # Group 1: 0-15 (Cube 1 & Cube 2)
         # Group 2: 16-26 (Cube 3)
@@ -130,9 +130,9 @@ class TestStaggerKeyframes(MayaTkTestCase):
 
         StaggerKeys.stagger_keys(self.objects, spacing=5, group_overlapping=True)
 
-        c1_start = pm.keyframe(self.cube1, q=True, tc=True)[0]
-        c2_start = pm.keyframe(self.cube2, q=True, tc=True)[0]
-        c3_start = pm.keyframe(self.cube3, q=True, tc=True)[0]
+        c1_start = cmds.keyframe(self.cube1, q=True, tc=True)[0]
+        c2_start = cmds.keyframe(self.cube2, q=True, tc=True)[0]
+        c3_start = cmds.keyframe(self.cube3, q=True, tc=True)[0]
 
         self.assertAlmostEqual(c1_start, 0)
         self.assertAlmostEqual(c2_start, 5)  # Should not move relative to Cube 1
@@ -146,9 +146,9 @@ class TestStaggerKeyframes(MayaTkTestCase):
         # Cube 1: 30-40 (25 + 5)
         StaggerKeys.stagger_keys(self.objects, spacing=5, invert=True)
 
-        c1_start = pm.keyframe(self.cube1, q=True, tc=True)[0]
-        c2_start = pm.keyframe(self.cube2, q=True, tc=True)[0]
-        c3_start = pm.keyframe(self.cube3, q=True, tc=True)[0]
+        c1_start = cmds.keyframe(self.cube1, q=True, tc=True)[0]
+        c2_start = cmds.keyframe(self.cube2, q=True, tc=True)[0]
+        c3_start = cmds.keyframe(self.cube3, q=True, tc=True)[0]
 
         self.assertAlmostEqual(c3_start, 0)
         self.assertAlmostEqual(c2_start, 15)
@@ -157,16 +157,16 @@ class TestStaggerKeyframes(MayaTkTestCase):
     def test_stagger_ignore_attribute(self):
         """Test that ignored attributes are not moved."""
         # Add key on ty for cube 2
-        pm.setKeyframe(self.cube2, t=0, v=0, at="ty")
-        pm.setKeyframe(self.cube2, t=10, v=10, at="ty")
+        cmds.setKeyframe(self.cube2, t=0, v=0, at="ty")
+        cmds.setKeyframe(self.cube2, t=10, v=10, at="ty")
 
         # Stagger but ignore 'translateY'
         StaggerKeys.stagger_keys(self.objects, spacing=5, ignore="translateY")
 
         # tx should move
-        c2_tx_start = pm.keyframe(self.cube2, at="tx", q=True, tc=True)[0]
+        c2_tx_start = cmds.keyframe(self.cube2, at="tx", q=True, tc=True)[0]
         # ty should NOT move (stay at 0)
-        c2_ty_start = pm.keyframe(self.cube2, at="ty", q=True, tc=True)[0]
+        c2_ty_start = cmds.keyframe(self.cube2, at="ty", q=True, tc=True)[0]
 
         self.assertAlmostEqual(c2_tx_start, 15)
         self.assertAlmostEqual(c2_ty_start, 0)
@@ -176,9 +176,9 @@ class TestStaggerKeyframes(MayaTkTestCase):
         # Start at frame 100
         StaggerKeys.stagger_keys(self.objects, spacing=5, start_frame=100)
 
-        c1_start = pm.keyframe(self.cube1, q=True, tc=True)[0]
-        c2_start = pm.keyframe(self.cube2, q=True, tc=True)[0]
-        c3_start = pm.keyframe(self.cube3, q=True, tc=True)[0]
+        c1_start = cmds.keyframe(self.cube1, q=True, tc=True)[0]
+        c2_start = cmds.keyframe(self.cube2, q=True, tc=True)[0]
+        c3_start = cmds.keyframe(self.cube3, q=True, tc=True)[0]
 
         self.assertAlmostEqual(c1_start, 100)
         self.assertAlmostEqual(c2_start, 115)  # 100 + 10 + 5
@@ -189,9 +189,9 @@ class TestStaggerKeyframes(MayaTkTestCase):
         # Spacing 0.5 = 50% of duration (10 frames) = 5 frames
         StaggerKeys.stagger_keys(self.objects, spacing=0.5)
 
-        c1_start = pm.keyframe(self.cube1, q=True, tc=True)[0]
-        c2_start = pm.keyframe(self.cube2, q=True, tc=True)[0]
-        c3_start = pm.keyframe(self.cube3, q=True, tc=True)[0]
+        c1_start = cmds.keyframe(self.cube1, q=True, tc=True)[0]
+        c2_start = cmds.keyframe(self.cube2, q=True, tc=True)[0]
+        c3_start = cmds.keyframe(self.cube3, q=True, tc=True)[0]
 
         self.assertAlmostEqual(c1_start, 0)
         self.assertAlmostEqual(c2_start, 15)  # 10 + 5
@@ -207,8 +207,8 @@ class TestStaggerKeyframes(MayaTkTestCase):
         # Cube 2: 15-25 (10 + 5)
         StaggerKeys.stagger_keys(objects, spacing=5)
 
-        c1_start = pm.keyframe(self.cube1, q=True, tc=True)[0]
-        c2_start = pm.keyframe(self.cube2, q=True, tc=True)[0]
+        c1_start = cmds.keyframe(self.cube1, q=True, tc=True)[0]
+        c2_start = cmds.keyframe(self.cube2, q=True, tc=True)[0]
 
         self.assertAlmostEqual(c1_start, 0)
         self.assertAlmostEqual(c2_start, 15)
@@ -224,17 +224,17 @@ class TestStaggerSplitStatic(MayaTkTestCase):
     def test_split_static_basic(self):
         """Test splitting a single object with a static gap."""
         # Create animation: 0-10 active, 10-50 static, 50-60 active
-        pm.setKeyframe(self.cube, t=0, v=0, at="tx")
-        pm.setKeyframe(self.cube, t=10, v=10, at="tx")
-        pm.setKeyframe(self.cube, t=50, v=10, at="tx")  # Static hold 10-50
-        pm.setKeyframe(self.cube, t=60, v=20, at="tx")
+        cmds.setKeyframe(self.cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(self.cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(self.cube, t=50, v=10, at="tx")  # Static hold 10-50
+        cmds.setKeyframe(self.cube, t=60, v=20, at="tx")
 
         # Stagger with split_static=True
         StaggerKeys.stagger_keys(
             [self.cube], start_frame=0, spacing=0, split_static=True
         )
 
-        times = pm.keyframe(self.cube, q=True, tc=True)
+        times = cmds.keyframe(self.cube, q=True, tc=True)
         self.assertIn(0.0, times)
         self.assertIn(20.0, times)
         self.assertTrue(any(abs(t - 10.0) < 0.001 for t in times))
@@ -244,28 +244,28 @@ class TestStaggerSplitStatic(MayaTkTestCase):
         cube2 = self.create_test_cube()
 
         # Cube 1: 0-10, gap, 50-60
-        pm.setKeyframe(self.cube, t=0, v=0, at="tx")
-        pm.setKeyframe(self.cube, t=10, v=10, at="tx")
-        pm.setKeyframe(self.cube, t=50, v=10, at="tx")
-        pm.setKeyframe(self.cube, t=60, v=20, at="tx")
+        cmds.setKeyframe(self.cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(self.cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(self.cube, t=50, v=10, at="tx")
+        cmds.setKeyframe(self.cube, t=60, v=20, at="tx")
 
         # Cube 2: 0-10
-        pm.setKeyframe(cube2, t=0, v=0, at="tx")
-        pm.setKeyframe(cube2, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube2, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube2, t=10, v=10, at="tx")
 
         StaggerKeys.stagger_keys(
             [self.cube, cube2], start_frame=0, spacing=0, split_static=True
         )
 
         # Check Cube 1
-        c1_times = sorted(pm.keyframe(self.cube, q=True, tc=True))
+        c1_times = sorted(cmds.keyframe(self.cube, q=True, tc=True))
         self.assertIn(0.0, c1_times)
         # With time-sorting, Cube 2 (starts 0) comes before Cube 1 Seg 2 (starts 50)
         # So: C1_S1(0-10) -> C2(10-20) -> C1_S2(20-30)
         self.assertIn(20.0, c1_times)
 
         # Check Cube 2
-        c2_times = sorted(pm.keyframe(cube2, q=True, tc=True))
+        c2_times = sorted(cmds.keyframe(cube2, q=True, tc=True))
         self.assertIn(10.0, c2_times)
         self.assertIn(20.0, c2_times)
 
@@ -274,14 +274,14 @@ class TestStaggerSplitStatic(MayaTkTestCase):
         cube2 = self.create_test_cube()
 
         # Cube 1: 0-10, gap, 50-60
-        pm.setKeyframe(self.cube, t=0, v=0, at="tx")
-        pm.setKeyframe(self.cube, t=10, v=10, at="tx")
-        pm.setKeyframe(self.cube, t=50, v=10, at="tx")
-        pm.setKeyframe(self.cube, t=60, v=20, at="tx")
+        cmds.setKeyframe(self.cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(self.cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(self.cube, t=50, v=10, at="tx")
+        cmds.setKeyframe(self.cube, t=60, v=20, at="tx")
 
         # Cube 2: 5-15
-        pm.setKeyframe(cube2, t=5, v=0, at="tx")
-        pm.setKeyframe(cube2, t=15, v=10, at="tx")
+        cmds.setKeyframe(cube2, t=5, v=0, at="tx")
+        cmds.setKeyframe(cube2, t=15, v=10, at="tx")
 
         StaggerKeys.stagger_keys(
             [self.cube, cube2],
@@ -292,14 +292,14 @@ class TestStaggerSplitStatic(MayaTkTestCase):
         )
 
         # Check Cube 1
-        c1_times = sorted(pm.keyframe(self.cube, q=True, tc=True))
+        c1_times = sorted(cmds.keyframe(self.cube, q=True, tc=True))
         self.assertIn(0.0, c1_times)
         self.assertIn(10.0, c1_times)
         self.assertIn(15.0, c1_times)
         self.assertIn(25.0, c1_times)
 
         # Check Cube 2
-        c2_times = sorted(pm.keyframe(cube2, q=True, tc=True))
+        c2_times = sorted(cmds.keyframe(cube2, q=True, tc=True))
         self.assertIn(5.0, c2_times)
         self.assertIn(15.0, c2_times)
 
@@ -312,26 +312,26 @@ class TestStaggerTangents(MayaTkTestCase):
     def test_stagger_smooth_tangents_skips_visibility(self):
         """Test that smooth_tangents skips visibility attributes."""
         # Create visibility keys (stepped)
-        pm.setKeyframe(self.cube1, t=0, v=1, at="visibility")
-        pm.setKeyframe(self.cube1, t=10, v=0, at="visibility")
+        cmds.setKeyframe(self.cube1, t=0, v=1, at="visibility")
+        cmds.setKeyframe(self.cube1, t=10, v=0, at="visibility")
 
         # Create transform keys (linear)
-        pm.setKeyframe(self.cube1, t=0, v=0, at="tx")
-        pm.setKeyframe(self.cube1, t=10, v=10, at="tx")
+        cmds.setKeyframe(self.cube1, t=0, v=0, at="tx")
+        cmds.setKeyframe(self.cube1, t=10, v=10, at="tx")
 
         # Ensure initial state
-        pm.keyTangent(self.cube1, at="visibility", outTangentType="step")
-        pm.keyTangent(self.cube1, at="tx", outTangentType="linear")
+        cmds.keyTangent(self.cube1, at="visibility", outTangentType="step")
+        cmds.keyTangent(self.cube1, at="tx", outTangentType="linear")
 
         # Stagger with smooth_tangents=True
         StaggerKeys.stagger_keys([self.cube1], spacing=5, smooth_tangents=True)
 
         # Check visibility tangents (should still be step)
-        vis_tangent = pm.keyTangent(
-            self.cube1, at="visibility", t=0, q=True, outTangentType=True
+        vis_tangent = cmds.keyTangent(
+            self.cube1, at="visibility", t=(0, 0), q=True, outTangentType=True
         )[0]
-        tx_tangent = pm.keyTangent(
-            self.cube1, at="tx", t=0, q=True, outTangentType=True
+        tx_tangent = cmds.keyTangent(
+            self.cube1, at="tx", t=(0, 0), q=True, outTangentType=True
         )[0]
 
         # Visibility should NOT be auto/spline
@@ -352,12 +352,12 @@ class TestStaggerSharedCurves(MayaTkTestCase):
         cube2 = self.create_test_cube("cube2")
 
         # Create animation on cube1
-        pm.setKeyframe(cube1, t=0, v=0, at="tx")
-        pm.setKeyframe(cube1, t=30, v=10, at="tx")
+        cmds.setKeyframe(cube1, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube1, t=30, v=10, at="tx")
 
         # Connect cube2.tx to the SAME animCurve as cube1.tx
-        anim_curve = pm.listConnections(cube1.tx, type="animCurve")[0]
-        pm.connectAttr(anim_curve.output, cube2.tx, force=True)
+        anim_curve = cmds.listConnections(f"{cube1}.tx", type="animCurve")[0]
+        cmds.connectAttr(f"{anim_curve}.output", f"{cube2}.tx", force=True)
 
         # Stagger them with spacing=0 (should result in NO shift if treated as one group)
         # If treated as separate, the second object would trigger a shift on the shared curve.
@@ -367,7 +367,7 @@ class TestStaggerSharedCurves(MayaTkTestCase):
             spacing=0,
         )
 
-        times = pm.keyframe(cube1, q=True, tc=True)
+        times = cmds.keyframe(cube1, q=True, tc=True)
 
         # If they were double-shifted, the keys would move.
         # If merged, they stay at 0-30 (since spacing=0 and they are the first/only group).
@@ -406,16 +406,16 @@ class TestStaggerSortOrder(MayaTkTestCase):
 
         # Create animation in time order: A, B, C
         # A: 0-10
-        pm.setKeyframe(self.objA, t=0, v=0, at="tx")
-        pm.setKeyframe(self.objA, t=10, v=10, at="tx")
+        cmds.setKeyframe(self.objA, t=0, v=0, at="tx")
+        cmds.setKeyframe(self.objA, t=10, v=10, at="tx")
 
         # B: 20-30
-        pm.setKeyframe(self.objB, t=20, v=0, at="tx")
-        pm.setKeyframe(self.objB, t=30, v=10, at="tx")
+        cmds.setKeyframe(self.objB, t=20, v=0, at="tx")
+        cmds.setKeyframe(self.objB, t=30, v=10, at="tx")
 
         # C: 40-50
-        pm.setKeyframe(self.objC, t=40, v=0, at="tx")
-        pm.setKeyframe(self.objC, t=50, v=10, at="tx")
+        cmds.setKeyframe(self.objC, t=40, v=0, at="tx")
+        cmds.setKeyframe(self.objC, t=50, v=10, at="tx")
 
     def test_stagger_sorts_by_time(self):
         """Test that objects are staggered in time order even if passed in random order."""
@@ -429,16 +429,16 @@ class TestStaggerSortOrder(MayaTkTestCase):
         # If not sorted, it would be C (40-50), B (50-60), A (60-70) or similar
 
         # Check A
-        self.assertEqual(pm.keyframe(self.objA, q=True, tc=True)[0], 0.0)
-        self.assertEqual(pm.keyframe(self.objA, q=True, tc=True)[-1], 10.0)
+        self.assertEqual(cmds.keyframe(self.objA, q=True, tc=True)[0], 0.0)
+        self.assertEqual(cmds.keyframe(self.objA, q=True, tc=True)[-1], 10.0)
 
         # Check B
-        self.assertEqual(pm.keyframe(self.objB, q=True, tc=True)[0], 10.0)
-        self.assertEqual(pm.keyframe(self.objB, q=True, tc=True)[-1], 20.0)
+        self.assertEqual(cmds.keyframe(self.objB, q=True, tc=True)[0], 10.0)
+        self.assertEqual(cmds.keyframe(self.objB, q=True, tc=True)[-1], 20.0)
 
         # Check C
-        self.assertEqual(pm.keyframe(self.objC, q=True, tc=True)[0], 20.0)
-        self.assertEqual(pm.keyframe(self.objC, q=True, tc=True)[-1], 30.0)
+        self.assertEqual(cmds.keyframe(self.objC, q=True, tc=True)[0], 20.0)
+        self.assertEqual(cmds.keyframe(self.objC, q=True, tc=True)[-1], 30.0)
 
     def test_stagger_invert_respects_sort(self):
         """Test that invert reverses the TIME sorted order, not selection order."""
@@ -453,13 +453,13 @@ class TestStaggerSortOrder(MayaTkTestCase):
         # C starts at 0 (or whatever start_frame defaults to, usually earliest key = 0)
 
         # C: 0-10
-        self.assertEqual(pm.keyframe(self.objC, q=True, tc=True)[0], 0.0)
+        self.assertEqual(cmds.keyframe(self.objC, q=True, tc=True)[0], 0.0)
 
         # B: 10-20
-        self.assertEqual(pm.keyframe(self.objB, q=True, tc=True)[0], 10.0)
+        self.assertEqual(cmds.keyframe(self.objB, q=True, tc=True)[0], 10.0)
 
         # A: 20-30
-        self.assertEqual(pm.keyframe(self.objA, q=True, tc=True)[0], 20.0)
+        self.assertEqual(cmds.keyframe(self.objA, q=True, tc=True)[0], 20.0)
 
 
 class TestSharedCurveCollapse(MayaTkTestCase):
@@ -472,12 +472,12 @@ class TestSharedCurveCollapse(MayaTkTestCase):
 
         # Create a shared animation curve
         # Keys at 0 and 10. Duration 10.
-        pm.setKeyframe(self.objA, t=0, v=0, at="tx")
-        pm.setKeyframe(self.objA, t=10, v=10, at="tx")
+        cmds.setKeyframe(self.objA, t=0, v=0, at="tx")
+        cmds.setKeyframe(self.objA, t=10, v=10, at="tx")
 
         # Connect objB.tx to the same curve
-        curve = pm.listConnections(self.objA.tx, type="animCurveTL")[0]
-        pm.connectAttr(curve.output, self.objB.tx)
+        curve = cmds.listConnections(f"{self.objA}.tx", type="animCurveTL")[0]
+        cmds.connectAttr(f"{curve}.output", f"{self.objB}.tx")
 
     def test_partial_overlap_collapse(self):
         """
@@ -490,7 +490,7 @@ class TestSharedCurveCollapse(MayaTkTestCase):
         # Start at 0. Force start to 5. Shift = 5.
         StaggerKeys.stagger_keys(objects, start_frame=5, spacing=0)
 
-        final_keys = pm.keyframe(self.objA, q=True, tc=True)
+        final_keys = cmds.keyframe(self.objA, q=True, tc=True)
 
         # Expected: Keys shifted by 5 -> [5.0, 15.0]. Duration 10.
         self.assertEqual(final_keys[0], 5.0, "Start frame should be 5.0")
@@ -511,16 +511,16 @@ class TestStaggerKeysFixes(MayaTkTestCase):
         self.cube = self.create_test_cube("test_stagger_fix_cube")
 
         # Create standard animation 0-10
-        pm.setKeyframe(self.cube, t=0, v=0, at="tx")
-        pm.setKeyframe(self.cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(self.cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(self.cube, t=10, v=10, at="tx")
 
         # Create visibility animation (stepped)
-        pm.setKeyframe(self.cube, t=0, v=1, at="visibility")
-        pm.setKeyframe(self.cube, t=5, v=0, at="visibility")
-        pm.setKeyframe(self.cube, t=10, v=1, at="visibility")
+        cmds.setKeyframe(self.cube, t=0, v=1, at="visibility")
+        cmds.setKeyframe(self.cube, t=5, v=0, at="visibility")
+        cmds.setKeyframe(self.cube, t=10, v=1, at="visibility")
 
         # Ensure visibility is stepped initially
-        pm.keyTangent(self.cube, at="visibility", itt="step", ott="step")
+        cmds.keyTangent(self.cube, at="visibility", itt="step", ott="step")
 
     def test_visibility_tangent_preservation(self):
         """Test that visibility tangents remain 'step' after staggering."""
@@ -528,12 +528,12 @@ class TestStaggerKeysFixes(MayaTkTestCase):
         StaggerKeys.stagger_keys(objects=[self.cube], start_frame=5, spacing=0)
 
         # Check visibility tangents
-        times = pm.keyframe(self.cube, at="visibility", q=True, tc=True)
+        times = cmds.keyframe(self.cube, at="visibility", q=True, tc=True)
         for t in times:
-            in_type = pm.keyTangent(
+            in_type = cmds.keyTangent(
                 self.cube, at="visibility", t=(t,), q=True, itt=True
             )[0]
-            out_type = pm.keyTangent(
+            out_type = cmds.keyTangent(
                 self.cube, at="visibility", t=(t,), q=True, ott=True
             )[0]
 

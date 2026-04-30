@@ -10,6 +10,7 @@ import pythontk as ptk
 from uitk import Signals
 from uitk.widgets.mixins.tooltip_mixin import fmt
 
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.anim_utils.shots._shots import (
     ShotStore,
     StoreEvent,
@@ -584,10 +585,9 @@ class ShotsController(ptk.LoggingMixin):
             store.notify_settings_changed()
             return
 
-        import pymel.core as pm
 
         if scope == "all":
-            with pm.UndoChunk():
+            with CoreUtils.undo_chunk():
                 seq.respace(gap=store.gap, start_frame=sorted_s[0].start)
         else:
             active_id = store.active_shot_id
@@ -599,7 +599,7 @@ class ShotsController(ptk.LoggingMixin):
             if idx is None:
                 store.notify_settings_changed()
                 return
-            with pm.UndoChunk():
+            with CoreUtils.undo_chunk():
                 if scope in ("start", "start_end") and idx > 0:
                     seq.move_shot(active_id, sorted_s[idx - 1].end + store.gap)
                     sorted_s = seq.sorted_shots()
@@ -651,10 +651,9 @@ class ShotsController(ptk.LoggingMixin):
         from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
             ShotSequencer,
         )
-        import pymel.core as pm
 
         seq = ShotSequencer(store=store)
-        with pm.UndoChunk():
+        with CoreUtils.undo_chunk():
             seq.move_shot(shot.shot_id, value)
         store.mark_dirty()
 
@@ -674,11 +673,10 @@ class ShotsController(ptk.LoggingMixin):
         from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
             ShotSequencer,
         )
-        import pymel.core as pm
 
         seq = ShotSequencer(store=store)
         shifted_audio: set = set()
-        with pm.UndoChunk():
+        with CoreUtils.undo_chunk():
             old_end = shot.end
             store.update_shot(shot.shot_id, end=value)
             seq._ripple_downstream(shot.shot_id, old_end, delta, shifted_audio)
@@ -808,10 +806,9 @@ class ShotsController(ptk.LoggingMixin):
         from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
             ShotSequencer,
         )
-        import pymel.core as pm
 
         seq = ShotSequencer(store=store)
-        with pm.UndoChunk():
+        with CoreUtils.undo_chunk():
             seq.move_shot_to_position(store.active_shot_id, target_pos)
 
         self._populate_shot_combobox(store)
@@ -826,10 +823,9 @@ class ShotsController(ptk.LoggingMixin):
         from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
             ShotSequencer,
         )
-        import pymel.core as pm
 
         seq = ShotSequencer(store=store)
-        with pm.UndoChunk():
+        with CoreUtils.undo_chunk():
             seq.trim_shot_to_content(store.active_shot_id)
 
         store.notify_settings_changed()
@@ -843,10 +839,9 @@ class ShotsController(ptk.LoggingMixin):
         from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
             ShotSequencer,
         )
-        import pymel.core as pm
 
         seq = ShotSequencer(store=store)
-        with pm.UndoChunk():
+        with CoreUtils.undo_chunk():
             for shot in list(store.shots):
                 seq.trim_shot_to_content(shot.shot_id)
 

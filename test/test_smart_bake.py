@@ -2,6 +2,7 @@
 # coding=utf-8
 """Tests for SmartBake module."""
 import unittest
+import maya.cmds as cmds
 
 
 class TestSmartBake(unittest.TestCase):
@@ -621,7 +622,7 @@ class TestSmartBake(unittest.TestCase):
 
         # Should have created an override layer
         self.assertIsNotNone(result.override_layer)
-        self.assertTrue(cmds.objExists(result.override_layer))
+        self.assertTrue(cmds.objExists(f"{result}.override_layer"))
 
         # Should have optimized the baked curves
         self.assertTrue(len(result.optimized) > 0)

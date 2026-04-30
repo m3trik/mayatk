@@ -1,4 +1,4 @@
-import pymel.core as pm
+import maya.cmds as cmds
 import sys
 import os
 
@@ -17,41 +17,48 @@ class TestOriginalMeshSeparated(base_test.QuickTestCase):
         Test instancing on a group named 'original_mesh_separated' containing identical objects.
         """
         # 1. Setup: Create the group and objects
-        group = pm.group(em=True, n="original_mesh_separated")
+        group = cmds.group(em=True, n="original_mesh_separated")
 
         # Create a prototype cube
-        proto = pm.polyCube(w=10, h=10, d=10, n="Cube_Proto")[0]
+        proto = cmds.polyCube(w=10, h=10, d=10, n="Cube_Proto")[0]
         # Add some detail to make it unique/identifiable if needed, but simple cube is fine for basic test
 
         # Create duplicates inside the group
         cubes = []
         for i in range(5):
-            dup = pm.duplicate(proto, n=f"Cube_{i}")[0]
-            pm.parent(dup, group)
-            pm.move(dup, i * 20, 0, 0)
+            dup = cmds.duplicate(proto, n=f"Cube_{i}")[0]
+            cmds.parent(dup, group)
+            cmds.move(i * 20, 0, 0, dup)
             cubes.append(dup)
 
-        pm.delete(proto)  # Cleanup prototype, we only want the group content
+        cmds.delete(proto)  # Cleanup prototype, we only want the group content
 
         # 2. Execution: Run AutoInstancer
-        # Pass children of the group, as AutoInstancer expects leaf meshes by default
-        children = group.getChildren(type="transform")
-        instancer = AutoInstancer()
+        # Pass children of the group, as AutoInstancer expects leaf meshes by default.
+        # separate_combined=True enables the second-pass leaf instancer; without
+        # it, low-triangle meshes are routed to the COMBINE strategy and the
+        # first pass (GPU_INSTANCE only) skips them.
+        children = (cmds.listRelatives(str(group), children=True, type="transform") or [])
+        instancer = AutoInstancer(separate_combined=True)
         instancer.run(nodes=children)
 
         # 3. Verification
         # We expect the cubes to be instanced.
 
         # Check that we have instances
-        shapes = pm.ls(dag=True, leaf=True, type="mesh")
-        # Filter for shapes in our group
-        group_shapes = [s for s in shapes if s.isChildOf(group)]
+        shapes = cmds.ls(dag=True, leaf=True, type="mesh")
+        # Filter for shapes in our group (any DAG path under the group)
+        group_long = cmds.ls(group, long=True)[0]
+        group_shapes = []
+        for s in shapes:
+            paths = cmds.ls(s, long=True) or []
+            if any(p.startswith(group_long + "|") for p in paths):
+                group_shapes.append(s)
 
         # Check if the shapes are instances
         instance_count = 0
         for shape in group_shapes:
-            # getAllParents() returns all parents of the shape
-            parents = shape.getAllParents()
+            parents = cmds.listRelatives(shape, allParents=True) or []
             if len(parents) > 1:
                 instance_count += 1
 
@@ -63,7 +70,7 @@ class TestOriginalMeshSeparated(base_test.QuickTestCase):
 
         # Check instances using listRelatives(allParents=True)
         # Note: We need to pass the MObject or ensure we get all parents of the underlying node
-        parents = pm.listRelatives(first_shape, allParents=True)
+        parents = cmds.listRelatives(first_shape, allParents=True)
 
         print(f"Shape: {first_shape}")
         print(f"Shape parents (listRelatives): {len(parents)}")

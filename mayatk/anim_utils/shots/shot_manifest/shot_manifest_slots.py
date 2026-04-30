@@ -818,13 +818,13 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     def _show_in_outliner(self, obj_name: str) -> None:
         """Select *obj_name* and reveal it in Maya's Outliner."""
         try:
-            import pymel.core as pm
+            import maya.cmds as cmds
         except ImportError:
             return
-        if not pm.objExists(obj_name):
+        if not cmds.objExists(obj_name):
             self._set_footer(f"'{obj_name}' not found in scene.", color="#D4908F")
             return
-        pm.select(obj_name, replace=True)
+        cmds.select(obj_name, replace=True)
         from mayatk.ui_utils._ui_utils import UiUtils
 
         UiUtils.reveal_in_outliner([obj_name])
@@ -1372,7 +1372,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             return
 
         try:
-            import pymel.core as pm
+            import maya.cmds as cmds
         except ImportError:
             self._set_footer("Maya is required to build shots.", color=ERROR_COLOR)
             return
@@ -1474,7 +1474,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             # Detection mode: don't remove existing shots not in steps
             remove = not self._is_detection_mode
 
-            pm.undoInfo(openChunk=True, chunkName="ShotManifest_build")
+            cmds.undoInfo(openChunk=True, chunkName="ShotManifest_build")
             self._building = True
             try:
                 with store.batch_update():
@@ -1492,7 +1492,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                         store.source_csv = csv_path
             finally:
                 self._building = False
-                pm.undoInfo(closeChunk=True)
+                cmds.undoInfo(closeChunk=True)
 
             # Store the store for later handoff to Shot Sequencer UI
             self._store = store
@@ -1582,7 +1582,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             return
 
         try:
-            import pymel.core as pm
+            import maya.cmds as cmds
         except ImportError:
             self._set_footer("Maya is required to assess shots.", color=ERROR_COLOR)
             return

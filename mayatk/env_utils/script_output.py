@@ -1,11 +1,12 @@
 # !/usr/bin/python
 # coding=utf-8
+import maya.cmds as cmds
+import maya.mel as mel
 from typing import List, Optional
 from qtpy import QtWidgets, QtGui, QtCore
 from maya.OpenMayaUI import MQtUtil
 from maya.app.general.mayaMixin import MayaQWidgetDockableMixin
 from shiboken6 import wrapInstance
-import pymel.core as pm
 from mayatk.env_utils.maya_connection import MayaConnection
 
 
@@ -133,14 +134,14 @@ class ScriptOutput(QtWidgets.QTextEdit):
 
         menu.addSeparator()  # Always ensure Script Editor is present
         ws_name = "scriptEditorPanel1Window"
-        if not pm.workspaceControl(ws_name, exists=True):
-            pm.mel.eval("ScriptEditor;")
-            pm.workspaceControl(ws_name, edit=True, visible=True)
+        if not cmds.workspaceControl(ws_name, exists=True):
+            mel.eval("ScriptEditor;")
+            cmds.workspaceControl(ws_name, edit=True, visible=True)
 
         # Get current echo state using MEL for more reliability
         try:
             # Use the correct MEL command for echo all commands
-            echo_all = bool(pm.mel.eval("commandEcho -query -state"))
+            echo_all = bool(mel.eval("commandEcho -query -state"))
         except Exception:
             echo_all = False
 
@@ -152,14 +153,14 @@ class ScriptOutput(QtWidgets.QTextEdit):
             try:
                 # Use MEL commands for more reliable operation
                 if checked:
-                    pm.mel.eval("commandEcho -state on")
+                    mel.eval("commandEcho -state on")
                 else:
-                    pm.mel.eval("commandEcho -state off")
+                    mel.eval("commandEcho -state off")
 
                 print(f"Echo All Commands: {'ON' if checked else 'OFF'}")
 
                 # Verify the change took effect
-                actual_state = bool(pm.mel.eval("commandEcho -query -state"))
+                actual_state = bool(mel.eval("commandEcho -query -state"))
 
                 if actual_state != checked:
                     print(
@@ -219,26 +220,26 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
     @staticmethod
     def _ensure_script_editor_initialized() -> bool:
         ws_name = "scriptEditorPanel1Window"
-        was_open = pm.workspaceControl(ws_name, exists=True)
-        if not was_open or not pm.workspaceControl(ws_name, query=True, visible=True):
-            pm.mel.eval("ScriptEditor;")
-            pm.workspaceControl(ws_name, edit=True, visible=True)
+        was_open = cmds.workspaceControl(ws_name, exists=True)
+        if not was_open or not cmds.workspaceControl(ws_name, query=True, visible=True):
+            mel.eval("ScriptEditor;")
+            cmds.workspaceControl(ws_name, edit=True, visible=True)
         return was_open
 
     @staticmethod
     def _hide_script_editor() -> None:
         ws_name = "scriptEditorPanel1Window"
         try:
-            pm.workspaceControl(ws_name, edit=True, visible=False)
+            cmds.workspaceControl(ws_name, edit=True, visible=False)
         except Exception:
             pass
 
     @classmethod
     def _delete_existing_workspace_control(cls):
         ws_name = "ScriptConsoleWorkspaceControl"
-        if pm.workspaceControl(ws_name, exists=True):
+        if cmds.workspaceControl(ws_name, exists=True):
             try:
-                pm.deleteUI(ws_name)
+                cmds.deleteUI(ws_name)
             except Exception:
                 pass
 
@@ -284,24 +285,24 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
         cls._instance.show(dockable=True, workspaceControlName=ws_name)
 
         def force_dock_and_resize():
-            if pm.workspaceControl(ws_name, exists=True):
+            if cmds.workspaceControl(ws_name, exists=True):
                 try:
                     # Set size
                     if width is not None:
-                        pm.workspaceControl(ws_name, edit=True, resizeWidth=width)
+                        cmds.workspaceControl(ws_name, edit=True, resizeWidth=width)
                     if height is not None:
-                        pm.workspaceControl(ws_name, edit=True, resizeHeight=height)
+                        cmds.workspaceControl(ws_name, edit=True, resizeHeight=height)
 
                     # Dock logic
                     if dock:
                         if isinstance(dock, str):
-                            pm.workspaceControl(
+                            cmds.workspaceControl(
                                 ws_name,
                                 edit=True,
                                 dockToMainWindow=(dock.lower(), False),
                             )
                         elif isinstance(dock, (tuple, list)) and len(dock) == 2:
-                            pm.workspaceControl(
+                            cmds.workspaceControl(
                                 ws_name,
                                 edit=True,
                                 dockToControl=(dock[0], dock[1].lower()),
@@ -317,7 +318,7 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
                             "right": "east",
                         }.get(tab_position.lower())
                         if tab_dir:
-                            pm.workspaceControl(
+                            cmds.workspaceControl(
                                 ws_name, edit=True, tabPosition=(tab_dir, -1)
                             )
                         else:

@@ -4,7 +4,8 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
+    import maya.api.OpenMaya as om
 except ImportError as error:  # pragma: no cover - Maya environment required
     print(__file__, error)
 
@@ -48,7 +49,7 @@ class ScaleKeys:
 
         by_speed = mode == "speed"
         if mode not in {"uniform", "speed"}:
-            pm.warning(f"Invalid mode '{mode}'. Using 'uniform'.")
+            cmds.warning(f"Invalid mode '{mode}'. Using 'uniform'.")
             mode = "uniform"
             by_speed = False
 
@@ -69,29 +70,29 @@ class ScaleKeys:
             try:
                 return float(value)
             except (TypeError, ValueError):
-                pm.warning(f"Invalid time_range value '{value}'. Ignoring component.")
+                cmds.warning(f"Invalid time_range value '{value}'. Ignoring component.")
                 return None
 
         base_start = _coerce_to_float(base_start_raw)
         base_end = _coerce_to_float(base_end_raw)
         range_specified = base_start is not None or base_end is not None
 
-        objects = pm.selected() if objects is None else objects
+        objects = (cmds.ls(selection=True) or []) if objects is None else objects
         if not objects:
             # We'll handle validation failure by setting objects to empty list
             # and checking in execute
             objects = []
         else:
-            objects = pm.ls(objects, flatten=True)
+            objects = cmds.ls(objects, flatten=True)
 
         channel_box_attrs = None
         if channel_box_attrs_only:
-            channel_box_attrs = pm.channelBox(
+            channel_box_attrs = cmds.channelBox(
                 "mainChannelBox", query=True, selectedMainAttributes=True
             )
 
         if selected_keys_only and not by_speed:
-            all_selected_keys = pm.keyframe(query=True, sl=True, tc=True)
+            all_selected_keys = cmds.keyframe(query=True, sl=True, tc=True)
             if not all_selected_keys:
                 # Will handle in execute
                 pass
@@ -102,13 +103,13 @@ class ScaleKeys:
             "per_object",
             "overlap_groups",
         }:
-            pm.warning(
+            cmds.warning(
                 f"Unsupported group_mode '{group_mode}'. Falling back to 'single_group'."
             )
             group_mode_normalized = "single_group"
 
         if by_speed and selected_keys_only:
-            pm.warning(
+            cmds.warning(
                 "selected_keys_only is not supported with mode='speed'. Processing all keys in range."
             )
             selected_keys_only = False
@@ -307,7 +308,7 @@ class ScaleKeys:
         """Execute a scale operation directly."""
         keys_scaled = 0
         for curve in curves:
-            if not pm.objExists(curve):
+            if not cmds.objExists(curve):
                 continue
 
             kwargs = {
@@ -317,15 +318,15 @@ class ScaleKeys:
             if time_range:
                 kwargs["time"] = time_range
                 # Verify keys exist in range before scaling to avoid warnings/errors
-                if not pm.keyframe(curve, query=True, time=time_range):
+                if not cmds.keyframe(curve, query=True, time=time_range):
                     continue
-                keys_scaled += pm.keyframe(
+                keys_scaled += cmds.keyframe(
                     curve, query=True, keyframeCount=True, time=time_range
                 )
             else:
-                keys_scaled += pm.keyframe(curve, query=True, keyframeCount=True)
+                keys_scaled += cmds.keyframe(curve, query=True, keyframeCount=True)
 
-            pm.scaleKey(curve, **kwargs)
+            cmds.scaleKey(curve, **kwargs)
         return keys_scaled
 
     def _execute_move_operation(
@@ -335,7 +336,7 @@ class ScaleKeys:
         allow_merge: bool = False,
     ) -> int:
         """Execute a move operation directly."""
-        if not pm.objExists(curve):
+        if not cmds.objExists(curve):
             return 0
         return self.utils._move_curve_keys(curve, time_pairs, allow_merge=allow_merge)
 
@@ -348,7 +349,7 @@ class ScaleKeys:
         """Execute a shift operation directly."""
         keys_scaled = 0
         for curve in curves:
-            if not pm.objExists(curve):
+            if not cmds.objExists(curve):
                 continue
 
             kwargs = {
@@ -358,29 +359,29 @@ class ScaleKeys:
             }
             if time_range:
                 kwargs["time"] = time_range
-                if not pm.keyframe(curve, query=True, time=time_range):
+                if not cmds.keyframe(curve, query=True, time=time_range):
                     continue
-                keys_scaled += pm.keyframe(
+                keys_scaled += cmds.keyframe(
                     curve, query=True, keyframeCount=True, time=time_range
                 )
             else:
-                keys_scaled += pm.keyframe(curve, query=True, keyframeCount=True)
+                keys_scaled += cmds.keyframe(curve, query=True, keyframeCount=True)
 
-            pm.keyframe(curve, **kwargs)
+            cmds.keyframe(curve, **kwargs)
         return keys_scaled
 
     @staticmethod
     def _filter_curves_by_channel_box(
-        curves: Optional[List[Union[str, "pm.PyNode"]]],
+        curves: Optional[List[str]],
         channel_box_attrs: Optional[List[str]],
-    ) -> List["pm.PyNode"]:
+    ) -> List[str]:
         """Restrict curves to those whose attributes are selected in the channel box."""
 
         if not curves:
             return []
 
         if not channel_box_attrs:
-            return [pm.PyNode(curve) for curve in curves]
+            return [str(curve) for curve in curves]
 
         # Parse channel box attrs into full names and simple names (last component)
         allowed_full: Set[str] = set()
@@ -406,31 +407,35 @@ class ScaleKeys:
                 allowed_simple.add(attr_lower)
 
         if not allowed_full and not allowed_simple:
-            return [pm.PyNode(curve) for curve in curves]
+            return [str(curve) for curve in curves]
 
-        filtered: List["pm.PyNode"] = []
+        filtered: List[str] = []
         for curve in curves:
-            try:
-                curve_node = pm.PyNode(curve)
-            except Exception:
+            curve_str = str(curve)
+            if not cmds.objExists(curve_str):
                 continue
 
             connections = (
-                pm.listConnections(
-                    curve_node, plugs=True, destination=True, source=False
+                cmds.listConnections(
+                    curve_str, plugs=True, destination=True, source=False
                 )
                 or []
             )
 
             for conn in connections:
-                attr_name = conn.attrName()
-                if not attr_name:
+                # conn is a plug string "node.attrPath"; attrName is the leaf attribute.
+                if "." not in conn:
+                    continue
+                node_part, _, attr_path = conn.partition(".")
+                attr_leaf = attr_path.split(".")[-1]
+                if not attr_leaf:
                     continue
 
-                attr_key = attr_name.lower()
-                full_name = f"{conn.node().name()}.{attr_name}".lower()
+                attr_key = attr_leaf.lower()
+                node_short = node_part.split("|")[-1].split(":")[-1]
+                full_name = f"{node_short}.{attr_leaf}".lower()
                 if attr_key in allowed_simple or full_name in allowed_full:
-                    filtered.append(curve_node)
+                    filtered.append(curve_str)
                     break
 
         return filtered
@@ -451,11 +456,11 @@ class ScaleKeys:
         try:
             factor_val = float(self.factor)
         except (TypeError, ValueError):
-            pm.warning("Factor must be a numeric value in speed mode.")
+            cmds.warning("Factor must be a numeric value in speed mode.")
             return 0
 
         if factor_val <= 0.0:
-            pm.warning("Factor must be greater than 0 in speed mode.")
+            cmds.warning("Factor must be greater than 0 in speed mode.")
             return 0
 
         for group in groups:
@@ -478,7 +483,7 @@ class ScaleKeys:
 
                 num_curves = len(info.get("all_curves", []))
                 if num_curves == 0:
-                    pm.warning(
+                    cmds.warning(
                         f"Object {info['object']} has no curves in range {object_range}"
                     )
                     continue
@@ -493,7 +498,7 @@ class ScaleKeys:
                 )
 
                 if not sample_times or total_distance <= 1e-6:
-                    pm.warning(
+                    cmds.warning(
                         f"No motion detected for {info['object']} in range {object_range}. "
                         f"Speed-based retiming requires spatial movement. Skipping {num_curves} curve(s)."
                     )
@@ -640,7 +645,7 @@ class ScaleKeys:
     ) -> int:
         """Execute uniform scaling for a group."""
         if factor <= 0:
-            pm.warning("Scale factor must be greater than 0.")
+            cmds.warning("Scale factor must be greater than 0.")
             return 0
 
         is_identity_scale = not self.absolute and abs(factor - 1.0) < 1e-6
@@ -767,7 +772,7 @@ class ScaleKeys:
                         # if query_time_arg:
                         #     kwargs["time"] = query_time_arg
 
-                        times = pm.keyframe(curve, **kwargs)
+                        times = cmds.keyframe(curve, **kwargs)
 
                         if query_time_arg and times:
                             start, end = query_time_arg
@@ -1142,28 +1147,28 @@ class ScaleKeys:
                 if self.absolute
                 else f"{float(self.factor):.2f}x speed"
             )
-            pm.displayInfo(
+            om.MGlobal.displayInfo(
                 f"Retimed {keys_scaled} keyframes to {speed_info} using {mode_label} ranges (objects processed={processed_objects}){range_info}."
             )
         else:
-            pm.warning(
+            cmds.warning(
                 "No keyframes were retimed. Check the specified objects and time range."
             )
 
     def _warn_no_targets(self) -> None:
         diagnostics = self.diagnostics or {}
         if diagnostics.get("filtered_by_channel_box") and self.channel_box_attrs:
-            pm.warning(
+            cmds.warning(
                 "No keyframes matched the selected channel box attributes. "
                 "Clear the channel box selection or choose keyed attributes."
             )
         elif diagnostics.get("filtered_by_ignore") and self.ignore:
-            pm.warning(
+            cmds.warning(
                 "All keyed attributes were filtered out by the ignore list: "
                 f"{self.ignore}"
             )
         else:
-            pm.warning(
+            cmds.warning(
                 "No animation curves found to retime."
                 if self.by_speed
                 else "No keyframes found to scale."
@@ -1244,11 +1249,11 @@ class ScaleKeys:
             if self.absolute:
                 scale_info = f"to {self.factor:.2f} frames"
 
-            pm.displayInfo(
+            om.MGlobal.displayInfo(
                 f"Scaled {keys_scaled} {selection_type} keys {scale_info} using {mode_label_map[self.group_mode]}{pivot_info}{range_info}."
             )
         else:
-            pm.warning("No keyframes found to scale.")
+            cmds.warning("No keyframes found to scale.")
 
     @staticmethod
     def _segments_to_object_info(

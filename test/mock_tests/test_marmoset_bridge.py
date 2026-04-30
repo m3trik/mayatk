@@ -1,28 +1,47 @@
 import sys
 from unittest.mock import MagicMock
 
-# 1. Mock Maya and Pymel modules BEFORE importing mayatk
-mock_maya = MagicMock()
-mock_cmds = MagicMock()
-mock_pm = MagicMock()
-mock_pymel = MagicMock()
+# Detect whether real maya.cmds / pymel are already loaded (run_tests.py path).
+# If so, skip mocking entirely — mocks would corrupt sys.modules and break
+# imports of production modules that need the real Maya runtime.
+_REAL_MAYA_AVAILABLE = "maya.cmds" in sys.modules and not isinstance(
+    sys.modules.get("maya.cmds"), MagicMock
+)
 
-sys.modules["maya"] = mock_maya
-sys.modules["maya.cmds"] = mock_cmds
-# LINK mocks to ensure consistency
-mock_maya.cmds = mock_cmds
-sys.modules["maya.mel"] = MagicMock()
-sys.modules["maya.api"] = MagicMock()
-sys.modules["maya.api.OpenMaya"] = MagicMock()
-sys.modules["maya.OpenMaya"] = MagicMock()
-sys.modules["pymel"] = mock_pymel
-sys.modules["pymel.core"] = mock_pm
+if _REAL_MAYA_AVAILABLE:
+    mock_pm = sys.modules.get("pymel.core")
+    mock_cmds = sys.modules["maya.cmds"]
+else:
+    # 1. Mock Maya and Pymel modules BEFORE importing mayatk
+    mock_maya = MagicMock()
+    mock_maya.__name__ = "maya"
+    mock_cmds = MagicMock()
+    mock_cmds.__name__ = "maya.cmds"
+    mock_pm = MagicMock()
+    mock_pm.__name__ = "pymel.core"
+    mock_pymel = MagicMock()
+    mock_pymel.__name__ = "pymel"
 
-# 2. Setup common mocks
-# Mock pm.ls() to return list of mocks
-mock_pm.ls.return_value = []
-# Mock pm.selected()
-mock_pm.selected.return_value = []
+    sys.modules["maya"] = mock_maya
+    sys.modules["maya.cmds"] = mock_cmds
+    # LINK mocks to ensure consistency
+    mock_maya.cmds = mock_cmds
+    _mock_mel = MagicMock(); _mock_mel.__name__ = "maya.mel"
+    _mock_api = MagicMock(); _mock_api.__name__ = "maya.api"
+    _mock_om = MagicMock(); _mock_om.__name__ = "maya.api.OpenMaya"
+    _mock_om1 = MagicMock(); _mock_om1.__name__ = "maya.OpenMaya"
+    sys.modules["maya.mel"] = _mock_mel
+    sys.modules["maya.api"] = _mock_api
+    sys.modules["maya.api.OpenMaya"] = _mock_om
+    sys.modules["maya.OpenMaya"] = _mock_om1
+    sys.modules["pymel"] = mock_pymel
+    sys.modules["pymel.core"] = mock_pm
+
+    # 2. Setup common mocks
+    # Mock pm.ls() to return list of mocks
+    mock_pm.ls.return_value = []
+    # Mock pm.selected()
+    mock_pm.selected.return_value = []
 
 import unittest
 import os
@@ -37,6 +56,13 @@ from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 
 
+# Skip when pymel is real (run_tests.py path) — this whole suite is mock-based.
+_PYMEL_IS_MOCKED = not _REAL_MAYA_AVAILABLE
+
+
+@unittest.skipUnless(
+    _PYMEL_IS_MOCKED, "Mock-based test — run via pytest, not run_tests.py"
+)
 class TestMarmosetBridgeStandalone(unittest.TestCase):
     def setUp(self):
         # Reset mocks

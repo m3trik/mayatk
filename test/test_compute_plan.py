@@ -118,14 +118,21 @@ class TestComputePlan(MayaTkTestCase):
         self.assertEqual(len(self.store.shots), 0, "Plan must not touch store")
 
     def test_plan_with_explicit_ranges(self):
-        """User-provided ranges are honored in the plan."""
+        """User-provided range start is honored; end is fit-driven by default."""
         steps = [_step("S1", objects=["cube1"])]
         ranges = {"S1": (10.0, 50.0)}
         plan = self.manifest._compute_plan(steps, ranges=ranges)
         creates = [p for p in plan if p.action == "created"]
         self.assertEqual(len(creates), 1)
         self.assertAlmostEqual(creates[0].start, 10.0)
-        self.assertAlmostEqual(creates[0].end, 50.0)
+        # End is driven by compute_duration / fit-mode unless zero_duration_fallback.
+        # Verify with fallback flag, end = rng[1].
+        plan2 = self.manifest._compute_plan(
+            steps, ranges=ranges, zero_duration_fallback=True
+        )
+        creates2 = [p for p in plan2 if p.action == "created"]
+        self.assertAlmostEqual(creates2[0].start, 10.0)
+        self.assertAlmostEqual(creates2[0].end, 50.0)
 
     def test_plan_locked_shots_skipped(self):
         """Locked shots appear as 'locked' in the plan."""
@@ -720,7 +727,9 @@ class TestBuildDurationEncompasses(MayaTkTestCase):
             _step("S2"),
         ]
 
-        actions = self.manifest.update(steps)
+        # fit_contents lets behavior-driven duration win over the 200f
+        # initial_shot_length default that extend_only would impose.
+        actions = self.manifest.update(steps, fit_mode="fit_contents")
         shots = self.store.sorted_shots()
 
         # S1 should be 30 frames (fade_in=15 + fade_out=15)
@@ -738,10 +747,12 @@ class TestBuildDurationEncompasses(MayaTkTestCase):
         steps = [
             _step("S1", objects=["a"], behaviors=["fade_in"]),  # 15 frames
             _step("S2", objects={"x": ["fade_in"], "y": ["fade_out"]}),  # 30 frames
-            _step("S3", objects=["b", "c"]),  # no behaviors = 30 fallback
+            _step("S3", objects=["b", "c"]),  # no behaviors -> 30 fallback
         ]
 
-        self.manifest.update(steps)
+        # fit_contents lets per-shot content size drive durations.
+        # initial_shot_length=30 sets the fallback for content-less S3.
+        self.manifest.update(steps, fit_mode="fit_contents", initial_shot_length=30)
         shots = self.store.sorted_shots()
 
         self.assertEqual(len(shots), 3)
