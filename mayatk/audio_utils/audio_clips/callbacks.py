@@ -27,7 +27,6 @@ Responsibilities:
 import logging
 
 try:
-    import pymel.core as pm
     import maya.cmds as cmds
 except ImportError:
     pass

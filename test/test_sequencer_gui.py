@@ -21,7 +21,36 @@ Usage via mayapy::
 import unittest
 import sys
 import os
+import maya.cmds as cmds
 
+import maya.mel as mel
+
+# --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
+from contextlib import contextmanager as _contextmanager
+
+
+def _pm_open_file(*args, **kw):
+    kw.setdefault("open", True)
+    return cmds.file(*args, **kw)
+
+
+def _pm_new_file(**kw):
+    kw.setdefault("new", True)
+    return cmds.file(**kw)
+
+
+def _pm_rename_file(path):
+    return cmds.file(rename=path)
+
+
+@_contextmanager
+def _pm_undo_chunk():
+    cmds.undoInfo(openChunk=True)
+    try:
+        yield
+    finally:
+        cmds.undoInfo(closeChunk=True)
+# --- end shims ---
 scripts_dir = r"O:\Cloud\Code\_scripts"
 for p in (
     scripts_dir,
@@ -73,7 +102,6 @@ except Exception:
 # ---------------------------------------------------------------------------
 if HAS_MAYA:
     import pymel.core as pm
-    import maya.cmds as cmds
 
 if HAS_MAYA and HAS_QT:
     from uitk.widgets.sequencer._sequencer import SequencerWidget
@@ -91,19 +119,19 @@ if HAS_MAYA and HAS_QT:
 
 
 def _new_scene():
-    pm.mel.file(new=True, force=True)
+    cmds.file(new=True, force=True)
 
 
 def _make_cube(name, keys, attr="translateX"):
-    cube = pm.polyCube(name=name)[0]
+    cube = cmds.polyCube(name=name)[0]
     for frame, value in keys.items():
-        pm.setKeyframe(cube, attribute=attr, time=frame, value=value)
+        cmds.setKeyframe(cube, attribute=attr, time=frame, value=value)
     return cube
 
 
 def _make_stepped_key(name, frame, value, attr="translateX"):
-    cube = pm.polyCube(name=name)[0]
-    pm.setKeyframe(cube, attribute=attr, time=frame, value=value)
+    cube = cmds.polyCube(name=name)[0]
+    cmds.setKeyframe(cube, attribute=attr, time=frame, value=value)
     curves = cmds.listConnections(str(cube), type="animCurve", s=True, d=False) or []
     for crv in curves:
         cmds.keyTangent(crv, time=(frame, frame), outTangentType="step")
@@ -409,7 +437,7 @@ class TestEngineResize(unittest.TestCase):
         store.define_shot("S0", 0, 100, [str(c1)])
         seq = ShotSequencer(store=store)
         seq.resize_shot(0, 0, 200)
-        keys = sorted(pm.keyframe(c1, q=True, attribute="translateX"))
+        keys = sorted(cmds.keyframe(c1, q=True, attribute="translateX"))
         self.assertAlmostEqual(keys[0], 0.0, places=1)
         self.assertAlmostEqual(keys[-1], 200.0, places=1)
 
@@ -926,11 +954,11 @@ class TestUndoRestoresSegments(unittest.TestCase):
         store = ShotStore()
         store.define_shot("S0", 0, 100, [str(c1)])
         seq = ShotSequencer(store=store)
-        with pm.UndoChunk():
+        with _pm_undo_chunk():
             seq.move_object_in_shot(0, str(c1), 10, 50, 60)
         segs_moved = seq.collect_object_segments(0)
         self.assertGreater(len(segs_moved), 0, "No segments after move")
-        pm.undo()
+        cmds.undo()
         segs_undo = seq.collect_object_segments(0)
         self.assertGreater(len(segs_undo), 0, "Segments vanished after undo")
         found = {s["obj"] for s in segs_undo}
@@ -941,9 +969,9 @@ class TestUndoRestoresSegments(unittest.TestCase):
         store = ShotStore()
         store.define_shot("S0", 0, 100, [str(c1)])
         seq = ShotSequencer(store=store)
-        with pm.UndoChunk():
+        with _pm_undo_chunk():
             seq.move_object_in_shot(0, str(c1), 10, 50, 60)
-        pm.undo()
+        cmds.undo()
         curves = cmds.listConnections(str(c1), type="animCurve", s=True, d=False) or []
         times = []
         for crv in curves:
@@ -1019,7 +1047,6 @@ class TestShotResizePreservesObjects(unittest.TestCase):
 
     def test_resize_shot_preserves_key_count(self):
         """Keys should be scaled, not deleted, by a shot range resize."""
-        import maya.cmds as cmds
 
         c1 = _make_cube("rsk_a", {10: 0, 30: 5, 50: 10})
         store = ShotStore()
@@ -1047,7 +1074,6 @@ class TestShotResizePreservesObjects(unittest.TestCase):
 
     def test_resize_shot_undo_restores_keys(self):
         """Undo after resize_shot must restore original key positions."""
-        import maya.cmds as cmds
 
         c1 = _make_cube("rsu_a", {10: 0, 50: 10})
         store = ShotStore()
@@ -1057,9 +1083,9 @@ class TestShotResizePreservesObjects(unittest.TestCase):
         times_before = sorted(
             t for c in curves for t in (cmds.keyframe(c, q=True, timeChange=True) or [])
         )
-        with pm.UndoChunk():
+        with _pm_undo_chunk():
             seq.resize_shot(0, 0, 40)
-        pm.undo()
+        cmds.undo()
         shot = seq.shot_by_id(0)
         times_after = sorted(
             t for c in curves for t in (cmds.keyframe(c, q=True, timeChange=True) or [])
@@ -1084,10 +1110,9 @@ class TestVisibilityKeyMove(unittest.TestCase):
 
     def test_visibility_move_preserves_translate_keys(self):
         """Moving a visibility key must leave translate keys untouched."""
-        import maya.cmds as cmds
 
         c1 = _make_cube("vmt_a", {10: 0, 30: 5, 50: 10})
-        pm.setKeyframe(str(c1), attribute="visibility", time=10, value=1)
+        cmds.setKeyframe(str(c1), attribute="visibility", time=10, value=1)
         vis_curves = (
             cmds.listConnections(
                 str(c1) + ".visibility", type="animCurve", s=True, d=False
@@ -1123,11 +1148,10 @@ class TestVisibilityKeyMove(unittest.TestCase):
 
     def test_visibility_only_object_persists(self):
         """An object with only visibility keys must remain after key move."""
-        import maya.cmds as cmds
 
-        c1 = pm.polyCube(name="vop_a")[0]
-        pm.setKeyframe(str(c1), attribute="visibility", time=10, value=1)
-        pm.setKeyframe(str(c1), attribute="visibility", time=50, value=0)
+        c1 = cmds.polyCube(name="vop_a")[0]
+        cmds.setKeyframe(str(c1), attribute="visibility", time=10, value=1)
+        cmds.setKeyframe(str(c1), attribute="visibility", time=50, value=0)
         vis_curves = (
             cmds.listConnections(
                 str(c1) + ".visibility", type="animCurve", s=True, d=False
@@ -1151,10 +1175,9 @@ class TestVisibilityKeyMove(unittest.TestCase):
 
     def test_no_stranded_keys_at_temp_offset(self):
         """shift_curves must never leave keys stranded at ~100000."""
-        import maya.cmds as cmds
 
         c1 = _make_cube("nsk_a", {10: 0, 50: 10})
-        pm.setKeyframe(str(c1), attribute="visibility", time=10, value=1)
+        cmds.setKeyframe(str(c1), attribute="visibility", time=10, value=1)
         vis_curves = (
             cmds.listConnections(
                 str(c1) + ".visibility", type="animCurve", s=True, d=False

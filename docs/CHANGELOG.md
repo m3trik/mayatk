@@ -84,12 +84,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Optimized module loading with caching system
 - Enhanced error handling and validation
 - Performance improvements in attribute resolution
-- Better integration with PyMEL and Maya API
+- Better integration with the Maya cmds API
 
 ### Dependencies
 - Python 3.7+
 - Autodesk Maya 2020+
-- PyMEL
 - NumPy 2.3.1
 - PyYAML 6.0.2
 - QtPy

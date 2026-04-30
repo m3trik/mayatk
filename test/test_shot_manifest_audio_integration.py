@@ -40,6 +40,7 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (  # noqa: E402
 from mayatk.anim_utils.shots.shot_manifest.range_resolver import (  # noqa: E402
     resolve_ranges,
 )
+import maya.cmds as cmds
 from mayatk.anim_utils.shots.shot_manifest.behaviors import (  # noqa: E402
     compute_duration,
 )

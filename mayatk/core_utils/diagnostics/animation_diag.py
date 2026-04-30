@@ -2,17 +2,18 @@
 # coding=utf-8
 """Animation-curve diagnostics and optional repair helpers."""
 from __future__ import annotations
+
+try:
+    import maya.cmds as cmds
+except ImportError:
+    cmds = None
 from typing import Any, Dict, List, Optional, Sequence, Union
 import math
 
-try:
-    import pymel.core as pm
-except ImportError as error:  # pragma: no cover - Maya runtime specific
-    print(__file__, error)
 
 from mayatk.core_utils._core_utils import CoreUtils
 
-PyNodeLike = Union[str, "pm.PyNode"]
+NodeLike = Union[str, object]
 
 
 class AnimCurveDiagnostics:
@@ -22,7 +23,7 @@ class AnimCurveDiagnostics:
     @CoreUtils.undoable
     def repair_corrupted_curves(
         cls,
-        objects: Optional[Union[PyNodeLike, Sequence[PyNodeLike]]] = None,
+        objects: Optional[Union[NodeLike, Sequence[NodeLike]]] = None,
         recursive: bool = True,
         delete_corrupted: bool = False,
         fix_infinite: bool = True,
@@ -48,7 +49,7 @@ class AnimCurveDiagnostics:
     @CoreUtils.undoable
     def repair_visibility_tangents(
         cls,
-        objects: Optional[Union[PyNodeLike, Sequence[PyNodeLike]]] = None,
+        objects: Optional[Union[NodeLike, Sequence[NodeLike]]] = None,
         recursive: bool = True,
         quiet: bool = False,
     ) -> int:
@@ -73,7 +74,7 @@ class AnimCurveDiagnostics:
 
         if not all_curves:
             if not quiet:
-                pm.warning("No animation curves found.")
+                cmds.warning("No animation curves found.")
             return 0
 
         # Filter for visibility curves using AnimUtils helper
@@ -88,7 +89,7 @@ class AnimCurveDiagnostics:
         for curve in vis_curves:
             try:
                 # Force step tangents (apply to both sides to avoid interpolation artifacts)
-                pm.keyTangent(
+                cmds.keyTangent(
                     curve,
                     edit=True,
                     outTangentType="step",
@@ -107,7 +108,7 @@ class AnimCurveDiagnostics:
     @classmethod
     def _repair_corrupted_curves(
         cls,
-        objects: Optional[Union[PyNodeLike, Sequence[PyNodeLike]]] = None,
+        objects: Optional[Union[NodeLike, Sequence[NodeLike]]] = None,
         recursive: bool = True,
         delete_corrupted: bool = False,
         fix_infinite: bool = True,
@@ -122,7 +123,7 @@ class AnimCurveDiagnostics:
 
         if not anim_curves:
             if not quiet:
-                pm.warning("No animation curves found to check.")
+                cmds.warning("No animation curves found to check.")
             return {
                 "corrupted_found": 0,
                 "curves_repaired": 0,
@@ -146,18 +147,18 @@ class AnimCurveDiagnostics:
 
         for curve in anim_curves:
             try:
-                if not pm.objExists(curve):
+                if not cmds.objExists(curve):
                     continue
 
                 curve_name = str(curve)
-                key_count = pm.keyframe(curve, query=True, keyframeCount=True)
+                key_count = cmds.keyframe(curve, query=True, keyframeCount=True)
 
                 if not key_count:
                     continue
 
                 try:
-                    times = pm.keyframe(curve, query=True, timeChange=True) or []
-                    values = pm.keyframe(curve, query=True, valueChange=True) or []
+                    times = cmds.keyframe(curve, query=True, timeChange=True) or []
+                    values = cmds.keyframe(curve, query=True, valueChange=True) or []
                 except RuntimeError as exc:
                     stats["corrupted_found"] += 1
                     stats["details"].append(
@@ -166,7 +167,7 @@ class AnimCurveDiagnostics:
 
                     if delete_corrupted:
                         try:
-                            pm.delete(curve)
+                            cmds.delete(curve)
                             stats["curves_deleted"] += 1
                             if not quiet:
                                 print(
@@ -241,7 +242,7 @@ class AnimCurveDiagnostics:
                                 )
                         elif delete_corrupted:
                             try:
-                                pm.delete(curve)
+                                cmds.delete(curve)
                                 stats["curves_deleted"] += 1
                                 if not quiet:
                                     print(
@@ -253,7 +254,7 @@ class AnimCurveDiagnostics:
 
             except Exception as exc:
                 if not quiet:
-                    pm.warning(f"Error processing curve {curve}: {str(exc)}")
+                    cmds.warning(f"Error processing curve {curve}: {str(exc)}")
                 continue
 
         if not quiet:
@@ -271,37 +272,37 @@ class AnimCurveDiagnostics:
 
     @staticmethod
     def _collect_anim_curves(
-        objects: Optional[Union[PyNodeLike, Sequence[PyNodeLike]]],
+        objects: Optional[Union[NodeLike, Sequence[NodeLike]]],
         recursive: bool,
-    ) -> List["pm.PyNode"]:
+    ) -> List[str]:
         if objects is None:
-            return pm.ls(type="animCurve")
+            return cmds.ls(type="animCurve")
 
-        targets = pm.ls(objects, flatten=True)
+        targets = cmds.ls(objects, flatten=True)
         anim_curves = set()
 
         for target in targets:
-            if not pm.objExists(target):
+            if not cmds.objExists(target):
                 continue
 
             try:
-                if pm.nodeType(target).startswith("animCurve"):
+                if cmds.nodeType(target).startswith("animCurve"):
                     anim_curves.add(target)
                     continue
             except Exception:
                 continue
 
-            connected = pm.listConnections(target, type="animCurve", s=True, d=False)
+            connected = cmds.listConnections(target, type="animCurve", s=True, d=False)
             if connected:
                 anim_curves.update(connected)
 
             if recursive:
                 descendants = (
-                    pm.listRelatives(target, allDescendents=True, type="transform")
+                    cmds.listRelatives(target, allDescendents=True, type="transform")
                     or []
                 )
                 for descendant in descendants:
-                    connected_desc = pm.listConnections(
+                    connected_desc = cmds.listConnections(
                         descendant, type="animCurve", s=True, d=False
                     )
                     if connected_desc:
@@ -311,7 +312,7 @@ class AnimCurveDiagnostics:
 
     @staticmethod
     def _repair_curve_keys(
-        curve: "pm.PyNode",
+        curve: str,
         keys_to_fix: List[int],
         times: List[float],
         values: List[float],
@@ -340,18 +341,18 @@ class AnimCurveDiagnostics:
 
                 if should_delete:
                     try:
-                        pm.cutKey(curve, index=(key_idx, key_idx), option="keys")
+                        cmds.cutKey(curve, index=(key_idx, key_idx), option="keys")
                     except Exception:
                         try:
                             if not math.isnan(time) and not math.isinf(time):
-                                pm.cutKey(curve, time=(time, time), option="keys")
+                                cmds.cutKey(curve, time=(time, time), option="keys")
                         except Exception:
                             return False
 
             try:
-                remaining_times = pm.keyframe(curve, query=True, timeChange=True) or []
+                remaining_times = cmds.keyframe(curve, query=True, timeChange=True) or []
                 remaining_values = (
-                    pm.keyframe(curve, query=True, valueChange=True) or []
+                    cmds.keyframe(curve, query=True, valueChange=True) or []
                 )
 
                 for t_value in remaining_times:
@@ -377,5 +378,5 @@ class AnimCurveDiagnostics:
 
         except Exception as exc:
             if not quiet:
-                pm.warning(f"Failed to repair curve keys: {str(exc)}")
+                cmds.warning(f"Failed to repair curve keys: {str(exc)}")
             return False

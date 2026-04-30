@@ -3,15 +3,17 @@
 """Utilities for creating playblasts and alternative preview renders in Maya."""
 from __future__ import annotations
 
+try:
+    import maya.cmds as cmds
+    import maya.api.OpenMaya as om
+except ImportError:
+    cmds = None
+
 import os
 import glob
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-try:
-    import pymel.core as pm
-except ImportError as error:  # pragma: no cover - Maya environment only
-    print(__file__, error)
 
 import pythontk as ptk
 
@@ -35,8 +37,8 @@ class PlayblastExporter:
     _scene_name: Optional[str] = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        playback_min = pm.playbackOptions(q=True, minTime=True)
-        playback_max = pm.playbackOptions(q=True, maxTime=True)
+        playback_min = cmds.playbackOptions(q=True, minTime=True)
+        playback_max = cmds.playbackOptions(q=True, maxTime=True)
 
         self.start_frame = (
             int(self.start_frame) if self.start_frame is not None else int(playback_min)
@@ -51,7 +53,7 @@ class PlayblastExporter:
     @property
     def scene_name(self) -> str:
         if self._scene_name is None:
-            scene = pm.sceneName()
+            scene = cmds.file(query=True, sceneName=True)
             if scene:
                 self._scene_name = os.path.basename(scene).rsplit(".", 1)[0]
             else:
@@ -61,7 +63,7 @@ class PlayblastExporter:
     @staticmethod
     def _get_scene_fps() -> float:
         """Get the current scene frames per second."""
-        unit = pm.currentUnit(q=True, time=True)
+        unit = cmds.currentUnit(q=True, time=True)
         return ptk.VidUtils.get_frame_rate(unit)
 
     # ------------------------------------------------------------------
@@ -78,7 +80,7 @@ class PlayblastExporter:
         """Create a playblast using Maya's viewport capture."""
 
         # Validate camera if provided
-        if camera_name and not pm.objExists(camera_name):
+        if camera_name and not cmds.objExists(camera_name):
             raise ValueError(f"Camera '{camera_name}' does not exist.")
 
         user_kwargs = dict(kwargs)
@@ -131,7 +133,7 @@ class PlayblastExporter:
         playblast_params.pop("filename", None)
 
         print(
-            "[PlayblastExporter] Invoking pm.playblast with:",
+            "[PlayblastExporter] Invoking cmds.playblast with:",
             {
                 "filepath": resolved_filepath,
                 "start": start,
@@ -142,7 +144,7 @@ class PlayblastExporter:
         )
 
         try:
-            playblast_result = pm.playblast(
+            playblast_result = cmds.playblast(
                 filename=resolved_filepath,
                 startTime=start,
                 endTime=end,
@@ -167,7 +169,7 @@ class PlayblastExporter:
                 if valid_path
                 else os.path.dirname(resolved_filepath)
             )
-            pm.displayInfo(f"Playblast image sequence created under: {sequence_dir}")
+            om.MGlobal.displayInfo(f"Playblast image sequence created under: {sequence_dir}")
             return ptk.format_path(sequence_dir)
 
         if not valid_path:
@@ -175,7 +177,7 @@ class PlayblastExporter:
                 "Playblast failed; Maya did not report a valid output file."
             )
 
-        pm.displayInfo(f"Playblast video created at: {valid_path}")
+        om.MGlobal.displayInfo(f"Playblast video created at: {valid_path}")
         return valid_path
 
     def render_with_arnold(
@@ -196,8 +198,8 @@ class PlayblastExporter:
         output_dir = os.path.abspath(output_dir)
 
         try:
-            if not pm.pluginInfo("mtoa", query=True, loaded=True):
-                pm.loadPlugin("mtoa")
+            if not cmds.pluginInfo("mtoa", query=True, loaded=True):
+                cmds.loadPlugin("mtoa")
         except Exception:  # pragma: no cover - Maya dependency
             pass
 
@@ -209,26 +211,26 @@ class PlayblastExporter:
         prefix = prefix or self.scene_name
         start = int(start_frame) if start_frame is not None else self.start_frame
         end = int(end_frame) if end_frame is not None else self.end_frame
-        layer = render_layer or pm.editRenderLayerGlobals(
+        layer = render_layer or cmds.editRenderLayerGlobals(
             query=True, currentRenderLayer=True
         )
 
-        old_workspace_images = pm.workspace(fileRuleEntry="images")
-        old_animation = pm.getAttr("defaultRenderGlobals.animation")
-        old_start = pm.getAttr("defaultRenderGlobals.startFrame")
-        old_end = pm.getAttr("defaultRenderGlobals.endFrame")
-        old_padding = pm.getAttr("defaultRenderGlobals.framePadding")
-        old_prefix = pm.getAttr("defaultRenderGlobals.imageFilePrefix")
+        old_workspace_images = cmds.workspace(fileRuleEntry="images")
+        old_animation = cmds.getAttr("defaultRenderGlobals.animation")
+        old_start = cmds.getAttr("defaultRenderGlobals.startFrame")
+        old_end = cmds.getAttr("defaultRenderGlobals.endFrame")
+        old_padding = cmds.getAttr("defaultRenderGlobals.framePadding")
+        old_prefix = cmds.getAttr("defaultRenderGlobals.imageFilePrefix")
 
         try:
-            pm.workspace(fileRule=("images", output_dir))
-            pm.setAttr("defaultRenderGlobals.imageFilePrefix", prefix, type="string")
-            pm.setAttr("defaultRenderGlobals.animation", True)
-            pm.setAttr("defaultRenderGlobals.startFrame", start)
-            pm.setAttr("defaultRenderGlobals.endFrame", end)
-            pm.setAttr("defaultRenderGlobals.framePadding", frame_padding)
+            cmds.workspace(fileRule=("images", output_dir))
+            cmds.setAttr("defaultRenderGlobals.imageFilePrefix", prefix, type="string")
+            cmds.setAttr("defaultRenderGlobals.animation", True)
+            cmds.setAttr("defaultRenderGlobals.startFrame", start)
+            cmds.setAttr("defaultRenderGlobals.endFrame", end)
+            cmds.setAttr("defaultRenderGlobals.framePadding", frame_padding)
 
-            pm.arnoldRender(
+            cmds.arnoldRender(
                 seq=True,
                 startFrame=start,
                 endFrame=end,
@@ -237,17 +239,23 @@ class PlayblastExporter:
                 **kwargs,
             )
         finally:
-            pm.workspace(fileRule=("images", old_workspace_images or "images"))
-            pm.setAttr(
+            cmds.workspace(fileRule=("images", old_workspace_images or "images"))
+            cmds.setAttr(
                 "defaultRenderGlobals.imageFilePrefix", old_prefix, type="string"
             )
-            pm.setAttr("defaultRenderGlobals.animation", old_animation)
-            pm.setAttr("defaultRenderGlobals.startFrame", old_start)
-            pm.setAttr("defaultRenderGlobals.endFrame", old_end)
-            pm.setAttr("defaultRenderGlobals.framePadding", old_padding)
+            cmds.setAttr("defaultRenderGlobals.animation", old_animation)
+            cmds.setAttr("defaultRenderGlobals.startFrame", old_start)
+            cmds.setAttr("defaultRenderGlobals.endFrame", old_end)
+            cmds.setAttr("defaultRenderGlobals.framePadding", old_padding)
 
-        driver = pm.PyNode("defaultArnoldDriver")
-        extension = driver.ai_translator.get() or "exr"
+        # Read the Arnold driver's translator (file extension); when the
+        # plugin is not loaded or the attribute is missing, fall back to
+        # the default ``exr``.
+        try:
+            ext_raw = cmds.getAttr("defaultArnoldDriver.ai_translator")
+            extension = ext_raw if isinstance(ext_raw, str) and ext_raw else "exr"
+        except Exception:
+            extension = "exr"
 
         rendered_files: List[str] = []
         for root, _, files in os.walk(output_dir):
@@ -261,7 +269,7 @@ class PlayblastExporter:
 
         rendered_files.sort()
 
-        pm.displayInfo(
+        om.MGlobal.displayInfo(
             f"Arnold render completed: {len(rendered_files)} frame(s) written to {output_dir}"
         )
         return rendered_files
@@ -378,7 +386,7 @@ class PlayblastExporter:
 
             except Exception as exc:  # noqa: BLE001
                 summary["error"] = str(exc)
-                pm.warning(f"Playblast variant '{label}' failed: {exc}")
+                cmds.warning(f"Playblast variant '{label}' failed: {exc}")
 
             results.append(summary)
 
@@ -403,7 +411,7 @@ class PlayblastExporter:
             },
         ]
 
-        if pm.optionVar.get("tentacleEnablePlayblastSequence", 0):
+        if cmds.optionVar(exists="tentacleEnablePlayblastSequence") and cmds.optionVar(query="tentacleEnablePlayblastSequence"):
             variations.append(
                 {
                     "label": "png_sequence",
@@ -417,7 +425,7 @@ class PlayblastExporter:
                 }
             )
 
-        if pm.optionVar.get("tentacleEnableArnoldPlayblast", 0):
+        if cmds.optionVar(exists="tentacleEnableArnoldPlayblast") and cmds.optionVar(query="tentacleEnableArnoldPlayblast"):
             variations.append(
                 {
                     "label": "arnold_sequence",
@@ -488,13 +496,13 @@ class PlayblastExporter:
         if not camera_name:
             return [], {}
 
-        panels = pm.getPanel(type="modelPanel")
+        panels = cmds.getPanel(type="modelPanel")
         original = {
-            panel: pm.modelEditor(panel, q=True, camera=True) for panel in panels
+            panel: cmds.modelEditor(panel, q=True, camera=True) for panel in panels
         }
         for panel in panels:
-            if pm.control(panel, exists=True):
-                pm.modelEditor(panel, e=True, camera=camera_name)
+            if cmds.control(panel, exists=True):
+                cmds.modelEditor(panel, e=True, camera=camera_name)
         return panels, original
 
     @staticmethod
@@ -502,30 +510,30 @@ class PlayblastExporter:
         panels: List[str], original_cameras: Dict[str, str]
     ) -> None:
         for panel in panels:
-            if pm.control(panel, exists=True):
-                pm.modelEditor(panel, e=True, camera=original_cameras.get(panel))
+            if cmds.control(panel, exists=True):
+                cmds.modelEditor(panel, e=True, camera=original_cameras.get(panel))
 
-    def _resolve_camera_shape(self, camera_name: Optional[str]) -> Optional[pm.nt.Camera]:  # type: ignore[name-defined]
+    def _resolve_camera_shape(self, camera_name: Optional[str]) -> Optional[object]:  # type: ignore[name-defined]
         target_camera = camera_name or self._active_viewport_camera()
         if not target_camera:
             return None
 
-        camera_nodes = pm.ls(target_camera, dag=True, type="camera")
+        camera_nodes = cmds.ls(target_camera, dag=True, type="camera")
         if camera_nodes:
             return camera_nodes[0]
 
         try:
-            cam_node = pm.PyNode(target_camera)
-            shapes = cam_node.getShapes()
+            cam_node = target_camera
+            shapes = (cmds.listRelatives(cam_node, shapes=True, noIntermediate=True, fullPath=True) or [])
             if shapes:
                 return shapes[0]
-        except pm.MayaNodeError:
+        except cmds.MayaNodeError:
             return None
         return None
 
     @staticmethod
     def _active_viewport_camera() -> Optional[str]:
-        active_panel = pm.getPanel(withFocus=True)
-        if active_panel and pm.getPanel(typeOf=active_panel) == "modelPanel":
-            return pm.modelPanel(active_panel, query=True, camera=True)
-        return pm.lookThru(query=True)
+        active_panel = cmds.getPanel(withFocus=True)
+        if active_panel and cmds.getPanel(typeOf=active_panel) == "modelPanel":
+            return cmds.modelPanel(active_panel, query=True, camera=True)
+        return cmds.lookThru(query=True)

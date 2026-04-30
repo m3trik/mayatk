@@ -32,7 +32,7 @@ except ImportError:
     except ImportError:
         pass
 
-import pymel.core as pm
+import maya.cmds as cmds
 import mayatk as mtk
 
 try:
@@ -49,27 +49,27 @@ class TestAnimUtils(MayaTkTestCase):
     def setUp(self):
         """Set up test scene with animated object."""
         super().setUp()
-        self.cube = pm.polyCube(name="test_anim_cube")[0]
-        self.sphere = pm.polySphere(name="test_anim_sphere")[0]
+        self.cube = cmds.polyCube(name="test_anim_cube")[0]
+        self.sphere = cmds.polySphere(name="test_anim_sphere")[0]
 
         # Set playback range for tie_keyframes test
-        pm.playbackOptions(minTime=1, maxTime=10)
+        cmds.playbackOptions(minTime=1, maxTime=10)
 
         # Create simple animation on cube
         # Frame 1: 0, Frame 10: 10 (Linear)
-        pm.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=10, value=10)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=10)
 
         # Frame 1: 0, Frame 10: 5 (Linear)
-        pm.setKeyframe(self.cube, attribute="translateY", time=1, value=0)
-        pm.setKeyframe(self.cube, attribute="translateY", time=10, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateY", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateY", time=10, value=5)
 
     def tearDown(self):
         """Clean up."""
-        if pm.objExists("test_anim_cube"):
-            pm.delete("test_anim_cube")
-        if pm.objExists("test_anim_sphere"):
-            pm.delete("test_anim_sphere")
+        if cmds.objExists("test_anim_cube"):
+            cmds.delete("test_anim_cube")
+        if cmds.objExists("test_anim_sphere"):
+            cmds.delete("test_anim_sphere")
         super().tearDown()
 
     # =========================================================================
@@ -80,7 +80,8 @@ class TestAnimUtils(MayaTkTestCase):
         """Test retrieving animation curves from objects."""
         curves = AnimUtils.objects_to_curves([self.cube])
         self.assertEqual(len(curves), 2)  # tx and ty
-        self.assertTrue(all(isinstance(c, pm.nt.AnimCurve) for c in curves))
+        # Production returns string node names; verify each is an animCurve.
+        self.assertTrue(all(cmds.nodeType(c).startswith("animCurve") for c in curves))
 
     def test_get_anim_curves(self):
         """Test get_anim_curves wrapper."""
@@ -94,12 +95,12 @@ class TestAnimUtils(MayaTkTestCase):
         is safe to delete because removing it leaves the attribute at the
         same resting value.
         """
-        pm.setKeyframe(self.cube, attribute="translateZ", time=1, value=0)
-        pm.setKeyframe(self.cube, attribute="translateZ", time=10, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateZ", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateZ", time=10, value=0)
 
         static_curves = AnimUtils.get_static_curves([self.cube])
         self.assertEqual(len(static_curves), 1)
-        self.assertTrue("translateZ" in static_curves[0].name())
+        self.assertTrue("translateZ" in static_curves[0])
 
     def test_get_static_curves_preserves_nondefault(self):
         """Verify static curves holding non-default values are NOT returned.
@@ -112,8 +113,8 @@ class TestAnimUtils(MayaTkTestCase):
         Fixed: 2026-02-24
         """
         # translateZ default is 0.0; constant 5.0 is non-default
-        pm.setKeyframe(self.cube, attribute="translateZ", time=1, value=5)
-        pm.setKeyframe(self.cube, attribute="translateZ", time=10, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateZ", time=1, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateZ", time=10, value=5)
 
         static_curves = AnimUtils.get_static_curves([self.cube])
         # Should NOT be flagged — deleting it would change the object's
@@ -128,17 +129,17 @@ class TestAnimUtils(MayaTkTestCase):
     def test_get_redundant_flat_keys(self):
         """Test identifying redundant flat keys."""
         # Create redundant keys: 0, 0, 0
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
-        pm.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=10, value=0)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=0)
 
         redundant = AnimUtils.get_redundant_flat_keys([self.cube])
         self.assertTrue(len(redundant) > 0)
         # redundant is list of (curve, times)
         found = False
         for curve, times in redundant:
-            if "translateX" in curve.name():
+            if "translateX" in curve:
                 self.assertIn(5.0, times)
                 found = True
         self.assertTrue(found)
@@ -158,19 +159,19 @@ class TestAnimUtils(MayaTkTestCase):
     def test_get_tied_keyframes(self):
         """Test detecting tied (bookend) keyframes."""
         # Create tied keys: 1-2 (val 0), 9-10 (val 10)
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
-        pm.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=2, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=9, value=10)
-        pm.setKeyframe(self.cube, attribute="translateX", time=10, value=10)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=2, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=9, value=10)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=10)
 
         tied = AnimUtils.get_tied_keyframes([self.cube])
-        self.assertIn(self.cube, tied)
+        cube_key = str(self.cube)
+        self.assertIn(cube_key, tied)
         # Should detect start and end ties
-        attr_name = f"{self.cube.name()}_translateX"  # Default curve name format
         # Curve names might vary, check values
         found = False
-        for attr, times in tied[self.cube].items():
+        for attr, times in tied[cube_key].items():
             if "translateX" in attr:
                 self.assertIn(1.0, times)
                 self.assertIn(10.0, times)
@@ -193,13 +194,13 @@ class TestAnimUtils(MayaTkTestCase):
         AnimUtils.set_keys_for_attributes(
             [self.sphere], target_times=[1, 10], translateX=5
         )
-        self.assertEqual(pm.getAttr(self.sphere + ".translateX", time=1), 5)
-        self.assertEqual(pm.getAttr(self.sphere + ".translateX", time=10), 5)
+        self.assertEqual(cmds.getAttr(self.sphere + ".translateX", time=1), 5)
+        self.assertEqual(cmds.getAttr(self.sphere + ".translateX", time=10), 5)
 
         # Per-object mode
-        data = {self.sphere.name(): {"translateY": 8.0}}
+        data = {str(self.sphere): {"translateY": 8.0}}
         AnimUtils.set_keys_for_attributes([self.sphere], target_times=[5], **data)
-        self.assertEqual(pm.getAttr(self.sphere + ".translateY", time=5), 8.0)
+        self.assertEqual(cmds.getAttr(self.sphere + ".translateY", time=5), 8.0)
 
     def test_set_keys_for_attributes_preserves_stepped_tangents(self):
         """Verify set_keys_for_attributes doesn't break existing stepped tangents.
@@ -208,7 +209,6 @@ class TestAnimUtils(MayaTkTestCase):
         overwriting stepped tangents when pasting values onto existing keys.
         Fixed: 2026-02-26
         """
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         # The cube already has keys at 1 and 10 from setUp.
@@ -220,7 +220,7 @@ class TestAnimUtils(MayaTkTestCase):
         AnimUtils.set_keys_for_attributes([self.cube], target_times=[1], translateX=99)
 
         # The value must be updated
-        self.assertAlmostEqual(pm.getAttr(plug, time=1), 99, places=3)
+        self.assertAlmostEqual(cmds.getAttr(plug, time=1), 99, places=3)
 
         # Stepped out-tangent must still be "step"
         ott = cmds.keyTangent(plug, query=True, time=(1, 1), outTangentType=True)
@@ -230,10 +230,9 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_copy_keys_channel_box(self):
         """Test copy_keys with channel_box mode captures selected CB attributes."""
-        import maya.cmds as cmds
 
         # Select the cube and highlight an attribute in the channel box
-        pm.select(self.cube)
+        cmds.select(self.cube)
         # Channel box mode requires attributes to be selected in the CB;
         # when nothing is highlighted the result should be empty.
         result = AnimUtils.copy_keys(mode="channel_box")
@@ -242,9 +241,8 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_copy_keys_current_frame(self):
         """Test copy_keys with current_frame mode reads animated values at the current time."""
-        import maya.cmds as cmds
 
-        pm.select(self.cube)
+        cmds.select(self.cube)
         cmds.currentTime(1)
         result = AnimUtils.copy_keys(mode="current_frame")
         self.assertIn(str(self.cube), result)
@@ -258,18 +256,17 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_paste_keys_basic(self):
         """Test paste_keys sets values at the current time."""
-        import maya.cmds as cmds
 
-        pm.select(self.sphere)
+        cmds.select(self.sphere)
         # Give sphere a key so the attribute exists on the curve
-        pm.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
 
         copied = {str(self.sphere): {"translateX": 42.0}}
         cmds.currentTime(5)
         count = AnimUtils.paste_keys(objects=[self.sphere], copied_data=copied)
         self.assertEqual(count, 1)
         self.assertAlmostEqual(
-            pm.getAttr(f"{self.sphere}.translateX", time=5), 42.0, places=3
+            cmds.getAttr(f"{self.sphere}.translateX", time=5), 42.0, places=3
         )
 
     def test_paste_keys_preserves_existing_stepped_tangent(self):
@@ -279,7 +276,6 @@ class TestAnimUtils(MayaTkTestCase):
         stepped tangents when pasting onto an existing key.
         Fixed: 2026-02-26
         """
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         # Set frame 1 out-tangent to stepped
@@ -290,7 +286,7 @@ class TestAnimUtils(MayaTkTestCase):
         AnimUtils.paste_keys(objects=[self.cube], copied_data=copied, target_time=1)
 
         # Value should be updated
-        self.assertAlmostEqual(pm.getAttr(plug, time=1), 77.0, places=3)
+        self.assertAlmostEqual(cmds.getAttr(plug, time=1), 77.0, places=3)
 
         # Stepped tangent must survive
         ott = cmds.keyTangent(plug, query=True, time=(1, 1), outTangentType=True)
@@ -306,7 +302,6 @@ class TestAnimUtils(MayaTkTestCase):
         stay stepped.
         Fixed: 2026-02-26
         """
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         # Set both existing keys (1, 10) to stepped.
@@ -332,17 +327,16 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_paste_keys_name_matching(self):
         """Verify paste_keys matches objects by short name when long path differs."""
-        import maya.cmds as cmds
 
-        pm.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
 
         # Store using short name
-        copied = {self.sphere.nodeName(): {"translateX": 33.0}}
+        copied = {self.sphere.split('|')[-1].split(':')[-1]: {"translateX": 33.0}}
         cmds.currentTime(1)
         count = AnimUtils.paste_keys(objects=[self.sphere], copied_data=copied)
         self.assertEqual(count, 1)
         self.assertAlmostEqual(
-            pm.getAttr(f"{self.sphere}.translateX", time=1), 33.0, places=3
+            cmds.getAttr(f"{self.sphere}.translateX", time=1), 33.0, places=3
         )
 
     def test_paste_keys_at_explicit_target_time(self):
@@ -351,9 +345,8 @@ class TestAnimUtils(MayaTkTestCase):
         Simulates the 'At Copy Frame' workflow where the user copies at
         frame 3 but the playhead has since moved to frame 8.
         """
-        import maya.cmds as cmds
 
-        pm.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
         copied = {str(self.sphere): {"translateX": 99.0}}
         copy_frame = 3
 
@@ -365,7 +358,7 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertEqual(count, 1)
         # Key should exist at the explicit target, not the playhead
         self.assertAlmostEqual(
-            pm.getAttr(f"{self.sphere}.translateX", time=copy_frame), 99.0, places=3
+            cmds.getAttr(f"{self.sphere}.translateX", time=copy_frame), 99.0, places=3
         )
         # No key should have been created at the playhead
         keys_at_8 = cmds.keyframe(
@@ -375,9 +368,8 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_paste_keys_kwargs_forwarded(self):
         """Verify extra kwargs are forwarded to pm.setKeyframe."""
-        import maya.cmds as cmds
 
-        pm.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
         copied = {str(self.sphere): {"translateX": 50.0}}
 
         # Pass breakdown=True which should mark the key as a breakdown
@@ -398,9 +390,8 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_copy_keys_current_frame_multiple_attrs(self):
         """copy_keys current_frame mode captures all keyed attrs, not just one."""
-        import maya.cmds as cmds
 
-        pm.select(self.cube)
+        cmds.select(self.cube)
         cmds.currentTime(1)
         result = AnimUtils.copy_keys(mode="current_frame")
         obj_data = result[str(self.cube)]
@@ -411,7 +402,7 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_copy_keys_no_objects_returns_empty(self):
         """copy_keys returns empty dict when no objects are selected or provided."""
-        pm.select(clear=True)
+        cmds.select(clear=True)
         result = AnimUtils.copy_keys(mode="current_frame")
         self.assertEqual(result, {})
 
@@ -422,7 +413,7 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_paste_keys_no_objects_returns_zero(self):
         """paste_keys returns 0 when no target objects are selected."""
-        pm.select(clear=True)
+        cmds.select(clear=True)
         result = AnimUtils.paste_keys(
             objects=[], copied_data={str(self.cube): {"translateX": 5.0}}
         )
@@ -430,39 +421,36 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_paste_keys_multiple_attrs(self):
         """paste_keys sets multiple attributes from copied data."""
-        import maya.cmds as cmds
 
         copied = {str(self.cube): {"translateX": 100.0, "translateY": 200.0}}
         cmds.currentTime(5)
         count = AnimUtils.paste_keys(objects=[self.cube], copied_data=copied)
         self.assertEqual(count, 1)
         self.assertAlmostEqual(
-            pm.getAttr(f"{self.cube}.translateX", time=5), 100.0, places=3
+            cmds.getAttr(f"{self.cube}.translateX", time=5), 100.0, places=3
         )
         self.assertAlmostEqual(
-            pm.getAttr(f"{self.cube}.translateY", time=5), 200.0, places=3
+            cmds.getAttr(f"{self.cube}.translateY", time=5), 200.0, places=3
         )
 
     def test_copy_paste_roundtrip(self):
         """Copy at one frame, move playhead, paste at playhead — values match."""
-        import maya.cmds as cmds
 
-        pm.select(self.cube)
+        cmds.select(self.cube)
         cmds.currentTime(1)
         copied = AnimUtils.copy_keys(mode="current_frame")
 
         cmds.currentTime(20)
-        pm.setKeyframe(self.cube, attribute="translateX", time=20, value=999)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=20, value=999)
         count = AnimUtils.paste_keys(objects=[self.cube], copied_data=copied)
         self.assertEqual(count, 1)
         # Value at 20 should now be the copied value (0.0 from frame 1), not 999
         self.assertAlmostEqual(
-            pm.getAttr(f"{self.cube}.translateX", time=20), 0.0, places=3
+            cmds.getAttr(f"{self.cube}.translateX", time=20), 0.0, places=3
         )
 
     def test_paste_keys_unmatched_object_returns_zero(self):
         """paste_keys returns 0 when copied data keys don't match target objects."""
-        import maya.cmds as cmds
 
         copied = {"nonexistent_object": {"translateX": 5.0}}
         cmds.currentTime(1)
@@ -477,7 +465,6 @@ class TestAnimUtils(MayaTkTestCase):
         time/value/tangent data.
         Fixed: 2026-03-01
         """
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         # Select both keys (frames 1 and 10)
@@ -508,7 +495,6 @@ class TestAnimUtils(MayaTkTestCase):
         empty result and the user got 'Nothing to copy'.
         Fixed: 2026-03-03
         """
-        import maya.cmds as cmds
 
         plug_tx = f"{self.cube}.translateX"
         # Select keys on translateX
@@ -535,7 +521,6 @@ class TestAnimUtils(MayaTkTestCase):
         stored a single scalar value per attribute.
         Fixed: 2026-03-01
         """
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         # Make keys stepped
@@ -567,7 +552,6 @@ class TestAnimUtils(MayaTkTestCase):
         smooth interpolation instead of stepped.
         Fixed: 2026-03-01
         """
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         # Make keys stepped
@@ -602,7 +586,6 @@ class TestAnimUtils(MayaTkTestCase):
         Verifies the lossless snapshot format includes per-key inAngle,
         outAngle, inWeight, outWeight and per-curve preInfinity/postInfinity.
         """
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         cmds.selectKey(plug, time=(1, 10), add=True)
@@ -631,7 +614,6 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_copy_keys_tangent_detail_false_unchanged(self):
         """copy_keys tangent_detail=False (default) returns the original list format."""
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         cmds.selectKey(plug, time=(1, 10), add=True)
@@ -652,7 +634,6 @@ class TestAnimUtils(MayaTkTestCase):
         Full round-trip: copy with tangent_detail, paste onto another object,
         verify the tangent properties match.
         """
-        import maya.cmds as cmds
 
         src_plug = f"{self.cube}.translateX"
         # Set a known non-default tangent angle on the source
@@ -671,7 +652,7 @@ class TestAnimUtils(MayaTkTestCase):
         )
 
         # Paste onto sphere (match_source=False so all data goes to sphere)
-        pm.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
         AnimUtils.paste_keys(
             objects=[self.sphere],
             copied_data=copied,
@@ -693,7 +674,6 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_paste_keys_tangent_detail_skips_angles_for_step(self):
         """Paste with tangent_detail data skips angle/weight for step tangents."""
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         cmds.keyTangent(
@@ -710,7 +690,7 @@ class TestAnimUtils(MayaTkTestCase):
 
         # Paste onto sphere — should not error even though step tangents
         # have angle/weight fields that Maya ignores
-        pm.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
         count = AnimUtils.paste_keys(
             objects=[self.sphere],
             copied_data=copied,
@@ -729,7 +709,7 @@ class TestAnimUtils(MayaTkTestCase):
         # Move keys from frame 1 to frame 5
         AnimUtils.move_keys_to_frame(objects=[self.cube], frame=5, time_range=(1, 1))
         self.assertEqual(
-            pm.keyframe(
+            cmds.keyframe(
                 self.cube,
                 attribute="translateX",
                 query=True,
@@ -741,7 +721,7 @@ class TestAnimUtils(MayaTkTestCase):
         # Original key should be gone
         self.assertEqual(
             len(
-                pm.keyframe(self.cube, attribute="translateX", query=True, time=(1, 1))
+                cmds.keyframe(self.cube, attribute="translateX", query=True, time=(1, 1)) or []
             ),
             0,
         )
@@ -755,7 +735,7 @@ class TestAnimUtils(MayaTkTestCase):
         """
         AnimUtils.move_keys_to_frame(objects=[self.cube], frame=20, align="end")
         # Last key (was 10) should now be at 20
-        keys_at_20 = pm.keyframe(
+        keys_at_20 = cmds.keyframe(
             self.cube,
             attribute="translateX",
             query=True,
@@ -766,7 +746,7 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertAlmostEqual(keys_at_20[0], 10.0, places=3)
 
         # First key (was 1) should now be at 11 (offset = 20 - 10 = +10)
-        keys_at_11 = pm.keyframe(
+        keys_at_11 = cmds.keyframe(
             self.cube,
             attribute="translateX",
             query=True,
@@ -778,11 +758,11 @@ class TestAnimUtils(MayaTkTestCase):
 
         # Original positions should be empty
         self.assertFalse(
-            pm.keyframe(self.cube, attribute="translateX", query=True, time=(1, 1)),
+            cmds.keyframe(self.cube, attribute="translateX", query=True, time=(1, 1)),
             "Original key at frame 1 still exists",
         )
         self.assertFalse(
-            pm.keyframe(self.cube, attribute="translateX", query=True, time=(10, 10)),
+            cmds.keyframe(self.cube, attribute="translateX", query=True, time=(10, 10)),
             "Original key at frame 10 still exists",
         )
 
@@ -795,7 +775,7 @@ class TestAnimUtils(MayaTkTestCase):
         """
         AnimUtils.move_keys_to_frame(objects=[self.cube], frame=20, align="auto")
         # Auto resolves to 'end' → last key (was 10) should now be at 20
-        keys_at_20 = pm.keyframe(
+        keys_at_20 = cmds.keyframe(
             self.cube,
             attribute="translateX",
             query=True,
@@ -806,7 +786,7 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertAlmostEqual(keys_at_20[0], 10.0, places=3)
 
         # First key (was 1) should now be at 11 (offset = 20 - 10 = +10)
-        keys_at_11 = pm.keyframe(
+        keys_at_11 = cmds.keyframe(
             self.cube,
             attribute="translateX",
             query=True,
@@ -823,13 +803,13 @@ class TestAnimUtils(MayaTkTestCase):
         first key (50) lands on frame 20.
         """
         # Clear ALL existing keys and create new ones far ahead
-        pm.cutKey(self.cube, clear=True)
-        pm.setKeyframe(self.cube, attribute="translateX", time=50, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=60, value=10)
+        cmds.cutKey(self.cube, clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=50, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=60, value=10)
 
         AnimUtils.move_keys_to_frame(objects=[self.cube], frame=20, align="auto")
         # Auto resolves to 'start' → first key (was 50) should now be at 20
-        keys_at_20 = pm.keyframe(
+        keys_at_20 = cmds.keyframe(
             self.cube,
             attribute="translateX",
             query=True,
@@ -840,7 +820,7 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertAlmostEqual(keys_at_20[0], 0.0, places=3)
 
         # Last key (was 60) should now be at 30 (offset = 20 - 50 = -30)
-        keys_at_30 = pm.keyframe(
+        keys_at_30 = cmds.keyframe(
             self.cube,
             attribute="translateX",
             query=True,
@@ -853,7 +833,7 @@ class TestAnimUtils(MayaTkTestCase):
         """Verify explicit align='start' moves the first key to the target frame."""
         AnimUtils.move_keys_to_frame(objects=[self.cube], frame=20, align="start")
         # First key (was 1) should now be at 20
-        keys_at_20 = pm.keyframe(
+        keys_at_20 = cmds.keyframe(
             self.cube,
             attribute="translateX",
             query=True,
@@ -864,7 +844,7 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertAlmostEqual(keys_at_20[0], 0.0, places=3)
 
         # Last key (was 10) should now be at 29 (offset = 20 - 1 = +19)
-        keys_at_29 = pm.keyframe(
+        keys_at_29 = cmds.keyframe(
             self.cube,
             attribute="translateX",
             query=True,
@@ -876,16 +856,16 @@ class TestAnimUtils(MayaTkTestCase):
     def test_delete_keys(self):
         """Test deleting keys."""
         AnimUtils.delete_keys([self.cube], "translateX", time=1)
-        keys = pm.keyframe(self.cube, attribute="translateX", query=True)
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
         self.assertNotIn(1.0, keys)
         self.assertIn(10.0, keys)
 
     def test_select_keys(self):
         """Test selecting keys."""
-        pm.selectKey(clear=True)
+        cmds.selectKey(clear=True)
         count = AnimUtils.select_keys([self.cube], time=1)
         self.assertGreater(count, 0)
-        selected = pm.keyframe(query=True, selected=True)
+        selected = cmds.keyframe(query=True, selected=True)
         self.assertTrue(len(selected) > 0)
 
     def test_parse_time_range(self):
@@ -906,24 +886,24 @@ class TestAnimUtils(MayaTkTestCase):
     def test_optimize_keys(self):
         """Test optimizing keys (removing redundant ones)."""
         # Create redundant flat keys: 0, 0, 0
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
-        pm.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=10, value=0)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=0)
 
         result = AnimUtils.optimize_keys([self.cube])
         self.assertGreater(len(result), 0)
-        keys = pm.keyframe(self.cube, attribute="translateX", query=True)
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True) or []
         self.assertNotIn(5.0, keys)
 
     def test_simplify_curve(self):
         """Test curve simplification."""
         # Create dense keys
         for i in range(1, 11):
-            pm.setKeyframe(self.cube, attribute="translateZ", time=i, value=i)
+            cmds.setKeyframe(self.cube, attribute="translateZ", time=i, value=i)
 
         AnimUtils.simplify_curve([self.cube], value_tolerance=0.1)
-        keys = pm.keyframe(self.cube, attribute="translateZ", query=True)
+        keys = cmds.keyframe(self.cube, attribute="translateZ", query=True)
         # Should have fewer keys than 10, likely just start and end for a straight line
         self.assertLess(len(keys), 10)
 
@@ -931,10 +911,10 @@ class TestAnimUtils(MayaTkTestCase):
         """Test adjusting key spacing."""
         # Keys at 1 and 10. Add spacing of 5.
         AnimUtils.adjust_key_spacing(
-            [self.cube.name()], spacing=5, time=5, relative=False
+            [self.cube], spacing=5, time=5, relative=False
         )
         # Key at 10 should move to 15
-        keys = pm.keyframe(self.cube, attribute="translateX", query=True)
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
         self.assertIn(15.0, keys)
         self.assertNotIn(10.0, keys)
 
@@ -958,17 +938,17 @@ class TestAnimUtils(MayaTkTestCase):
         Simplest: keys at 1, 5, 10.  Shift keys >= 6 by -5.
         Only key at 10 moves (10 → 5).  Key at 5 is stationary.  Collision!
         """
-        pm.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
         # Now keys at 1, 5, 10
         AnimUtils.adjust_key_spacing(
-            [self.cube.name()],
+            [self.cube],
             spacing=-5,
             time=6,
             relative=False,
             prevent_collisions=True,
         )
         # Key at 10 should NOT have moved because collision with 5
-        keys = pm.keyframe(self.cube, attribute="translateX", query=True)
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
         self.assertIn(10.0, keys, "Key at 10 should remain — collision aborted move")
         self.assertIn(5.0, keys, "Key at 5 should remain — stationary")
 
@@ -979,16 +959,16 @@ class TestAnimUtils(MayaTkTestCase):
         Shift keys >= 6 by -5.  Key 10 → 5.  Without collision prevention,
         the move is attempted (may overwrite or fail silently).
         """
-        pm.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
         # Keys at 1, 5, 10
         AnimUtils.adjust_key_spacing(
-            [self.cube.name()],
+            [self.cube],
             spacing=-5,
             time=6,
             relative=False,
             prevent_collisions=False,
         )
-        keys = pm.keyframe(self.cube, attribute="translateX", query=True)
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
         # Key at 10 should have been attempted to move (may or may not succeed
         # depending on Maya's handling, but it should NOT be at 10 anymore)
         # The key at 5 may be overwritten.  Just verify 10 is gone — that means
@@ -1002,13 +982,13 @@ class TestAnimUtils(MayaTkTestCase):
         Key at 10 → 13.  Key at 1 is stationary but dest 13 ≠ 1.  No collision.
         """
         AnimUtils.adjust_key_spacing(
-            [self.cube.name()],
+            [self.cube],
             spacing=3,
             time=5,
             relative=False,
             prevent_collisions=True,
         )
-        keys = pm.keyframe(self.cube, attribute="translateX", query=True)
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
         self.assertIn(13.0, keys, "Key at 10 should move to 13")
         self.assertNotIn(10.0, keys, "Key at 10 should no longer exist")
         self.assertIn(1.0, keys, "Key at 1 should be unaffected")
@@ -1016,17 +996,17 @@ class TestAnimUtils(MayaTkTestCase):
     def test_add_intermediate_keys(self):
         """Test adding intermediate keys."""
         AnimUtils.add_intermediate_keys([self.cube], time_range=(1, 10), percent=50)
-        keys = pm.keyframe(self.cube, attribute="translateX", query=True)
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
         # Should have more than just 1 and 10
         self.assertGreater(len(keys), 2)
 
     def test_remove_intermediate_keys(self):
         """Test removing intermediate keys."""
         # Add some intermediate keys
-        pm.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
 
         AnimUtils.remove_intermediate_keys([self.cube])
-        keys = pm.keyframe(self.cube, attribute="translateX", query=True)
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
         self.assertEqual(len(keys), 2)  # Only start and end
         self.assertIn(1.0, keys)
         self.assertIn(10.0, keys)
@@ -1034,45 +1014,51 @@ class TestAnimUtils(MayaTkTestCase):
     def test_invert_keys(self):
         """Test inverting keys."""
         # Select object
-        pm.select(self.cube)
+        cmds.select(self.cube)
         # Invert horizontally around frame 5
         AnimUtils.invert_keys(time=5, relative=False, mode="horizontal")
         # Key at 1 should move to 9 (5 + (5-1)) -> Wait, logic is inversion_point - (key_time - max_time)
         # Let's just check that keys moved
-        keys = pm.keyframe(self.cube, attribute="translateX", query=True)
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
         self.assertNotEqual(keys, [1.0, 10.0])
 
     def test_align_selected_keyframes(self):
         """Test aligning selected keyframes."""
-        # Select object first
-        pm.select(self.cube)
-        # Select keys
-        pm.selectKey(self.cube, attribute="translateX", time=(1, 1))
-        pm.selectKey(self.cube, attribute="translateY", time=(10, 10), add=True)
 
-        # Verify selection
-        sel = pm.keyframe(query=True, selected=True)
-        if not sel:
-            self.skipTest("Could not select keyframes")
+        cmds.select(str(self.cube))
+        cmds.selectKey(str(self.cube), attribute="translateX", time=(1, 1))
+        cmds.selectKey(
+            str(self.cube), attribute="translateY", time=(10, 10), add=True
+        )
+        sel = cmds.keyframe(q=True, selected=True) or []
+        self.assertTrue(
+            sel,
+            "selectKey did not register a selection — Maya/mayapy regression",
+        )
 
-        # Align to frame 5
         AnimUtils.align_selected_keyframes(target_frame=5)
 
-        # Check if keys moved
-        tx_val = pm.keyframe(
-            self.cube, attribute="translateX", query=True, time=(5, 5), valueChange=True
+        tx_val = cmds.keyframe(
+            str(self.cube),
+            attribute="translateX",
+            query=True,
+            time=(5, 5),
+            valueChange=True,
         )
-        ty_val = pm.keyframe(
-            self.cube, attribute="translateY", query=True, time=(5, 5), valueChange=True
+        ty_val = cmds.keyframe(
+            str(self.cube),
+            attribute="translateY",
+            query=True,
+            time=(5, 5),
+            valueChange=True,
         )
-
         self.assertTrue(tx_val or ty_val)
 
     def test_transfer_keyframes(self):
         """Test transferring keyframes."""
         AnimUtils.transfer_keyframes([self.cube, self.sphere])
         # Sphere should now have keys
-        keys = pm.keyframe(self.sphere, query=True)
+        keys = cmds.keyframe(self.sphere, query=True)
         self.assertTrue(len(keys) > 0)
 
     def test_transfer_keyframes_relative_mixed_times(self):
@@ -1086,11 +1072,11 @@ class TestAnimUtils(MayaTkTestCase):
         """
         # Set up source with staggered key times:
         # translateX keyed at 1 and 10, translateZ keyed at 5 and 10
-        pm.setKeyframe(self.cube, attribute="translateZ", time=5, value=3)
-        pm.setKeyframe(self.cube, attribute="translateZ", time=10, value=8)
+        cmds.setKeyframe(self.cube, attribute="translateZ", time=5, value=3)
+        cmds.setKeyframe(self.cube, attribute="translateZ", time=10, value=8)
 
         # Give target a starting translateZ so relative offset is nonzero
-        pm.setAttr(self.sphere.translateZ, 10)
+        cmds.setAttr(f"{self.sphere}.translateZ", 10)
 
         AnimUtils.transfer_keyframes(
             [self.cube, self.sphere], relative=True, transfer_tangents=False
@@ -1099,7 +1085,7 @@ class TestAnimUtils(MayaTkTestCase):
         # translateZ keys MUST exist on the target — the bug caused them
         # to be silently skipped because keyframe_times[0] was 1 (from
         # translateX) and translateZ had no key at time 1.
-        tz_keys = pm.keyframe(self.sphere, attribute="translateZ", query=True)
+        tz_keys = cmds.keyframe(self.sphere, attribute="translateZ", query=True)
         self.assertTrue(
             len(tz_keys) > 0,
             "translateZ keys were not transferred — relative offset "
@@ -1109,7 +1095,7 @@ class TestAnimUtils(MayaTkTestCase):
 
         # Verify relative offset: at time 5 (first translateZ key on
         # source), the target should equal its initial value (10).
-        tz_val = pm.keyframe(
+        tz_val = cmds.keyframe(
             self.sphere,
             attribute="translateZ",
             query=True,
@@ -1129,7 +1115,7 @@ class TestAnimUtils(MayaTkTestCase):
         Keys at 1 and 10. Insert exact gap of 6 frames at frame 5.
         The first key after 5 is at 10. With exact_gap, it should move to 5+6=11.
         """
-        pm.currentTime(5)
+        cmds.currentTime(5)
         AnimUtils.adjust_key_spacing(
             [self.cube],
             spacing=6,
@@ -1138,7 +1124,7 @@ class TestAnimUtils(MayaTkTestCase):
             exact_gap=True,
         )
 
-        keys = pm.keyframe(self.cube, attribute="translateX", query=True)
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
         self.assertIn(11.0, keys)
         self.assertNotIn(10.0, keys)
 
@@ -1148,7 +1134,6 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_step_keys_all(self):
         """step_keys with keys=None steps every key on the object."""
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         AnimUtils.step_keys(objects=[self.cube], keys=None, tangent="out")
@@ -1162,7 +1147,6 @@ class TestAnimUtils(MayaTkTestCase):
         Bug: stepping a single key used to affect the entire curve.
         Fixed: 2026-03-01
         """
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         # Ensure both keys start non-stepped
@@ -1180,7 +1164,6 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_step_keys_dict_specific_times(self):
         """step_keys with a dict of curve→times steps only those times."""
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         curves = AnimUtils.objects_to_curves([self.cube], as_strings=True)
@@ -1202,7 +1185,6 @@ class TestAnimUtils(MayaTkTestCase):
         type from 'auto' to 'fixed' when angle is restored.
         Fixed: 2026-03-01
         """
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         cmds.keyTangent(plug, edit=True, outTangentType="auto", inTangentType="auto")
@@ -1221,7 +1203,6 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_step_keys_in_only_does_not_affect_out(self):
         """tangent='in' sets only the in-tangent to stepnext, preserving out-tangent type exactly."""
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         cmds.keyTangent(plug, edit=True, outTangentType="auto", inTangentType="auto")
@@ -1247,7 +1228,6 @@ class TestAnimUtils(MayaTkTestCase):
         converts the type to 'fixed', breaking auto-computation.
         Fixed: 2026-03-01
         """
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         cmds.keyTangent(
@@ -1266,7 +1246,6 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_step_keys_both(self):
         """tangent='both' sets out to step and in to stepnext."""
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         cmds.keyTangent(plug, edit=True, outTangentType="auto", inTangentType="auto")
@@ -1288,7 +1267,6 @@ class TestAnimUtils(MayaTkTestCase):
         predecessor and the first selected key would interpolate smoothly.
         Fixed: 2026-03-01
         """
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         # Reset all to auto
@@ -1344,7 +1322,7 @@ class TestAnimUtils(MayaTkTestCase):
     def test_step_tangent_as_in_tangent_is_invalid(self):
         """Verify that Maya rejects 'step' as an in-tangent type.
 
-        ``pm.setKeyframe(inTangentType="step")`` silently fails — Maya
+        ``cmds.setKeyframe(inTangentType="step")`` silently fails — Maya
         only accepts 'stepnext' for in-tangents.  The behaviors system
         was passing 'step' for both in and out tangent types, which
         produced warnings and left in-tangents unchanged.
@@ -1353,7 +1331,6 @@ class TestAnimUtils(MayaTkTestCase):
         instead of using ``step_keys`` or ``"stepnext"``.
         Fixed: 2026-03-25
         """
-        import maya.cmds as cmds
 
         plug = f"{self.cube}.translateX"
         # Start with auto tangents so we have a known baseline
@@ -1387,11 +1364,9 @@ class TestAnimUtils(MayaTkTestCase):
         from mayatk.anim_utils.shots.shot_manifest.behaviors import apply_behavior
 
         # Add opacity attribute to trigger the visibility mirror path
-        pm.addAttr(self.cube, ln="opacity", at="float", min=0, max=1, dv=1, k=True)
+        cmds.addAttr(self.cube, ln="opacity", at="float", min=0, max=1, dv=1, k=True)
 
         apply_behavior(str(self.cube), "fade_in", start=1, end=30)
-
-        import maya.cmds as cmds
 
         vis_keys = cmds.keyframe(f"{self.cube}.visibility", q=True, timeChange=True)
         self.assertTrue(vis_keys, "Visibility should have keys from mirror")
@@ -1422,20 +1397,20 @@ class TestAnimUtils(MayaTkTestCase):
     def test_set_visibility_keys(self):
         """Test setting visibility keys."""
         AnimUtils.set_visibility_keys([self.cube], visible=False, when="start")
-        vis = pm.getAttr(self.cube + ".visibility", time=1)
+        vis = cmds.getAttr(self.cube + ".visibility", time=1)
         self.assertEqual(vis, 0)
 
     def test_tie_and_untie_keyframes(self):
         """Test tie and untie keyframes."""
         # Tie keys (playback range 1-10, padding 1 -> 0 and 11)
         AnimUtils.tie_keyframes([self.cube], padding=1)
-        keys = pm.keyframe(self.cube, attribute="translateX", query=True)
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
         self.assertIn(0.0, keys)  # 1 - 1
         self.assertIn(11.0, keys)  # 10 + 1
 
         # Untie keys
         AnimUtils.untie_keyframes([self.cube])
-        keys = pm.keyframe(self.cube, attribute="translateX", query=True)
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
         self.assertNotIn(0.0, keys)
         self.assertNotIn(11.0, keys)
 
@@ -1448,13 +1423,12 @@ class TestAnimUtils(MayaTkTestCase):
         have their bookend keys set back to 'step' (or 'stepnext').
         Fixed: 2026-02-24
         """
-        import maya.cmds as cmds
 
         # Create a visibility-style curve: entirely stepped
-        pm.cutKey(self.cube, attribute="visibility", clear=True)
-        pm.setKeyframe(self.cube, attribute="visibility", time=3, value=1)
-        pm.setKeyframe(self.cube, attribute="visibility", time=5, value=0)
-        pm.setKeyframe(self.cube, attribute="visibility", time=8, value=1)
+        cmds.cutKey(self.cube, attribute="visibility", clear=True)
+        cmds.setKeyframe(self.cube, attribute="visibility", time=3, value=1)
+        cmds.setKeyframe(self.cube, attribute="visibility", time=5, value=0)
+        cmds.setKeyframe(self.cube, attribute="visibility", time=8, value=1)
         vis_curve = cmds.listConnections(
             str(self.cube) + ".visibility",
             type="animCurve",
@@ -1492,13 +1466,12 @@ class TestAnimUtils(MayaTkTestCase):
         from 'step' to 'auto'/'fixed', corrupting the curve.
         Fixed: 2026-02-25 (cleanup allowed, step_keys restores boundaries)
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
 
         # Flat segment: all values 0.0, all keys stepped
         for t in [1, 3, 5, 7, 10]:
-            pm.setKeyframe(self.cube, attribute="translateX", time=t, value=0.0)
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=0.0)
         curve = (
             cmds.listConnections(
                 f"{self.cube}.translateX", type="animCurve", source=True
@@ -1548,13 +1521,12 @@ class TestAnimUtils(MayaTkTestCase):
         of snapping.
         Fixed: 2026-02-25
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
 
         # Keys at fractional times with stepped tangents
         for t, v in [(1.0, 0.0), (3.7, 5.0), (6.3, 5.0), (10.0, 10.0)]:
-            pm.setKeyframe(self.cube, attribute="translateX", time=t, value=v)
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=v)
         curve = (
             cmds.listConnections(
                 f"{self.cube}.translateX", type="animCurve", source=True
@@ -1597,15 +1569,14 @@ class TestAnimUtils(MayaTkTestCase):
         S00A47_PIN_LOC that had a mix of stepped and smooth tangent types.
         Fixed: 2026-03-02
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
 
         # Create curve with most keys stepped, but first and last are auto
-        pm.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
         for t in range(2, 10):
-            pm.setKeyframe(self.cube, attribute="translateX", time=t, value=float(t))
-        pm.setKeyframe(self.cube, attribute="translateX", time=10, value=10)
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=float(t))
+        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=10)
 
         curve = (
             cmds.listConnections(
@@ -1653,19 +1624,18 @@ class TestAnimUtils(MayaTkTestCase):
         on those curves, including smooth translate/rotate animation.
         Fixed: 2026-03-02
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, clear=True)
+        cmds.cutKey(self.cube, clear=True)
 
         # Create smooth translate animation (auto tangents)
-        pm.setKeyframe(self.cube, attribute="translateX", time=2, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=5, value=10)
-        pm.setKeyframe(self.cube, attribute="translateX", time=9, value=3)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=2, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=10)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=9, value=3)
 
         # Create stepped visibility animation (like a toggle)
-        pm.setKeyframe(self.cube, attribute="visibility", time=2, value=1)
-        pm.setKeyframe(self.cube, attribute="visibility", time=5, value=0)
-        pm.setKeyframe(self.cube, attribute="visibility", time=9, value=1)
+        cmds.setKeyframe(self.cube, attribute="visibility", time=2, value=1)
+        cmds.setKeyframe(self.cube, attribute="visibility", time=5, value=0)
+        cmds.setKeyframe(self.cube, attribute="visibility", time=9, value=1)
 
         vis_curve = (
             cmds.listConnections(
@@ -1719,15 +1689,14 @@ class TestAnimUtils(MayaTkTestCase):
         skipped restoration because the curve wasn't fully stepped.
         Fixed: 2026-03-02
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
 
         # Create a curve: stepped bookend at start, smooth interior, stepped at end
-        pm.setKeyframe(self.cube, attribute="translateX", time=2, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=4, value=5)
-        pm.setKeyframe(self.cube, attribute="translateX", time=6, value=8)
-        pm.setKeyframe(self.cube, attribute="translateX", time=9, value=10)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=2, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=4, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=6, value=8)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=9, value=10)
 
         curve = (
             cmds.listConnections(
@@ -1788,15 +1757,14 @@ class TestAnimUtils(MayaTkTestCase):
         the original angle/weight.
         Fixed: 2026-03-05
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
 
         # Create a curve with auto tangent at boundary: animated segment
         # followed by a long flat hold.
-        pm.setKeyframe(self.cube, attribute="translateX", time=100, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=110, value=5)
-        pm.setKeyframe(self.cube, attribute="translateX", time=120, value=10)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=100, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=110, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=120, value=10)
 
         curve = (
             cmds.listConnections(
@@ -1810,7 +1778,7 @@ class TestAnimUtils(MayaTkTestCase):
         cmds.keyTangent(curve, time=(120, 120), outTangentType="auto")
 
         # Add a distant flat hold key (simulating FBX tied animation)
-        pm.setKeyframe(self.cube, attribute="translateX", time=500, value=10)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=500, value=10)
         cmds.keyTangent(curve, time=(500, 500), inTangentType="flat")
 
         # Sample at midpoints before tie
@@ -1843,11 +1811,10 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_tie_keyframes_custom_range(self):
         """Verify tie_keyframes respects the custom_range parameter."""
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
-        pm.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=15, value=10)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=15, value=10)
 
         AnimUtils.tie_keyframes([self.cube], custom_range=(0, 20))
 
@@ -1864,11 +1831,10 @@ class TestAnimUtils(MayaTkTestCase):
         A curve from t=5 v=0 to t=15 v=10 should produce a bookend at t=0 with
         v=0 (the evaluation of the curve at t=0, which is the pre-infinity value).
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
-        pm.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=15, value=10)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=15, value=10)
 
         AnimUtils.tie_keyframes([self.cube], custom_range=(0, 20))
 
@@ -1893,11 +1859,10 @@ class TestAnimUtils(MayaTkTestCase):
         """Verify calling tie_keyframes twice doesn't produce duplicate keys
         or corrupt tangent types.
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
-        pm.setKeyframe(self.cube, attribute="translateX", time=3, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=8, value=5)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=3, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=8, value=5)
 
         AnimUtils.tie_keyframes([self.cube])
         keys_first = cmds.keyframe(
@@ -1931,11 +1896,10 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_tie_keyframes_bookend_tangent_is_flat(self):
         """Verify non-stepped bookend keys have flat tangent types for clean holds."""
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
-        pm.setKeyframe(self.cube, attribute="translateX", time=3, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=8, value=10)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=3, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=8, value=10)
 
         AnimUtils.tie_keyframes([self.cube])
 
@@ -1971,11 +1935,11 @@ class TestAnimUtils(MayaTkTestCase):
     def test_snap_keys_to_frames(self):
         """Test snapping keys to whole frame values."""
         # Add a key at fractional time
-        pm.setKeyframe(self.cube, attribute="translateX", time=5.5, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5.5, value=5)
 
         count = AnimUtils.snap_keys_to_frames([self.cube])
         self.assertGreater(count, 0)
-        keys = pm.keyframe(self.cube, attribute="translateX", query=True)
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
         self.assertNotIn(5.5, keys)
         self.assertIn(6.0, keys)  # Nearest
 
@@ -1986,11 +1950,10 @@ class TestAnimUtils(MayaTkTestCase):
         risking tangent/value loss. Now uses keyframe(edit=True, timeChange=...).
         Fixed: 2026-02-22
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
-        pm.setKeyframe(self.cube, attribute="translateX", time=3.7, value=42.0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=8.3, value=-15.5)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=3.7, value=42.0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=8.3, value=-15.5)
 
         AnimUtils.snap_keys_to_frames([self.cube])
 
@@ -2010,11 +1973,10 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_snap_keys_to_frames_multiple_fractional(self):
         """Test snapping multiple fractional keys on the same curve."""
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateY", clear=True)
+        cmds.cutKey(self.cube, attribute="translateY", clear=True)
         for t in [1.1, 2.9, 5.5, 10.2]:
-            pm.setKeyframe(self.cube, attribute="translateY", time=t, value=t * 2)
+            cmds.setKeyframe(self.cube, attribute="translateY", time=t, value=t * 2)
 
         count = AnimUtils.snap_keys_to_frames([self.cube])
         self.assertEqual(count, 4)
@@ -2034,10 +1996,10 @@ class TestAnimUtils(MayaTkTestCase):
         construction per curve. All callers checked — none depend on PyNode type.
         Fixed: 2026-02-22
         """
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
-        pm.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=10, value=0)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=0)
 
         result = AnimUtils.optimize_keys([self.cube])
         self.assertGreater(len(result), 0)
@@ -2055,14 +2017,13 @@ class TestAnimUtils(MayaTkTestCase):
         flat-to-non-flat transitions.
         Fixed: 2026-02-24
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
 
         # Build curve: hold at 0 for frames 1-10, rise to 10 at frame 20
         for t in range(1, 11):
-            pm.setKeyframe(self.cube, attribute="translateX", time=t, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=20, value=10)
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=20, value=10)
 
         curve_name = (
             cmds.listConnections(
@@ -2092,7 +2053,7 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertEqual(in_type_10[0], "flat", "Boundary in-tangent not pinned")
 
         # Evaluate mid-flat region - value must be exactly 0 (no overshoot)
-        val_at_5 = pm.getAttr(f"{self.cube}.translateX", time=5)
+        val_at_5 = cmds.getAttr(f"{self.cube}.translateX", time=5)
         self.assertAlmostEqual(
             val_at_5, 0.0, places=3, msg="Overshoot in flat region after key removal"
         )
@@ -2105,13 +2066,12 @@ class TestAnimUtils(MayaTkTestCase):
         remove_static_curves=True deleted the curve, losing the held position.
         Fixed: 2026-02-24
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
 
         # Simulate baked constraint: constant value 5.0 over 10 frames
         for t in range(1, 11):
-            pm.setKeyframe(self.cube, attribute="translateX", time=t, value=5.0)
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=5.0)
 
         # Run full optimize (including remove_static_curves)
         AnimUtils.optimize_keys(
@@ -2131,7 +2091,7 @@ class TestAnimUtils(MayaTkTestCase):
         )
 
         # Value should still be 5.0
-        val = pm.getAttr(f"{self.cube}.translateX", time=5)
+        val = cmds.getAttr(f"{self.cube}.translateX", time=5)
         self.assertAlmostEqual(val, 5.0, places=3)
 
     def test_optimize_keys_deletes_static_at_default(self):
@@ -2140,13 +2100,12 @@ class TestAnimUtils(MayaTkTestCase):
         Complementary to test_optimize_keys_preserves_constraint_hold:
         curves at default value (e.g. translateZ=0) are safe to remove.
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateZ", clear=True)
+        cmds.cutKey(self.cube, attribute="translateZ", clear=True)
 
         # Static curve at default value 0.0
         for t in range(1, 11):
-            pm.setKeyframe(self.cube, attribute="translateZ", time=t, value=0.0)
+            cmds.setKeyframe(self.cube, attribute="translateZ", time=t, value=0.0)
 
         AnimUtils.optimize_keys(
             [self.cube],
@@ -2174,25 +2133,24 @@ class TestAnimUtils(MayaTkTestCase):
         curve, causing the object to snap to origin.
         Fixed: 2026-02-24
         """
-        import maya.cmds as cmds
         from mayatk.anim_utils.smart_bake import SmartBake
 
         # Create target (static locator) at position (7, 3, -2)
-        loc = pm.spaceLocator(name="constraint_target")
-        pm.setAttr(loc + ".translateX", 7)
-        pm.setAttr(loc + ".translateY", 3)
-        pm.setAttr(loc + ".translateZ", -2)
+        loc = cmds.spaceLocator(name="constraint_target")[0]
+        cmds.setAttr(loc + ".translateX", 7)
+        cmds.setAttr(loc + ".translateY", 3)
+        cmds.setAttr(loc + ".translateZ", -2)
 
         # Create driven object
-        driven = pm.polyCube(name="driven_cube")[0]
+        driven = cmds.polyCube(name="driven_cube")[0]
 
         # Constrain driven to target
-        constraint = pm.pointConstraint(loc, driven, maintainOffset=False)
+        constraint = cmds.pointConstraint(loc, driven, maintainOffset=False)
 
         # Verify constraint is working
-        self.assertAlmostEqual(pm.getAttr(driven + ".translateX"), 7.0, places=2)
-        self.assertAlmostEqual(pm.getAttr(driven + ".translateY"), 3.0, places=2)
-        self.assertAlmostEqual(pm.getAttr(driven + ".translateZ"), -2.0, places=2)
+        self.assertAlmostEqual(cmds.getAttr(driven + ".translateX"), 7.0, places=2)
+        self.assertAlmostEqual(cmds.getAttr(driven + ".translateY"), 3.0, places=2)
+        self.assertAlmostEqual(cmds.getAttr(driven + ".translateZ"), -2.0, places=2)
 
         # Smart bake with delete_inputs + optimize_keys
         baker = SmartBake(
@@ -2220,19 +2178,19 @@ class TestAnimUtils(MayaTkTestCase):
 
         # Position must be preserved despite static curves + delete_inputs
         self.assertAlmostEqual(
-            pm.getAttr(driven + ".translateX"),
+            cmds.getAttr(driven + ".translateX"),
             7.0,
             places=2,
             msg="Held X position lost after SmartBake",
         )
         self.assertAlmostEqual(
-            pm.getAttr(driven + ".translateY"),
+            cmds.getAttr(driven + ".translateY"),
             3.0,
             places=2,
             msg="Held Y position lost after SmartBake",
         )
         self.assertAlmostEqual(
-            pm.getAttr(driven + ".translateZ"),
+            cmds.getAttr(driven + ".translateZ"),
             -2.0,
             places=2,
             msg="Held Z position lost after SmartBake",
@@ -2251,7 +2209,7 @@ class TestAnimUtils(MayaTkTestCase):
     def test_set_current_frame(self):
         """Test setting current timeline frame."""
         frame = AnimUtils.set_current_frame(5.0)
-        current = pm.currentTime(query=True)
+        current = cmds.currentTime(query=True)
         self.assertEqual(current, 5.0)
 
     def test_smart_bake_preserves_sdk_curves_after_delete_inputs(self):
@@ -2263,28 +2221,27 @@ class TestAnimUtils(MayaTkTestCase):
         destroying all baked animation.
         Fixed: 2026-02-25
         """
-        import maya.cmds as cmds
         from mayatk.anim_utils.smart_bake import SmartBake
 
-        pm.playbackOptions(minTime=1, maxTime=20)
+        cmds.playbackOptions(minTime=1, maxTime=20)
 
         # Create SDK driver
-        driver = pm.polyCube(name="sdk_driver")[0]
-        driven = pm.polyCube(name="sdk_driven")[0]
+        driver = cmds.polyCube(name="sdk_driver")[0]
+        driven = cmds.polyCube(name="sdk_driven")[0]
 
         # Animate driver.translateX over time
-        pm.setKeyframe(driver, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(driver, attribute="translateX", time=10, value=5)
-        pm.setKeyframe(driver, attribute="translateX", time=20, value=0)
+        cmds.setKeyframe(driver, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(driver, attribute="translateX", time=10, value=5)
+        cmds.setKeyframe(driver, attribute="translateX", time=20, value=0)
 
         # Create SDK: driver.tx drives driven.ty
-        pm.setDrivenKeyframe(
+        cmds.setDrivenKeyframe(
             driven + ".translateY",
             currentDriver=driver + ".translateX",
             driverValue=0,
             value=0,
         )
-        pm.setDrivenKeyframe(
+        cmds.setDrivenKeyframe(
             driven + ".translateY",
             currentDriver=driver + ".translateX",
             driverValue=5,
@@ -2292,8 +2249,8 @@ class TestAnimUtils(MayaTkTestCase):
         )
 
         # Verify SDK is working
-        pm.currentTime(10)
-        self.assertAlmostEqual(pm.getAttr(driven + ".translateY"), 10.0, places=1)
+        cmds.currentTime(10)
+        self.assertAlmostEqual(cmds.getAttr(driven + ".translateY"), 10.0, places=1)
 
         # Verify pre-bake curve type
         curves = (
@@ -2356,11 +2313,10 @@ class TestAnimUtils(MayaTkTestCase):
         default value.
         Fixed: 2026-03-05
         """
-        import maya.cmds as cmds
 
         # Create a static curve and disconnect it
-        pm.setKeyframe(self.cube, attribute="translateZ", time=1, value=5)
-        pm.setKeyframe(self.cube, attribute="translateZ", time=10, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateZ", time=1, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateZ", time=10, value=5)
 
         curves = cmds.listConnections(
             f"{self.cube}.translateZ", type="animCurve", source=True
@@ -2376,7 +2332,7 @@ class TestAnimUtils(MayaTkTestCase):
             cmds.disconnectAttr(conns[0], conns[1])
 
         # Now the curve has no driven attribute — should NOT be deleted
-        static = AnimUtils.get_static_curves([pm.PyNode(curve)])
+        static = AnimUtils.get_static_curves([curve])
         self.assertEqual(
             len(static),
             0,
@@ -2391,18 +2347,17 @@ class TestAnimUtils(MayaTkTestCase):
         changing the curve shape at flat-to-animated transitions.
         Fixed: 2026-03-05
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
 
         # Create animation: flat hold then ramp up.
         # Sparse keys so the tangent change is significant.
-        pm.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=10, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=20, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=30, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=40, value=10)
-        pm.setKeyframe(self.cube, attribute="translateX", time=50, value=20)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=20, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=30, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=40, value=10)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=50, value=20)
 
         curves = cmds.listConnections(
             f"{self.cube}.translateX", type="animCurve", source=True
@@ -2416,7 +2371,7 @@ class TestAnimUtils(MayaTkTestCase):
         ]
 
         AnimUtils.get_redundant_flat_keys(
-            [pm.PyNode(curve)],
+            [curve],
             remove=True,
         )
 
@@ -2452,16 +2407,15 @@ class TestAnimUtils(MayaTkTestCase):
         on the boundary tangent creates massive drift (up to 6.5 degrees).
         Fixed: 2026-03-05
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
 
         # Create a long flat segment followed by animation.
         # The flat segment spans many frames to amplify any tangent error.
         for t in range(0, 101, 10):
-            pm.setKeyframe(self.cube, attribute="translateX", time=t, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=110, value=10)
-        pm.setKeyframe(self.cube, attribute="translateX", time=120, value=20)
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=110, value=10)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=120, value=20)
 
         curve = (
             cmds.listConnections(
@@ -2500,14 +2454,13 @@ class TestAnimUtils(MayaTkTestCase):
         bookend-to-original-key region.
         Fixed: 2026-03-05
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
 
         # Create animation only in a narrow range (100-200)
-        pm.setKeyframe(self.cube, attribute="translateX", time=100, value=5)
-        pm.setKeyframe(self.cube, attribute="translateX", time=150, value=10)
-        pm.setKeyframe(self.cube, attribute="translateX", time=200, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=100, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=150, value=10)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=200, value=5)
 
         curve = (
             cmds.listConnections(
@@ -2554,22 +2507,21 @@ class TestAnimUtils(MayaTkTestCase):
         drift (6.5 degrees on production scenes).
         Fixed: 2026-03-05
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
 
         # Create a realistic curve: baked flat segment + animated region
         # Flat region: hundreds of identical keys (simulates constraint bake)
         for t in range(0, 201):
-            pm.setKeyframe(self.cube, attribute="translateX", time=t, value=0)
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=0)
         # Animated region
-        pm.setKeyframe(self.cube, attribute="translateX", time=210, value=5)
-        pm.setKeyframe(self.cube, attribute="translateX", time=220, value=10)
-        pm.setKeyframe(self.cube, attribute="translateX", time=230, value=5)
-        pm.setKeyframe(self.cube, attribute="translateX", time=240, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=210, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=220, value=10)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=230, value=5)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=240, value=0)
         # Another flat region
         for t in range(240, 401):
-            pm.setKeyframe(self.cube, attribute="translateX", time=t, value=0)
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=0)
 
         # Dense evaluation before pipeline
         sample_frames = list(range(0, 401, 5))
@@ -2615,9 +2567,8 @@ class TestAnimUtils(MayaTkTestCase):
         tangent modes differently, corrupting curves on import.
         Fixed: 2026-06-05
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, clear=True)
+        cmds.cutKey(self.cube, clear=True)
 
         # Create animation with 'fixed' tangent types (mirroring production data)
         times_vals = [
@@ -2628,7 +2579,7 @@ class TestAnimUtils(MayaTkTestCase):
             (30, 0.0),
         ]
         for t, v in times_vals:
-            pm.setKeyframe(self.cube, attribute="translateX", time=t, value=v)
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=v)
 
         curve = (
             cmds.listConnections(
@@ -2714,13 +2665,12 @@ class TestAnimUtils(MayaTkTestCase):
         fixed tangent sections.
         Fixed: 2026-06-05
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, clear=True)
+        cmds.cutKey(self.cube, clear=True)
 
-        pm.setKeyframe(self.cube, attribute="translateX", time=10, value=0)
-        pm.setKeyframe(self.cube, attribute="translateX", time=20, value=10)
-        pm.setKeyframe(self.cube, attribute="translateX", time=30, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=20, value=10)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=30, value=0)
 
         curve = (
             cmds.listConnections(
@@ -2771,9 +2721,8 @@ class TestAnimUtils(MayaTkTestCase):
         their current angles) while skipping flat boundary tangents.
         Fixed: 2026-03-06
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, clear=True)
+        cmds.cutKey(self.cube, clear=True)
 
         # Replicate the production pattern: per-frame baked keys with
         # auto tangents, a long flat region, an animated region, then
@@ -2782,16 +2731,16 @@ class TestAnimUtils(MayaTkTestCase):
         flat_val = 0.717680
         # Flat region 1: frames 0-299 (300 per-frame keys, all same value)
         for t in range(0, 300):
-            pm.setKeyframe(self.cube, attribute="translateY", time=t, value=flat_val)
+            cmds.setKeyframe(self.cube, attribute="translateY", time=t, value=flat_val)
         # Animated region: frames 300-349 (ramp up then back)
         for t in range(300, 350):
             offset = (t - 300) / 50.0
             val = flat_val + offset * 10.0  # ramp from 0.717 to ~10.717
-            pm.setKeyframe(self.cube, attribute="translateY", time=t, value=val)
+            cmds.setKeyframe(self.cube, attribute="translateY", time=t, value=val)
         # Flat region 2: frames 350-499 (150 per-frame keys)
         end_val = flat_val + 10.0
         for t in range(350, 500):
-            pm.setKeyframe(self.cube, attribute="translateY", time=t, value=end_val)
+            cmds.setKeyframe(self.cube, attribute="translateY", time=t, value=end_val)
 
         # All keys should have auto tangent type (default for setKeyframe)
         curve = (
@@ -2887,18 +2836,17 @@ class TestAnimUtils(MayaTkTestCase):
         produce zero auto tangents and zero value drift.
         Fixed: 2026-03-06
         """
-        import maya.cmds as cmds
 
-        pm.cutKey(self.cube, clear=True)
+        cmds.cutKey(self.cube, clear=True)
 
         flat_val = 0.717680
         # Flat region 1: frames 100-399
         for t in range(100, 400):
-            pm.setKeyframe(self.cube, attribute="translateY", time=t, value=flat_val)
+            cmds.setKeyframe(self.cube, attribute="translateY", time=t, value=flat_val)
         # Animated region: frames 400-449
         for t in range(400, 450):
             offset = (t - 400) / 50.0
-            pm.setKeyframe(
+            cmds.setKeyframe(
                 self.cube,
                 attribute="translateY",
                 time=t,
@@ -2907,7 +2855,7 @@ class TestAnimUtils(MayaTkTestCase):
         # Flat region 2: frames 450-599
         end_val = flat_val + 10.0
         for t in range(450, 600):
-            pm.setKeyframe(self.cube, attribute="translateY", time=t, value=end_val)
+            cmds.setKeyframe(self.cube, attribute="translateY", time=t, value=end_val)
 
         curve = (
             cmds.listConnections(
@@ -2999,18 +2947,17 @@ class TestAnimUtils(MayaTkTestCase):
         optimize_keys → interior flat keys removed, boundary keys kept.
         Expected: value preserved exactly, key count reduced to 2 per channel.
         """
-        import maya.cmds as cmds
         from mayatk.anim_utils.smart_bake import SmartBake
 
-        pm.playbackOptions(minTime=1, maxTime=30)
+        cmds.playbackOptions(minTime=1, maxTime=30)
 
-        loc = pm.spaceLocator(name="static_target")
-        pm.setAttr(loc + ".translateX", 5)
-        pm.setAttr(loc + ".translateY", 3)
-        pm.setAttr(loc + ".translateZ", -2)
+        loc = cmds.spaceLocator(name="static_target")[0]
+        cmds.setAttr(loc + ".translateX", 5)
+        cmds.setAttr(loc + ".translateY", 3)
+        cmds.setAttr(loc + ".translateZ", -2)
 
-        driven = pm.polyCube(name="static_driven")[0]
-        pm.pointConstraint(loc, driven, maintainOffset=False)
+        driven = cmds.polyCube(name="static_driven")[0]
+        cmds.pointConstraint(loc, driven, maintainOffset=False)
 
         # Bake
         baker = SmartBake(
@@ -3067,16 +3014,15 @@ class TestAnimUtils(MayaTkTestCase):
         optimize_keys → animated keys preserved, flat hold reduced.
         Expected: animated portion intact, flat region has 2 boundary keys.
         """
-        import maya.cmds as cmds
         from mayatk.anim_utils.smart_bake import SmartBake
 
-        pm.playbackOptions(minTime=1, maxTime=40)
+        cmds.playbackOptions(minTime=1, maxTime=40)
 
-        loc = pm.spaceLocator(name="moving_target")
+        loc = cmds.spaceLocator(name="moving_target")[0]
         # Animate tx: linear ramp then hold
-        pm.setKeyframe(loc, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(loc, attribute="translateX", time=20, value=10)
-        pm.setKeyframe(loc, attribute="translateX", time=40, value=10)
+        cmds.setKeyframe(loc, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(loc, attribute="translateX", time=20, value=10)
+        cmds.setKeyframe(loc, attribute="translateX", time=40, value=10)
         cmds.keyTangent(
             str(loc) + ".translateX",
             edit=True,
@@ -3084,8 +3030,8 @@ class TestAnimUtils(MayaTkTestCase):
             outTangentType="linear",
         )
 
-        driven = pm.polyCube(name="moving_driven")[0]
-        pm.pointConstraint(loc, driven, maintainOffset=False)
+        driven = cmds.polyCube(name="moving_driven")[0]
+        cmds.pointConstraint(loc, driven, maintainOffset=False)
 
         # Sample evaluated values before bake (ground truth from constraint)
         sample_frames = list(range(1, 41))
@@ -3157,13 +3103,12 @@ class TestAnimUtils(MayaTkTestCase):
         optimize_keys → minimal reduction (all keys needed for shape).
         Expected: key count stays high, max value deviation < 0.5.
         """
-        import maya.cmds as cmds
         from mayatk.anim_utils.smart_bake import SmartBake
 
-        pm.playbackOptions(minTime=1, maxTime=60)
+        cmds.playbackOptions(minTime=1, maxTime=60)
 
-        driven = pm.polyCube(name="sine_driven")[0]
-        pm.expression(
+        driven = cmds.polyCube(name="sine_driven")[0]
+        cmds.expression(
             s=f"{driven}.translateX = sin(frame * 0.3) * 10;",
             name="sine_expr",
         )
@@ -3229,19 +3174,18 @@ class TestAnimUtils(MayaTkTestCase):
         optimize_keys → flat segments reduced, stepped tangents preserved.
         Expected: segments hold constant between steps, key count reduced.
         """
-        import maya.cmds as cmds
         from mayatk.anim_utils.smart_bake import SmartBake
 
-        pm.playbackOptions(minTime=1, maxTime=20)
+        cmds.playbackOptions(minTime=1, maxTime=20)
 
-        loc = pm.spaceLocator(name="stepped_target")
-        pm.setKeyframe(loc, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(loc, attribute="translateX", time=10, value=5)
-        pm.setKeyframe(loc, attribute="translateX", time=20, value=0)
+        loc = cmds.spaceLocator(name="stepped_target")[0]
+        cmds.setKeyframe(loc, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(loc, attribute="translateX", time=10, value=5)
+        cmds.setKeyframe(loc, attribute="translateX", time=20, value=0)
         cmds.keyTangent(str(loc) + ".translateX", edit=True, outTangentType="step")
 
-        driven = pm.polyCube(name="stepped_driven")[0]
-        pm.pointConstraint(loc, driven, maintainOffset=False)
+        driven = cmds.polyCube(name="stepped_driven")[0]
+        cmds.pointConstraint(loc, driven, maintainOffset=False)
 
         # Ground truth: stepped holds
         truth = {}
@@ -3306,22 +3250,21 @@ class TestAnimUtils(MayaTkTestCase):
         optimize_keys → tx keeps animated keys, ty/tz reduced to boundaries.
         Expected: tx values match constraint, ty/tz hold positions preserved.
         """
-        import maya.cmds as cmds
         from mayatk.anim_utils.smart_bake import SmartBake
 
-        pm.playbackOptions(minTime=1, maxTime=30)
+        cmds.playbackOptions(minTime=1, maxTime=30)
 
-        loc = pm.spaceLocator(name="mixed_target")
+        loc = cmds.spaceLocator(name="mixed_target")[0]
         # Animate tx
-        pm.setKeyframe(loc, attribute="translateX", time=1, value=0)
-        pm.setKeyframe(loc, attribute="translateX", time=15, value=10)
-        pm.setKeyframe(loc, attribute="translateX", time=30, value=0)
+        cmds.setKeyframe(loc, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(loc, attribute="translateX", time=15, value=10)
+        cmds.setKeyframe(loc, attribute="translateX", time=30, value=0)
         # Static ty/tz
-        pm.setAttr(loc + ".translateY", 3)
-        pm.setAttr(loc + ".translateZ", -2)
+        cmds.setAttr(loc + ".translateY", 3)
+        cmds.setAttr(loc + ".translateZ", -2)
 
-        driven = pm.polyCube(name="mixed_driven")[0]
-        pm.pointConstraint(loc, driven, maintainOffset=False)
+        driven = cmds.polyCube(name="mixed_driven")[0]
+        cmds.pointConstraint(loc, driven, maintainOffset=False)
 
         # Ground truth
         sample_frames = list(range(1, 31))
@@ -3401,19 +3344,18 @@ class TestAnimUtils(MayaTkTestCase):
         Cube point-constrained. Run full pipeline.
         Expected: all evaluated values match pre-pipeline truth within tolerance.
         """
-        import maya.cmds as cmds
         from mayatk.anim_utils.smart_bake import SmartBake
 
-        pm.playbackOptions(minTime=1, maxTime=60)
+        cmds.playbackOptions(minTime=1, maxTime=60)
 
-        loc = pm.spaceLocator(name="pipe_target")
+        loc = cmds.spaceLocator(name="pipe_target")[0]
         # tx: sine wave via keys
         for f in range(1, 61):
             val = math.sin(f * 0.2) * 5
-            pm.setKeyframe(loc, attribute="translateX", time=f, value=val)
+            cmds.setKeyframe(loc, attribute="translateX", time=f, value=val)
         # ty: linear ramp
-        pm.setKeyframe(loc, attribute="translateY", time=1, value=0)
-        pm.setKeyframe(loc, attribute="translateY", time=60, value=20)
+        cmds.setKeyframe(loc, attribute="translateY", time=1, value=0)
+        cmds.setKeyframe(loc, attribute="translateY", time=60, value=20)
         cmds.keyTangent(
             str(loc) + ".translateY",
             edit=True,
@@ -3421,10 +3363,10 @@ class TestAnimUtils(MayaTkTestCase):
             outTangentType="linear",
         )
         # tz: static
-        pm.setAttr(loc + ".translateZ", 7)
+        cmds.setAttr(loc + ".translateZ", 7)
 
-        driven = pm.polyCube(name="pipe_driven")[0]
-        pm.pointConstraint(loc, driven, maintainOffset=False)
+        driven = cmds.polyCube(name="pipe_driven")[0]
+        cmds.pointConstraint(loc, driven, maintainOffset=False)
 
         # Ground truth before bake
         sample_frames = list(range(1, 61))
@@ -3507,7 +3449,6 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        import maya.cmds as cmds
         import random
 
         cls.fbx_path = os.environ.get("MAYATK_TEST_FBX", _DEFAULT_FBX)
@@ -3583,7 +3524,6 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
 
     def _reload_cached_scene(self):
         """Re-open the cached scene (much faster than FBX import)."""
-        import maya.cmds as cmds
 
         cmds.file(self._cached_scene, open=True, force=True)
         return list(self._animated_objects)
@@ -3594,7 +3534,6 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
         Returns:
             dict: {obj: {frame: (tx, ty, tz, rx, ry, rz)}}
         """
-        import maya.cmds as cmds
 
         attrs = ("tx", "ty", "tz", "rx", "ry", "rz")
         snap = {obj: {} for obj in objects}
@@ -3637,7 +3576,6 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
 
     def _get_sample_frames(self, count=10):
         """Return evenly spaced frames across the playback range."""
-        import maya.cmds as cmds
 
         start = int(cmds.playbackOptions(q=True, minTime=True))
         end = int(cmds.playbackOptions(q=True, maxTime=True))
@@ -3661,7 +3599,6 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
         optimize_keys (static curve removal + flat key removal), and
         verifies no position drift exceeds tolerance.
         """
-        import maya.cmds as cmds
 
         animated = self._reload_cached_scene()
         self.assertTrue(animated, "No animated objects found in FBX")
@@ -3697,7 +3634,6 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
         End-to-end: imports FBX, smart-bakes constrained objects with
         delete_inputs + optimize_keys, verifies no position drift.
         """
-        import maya.cmds as cmds
         from mayatk.anim_utils.smart_bake import SmartBake
 
         animated = self._reload_cached_scene()
@@ -3732,7 +3668,6 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
         Imports FBX, snapshots positions, runs snap then tie, and
         verifies positions remain within tolerance.
         """
-        import maya.cmds as cmds
 
         animated = self._reload_cached_scene()
         self.assertTrue(animated, "No animated objects found in FBX")
@@ -3756,7 +3691,6 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
 
         Runs the same task sequence as TaskManager in the real exporter.
         """
-        import maya.cmds as cmds
         from mayatk.anim_utils.smart_bake import SmartBake
 
         animated = self._reload_cached_scene()
@@ -3816,7 +3750,6 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
         Useful for verifying the file imported correctly and understanding
         the complexity of the test scene.
         """
-        import maya.cmds as cmds
 
         animated = self._reload_cached_scene()
 

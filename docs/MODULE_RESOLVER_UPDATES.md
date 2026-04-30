@@ -184,17 +184,17 @@ result = runner.run(suite)
 ### Command Port Basics
 
 ```python
-import pymel.core as pm
+import maya.cmds as cmds
 
 # Open Python command port
-pm.commandPort(name=':7002', sourceType='python')
+cmds.commandPort(name=':7002', sourceType='python')
 
 # Open MEL command port
-pm.commandPort(name=':7001', sourceType='mel')
+cmds.commandPort(name=':7001', sourceType='mel')
 
 # Close ports
-pm.commandPort(name=':7002', close=True)
-pm.commandPort(name=':7001', close=True)
+cmds.commandPort(name=':7002', close=True)
+cmds.commandPort(name=':7001', close=True)
 ```
 
 Or using mayatk:

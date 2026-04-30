@@ -34,6 +34,7 @@ from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.mat_utils.image_to_plane._image_to_plane import ImageToPlane
 
 from base_test import MayaTkTestCase
+import maya.cmds as cmds
 
 
 # ---------------------------------------------------------------------------
@@ -106,20 +107,20 @@ class TestCreateFileNode(MayaTkTestCase):
     def test_creates_file_and_place2d(self):
         """create_file_node returns a file node and a place2dTexture."""
         fn, p2d = MatUtils.create_file_node(self._img, name="myTex")
-        self.assertEqual(pm.nodeType(fn), "file")
-        self.assertEqual(pm.nodeType(p2d), "place2dTexture")
+        self.assertEqual(cmds.nodeType(fn), "file")
+        self.assertEqual(cmds.nodeType(p2d), "place2dTexture")
 
     def test_texture_path_set(self):
         """File node stores the image path."""
         fn, _ = MatUtils.create_file_node(self._img)
-        stored = fn.fileTextureName.get()
+        stored = cmds.getAttr(f"{fn}.fileTextureName")
         self.assertEqual(os.path.normpath(stored), os.path.normpath(self._img))
 
     def test_place2d_connected_to_file(self):
         """place2dTexture.outUV is connected to file.uvCoord."""
         fn, p2d = MatUtils.create_file_node(self._img, name="wiring")
-        conns = p2d.outUV.listConnections(plugs=True) or []
-        dest_names = [c.name() for c in conns]
+        conns = cmds.listConnections(f"{p2d}.outUV", plugs=True) or []
+        dest_names = [c for c in conns]
         self.assertTrue(
             any("uvCoord" in d for d in dest_names),
             f"outUV not connected to uvCoord — destinations: {dest_names}",
@@ -128,13 +129,13 @@ class TestCreateFileNode(MayaTkTestCase):
     def test_default_name_from_stem(self):
         """When no name is given, the node name derives from the file stem."""
         fn, p2d = MatUtils.create_file_node(self._img)
-        self.assertIn("tile", fn.name())
-        self.assertIn("tile", p2d.name())
+        self.assertIn("tile", fn)
+        self.assertIn("tile", p2d)
 
     def test_color_space_override(self):
         """Explicit color_space kwarg sets the attribute."""
         fn, _ = MatUtils.create_file_node(self._img, color_space="Raw")
-        self.assertEqual(fn.colorSpace.get(), "Raw")
+        self.assertEqual(cmds.getAttr(f"{fn}.colorSpace"), "Raw")
 
 
 class TestCreateShadingGroup(MayaTkTestCase):
@@ -142,53 +143,65 @@ class TestCreateShadingGroup(MayaTkTestCase):
 
     def test_creates_sg_connected_to_shader(self):
         """SG is created and surfaceShader is connected."""
-        shader = pm.shadingNode("lambert", asShader=True, name="test_lam")
+        shader = cmds.shadingNode("lambert", asShader=True, name="test_lam")
         sg = MatUtils.create_shading_group(shader)
-        self.assertEqual(pm.nodeType(sg), "shadingEngine")
-        conns = sg.surfaceShader.listConnections()
-        self.assertIn(shader, conns)
+        self.assertEqual(cmds.nodeType(sg), "shadingEngine")
+        conns = cmds.listConnections(f"{sg}.surfaceShader") or []
+        self.assertIn(str(shader), [str(c) for c in conns])
 
     def test_custom_sg_name(self):
         """Custom name is respected."""
-        shader = pm.shadingNode("lambert", asShader=True, name="sg_test")
+        shader = cmds.shadingNode("lambert", asShader=True, name="sg_test")
         sg = MatUtils.create_shading_group(shader, name="mySG")
-        self.assertEqual(sg.name(), "mySG")
+        self.assertEqual(sg, "mySG")
 
     def test_assign_to_object(self):
         """Objects passed via assign_to are members of the new SG."""
-        shader = pm.shadingNode("lambert", asShader=True, name="assign_mat")
-        cube = pm.polyCube(name="assign_cube")[0]
+        shader = cmds.shadingNode("lambert", asShader=True, name="assign_mat")
+        cube = cmds.polyCube(name="assign_cube")[0]
         sg = MatUtils.create_shading_group(shader, assign_to=cube)
-        members = pm.sets(sg, query=True) or []
+        members = cmds.sets(sg, query=True) or []
         # polyPlane shapes get added
         self.assertTrue(len(members) > 0)
 
     def test_assign_to_list(self):
         """Assign multiple objects at once."""
-        shader = pm.shadingNode("lambert", asShader=True, name="multi_mat")
-        a = pm.polyCube(name="a")[0]
+        shader = cmds.shadingNode("lambert", asShader=True, name="multi_mat")
+        a = cmds.polyCube(name="a")[0]
         b = (
-            pm.poleSphere(name="b")[0]
+            cmds.polySphere(name="b")[0]
             if hasattr(pm, "poleSphere")
-            else pm.polySphere(name="b")[0]
+            else cmds.polySphere(name="b")[0]
         )
         sg = MatUtils.create_shading_group(shader, assign_to=[a, b])
-        members = pm.sets(sg, query=True) or []
+        members = cmds.sets(sg, query=True) or []
         self.assertTrue(len(members) >= 2)
+
+
+def _ensure_stingray_loadable():
+    """Ensure shaderFXPlugin / Stingray support is loaded.
+
+    StingrayPBS is provided by shaderFXPlugin in Maya 2024+; both stock
+    Maya and mayapy auto-load it, but test runners that mock/clear plugin
+    state can leave it unloaded. Loading it explicitly is harmless.
+    """
+    for p in ("shaderFXPlugin", "stingray_pbs"):
+        try:
+            if not cmds.pluginInfo(p, query=True, loaded=True):
+                cmds.loadPlugin(p, quiet=True)
+        except RuntimeError:
+            pass
 
 
 class TestCreateStingrayShader(MayaTkTestCase):
     """Tests for MatUtils.create_stingray_shader."""
 
     def test_creates_stingray_node(self):
-        """Stingray PBS node is created when the plugin is available."""
-        try:
-            shader = MatUtils.create_stingray_shader("test_sr")
-            self.assertTrue(pm.objExists(shader))
-            # StingrayPBS may show as different nodeType depending on Maya version
-            self.assertIn("Stingray", pm.nodeType(shader))
-        except Exception:
-            self.skipTest("StingrayPBS not available in this Maya session.")
+        """Stingray PBS node is created."""
+        _ensure_stingray_loadable()
+        shader = MatUtils.create_stingray_shader("test_sr")
+        self.assertTrue(cmds.objExists(shader))
+        self.assertIn("Stingray", cmds.nodeType(shader))
 
 
 # ===========================================================================
@@ -245,7 +258,7 @@ class TestImageToPlane(MayaTkTestCase):
         results = ImageToPlane.create([img], mat_type="standard", suffix="_MAT")
         self.assertIn("wide", results)
         plane = results["wide"]
-        self.assertTrue(pm.objExists(plane))
+        self.assertTrue(cmds.objExists(plane))
 
     def test_plane_aspect_ratio_landscape(self):
         """Plane width/height matches a 2:1 landscape image."""
@@ -256,7 +269,7 @@ class TestImageToPlane(MayaTkTestCase):
             plane_height=10.0,
         )
         plane = results["ratio_test"]
-        bb = pm.exactWorldBoundingBox(plane)
+        bb = cmds.exactWorldBoundingBox(plane)
         # bb = [xmin, ymin, zmin, xmax, ymax, zmax]
         # With axis=[0,0,1] the plane lies in XY
         plane_w = bb[3] - bb[0]  # x extent
@@ -279,7 +292,7 @@ class TestImageToPlane(MayaTkTestCase):
             plane_height=10.0,
         )
         plane = results["portrait_ratio"]
-        bb = pm.exactWorldBoundingBox(plane)
+        bb = cmds.exactWorldBoundingBox(plane)
         plane_w = bb[3] - bb[0]
         plane_h = bb[4] - bb[1]
         larger = max(plane_w, plane_h)
@@ -297,7 +310,7 @@ class TestImageToPlane(MayaTkTestCase):
             plane_height=10.0,
         )
         plane = results["sq"]
-        bb = pm.exactWorldBoundingBox(plane)
+        bb = cmds.exactWorldBoundingBox(plane)
         plane_w = bb[3] - bb[0]
         plane_h = bb[4] - bb[1]
         larger = max(plane_w, plane_h)
@@ -311,42 +324,41 @@ class TestImageToPlane(MayaTkTestCase):
         """Default suffix is _MAT."""
         img = _create_test_image(64, 64, "brick", self._tmp_dir)
         ImageToPlane.create([img], mat_type="standard")
-        self.assertTrue(pm.objExists("brick_MAT"))
+        self.assertTrue(cmds.objExists("brick_MAT"))
 
     def test_material_suffix_custom(self):
         """Custom suffix is applied."""
         img = _create_test_image(64, 64, "stone", self._tmp_dir)
         ImageToPlane.create([img], mat_type="standard", suffix="_proxy")
-        self.assertTrue(pm.objExists("stone_proxy"))
+        self.assertTrue(cmds.objExists("stone_proxy"))
 
     def test_material_is_assigned(self):
         """The created material is assigned to the plane's shading group."""
         img = _create_test_image(64, 64, "assigned", self._tmp_dir)
         results = ImageToPlane.create([img], mat_type="standard")
         plane = results["assigned"]
-        shapes = plane.getShapes()
+        shapes = (cmds.listRelatives(str(plane), shapes=True, ni=True) or [])
         self.assertTrue(len(shapes) > 0)
-        sgs = shapes[0].listConnections(type="shadingEngine") or []
+        sgs = cmds.listConnections(shapes[0], type="shadingEngine") or []
         self.assertTrue(len(sgs) > 0)
         # SG should be connected to our shader
-        shaders = sgs[0].surfaceShader.listConnections() or []
-        shader_names = [s.name() for s in shaders]
+        shaders = cmds.listConnections(f"{sgs[0]}.surfaceShader") or []
         self.assertTrue(
-            any("assigned_MAT" in n for n in shader_names),
-            f"Expected shader 'assigned_MAT' in {shader_names}",
+            any("assigned_MAT" in n for n in shaders),
+            f"Expected shader 'assigned_MAT' in {shaders}",
         )
 
     def test_file_node_connected(self):
         """A file node with the image path feeds the shader."""
         img = _create_test_image(64, 64, "filecheck", self._tmp_dir)
         ImageToPlane.create([img], mat_type="standard")
-        shader = pm.PyNode("filecheck_MAT")
+        shader = "filecheck_MAT"
         # Walk upstream from baseColor or color
-        color_attr = "baseColor" if shader.hasAttr("baseColor") else "color"
-        conns = shader.attr(color_attr).listConnections(type="file") or []
+        color_attr = "baseColor" if cmds.attributeQuery("baseColor", node=shader, exists=True) else "color"
+        conns = cmds.listConnections(f"{shader}.{color_attr}", type="file") or []
         self.assertTrue(len(conns) > 0, "No file node connected to shader color")
         fn = conns[0]
-        stored = fn.fileTextureName.get()
+        stored = cmds.getAttr(f"{fn}.fileTextureName")
         self.assertEqual(
             os.path.normpath(stored),
             os.path.normpath(img),
@@ -377,37 +389,33 @@ class TestImageToPlane(MayaTkTestCase):
     # -- Stingray shader ---------------------------------------------------
 
     def test_create_stingray_plane(self):
-        """Create a plane with Stingray PBS material (if available)."""
+        """Create a plane with Stingray PBS material."""
+        _ensure_stingray_loadable()
         img = _create_test_image(64, 64, "sr_test", self._tmp_dir)
-        try:
-            results = ImageToPlane.create([img], mat_type="stingray")
-            self.assertIn("sr_test", results)
-            self.assertTrue(pm.objExists("sr_test_MAT"))
-        except Exception:
-            self.skipTest("StingrayPBS not available in this Maya session.")
+        results = ImageToPlane.create([img], mat_type="stingray")
+        self.assertIn("sr_test", results)
+        self.assertTrue(cmds.objExists("sr_test_MAT"))
 
     def test_stingray_use_color_map_enabled(self):
         """Verify use_color_map is set to 1 so the texture is visible.
 
-        Bug: StingrayPBS planes appeared white because use_color_map was
-        never enabled after connecting the file node to TEX_color_map.
-        Fixed: 2026-02-23
+        Regression: StingrayPBS planes appeared white because use_color_map
+        was never enabled after connecting the file node to TEX_color_map.
         """
+        _ensure_stingray_loadable()
         img = _create_test_image(64, 64, "sr_clr", self._tmp_dir)
-        try:
-            ImageToPlane.create([img], mat_type="stingray")
-            shader = pm.PyNode("sr_clr_MAT")
-            self.assertTrue(
-                shader.hasAttr("use_color_map"),
-                "StingrayPBS shader missing use_color_map attr",
-            )
-            self.assertEqual(
-                shader.use_color_map.get(),
-                1.0,
-                "use_color_map not enabled — texture will appear white",
-            )
-        except Exception:
-            self.skipTest("StingrayPBS not available in this Maya session.")
+        ImageToPlane.create([img], mat_type="stingray")
+        shader = "sr_clr_MAT"
+        self.assertTrue(cmds.objExists(shader))
+        self.assertTrue(
+            cmds.attributeQuery("use_color_map", node=shader, exists=True),
+            "StingrayPBS shader missing use_color_map attr",
+        )
+        self.assertEqual(
+            cmds.getAttr(f"{shader}.use_color_map"),
+            1.0,
+            "use_color_map not enabled — texture will appear white",
+        )
 
     # -- Remove ------------------------------------------------------------
 
@@ -417,29 +425,29 @@ class TestImageToPlane(MayaTkTestCase):
         results = ImageToPlane.create([img], mat_type="standard")
         plane = results["removable"]
         # Grab names before removal
-        plane_name = plane.name()
+        plane_name = plane
         mat_name = "removable_MAT"
         sg_name = f"{mat_name}_SG"
 
         removed = ImageToPlane.remove([plane])
         self.assertEqual(removed, 1)
-        self.assertFalse(pm.objExists(plane_name))
-        self.assertFalse(pm.objExists(mat_name))
+        self.assertFalse(cmds.objExists(plane_name))
+        self.assertFalse(cmds.objExists(mat_name))
 
     def test_remove_uses_selection_when_no_args(self):
         """remove() with no args uses current selection."""
         img = _create_test_image(64, 64, "sel_rm", self._tmp_dir)
         results = ImageToPlane.create([img], mat_type="standard")
         plane = results["sel_rm"]
-        pm.select(plane, replace=True)
+        cmds.select(plane, replace=True)
 
         removed = ImageToPlane.remove()
         self.assertEqual(removed, 1)
-        self.assertFalse(pm.objExists("sel_rm"))
+        self.assertFalse(cmds.objExists("sel_rm"))
 
     def test_remove_returns_zero_on_empty(self):
         """remove() with nothing selected returns 0."""
-        pm.select(clear=True)
+        cmds.select(clear=True)
         self.assertEqual(ImageToPlane.remove(), 0)
 
     # -- Plane height parameter --------------------------------------------
@@ -453,7 +461,7 @@ class TestImageToPlane(MayaTkTestCase):
             plane_height=5.0,
         )
         plane = results["sized"]
-        bb = pm.exactWorldBoundingBox(plane)
+        bb = cmds.exactWorldBoundingBox(plane)
         # Square image → both extents should be ~5.0
         plane_w = bb[3] - bb[0]
         plane_h = bb[4] - bb[1]

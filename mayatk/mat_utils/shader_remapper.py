@@ -1,7 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
 from typing import List, Dict, Any, Tuple, Type
-import pymel.core as pm
+
+try:
+    import maya.cmds as cmds
+except ImportError as error:
+    print(__file__, error)
 import pythontk as ptk
 
 # From this package
@@ -27,9 +31,9 @@ class ShaderRemapper(ptk.LoggingMixin):
 
     def remap_shaders(
         self,
-        shaders: List["pm.nt.ShadingDependNode"],
+        shaders: List[str],
         target_type: str,
-    ) -> Dict["pm.nt.ShadingDependNode", "pm.nt.ShadingDependNode"]:
+    ) -> Dict[str, str]:
         """
         For each shader:
         - Create a new shader node of target_type.
@@ -40,7 +44,7 @@ class ShaderRemapper(ptk.LoggingMixin):
         """
         result = {}
         for old_shader in shaders:
-            src_type = type(old_shader).__name__
+            src_type = cmds.nodeType(old_shader)
             mapping = self.attr_map.get_mapping(src_type, target_type)
             if not mapping:
                 if self.verbose:
@@ -62,48 +66,49 @@ class ShaderRemapper(ptk.LoggingMixin):
             result[old_shader] = new_shader
         return result
 
-    def _create_shader(self, old_shader: Any, target_type: str) -> Any:
+    def _create_shader(self, old_shader: str, target_type: str) -> str:
         """Create a new shader node of the target_type with the original name + suffix."""
         new_name = f"{old_shader}_{self.name_suffix}".replace("__", "_")
-        if pm.objExists(new_name):
+        if cmds.objExists(new_name):
             try:
-                pm.delete(new_name)
+                cmds.delete(new_name)
             except Exception:
-                pm.warning(f"Could not delete existing shader node: {new_name}")
+                cmds.warning(f"Could not delete existing shader node: {new_name}")
 
-        new_shader = pm.shadingNode(target_type, asShader=True, name=new_name)
+        new_shader = cmds.shadingNode(target_type, asShader=True, name=new_name)
         return new_shader
 
     def _connect_file_nodes(
         self,
-        old_shader: pm.nt.ShadingDependNode,
-        new_shader: pm.nt.ShadingDependNode,
+        old_shader: str,
+        new_shader: str,
         mapping: tuple,
     ) -> None:
         for src_attr, src_plug, dst_attr in mapping:
             if dst_attr == "normalCamera":
-                if old_shader.hasAttr(src_attr):
-                    for file_node in old_shader.attr(src_attr).inputs(type="file"):
-                        # Ensure color-managed attributes exist
-                        if not file_node.hasAttr("isColorManaged"):
-                            file_node.addAttr("isColorManaged", at="bool")
-                        if not file_node.hasAttr("ignoreColorSpaceFileRules"):
-                            file_node.addAttr("ignoreColorSpaceFileRules", at="bool")
+                if cmds.attributeQuery(src_attr, node=old_shader, exists=True):
+                    for file_node in cmds.listConnections(
+                        f"{old_shader}.{src_attr}", source=True, destination=False, type="file"
+                    ) or []:
+                        if not cmds.attributeQuery("isColorManaged", node=file_node, exists=True):
+                            cmds.addAttr(file_node, longName="isColorManaged", attributeType="bool")
+                        if not cmds.attributeQuery("ignoreColorSpaceFileRules", node=file_node, exists=True):
+                            cmds.addAttr(file_node, longName="ignoreColorSpaceFileRules", attributeType="bool")
 
-                        file_node.isColorManaged.set(True)
-                        file_node.ignoreColorSpaceFileRules.set(True)
-                        file_node.colorSpace.set("Raw", type="string")
+                        cmds.setAttr(f"{file_node}.isColorManaged", True)
+                        cmds.setAttr(f"{file_node}.ignoreColorSpaceFileRules", True)
+                        cmds.setAttr(f"{file_node}.colorSpace", "Raw", type="string")
 
-                        bump = pm.shadingNode(
+                        bump = cmds.shadingNode(
                             "bump2d", asUtility=True, name=f"{file_node}_bump2d"
                         )
-                        bump.bumpInterp.set(1)  # Tangent Space Normals
+                        cmds.setAttr(f"{bump}.bumpInterp", 1)  # Tangent Space Normals
 
-                        pm.connectAttr(
-                            file_node.outColor, bump.normalCamera, force=True
+                        cmds.connectAttr(
+                            f"{file_node}.outColor", f"{bump}.normalCamera", force=True
                         )
-                        pm.connectAttr(
-                            bump.outNormal, new_shader.normalCamera, force=True
+                        cmds.connectAttr(
+                            f"{bump}.outNormal", f"{new_shader}.normalCamera", force=True
                         )
 
                         if self.verbose:
@@ -113,29 +118,33 @@ class ShaderRemapper(ptk.LoggingMixin):
                 continue
 
             # Regular attribute mappings
-            if old_shader.hasAttr(src_attr) and new_shader.hasAttr(dst_attr):
-                for tex in old_shader.attr(src_attr).inputs(type="file"):
-                    try:
-                        out_attr = getattr(tex, src_plug)
-                    except AttributeError:
+            if (
+                cmds.attributeQuery(src_attr, node=old_shader, exists=True)
+                and cmds.attributeQuery(dst_attr, node=new_shader, exists=True)
+            ):
+                for tex in cmds.listConnections(
+                    f"{old_shader}.{src_attr}", source=True, destination=False, type="file"
+                ) or []:
+                    out_attr = f"{tex}.{src_plug}"
+                    if not cmds.attributeQuery(src_plug, node=tex, exists=True):
                         self.logger.warning(f"  Missing plug '{src_plug}' on {tex}")
                         continue
                     try:
-                        pm.connectAttr(
-                            out_attr, getattr(new_shader, dst_attr), force=True
+                        cmds.connectAttr(
+                            out_attr, f"{new_shader}.{dst_attr}", force=True
                         )
                         if self.verbose:
                             self.logger.info(
-                                f"  Connected {out_attr.name()} → {new_shader}.{dst_attr}"
+                                f"  Connected {out_attr} → {new_shader}.{dst_attr}"
                             )
                     except Exception as e:
                         self.logger.warning(
-                            f"  Failed to connect {out_attr.name()} → {new_shader}.{dst_attr}: {e}"
+                            f"  Failed to connect {out_attr} → {new_shader}.{dst_attr}: {e}"
                         )
 
-    def _reassign_to_geo(self, old_shader: Any, new_shader: Any) -> None:
+    def _reassign_to_geo(self, old_shader: str, new_shader: str) -> None:
         """Reassign the new shader to all geometry previously assigned to the old shader."""
-        engines = set(pm.listConnections(old_shader, type="shadingEngine"))
+        engines = set(cmds.listConnections(old_shader, type="shadingEngine") or [])
         if not engines:
             if self.verbose:
                 self.logger.info(
@@ -144,11 +153,11 @@ class ShaderRemapper(ptk.LoggingMixin):
             return
 
         for se in engines:
-            geo = pm.sets(se, query=True) or []
+            geo = cmds.sets(se, query=True) or []
             if not geo:
                 continue
             try:
-                pm.connectAttr(new_shader.outColor, se.surfaceShader, force=True)
+                cmds.connectAttr(f"{new_shader}.outColor", f"{se}.surfaceShader", force=True)
                 if self.verbose:
                     self.logger.info(
                         f"  Assigned {new_shader} to {len(geo)} geo via {se}"
@@ -166,7 +175,7 @@ if __name__ == "__main__":
     mats = MatUtils.get_scene_mats(inc="mat_wing*", node_type="StingrayPBS", sort=True)
     print(f"Found {len(mats)} materials to remap.")
     for mat in mats:
-        print(f" - {mat.name()}")
+        print(f" - {mat}")
 
     # Remap to blinn
     remapper = ShaderRemapper(

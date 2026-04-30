@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Sequence, Tuple, Any, Union
 from collections import defaultdict
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
     import maya.api.OpenMaya as om
 except ImportError as error:
     print(__file__, error)
@@ -22,18 +22,48 @@ from mayatk.core_utils.instancing.instancing_strategy import (
     StrategyConfig,
     StrategyType,
 )
+from mayatk.core_utils._core_utils import short_name
+from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.xform_utils._xform_utils import get_object_matrix, set_object_matrix
 
 
 class InstanceCandidate:
-    """Holds information about a transform candidate for instancing."""
+    """Holds information about a transform candidate for instancing.
 
-    def __init__(self, transform: pm.nodetypes.Transform):
-        self.transform = transform
-        self.matrix = transform.getMatrix(worldSpace=True)
-        self.parent = transform.getParent()
-        self.visibility = transform.visibility.get()
+    ``transform`` is a property that re-resolves the node's *current* DAG
+    path from its UUID on each access. Plain string paths do not survive
+    reparenting/renaming transparently because it held an ``MObject``;
+    bare path strings do not. We mirror that behavior with a UUID lookup.
+    """
+
+    def __init__(self, transform):
+        path = str(transform)
+        uuids = cmds.ls(path, uuid=True) or []
+        self.uuid: Optional[str] = uuids[0] if uuids else None
+        self._path: str = path  # fallback if uuid lookup fails
+        self.matrix = get_object_matrix(path, world=True)
+        self.parent = (
+            cmds.listRelatives(path, parent=True, fullPath=True) or [None]
+        )[0]
+        try:
+            self.visibility = bool(cmds.getAttr(f"{path}.visibility"))
+        except Exception:
+            self.visibility = True
         # Transform required to align prototype to this candidate (if instanced)
-        self.relative_transform: Optional[pm.dt.Matrix] = None
+        self.relative_transform: Optional[om.MMatrix] = None
+
+    @property
+    def transform(self) -> str:
+        if self.uuid:
+            current = cmds.ls(self.uuid, long=True) or []
+            if current:
+                return current[0]
+        return self._path
+
+    def exists(self) -> bool:
+        if self.uuid:
+            return bool(cmds.ls(self.uuid))
+        return cmds.objExists(self._path)
 
     def __repr__(self):
         return f"<InstanceCandidate {self.transform}>"
@@ -151,13 +181,13 @@ class AutoInstancer(ptk.LoggingMixin):
 
     def run(
         self,
-        nodes: Optional[Sequence[pm.nodetypes.Transform]] = None,
-    ) -> List[pm.nodetypes.Transform]:
+        nodes: Optional[Sequence[object]] = None,
+    ) -> List[object]:
         """Entry point for discovering and instancing matching meshes."""
         if nodes is None:
-            nodes = pm.ls(selection=True, type="transform")
+            nodes = cmds.ls(selection=True, type="transform")
             if not nodes:
-                nodes = pm.ls(type="transform")
+                nodes = cmds.ls(type="transform")
 
         # Handle separation if requested
         if self.separate_combined:
@@ -170,48 +200,67 @@ class AutoInstancer(ptk.LoggingMixin):
             else:
                 self.check_hierarchy = True
 
-        # Canonicalize leaf meshes AFTER reassembly so instancing can match them
-        # NOTE: If we canonicalize, we reset transforms to align with PCA.
-        # This makes the local geometry identical (good for instancing).
-        # But it also changes the rotation of the assembly parts.
-        # If we re-parent them later, we might lose the "assembly rotation" if not careful.
-        # However, for single-level assemblies (groups), correct instance transforms should cover it.
-        # The issue is if assemblers rely on world-space assumptions.
-        nodes = self.reconstructor.canonicalize_leaf_meshes(nodes)
+        # Canonicalize leaf meshes AFTER reassembly so instancing can match
+        # them.  Canonicalization absorbs translation/rotation into the
+        # transform so PCA-aligned geometry compares equal — required for the
+        # reassembly flow.  For plain leaf-instancing it's too aggressive: it
+        # collapses frozen-vs-non-frozen and pivot-shifted cubes into the
+        # same signature, instancing objects that the user wants kept
+        # distinct.  Gate on ``separate_combined`` (the assembly flow) only.
+        if self.separate_combined:
+            nodes = self.reconstructor.canonicalize_leaf_meshes(nodes)
 
         groups = self.find_instance_groups(nodes)
 
-        # Sort groups by hierarchy depth of prototype (shallowest first)
-        groups.sort(key=lambda g: len(g.prototype.transform.getAllParents()))
+        # Sort groups by hierarchy depth of prototype (shallowest first).
+        # Walk the ancestor chain — equivalent to
+        # the count of ``|`` separators in a full DAG path.
+        def _depth(transform: str) -> int:
+            full = cmds.ls(transform, long=True) or [transform]
+            return full[0].count("|")
+
+        groups.sort(key=lambda g: _depth(g.prototype.transform))
 
         report: List[Dict[str, object]] = []
-        all_instances: List[pm.nodetypes.Transform] = []
+        all_instances: List[object] = []
 
         for group in groups:
             if not group.members:
                 continue
 
+            # An earlier (shallower) group's processing may have deleted or
+            # re-parented this group's prototype. Skip if it's gone — its
+            # contents were already instanced by the ancestor pass.
+            if not group.prototype.exists():
+                continue
+            group.members = [m for m in group.members if m.exists()]
+            if not group.members:
+                continue
+
             # Apply Instancing Strategy Rules (First Pass)
             prototype_transform = group.prototype.transform
-            prototype_shape = prototype_transform.getShape()
+            prototype_shape = (cmds.listRelatives(prototype_transform, shapes=True, fullPath=True) or [None])[0]
 
             group_size = len(group.members) + 1
             strategy = StrategyType.COMBINE  # Default
 
-            if prototype_shape and isinstance(prototype_shape, pm.nodetypes.Mesh):
+            if prototype_shape and cmds.objectType(prototype_shape) == 'mesh':
                 strategy = self.strategy_analyzer.evaluate(
                     group_size, mesh_node=prototype_shape
                 )
             else:
                 # It's an assembly/group - calculate total triangles
                 tri_count = 0
-                meshes = prototype_transform.listRelatives(
-                    allDescendents=True, type="mesh"
-                )
+                meshes = cmds.listRelatives(
+                    prototype_transform,
+                    allDescendents=True,
+                    type="mesh",
+                    fullPath=True,
+                ) or []
                 for m in meshes:
-                    if not m.intermediateObject.get():
+                    if not NodeUtils.is_intermediate(m):
                         try:
-                            tri_count += int(pm.polyEvaluate(m, triangle=True))
+                            tri_count += int(cmds.polyEvaluate(m, triangle=True))
                         except Exception:
                             pass
                 strategy = self.strategy_analyzer.evaluate(
@@ -253,14 +302,14 @@ class AutoInstancer(ptk.LoggingMixin):
             processed_nodes = set(all_instances)
 
             leaf_candidates = []
-            all_transforms = pm.ls(type="transform")
+            all_transforms = cmds.ls(type="transform")
             for t in all_transforms:
                 if t in processed_nodes:
                     continue
 
-                shape = t.getShape()
-                if shape and not shape.intermediateObject.get():
-                    if isinstance(shape, pm.nodetypes.Mesh):
+                shape = NodeUtils.get_shape(t)
+                if shape and not NodeUtils.is_intermediate(shape):
+                    if cmds.objectType(shape) == 'mesh':
                         leaf_candidates.append(t)
 
             original_check = self.check_hierarchy
@@ -274,10 +323,8 @@ class AutoInstancer(ptk.LoggingMixin):
 
                 # Apply Instancing Strategy Rules
                 # We check the prototype mesh for triangle count
-                prototype_mesh = group.prototype.transform.getShape()
-                if not prototype_mesh or not isinstance(
-                    prototype_mesh, pm.nodetypes.Mesh
-                ):
+                prototype_mesh = NodeUtils.get_shape(group.prototype.transform)
+                if not prototype_mesh or not cmds.objectType(prototype_mesh) == 'mesh':
                     continue
 
                 # Group size is members + prototype (1)
@@ -305,31 +352,37 @@ class AutoInstancer(ptk.LoggingMixin):
         return all_instances
 
     def find_instance_groups(
-        self, nodes: Optional[Sequence[pm.nodetypes.Transform]] = None
+        self, nodes: Optional[Sequence[object]] = None
     ) -> List[InstanceGroup]:
         """Finds groups of identical objects in the scene."""
         if nodes is None:
-            nodes = pm.ls(selection=True, type="transform")
+            nodes = cmds.ls(selection=True, type="transform")
             if not nodes:
-                nodes = pm.ls(type="transform")
+                nodes = cmds.ls(type="transform")
 
         candidates = []
         if self.check_hierarchy:
             for n in nodes:
-                if n.isReadOnly():
+                node_str = str(n)
+                # Skip locked / referenced read-only nodes.
+                try:
+                    if cmds.lockNode(node_str, q=True, lock=True)[0]:
+                        continue
+                except Exception:
+                    pass
+                if node_str.split('|')[-1].split(':')[-1] in ["persp", "top", "front", "side"]:
                     continue
-                if n.name() in ["persp", "top", "front", "side"]:
-                    continue
-                candidates.append(InstanceCandidate(n))
+                candidates.append(InstanceCandidate(node_str))
         else:
             for n in nodes:
-                shape = n.getShape()
+                node_str = str(n)
+                shape = NodeUtils.get_shape(node_str, no_intermediate=False)
                 if (
                     shape
-                    and isinstance(shape, pm.nodetypes.Mesh)
-                    and not shape.intermediateObject.get()
+                    and cmds.objectType(shape) == 'mesh'
+                    and not NodeUtils.is_intermediate(shape)
                 ):
-                    candidates.append(InstanceCandidate(n))
+                    candidates.append(InstanceCandidate(node_str))
 
         # Group by signature
         signature_map = defaultdict(list)
@@ -353,13 +406,19 @@ class AutoInstancer(ptk.LoggingMixin):
 
         groups = []
 
+        def _is_instanced(transform_path: str) -> bool:
+            shape = NodeUtils.get_shape(transform_path)
+            if not shape:
+                return False
+            # In Maya, an instanced shape has more than one parent transform.
+            parents = cmds.listRelatives(shape, allParents=True) or []
+            return len(parents) > 1
+
         for sig, potential_matches in signature_map.items():
             potential_matches.sort(
                 key=lambda x: (
-                    not (
-                        x.transform.getShape() and x.transform.getShape().isInstanced()
-                    ),
-                    x.transform.name(),
+                    not _is_instanced(x.transform),
+                    short_name(x.transform),
                 )
             )
 
@@ -461,78 +520,84 @@ class AutoInstancer(ptk.LoggingMixin):
 
     def _convert_group_to_instances(
         self, group: InstanceGroup
-    ) -> List[pm.nodetypes.Transform]:
+    ) -> List[str]:
         """Convert all members of a group to instances of the prototype."""
-        if not group.prototype.transform.exists():
+        if not cmds.objExists(group.prototype.transform):
             return []
 
         if not group.members:
             return [group.prototype.transform]
 
         prototype_transform = group.prototype.transform
-        instances = []
+        instances: List[str] = []
 
         for member in group.members:
             target = member.transform
-            if not target.exists():
+            if not cmds.objExists(target):
                 continue
 
-            target_name = target.name()
+            target_name = target.split('|')[-1].split(':')[-1]
 
             # 1. Duplicate target transform
-            new_instance = pm.duplicate(target, parentOnly=True)[0]
+            new_instance = cmds.duplicate(target, parentOnly=True)[0]
 
             # Apply relative transform if it exists
             rel_mtx = member.relative_transform
-            if not rel_mtx and hasattr(target, "relative_transform"):
-                rel_mtx = target.relative_transform
 
             if rel_mtx:
-                # Apply relative transform (rotation/scale) to the new instance
-                # We combine it with the existing transform (from target)
+                # Combine with existing transform (from target).
                 # Order: rel_mtx (shape correction) * target_matrix (world placement)
-                target_matrix = new_instance.getMatrix(worldSpace=True)
+                target_matrix = get_object_matrix(new_instance, world=True)
                 final_matrix = rel_mtx * target_matrix
-                new_instance.setMatrix(final_matrix, worldSpace=True)
+                set_object_matrix(new_instance, final_matrix, world=True)
 
             # 2. Create temp instance of prototype
-            temp_instance = pm.instance(prototype_transform, leaf=True)[0]
+            temp_instance = cmds.instance(prototype_transform, leaf=True)[0]
 
             # 3. Move contents of temp_instance to new_instance
-            children = temp_instance.getChildren()
+            children = (
+                cmds.listRelatives(temp_instance, children=True, fullPath=True) or []
+            )
             for child in children:
-                if not isinstance(child, pm.nodetypes.Shape):
-                    if new_instance == child or new_instance.hasParent(child):
+                is_shape = cmds.objectType(child) == 'shape' or cmds.ls(
+                    child, shapes=True
+                )
+                if not is_shape:
+                    # Skip self-parenting and ancestor cycles.
+                    if new_instance == child or child in (
+                        cmds.listRelatives(new_instance, allParents=True, fullPath=True)
+                        or []
+                    ):
                         continue
 
-                if isinstance(child, pm.nodetypes.Shape):
+                if is_shape:
                     try:
-                        pm.parent(child, new_instance, shape=True, relative=True)
+                        cmds.parent(child, new_instance, shape=True, relative=True)
                     except RuntimeError as e:
                         self.logger.warning("Failed to parent shape %s: %s", child, e)
                 else:
                     try:
-                        pm.parent(child, new_instance, relative=True)
+                        cmds.parent(child, new_instance, relative=True)
                     except RuntimeError as e:
                         self.logger.warning(
                             "Failed to parent transform %s: %s", child, e
                         )
 
             # 4. Cleanup temp_instance
-            pm.delete(temp_instance)
+            cmds.delete(temp_instance)
 
             # 5. Preserve children of target
             if not self.check_hierarchy:
-                target_children = target.getChildren(type="transform")
+                target_children = NodeUtils.get_children(target, type="transform")
                 if target_children:
                     try:
-                        pm.parent(target_children, world=True)
+                        cmds.parent(target_children, world=True)
                     except Exception:
                         pass
 
             # 6. Delete original and rename instance
-            pm.delete(target)
-            new_instance.rename(target_name)
+            cmds.delete(target)
+            new_instance = cmds.rename(new_instance, target_name)
 
             instances.append(new_instance)
 
@@ -555,7 +620,7 @@ if __name__ == "__main__":
     from mayatk import clear_scrollfield_reporters, AutoInstancer
 
     clear_scrollfield_reporters()
-    sel = pm.selected()
+    sel = cmds.ls(selection=True) or []
 
     instancer = AutoInstancer(
         separate_combined=True,

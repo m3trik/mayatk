@@ -1,6 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
-import pymel.core as pm
+from __future__ import annotations
+
+try:
+    import maya.cmds as cmds
+except ImportError as error:
+    print(__file__, error)
 from typing import List, Tuple, Union, Optional
 import pythontk as ptk
 
@@ -12,23 +17,23 @@ class DuplicateGrid(ptk.LoggingMixin):
     @classmethod
     def duplicate_grid(
         cls,
-        objects: List[pm.PyNode],
+        objects: List[str],
         dimensions: Tuple[int, int, int],
         spacing: float = 0,
         instance: bool = True,
         group: bool = True,
-    ) -> Union[pm.PyNode, List[pm.PyNode]]:
+    ) -> Union[str, List[str]]:
         """Duplicate objects in a grid pattern.
 
         Parameters:
-            objects (List[pm.PyNode]): List of objects to duplicate.
+            objects (List[str]): List of objects to duplicate.
             dimensions (Tuple[int, int, int]): Number of copies in x, y, z.
             spacing (float): Extra spacing between copies (added to bounding box).
             instance (bool): Whether to instance the duplicates.
             group (bool): Whether to group the result.
 
         Returns:
-            Union[pm.PyNode, List[pm.PyNode]]: The container group or list of duplicates.
+            Union[str, List[str]]: The container group or list of duplicates.
         """
         duplicates = []
         x_count, y_count, z_count = dimensions
@@ -38,15 +43,15 @@ class DuplicateGrid(ptk.LoggingMixin):
             return []
 
         # Create a temporary group for the originals to calculate bounding box and duplicate easily
-        original_group = pm.group(em=True, name="temp_original_group")
+        original_group = cmds.group(em=True, name="temp_original_group")
         for obj in objects:
-            pm.parent(obj, original_group)
+            cmds.parent(obj, original_group)
 
         # Calculate offsets based on original position and bounding box
-        original_pos = pm.xform(original_group, query=True, translation=True)
+        original_pos = cmds.xform(original_group, query=True, translation=True)
         orig_x, orig_y, orig_z = original_pos
 
-        bbox = pm.exactWorldBoundingBox(original_group)
+        bbox = cmds.exactWorldBoundingBox(original_group)
         base_spacing_x = bbox[3] - bbox[0]
         base_spacing_y = bbox[4] - bbox[1]
         base_spacing_z = bbox[5] - bbox[2]
@@ -56,7 +61,7 @@ class DuplicateGrid(ptk.LoggingMixin):
         spacing_z = base_spacing_z + (spacing if spacing else 0)
 
         final_group = (
-            pm.group(em=True, name="final_duplicated_group") if group else None
+            cmds.group(em=True, name="final_duplicated_group") if group else None
         )
 
         try:
@@ -74,108 +79,76 @@ class DuplicateGrid(ptk.LoggingMixin):
             step_z = spacing_z * dir_z
 
             # 1. Build X-Row
-            # Create a container for the row
-            row_group = pm.group(em=True, name="temp_row_group")
-            # We duplicate the original (single cell) abs(x) times
+            row_group = cmds.group(em=True, name="temp_row_group")
             for i in range(abs(x_count)):
-                # Duplicate the source cell (original_group)
-                cell_dup = pm.duplicate(
+                cell_dup = cmds.duplicate(
                     original_group,
                     instanceLeaf=instance,
                 )[0]
-                # Move relative to the row's origin.
-                # Note: original_group is at 0,0,0 inside the temp group,
-                # so duplications are at 0,0,0. We just translate by step * i.
-                pm.xform(cell_dup, t=(orig_x + (step_x * i), orig_y, orig_z), ws=True)
-                pm.parent(cell_dup, row_group)
+                cmds.xform(
+                    cell_dup, t=(orig_x + (step_x * i), orig_y, orig_z), ws=True
+                )
+                cell_dup = cmds.parent(cell_dup, row_group)[0]
 
             # 2. Build Y-Planes
-            # Create a container for the plane
-            plane_group = pm.group(em=True, name="temp_plane_group")
-            # Duplicate the Row abs(y) times
+            plane_group = cmds.group(em=True, name="temp_plane_group")
             for j in range(abs(y_count)):
-                row_dup = pm.duplicate(
+                row_dup = cmds.duplicate(
                     row_group,
                     instanceLeaf=instance,
                 )[0]
-                # Shift the entire row in Y
-                # row_group itself was at 0,0,0 world (default create).
-                # But it contains absolute positioned children.
-                # Moving row_dup shifts its children.
-                pm.xform(row_dup, t=(0, step_y * j, 0), r=True)
-                pm.parent(row_dup, plane_group)
+                cmds.xform(row_dup, t=(0, step_y * j, 0), r=True)
+                row_dup = cmds.parent(row_dup, plane_group)[0]
 
-            # Cleanup row template
-            pm.delete(row_group)
+            cmds.delete(row_group)
 
             # 3. Build Z-Volume
-            # Create a container for the volume
-            volume_group = pm.group(em=True, name="temp_volume_group")
+            volume_group = cmds.group(em=True, name="temp_volume_group")
             for k in range(abs(z_count)):
-                plane_dup = pm.duplicate(
+                plane_dup = cmds.duplicate(
                     plane_group,
                     instanceLeaf=instance,
                 )[0]
-                # Shift plane in Z
-                pm.xform(plane_dup, t=(0, 0, step_z * k), r=True)
-                pm.parent(plane_dup, volume_group)
+                cmds.xform(plane_dup, t=(0, 0, step_z * k), r=True)
+                plane_dup = cmds.parent(plane_dup, volume_group)[0]
 
-            # Cleanup plane template
-            pm.delete(plane_group)
+            cmds.delete(plane_group)
 
             # 4. Flatten / Ungroup
             # current hierarchy: volume_group -> [planes] -> [rows] -> [cells] -> [objects]
-            # We want: [objects]
-            # or if group=True: final_group -> [objects]
 
-            # Move all high-level items (planes) out of volume group
-            # Actually, simplest is to ungroup sequentially.
-
-            # Ungroup Volume -> List of Planes
-            planes = pm.ungroup(volume_group)
+            planes = cmds.ungroup(volume_group) or []
             if not isinstance(planes, list):
                 planes = [planes]
-
-            # -----------------------------------------------------------
-            # FIX: Ungrouping multiple groups at once works, but if 'ungroup'
-            # is called with a list, PyMEL passes them as arguments.
-            # If the list is empty, it fails.
-            # Also, 'pm.ungroup' might not iterate efficiently over the list
-            # if passed as `*planes`.
-            # Let's ensure we are passing valid objects.
-            # -----------------------------------------------------------
 
             # Ungroup Planes -> List of Rows
             if planes:
                 rows_raw = []
                 for p in planes:
-                    # Check if group has children before ungrouping to avoid error
-                    if pm.listRelatives(p, children=True):
-                        res = pm.ungroup(p)
+                    if cmds.listRelatives(p, children=True):
+                        res = cmds.ungroup(p) or []
                         if isinstance(res, list):
                             rows_raw.extend(res)
                         else:
                             rows_raw.append(res)
                     else:
-                        # If empty group, just delete it? Or keep?
-                        # It shouldn't be empty if logic is correct.
-                        pm.delete(p)
+                        cmds.delete(p)
                 rows = rows_raw
             else:
                 rows = []
 
-            # Ungroup Rows -> List of Cells (copies of original_group)
+            # Ungroup Rows -> List of Cells
             if rows:
                 cells_raw = []
                 for r in rows:
-                    if pm.listRelatives(r, children=True):
-                        res = pm.ungroup(r)
+                    if cmds.listRelatives(r, children=True):
+                        res = cmds.ungroup(r) or []
                         if isinstance(res, list):
                             cells_raw.extend(res)
                         else:
                             cells_raw.append(res)
                     else:
-                        pm.delete(r)
+                        cmds.delete(r)
                 cells = cells_raw
             else:
                 cells = []
@@ -184,23 +157,24 @@ class DuplicateGrid(ptk.LoggingMixin):
             if cells:
                 final_objects_raw = []
                 for c in cells:
-                    if pm.listRelatives(c, children=True):
-                        res = pm.ungroup(c)
+                    if cmds.listRelatives(c, children=True):
+                        res = cmds.ungroup(c) or []
                         if isinstance(res, list):
                             final_objects_raw.extend(res)
                         else:
                             final_objects_raw.append(res)
                     else:
-                        pm.delete(c)
+                        cmds.delete(c)
                 final_objects = final_objects_raw
             else:
                 final_objects = []
 
             # 5. Finalize
             if group:
-                if final_group is None:  # Should be created earlier if group=True
-                    final_group = pm.group(em=True, name="final_duplicated_group")
-                pm.parent(final_objects, final_group)
+                if final_group is None:
+                    final_group = cmds.group(em=True, name="final_duplicated_group")
+                if final_objects:
+                    final_objects = cmds.parent(final_objects, final_group) or []
 
             duplicates.extend(final_objects)
             for d in final_objects:
@@ -208,8 +182,8 @@ class DuplicateGrid(ptk.LoggingMixin):
 
         finally:
             # Always restore originals
-            if pm.objExists(original_group):
-                pm.ungroup(original_group)
+            if cmds.objExists(original_group):
+                cmds.ungroup(original_group)
 
         return final_group if group else duplicates
 

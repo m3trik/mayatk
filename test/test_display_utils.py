@@ -10,7 +10,7 @@ Tests for DisplayUtils class functionality including:
 - Visible geometry queries
 """
 import unittest
-import pymel.core as pm
+import maya.cmds as cmds
 import mayatk as mtk
 
 from base_test import MayaTkTestCase
@@ -22,33 +22,33 @@ class TestDisplayUtils(MayaTkTestCase):
     def setUp(self):
         """Set up test scene."""
         super().setUp()
-        self.cube = pm.polyCube(name="test_display_cube")[0]
-        self.sphere = pm.polySphere(name="test_display_sphere")[0]
+        self.cube = cmds.polyCube(name="test_display_cube")[0]
+        self.sphere = cmds.polySphere(name="test_display_sphere")[0]
 
     def tearDown(self):
         """Clean up."""
         for obj in ["test_display_cube", "test_display_sphere"]:
-            if pm.objExists(obj):
-                pm.delete(obj)
+            if cmds.objExists(obj):
+                cmds.delete(obj)
         super().tearDown()
 
     def test_set_visibility_show(self):
         """Test making objects visible."""
-        pm.hide(self.cube)
+        cmds.hide(self.cube)
         mtk.set_visibility(self.cube, visibility=True)
-        self.assertTrue(self.cube.visibility.get())
+        self.assertTrue(cmds.getAttr(f"{self.cube}.visibility"))
 
     def test_set_visibility_hide(self):
         """Test hiding objects."""
         mtk.set_visibility(self.cube, visibility=False)
-        self.assertFalse(self.cube.visibility.get())
+        self.assertFalse(cmds.getAttr(f"{self.cube}.visibility"))
 
     def test_is_templated(self):
         """Test checking if object is templated."""
         result = mtk.is_templated(self.cube)
         self.assertFalse(result)
 
-        self.cube.template.set(True)
+        cmds.setAttr(f"{self.cube}.template", True)
         result = mtk.is_templated(self.cube)
         self.assertTrue(result)
 

@@ -8,7 +8,7 @@ textured polygon planes from image files in Maya.
 import os
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError:
     pass
 
@@ -150,9 +150,9 @@ class ImageToPlaneSlots:
 
         # Select the group (if created) or the individual planes
         if group and "__group__" in results:
-            pm.select(results["__group__"], replace=True)
+            cmds.select(results["__group__"], replace=True)
         else:
-            pm.select(list(results.values()), replace=True)
+            cmds.select(list(results.values()), replace=True)
 
     # ------------------------------------------------------------------
     # Manage
@@ -161,7 +161,7 @@ class ImageToPlaneSlots:
     @mtk.CoreUtils.undoable
     def _remove_selected(self):
         """Remove selected planes and their associated materials."""
-        objects = pm.selected()
+        objects = cmds.ls(selection=True) or []
         if not objects:
             self.ui.footer.setText("Select planes to remove.")
             return

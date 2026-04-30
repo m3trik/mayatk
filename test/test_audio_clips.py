@@ -135,7 +135,7 @@ class TestSync(MayaTkTestCase):
         AudioClips.sync()
         dg = audio_utils.find_dg_node_for_track("sync_one")
         self.assertIsNotNone(dg)
-        self.assertTrue(cmds.objExists(dg))
+        self.assertTrue(cmds.objExists(str(dg)))
 
     def test_sync_builds_composite_when_tracks_keyed(self):
         wav = _make_wav("comp_one", duration_sec=0.3)
@@ -398,7 +398,7 @@ class TestCompositeCollision(MayaTkTestCase):
         self.assertIsNotNone(comp)
 
         audio_utils.sync()
-        self.assertTrue(cmds.objExists(comp))
+        self.assertTrue(cmds.objExists(str(comp)))
 
 
 if __name__ == "__main__":

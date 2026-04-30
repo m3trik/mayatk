@@ -18,7 +18,7 @@ Before you begin, ensure you have:
 
 - **Autodesk Maya 2020 or later** installed
 - **Python 3.7+** (Maya's Python environment)
-- Basic familiarity with Maya's Python API or PyMEL
+- Basic familiarity with Maya's Python API
 - Understanding of Maya's object model (transforms, shapes, components)
 
 ## Installation
@@ -64,11 +64,11 @@ print("Installation successful!")
 
 ```python
 import mayatk as mtk
+import maya.cmds as cmds
 
 # Create some test geometry
-import pymel.core as pm
-cube = pm.polyCube(name="testCube")[0]
-sphere = pm.polySphere(name="testSphere")[0]
+cube = cmds.polyCube(name="testCube")[0]
+sphere = cmds.polySphere(name="testSphere")[0]
 
 # Use mayatk functions
 print(f"Is cube a group? {mtk.is_group(cube)}")
@@ -80,7 +80,7 @@ print(f"Cube bounding box: {bbox}")
 
 ```python
 # Select some objects in Maya first
-pm.select(["testCube", "testSphere"])
+cmds.select(["testCube", "testSphere"])
 
 # Create a selection utility instance
 selection = mtk.Selection()
@@ -126,12 +126,12 @@ def create_test_scene():
     # Create objects
     cubes = []
     for i in range(5):
-        cube = pm.polyCube(name=f"cube_{i}")[0]
+        cube = cmds.polyCube(name=f"cube_{i}")[0]
         cube.translateX.set(i * 2)
         cubes.append(cube)
     
     # Group them
-    group = pm.group(cubes, name="cube_group")
+    group = cmds.group(cubes, name="cube_group")
     return group
 
 # Execute - all operations can be undone with a single Ctrl+Z
@@ -185,8 +185,8 @@ mayatk functions typically accept various input formats:
 # String names
 mtk.freeze_transforms("pCube1")
 
-# PyMEL objects
-cube = pm.PyNode("pCube1")
+# Variables
+cube = "pCube1"
 mtk.freeze_transforms(cube)
 
 # Lists of objects
@@ -206,7 +206,7 @@ mtk.clean_scene(remove_unused=True, optimize=True)
 mtk.organize_outliner()
 
 # Freeze transformations on all geometry
-geometry = pm.ls(type="mesh", transforms=True)
+geometry = cmds.ls(type="mesh", transforms=True)
 mtk.freeze_transforms(geometry)
 ```
 
@@ -237,7 +237,7 @@ mtk.bridge_edges(edge_loop_1, edge_loop_2, divisions=3)
 # Create a simple FK chain
 joints = []
 for i in range(3):
-    joint = pm.joint(name=f"joint_{i}")
+    joint = cmds.joint(name=f"joint_{i}")
     joint.translateX.set(i * 2)
     joints.append(joint)
 
@@ -256,7 +256,7 @@ ik_handle, effector = mtk.create_ik_chain(joints[0], joints[-1])
 
 ```python
 # Select geometry
-geometry = pm.selected()
+geometry = cmds.ls(selection=True)
 
 # Apply planar projection
 mtk.planar_projection(geometry, projection_type="z")
@@ -272,14 +272,14 @@ mtk.layout_uvs(geometry, shell_spacing=0.02, tile_spacing=0.05)
 
 ```python
 # Create keyframes
-objects = pm.selected()
+objects = cmds.ls(selection=True)
 
 # Set initial keyframe
-pm.currentTime(1)
+cmds.currentTime(1)
 mtk.set_keyframe(objects, attributes=["tx", "ty", "tz", "rx", "ry", "rz"])
 
 # Move to frame 24 and set another keyframe
-pm.currentTime(24)
+cmds.currentTime(24)
 for obj in objects:
     obj.translateX.set(obj.translateX.get() + 5)
 mtk.set_keyframe(objects, attributes=["tx", "ty", "tz"])
@@ -300,10 +300,10 @@ def process_selected_geometry(objects):
         mtk.freeze_transforms(obj)
         
         # Reset pivot
-        pm.xform(obj, centerPivots=True)
+        cmds.xform(obj, centerPivots=True)
         
         # Delete history
-        pm.delete(obj, constructionHistory=True)
+        cmds.delete(obj, constructionHistory=True)
 
 # Usage: just select objects and call
 process_selected_geometry()
@@ -316,8 +316,8 @@ def safe_operation():
     """Example of safe mayatk usage"""
     try:
         # Check if objects exist
-        if not pm.objExists("pCube1"):
-            pm.polyCube(name="pCube1")
+        if not cmds.objExists("pCube1"):
+            cmds.polyCube(name="pCube1")
         
         # Perform operations
         mtk.freeze_transforms("pCube1")
@@ -337,7 +337,7 @@ def safe_operation():
 def batch_process_scene():
     """Process all geometry in the scene"""
     # Get all mesh transforms
-    geometry = pm.ls(type="mesh", transforms=True)
+    geometry = cmds.ls(type="mesh", transforms=True)
     
     for obj in geometry:
         # Skip if already processed
@@ -346,10 +346,10 @@ def batch_process_scene():
             
         # Process object
         mtk.freeze_transforms(obj)
-        pm.delete(obj, constructionHistory=True)
+        cmds.delete(obj, constructionHistory=True)
         
         # Mark as processed
-        pm.addAttr(obj, longName="processed", attributeType="bool")
+        cmds.addAttr(obj, longName="processed", attributeType="bool")
         obj.processed.set(True)
 ```
 
@@ -374,7 +374,7 @@ def advanced_selection_workflow():
         boundary_edges = selection.filter_selection("boundary", edges)
         
         # Select boundary edges
-        pm.select(boundary_edges)
+        cmds.select(boundary_edges)
 ```
 
 ## Troubleshooting
@@ -394,23 +394,24 @@ for path in sys.path:
 sys.path.append("/path/to/mayatk")
 ```
 
-#### 2. PyMEL Issues
+#### 2. Maya Imports
 
 ```python
-# If PyMEL functions aren't working:
+# Verify Maya is properly accessible:
 try:
-    import pymel.core as pm
-    print("PyMEL imported successfully")
+    import maya.cmds as cmds
+    import maya.api.OpenMaya as om
+    print(f"Maya {cmds.about(version=True)} ready")
 except ImportError as e:
-    print(f"PyMEL import failed: {e}")
-    print("Make sure PyMEL is properly installed in Maya")
+    print(f"Maya import failed: {e}")
+    print("Make sure mayatk is run inside Maya or mayapy")
 ```
 
 #### 3. Selection Issues
 
 ```python
 # If selection-based functions aren't working:
-current_selection = pm.selected()
+current_selection = cmds.ls(selection=True)
 print(f"Current selection: {current_selection}")
 
 if not current_selection:

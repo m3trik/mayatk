@@ -1,11 +1,12 @@
 # !/usr/bin/python
 # coding=utf-8
+try:
+    import maya.cmds as cmds
+except ImportError:
+    cmds = None
+
 from typing import List, Union, Optional
 
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 import pythontk as ptk
 
 # From this package:
@@ -37,7 +38,7 @@ class Snap(ptk.HelpMixin):
         )
 
         progressBar = "mainProgressBar"
-        pm.progressBar(
+        cmds.progressBar(
             progressBar,
             edit=True,
             beginProgress=True,
@@ -48,16 +49,16 @@ class Snap(ptk.HelpMixin):
 
         moved_count = 0
         for v1, v2 in closestVerts.items():
-            if pm.progressBar(progressBar, query=True, isCancelled=True):
+            if cmds.progressBar(progressBar, query=True, isCancelled=True):
                 break
 
-            v2Pos = pm.pointPosition(v2, world=True)
-            pm.xform(v1, translation=v2Pos, worldSpace=True)
+            v2Pos = cmds.pointPosition(v2, world=True)
+            cmds.xform(v1, translation=v2Pos, worldSpace=True)
             moved_count += 1
 
-            pm.progressBar(progressBar, edit=True, step=1)
+            cmds.progressBar(progressBar, edit=True, step=1)
 
-        pm.progressBar(progressBar, edit=True, endProgress=True)
+        cmds.progressBar(progressBar, edit=True, endProgress=True)
         return moved_count
 
     @staticmethod
@@ -173,12 +174,12 @@ class Snap(ptk.HelpMixin):
                     # Already far enough - keep original
                     new_points.append(point)
 
-            # Apply new positions using PyMEL (supports undo)
+            # Apply new positions (supports undo)
             if moved_count > 0:
                 # Get the transform node for vertex access
-                transform = pm.PyNode(source)
+                transform = source
                 if transform.type() == "mesh":
-                    transform = transform.getParent()
+                    transform = (cmds.listRelatives(transform, parent=True, fullPath=True) or [None])[0]
 
                 for i in range(len(new_points)):
                     old_pt = points[i]
@@ -190,7 +191,7 @@ class Snap(ptk.HelpMixin):
                         or abs(new_pt.z - old_pt.z) > 0.0001
                     ):
                         vtx = f"{transform}.vtx[{i}]"
-                        pm.xform(vtx, ws=True, t=(new_pt.x, new_pt.y, new_pt.z))
+                        cmds.xform(vtx, ws=True, t=(new_pt.x, new_pt.y, new_pt.z))
 
                 total_moved += moved_count
                 print(f"Moved {moved_count} vertices on {source}")
@@ -215,12 +216,12 @@ class Snap(ptk.HelpMixin):
             int: Number of items that were snapped.
         """
         if objects is None:
-            objects = pm.selected(flatten=True)
+            objects = cmds.ls(sl=True, flatten=True)
         else:
-            objects = pm.ls(objects, flatten=True)
+            objects = cmds.ls(objects, flatten=True)
 
         if not objects:
-            pm.warning("No objects selected for grid snapping.")
+            cmds.warning("No objects selected for grid snapping.")
             return 0
 
         axes = axes.lower()
@@ -238,14 +239,14 @@ class Snap(ptk.HelpMixin):
                 snap_count += 1
             else:
                 # It's a transform - snap the pivot
-                pos = pm.xform(obj, q=True, ws=True, rp=True)
+                pos = cmds.xform(obj, q=True, ws=True, rp=True)
                 new_pos = list(pos)
                 for i, axis in enumerate(["x", "y", "z"]):
                     if axis in axes:
                         new_pos[i] = round(pos[i] / grid_size) * grid_size
                 # Calculate the delta and move
                 delta = [new_pos[i] - pos[i] for i in range(3)]
-                pm.move(obj, delta, relative=True, worldSpace=True)
+                cmds.move(obj, delta, relative=True, worldSpace=True)
                 snap_count += 1
 
         return snap_count
@@ -303,9 +304,9 @@ class SnapSlots:
 
     def b000(self):
         """Snap to Surface button."""
-        sel = pm.selected()
+        sel = cmds.ls(selection=True) or []
         if len(sel) < 2:
-            pm.warning("Select source mesh(es) first, then the target mesh last.")
+            cmds.warning("Select source mesh(es) first, then the target mesh last.")
             return
 
         source_meshes = sel[:-1]
@@ -338,9 +339,9 @@ class SnapSlots:
 
     def b001(self):
         """Snap to Closest Vertex button."""
-        sel = pm.selected()
+        sel = cmds.ls(selection=True) or []
         if len(sel) != 2:
-            pm.warning("Select exactly two meshes: source first, then target.")
+            cmds.warning("Select exactly two meshes: source first, then target.")
             return
 
         obj1, obj2 = sel

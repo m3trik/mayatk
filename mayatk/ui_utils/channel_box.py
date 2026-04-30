@@ -280,6 +280,10 @@ class ChannelBox:
         superset so row-matching works regardless of which convention the
         model uses.
 
+        Inputs can be long ("translateX"), short ("tx"), or nice
+        ("Translate X") names; nice names are reverse-resolved by
+        scanning the selected node's keyable attributes.
+
         Returns:
             set[str]
         """
@@ -288,8 +292,26 @@ class ChannelBox:
         if not sel_nodes:
             return names
         node = sel_nodes[-1]
+
+        nice_to_long: dict = {}
+        try:
+            for long_attr in cmds.listAttr(node, keyable=True) or []:
+                try:
+                    nice = cmds.attributeName(f"{node}.{long_attr}", nice=True)
+                    if nice:
+                        nice_to_long[nice] = long_attr
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         for attr in attr_names:
-            plug = f"{node}.{attr}"
+            if attr in nice_to_long:
+                names.add(nice_to_long[attr])
+                long_attr = nice_to_long[attr]
+            else:
+                long_attr = attr
+            plug = f"{node}.{long_attr}"
             for flag in ("nice", "long", "short"):
                 try:
                     n = cmds.attributeName(plug, **{flag: True})

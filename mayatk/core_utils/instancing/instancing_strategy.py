@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError:
     pass
 
@@ -38,7 +38,7 @@ class InstancingStrategy:
     def evaluate(
         self,
         group_size: int,
-        mesh_node: Optional[pm.nodetypes.Mesh] = None,
+        mesh_node: Optional[object] = None,
         triangle_count: Optional[int] = None,
     ) -> StrategyType:
         """
@@ -104,11 +104,11 @@ class InstancingStrategy:
         # Static -> COMBINE
         return StrategyType.COMBINE
 
-    def _get_triangle_count(self, mesh_node: pm.nodetypes.Mesh) -> int:
+    def _get_triangle_count(self, mesh_node: object) -> int:
         try:
             # polyEvaluate returns a dict or int depending on args
             # -t returns triangle count
-            count = pm.polyEvaluate(mesh_node, triangle=True)
+            count = cmds.polyEvaluate(mesh_node, triangle=True)
             return int(count)
         except Exception:
             return 0

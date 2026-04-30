@@ -6,11 +6,16 @@ from typing import List, Optional, Tuple, Callable, Union, Dict, Any
 from qtpy import QtCore, QtGui
 
 try:
-    import pymel.core as pm
     import maya.cmds as cmds
+    import maya.mel as mel
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
+
+
+def _plug(node, attr: str) -> str:
+    """Build a plug string from a node-or-string node."""
+    return f"{node}.{attr}"
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
@@ -311,7 +316,7 @@ class GameShader(ptk.LoggingMixin):
 
         # Return the shading engine (not the shader node itself)
         # Find the connected shading engine
-        shading_groups = pm.listConnections(shader_node, type="shadingEngine")
+        shading_groups = cmds.listConnections(shader_node, type="shadingEngine")
         if shading_groups:
             return shading_groups[0]
         return shader_node
@@ -329,7 +334,7 @@ class GameShader(ptk.LoggingMixin):
                             is loaded into the shader node.
 
         Returns:
-            pm.nt.StingrayPBS: The created StingrayPBS shader node.
+            str: The created StingrayPBS shader node.
         """
         EnvUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
 
@@ -347,7 +352,7 @@ class GameShader(ptk.LoggingMixin):
                 "StingrayPBS",
                 "Standard_Transparent.sfx",
             )
-            pm.cmds.shaderfx(sfxnode=sr_node.name(), loadGraph=graph)
+            cmds.shaderfx(sfxnode=str(sr_node), loadGraph=graph)
         else:
             # Ensure standard graph is loaded (crucial for batch mode)
             maya_install_path = EnvUtils.get_env_info("install_path")
@@ -360,7 +365,7 @@ class GameShader(ptk.LoggingMixin):
                 "Standard.sfx",
             )
             if os.path.exists(graph):
-                pm.cmds.shaderfx(sfxnode=sr_node.name(), loadGraph=graph)
+                cmds.shaderfx(sfxnode=str(sr_node), loadGraph=graph)
 
         return sr_node
 
@@ -382,7 +387,7 @@ class GameShader(ptk.LoggingMixin):
                                  find the connected shading engine.
 
         Returns:
-            Tuple[pm.nt.AiStandardSurface, pm.nt.AiMultiply, pm.nt.Bump2d]: A tuple containing
+            Tuple[str, str, str]: A tuple containing
             the created aiStandardSurface node, aiMultiply node, and bump2d node, in that order.
         """
         EnvUtils.load_plugin("mtoa")  # Load Arnold plugin
@@ -390,9 +395,9 @@ class GameShader(ptk.LoggingMixin):
         ai_node = NodeUtils.create_render_node(
             "aiStandardSurface", name=name + "_ai" if name else ""
         )
-        aiMult_node = pm.shadingNode("aiMultiply", asShader=True)
-        bump_node = pm.shadingNode("bump2d", asShader=True)
-        bump_node.bumpInterp.set(1)  # Set to tangent space normals
+        aiMult_node = cmds.shadingNode("aiMultiply", asShader=True)
+        bump_node = cmds.shadingNode("bump2d", asShader=True)
+        cmds.setAttr(f"{bump_node}.bumpInterp", 1)  # Set to tangent space normals
 
         # Get shading engine from either Stingray PBS or Standard Surface
         shading_engine = NodeUtils.get_connected_nodes(
@@ -404,9 +409,9 @@ class GameShader(ptk.LoggingMixin):
 
         # Connect Arnold nodes to the shading engine
         Attributes.connect_multi(
-            (ai_node.outColor, shading_engine.aiSurfaceShader),
-            (aiMult_node.outColor, ai_node.baseColor),
-            (bump_node.outNormal, ai_node.normalCamera),
+            (f"{ai_node}.outColor", f"{shading_engine}.aiSurfaceShader"),
+            (f"{aiMult_node}.outColor", f"{ai_node}.baseColor"),
+            (f"{bump_node}.outNormal", f"{ai_node}.normalCamera"),
         )
         return ai_node, aiMult_node, bump_node
 
@@ -422,23 +427,23 @@ class GameShader(ptk.LoggingMixin):
                           If True, sets up transparency attributes.
 
         Returns:
-            pm.nt.StandardSurface: The created Standard Surface shader node.
+            str: The created Standard Surface shader node.
         """
         # Create Standard Surface node - must use shadingNode, not create_render_node
-        std_node = pm.shadingNode("standardSurface", asShader=True, name=name)
+        std_node = cmds.shadingNode("standardSurface", asShader=True, name=name)
 
         # Create and assign shading group
-        sg_node = pm.sets(
+        sg_node = cmds.sets(
             renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
         )
-        pm.connectAttr(std_node.outColor, sg_node.surfaceShader, force=True)
+        cmds.connectAttr(f"{std_node}.outColor", f"{sg_node}.surfaceShader", force=True)
 
         if opacity:
             # Enable transparency for standard surface
             # Note: We do NOT set transmission to 1.0 (glass).
             # We ONLY enable thinWalled for correct cutout/foliage behavior.
             # Opacity is driven by the 'opacity' (alpha) input connection later.
-            std_node.thinWalled.set(True)
+            cmds.setAttr(f"{std_node}.thinWalled", True)
 
         return std_node
 
@@ -447,49 +452,49 @@ class GameShader(ptk.LoggingMixin):
 
         Args:
             source_plug (pm.Attribute): The source attribute to connect from.
-            node (pm.PyNode): The target node.
+            node (str): The target node.
             attr_name (str): The name of the target attribute.
         """
         # Check if attribute exists
-        if not pm.attributeQuery(attr_name, node=node, exists=True):
+        if not cmds.attributeQuery(attr_name, node=node, exists=True):
             print(f"Warning: Attribute {attr_name} not found on {node}")
             return False
 
         # Try to find children (R, G, B or X, Y, Z)
         children = []
         for suffix in ["R", "G", "B"]:
-            if pm.attributeQuery(attr_name + suffix, node=node, exists=True):
+            if cmds.attributeQuery(attr_name + suffix, node=node, exists=True):
                 children.append(attr_name + suffix)
 
         if not children:
             for suffix in ["X", "Y", "Z"]:
-                if pm.attributeQuery(attr_name + suffix, node=node, exists=True):
+                if cmds.attributeQuery(attr_name + suffix, node=node, exists=True):
                     children.append(attr_name + suffix)
 
         if children and len(children) >= 3:
             # Explicitly break connection to parent attribute if it exists
             # This prevents "ghost" connections where parent remains connected to old node
             try:
-                if pm.attributeQuery(attr_name, node=node, exists=True):
-                    inputs = pm.listConnections(
+                if cmds.attributeQuery(attr_name, node=node, exists=True):
+                    inputs = cmds.listConnections(
                         f"{node}.{attr_name}",
                         plugs=True,
                         source=True,
                         destination=False,
                     )
                     if inputs:
-                        pm.disconnectAttr(inputs[0], f"{node}.{attr_name}")
+                        cmds.disconnectAttr(inputs[0], f"{node}.{attr_name}")
             except Exception as e:
                 print(f"Warning: Failed to disconnect parent {attr_name}: {e}")
 
             # Connect to all 3 children
             for child in children[:3]:
-                pm.connectAttr(source_plug, f"{node}.{child}", force=True)
+                cmds.connectAttr(source_plug, f"{node}.{child}", force=True)
             return True
         else:
             # Fallback: try connecting to parent directly
             try:
-                pm.connectAttr(source_plug, f"{node}.{attr_name}", force=True)
+                cmds.connectAttr(source_plug, f"{node}.{attr_name}", force=True)
                 return True
             except Exception as e:
                 print(f"Failed to connect {source_plug} to {node}.{attr_name}: {e}")
@@ -507,26 +512,26 @@ class GameShader(ptk.LoggingMixin):
             shader_node: The shader node.
             attr_name: The name of the custom attribute to create (e.g. 'MSAO_Map').
         """
-        if not pm.attributeQuery(attr_name, node=shader_node, exists=True):
-            pm.addAttr(
+        if not cmds.attributeQuery(attr_name, node=shader_node, exists=True):
+            cmds.addAttr(
                 shader_node,
                 longName=attr_name,
                 attributeType="float3",
                 usedAsColor=True,
             )
-            pm.addAttr(
+            cmds.addAttr(
                 shader_node,
                 longName=f"{attr_name}R",
                 attributeType="float",
                 parent=attr_name,
             )
-            pm.addAttr(
+            cmds.addAttr(
                 shader_node,
                 longName=f"{attr_name}G",
                 attributeType="float",
                 parent=attr_name,
             )
-            pm.addAttr(
+            cmds.addAttr(
                 shader_node,
                 longName=f"{attr_name}B",
                 attributeType="float",
@@ -534,8 +539,8 @@ class GameShader(ptk.LoggingMixin):
             )
 
         target_plug = f"{shader_node}.{attr_name}"
-        if not pm.isConnected(texture_node.outColor, target_plug):
-            pm.connectAttr(texture_node.outColor, target_plug, force=True)
+        if not cmds.isConnected(f"{texture_node}.outColor", target_plug):
+            cmds.connectAttr(f"{texture_node}.outColor", target_plug, force=True)
 
     @CoreUtils.undoable
     def connect_stingray_nodes(
@@ -547,7 +552,7 @@ class GameShader(ptk.LoggingMixin):
         Parameters:
             texture (str): The file path of the texture image to be connected.
             texture_type (str): The type of the texture (e.g., "Base_Color", "Roughness", "Metallic", "Emissive", etc.).
-            sr_node (pm.nt.StingrayPBS): The StingrayPBS shader node to which the textures will be connected.
+            sr_node (str): The StingrayPBS shader node to which the textures will be connected.
 
         Returns:
             bool: True if the connection is successful, False otherwise.
@@ -558,8 +563,8 @@ class GameShader(ptk.LoggingMixin):
                 fileTextureName=texture,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outColor, sr_node.TEX_color_map, force=True)
-            sr_node.use_color_map.set(1)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{sr_node}.TEX_color_map", force=True)
+            cmds.setAttr(f"{sr_node}.use_color_map", 1)
 
         elif texture_type == "Albedo_Transparency":
             texture_node = NodeUtils.create_render_node(
@@ -567,11 +572,11 @@ class GameShader(ptk.LoggingMixin):
                 fileTextureName=texture,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outColor, sr_node.TEX_color_map, force=True)
-            if sr_node.hasAttr("opacity"):
-                pm.connectAttr(texture_node.outAlpha, sr_node.opacity, force=True)
-                sr_node.use_opacity_map.set(1)
-            sr_node.use_color_map.set(1)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{sr_node}.TEX_color_map", force=True)
+            if cmds.attributeQuery("opacity", node=str(sr_node), exists=True):
+                cmds.connectAttr(f"{texture_node}.outAlpha", f"{sr_node}.opacity", force=True)
+                cmds.setAttr(f"{sr_node}.use_opacity_map", 1)
+            cmds.setAttr(f"{sr_node}.use_color_map", 1)
             return True
 
         elif texture_type in ["Roughness", "Metallic"]:
@@ -586,10 +591,10 @@ class GameShader(ptk.LoggingMixin):
                 name=ptk.format_path(texture, section="name"),
             )
             # Connect RGB directly to ensure FBX export (Single channel maps are usually grayscale so RGB matches)
-            pm.connectAttr(
-                texture_node.outColor, f"{sr_node}.{target_attr_name}", force=True
+            cmds.connectAttr(
+                f"{texture_node}.outColor", f"{sr_node}.{target_attr_name}", force=True
             )
-            sr_node.setAttr(f"use_{texture_type.lower()}_map", 1)
+            cmds.setAttr(f"{sr_node}.use_{texture_type.lower()}_map", 1)
 
         elif texture_type == "Metallic_Smoothness":
             texture_node = NodeUtils.create_render_node(
@@ -599,8 +604,17 @@ class GameShader(ptk.LoggingMixin):
             )
             # Metallic (RGB) -> Metallic Map
             # Connect RGB directly to ensure FBX export (Metallic is usually grayscale so RGB matches)
-            pm.connectAttr(texture_node.outColor, sr_node.TEX_metallic_map, force=True)
-            sr_node.use_roughness_map.set(1)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{sr_node}.TEX_metallic_map", force=True)
+
+            # Smoothness (Alpha) -> Invert -> Roughness Map (Unity stores smoothness, Stingray expects roughness)
+            rev_node = NodeUtils.create_render_node("reverse")
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{rev_node}.inputX", force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{rev_node}.inputY", force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{rev_node}.inputZ", force=True)
+            self._connect_channel(f"{rev_node}.outputX", sr_node, "TEX_roughness_map")
+
+            cmds.setAttr(f"{sr_node}.use_metallic_map", 1)
+            cmds.setAttr(f"{sr_node}.use_roughness_map", 1)
 
         elif texture_type == "ORM":
             # Unreal/glTF ORM Map: R=AO, G=Roughness, B=Metallic
@@ -610,15 +624,15 @@ class GameShader(ptk.LoggingMixin):
                 name=ptk.format_path(texture, section="name"),
             )
             # Connect RGB directly to AO map (R channel matches AO) to ensure FBX export
-            pm.connectAttr(texture_node.outColor, sr_node.TEX_ao_map, force=True)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{sr_node}.TEX_ao_map", force=True)
 
             # Connect other channels individually
-            self._connect_channel(texture_node.outColorG, sr_node, "TEX_roughness_map")
-            self._connect_channel(texture_node.outColorB, sr_node, "TEX_metallic_map")
+            self._connect_channel(f"{texture_node}.outColorG", sr_node, "TEX_roughness_map")
+            self._connect_channel(f"{texture_node}.outColorB", sr_node, "TEX_metallic_map")
 
-            sr_node.use_ao_map.set(1)
-            sr_node.use_roughness_map.set(1)
-            sr_node.use_metallic_map.set(1)
+            cmds.setAttr(f"{sr_node}.use_ao_map", 1)
+            cmds.setAttr(f"{sr_node}.use_roughness_map", 1)
+            cmds.setAttr(f"{sr_node}.use_metallic_map", 1)
 
         elif texture_type == "MSAO":
             # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
@@ -630,24 +644,24 @@ class GameShader(ptk.LoggingMixin):
 
             # Connect metallic channel (R) -> TEX_metallic_map
             # Connect RGB directly to ensure FBX export (R=Metallic matches)
-            pm.connectAttr(texture_node.outColor, sr_node.TEX_metallic_map, force=True)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{sr_node}.TEX_metallic_map", force=True)
 
             # Connect AO channel (G) -> TEX_ao_map
-            self._connect_channel(texture_node.outColorG, sr_node, "TEX_ao_map")
+            self._connect_channel(f"{texture_node}.outColorG", sr_node, "TEX_ao_map")
 
             # Connect smoothness channel (A) -> Invert -> TEX_roughness_map
             # Unity Smoothness is inverse of Roughness
             rev_node = NodeUtils.create_render_node("reverse")
-            pm.connectAttr(texture_node.outAlpha, rev_node.inputX, force=True)
-            pm.connectAttr(texture_node.outAlpha, rev_node.inputY, force=True)
-            pm.connectAttr(texture_node.outAlpha, rev_node.inputZ, force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{rev_node}.inputX", force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{rev_node}.inputY", force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{rev_node}.inputZ", force=True)
 
             # Use reverse output X (float) for roughness
-            self._connect_channel(rev_node.outputX, sr_node, "TEX_roughness_map")
+            self._connect_channel(f"{rev_node}.outputX", sr_node, "TEX_roughness_map")
 
-            sr_node.use_metallic_map.set(1)
-            sr_node.use_ao_map.set(1)
-            sr_node.use_roughness_map.set(1)
+            cmds.setAttr(f"{sr_node}.use_metallic_map", 1)
+            cmds.setAttr(f"{sr_node}.use_ao_map", 1)
+            cmds.setAttr(f"{sr_node}.use_roughness_map", 1)
 
         elif "Normal" in texture_type:
             texture_node = NodeUtils.create_render_node(
@@ -655,8 +669,8 @@ class GameShader(ptk.LoggingMixin):
                 fileTextureName=texture,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outColor, sr_node.TEX_normal_map, force=True)
-            sr_node.use_normal_map.set(1)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{sr_node}.TEX_normal_map", force=True)
+            cmds.setAttr(f"{sr_node}.use_normal_map", 1)
 
         elif texture_type == "Emissive":
             texture_node = NodeUtils.create_render_node(
@@ -664,8 +678,8 @@ class GameShader(ptk.LoggingMixin):
                 fileTextureName=texture,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outColor, sr_node.TEX_emissive_map, force=True)
-            sr_node.use_emissive_map.set(1)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{sr_node}.TEX_emissive_map", force=True)
+            cmds.setAttr(f"{sr_node}.use_emissive_map", 1)
 
         elif texture_type == "Ambient_Occlusion":
             texture_node = NodeUtils.create_render_node(
@@ -674,8 +688,8 @@ class GameShader(ptk.LoggingMixin):
                 name=ptk.format_path(texture, section="name"),
             )
             # Connect RGB directly to ensure FBX export (AO is usually grayscale so RGB matches)
-            pm.connectAttr(texture_node.outColor, sr_node.TEX_ao_map, force=True)
-            sr_node.use_ao_map.set(1)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{sr_node}.TEX_ao_map", force=True)
+            cmds.setAttr(f"{sr_node}.use_ao_map", 1)
 
         elif texture_type == "Opacity":
             texture_node = NodeUtils.create_render_node(
@@ -683,37 +697,37 @@ class GameShader(ptk.LoggingMixin):
                 fileTextureName=texture,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outAlpha, sr_node.opacity, force=True)
-            sr_node.use_opacity_map.set(1)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{sr_node}.opacity", force=True)
+            cmds.setAttr(f"{sr_node}.use_opacity_map", 1)
 
         elif texture_type == "Specular":
-            if sr_node.hasAttr("TEX_specular_map"):
+            if cmds.attributeQuery("TEX_specular_map", node=str(sr_node), exists=True):
                 texture_node = NodeUtils.create_render_node(
                     "file",
                     fileTextureName=texture,
                     name=ptk.format_path(texture, section="name"),
                 )
-                pm.connectAttr(
-                    texture_node.outColor, sr_node.TEX_specular_map, force=True
+                cmds.connectAttr(
+                    f"{texture_node}.outColor", f"{sr_node}.TEX_specular_map", force=True
                 )
-                if sr_node.hasAttr("use_specular_map"):
-                    sr_node.use_specular_map.set(1)
+                if cmds.attributeQuery("use_specular_map", node=str(sr_node), exists=True):
+                    cmds.setAttr(f"{sr_node}.use_specular_map", 1)
                 return True
             return False
 
         elif texture_type == "Glossiness":
-            if sr_node.hasAttr("TEX_glossiness_map"):
+            if cmds.attributeQuery("TEX_glossiness_map", node=str(sr_node), exists=True):
                 texture_node = NodeUtils.create_render_node(
                     "file",
                     fileTextureName=texture,
                     name=ptk.format_path(texture, section="name"),
                 )
                 # Connect RGB directly to ensure FBX export
-                pm.connectAttr(
-                    texture_node.outColor, sr_node.TEX_glossiness_map, force=True
+                cmds.connectAttr(
+                    f"{texture_node}.outColor", f"{sr_node}.TEX_glossiness_map", force=True
                 )
-                if sr_node.hasAttr("use_glossiness_map"):
-                    sr_node.use_glossiness_map.set(1)
+                if cmds.attributeQuery("use_glossiness_map", node=str(sr_node), exists=True):
+                    cmds.setAttr(f"{sr_node}.use_glossiness_map", 1)
                 return True
             return False
 
@@ -735,9 +749,9 @@ class GameShader(ptk.LoggingMixin):
         Parameters:
             texture (str): The file path of the texture image to be connected.
             texture_type (str): The type of the texture (e.g., "Base_Color", "Roughness", "Metallic").
-            ai_node (pm.nt.Anisotropic): The Arnold shader node to which the base color and metallic textures will be connected.
-            aiMult_node (pm.nt.LayeredTexture): The Arnold multiply node used for blending textures.
-            bump_node (pm.nt.Bump2d): The Arnold bump node to which normal maps will be connected.
+            ai_node (str): The Arnold shader node to which the base color and metallic textures will be connected.
+            aiMult_node (str): The Arnold multiply node used for blending textures.
+            bump_node (str): The Arnold bump node to which normal maps will be connected.
 
         Returns:
             bool: True if the connection is successful, False otherwise.
@@ -750,7 +764,7 @@ class GameShader(ptk.LoggingMixin):
                 ignoreColorSpaceFileRules=1,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outColor, aiMult_node.input1, force=True)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{aiMult_node}.input1", force=True)
 
         elif texture_type == "Albedo_Transparency":
             texture_node = NodeUtils.create_render_node(
@@ -761,11 +775,11 @@ class GameShader(ptk.LoggingMixin):
                 name=ptk.format_path(texture, section="name"),
             )
             # Connect base color
-            pm.connectAttr(texture_node.outColor, aiMult_node.input1, force=True)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{aiMult_node}.input1", force=True)
             # Handle transparency by connecting alpha to Arnold's standard surface opacity
-            pm.connectAttr(texture_node.outAlpha, ai_node.opacityR, force=True)
-            pm.connectAttr(texture_node.outAlpha, ai_node.opacityG, force=True)
-            pm.connectAttr(texture_node.outAlpha, ai_node.opacityB, force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{ai_node}.opacityR", force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{ai_node}.opacityG", force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{ai_node}.opacityB", force=True)
             return True
 
         elif texture_type == "Roughness":
@@ -777,10 +791,10 @@ class GameShader(ptk.LoggingMixin):
                 ignoreColorSpaceFileRules=1,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outAlpha, ai_node.specularRoughness, force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{ai_node}.specularRoughness", force=True)
             # Opacity: same roughness map used in Specular Roughness to provide additional blurriness of refraction.
-            pm.connectAttr(
-                texture_node.outAlpha, ai_node.transmissionExtraRoughness, force=True
+            cmds.connectAttr(
+                f"{texture_node}.outAlpha", f"{ai_node}.transmissionExtraRoughness", force=True
             )
 
         elif texture_type == "Metallic":
@@ -792,7 +806,7 @@ class GameShader(ptk.LoggingMixin):
                 ignoreColorSpaceFileRules=1,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outAlpha, ai_node.metalness, force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{ai_node}.metalness", force=True)
 
         elif texture_type == "Metallic_Smoothness":
             texture_node = NodeUtils.create_render_node(
@@ -807,12 +821,12 @@ class GameShader(ptk.LoggingMixin):
             reverse_node = NodeUtils.create_render_node(
                 "reverse", name="invertSmoothness"
             )
-            pm.connectAttr(texture_node.outAlpha, reverse_node.inputX, force=True)
-            pm.connectAttr(reverse_node.outputX, ai_node.specularRoughness, force=True)
-            pm.connectAttr(
-                reverse_node.outputX, ai_node.transmissionExtraRoughness, force=True
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{reverse_node}.inputX", force=True)
+            cmds.connectAttr(f"{reverse_node}.outputX", f"{ai_node}.specularRoughness", force=True)
+            cmds.connectAttr(
+                f"{reverse_node}.outputX", f"{ai_node}.transmissionExtraRoughness", force=True
             )
-            pm.connectAttr(texture_node.outColorR, ai_node.metalness, force=True)
+            cmds.connectAttr(f"{texture_node}.outColorR", f"{ai_node}.metalness", force=True)
 
         elif texture_type == "ORM":
             # Unreal/glTF ORM Map: R=AO, G=Roughness, B=Metallic
@@ -825,19 +839,19 @@ class GameShader(ptk.LoggingMixin):
                 name=ptk.format_path(texture, section="name"),
             )
             # Metallic (B)
-            pm.connectAttr(texture_node.outColorB, ai_node.metalness, force=True)
+            cmds.connectAttr(f"{texture_node}.outColorB", f"{ai_node}.metalness", force=True)
             # Roughness (G)
-            pm.connectAttr(
-                texture_node.outColorG, ai_node.specularRoughness, force=True
+            cmds.connectAttr(
+                f"{texture_node}.outColorG", f"{ai_node}.specularRoughness", force=True
             )
-            pm.connectAttr(
-                texture_node.outColorG, ai_node.transmissionExtraRoughness, force=True
+            cmds.connectAttr(
+                f"{texture_node}.outColorG", f"{ai_node}.transmissionExtraRoughness", force=True
             )
             # AO (R) -> Multiply with Base Color (using aiMultiply)
             # Connect R channel to all RGB inputs of input2 to multiply uniformly
-            pm.connectAttr(texture_node.outColorR, aiMult_node.input2R, force=True)
-            pm.connectAttr(texture_node.outColorR, aiMult_node.input2G, force=True)
-            pm.connectAttr(texture_node.outColorR, aiMult_node.input2B, force=True)
+            cmds.connectAttr(f"{texture_node}.outColorR", f"{aiMult_node}.input2R", force=True)
+            cmds.connectAttr(f"{texture_node}.outColorR", f"{aiMult_node}.input2G", force=True)
+            cmds.connectAttr(f"{texture_node}.outColorR", f"{aiMult_node}.input2B", force=True)
 
         elif texture_type == "MSAO":
             # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
@@ -850,19 +864,19 @@ class GameShader(ptk.LoggingMixin):
                 name=ptk.format_path(texture, section="name"),
             )
             # Metallic from red channel
-            pm.connectAttr(texture_node.outColorR, ai_node.metalness, force=True)
+            cmds.connectAttr(f"{texture_node}.outColorR", f"{ai_node}.metalness", force=True)
             # Smoothness in alpha needs to be inverted to roughness
             reverse_node = NodeUtils.create_render_node(
                 "reverse", name="invertSmoothness"
             )
-            pm.connectAttr(texture_node.outAlpha, reverse_node.inputX, force=True)
-            pm.connectAttr(reverse_node.outputX, ai_node.specularRoughness, force=True)
-            pm.connectAttr(
-                reverse_node.outputX, ai_node.transmissionExtraRoughness, force=True
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{reverse_node}.inputX", force=True)
+            cmds.connectAttr(f"{reverse_node}.outputX", f"{ai_node}.specularRoughness", force=True)
+            cmds.connectAttr(
+                f"{reverse_node}.outputX", f"{ai_node}.transmissionExtraRoughness", force=True
             )
             # AO from green channel - multiply with base color using aiMultiply
             # Connect green channel as grayscale to all RGB channels of input2
-            pm.connectAttr(texture_node.outColor, aiMult_node.input2, force=True)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{aiMult_node}.input2", force=True)
 
         elif texture_type == "Emissive":
             texture_node = NodeUtils.create_render_node(
@@ -872,8 +886,8 @@ class GameShader(ptk.LoggingMixin):
                 ignoreColorSpaceFileRules=1,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outAlpha, ai_node.emission, force=True)
-            pm.connectAttr(texture_node.outColor, ai_node.emissionColor, force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{ai_node}.emission", force=True)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{ai_node}.emissionColor", force=True)
 
         elif "Normal" in texture_type:
             texture_node = NodeUtils.create_render_node(
@@ -884,7 +898,7 @@ class GameShader(ptk.LoggingMixin):
                 ignoreColorSpaceFileRules=1,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outAlpha, bump_node.bumpValue, force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{bump_node}.bumpValue", force=True)
 
         elif texture_type == "Ambient_Occlusion":
             texture_node = NodeUtils.create_render_node(
@@ -894,7 +908,7 @@ class GameShader(ptk.LoggingMixin):
                 ignoreColorSpaceFileRules=1,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outColor, aiMult_node.input2, force=True)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{aiMult_node}.input2", force=True)
 
         elif texture_type == "Opacity":
             texture_node = NodeUtils.create_render_node(
@@ -905,7 +919,7 @@ class GameShader(ptk.LoggingMixin):
                 ignoreColorSpaceFileRules=1,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outColor, ai_node.opacity, force=True)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{ai_node}.opacity", force=True)
         else:
             return False
         return True
@@ -918,7 +932,7 @@ class GameShader(ptk.LoggingMixin):
         Parameters:
             texture (str): The file path of the texture image to be connected.
             texture_type (str): The type of texture (e.g., "Base_Color", "Roughness", "Metallic").
-            std_node (pm.nt.StandardSurface): The Standard Surface shader node.
+            std_node (str): The Standard Surface shader node.
 
         Returns:
             bool: True if connection successful, False otherwise.
@@ -929,7 +943,7 @@ class GameShader(ptk.LoggingMixin):
                 fileTextureName=texture,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outColor, std_node.baseColor, force=True)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{std_node}.baseColor", force=True)
 
         elif texture_type == "Albedo_Transparency":
             texture_node = NodeUtils.create_render_node(
@@ -937,11 +951,11 @@ class GameShader(ptk.LoggingMixin):
                 fileTextureName=texture,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outColor, std_node.baseColor, force=True)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{std_node}.baseColor", force=True)
             # Opacity is RGB, connect alpha to all channels
-            pm.connectAttr(texture_node.outAlpha, std_node.opacityR, force=True)
-            pm.connectAttr(texture_node.outAlpha, std_node.opacityG, force=True)
-            pm.connectAttr(texture_node.outAlpha, std_node.opacityB, force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{std_node}.opacityR", force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{std_node}.opacityG", force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{std_node}.opacityB", force=True)
             return True
 
         elif texture_type == "Roughness":
@@ -952,8 +966,8 @@ class GameShader(ptk.LoggingMixin):
                 alphaIsLuminance=1,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(
-                texture_node.outAlpha, std_node.specularRoughness, force=True
+            cmds.connectAttr(
+                f"{texture_node}.outAlpha", f"{std_node}.specularRoughness", force=True
             )
 
         elif texture_type == "Metallic":
@@ -964,7 +978,7 @@ class GameShader(ptk.LoggingMixin):
                 alphaIsLuminance=1,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outAlpha, std_node.metalness, force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{std_node}.metalness", force=True)
 
         elif texture_type == "Metallic_Smoothness":
             texture_node = NodeUtils.create_render_node(
@@ -978,9 +992,9 @@ class GameShader(ptk.LoggingMixin):
             reverse_node = NodeUtils.create_render_node(
                 "reverse", name="invertSmoothness"
             )
-            pm.connectAttr(texture_node.outAlpha, reverse_node.inputX, force=True)
-            pm.connectAttr(reverse_node.outputX, std_node.specularRoughness, force=True)
-            pm.connectAttr(texture_node.outColorR, std_node.metalness, force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{reverse_node}.inputX", force=True)
+            cmds.connectAttr(f"{reverse_node}.outputX", f"{std_node}.specularRoughness", force=True)
+            cmds.connectAttr(f"{texture_node}.outColorR", f"{std_node}.metalness", force=True)
 
             # Ensure FBX export preserves the texture
             self._ensure_fbx_safe_connection(
@@ -997,22 +1011,22 @@ class GameShader(ptk.LoggingMixin):
                 name=ptk.format_path(texture, section="name"),
             )
             # Metallic (B)
-            pm.connectAttr(texture_node.outColorB, std_node.metalness, force=True)
+            cmds.connectAttr(f"{texture_node}.outColorB", f"{std_node}.metalness", force=True)
             # Roughness (G)
-            pm.connectAttr(
-                texture_node.outColorG, std_node.specularRoughness, force=True
+            cmds.connectAttr(
+                f"{texture_node}.outColorG", f"{std_node}.specularRoughness", force=True
             )
             # AO (R) -> Multiply with Base Color
-            existing_conn = pm.listConnections(
-                std_node.baseColor, source=True, destination=False
+            existing_conn = cmds.listConnections(
+                f"{std_node}.baseColor", source=True, destination=False
             )
             if existing_conn:
-                mult_node = pm.shadingNode("multiplyDivide", asUtility=True)
-                pm.connectAttr(existing_conn[0].outColor, mult_node.input1, force=True)
-                pm.connectAttr(texture_node.outColorR, mult_node.input2X, force=True)
-                pm.connectAttr(texture_node.outColorR, mult_node.input2Y, force=True)
-                pm.connectAttr(texture_node.outColorR, mult_node.input2Z, force=True)
-                pm.connectAttr(mult_node.output, std_node.baseColor, force=True)
+                mult_node = cmds.shadingNode("multiplyDivide", asUtility=True)
+                cmds.connectAttr(f"{existing_conn[0]}.outColor", f"{mult_node}.input1", force=True)
+                cmds.connectAttr(f"{texture_node}.outColorR", f"{mult_node}.input2X", force=True)
+                cmds.connectAttr(f"{texture_node}.outColorR", f"{mult_node}.input2Y", force=True)
+                cmds.connectAttr(f"{texture_node}.outColorR", f"{mult_node}.input2Z", force=True)
+                cmds.connectAttr(f"{mult_node}.output", f"{std_node}.baseColor", force=True)
 
             self._ensure_fbx_safe_connection(texture_node, std_node, "ORM_Map")
 
@@ -1026,24 +1040,24 @@ class GameShader(ptk.LoggingMixin):
                 name=ptk.format_path(texture, section="name"),
             )
             # Connect red channel (metallic) to metalness
-            pm.connectAttr(texture_node.outColorR, std_node.metalness, force=True)
+            cmds.connectAttr(f"{texture_node}.outColorR", f"{std_node}.metalness", force=True)
             # Smoothness in alpha needs to be inverted to roughness
             reverse_node = NodeUtils.create_render_node(
                 "reverse", name="invertSmoothness"
             )
-            pm.connectAttr(texture_node.outAlpha, reverse_node.inputX, force=True)
-            pm.connectAttr(reverse_node.outputX, std_node.specularRoughness, force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{reverse_node}.inputX", force=True)
+            cmds.connectAttr(f"{reverse_node}.outputX", f"{std_node}.specularRoughness", force=True)
             # AO in green channel - multiply with base color if already connected
-            existing_conn = pm.listConnections(
-                std_node.baseColor, source=True, destination=False
+            existing_conn = cmds.listConnections(
+                f"{std_node}.baseColor", source=True, destination=False
             )
             if existing_conn:
-                mult_node = pm.shadingNode("multiplyDivide", asUtility=True)
-                pm.connectAttr(existing_conn[0].outColor, mult_node.input1, force=True)
-                pm.connectAttr(texture_node.outColorG, mult_node.input2X, force=True)
-                pm.connectAttr(texture_node.outColorG, mult_node.input2Y, force=True)
-                pm.connectAttr(texture_node.outColorG, mult_node.input2Z, force=True)
-                pm.connectAttr(mult_node.output, std_node.baseColor, force=True)
+                mult_node = cmds.shadingNode("multiplyDivide", asUtility=True)
+                cmds.connectAttr(f"{existing_conn[0]}.outColor", f"{mult_node}.input1", force=True)
+                cmds.connectAttr(f"{texture_node}.outColorG", f"{mult_node}.input2X", force=True)
+                cmds.connectAttr(f"{texture_node}.outColorG", f"{mult_node}.input2Y", force=True)
+                cmds.connectAttr(f"{texture_node}.outColorG", f"{mult_node}.input2Z", force=True)
+                cmds.connectAttr(f"{mult_node}.output", f"{std_node}.baseColor", force=True)
 
             # Ensure FBX export preserves the texture
             self._ensure_fbx_safe_connection(texture_node, std_node, "MSAO_Map")
@@ -1056,11 +1070,11 @@ class GameShader(ptk.LoggingMixin):
                 colorSpace="Raw",
                 name=ptk.format_path(texture, section="name"),
             )
-            bump_node = pm.shadingNode("bump2d", asUtility=True)
-            bump_node.bumpInterp.set(1)  # Tangent space normals
+            bump_node = cmds.shadingNode("bump2d", asUtility=True)
+            cmds.setAttr(f"{bump_node}.bumpInterp", 1)  # Tangent space normals
             # Use outAlpha (grayscale) instead of outColor for bump2d compatibility
-            pm.connectAttr(texture_node.outAlpha, bump_node.bumpValue, force=True)
-            pm.connectAttr(bump_node.outNormal, std_node.normalCamera, force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{bump_node}.bumpValue", force=True)
+            cmds.connectAttr(f"{bump_node}.outNormal", f"{std_node}.normalCamera", force=True)
 
         elif texture_type == "Emissive":
             texture_node = NodeUtils.create_render_node(
@@ -1068,8 +1082,8 @@ class GameShader(ptk.LoggingMixin):
                 fileTextureName=texture,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outColor, std_node.emissionColor, force=True)
-            std_node.emission.set(1.0)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{std_node}.emissionColor", force=True)
+            cmds.setAttr(f"{std_node}.emission", 1.0)
 
         elif texture_type == "Ambient_Occlusion":
             # Standard Surface doesn't have direct AO input, multiply with base color
@@ -1080,15 +1094,15 @@ class GameShader(ptk.LoggingMixin):
                 name=ptk.format_path(texture, section="name"),
             )
             # Create multiply node to combine AO with base color
-            mult_node = pm.shadingNode("multiplyDivide", asUtility=True)
+            mult_node = cmds.shadingNode("multiplyDivide", asUtility=True)
             # If base color already connected, insert multiply
-            existing_conn = pm.listConnections(
-                std_node.baseColor, source=True, destination=False
+            existing_conn = cmds.listConnections(
+                f"{std_node}.baseColor", source=True, destination=False
             )
             if existing_conn:
-                pm.connectAttr(existing_conn[0].outColor, mult_node.input1, force=True)
-            pm.connectAttr(texture_node.outColor, mult_node.input2, force=True)
-            pm.connectAttr(mult_node.output, std_node.baseColor, force=True)
+                cmds.connectAttr(f"{existing_conn[0]}.outColor", f"{mult_node}.input1", force=True)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{mult_node}.input2", force=True)
+            cmds.connectAttr(f"{mult_node}.output", f"{std_node}.baseColor", force=True)
 
         elif texture_type == "Opacity":
             texture_node = NodeUtils.create_render_node(
@@ -1098,7 +1112,7 @@ class GameShader(ptk.LoggingMixin):
                 alphaIsLuminance=1,
                 name=ptk.format_path(texture, section="name"),
             )
-            pm.connectAttr(texture_node.outAlpha, std_node.opacity, force=True)
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{std_node}.opacity", force=True)
 
         else:
             return False
@@ -1198,8 +1212,8 @@ class GameShader(ptk.LoggingMixin):
 
             elif specular_map:
                 # Convert specular map to roughness and metallic maps
-                created_roughness_map = ptk.create_roughness_from_spec(specular_map[0])
-                created_metallic_map = ptk.create_metallic_from_spec(specular_map[0])
+                created_roughness_map = ptk.MapFactory.create_roughness_from_spec(specular_map[0])
+                created_metallic_map = ptk.MapFactory.create_metallic_from_spec(specular_map[0])
 
                 # Save these images to disk and get their file paths
                 base_name = ptk.MapFactory.get_base_texture_name(specular_map[0])
@@ -1219,7 +1233,7 @@ class GameShader(ptk.LoggingMixin):
                 combined_map_name = f"{base_name}_MetallicSmoothness.{output_extension}"
                 combined_map_path = os.path.join(out_dir, combined_map_name)
 
-                combined_map = ptk.pack_smoothness_into_metallic(
+                combined_map = ptk.MapFactory.pack_smoothness_into_metallic(
                     metal_path,
                     rough_path,
                     invert_alpha=True,
@@ -1244,7 +1258,7 @@ class GameShader(ptk.LoggingMixin):
                 combined_map_name = f"{base_name}_MetallicSmoothness.{output_extension}"
                 combined_map_path = os.path.join(out_dir, combined_map_name)
 
-                combined_map = ptk.pack_smoothness_into_metallic(
+                combined_map = ptk.MapFactory.pack_smoothness_into_metallic(
                     metallic_map[0],
                     alpha_map,
                     invert_alpha=invert_alpha,
@@ -1267,12 +1281,12 @@ class GameShader(ptk.LoggingMixin):
 
             if not metallic_map and specular_map:
                 # Create a metallic map from the specular map
-                created_metallic_map = ptk.create_metallic_from_spec(specular_map[0])
+                created_metallic_map = ptk.MapFactory.create_metallic_from_spec(specular_map[0])
                 filtered_textures.append(created_metallic_map)
 
             if not roughness_map and specular_map:
                 # Create a roughness map from the specular map
-                created_roughness_map = ptk.create_roughness_from_spec(specular_map[0])
+                created_roughness_map = ptk.MapFactory.create_roughness_from_spec(specular_map[0])
                 filtered_textures.append(created_roughness_map)
 
             return filtered_textures
@@ -1346,7 +1360,7 @@ class GameShader(ptk.LoggingMixin):
             mask_map_full_path = os.path.join(out_dir, mask_map_name)
 
             # Use pythontk's pack_msao_texture function
-            mask_map_path = ptk.pack_msao_texture(
+            mask_map_path = ptk.MapFactory.pack_msao_texture(
                 metallic_map_path=metallic_map[0],
                 ao_map_path=(
                     ao_map[0] if ao_map else None
@@ -1415,7 +1429,7 @@ class GameShader(ptk.LoggingMixin):
                 ]
             elif base_color_map and transparency_map:
                 # Create an albedo transparency map from albedo and transparency maps, then update the list
-                combined_map = ptk.pack_transparency_into_albedo(
+                combined_map = ptk.MapFactory.pack_transparency_into_albedo(
                     base_color_map[0], transparency_map[0]
                 )
                 return [
@@ -1499,10 +1513,10 @@ class GameShaderSlots(GameShader):
         """Graph the material in the Hypershade."""
         if self.last_created_shader:
             MatUtils.graph_materials(self.last_created_shader)
-        elif pm.objExists(self.mat_name):
+        elif cmds.objExists(self.mat_name):
             MatUtils.graph_materials(self.mat_name)
         else:
-            pm.warning(f"Material '{self.mat_name}' not found.")
+            cmds.warning(f"Material '{self.mat_name}' not found.")
 
     @property
     def mat_name(self) -> str:

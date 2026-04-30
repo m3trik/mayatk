@@ -16,10 +16,12 @@ except ImportError:
     KDTree = None
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
+    import maya.api.OpenMaya as om
 except ImportError:
     pass
 
+import math
 import pythontk as ptk
 
 # From this package:
@@ -42,27 +44,29 @@ class AssemblyReconstructor:
         self.combine_assemblies = combine_assemblies
         self.search_radius_mult = search_radius_mult
         self.verbose = verbose
-        self.combine_targets: List[Tuple[Optional[pm.nodetypes.Transform], str]] = []
+        self.combine_targets: List[Tuple[Optional[object], str]] = []
 
     def separate_combined_meshes(
-        self, nodes: List[pm.nodetypes.Transform]
-    ) -> List[pm.nodetypes.Transform]:
+        self, nodes: List[object]
+    ) -> List[object]:
         """Separate any combined meshes in the list into their shells."""
         new_nodes = []
         self.combine_targets = []  # Reset
 
         for node in nodes:
-            if not node.exists():
+            node_str = str(node)
+            if not cmds.objExists(node_str):
                 continue
 
-            shape = node.getShape()
-            if not shape or not isinstance(shape, pm.nodetypes.Mesh):
-                new_nodes.append(node)
+            shapes = cmds.listRelatives(node_str, shapes=True, noIntermediate=True, fullPath=True) or []
+            shape = shapes[0] if shapes else None
+            if not shape or cmds.objectType(shape) != "mesh":
+                new_nodes.append(node_str)
                 continue
 
             # Check shell count
             try:
-                num_shells = pm.polyEvaluate(node, shell=True)
+                num_shells = cmds.polyEvaluate(node_str, shell=True)
             except RuntimeError:
                 num_shells = 0
 
@@ -77,52 +81,51 @@ class AssemblyReconstructor:
                 num_shells = 0
 
             if num_shells > 1:
-                # Unlock normals - REMOVED to preserve custom normals
-                # try:
-                #     pm.polyNormalPerVertex(shape, unFreezeNormal=True)
-                # except Exception:
-                #     pass
-
                 if self.verbose:
-                    print(f"Separating combined mesh: {node} ({num_shells} shells)")
+                    print(f"Separating combined mesh: {node_str} ({num_shells} shells)")
 
                 if self.combine_assemblies:
                     try:
-                        self.combine_targets.append((node.getParent(), node.name()))
+                        parent = (cmds.listRelatives(node_str, parent=True, fullPath=True) or [None])[0]
+                        self.combine_targets.append((parent, node_str.split("|")[-1]))
                     except Exception:
-                        self.combine_targets.append((None, node.name()))
+                        self.combine_targets.append((None, node_str.split("|")[-1]))
 
                 try:
-                    separated = pm.polySeparate(node, ch=False)
-                    separated_nodes = [pm.PyNode(n) for n in separated]
+                    separated = cmds.polySeparate(node_str, ch=False) or []
                     # NOTE: Do NOT canonicalize here - it expands bounding boxes
                     # and breaks BFS grouping. Canonicalization is done after
                     # reassemble_assemblies for instancing purposes.
-                    new_nodes.extend(separated_nodes)
+                    new_nodes.extend(separated)
                 except RuntimeError as e:
-                    print(f"Failed to separate {node}: {e}")
-                    new_nodes.append(node)
+                    print(f"Failed to separate {node_str}: {e}")
+                    new_nodes.append(node_str)
             else:
-                new_nodes.append(node)
+                new_nodes.append(node_str)
 
         return new_nodes
 
-    def center_transform_on_geometry(self, node: pm.nodetypes.Transform) -> None:
+    def center_transform_on_geometry(self, node) -> None:
         """Moves the transform to the center of its geometry without moving the geometry."""
+        node_str = str(node)
         try:
-            mesh = node.getShape()
-            if not mesh:
+            shapes = cmds.listRelatives(node_str, shapes=True, noIntermediate=True, fullPath=True) or []
+            if not shapes:
                 return
-            pts = mesh.getPoints(space="world")
+            sel = om.MSelectionList()
+            sel.add(shapes[0])
+            fn = om.MFnMesh(sel.getDagPath(0))
+            pts = fn.getPoints(om.MSpace.kWorld)
         except Exception:
             return
 
-        center = pm.dt.Point(np.mean(pts, axis=0))
-        node.setTranslation(center, space="world")
-        mesh.setPoints(pts, space="world")
-        pm.xform(node, centerPivots=True)
+        pts_np = np.array([[p.x, p.y, p.z] for p in pts])
+        center = pts_np.mean(axis=0).tolist()
+        cmds.xform(node_str, translation=center, worldSpace=True)
+        fn.setPoints(pts, om.MSpace.kWorld)
+        cmds.xform(node_str, centerPivots=True)
 
-    def canonicalize_transform(self, node: pm.nodetypes.Transform) -> None:
+    def canonicalize_transform(self, node) -> None:
         """Aligns the transform's rotation to the geometry's PCA axes."""
         self.center_transform_on_geometry(node)
 
@@ -130,25 +133,38 @@ class AssemblyReconstructor:
         if not basis_matrix:
             return
 
+        node_str = str(node)
         try:
-            mesh = node.getShape()
-            if not mesh:
+            shapes = cmds.listRelatives(node_str, shapes=True, noIntermediate=True, fullPath=True) or []
+            if not shapes:
                 return
 
-            pts = mesh.getPoints(space="world")
-            tm = pm.dt.TransformationMatrix(basis_matrix)
-            rotation = tm.eulerRotation()
+            sel = om.MSelectionList()
+            sel.add(shapes[0])
+            fn = om.MFnMesh(sel.getDagPath(0))
+            pts = fn.getPoints(om.MSpace.kWorld)
 
-            node.setRotation(rotation, space="world")
-            mesh.setPoints(pts, space="world")
+            # ``geometry_matcher.get_pca_basis`` now returns ``om.MMatrix``;
+            # use it directly. Fall back to row/col indexing for legacy
+            # ``object`` returns where ``__getitem__`` yields a row.
+            if isinstance(basis_matrix, om.MMatrix):
+                tm = om.MTransformationMatrix(basis_matrix)
+            else:
+                flat = [basis_matrix[i][j] for i in range(4) for j in range(4)]
+                tm = om.MTransformationMatrix(om.MMatrix(flat))
+            euler = tm.rotation(asQuaternion=False)
+            rot_deg = [math.degrees(euler.x), math.degrees(euler.y), math.degrees(euler.z)]
+
+            cmds.xform(node_str, rotation=rot_deg, worldSpace=True)
+            fn.setPoints(pts, om.MSpace.kWorld)
 
         except Exception as e:
             if self.verbose:
-                print(f"[WARNING] Canonicalization failed for {node}: {e}")
+                print(f"[WARNING] Canonicalization failed for {node_str}: {e}")
 
     def canonicalize_leaf_meshes(
-        self, nodes: List[pm.nodetypes.Transform]
-    ) -> List[pm.nodetypes.Transform]:
+        self, nodes: List[object]
+    ) -> List[object]:
         """Canonicalize all leaf mesh transforms for instancing.
 
         This should be called AFTER reassemble_assemblies to prepare
@@ -159,21 +175,22 @@ class AssemblyReconstructor:
         because canonicalization expands bounding boxes and breaks touch detection.
         """
         for node in nodes:
-            shape = node.getShape()
-            if shape and isinstance(shape, pm.nodetypes.Mesh):
-                self.canonicalize_transform(node)
+            node_str = str(node)
+            shapes = cmds.listRelatives(node_str, shapes=True, noIntermediate=True, fullPath=True) or []
+            if shapes and cmds.objectType(shapes[0]) == "mesh":
+                self.canonicalize_transform(node_str)
             else:
                 # It's a group - canonicalize children
-                children = node.getChildren(type="transform")
+                children = cmds.listRelatives(node_str, children=True, type="transform", fullPath=True) or []
                 for child in children:
-                    child_shape = child.getShape()
-                    if child_shape and isinstance(child_shape, pm.nodetypes.Mesh):
+                    child_shapes = cmds.listRelatives(child, shapes=True, noIntermediate=True, fullPath=True) or []
+                    if child_shapes and cmds.objectType(child_shapes[0]) == "mesh":
                         self.canonicalize_transform(child)
         return nodes
 
     def reassemble_assemblies(
-        self, nodes: List[pm.nodetypes.Transform]
-    ) -> List[pm.nodetypes.Transform]:
+        self, nodes: List[object]
+    ) -> List[object]:
         """Reassemble separated shells into logical assemblies.
 
         Algorithm:
@@ -187,24 +204,28 @@ class AssemblyReconstructor:
         # Filter to valid mesh transforms
         valid_nodes = []
         for n in nodes:
-            shape = n.getShape()
-            if shape and isinstance(shape, pm.nodetypes.Mesh):
-                valid_nodes.append(n)
+            n_str = str(n)
+            shapes = cmds.listRelatives(n_str, shapes=True, noIntermediate=True, fullPath=True) or []
+            if shapes and cmds.objectType(shapes[0]) == "mesh":
+                valid_nodes.append(n_str)
 
         if not valid_nodes:
-            return list(nodes)
+            return [str(n) for n in nodes]
 
         # Build part info
         parts: List[Dict[str, Any]] = []
         for node in valid_nodes:
             try:
-                shape = node.getShape()
-                bbox = pm.exactWorldBoundingBox(node)
+                shapes = cmds.listRelatives(node, shapes=True, noIntermediate=True, fullPath=True) or []
+                shape = shapes[0] if shapes else None
+                if not shape:
+                    continue
+                bbox = cmds.exactWorldBoundingBox(node)
                 if not isinstance(bbox, list) or len(bbox) != 6:
                     continue
 
-                nverts = shape.numVertices()
-                nfaces = shape.numFaces()
+                nverts = cmds.polyEvaluate(shape, vertex=True)
+                nfaces = cmds.polyEvaluate(shape, face=True)
                 center = np.array(
                     [
                         (bbox[0] + bbox[3]) / 2,
@@ -491,15 +512,16 @@ class AssemblyReconstructor:
         # Convert to list of lists format
         return [cluster["members"] for cluster in all_clusters]
 
-    def _get_material(self, node: pm.nodetypes.Transform) -> Optional[str]:
+    def _get_material(self, node) -> Optional[str]:
         """Get the material name assigned to a node."""
         try:
-            shape = node.getShape()
-            if not shape:
+            node_str = str(node)
+            shapes = cmds.listRelatives(node_str, shapes=True, noIntermediate=True, fullPath=True) or []
+            if not shapes:
                 return None
-            sgs = pm.listConnections(shape, type="shadingEngine")
+            sgs = cmds.listConnections(shapes[0], type="shadingEngine") or []
             if sgs:
-                return sgs[0].name()
+                return sgs[0]
         except Exception:
             pass
         return None
@@ -785,16 +807,16 @@ class AssemblyReconstructor:
 
     def _create_assembly_groups(
         self, parts: List[Dict], groups: List[List[int]]
-    ) -> List[pm.nodetypes.Transform]:
+    ) -> List[object]:
         """Create Maya group nodes for each assembly."""
         result = []
-        used_nodes: Set[pm.nodetypes.Transform] = set()
+        used_nodes: Set[str] = set()
 
         for group in groups:
             if len(group) <= 1:
                 # Single part - no assembly needed
                 for idx in group:
-                    node = parts[idx]["node"]
+                    node = str(parts[idx]["node"])
                     if node not in used_nodes:
                         result.append(node)
                         used_nodes.add(node)
@@ -802,13 +824,13 @@ class AssemblyReconstructor:
 
             # Find the root (largest volume)
             root_idx = max(group, key=lambda i: parts[i]["volume"])
-            root = parts[root_idx]["node"]
-            children = [parts[idx]["node"] for idx in group if idx != root_idx]
+            root = str(parts[root_idx]["node"])
+            children = [str(parts[idx]["node"]) for idx in group if idx != root_idx]
 
             # Check for already-used nodes
             if root in used_nodes or any(c in used_nodes for c in children):
                 for idx in group:
-                    node = parts[idx]["node"]
+                    node = str(parts[idx]["node"])
                     if node not in used_nodes:
                         result.append(node)
                         used_nodes.add(node)
@@ -816,19 +838,20 @@ class AssemblyReconstructor:
 
             # Create assembly group
             try:
-                assembly_grp = pm.group(empty=True, name="Assembly_1")
+                assembly_grp = cmds.group(empty=True, name="Assembly_1")
 
                 # Position at centroid
                 points = [parts[idx]["center"] for idx in group]
-                centroid = np.mean(points, axis=0)
-                assembly_grp.setTranslation(centroid.tolist(), space="world")
-                assembly_grp.setRotation(root.getRotation(space="world"), space="world")
+                centroid = np.mean(points, axis=0).tolist()
+                cmds.xform(assembly_grp, translation=centroid, worldSpace=True)
+                root_rot = cmds.xform(root, q=True, rotation=True, worldSpace=True)
+                cmds.xform(assembly_grp, rotation=root_rot, worldSpace=True)
 
-                pm.parent(root, assembly_grp)
+                cmds.parent(root, assembly_grp)
                 used_nodes.add(root)
 
                 for child in children:
-                    pm.parent(child, assembly_grp)
+                    cmds.parent(child, assembly_grp)
                     used_nodes.add(child)
 
                 result.append(assembly_grp)
@@ -836,7 +859,7 @@ class AssemblyReconstructor:
             except Exception as e:
                 logger.error(f"Error creating assembly for {root}: {e}")
                 for idx in group:
-                    node = parts[idx]["node"]
+                    node = str(parts[idx]["node"])
                     if node not in used_nodes:
                         result.append(node)
                         used_nodes.add(node)
@@ -844,8 +867,8 @@ class AssemblyReconstructor:
         return result
 
     def combine_reassembled_assemblies(
-        self, nodes: List[pm.nodetypes.Transform]
-    ) -> List[pm.nodetypes.Transform]:
+        self, nodes: List[object]
+    ) -> List[object]:
         """Combine the 'Core' of each reconstructed assembly into a single mesh."""
         if not nodes:
             return []
@@ -855,12 +878,12 @@ class AssemblyReconstructor:
         other_nodes = []
 
         for node in nodes:
-            if isinstance(node, pm.nodetypes.Transform) and node.name().startswith(
-                "Assembly_"
-            ):
-                assembly_groups.append(node)
+            node_str = str(node)
+            leaf = node_str.split("|")[-1]
+            if cmds.objectType(node_str) == "transform" and leaf.startswith("Assembly_"):
+                assembly_groups.append(node_str)
             else:
-                other_nodes.append(node)
+                other_nodes.append(node_str)
 
         combined_meshes.extend(other_nodes)
         if not assembly_groups:
@@ -868,7 +891,7 @@ class AssemblyReconstructor:
 
         sig_counts = defaultdict(int)
         for grp in assembly_groups:
-            children = grp.getChildren(type="transform")
+            children = cmds.listRelatives(grp, children=True, type="transform", fullPath=True) or []
             sigs = set()
             for c in children:
                 if self._is_mesh_transform(c):
@@ -883,7 +906,7 @@ class AssemblyReconstructor:
         common_sigs = {s for s, count in sig_counts.items() if count >= threshold}
 
         for grp in assembly_groups:
-            children = grp.getChildren(type="transform")
+            children = cmds.listRelatives(grp, children=True, type="transform", fullPath=True) or []
             mesh_children = [c for c in children if self._is_mesh_transform(c)]
 
             core_parts = []
@@ -901,24 +924,23 @@ class AssemblyReconstructor:
                     core_mesh = core_parts[0]
                 else:
                     try:
-                        core_mesh = pm.polyUnite(
+                        grp_short = grp.split("|")[-1]
+                        result_list = cmds.polyUnite(
                             core_parts,
-                            name=f"{grp.name()}_core",
+                            name=f"{grp_short}_core",
                             ch=False,
                             mergeUVSets=True,
-                        )[0]
-                        try:
-                            core_mesh = pm.PyNode(core_mesh)
-                        except:
-                            pass
+                        ) or []
+                        core_mesh = result_list[0] if result_list else None
                     except Exception:
                         core_mesh = None
 
                 if core_mesh:
                     try:
-                        core_mesh = core_mesh.rename(f"{grp.name()}_combined")
+                        grp_short = grp.split("|")[-1]
+                        core_mesh = cmds.rename(core_mesh, f"{grp_short}_combined")
                         self.canonicalize_transform(core_mesh)
-                    except:
+                    except Exception:
                         pass
                     combined_meshes.append(core_mesh)
 
@@ -927,27 +949,25 @@ class AssemblyReconstructor:
             try:
                 for r in remainder_parts:
                     try:
-                        pm.parent(r, world=True)
-                    except:
+                        cmds.parent(r, world=True)
+                    except Exception:
                         pass
-                if not grp.getChildren():
-                    pm.delete(grp)
-            except:
+                if not (cmds.listRelatives(grp, children=True, fullPath=True) or []):
+                    cmds.delete(grp)
+            except Exception:
                 pass
 
         return combined_meshes
 
     @staticmethod
-    def _is_mesh_transform(n: pm.PyNode) -> bool:
+    def _is_mesh_transform(n) -> bool:
         """Check if a node is a transform with a valid mesh shape."""
         try:
-            if not isinstance(n, pm.nodetypes.Transform):
+            n_str = str(n)
+            if not cmds.objExists(n_str) or cmds.objectType(n_str) != "transform":
                 return False
-            if hasattr(n, "exists") and not n.exists():
-                return False
-            shape = n.getShape()
-            if not shape or not isinstance(shape, pm.nodetypes.Mesh):
-                return False
-            return not shape.intermediateObject.get()
+            # noIntermediate=True already excludes intermediate objects
+            shapes = cmds.listRelatives(n_str, shapes=True, noIntermediate=True, fullPath=True) or []
+            return bool(shapes) and cmds.objectType(shapes[0]) == "mesh"
         except Exception:
             return False

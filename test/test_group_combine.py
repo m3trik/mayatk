@@ -4,12 +4,12 @@
 Test Suite for Grouping and Combining operations in EditUtils.
 """
 import unittest
-import pymel.core as pm
 import mayatk as mtk
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 
 from base_test import MayaTkTestCase
+import maya.cmds as cmds
 
 
 class TestGroupCombine(MayaTkTestCase):
@@ -18,48 +18,51 @@ class TestGroupCombine(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         # Create some test objects
-        self.cube1 = pm.polyCube(n="cube1")[0]
-        self.cube2 = pm.polyCube(n="cube2")[0]
-        self.cube3 = pm.polyCube(n="cube3")[0]
+        self.cube1 = cmds.polyCube(n="cube1")[0]
+        self.cube2 = cmds.polyCube(n="cube2")[0]
+        self.cube3 = cmds.polyCube(n="cube3")[0]
 
         # Assign materials
-        self.mat1 = pm.shadingNode("lambert", asShader=True, n="mat1")
-        self.mat2 = pm.shadingNode("lambert", asShader=True, n="mat2")
+        self.mat1 = cmds.shadingNode("lambert", asShader=True, n="mat1")
+        self.mat2 = cmds.shadingNode("lambert", asShader=True, n="mat2")
 
-        pm.select(self.cube1, self.cube2)
-        pm.hyperShade(assign=self.mat1)
+        cmds.select(self.cube1, self.cube2)
+        cmds.hyperShade(assign=self.mat1)
 
-        pm.select(self.cube3)
-        pm.hyperShade(assign=self.mat2)
+        cmds.select(self.cube3)
+        cmds.hyperShade(assign=self.mat2)
 
     def test_group_objects(self):
         """Test EditUtils.group_objects."""
         # Group with explicit list to ensure order
         grp = EditUtils.group_objects([self.cube1, self.cube2])
 
-        self.assertTrue(pm.objExists(grp))
-        self.assertEqual(grp.nodeType(), "transform")
+        self.assertTrue(cmds.objExists(str(grp)))
+        self.assertEqual(cmds.nodeType(grp), "transform")
 
         # Check children
-        children = grp.getChildren()
-        self.assertIn(self.cube1, children)
-        self.assertIn(self.cube2, children)
+        children = cmds.listRelatives(str(grp), children=True) or []
+        c1_short = str(self.cube1).split("|")[-1]
+        c2_short = str(self.cube2).split("|")[-1]
+        children_short = [c.split("|")[-1] for c in children]
+        self.assertIn(c1_short, children_short)
+        self.assertIn(c2_short, children_short)
 
         # Check naming (should be named after first object)
         # Use nodeName() to avoid pipe issues if full path is returned
-        self.assertTrue(grp.nodeName().startswith("cube1"))
+        self.assertTrue(grp.split('|')[-1].split(':')[-1].startswith("cube1"))
 
     def test_combine_objects_basic(self):
         """Test basic combine (no grouping)."""
         combined = EditUtils.combine_objects([self.cube1, self.cube2])
 
-        self.assertTrue(pm.objExists(combined))
-        self.assertEqual(combined.nodeType(), "transform")
+        self.assertTrue(cmds.objExists(combined))
+        self.assertEqual(cmds.nodeType(combined), "transform")
 
         # Should be one mesh now
         # Note: combine_objects renames the result to the first object's name (cube1)
-        self.assertTrue(pm.objExists("cube1"))
-        self.assertFalse(pm.objExists("cube2"))
+        self.assertTrue(cmds.objExists("cube1"))
+        self.assertFalse(cmds.objExists("cube2"))
 
     def test_combine_objects_material_grouping(self):
         """Test combine with group_by_material=True."""
@@ -70,9 +73,9 @@ class TestGroupCombine(MayaTkTestCase):
         # The logic says: "if len(group_objs) < 2: continue"
 
         # Let's add another object to mat2 to ensure it combines
-        cube4 = pm.polyCube(n="cube4")[0]
-        pm.select(cube4)
-        pm.hyperShade(assign=self.mat2)
+        cube4 = cmds.polyCube(n="cube4")[0]
+        cmds.select(cube4)
+        cmds.hyperShade(assign=self.mat2)
 
         objects = [self.cube1, self.cube2, self.cube3, cube4]
 
@@ -87,7 +90,7 @@ class TestGroupCombine(MayaTkTestCase):
         # We can't easily predict order, so check both
         mats_found = []
         for res in results:
-            shapes = res.getShapes()
+            shapes = cmds.listRelatives(str(res), shapes=True, ni=True) or []
             # Get assigned shader
             # Simple check: select and graph? or use MatUtils
             mats = MatUtils.get_mats(res)
@@ -99,21 +102,21 @@ class TestGroupCombine(MayaTkTestCase):
     def test_combine_objects_clustering(self):
         """Test combine with clustering."""
         # Create 2 cubes far apart with same material
-        c1 = pm.polyCube(n="c1")[0]
-        c2 = pm.polyCube(n="c2")[0]
-        pm.move(c2, 100, 0, 0)  # Move 100 units away
+        c1 = cmds.polyCube(n="c1")[0]
+        c2 = cmds.polyCube(n="c2")[0]
+        cmds.move(100, 0, 0, c2)  # Move 100 units away
 
         # Create 2 cubes close to c1
-        c3 = pm.polyCube(n="c3")[0]
-        pm.move(c3, 2, 0, 0)
+        c3 = cmds.polyCube(n="c3")[0]
+        cmds.move(2, 0, 0, c3)
 
         # Create 2 cubes close to c2
-        c4 = pm.polyCube(n="c4")[0]
-        pm.move(c4, 102, 0, 0)
+        c4 = cmds.polyCube(n="c4")[0]
+        cmds.move(102, 0, 0, c4)
 
         # Assign same material to all
-        pm.select(c1, c2, c3, c4)
-        pm.hyperShade(assign=self.mat1)
+        cmds.select(c1, c2, c3, c4)
+        cmds.hyperShade(assign=self.mat1)
 
         # Threshold 10. c1-c3 are close. c2-c4 are close. (c1/c3) far from (c2/c4).
         # Should result in 2 clusters -> 2 combined meshes.
@@ -136,23 +139,23 @@ class TestGroupCombine(MayaTkTestCase):
         parents, not when all children were consumed by the operation.
         Fixed: 2026-02-26
         """
-        grp = pm.group(em=True, n="container_grp")
-        c1 = pm.polyCube(n="child_a")[0]
-        c2 = pm.polyCube(n="child_b")[0]
-        pm.parent(c1, grp)
-        pm.parent(c2, grp)
+        grp = cmds.group(em=True, n="container_grp")
+        c1 = cmds.polyCube(n="child_a")[0]
+        c2 = cmds.polyCube(n="child_b")[0]
+        cmds.parent(c1, grp)
+        cmds.parent(c2, grp)
 
         combined = EditUtils.combine_objects([c1, c2])
 
         self.assertTrue(
-            pm.objExists(grp),
+            cmds.objExists(grp),
             "Parent group should still exist after combine",
         )
         self.assertTrue(
-            pm.objExists(combined),
+            cmds.objExists(combined),
             "Combined mesh should exist",
         )
-        result_parent = pm.listRelatives(combined, parent=True)
+        result_parent = cmds.listRelatives(combined, parent=True)
         self.assertTrue(
             result_parent and result_parent[0] == grp,
             f"Combined mesh should be under '{grp}', got '{result_parent}'",
@@ -165,25 +168,25 @@ class TestGroupCombine(MayaTkTestCase):
         should survive (it still has a remaining child) and the result should
         be reparented under it.
         """
-        grp = pm.group(em=True, n="mixed_grp")
-        c1 = pm.polyCube(n="combine_a")[0]
-        c2 = pm.polyCube(n="combine_b")[0]
-        c3 = pm.polyCube(n="keep_me")[0]
-        pm.parent(c1, grp)
-        pm.parent(c2, grp)
-        pm.parent(c3, grp)
+        grp = cmds.group(em=True, n="mixed_grp")
+        c1 = cmds.polyCube(n="combine_a")[0]
+        c2 = cmds.polyCube(n="combine_b")[0]
+        c3 = cmds.polyCube(n="keep_me")[0]
+        cmds.parent(c1, grp)
+        cmds.parent(c2, grp)
+        cmds.parent(c3, grp)
 
         combined = EditUtils.combine_objects([c1, c2])
 
-        self.assertTrue(pm.objExists(grp))
-        self.assertTrue(pm.objExists(combined))
-        result_parent = pm.listRelatives(combined, parent=True)
+        self.assertTrue(cmds.objExists(grp))
+        self.assertTrue(cmds.objExists(combined))
+        result_parent = cmds.listRelatives(combined, parent=True)
         self.assertTrue(
             result_parent and result_parent[0] == grp,
             f"Combined mesh should be under '{grp}', got '{result_parent}'",
         )
         # The untouched child should still be there
-        self.assertTrue(pm.objExists("keep_me"))
+        self.assertTrue(cmds.objExists("keep_me"))
 
 
 if __name__ == "__main__":

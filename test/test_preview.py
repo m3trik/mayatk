@@ -11,8 +11,6 @@ Tests for Preview class functionality including:
 - Undo queue integrity
 """
 import unittest
-import pymel.core as pm
-
 try:
     from qtpy import QtWidgets
 except ImportError:
@@ -20,6 +18,7 @@ except ImportError:
 
 from base_test import MayaTkTestCase
 from mayatk.core_utils.preview import Preview
+import maya.cmds as cmds
 
 
 class MockOperation:
@@ -35,7 +34,7 @@ class MockOperation:
             raise RuntimeError("Simulated failure")
         self.perform_count += 1
         for obj in objects:
-            pm.move(obj, 0, 1, 0, r=True)
+            cmds.move(0, 1, 0, obj, r=True)
 
 
 @unittest.skipIf(QtWidgets is None, "Qt not available")
@@ -44,8 +43,8 @@ class TestPreview(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        self.cube = pm.polyCube(name="test_cube")[0]
-        self.sphere = pm.polySphere(name="test_sphere")[0]
+        self.cube = cmds.polyCube(name="test_cube")[0]
+        self.sphere = cmds.polySphere(name="test_sphere")[0]
 
         self.window = QtWidgets.QMainWindow()
         self.chk = QtWidgets.QCheckBox("Preview")
@@ -88,18 +87,18 @@ class TestPreview(MayaTkTestCase):
 
     def test_enable_disable_cycle(self):
         """Test basic enable/disable reverts the operation."""
-        pm.select(self.cube)
-        initial_pos = self.cube.getTranslation(space="world")
+        cmds.select(self.cube)
+        initial_pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
 
         self.preview.enable()
         self.assertTrue(self.chk.isChecked())
 
-        current_pos = self.cube.getTranslation(space="world")
-        self.assertAlmostEqual(current_pos.y, initial_pos.y + 1, places=4)
+        current_pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
+        self.assertAlmostEqual(current_pos[1], initial_pos[1] + 1, places=4)
 
         self.preview.disable()
-        final_pos = self.cube.getTranslation(space="world")
-        self.assertAlmostEqual(final_pos.y, initial_pos.y, places=4)
+        final_pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
+        self.assertAlmostEqual(final_pos[1], initial_pos[1], places=4)
         self.assertFalse(self.preview.needs_undo)
 
     def test_disable_always_undoes_operation(self):
@@ -111,8 +110,8 @@ class TestPreview(MayaTkTestCase):
         - External undo detection
         The operation is properly reverted.
         """
-        pm.select(self.cube)
-        initial_pos = self.cube.getTranslation(space="world")
+        cmds.select(self.cube)
+        initial_pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
 
         self.preview.enable()
         self.assertTrue(self.preview.needs_undo)
@@ -120,38 +119,38 @@ class TestPreview(MayaTkTestCase):
         # Simulate selection change calling disable
         self.preview.disable()
 
-        final_pos = self.cube.getTranslation(space="world")
+        final_pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
         self.assertAlmostEqual(
-            final_pos.y,
-            initial_pos.y,
+            final_pos[1],
+            initial_pos[1],
             places=4,
             msg="Operation was NOT undone when disable() was called",
         )
 
     def test_finalize_preserves_changes(self):
         """Test finalize_changes keeps the operation applied."""
-        pm.select(self.cube)
-        initial_pos = self.cube.getTranslation(space="world")
+        cmds.select(self.cube)
+        initial_pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
 
         self.preview.enable()
         self.preview.finalize_changes()
 
-        final_pos = self.cube.getTranslation(space="world")
-        self.assertAlmostEqual(final_pos.y, initial_pos.y + 1, places=4)
+        final_pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
+        self.assertAlmostEqual(final_pos[1], initial_pos[1] + 1, places=4)
 
     def test_refresh_updates_preview(self):
         """Test refresh applies operation again after undo."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
 
         # First operation moves Y+1
-        pos_after_enable = self.cube.getTranslation(space="world")
+        pos_after_enable = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
 
         # Refresh should undo then redo (net effect: still Y+1)
         self.preview.refresh()
 
-        pos_after_refresh = self.cube.getTranslation(space="world")
-        self.assertAlmostEqual(pos_after_enable.y, pos_after_refresh.y, places=4)
+        pos_after_refresh = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
+        self.assertAlmostEqual(pos_after_enable[1], pos_after_refresh[1], places=4)
 
     def test_multiple_refresh_calls_keep_checkbox_checked(self):
         """Test that calling refresh multiple times keeps preview enabled.
@@ -159,7 +158,7 @@ class TestPreview(MayaTkTestCase):
         This simulates changing slider values in the UI - each value change
         triggers refresh(), but the checkbox should remain checked.
         """
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
         self.assertTrue(self.chk.isChecked())
 
@@ -179,7 +178,7 @@ class TestPreview(MayaTkTestCase):
         Some Maya operations clear the selection. The preview should handle this
         by temporarily disabling selection monitoring during refresh.
         """
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
         self.assertTrue(self.chk.isChecked())
 
@@ -188,7 +187,7 @@ class TestPreview(MayaTkTestCase):
 
         def selection_clearing_operation(objects):
             original_perform(objects)
-            pm.select(clear=True)  # Simulate Maya clearing selection
+            cmds.select(clear=True)  # Simulate Maya clearing selection
 
         self.op.perform_operation = selection_clearing_operation
 
@@ -209,35 +208,35 @@ class TestPreview(MayaTkTestCase):
 
     def test_selection_change_disables_preview(self):
         """Test that changing selection disables preview."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
         self.assertTrue(self.chk.isChecked())
 
         # Simulate selection change by calling the handler directly
-        pm.select(self.sphere)
+        cmds.select(self.sphere)
         self.preview.disable_on_selection_change()
 
         self.assertFalse(self.chk.isChecked())
 
     def test_selection_cleared_disables_preview(self):
         """Test that clearing selection disables preview."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
         self.assertTrue(self.chk.isChecked())
 
-        pm.select(clear=True)
+        cmds.select(clear=True)
         self.preview.disable_on_selection_change()
 
         self.assertFalse(self.chk.isChecked())
 
     def test_same_selection_does_not_disable(self):
         """Test that re-selecting the same objects does not disable preview."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
         self.assertTrue(self.chk.isChecked())
 
         # Re-select same object
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.disable_on_selection_change()
 
         # Should still be enabled
@@ -245,12 +244,12 @@ class TestPreview(MayaTkTestCase):
 
     def test_selection_change_during_refresh_ignored(self):
         """Test that selection changes during refresh are ignored."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
 
         # Simulate being in refresh
         self.preview.is_refreshing = True
-        pm.select(self.sphere)
+        cmds.select(self.sphere)
         self.preview.disable_on_selection_change()
 
         # Should still be enabled because we were refreshing
@@ -259,24 +258,24 @@ class TestPreview(MayaTkTestCase):
 
     def test_adding_to_selection_disables_preview(self):
         """Test that adding objects to selection disables preview."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
         self.assertTrue(self.chk.isChecked())
 
         # Add sphere to selection
-        pm.select(self.sphere, add=True)
+        cmds.select(self.sphere, add=True)
         self.preview.disable_on_selection_change()
 
         self.assertFalse(self.chk.isChecked())
 
     def test_removing_from_selection_disables_preview(self):
         """Test that removing objects from selection disables preview."""
-        pm.select([self.cube, self.sphere])
+        cmds.select([self.cube, self.sphere])
         self.preview.enable()
         self.assertTrue(self.chk.isChecked())
 
         # Deselect sphere
-        pm.select(self.sphere, deselect=True)
+        cmds.select(self.sphere, deselect=True)
         self.preview.disable_on_selection_change()
 
         self.assertFalse(self.chk.isChecked())
@@ -287,7 +286,7 @@ class TestPreview(MayaTkTestCase):
 
     def test_external_undo_disables_preview(self):
         """Test that manual undo disables the preview."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
         self.preview.refresh()
 
@@ -296,14 +295,14 @@ class TestPreview(MayaTkTestCase):
             self.preview.disable_on_external_undo()
 
         # Simulate manual undo
-        pm.undo()
+        cmds.undo()
         self.preview.disable_on_external_undo()
 
         self.assertFalse(self.chk.isChecked())
 
     def test_internal_undo_does_not_disable(self):
         """Test that internal undo during refresh does not disable preview."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
 
         # Refresh triggers internal undo
@@ -314,7 +313,7 @@ class TestPreview(MayaTkTestCase):
 
     def test_expected_undo_events_consumed(self):
         """Test that expected undo events are properly counted down."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
 
         # Manually set expected events
@@ -336,7 +335,7 @@ class TestPreview(MayaTkTestCase):
 
     def test_operation_failure_clears_needs_undo(self):
         """Test that failed operations don't leave stale undo state."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
         self.assertTrue(self.preview.needs_undo)
 
@@ -348,7 +347,7 @@ class TestPreview(MayaTkTestCase):
 
     def test_no_selection_shows_message(self):
         """Test that enabling with no selection shows message and disables."""
-        pm.select(clear=True)
+        cmds.select(clear=True)
         messages = []
         self.preview.message_func = messages.append
 
@@ -359,7 +358,7 @@ class TestPreview(MayaTkTestCase):
 
     def test_operation_failure_reverts_position(self):
         """Test that failed operation leaves object at original position."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
 
         initial_y = 1.0  # After first successful operation
@@ -368,8 +367,8 @@ class TestPreview(MayaTkTestCase):
         self.preview.refresh()
 
         # Undo happened, but new op failed, so cube should be at 0
-        pos = self.cube.getTranslation(space="world")
-        self.assertAlmostEqual(pos.y, 0, places=4)
+        pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
+        self.assertAlmostEqual(pos[1], 0, places=4)
 
     # -------------------------------------------------------------------------
     # Undo Queue Integrity Tests
@@ -377,34 +376,34 @@ class TestPreview(MayaTkTestCase):
 
     def test_undo_queue_not_cleared(self):
         """Ensure preview does not clear the undo queue."""
-        pm.select(self.sphere)
-        pm.move(self.sphere, 10, 0, 0)  # Sentinel action
+        cmds.select(self.sphere)
+        cmds.move(10, 0, 0, self.sphere)  # Sentinel action
 
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
         self.preview.disable()
 
         # Undo the select
-        pm.undo()
+        cmds.undo()
         # Undo the sentinel move
-        pm.undo()
+        cmds.undo()
 
-        pos = self.sphere.getTranslation(space="world")
+        pos = cmds.xform(self.sphere, query=True, worldSpace=True, translation=True)
         self.assertAlmostEqual(
-            pos.x, 0, places=4, msg="Undo queue was cleared by Preview"
+            pos[0], 0, places=4, msg="Undo queue was cleared by Preview"
         )
 
     def test_disable_restores_undo_state(self):
         """Test that disable restores previous undo info state."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
 
         # Check initial state
-        initial_state = pm.undoInfo(q=True, state=True)
+        initial_state = cmds.undoInfo(q=True, state=True)
 
         self.preview.enable()
         self.preview.disable()
 
-        final_state = pm.undoInfo(q=True, state=True)
+        final_state = cmds.undoInfo(q=True, state=True)
         self.assertEqual(initial_state, final_state)
 
     # -------------------------------------------------------------------------
@@ -413,19 +412,19 @@ class TestPreview(MayaTkTestCase):
 
     def test_checkbox_toggled_enables_preview(self):
         """Test that toggling checkbox via signal enables preview."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
 
         # Simulate checkbox toggle (this triggers the toggled signal)
         self.chk.setChecked(True)
 
         self.assertTrue(self.chk.isChecked())
         # Operation should have been performed
-        pos = self.cube.getTranslation(space="world")
-        self.assertAlmostEqual(pos.y, 1.0, places=4)
+        pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
+        self.assertAlmostEqual(pos[1], 1.0, places=4)
 
     def test_create_button_disabled_initially(self):
         """Test create button state management."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
 
         self.preview.enable()
         self.assertTrue(self.btn.isEnabled())
@@ -435,7 +434,7 @@ class TestPreview(MayaTkTestCase):
 
     def test_create_button_finalizes(self):
         """Test that clicking create button finalizes changes."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
         self.preview.enable()
 
         # Simulate button click
@@ -443,8 +442,8 @@ class TestPreview(MayaTkTestCase):
 
         # Should be disabled and changes preserved
         self.assertFalse(self.chk.isChecked())
-        pos = self.cube.getTranslation(space="world")
-        self.assertAlmostEqual(pos.y, 1.0, places=4)
+        pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
+        self.assertAlmostEqual(pos[1], 1.0, places=4)
 
 
 @unittest.skipIf(QtWidgets is None, "Qt not available")
@@ -499,7 +498,7 @@ class TestPreviewEdgeCases(MayaTkTestCase):
 
         # Verify jobs exist
         for job_id in job_ids:
-            self.assertTrue(pm.scriptJob(exists=job_id))
+            self.assertTrue(cmds.scriptJob(exists=job_id))
 
         # Explicit cleanup
         preview.cleanup()
@@ -507,7 +506,7 @@ class TestPreviewEdgeCases(MayaTkTestCase):
         # Jobs should be cleaned up
         for job_id in job_ids:
             self.assertFalse(
-                pm.scriptJob(exists=job_id), f"ScriptJob {job_id} was not cleaned up"
+                cmds.scriptJob(exists=job_id), f"ScriptJob {job_id} was not cleaned up"
             )
 
         # script_jobs list should be empty

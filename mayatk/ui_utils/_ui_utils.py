@@ -1,11 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
+import maya.cmds as cmds
 from typing import Optional
 
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 
 
 class UiUtils:
@@ -36,15 +33,6 @@ class UiUtils:
 
             return wrapInstance(int(ptr), QtWidgets.QMainWindow)
         except ImportError:
-            pass
-
-        # Fallback to PySide2 logic if shiboken import fails but PySide2 is present
-        try:
-            import PySide2.QtWidgets
-            import PySide2.QtGui
-
-            return wrapInstance(long(ptr), PySide2.QtWidgets.QWidget)
-        except:
             return None
 
     @staticmethod
@@ -72,7 +60,7 @@ class UiUtils:
     @staticmethod
     def get_panel(*args, **kwargs):
         """Returns panel and panel configuration information.
-        A fix for the broken pymel command `getPanel`.
+        Returns Maya panel info via the cmds.getPanel command.
 
         Parameters:
             [allConfigs=boolean], [allPanels=boolean], [allScriptedTypes=boolean], [allTypes=boolean], [configWithLabel=string], [containing=string], [invisiblePanels=boolean], [scriptType=string], [type=string], [typeOf=string], [underPointer=boolean], [visiblePanels=boolean], [withFocus=boolean], [withLabel=string])
@@ -80,7 +68,7 @@ class UiUtils:
         Returns:
             (str) An array of panel names.
         """
-        from maya.cmds import getPanel  # pymel getPanel is broken in ver: 2022,23
+        from maya.cmds import getPanel
 
         result = getPanel(*args, **kwargs)
 
@@ -97,20 +85,20 @@ class UiUtils:
 
         Example:
             main_progress_bar (len(edges), progressCount)
-            pm.progressBar ("progressBar_", edit=1, step=1)
-            if pm.progressBar ("progressBar_", q=True, isCancelled=1):
+            cmds.progressBar ("progressBar_", edit=1, step=1)
+            if cmds.progressBar ("progressBar_", q=True, isCancelled=1):
                 break
-            pm.progressBar ("progressBar_", edit=1, endProgress=1)
+            cmds.progressBar ("progressBar_", edit=1, endProgress=1)
 
             to use main progressBar: name=string $gMainProgressBar
         """
         status = "processing: {} items ..".format(size)
 
         edit = False
-        if pm.progressBar(name, exists=1):
+        if cmds.progressBar(name, exists=1):
             edit = True
 
-        pm.progressBar(
+        cmds.progressBar(
             name,
             edit=edit,
             beginProgress=1,
@@ -124,14 +112,14 @@ class UiUtils:
     def list_ui_objects():
         """List all UI objects."""
         ui_objects = {
-            "windows": pm.lsUI(windows=True),
-            "panels": pm.lsUI(panels=True),
-            "editors": pm.lsUI(editors=True),
-            "menus": pm.lsUI(menus=True),
-            "menuItems": pm.lsUI(menuItems=True),
-            "controls": pm.lsUI(controls=True),
-            "controlLayouts": pm.lsUI(controlLayouts=True),
-            "contexts": pm.lsUI(contexts=True),
+            "windows": cmds.lsUI(windows=True),
+            "panels": cmds.lsUI(panels=True),
+            "editors": cmds.lsUI(editors=True),
+            "menus": cmds.lsUI(menus=True),
+            "menuItems": cmds.lsUI(menuItems=True),
+            "controls": cmds.lsUI(controls=True),
+            "controlLayouts": cmds.lsUI(controlLayouts=True),
+            "contexts": cmds.lsUI(contexts=True),
         }
         for category, objects in ui_objects.items():
             print(f"{category}:\n{objects}\n")
@@ -146,22 +134,22 @@ class UiUtils:
         slate for viewing new script or command output.
         """
         # Get a list of all UI objects of type "cmdScrollFieldReporter"
-        reporters = pm.lsUI(type="cmdScrollFieldReporter")
+        reporters = cmds.lsUI(type="cmdScrollFieldReporter")
 
         # If any reporters are found, clear them
         for reporter in reporters:
-            pm.cmdScrollFieldReporter(reporter, edit=True, clear=True)
+            cmds.cmdScrollFieldReporter(reporter, edit=True, clear=True)
 
     @staticmethod
     def reveal_in_outliner(objects):
         """Reveal and select objects in the Outliner panel."""
         if not objects:
             return
-        outliner_editor = pm.outlinerPanel(
+        outliner_editor = cmds.outlinerPanel(
             "outlinerPanel1", query=True, outlinerEditor=True
         )
-        pm.select(objects, replace=True)
-        pm.outlinerEditor(outliner_editor, edit=True, showSelected=True)
+        cmds.select(objects, replace=True)
+        cmds.outlinerEditor(outliner_editor, edit=True, showSelected=True)
 
     @staticmethod
     def dispatch_log_link(url, logger=None) -> bool:

@@ -162,7 +162,7 @@ def robust_function(objects):
     for obj in objects:
         try:
             # Validate object exists
-            if not pm.objExists(obj):
+            if not cmds.objExists(obj):
                 print(f"Warning: Object {obj} does not exist")
                 continue
             
@@ -273,7 +273,7 @@ Use pytest with Maya-specific fixtures:
 
 ```python
 import pytest
-import pymel.core as pm
+import maya.cmds as cmds
 import mayatk as mtk
 
 class TestCoreUtils:
@@ -282,11 +282,11 @@ class TestCoreUtils:
     def setup_method(self):
         """Setup before each test"""
         # Clear scene
-        pm.newFile(force=True)
+        cmds.file(force=True)
         
         # Create test objects
-        self.test_cube = pm.polyCube(name="test_cube")[0]
-        self.test_sphere = pm.polySphere(name="test_sphere")[0]
+        self.test_cube = cmds.polyCube(name="test_cube")[0]
+        self.test_sphere = cmds.polySphere(name="test_sphere")[0]
     
     def test_is_group(self):
         """Test is_group function"""
@@ -294,7 +294,7 @@ class TestCoreUtils:
         assert not mtk.is_group(self.test_cube)
         
         # Test with group
-        group = pm.group(empty=True, name="test_group")
+        group = cmds.group(empty=True, name="test_group")
         assert mtk.is_group(group)
     
     def test_get_bounding_box(self):
@@ -315,9 +315,9 @@ class TestCoreUtils:
     def test_parametrized_is_group(self, obj_type, expected):
         """Parametrized test for is_group"""
         if obj_type == "group":
-            obj = pm.group(empty=True)
+            obj = cmds.group(empty=True)
         else:
-            obj = pm.createNode(obj_type)
+            obj = cmds.createNode(obj_type)
         
         assert mtk.is_group(obj) == expected
 ```
@@ -468,7 +468,7 @@ Use Maya's Script Editor for interactive debugging:
 
 ```python
 import mayatk as mtk
-import pymel.core as pm
+import maya.cmds as cmds
 
 # Enable debug output
 import logging

@@ -18,8 +18,33 @@ import tempfile
 import logging
 from unittest.mock import patch
 import maya.cmds as cmds
-import pymel.core as pm
 
+# --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
+from contextlib import contextmanager as _contextmanager
+
+
+def _pm_open_file(*args, **kw):
+    kw.setdefault("open", True)
+    return cmds.file(*args, **kw)
+
+
+def _pm_new_file(**kw):
+    kw.setdefault("new", True)
+    return cmds.file(**kw)
+
+
+def _pm_rename_file(path):
+    return cmds.file(rename=path)
+
+
+@_contextmanager
+def _pm_undo_chunk():
+    cmds.undoInfo(openChunk=True)
+    try:
+        yield
+    finally:
+        cmds.undoInfo(closeChunk=True)
+# --- end shims ---
 from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
 from base_test import MayaTkTestCase
 
@@ -34,9 +59,9 @@ class TestSceneExporter(MayaTkTestCase):
         self.temp_dir = tempfile.mkdtemp()
 
         # Create some test geometry
-        self.cube = pm.polyCube(name="ExportCube")[0]
-        self.sphere = pm.polySphere(name="ExportSphere")[0]
-        self.group = pm.group(self.cube, self.sphere, name="ExportGroup")
+        self.cube = cmds.polyCube(name="ExportCube")[0]
+        self.sphere = cmds.polySphere(name="ExportSphere")[0]
+        self.group = cmds.group(self.cube, self.sphere, name="ExportGroup")
 
     def tearDown(self):
         """Clean up test environment."""
@@ -55,26 +80,26 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_initialize_objects_selection(self):
         """Test object initialization from selection."""
-        pm.select(self.cube)
+        cmds.select(self.cube)
         objs = self.exporter._initialize_objects(None)
         self.assertEqual(len(objs), 1)
-        self.assertIn(self.cube.longName(), objs)
+        self.assertIn(cmds.ls(str(self.cube), l=True)[0], objs)
 
     def test_initialize_objects_list(self):
         """Test object initialization from list."""
-        objs = self.exporter._initialize_objects([self.sphere.name()])
+        objs = self.exporter._initialize_objects([self.sphere])
         self.assertEqual(len(objs), 1)
-        self.assertIn(self.sphere.longName(), objs)
+        self.assertIn(cmds.ls(str(self.sphere), l=True)[0], objs)
 
     def test_initialize_objects_callable(self):
         """Test object initialization from callable."""
 
         def get_objs():
-            return [self.group.name()]
+            return [self.group]
 
         objs = self.exporter._initialize_objects(get_objs)
         self.assertEqual(len(objs), 1)
-        self.assertIn(self.group.longName(), objs)
+        self.assertIn(cmds.ls(str(self.group), l=True)[0], objs)
 
     # ------------------------------------------------------------------
     # Export path generation
@@ -88,7 +113,7 @@ class TestSceneExporter(MayaTkTestCase):
         self.exporter.timestamp = False
 
         scene_path = os.path.join(self.temp_dir, "test_scene.ma")
-        pm.renameFile(scene_path)
+        _pm_rename_file(scene_path)
 
         path = self.exporter.generate_export_path()
         self.assertTrue(path.endswith("test_scene.fbx"))
@@ -142,15 +167,15 @@ class TestSceneExporter(MayaTkTestCase):
     def test_perform_export_basic(self):
         """Test basic export execution."""
         try:
-            if not pm.pluginInfo("fbxmaya", q=True, loaded=True):
-                pm.loadPlugin("fbxmaya")
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
         except:
             print("FBX plugin not available, skipping actual export call")
             return
 
         result = self.exporter.perform_export(
             export_dir=self.temp_dir,
-            objects=[self.cube.name()],
+            objects=[self.cube],
             file_format="FBX export",
         )
         self.assertIsNotNone(result)
@@ -165,21 +190,21 @@ class TestSceneExporter(MayaTkTestCase):
             "set_linear_unit": "cm",
             "check_framerate": "30fps",
         }
-        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         success = self.exporter.task_manager.run_tasks(tasks)
         self.assertTrue(success)
 
     def test_check_failure(self):
         """Test that a failing check returns False."""
-        shader = pm.shadingNode("lambert", asShader=True)
-        file_node = pm.shadingNode("file", asTexture=True)
-        pm.connectAttr(f"{file_node}.outColor", f"{shader}.color")
-        pm.setAttr(f"{file_node}.fileTextureName", "C:/absolute/path/texture.png")
-        pm.select(self.cube)
-        pm.hyperShade(assign=shader)
+        shader = cmds.shadingNode("lambert", asShader=True)
+        file_node = cmds.shadingNode("file", asTexture=True)
+        cmds.connectAttr(f"{file_node}.outColor", f"{shader}.color")
+        cmds.setAttr(f"{file_node}.fileTextureName", "C:/absolute/path/texture.png", type="string")
+        cmds.select(self.cube)
+        cmds.hyperShade(assign=shader)
 
         tasks = {"check_absolute_paths": True}
-        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         success = self.exporter.task_manager.run_tasks(tasks)
         self.assertFalse(success)
 
@@ -194,11 +219,11 @@ class TestSceneExporter(MayaTkTestCase):
         each time re-walking all shape->shadingEngine->material connections.
         Fixed: 2026-02-22
         """
-        shader = pm.shadingNode("lambert", asShader=True)
-        pm.select(self.cube)
-        pm.hyperShade(assign=shader)
+        shader = cmds.shadingNode("lambert", asShader=True)
+        cmds.select(self.cube)
+        cmds.hyperShade(assign=shader)
 
-        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
         mats1 = self.exporter.task_manager._get_all_materials()
         self.assertGreater(len(mats1), 0)
@@ -214,15 +239,15 @@ class TestSceneExporter(MayaTkTestCase):
         material data from a previous object set isn't reused.
         Fixed: 2026-02-22
         """
-        shader = pm.shadingNode("lambert", asShader=True)
-        pm.select(self.cube)
-        pm.hyperShade(assign=shader)
+        shader = cmds.shadingNode("lambert", asShader=True)
+        cmds.select(self.cube)
+        cmds.hyperShade(assign=shader)
 
-        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         self.exporter.task_manager._get_all_materials()
         self.assertIsNotNone(self.exporter.task_manager._cached_materials)
 
-        self.exporter.task_manager.objects = [self.sphere.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.sphere), l=True)[0]]
         self.assertIsNone(
             self.exporter.task_manager._cached_materials,
             "Cache should be None after objects change",
@@ -242,7 +267,7 @@ class TestSceneExporter(MayaTkTestCase):
         self.exporter.logger.addHandler(handler)
         self.exporter.logger.setLevel(logging.INFO)
 
-        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         tasks = {"set_linear_unit": "cm"}
         self.exporter.task_manager.run_tasks(tasks)
 
@@ -309,7 +334,7 @@ class TestSceneExporter(MayaTkTestCase):
         Fixed: 2026-03-04
         """
         tm = self.exporter.task_manager
-        tm.objects = [self.cube.longName()]
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
         # Run with optimize_keys=True
         tm.run_tasks({"optimize_keys": True})
@@ -327,7 +352,7 @@ class TestSceneExporter(MayaTkTestCase):
         Fixed: 2026-03-04
         """
         tm = self.exporter.task_manager
-        tm.objects = [self.cube.longName()]
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
         # Run without optimize_keys in the dict (simulates unchecked)
         tm.run_tasks({"set_linear_unit": "cm"})
@@ -379,14 +404,14 @@ class TestSceneExporter(MayaTkTestCase):
         with open(tex_path, "w") as f:
             f.write("dummy")
 
-        shader = pm.shadingNode("lambert", asShader=True)
-        file_node = pm.shadingNode("file", asTexture=True)
-        pm.connectAttr(f"{file_node}.outColor", f"{shader}.color")
+        shader = cmds.shadingNode("lambert", asShader=True)
+        file_node = cmds.shadingNode("file", asTexture=True)
+        cmds.connectAttr(f"{file_node}.outColor", f"{shader}.color")
         cmds.setAttr(f"{file_node}.fileTextureName", tex_path, type="string")
-        pm.select(self.cube)
-        pm.hyperShade(assign=shader)
+        cmds.select(self.cube)
+        cmds.hyperShade(assign=shader)
 
-        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
         # Capture warnings
         log_output = []
@@ -410,18 +435,18 @@ class TestSceneExporter(MayaTkTestCase):
         the task should log a warning with the file node name and broken path.
         Added: 2026-03-04
         """
-        shader = pm.shadingNode("lambert", asShader=True)
-        file_node = pm.shadingNode("file", asTexture=True)
-        pm.connectAttr(f"{file_node}.outColor", f"{shader}.color")
+        shader = cmds.shadingNode("lambert", asShader=True)
+        file_node = cmds.shadingNode("file", asTexture=True)
+        cmds.connectAttr(f"{file_node}.outColor", f"{shader}.color")
         cmds.setAttr(
             f"{file_node}.fileTextureName",
             "/nonexistent/path/missing_texture.png",
             type="string",
         )
-        pm.select(self.cube)
-        pm.hyperShade(assign=shader)
+        cmds.select(self.cube)
+        cmds.hyperShade(assign=shader)
 
-        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
         log_output = []
         handler = logging.Handler()
@@ -460,7 +485,7 @@ class TestSceneExporter(MayaTkTestCase):
 
         # Save to temp dir (no workspace.mel ancestor)
         scene_path = os.path.join(self.temp_dir, "no_workspace_scene.ma")
-        pm.renameFile(scene_path)
+        _pm_rename_file(scene_path)
 
         self.exporter.task_manager.set_workspace(enable=True)
 
@@ -488,11 +513,11 @@ class TestSceneExporter(MayaTkTestCase):
         Fixed: 2026-03-04
         """
         # Set framerate to ntsc and check for ntsc
-        pm.currentUnit(time="ntsc")
+        cmds.currentUnit(time="ntsc")
         # Create a keyframe so the check doesn't skip
-        cmds.setKeyframe(self.cube.name(), attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(str(self.cube), attribute="translateX", time=1, value=0)
 
-        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         success, messages = self.exporter.task_manager.check_framerate("ntsc")
         self.assertTrue(success)
         self.assertEqual(
@@ -501,10 +526,10 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_check_framerate_fail_returns_messages(self):
         """Verify check_framerate returns (False, [...]) on mismatch."""
-        pm.currentUnit(time="ntsc")
-        cmds.setKeyframe(self.cube.name(), attribute="translateX", time=1, value=0)
+        cmds.currentUnit(time="ntsc")
+        cmds.setKeyframe(str(self.cube), attribute="translateX", time=1, value=0)
 
-        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         success, messages = self.exporter.task_manager.check_framerate("pal")
         self.assertFalse(success)
         self.assertGreater(
@@ -524,7 +549,7 @@ class TestSceneExporter(MayaTkTestCase):
         reported a failure even though geometry was correctly reassigned.
         Fixed: 2026-03-05
         """
-        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
         with patch(
             "mayatk.env_utils.scene_exporter.task_manager.MatUtils.reassign_duplicate_materials"
@@ -546,7 +571,7 @@ class TestSceneExporter(MayaTkTestCase):
         stale list, causing ValueError: No object matches name.
         Fixed: 2026-03-05
         """
-        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         # Prime the cache
         self.exporter.task_manager._get_all_materials()
         self.assertIsNotNone(self.exporter.task_manager._cached_materials)
@@ -568,7 +593,7 @@ class TestSceneExporter(MayaTkTestCase):
         cmds.listHistory crashed with ValueError.
         Fixed: 2026-03-05
         """
-        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         # Inject a fake deleted material into the cache
         real = self.exporter.task_manager._get_all_materials()
         self.exporter.task_manager._cached_materials = list(real) + [
@@ -586,7 +611,7 @@ class TestSceneExporter(MayaTkTestCase):
         flat-to-animated boundaries.
         Fixed: 2026-03-05
         """
-        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
         with patch("mayatk.anim_utils.smart_bake.SmartBake") as MockBaker:
             mock_instance = MockBaker.return_value
@@ -695,7 +720,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_hierarchy_check_no_manifest(self):
         """Check passes when no manifest exists yet."""
-        self.exporter.task_manager.objects = [self.cube.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         self.exporter.task_manager.export_path = os.path.join(self.temp_dir, "test.fbx")
         passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
         self.assertTrue(passed)
@@ -713,9 +738,9 @@ class TestSceneExporter(MayaTkTestCase):
 
         # Build manifest from actual scene hierarchy, then add an extra node
         self.exporter.task_manager.objects = [
-            self.group.longName(),
-            self.cube.longName(),
-            self.sphere.longName(),
+            cmds.ls(str(self.group), l=True)[0],
+            cmds.ls(str(self.cube), l=True)[0],
+            cmds.ls(str(self.sphere), l=True)[0],
         ]
         self.exporter.task_manager.export_path = export_path
         current = sorted(self.exporter.task_manager._build_full_hierarchy_set())
@@ -737,8 +762,8 @@ class TestSceneExporter(MayaTkTestCase):
 
         # Build manifest from actual hierarchy, then add a node that will be "missing"
         self.exporter.task_manager.objects = [
-            self.group.longName(),
-            self.cube.longName(),
+            cmds.ls(str(self.group), l=True)[0],
+            cmds.ls(str(self.cube), l=True)[0],
         ]
         self.exporter.task_manager.export_path = export_path
         current = sorted(self.exporter.task_manager._build_full_hierarchy_set())
@@ -766,9 +791,9 @@ class TestSceneExporter(MayaTkTestCase):
 
         # Build manifest from actual expanded hierarchy so check passes
         self.exporter.task_manager.objects = [
-            self.group.longName(),
-            self.cube.longName(),
-            self.sphere.longName(),
+            cmds.ls(str(self.group), l=True)[0],
+            cmds.ls(str(self.cube), l=True)[0],
+            cmds.ls(str(self.sphere), l=True)[0],
         ]
         self.exporter.task_manager.export_path = export_path
         current = sorted(self.exporter.task_manager._build_full_hierarchy_set())
@@ -822,15 +847,15 @@ class TestSceneExporter(MayaTkTestCase):
         manifest_path = os.path.join(self.temp_dir, ".test.hierarchy.json")
 
         # Write manifest from current hierarchy (before reparenting)
-        self.exporter.task_manager.objects = [self.group.longName()]
+        self.exporter.task_manager.objects = [cmds.ls(str(self.group), l=True)[0]]
         self.exporter.task_manager.export_path = export_path
         original = sorted(self.exporter.task_manager._build_full_hierarchy_set())
         with open(manifest_path, "w") as f:
             json.dump({"paths": original, "object_count": len(original)}, f)
 
         # Reparent everything under a new group
-        new_parent = pm.group(self.group, name="NewParent")
-        self.exporter.task_manager.objects = [new_parent.longName()]
+        new_parent = cmds.group(self.group, name="NewParent")
+        self.exporter.task_manager.objects = [cmds.ls(str(new_parent), l=True)[0]]
 
         passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
         self.assertFalse(
@@ -846,12 +871,12 @@ class TestSceneExporter(MayaTkTestCase):
         transforms (never assemblies), so the check always passed.
         Fixed: 2026-04-10
         """
-        cmds.setAttr(f"{self.group.longName()}.translateX", 10)
+        cmds.setAttr(f"{cmds.ls(str(self.group), l=True)[0]}.translateX", 10)
 
         # Objects are geometry — exactly what get_visible_geometry returns
         self.exporter.task_manager.objects = [
-            self.cube.longName(),
-            self.sphere.longName(),
+            cmds.ls(str(self.cube), l=True)[0],
+            cmds.ls(str(self.sphere), l=True)[0],
         ]
 
         passed, messages = self.exporter.task_manager.check_root_default_transforms()
@@ -862,8 +887,8 @@ class TestSceneExporter(MayaTkTestCase):
     def test_root_transforms_passes_for_default_group(self):
         """Root transform check passes when root group has identity transforms."""
         self.exporter.task_manager.objects = [
-            self.cube.longName(),
-            self.sphere.longName(),
+            cmds.ls(str(self.cube), l=True)[0],
+            cmds.ls(str(self.sphere), l=True)[0],
         ]
 
         passed, _ = self.exporter.task_manager.check_root_default_transforms()
@@ -875,12 +900,12 @@ class TestSceneExporter(MayaTkTestCase):
         Bug: Wrapping the entire scene in a new group was undetected.
         Fixed: 2026-04-10
         """
-        wrapper = pm.group(self.group, name="WrapperGroup")
-        cmds.setAttr(f"{wrapper.longName()}.translateY", 5)
+        wrapper = cmds.group(self.group, name="WrapperGroup")
+        cmds.setAttr(f"{cmds.ls(str(wrapper), l=True)[0]}.translateY", 5)
 
         self.exporter.task_manager.objects = [
-            self.cube.longName(),
-            self.sphere.longName(),
+            cmds.ls(str(self.cube), l=True)[0],
+            cmds.ls(str(self.sphere), l=True)[0],
         ]
 
         passed, messages = self.exporter.task_manager.check_root_default_transforms()
@@ -905,17 +930,23 @@ class TestSceneExporter(MayaTkTestCase):
             json.dump({"paths": previous, "object_count": len(previous)}, f)
 
         # Now wrap everything — long paths gain a prefix
-        wrapper = pm.group(self.group, name="WrapperGroup")
+        wrapper = cmds.group(self.group, name="WrapperGroup")
         self.exporter.task_manager.objects = [
-            self.cube.longName(),
-            self.sphere.longName(),
+            cmds.ls(str(self.cube), l=True)[0],
+            cmds.ls(str(self.sphere), l=True)[0],
         ]
         self.exporter.task_manager.export_path = export_path
 
         passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
         self.assertFalse(passed, "Wrapped hierarchy should differ from manifest")
-        self.assertTrue(any("missing" in m.lower() for m in messages))
-        self.assertTrue(any("new" in m.lower() for m in messages))
+        # The new diff summarises wrapping as "Reparenting detected"; the
+        # legacy "missing"/"new" wording only surfaces for items that
+        # *aren't* explained by reparenting.
+        joined = " ".join(m.lower() for m in messages)
+        self.assertTrue(
+            "reparenting" in joined or "missing" in joined,
+            f"Expected reparenting/missing diff, got: {messages}",
+        )
 
 
 if __name__ == "__main__":

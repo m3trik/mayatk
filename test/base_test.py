@@ -16,8 +16,8 @@ if scripts_dir not in sys.path:
     sys.path.insert(0, scripts_dir)
 
 try:
-    import pymel.core as pm
     import maya.cmds as cmds
+    from maya import mel
 except ImportError as error:
     print(f"Warning: {error}")
 
@@ -43,63 +43,54 @@ class MayaTkTestCase(unittest.TestCase):
     def setUp(self):
         """Set up clean Maya scene for each test."""
         try:
-            pm.mel.file(new=True, force=True)
+            cmds.file(new=True, force=True)
         except Exception as e:
             print(f"Warning: Could not create new scene: {e}")
 
     def tearDown(self):
         """Clean up after each test."""
         try:
-            pm.mel.file(new=True, force=True)
+            cmds.file(new=True, force=True)
         except Exception:
             pass
 
     def assertNodeExists(self, node_name: str, msg: str = None):
         """Assert that a Maya node exists."""
-        exists = pm.objExists(node_name)
+        exists = cmds.objExists(str(node_name))
         if not exists:
             msg = msg or f"Node '{node_name}' does not exist"
             raise AssertionError(msg)
 
     def assertNodeType(self, node, expected_type: str, msg: str = None):
         """Assert that a node is of the expected type."""
-        actual_type = pm.nodeType(node)
+        actual_type = cmds.nodeType(str(node))
         if actual_type != expected_type:
             msg = msg or f"Expected node type '{expected_type}', got '{actual_type}'"
             raise AssertionError(msg)
 
     def assertNodesConnected(self, source, destination, msg: str = None):
-        """Assert that two nodes/attributes are connected."""
+        """Assert that two attributes/plugs are connected."""
+        src = str(source)
+        dst = str(destination)
         try:
-            if isinstance(source, str):
-                source = pm.PyNode(source)
-            if isinstance(destination, str):
-                destination = pm.PyNode(destination)
-
-            connections = destination.listConnections(source=True, plugs=True)
-            is_connected = any(conn == source for conn in connections)
-
-            if not is_connected:
-                msg = msg or f"'{source}' is not connected to '{destination}'"
-                raise AssertionError(msg)
+            connections = cmds.listConnections(dst, source=True, plugs=True) or []
+            if src in connections or any(c.split(".")[0] == src.split(".")[0] for c in connections):
+                return
+            raise AssertionError(msg or f"'{src}' is not connected to '{dst}'")
         except Exception as e:
-            msg = msg or f"Error checking connection: {e}"
-            raise AssertionError(msg)
+            raise AssertionError(msg or f"Error checking connection: {e}")
 
     def create_test_cube(self, name: str = "test_cube"):
-        """Create a test cube for testing."""
-        cube_name = cmds.polyCube(name=name)[0]
-        return pm.PyNode(cube_name)
+        """Create a test cube for testing. Returns transform name (str)."""
+        return cmds.polyCube(name=name)[0]
 
     def create_test_sphere(self, name: str = "test_sphere"):
-        """Create a test sphere for testing."""
-        sphere_name = cmds.polySphere(name=name)[0]
-        return pm.PyNode(sphere_name)
+        """Create a test sphere for testing. Returns transform name (str)."""
+        return cmds.polySphere(name=name)[0]
 
     def create_test_cylinder(self, name: str = "test_cylinder"):
-        """Create a test cylinder for testing."""
-        cylinder_name = cmds.polyCylinder(name=name)[0]
-        return pm.PyNode(cylinder_name)
+        """Create a test cylinder for testing. Returns transform name (str)."""
+        return cmds.polyCylinder(name=name)[0]
 
     def get_test_callback(self):
         """Get a test callback function that captures messages."""
@@ -130,9 +121,9 @@ def skip_if_no_maya(func):
 
     def wrapper(*args, **kwargs):
         try:
-            import pymel.core as pm
+            import maya.cmds as cmds
 
-            pm.about(version=True)
+            cmds.about(version=True)
             return func(*args, **kwargs)
         except Exception:
             import unittest

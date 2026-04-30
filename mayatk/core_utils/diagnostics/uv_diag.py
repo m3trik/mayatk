@@ -2,17 +2,18 @@
 # coding=utf-8
 """UV diagnostics and repair helpers."""
 from __future__ import annotations
+
+try:
+    import maya.cmds as cmds
+except ImportError:
+    cmds = None
 from typing import Optional, Sequence, Union
 from dataclasses import dataclass, field
 
-try:
-    import pymel.core as pm
-except ImportError as error:  # pragma: no cover - Maya runtime specific
-    print(__file__, error)
 
 # Type aliases keep Maya stubs optional during static analysis
-PyNodeLike = Union[str, object]
-PyNodeSeq = Union[PyNodeLike, Sequence[PyNodeLike]]
+NodeLike = Union[str, object]
+NodeSeq = Union[NodeLike, Sequence[NodeLike]]
 
 
 @dataclass
@@ -32,7 +33,7 @@ class UvSetCleanupResult:
             return f"{self.shape}: ERROR - {self.error}"
         delete_str = ", ".join(self.sets_to_delete) if self.sets_to_delete else "none"
         return (
-            f"{self.shape}: {self.initial_sets} → ['{self.final_name}'] "
+            f"{self.shape}: {self.initial_sets} -> ['{self.final_name}'] "
             f"(primary: '{self.primary_set}', delete: [{delete_str}])"
         )
 
@@ -43,7 +44,7 @@ class UvDiagnostics:
     @classmethod
     def cleanup_uv_sets(
         cls,
-        objects: PyNodeSeq,
+        objects: NodeSeq,
         remove_empty: bool = True,
         keep_only_primary: bool = True,
         rename_to_map1: bool = True,
@@ -78,6 +79,7 @@ class UvDiagnostics:
         results: list[UvSetCleanupResult] = []
 
         for obj in objects:
+            obj = str(obj)
             # Get the mesh shape node
             try:
                 shape = NodeUtils.get_shape_node(obj, returned_type="obj")
@@ -91,17 +93,18 @@ class UvDiagnostics:
                 )
                 continue
 
-            if not shape or not isinstance(shape, pm.nt.Mesh):
+            if not shape:
+                continue
+            shape = str(shape)
+
+            if not cmds.attributeQuery("uvSet", node=shape, exists=True):
                 continue
 
-            if not shape.hasAttr("uvSet"):
-                continue
-
-            result = UvSetCleanupResult(shape=str(shape))
+            result = UvSetCleanupResult(shape=shape)
 
             try:
                 # Get initial state
-                all_sets = pm.polyUVSet(shape, query=True, allUVSets=True) or []
+                all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
                 result.initial_sets = list(all_sets)
 
                 # Check if all UV sets are ghosts - if so, try deleting history first
@@ -110,9 +113,9 @@ class UvDiagnostics:
                 if not real_sets and all_sets:
                     # All UV sets are ghosts - try deleting construction history
                     try:
-                        pm.delete(obj, constructionHistory=True)
+                        cmds.delete(obj, constructionHistory=True)
                         # Re-query after history deletion
-                        all_sets = pm.polyUVSet(shape, query=True, allUVSets=True) or []
+                        all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
                         real_sets = cls._get_real_uv_sets(shape)
                     except Exception:
                         pass  # History deletion failed, continue anyway
@@ -154,7 +157,7 @@ class UvDiagnostics:
                     if not cleanup_ok:
                         # Verify final state
                         final_sets = (
-                            pm.polyUVSet(shape, query=True, allUVSets=True) or []
+                            cmds.polyUVSet(shape, query=True, allUVSets=True) or []
                         )
                         result.error = f"cleanup incomplete, final sets: {final_sets}"
                 else:
@@ -185,12 +188,13 @@ class UvDiagnostics:
         Returns:
             Set of UV set names that are "real" (deletable) on this mesh.
         """
-        all_sets = pm.polyUVSet(shape, query=True, allUVSets=True) or []
+        shape = str(shape)
+        all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
         real_sets = set()
 
         for uv_set in dict.fromkeys(all_sets):  # unique
             try:
-                per_inst = pm.polyUVSet(
+                per_inst = cmds.polyUVSet(
                     shape, query=True, perInstance=True, uvSet=uv_set
                 )
                 if per_inst:  # Not None/empty = real UV set
@@ -218,6 +222,7 @@ class UvDiagnostics:
             - overlap_count: Number of overlapping UV faces (lower is better)
             - area_outside: Area of UV bounding box outside 0-1 range (lower is better)
         """
+        shape = str(shape)
         result = {
             "uv_count": 0,
             "area": 0.0,
@@ -229,14 +234,14 @@ class UvDiagnostics:
         }
 
         try:
-            pm.polyUVSet(shape, currentUVSet=True, uvSet=uv_set)
-            uv_count = pm.polyEvaluate(shape, uvcoord=True) or 0
+            cmds.polyUVSet(shape, currentUVSet=True, uvSet=uv_set)
+            uv_count = cmds.polyEvaluate(shape, uvcoord=True) or 0
             result["uv_count"] = uv_count
 
             if uv_count > 0:
                 # Get UV bounding box
                 try:
-                    bbox = pm.polyEvaluate(shape, boundingBox2d=True)
+                    bbox = cmds.polyEvaluate(shape, boundingBox2d=True)
                     if bbox and len(bbox) == 2:
                         umin, umax = bbox[0]
                         vmin, vmax = bbox[1]
@@ -273,7 +278,7 @@ class UvDiagnostics:
 
                         # Get UV area
                         try:
-                            area = pm.polyEvaluate(shape, uvArea=True) or 0.0
+                            area = cmds.polyEvaluate(shape, uvArea=True) or 0.0
                             if isinstance(area, (list, tuple)):
                                 area = area[0] if area else 0.0
                             result["area"] = float(area)
@@ -290,7 +295,7 @@ class UvDiagnostics:
 
                 # Get Overlap Count
                 try:
-                    overlaps = pm.polyUVOverlap(shape, oc=True)
+                    overlaps = cmds.polyUVOverlap(shape, oc=True)
                     if overlaps:
                         result["overlap_count"] = len(overlaps)
                 except Exception:
@@ -337,7 +342,8 @@ class UvDiagnostics:
         # Standard names used ONLY as tiebreaker for equal-quality sets
         STANDARD_NAMES = ("map1", "UVChannel_1", "UVMap", "Default", "uvSet")
 
-        all_sets = pm.polyUVSet(shape, query=True, allUVSets=True) or []
+        shape = str(shape)
+        all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
         if not all_sets:
             return None
 
@@ -422,15 +428,16 @@ class UvDiagnostics:
     @staticmethod
     def _get_empty_uv_sets(shape, primary_uv_set: str) -> list[str]:
         """Get list of empty UV sets (excluding primary)."""
-        all_sets = pm.polyUVSet(shape, query=True, allUVSets=True) or []
+        shape = str(shape)
+        all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
         empty_sets: list[str] = []
 
         for uv_set in all_sets:
             if uv_set == primary_uv_set:
                 continue
             try:
-                pm.polyUVSet(shape, currentUVSet=True, uvSet=uv_set)
-                uv_count = pm.polyEvaluate(shape, uvcoord=True) or 0
+                cmds.polyUVSet(shape, currentUVSet=True, uvSet=uv_set)
+                uv_count = cmds.polyEvaluate(shape, uvcoord=True) or 0
                 if uv_count == 0:
                     empty_sets.append(uv_set)
             except RuntimeError:
@@ -463,25 +470,26 @@ class UvDiagnostics:
         """
         import maya.mel as mel
 
-        all_sets = pm.polyUVSet(shape, query=True, allUVSets=True) or []
-        shape_name = str(shape)  # Get shape name for MEL commands
+        shape = str(shape)
+        all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+        shape_name = shape
 
         # Get the set of "real" UV sets that can actually be deleted
         real_sets = UvDiagnostics._get_real_uv_sets(shape)
 
         # Ensure primary is set as current before any operations
         if primary_uv_set in all_sets:
-            pm.polyUVSet(shape, currentUVSet=True, uvSet=primary_uv_set)
+            cmds.polyUVSet(shape, currentUVSet=True, uvSet=primary_uv_set)
 
         # CRITICAL: Reorder primary UV set to index 0 FIRST
         # Maya protects the UV set at index 0 from deletion. By moving our
         # primary to index 0, we make all other UV sets deletable.
         if all_sets and all_sets[0] != primary_uv_set and primary_uv_set in all_sets:
             try:
-                pm.polyUVSet(
+                cmds.polyUVSet(
                     shape, reorder=True, uvSet=primary_uv_set, newUVSet=all_sets[0]
                 )
-                all_sets = pm.polyUVSet(shape, query=True, allUVSets=True) or []
+                all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
                 real_sets = UvDiagnostics._get_real_uv_sets(shape)
             except RuntimeError:
                 pass  # Reorder failed, continue anyway
@@ -508,17 +516,21 @@ class UvDiagnostics:
                 seen_names.add(uv_set)
 
         # Re-query after removing duplicates
-        all_sets = pm.polyUVSet(shape, query=True, allUVSets=True) or []
+        all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
         real_sets = UvDiagnostics._get_real_uv_sets(shape)  # Re-query real sets
 
-        # Delete non-primary REAL sets - keep deleting until only primary remains
+        # Delete non-primary REAL sets - keep deleting until only primary remains.
+        # Honour the caller-supplied ``sets_to_delete`` allow-list so the
+        # ``remove_empty=True, keep_only_primary=False`` mode can preserve
+        # populated secondary sets.
         max_iterations = 50  # Safety limit (some meshes have many UV sets)
         failed_sets = set()  # Track sets that fail to delete to avoid retrying
         deleted_count = 0
         ghost_count = 0  # Track ghost sets we skip
+        delete_allow = set(sets_to_delete or [])
 
         for _ in range(max_iterations):
-            current_sets = pm.polyUVSet(shape, query=True, allUVSets=True) or []
+            current_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
 
             # De-duplicate current sets for comparison (Maya reports duplicates)
             unique_current = list(dict.fromkeys(current_sets))
@@ -536,6 +548,8 @@ class UvDiagnostics:
                         ghost_count += 1
                         failed_sets.add(uv_set)  # Mark as "handled"
                     continue
+                if uv_set not in delete_allow:
+                    continue
                 set_to_delete = uv_set
                 break
 
@@ -544,12 +558,12 @@ class UvDiagnostics:
 
             try:
                 # If set_to_delete is the current UV set, switch to primary first
-                current_uv = pm.polyUVSet(shape, query=True, currentUVSet=True)
+                current_uv = cmds.polyUVSet(shape, query=True, currentUVSet=True)
                 if current_uv == set_to_delete or (
                     isinstance(current_uv, list) and set_to_delete in current_uv
                 ):
                     if primary_uv_set in current_sets:
-                        pm.polyUVSet(shape, currentUVSet=True, uvSet=primary_uv_set)
+                        cmds.polyUVSet(shape, currentUVSet=True, uvSet=primary_uv_set)
                     else:
                         # Find any other real set to switch to
                         other_set = next(
@@ -561,17 +575,17 @@ class UvDiagnostics:
                             None,
                         )
                         if other_set:
-                            pm.polyUVSet(shape, currentUVSet=True, uvSet=other_set)
+                            cmds.polyUVSet(shape, currentUVSet=True, uvSet=other_set)
 
                 # Use MEL with shape name directly - this is the only reliable method
                 mel.eval(f'polyUVSet -delete -uvSet "{set_to_delete}" "{shape_name}";')
 
                 # Verify deletion actually happened
-                new_sets = pm.polyUVSet(shape, query=True, allUVSets=True) or []
+                new_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
                 if set_to_delete in new_sets:
                     # Deletion silently failed - mark as failed
                     if not quiet:
-                        pm.warning(
+                        cmds.warning(
                             f"{shape}: deletion of '{set_to_delete}' silently failed"
                         )
                     failed_sets.add(set_to_delete)
@@ -581,7 +595,7 @@ class UvDiagnostics:
                     real_sets = UvDiagnostics._get_real_uv_sets(shape)
             except Exception as e:
                 if not quiet:
-                    pm.warning(f"{shape}: failed to delete '{set_to_delete}': {e}")
+                    cmds.warning(f"{shape}: failed to delete '{set_to_delete}': {e}")
                 failed_sets.add(set_to_delete)
                 # Continue trying other sets instead of breaking
 
@@ -605,7 +619,7 @@ class UvDiagnostics:
                 else:
                     # Target exists and not forcing - skip rename
                     if not quiet:
-                        pm.warning(
+                        cmds.warning(
                             f"{shape}: Cannot rename to '{final_name}', set already exists."
                         )
                     return (
@@ -615,7 +629,7 @@ class UvDiagnostics:
             try:
                 # Direct rename is safer and cleaner than copy-delete.
                 # Renaming the default set (index 0) is allowed; deleting it is not.
-                pm.polyUVSet(
+                cmds.polyUVSet(
                     shape, rename=True, uvSet=primary_uv_set, newUVSet=final_name
                 )
                 current_name = final_name
@@ -623,11 +637,11 @@ class UvDiagnostics:
                 # Fallback: Copy-Reorder-Delete strategy
                 # If specific rename fails (e.g. weird history), try creating new and deleting old.
                 try:
-                    pm.polyUVSet(
+                    cmds.polyUVSet(
                         shape, copy=True, uvSet=primary_uv_set, newUVSet=final_name
                     )
                     # CRITICAL: Must reorder the NEW set to index 0 before we can delete the OLD primary (which was at index 0)
-                    pm.polyUVSet(
+                    cmds.polyUVSet(
                         shape, reorder=True, uvSet=final_name, newUVSet=primary_uv_set
                     )
                     mel.eval(
@@ -636,13 +650,13 @@ class UvDiagnostics:
                     current_name = final_name
                 except Exception as e:
                     if not quiet:
-                        pm.warning(f"{shape}: Rename failed: {e}")
+                        cmds.warning(f"{shape}: Rename failed: {e}")
                     return False
 
         # Ensure final set is current
         if current_name:
             try:
-                pm.polyUVSet(shape, currentUVSet=True, uvSet=current_name)
+                cmds.polyUVSet(shape, currentUVSet=True, uvSet=current_name)
             except:
                 pass
 

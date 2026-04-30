@@ -3,7 +3,7 @@
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError as error:  # pragma: no cover - Maya environment required
     print(__file__, error)
 
@@ -85,24 +85,24 @@ class StaggerKeys:
         from mayatk.anim_utils.segment_keys import SegmentKeys
 
         if not objects:
-            pm.warning("No objects provided.")
+            cmds.warning("No objects provided.")
             return
 
         # Auto-enable group_overlapping if merge_touching is requested
         if merge_touching:
             group_overlapping = True
 
-        objects = pm.ls(objects, type="transform", flatten=True)
+        objects = cmds.ls(objects, type="transform", flatten=True)
         # Invert logic is applied after collection and sorting to ensure consistent behavior
 
         # Get channel box attributes if requested
         channel_box_attrs = None
         if channel_box_attrs_only:
-            channel_box_attrs = pm.channelBox(
+            channel_box_attrs = cmds.channelBox(
                 "mainChannelBox", query=True, selectedMainAttributes=True
             )
             if not channel_box_attrs:
-                pm.warning(
+                cmds.warning(
                     "Channel Box Attrs Only is enabled but no attributes are selected "
                     "in the Channel Box. Select attributes or disable this option."
                 )
@@ -113,7 +113,7 @@ class StaggerKeys:
         selected_keys_only = False
         try:
             # Check if any keys are selected on the target objects
-            if pm.keyframe(objects, query=True, name=True, selected=True):
+            if cmds.keyframe(objects, query=True, name=True, selected=True):
                 selected_keys_only = True
         except Exception:
             pass
@@ -130,7 +130,7 @@ class StaggerKeys:
         )
 
         if not obj_keyframe_data:
-            pm.warning("No keyframes found on the provided objects.")
+            cmds.warning("No keyframes found on the provided objects.")
             return
 
         # Calculate bounds

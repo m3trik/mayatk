@@ -175,8 +175,8 @@ class TestClassifyConnection(MayaTkTestCase):
         self.assertEqual(result, "none")
 
     def test_keyframe_connection(self):
-        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
-        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=5)
+        cmds.setKeyframe(str(self.cube), attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(str(self.cube), attribute="translateX", time=10, value=5)
         result = AttributeManager.classify_connection(self.cube, "translateX")
         self.assertEqual(result, "keyframe")
 
@@ -369,7 +369,7 @@ class TestMuteUnmute(MayaTkTestCase):
         super().setUp()
         self.cube = cmds.polyCube(name="mut_cube")[0]
         # Mute requires an anim curve
-        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(str(self.cube), attribute="translateX", time=1, value=0)
 
     def test_mute_and_unmute(self):
         AttributeManager.mute_attrs([self.cube], ["translateX"])

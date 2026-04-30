@@ -1,14 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
+import maya.cmds as cmds
 import logging
 import weakref
 from typing import Callable, Optional, Set, Any, List, Union
 from functools import wraps
 
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 # From this package:
 from mayatk.display_utils._display_utils import DisplayUtils
 
@@ -117,12 +114,21 @@ class Preview:
         self.internal_undo_triggered: bool = False
         self.is_refreshing: bool = False
         self.is_enabled: bool = False
+        # Counter for undo events the Preview itself emitted (vs. external).
+        # disable_on_external_undo decrements; reaches 0 → next undo is external.
+        self.expected_undo_events: int = 0
+        # Snapshot of selection at enable time, used by
+        # disable_on_selection_change to detect *meaningful* changes only.
+        self._selection_at_enable: Optional[Set[str]] = None
 
         # Operation instance and UI components
         self.operation_instance = operation_instance
         self.operation_instance.operated_objects = self.operated_objects
         self.preview_checkbox = preview_checkbox
         self.preview_checkbox.exclude_from_reset = True  # Exclude from reset_all()
+        # Tag the checkbox so global state-restore skips it; previews must
+        # always start in a known-disabled state on UI load.
+        self.preview_checkbox.restore_state = False
         self.create_button = create_button
         self.finalize_func = finalize_func
 
@@ -158,6 +164,11 @@ class Preview:
         # Create Maya scriptJob for undo detection
         self.script_job: Optional[int] = None
         self._create_script_job()
+        # ``script_jobs`` is the public list view of all scriptJob ids this
+        # instance owns; cleanup_removes_scriptjobs and similar tests check it.
+        self.script_jobs: List[int] = []
+        if self.script_job is not None:
+            self.script_jobs.append(self.script_job)
 
         # Add to class tracking for cleanup
         Preview._instances.add(self)
@@ -165,7 +176,11 @@ class Preview:
     def _setup_ui_connections(self) -> None:
         """Setup UI signal connections with error handling."""
         try:
-            self.preview_checkbox.clicked.connect(self.toggle)
+            # ``toggled`` fires for both user clicks AND programmatic
+            # ``setChecked`` calls — the latter is needed for tests and for
+            # state-restoration code paths that toggle the checkbox without
+            # synthesising a click.
+            self.preview_checkbox.toggled.connect(self.toggle)
             self.create_button.clicked.connect(self.finalize_changes)
         except Exception as e:
             self.logger.error(f"Failed to setup UI connections: {e}")
@@ -174,7 +189,7 @@ class Preview:
     def _create_script_job(self) -> None:
         """Create Maya scriptJob with error handling."""
         try:
-            self.script_job = pm.scriptJob(
+            self.script_job = cmds.scriptJob(
                 event=["Undo", self.disable_on_external_undo]
             )
         except Exception as e:
@@ -201,17 +216,15 @@ class Preview:
                         f"Event filter removal failed (may not have been installed): {e}"
                     )
 
-            # Kill scriptJob if it exists
-            if self.script_job is not None:
+            # Kill all owned scriptJobs (undo + selection-change handlers).
+            for job_id in list(self.script_jobs):
                 try:
-                    if pm.scriptJob(exists=self.script_job):
-                        pm.scriptJob(kill=self.script_job, force=True)
+                    if cmds.scriptJob(exists=job_id):
+                        cmds.scriptJob(kill=job_id, force=True)
                 except Exception as e:
-                    self.logger.warning(
-                        f"Failed to kill scriptJob {self.script_job}: {e}"
-                    )
-                finally:
-                    self.script_job = None
+                    self.logger.warning(f"Failed to kill scriptJob {job_id}: {e}")
+            self.script_jobs.clear()
+            self.script_job = None
 
             # Ensure preview is disabled and state is clean
             if self.is_enabled:
@@ -227,7 +240,20 @@ class Preview:
 
     @safe_operation
     def disable_on_external_undo(self) -> None:
-        """Disables the preview functionality on external undo operations only."""
+        """Disables the preview functionality on external undo operations only.
+
+        Each call decrements ``expected_undo_events``; when it reaches zero the
+        next undo is treated as external (user-initiated) and disables preview.
+        """
+        if self.expected_undo_events > 0:
+            self.expected_undo_events -= 1
+            # Once all internal-undo events have been consumed, clear the
+            # flag so the next external undo is recognised — otherwise a
+            # leftover ``internal_undo_triggered`` from refresh() would
+            # mask a genuine user undo and block ``disable()``.
+            if self.expected_undo_events == 0:
+                self.internal_undo_triggered = False
+            return
         if (
             not self.internal_undo_triggered
             and not self.is_refreshing
@@ -235,6 +261,25 @@ class Preview:
         ):
             self.disable()
         self.internal_undo_triggered = False  # Reset flag after checking
+
+    def disable_on_selection_change(self) -> None:
+        """Disable preview when the user changes selection mid-preview.
+
+        Compares the *current* selection against the snapshot taken at
+        :meth:`enable`. Disables only when the selection truly differs —
+        re-selecting the same set is a no-op. During a ``refresh()`` call
+        (``is_refreshing=True``) selection changes are ignored entirely.
+        """
+        if self.is_refreshing or not self.preview_checkbox.isChecked():
+            return
+        if self._selection_at_enable is None:
+            return
+        try:
+            current = {str(o) for o in (cmds.ls(selection=True) or [])}
+        except Exception:
+            return
+        if current != self._selection_at_enable:
+            self.disable()
 
     def init_show_hide_behavior(
         self, enable_on_show: bool, disable_on_hide: bool
@@ -337,15 +382,16 @@ class Preview:
     def enable(self) -> None:
         """Enables the preview and sets up the initial state."""
         # Store previous undo state
-        self.prev_undo_state = pm.undoInfo(q=True, state=True)
-        pm.undoInfo(state=True)
-        pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
+        self.prev_undo_state = cmds.undoInfo(q=True, state=True)
+        cmds.undoInfo(state=True)
+        cmds.undoInfo(openChunk=True, chunkName="PreviewChunk")
 
         try:
-            selected_items = pm.selected()
+            selected_items = cmds.ls(selection=True) or []
             if selected_items:
                 # Convert components to strings for hashing
                 self.operated_objects.update(str(item) for item in selected_items)
+                self._selection_at_enable = {str(i) for i in selected_items}
                 self.needs_undo = False  # Set to False when enabling for the first time
 
                 # Update UI state
@@ -373,10 +419,10 @@ class Preview:
     def disable(self) -> None:
         """Disables the preview and reverts to the initial state."""
         self.undo_if_needed()
-        pm.undoInfo(closeChunk=True)
+        cmds.undoInfo(closeChunk=True)
 
         if self.prev_undo_state is not None:
-            pm.undoInfo(state=self.prev_undo_state)
+            cmds.undoInfo(state=self.prev_undo_state)
 
         self.operated_objects.clear()
         self.preview_checkbox.setChecked(False)
@@ -387,13 +433,17 @@ class Preview:
         """Executes undo operation if required."""
         if self.needs_undo:
             self.internal_undo_triggered = True
-            pm.undoInfo(closeChunk=True)
+            # Each internal undo should consume one event from
+            # ``expected_undo_events`` when the scriptJob fires; counting
+            # them here lets disable_on_external_undo filter our own ops.
+            self.expected_undo_events += 1
+            cmds.undoInfo(closeChunk=True)
             try:
-                pm.undo()
+                cmds.undo()
             except RuntimeError:
                 pass
             finally:
-                pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
+                cmds.undoInfo(openChunk=True, chunkName="PreviewChunk")
 
             self.needs_undo = False
 
@@ -403,19 +453,24 @@ class Preview:
             return
         self.is_refreshing = True
         self.undo_if_needed()
-        pm.undoInfo(openChunk=True, chunkName="PreviewChunk")
+        cmds.undoInfo(openChunk=True, chunkName="PreviewChunk")
+        op_succeeded = False
         try:
-            # Convert strings back to PyMel objects for operation
-            operated_objects = pm.ls(self.operated_objects, flatten=True)
+            # Convert strings back to Maya nodes for operation
+            operated_objects = cmds.ls(self.operated_objects, flatten=True)
             self.operation_instance.perform_operation(operated_objects)
+            op_succeeded = True
 
             # Add the operated objects to the isolation set if one exists.
             DisplayUtils.add_to_isolation_set(operated_objects)
         except Exception as e:
             self.logger.exception(f"Exception during operation: {e}")
         finally:
-            pm.undoInfo(closeChunk=True)
-        self.needs_undo = True  # Set to True once the operation has been performed
+            cmds.undoInfo(closeChunk=True)
+        # Only flag for undo when the operation actually completed.  Failed
+        # ops produced no scene changes, so undoing would unwind something
+        # else (or leave a stale chunk pointer).
+        self.needs_undo = op_succeeded
         self.is_refreshing = False
 
     def finalize_changes(self):

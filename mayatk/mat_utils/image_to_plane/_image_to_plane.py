@@ -12,10 +12,9 @@ from typing import Dict, List, Optional
 import pythontk as ptk
 
 try:
-    import pymel.core as pm
-    from maya import cmds
+    import maya.cmds as cmds
 except ImportError:
-    pass
+    cmds = None
 
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.mat_utils._mat_utils import MatUtils
@@ -97,7 +96,7 @@ class ImageToPlane(ptk.LoggingMixin):
                 )
 
         if group and results:
-            grp = pm.group(list(results.values()), name=group_name)
+            grp = cmds.group(list(results.values()), name=group_name)
             results["__group__"] = grp
 
         return results
@@ -118,29 +117,32 @@ class ImageToPlane(ptk.LoggingMixin):
             int: Number of objects removed.
         """
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True) or []
         if not objects:
             return 0
 
         count = 0
         for obj in list(objects):
             try:
+                obj_str = str(obj)
                 # Collect all nodes to delete, then batch-delete
                 to_delete = []
 
-                shapes = obj.getShapes() if hasattr(obj, "getShapes") else []
+                shapes = cmds.listRelatives(
+                    obj_str, shapes=True, noIntermediate=True, fullPath=True
+                ) or []
                 for shape in shapes:
-                    sgs = shape.listConnections(type="shadingEngine") or []
+                    sgs = cmds.listConnections(shape, type="shadingEngine") or []
                     for sg in sgs:
-                        if sg.name() == "initialShadingGroup":
+                        if sg.split("|")[-1].split(":")[-1] == "initialShadingGroup":
                             continue
                         # Shader connected to surfaceShader
-                        shaders = sg.surfaceShader.listConnections() or []
+                        shaders = cmds.listConnections(f"{sg}.surfaceShader") or []
                         for shader in shaders:
                             # File nodes upstream of the shader
-                            files = shader.listConnections(type="file") or []
+                            files = cmds.listConnections(shader, type="file") or []
                             for f in files:
-                                p2ds = f.listConnections(type="place2dTexture") or []
+                                p2ds = cmds.listConnections(f, type="place2dTexture") or []
                                 to_delete.extend(p2ds)
                                 to_delete.append(f)
                             to_delete.append(shader)
@@ -149,13 +151,13 @@ class ImageToPlane(ptk.LoggingMixin):
                 # Delete upstream nodes first, then the object
                 for node in to_delete:
                     try:
-                        if pm.objExists(node):
-                            pm.delete(node)
+                        if cmds.objExists(node):
+                            cmds.delete(node)
                     except Exception:
                         pass
 
-                if pm.objExists(obj):
-                    pm.delete(obj)
+                if cmds.objExists(obj_str):
+                    cmds.delete(obj_str)
                 count += 1
             except Exception:
                 cls.logger.debug("Could not fully clean %s", obj, exc_info=True)
@@ -176,7 +178,7 @@ class ImageToPlane(ptk.LoggingMixin):
         plane_width = plane_height * aspect
 
         # --- Poly plane ---
-        plane, _ = pm.polyPlane(
+        plane, _ = cmds.polyPlane(
             name=stem,
             width=plane_width,
             height=plane_height,
@@ -210,7 +212,7 @@ class ImageToPlane(ptk.LoggingMixin):
                 name=name,
                 return_type="shader",
             )
-            return pm.PyNode(shader_name)
+            return shader_name
 
     @staticmethod
     def _connect_texture(shader, file_node, mat_type):
@@ -218,17 +220,23 @@ class ImageToPlane(ptk.LoggingMixin):
         if mat_type == "stingray":
             # StingrayPBS uses TEX_color_map and requires use_color_map=1
             try:
-                file_node.outColor >> shader.TEX_color_map
-                shader.use_color_map.set(1)
+                cmds.connectAttr(
+                    f"{file_node}.outColor", f"{shader}.TEX_color_map", force=True
+                )
+                cmds.setAttr(f"{shader}.use_color_map", 1)
             except Exception:
                 try:
-                    file_node.outColor >> shader.color
+                    cmds.connectAttr(
+                        f"{file_node}.outColor", f"{shader}.color", force=True
+                    )
                 except Exception:
                     pass
         else:
             # standardSurface / lambert
-            color_attr = "baseColor" if shader.hasAttr("baseColor") else "color"
-            file_node.outColor >> shader.attr(color_attr)
+            color_attr = "baseColor" if cmds.attributeQuery("baseColor", node=shader, exists=True) else "color"
+            cmds.connectAttr(
+                f"{file_node}.outColor", f"{shader}.{color_attr}", force=True
+            )
 
     @staticmethod
     def _get_image_dimensions(image_path):
@@ -238,11 +246,11 @@ class ImageToPlane(ptk.LoggingMixin):
         """
         try:
             # Create a temporary file node to query resolution
-            tmp = pm.shadingNode("file", asTexture=True)
-            tmp.fileTextureName.set(image_path)
-            w = tmp.outSizeX.get()
-            h = tmp.outSizeY.get()
-            pm.delete(tmp)
+            tmp = cmds.shadingNode("file", asTexture=True)
+            cmds.setAttr(f"{tmp}.fileTextureName", image_path, type="string")
+            w = cmds.getAttr(f"{tmp}.outSizeX")
+            h = cmds.getAttr(f"{tmp}.outSizeY")
+            cmds.delete(tmp)
             if w and h:
                 return w, h
         except Exception:

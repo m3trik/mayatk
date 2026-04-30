@@ -6,10 +6,9 @@ Provides ``RenderOpacitySlots`` — a standalone window for creating,
 keying fades, and removing per-object opacity in Maya.
 """
 try:
-    import pymel.core as pm
     import maya.cmds as cmds
 except ImportError:
-    pass
+    cmds = None
 
 import logging
 
@@ -109,7 +108,7 @@ class RenderOpacitySlots:
         When the header checkbox is checked and the selection is non-empty,
         only the last selected object is returned.
         """
-        objects = pm.selected()
+        objects = cmds.ls(selection=True) or []
         if objects and self.ui.header.menu.chk_last_selected.isChecked():
             return objects[-1:]
         return objects
@@ -121,9 +120,9 @@ class RenderOpacitySlots:
 
         objects = self._get_selected()
         if not objects:
-            cube = pm.polyCube(name="opacity_cube")[0]
+            cube = cmds.polyCube(name="opacity_cube")[0]
             objects = [cube]
-            pm.select(objects, replace=True)
+            cmds.select(objects, replace=True)
 
         names = [o.name() for o in objects]
         label = ", ".join(names[:5])
@@ -140,7 +139,7 @@ class RenderOpacitySlots:
             self.sb.message_box(f"Error: {e}")
             return
         finally:
-            pm.select(objects, replace=True)
+            cmds.select(objects, replace=True)
 
         self.ui.footer.setText(
             f"{mode.title()} opacity → {len(results)} object(s): {label}"
@@ -223,7 +222,7 @@ class RenderOpacitySlots:
 
         auto_create = widget.option_box.menu.chk_auto_create.isChecked()
 
-        current = pm.currentTime(query=True)
+        current = cmds.currentTime(query=True)
 
         if ends_at_cursor:
             start, end = current - frames, current
@@ -286,7 +285,7 @@ class RenderOpacitySlots:
             self.sb.message_box(f"Error: {e}")
             return
         finally:
-            pm.select(objects, replace=True)
+            cmds.select(objects, replace=True)
 
         self.ui.footer.setText(
             f"Opacity removed from {len(objects)} object(s): {label}"
@@ -315,7 +314,7 @@ class RenderOpacitySlots:
             if not self.ui or not self.ui.isVisible():
                 return
 
-            selected = pm.selected()
+            selected = cmds.ls(selection=True) or []
             if not selected:
                 for item in self.ui.tb000.option_box.menu.get_items():
                     item.setEnabled(False)
@@ -327,7 +326,9 @@ class RenderOpacitySlots:
                 lambda sel=list(selected): mtk.RenderOpacity.ensure_connections(sel)
             )
 
-            has_opacity = any(obj.hasAttr("opacity") for obj in selected)
+            has_opacity = any(
+                cmds.attributeQuery("opacity", node=obj, exists=True) for obj in selected
+            )
             for item in self.ui.tb000.option_box.menu.get_items():
                 item.setEnabled(has_opacity)
         except RuntimeError:

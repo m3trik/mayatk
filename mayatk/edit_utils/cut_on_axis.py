@@ -1,10 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 # from this package:
+import maya.cmds as cmds
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.node_utils._node_utils import NodeUtils
@@ -50,7 +47,7 @@ class CutOnAxis:
                 use_object_axes=use_object_axes,
             )
 
-            pm.select(objects)
+            cmds.select(objects)
 
 
 class CutOnAxisSlots:

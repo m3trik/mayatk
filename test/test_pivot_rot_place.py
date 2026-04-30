@@ -1,25 +1,24 @@
-import pymel.core as pm
-
 try:
     from base_test import MayaTkTestCase
 except ImportError:
     from mayatk.test.base_test import MayaTkTestCase
 from mayatk.xform_utils._xform_utils import XformUtils
+import maya.cmds as cmds
 
 
 class TestPivotRotation(MayaTkTestCase):
     def test_transfer_pivot_rotation(self):
         # Setup
-        s = pm.polyCube(n="source")[0]
-        t = pm.polyCube(n="target")[0]
+        s = cmds.polyCube(n="source")[0]
+        t = cmds.polyCube(n="target")[0]
 
         # Rotate source object (which rotates pivot in world)
-        pm.rotate(s, 45, 90, 0)
+        cmds.rotate(45, 90, 0, s)
 
         # Ensure target is different
-        pm.rotate(t, 0, 0, 0)
+        cmds.rotate(0, 0, 0, t)
 
-        print("Source Rotation:", pm.xform(s, q=True, ws=True, ro=True))
+        print("Source Rotation:", cmds.xform(s, q=True, ws=True, ro=True))
 
         # Transfer Rotate Pivot Orientation
         XformUtils.transfer_pivot([s, t], rotate=True, world_space=True)
@@ -38,8 +37,8 @@ class TestPivotRotation(MayaTkTestCase):
         # We can query transform rotation. xform -ro returns transform rotation.
         # If we modified only pivot, -ro shouldn't change?
 
-        s_ro = pm.xform(s, q=True, ws=True, ro=True)
-        t_ro = pm.xform(t, q=True, ws=True, ro=True)
+        s_ro = cmds.xform(s, q=True, ws=True, ro=True)
+        t_ro = cmds.xform(t, q=True, ws=True, ro=True)
 
         print(f"Source RO: {s_ro}")
         print(f"Target RO: {t_ro}")

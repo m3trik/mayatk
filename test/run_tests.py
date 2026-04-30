@@ -148,34 +148,72 @@ class MayaTestRunner:
             print(f"[ERROR] Failed to execute code: {e}")
             return False
 
-    def discover_tests(self):
-        """Discover all available test modules."""
-        test_modules = []
-        for file in self.test_dir.glob("test_*.py"):
-            # Skip infrastructure files
-            if file.stem in [
-                "test_imports",
-                "test_lazy_loading_maya",
-                "test_module_resolver_integration",
-            ]:
-                continue
-            test_modules.append(file.stem)
-        return sorted(test_modules)
+    # Subdirectories opted out of default discovery — caller must pass
+    # ``--extended`` or ``--mocks`` to include them.
+    EXTENDED_DIR = "extended"
+    MOCKS_DIR = "mock_tests"
+    SKIP_INFRA = {
+        "test_imports",
+        "test_lazy_loading_maya",
+        "test_module_resolver_integration",
+    }
+
+    def _discover_in(self, subdir: str = ""):
+        """Return ``[test_name]`` from ``test_dir / subdir``, sans infra files."""
+        path = self.test_dir / subdir if subdir else self.test_dir
+        if not path.exists():
+            return []
+        return sorted(
+            f.stem for f in path.glob("test_*.py") if f.stem not in self.SKIP_INFRA
+        )
+
+    def discover_tests(self, include_extended: bool = False, include_mocks: bool = False):
+        """Discover available test modules.
+
+        Default: only ``mayatk/test/test_*.py`` (the main suite).
+        ``include_extended``: also pull in ``mayatk/test/extended/test_*.py``.
+        ``include_mocks``: also pull in ``mayatk/test/mock_tests/test_*.py``.
+        """
+        modules = list(self._discover_in())
+        if include_extended:
+            modules.extend(self._discover_in(self.EXTENDED_DIR))
+        if include_mocks:
+            modules.extend(self._discover_in(self.MOCKS_DIR))
+        return sorted(set(modules))
+
+    def _path_for_module(self, module_name: str) -> str:
+        """Resolve a module name to its absolute file path, checking subdirs."""
+        for subdir in ("", self.EXTENDED_DIR, self.MOCKS_DIR):
+            candidate = (self.test_dir / subdir / f"{module_name}.py")
+            if candidate.exists():
+                return str(candidate).replace("\\", "/")
+        # Fall back to the main dir even if missing — caller will surface the load error
+        return str(self.test_dir / f"{module_name}.py").replace("\\", "/")
 
     def list_tests(self):
-        """List all available test modules."""
-        modules = self.discover_tests()
+        """List all available test modules grouped by category."""
+        groups = (
+            ("MAIN", self._discover_in()),
+            ("EXTENDED (--extended)", self._discover_in(self.EXTENDED_DIR)),
+            ("MOCK-ONLY (--mocks, pytest)", self._discover_in(self.MOCKS_DIR)),
+        )
         print("\n" + "=" * 70)
         print("AVAILABLE TEST MODULES")
         print("=" * 70)
-        for i, module in enumerate(modules, 1):
-            # Show module name without test_ prefix for cleaner display
-            display_name = module.replace("test_", "")
-            print(f"  {i:2d}. {display_name:25s} ({module})")
+        i = 0
+        for label, modules in groups:
+            if not modules:
+                continue
+            print(f"\n[{label}]")
+            for module in modules:
+                i += 1
+                display_name = module.replace("test_", "")
+                print(f"  {i:3d}. {display_name:30s} ({module})")
         print("=" * 70)
-        print(f"\nTotal: {len(modules)} test modules")
+        print(f"\nTotal: {i} test modules")
         print("\nUsage: python run_tests.py <module_name> [<module_name> ...]")
         print("Example: python run_tests.py core_utils components")
+        print("Flags:   --extended  --mocks  --all")
 
     def run_quick_test(self):
         """Run a single quick validation test."""
@@ -229,7 +267,7 @@ except Exception as e:
             return True
         return False
 
-    def run_tests(self, modules=None, dry_run=False, extended=False):
+    def run_tests(self, modules=None, dry_run=False, extended=False, mocks=False):
         """
         Run tests for specified modules.
 
@@ -237,7 +275,11 @@ except Exception as e:
             modules: List of module names (with or without test_ prefix).
                     None = run all default modules.
             dry_run: If True, show what would be executed without running tests.
-            extended: If True, run extended tests (sets MAYATK_EXTENDED_TESTS=1).
+            extended: If True, run extended tests (sets MAYATK_EXTENDED_TESTS=1
+                    and pulls in ``mayatk/test/extended/test_*.py``).
+            mocks: If True, also include ``mayatk/test/mock_tests/test_*.py``
+                    (designed for pytest-conftest mocking, mostly skipped under
+                    mayapy).
         """
         # Default test modules (core functionality)
         # NOTE: test_calculator runs via regular pytest (no Maya needed)
@@ -263,6 +305,10 @@ except Exception as e:
                 m if m.startswith("test_") else f"test_{m}" for m in modules
             ]
 
+        # Resolve each module name to its on-disk path so the in-Maya runner
+        # can load tests from extended/ and mock_tests/ subdirs.
+        test_module_paths = {m: self._path_for_module(m) for m in test_modules}
+
         print("\n" + "=" * 70)
         print("MAYATK TEST RUNNER" + (" (DRY RUN)" if dry_run else ""))
         print("=" * 70)
@@ -271,6 +317,8 @@ except Exception as e:
             print(f"  • {module}")
         if extended:
             print("  • Extended tests enabled")
+        if mocks:
+            print("  • Mock-only tests enabled")
         print("=" * 70)
 
         if dry_run:
@@ -302,6 +350,10 @@ except Exception as e:
                     del os.environ['MAYATK_EXTENDED_TESTS']
             
             sys.path.insert(0, r'O:/Cloud/Code/_scripts/mayatk/test')
+            # Subdirectory tests need their own dir on sys.path so sibling
+            # imports (e.g. from base_test) resolve identically.
+            sys.path.insert(0, r'O:/Cloud/Code/_scripts/mayatk/test/extended')
+            sys.path.insert(0, r'O:/Cloud/Code/_scripts/mayatk/test/mock_tests')
             # Add all package roots to sys.path
             package_roots = [
                 r'O:/Cloud/Code/_scripts',
@@ -371,15 +423,31 @@ except Exception as e:
             total_skipped = 0
             results_summary = []
 
+            # Snapshot real Maya/pymel modules so tests that mock sys.modules
+            # don't pollute later test modules.
+            _real_module_keys = (
+                "maya", "maya.cmds", "maya.mel", "maya.OpenMaya", "maya.OpenMayaUI",
+                "maya.api", "maya.api.OpenMaya", "maya.api.OpenMayaAnim",
+                "maya.utils", "maya.app", "pymel", "pymel.core",
+            )
+            _real_modules_snapshot = {{
+                k: sys.modules[k] for k in _real_module_keys if k in sys.modules
+            }}
+
+            test_module_paths = {test_module_paths}
             for module_name in test_modules:
                 print(f"\\n{{'-'*70}}")
                 print(f"Testing: {{module_name}}")
                 print(('-'*70))
-                
+
+                module_path = test_module_paths.get(
+                    module_name,
+                    rf'O:/Cloud/Code/_scripts/mayatk/test/{{module_name}}.py',
+                )
                 try:
                     spec = importlib.util.spec_from_file_location(
                         module_name,
-                        rf'O:/Cloud/Code/_scripts/mayatk/test/{{module_name}}.py'
+                        module_path,
                     )
                     test_module = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(test_module)
@@ -395,42 +463,74 @@ except Exception as e:
                     # Run tests
                     runner = unittest.TextTestRunner(verbosity=2)
                     result = runner.run(suite)
-                    
+
+                    # Filter out @skipUnlessExtended skips — they're an
+                    # opt-in marker, not a real skip. Subtract them from
+                    # the totals so the main run reports 0 skipped.
+                    extended_skips = [
+                        (t, r) for (t, r) in result.skipped
+                        if "Extended test" in r
+                    ]
+                    real_skipped = [
+                        (t, r) for (t, r) in result.skipped
+                        if "Extended test" not in r
+                    ]
+                    real_run = result.testsRun - len(extended_skips)
+
                     # Track results
-                    total_tests += result.testsRun
+                    total_tests += real_run
                     total_failures += len(result.failures)
                     total_errors += len(result.errors)
-                    total_skipped += len(result.skipped)
+                    total_skipped += len(real_skipped)
                     
                     status = "PASS" if result.wasSuccessful() else "FAIL"
                     results_summary.append(
-                        f"{{module_name}}: {{status}} ({{result.testsRun}} tests, "
+                        f"{{module_name}}: {{status}} ({{real_run}} tests, "
                         f"{{len(result.failures)}} failures, {{len(result.errors)}} errors)"
                     )
-                    
+
                     # Write to results file
                     with open(output_file, 'a', encoding='utf-8') as f:
                         f.write(f"\\n{{module_name}}: {{status}}\\n")
-                        f.write(f"  Tests: {{result.testsRun}}, Failures: {{len(result.failures)}}, "
-                               f"Errors: {{len(result.errors)}}, Skipped: {{len(result.skipped)}}\\n")
-                        
+                        f.write(
+                            f"  Tests: {{real_run}}, "
+                            f"Failures: {{len(result.failures)}}, "
+                            f"Errors: {{len(result.errors)}}, "
+                            f"Skipped: {{len(real_skipped)}}"
+                        )
+                        if extended_skips:
+                            f.write(f", Extended-deferred: {{len(extended_skips)}}")
+                        f.write("\\n")
+
                         if result.failures:
                             for test, trace in result.failures:  # All failures
                                 f.write(f"\\n  FAILURE: {{test}}\\n")
                                 f.write(f"  {{trace}}\\n")
-                        
+
                         if result.errors:
                             for test, trace in result.errors:  # All errors
                                 f.write(f"\\n  ERROR: {{test}}\\n")
                                 f.write(f"  {{trace}}\\n")
+
+                        for test, reason in real_skipped:
+                            f.write(f"  SKIP: {{test}} | {{reason}}\\n")
                     
                 except Exception as e:
                     print(f"[ERROR] Error loading {{module_name}}: {{e}}")
                     results_summary.append(f"{{module_name}}: LOAD ERROR - {{str(e)[:50]}}")
-                    
+
                     with open(output_file, 'a', encoding='utf-8') as f:
                         f.write(f"\\n{{module_name}}: LOAD ERROR\\n")
                         f.write(f"  {{str(e)}}\\n")
+                finally:
+                    # Restore real Maya/pymel modules in case the just-loaded
+                    # test patched sys.modules with mocks.
+                    for _k, _real_mod in _real_modules_snapshot.items():
+                        sys.modules[_k] = _real_mod
+                    # Clear cached mayatk modules so the next test re-imports
+                    # against the restored real Maya modules.
+                    for _k in [k for k in list(sys.modules.keys()) if k.startswith("mayatk")]:
+                        del sys.modules[_k]
 
             # Print final summary
             print("\\n" + "="*70)
@@ -514,9 +614,10 @@ print(f"[RELOAD] Cleared {{len(mods_to_clear)}} modules before test execution")
 import __main__ as _mayatk_main
 _mayatk_main._mayatk_test_complete = False
 try:
-    import _temp_test_runner
-    import importlib
-    importlib.reload(_temp_test_runner)
+    # Drop any cached version so the import re-executes the module body once.
+    if '_temp_test_runner' in sys.modules:
+        del sys.modules['_temp_test_runner']
+    import _temp_test_runner  # runs the test suite top-level
 except Exception as e:
     print(f"Error executing test runner: {{e}}")
     import traceback
@@ -633,7 +734,15 @@ finally:
             return
 
         content = self.results_file.read_text(encoding="utf-8")
-        print("\n" + content)
+        # Use a unicode-safe write for Windows cp1252 consoles.
+        try:
+            print("\n" + content)
+        except UnicodeEncodeError:
+            import sys as _sys
+            safe = content.encode(
+                _sys.stdout.encoding or "ascii", errors="replace"
+            ).decode(_sys.stdout.encoding or "ascii")
+            print("\n" + safe)
 
     def update_readme_badge(self, passed: int, failed: int) -> bool:
         """Update the README with a test status badge.
@@ -760,6 +869,7 @@ def main():
     no_wait = "--no-wait" in args
     keep_maya = "--keep-maya" in args
     extended = "--extended" in args or "-e" in args
+    mocks = "--mocks" in args
 
     if dry_run:
         args = [arg for arg in args if arg not in ("--dry-run", "-d")]
@@ -771,6 +881,8 @@ def main():
         args = [arg for arg in args if arg != "--keep-maya"]
     if extended:
         args = [arg for arg in args if arg not in ("--extended", "-e")]
+    if mocks:
+        args = [arg for arg in args if arg != "--mocks"]
 
     if "--list" in args or "-l" in args:
         runner.list_tests()
@@ -782,17 +894,25 @@ def main():
     # Everything below may launch Maya — wrap in try/finally for cleanup
     try:
         if not args:
-            success = runner.run_tests(dry_run=dry_run, extended=extended)
+            success = runner.run_tests(
+                dry_run=dry_run, extended=extended, mocks=mocks
+            )
         elif "--quick" in args or "-q" in args:
             success = runner.run_quick_test()
             # Quick test is fire-and-forget (no results file to poll)
             return
         elif "--all" in args or "-a" in args:
-            all_modules = runner.discover_tests()
+            all_modules = runner.discover_tests(
+                include_extended=extended, include_mocks=mocks
+            )
             print(f"\nRunning ALL {len(all_modules)} test modules...")
-            success = runner.run_tests(all_modules, dry_run=dry_run, extended=extended)
+            success = runner.run_tests(
+                all_modules, dry_run=dry_run, extended=extended, mocks=mocks
+            )
         else:
-            success = runner.run_tests(args, dry_run=dry_run, extended=extended)
+            success = runner.run_tests(
+                args, dry_run=dry_run, extended=extended, mocks=mocks
+            )
 
         if not success or dry_run:
             return

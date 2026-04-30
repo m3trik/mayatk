@@ -4,13 +4,13 @@ import os
 from typing import List, Union
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
 # From this package:
-from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils._core_utils import CoreUtils, as_strings
 from mayatk.core_utils.components import Components
 from mayatk.node_utils._node_utils import NodeUtils
 
@@ -53,10 +53,12 @@ class UvUtils(ptk.HelpMixin):
         Parameters:
             objects (str/obj/list): Polygon mesh objects and/or components.
         """
-        for obj in pm.ls(objects, objectsOnly=True):
+
+        objects = as_strings(objects)
+        for obj in cmds.ls(objects, objectsOnly=True) or []:
             # filter components for only this object.
-            obj_compts = [i for i in objects if obj in pm.ls(i, objectsOnly=1)]
-            pm.polyLayoutUV(
+            obj_compts = [i for i in objects if obj in (cmds.ls(i, objectsOnly=True) or [])]
+            cmds.polyLayoutUV(
                 obj_compts,
                 flipReversed=0,
                 layout=0,
@@ -77,12 +79,14 @@ class UvUtils(ptk.HelpMixin):
             v (int): v coordinate.
             relative (bool): Move relative or absolute.
         """
+
+        objects = as_strings(objects)
         # Convert the objects to UVs
-        uvs = pm.polyListComponentConversion(objects, fromFace=True, toUV=True)
-        uvs = pm.ls(uvs, flatten=True)
+        uvs = cmds.polyListComponentConversion(objects, fromFace=True, toUV=True) or []
+        uvs = cmds.ls(uvs, flatten=True) or []
 
         # Move the UVs to the given u and v coordinates
-        pm.polyEditUV(uvs, u=u, v=v, relative=relative)
+        cmds.polyEditUV(uvs, u=u, v=v, relative=relative)
 
     @classmethod
     @CoreUtils.undoable
@@ -129,23 +133,23 @@ class UvUtils(ptk.HelpMixin):
         if per_shell:
             shell_face_sets = cls.get_uv_shell_sets(objects, returned_type="shell")
             for face_set in shell_face_sets:
-                shell_uvs = pm.polyListComponentConversion(face_set, toUV=True)
-                shell_uvs = pm.ls(shell_uvs, flatten=True)
+                shell_uvs = cmds.polyListComponentConversion(face_set, toUV=True) or []
+                shell_uvs = cmds.ls(shell_uvs, flatten=True) or []
                 if shell_uvs:
                     uv_groups.append(shell_uvs)
         else:
-            uvs = pm.polyListComponentConversion(objects, toUV=True)
-            uvs = pm.ls(uvs, flatten=True)
+            uvs = cmds.polyListComponentConversion(objects, toUV=True) or []
+            uvs = cmds.ls(uvs, flatten=True) or []
             if uvs:
                 uv_groups.append(uvs)
 
         if not uv_groups:
-            pm.warning("No UVs found to flip.")
+            cmds.warning("No UVs found to flip.")
             return
 
         for uv_list in uv_groups:
             # 1. Get all UVs and coordinates
-            coords_flat = pm.polyEditUV(uv_list, query=True)
+            coords_flat = cmds.polyEditUV(uv_list, query=True)
             if not coords_flat:
                 continue
 
@@ -180,14 +184,14 @@ class UvUtils(ptk.HelpMixin):
 
             n = len(uv_list)
             if n > 350:
-                pm.warning(
+                cmds.warning(
                     "Large UV shell detected; direct-mapping flip may take a moment."
                 )
 
             if not preserve_position:
                 # Geometric flip: actually mirrors UV coordinates around the pivot.
                 for i, (u, v) in enumerate(targets):
-                    pm.polyEditUV(uv_list[i], u=u, v=v, relative=False)
+                    cmds.polyEditUV(uv_list[i], u=u, v=v, relative=False)
                 continue
 
             # Footprint-preserving flip:
@@ -211,7 +215,7 @@ class UvUtils(ptk.HelpMixin):
                 if slot_idx is None:
                     continue
                 u, v = orig_slots[slot_idx]
-                pm.polyEditUV(uv_list[uv_idx], u=u, v=v, relative=False)
+                cmds.polyEditUV(uv_list[uv_idx], u=u, v=v, relative=False)
 
     @classmethod
     @CoreUtils.undoable
@@ -229,7 +233,7 @@ class UvUtils(ptk.HelpMixin):
         `preserve_position=True`.
         """
         try:
-            pm.warning(
+            cmds.warning(
                 "UvUtils.flip_uvs is deprecated; use UvUtils.mirror_uvs instead."
             )
         except Exception:
@@ -257,39 +261,46 @@ class UvUtils(ptk.HelpMixin):
 
         Returns:
             (list)(dict): Depending on the given returned_type arg.
-            Example: {0: [MeshFace('pShape.f[0]'), MeshFace('pShape.f[1]')],
-                      1: [MeshFace('pShape.f[2]'), MeshFace('pShape.f[3]')]}
         """
         import maya.api.OpenMaya as om
 
         if objects is None:
-            objects = pm.selected()
+            objects = cmds.ls(selection=True) or []
 
         # Expand inputs to faces
         faces = Components.get_components(objects, "faces", flatten=True)
         if not faces:
             return [] if returned_type in ("shell", "id") else {}
 
-        # Group PyNodes faces by their shape node to batch API calls
+        # Group faces by their shape node to batch API calls
+        # Use str() on node components to get cmds-compatible strings
         mesh_faces_map = {}
         for f in faces:
-            node = f.node()
-            shape = node.getShape() if isinstance(node, pm.nt.Transform) else node
-            if shape not in mesh_faces_map:
-                mesh_faces_map[shape] = []
-            mesh_faces_map[shape].append(f)
+            f_str = str(f)
+            node_str = f_str.split(".")[0]
+            # Resolve to shape node
+            if cmds.objectType(node_str, isAType="transform"):
+                shapes = cmds.listRelatives(node_str, shapes=True, fullPath=True) or []
+                shape_str = shapes[0] if shapes else None
+            else:
+                shape_str = node_str
+            if shape_str is None:
+                continue
+            if shape_str not in mesh_faces_map:
+                mesh_faces_map[shape_str] = []
+            mesh_faces_map[shape_str].append(f)
 
         shells = {}
         shell_count = 0
 
-        for shape, shape_faces in mesh_faces_map.items():
-            if not isinstance(shape, pm.nt.Mesh):
+        for shape_str, shape_faces in mesh_faces_map.items():
+            if cmds.objectType(shape_str) != "mesh":
                 continue
 
             try:
                 # Retrieve MFnMesh
                 sel = om.MSelectionList()
-                sel.add(shape.longName())
+                sel.add(shape_str)
                 dag_path = sel.getDagPath(0)
                 mfn_mesh = om.MFnMesh(dag_path)
                 current_uv_set = mfn_mesh.currentUVSetName()
@@ -301,10 +312,14 @@ class UvUtils(ptk.HelpMixin):
                 local_shells = {}
 
                 for f in shape_faces:
-                    face_idx = f.index()
+                    # Parse face index from string representation
+                    f_str = str(f)
+                    try:
+                        face_idx = int(f_str.split("[")[1].rstrip("]"))
+                    except (IndexError, ValueError):
+                        continue
                     try:
                         # Get the UV index of the first vertex of the face.
-                        # We use the first valid UV map point index found.
                         if mfn_mesh.polygonVertexCount(face_idx) > 0:
                             uv_id = mfn_mesh.getPolygonUVid(face_idx, 0, current_uv_set)
 
@@ -321,7 +336,7 @@ class UvUtils(ptk.HelpMixin):
                     shell_count += 1
 
             except Exception as e:
-                pm.warning(f"Error processing UV shells for {shape}: {e}")
+                cmds.warning(f"Error processing UV shells for {shape_str}: {e}")
                 continue
 
         if returned_type == "shell":
@@ -343,46 +358,46 @@ class UvUtils(ptk.HelpMixin):
         Returns:
             (list): UV border edges.
         """
-        uv_border_edges = []
-        for obj in pm.ls(objects):
-            # Get shape node using NodeUtils reliable method
-            try:
-                shape = NodeUtils.get_shape_node(obj, returned_type="obj")
-                if isinstance(shape, list) and len(shape) > 0:
-                    obj = shape[0]
-                elif shape:
-                    obj = shape
-            except Exception:
-                # Fallback to original method if NodeUtils fails
-                if isinstance(obj, pm.nt.Transform):
-                    obj = obj.getShape()
 
-            # If the obj is a mesh shape, get its UV borders
-            if isinstance(obj, pm.nt.Mesh):
-                # Get the connected edges to the selected UVs
-                connected_edges = pm.polyListComponentConversion(
-                    obj, fromUV=True, toEdge=True
-                )
-                connected_edges = pm.ls(connected_edges, flatten=True)
-            elif isinstance(obj, pm.general.MeshEdge):
-                # If the object is already an edge, no conversion is necessary
-                connected_edges = pm.ls(obj, flatten=True)
-            elif isinstance(obj, pm.general.MeshUV):
-                # If the object is a UV, convert it to its connected edges
-                connected_edges = pm.polyListComponentConversion(
-                    obj, fromUV=True, toEdge=True
-                )
-                connected_edges = pm.ls(connected_edges, flatten=True)
+        objects = as_strings(objects)
+        uv_border_edges = []
+        for obj in cmds.ls(objects) or []:
+            obj_str = str(obj)
+            # Resolve transform to its shape
+            if "." not in obj_str:
+                try:
+                    shapes = cmds.listRelatives(obj_str, shapes=True, fullPath=True) or []
+                    if shapes:
+                        obj_str = shapes[0]
+                except Exception:
+                    pass
+
+            # Determine component or node type and get connected edges
+            if "." not in obj_str and cmds.objectType(obj_str) == "mesh":
+                # Mesh shape — get UV border edges
+                connected_edges = cmds.polyListComponentConversion(
+                    obj_str, fromUV=True, toEdge=True
+                ) or []
+                connected_edges = cmds.ls(connected_edges, flatten=True) or []
+            elif ".e[" in obj_str:
+                # Edge component — already an edge
+                connected_edges = cmds.ls(obj_str, flatten=True) or []
+            elif ".map[" in obj_str or ".uv[" in obj_str:
+                # UV component — convert to edges
+                connected_edges = cmds.polyListComponentConversion(
+                    obj_str, fromUV=True, toEdge=True
+                ) or []
+                connected_edges = cmds.ls(connected_edges, flatten=True) or []
             else:
-                raise ValueError(f"Unsupported object type: {type(obj)}")
+                raise ValueError(f"Unsupported object type: {obj_str}")
 
             for edge in connected_edges:
-                edge_uvs = pm.ls(
-                    pm.polyListComponentConversion(edge, tuv=True), fl=True
-                )
-                edge_faces = pm.ls(
-                    pm.polyListComponentConversion(edge, tf=True), fl=True
-                )
+                edge_uvs = cmds.ls(
+                    cmds.polyListComponentConversion(edge, tuv=True) or [], fl=True
+                ) or []
+                edge_faces = cmds.ls(
+                    cmds.polyListComponentConversion(edge, tf=True) or [], fl=True
+                ) or []
                 if (
                     len(edge_uvs) > 2 or len(edge_faces) < 2
                 ):  # If an edge has more than two uvs or less than 2 faces, it's a uv border edge.
@@ -409,19 +424,19 @@ class UvUtils(ptk.HelpMixin):
         # Convert objects to faces if they are not already
         if not isinstance(objects, list):
             objects = [objects]
-        faces = pm.polyListComponentConversion(objects, toFace=True)
-        faces = pm.filterExpand(
+        faces = cmds.polyListComponentConversion(objects, toFace=True) or []
+        faces = cmds.filterExpand(
             faces, ex=True, sm=34
         )  # Now this will work, as faces are passed
 
         if not faces:
-            pm.warning("No faces found in the input objects.")
+            cmds.warning("No faces found in the input objects.")
             return 0
 
         # Calculate 3D and UV areas
         for f in faces:
-            world_face_area = pm.polyEvaluate(f, worldFaceArea=True)
-            uv_face_area = pm.polyEvaluate(f, uvFaceArea=True)
+            world_face_area = cmds.polyEvaluate(f, worldFaceArea=True)
+            uv_face_area = cmds.polyEvaluate(f, uvFaceArea=True)
             if (
                 world_face_area and uv_face_area
             ):  # Check if the area lists are not empty
@@ -430,7 +445,7 @@ class UvUtils(ptk.HelpMixin):
 
         # Avoid division by zero
         if area_3d_sum == 0 or area_uv_sum == 0:
-            pm.warning("Cannot calculate texel density with zero area.")
+            cmds.warning("Cannot calculate texel density with zero area.")
             return 0
 
         # Calculate texel density
@@ -449,17 +464,19 @@ class UvUtils(ptk.HelpMixin):
             map_size (int): Size of the map to calculate the texel density against.
         """
         # Get UV shell sets
-        shells = cls.get_uv_shell_sets(objects or pm.selected(), returned_type="shell")
+        shells = cls.get_uv_shell_sets(
+            objects or (cmds.ls(selection=True) or []), returned_type="shell"
+        )
 
         for shell_faces in shells:
             # Convert face list to UVs
-            shell_uvs = pm.polyListComponentConversion(shell_faces, toUV=True)
-            shell_uvs = pm.ls(shell_uvs, flatten=True)  # Flatten the list of UVs
+            shell_uvs = cmds.polyListComponentConversion(shell_faces, toUV=True) or []
+            shell_uvs = cmds.ls(shell_uvs, flatten=True) or []  # Flatten the list of UVs
 
             # Calculate current density and scaling factor
             current_density = cls.get_texel_density(shell_faces, map_size)
             if current_density == 0:
-                pm.warning(
+                cmds.warning(
                     f"Cannot set texel density for UV shell with zero area: {shell_faces}"
                 )
                 continue  # Skip this shell and continue with the next one
@@ -467,12 +484,12 @@ class UvUtils(ptk.HelpMixin):
             scale = density / current_density
 
             # Calculate bounding box center for UVs
-            bc = pm.polyEvaluate(shell_uvs, bc2=True)
+            bc = cmds.polyEvaluate(shell_uvs, bc2=True)
             pU = (bc[0][0] + bc[1][0]) / 2
             pV = (bc[0][1] + bc[1][1]) / 2
 
             # Scale UVs
-            pm.polyEditUV(shell_uvs, pu=pU, pv=pV, su=scale, sv=scale)
+            cmds.polyEditUV(shell_uvs, pu=pU, pv=pV, su=scale, sv=scale)
 
     @staticmethod
     @CoreUtils.undoable
@@ -485,16 +502,13 @@ class UvUtils(ptk.HelpMixin):
         topology-agnostic and can work with different mesh structures.
 
         Parameters:
-            source (Union[str, pm.nt.Transform, List[Union[str, pm.nt.Transform]]]): The source mesh(es) from
-                which to transfer UVs. Can be a string name, a PyNode object, or a list of these.
-            target (Union[str, pm.nt.Transform, List[Union[str, pm.nt.Transform]]]): The target mesh(es) to
-                which UVs will be transferred. Can be a string name, a PyNode object, or a list of these.
-            tolerance (float): The geometric similarity tolerance within which UV transfer should occur.
-                Defaults to 0.1.
+            source (Union[str, object, List]): The source mesh(es) from which to transfer UVs.
+            target (Union[str, object, List]): The target mesh(es) to which UVs will be transferred.
+            tolerance (float): The geometric similarity tolerance. Defaults to 0.1.
         """
         mapping = CoreUtils.build_mesh_similarity_mapping(source, target, tolerance)
         for source_name, target_name in mapping.items():
-            pm.transferAttributes(
+            cmds.transferAttributes(
                 source_name,
                 target_name,
                 transferPositions=False,
@@ -508,29 +522,27 @@ class UvUtils(ptk.HelpMixin):
                 flipUVs=False,
                 colorBorders=True,
             )
-            pm.delete(target_name, ch=True)  # Clean up history on target
+            cmds.delete(target_name, ch=True)  # Clean up history on target
 
     @staticmethod
-    def reorder_uv_sets(obj: "pm.nt.Transform", new_order: list[str]) -> None:
+    def reorder_uv_sets(obj: str, new_order: list[str]) -> None:
         """Reorder UV sets of the given object to match the specified new order.
         This method will raise a ValueError if the new order does not match the existing UV sets.
 
         Parameters:
-            obj (pm.nt.Transform): The object whose UV sets will be reordered.
+            obj (str): The object whose UV sets will be reordered.
             new_order (list[str]): The desired order of UV sets.
-                This should be a list of strings representing the names of the UV sets.
-                The order of the names in this list will be the new order of the UV sets.
-                The first element in the list will be set as the current UV set.
         """
-        # Get shape node using NodeUtils reliable method
+        # Get shape node
         try:
             shape = NodeUtils.get_shape_node(obj, returned_type="obj")
             if isinstance(shape, list) and len(shape) > 0:
                 shape = shape[0]
         except Exception:
-            # Fallback to original method if NodeUtils fails
-            shape = obj.getShape()
-        existing = pm.polyUVSet(shape, query=True, allUVSets=True) or []
+            shapes = cmds.listRelatives(str(obj), shapes=True, fullPath=True) or []
+            shape = shapes[0] if shapes else obj
+        shape = str(shape)
+        existing = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
 
         if set(existing) != set(new_order):
             raise ValueError("new_order must match the set of existing UV sets")
@@ -541,15 +553,13 @@ class UvUtils(ptk.HelpMixin):
 
             # Only reorder if order is incorrect
             if existing.index(current) < existing.index(insert_after):
-                pm.polyUVSet(shape, reorder=True, uvSet=current, newUVSet=insert_after)
-                existing = pm.polyUVSet(shape, query=True, allUVSets=True)
+                cmds.polyUVSet(shape, reorder=True, uvSet=current, newUVSet=insert_after)
+                existing = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
 
     @staticmethod
     @CoreUtils.undoable
     def remove_empty_uv_sets(objects, quiet: bool = False) -> None:
         """Remove empty UV sets from the given objects.
-        This method checks each UV set of the objects and deletes any that are empty.
-        It also prints a message for each deleted UV set unless quiet is set to True.
 
         Parameters:
             objects (str/obj/list): Polygon objects or components to check for empty UV sets.
@@ -558,49 +568,52 @@ class UvUtils(ptk.HelpMixin):
         objects = NodeUtils.get_transform_node(objects)
 
         for obj in objects:
-            # Get shape node using NodeUtils reliable method
+            # Get shape node
             try:
                 shape = NodeUtils.get_shape_node(obj, returned_type="obj")
                 if isinstance(shape, list) and len(shape) > 0:
                     shape = shape[0]
             except Exception:
-                # Fallback to original method if NodeUtils fails
-                shape = obj.getShape() if hasattr(obj, "getShape") else obj
-            if not isinstance(shape, pm.nt.Shape) or not shape.hasAttr("uvSet"):
+                shapes = cmds.listRelatives(str(obj), shapes=True, fullPath=True) or []
+                shape = shapes[0] if shapes else None
+            if shape is None:
+                continue
+            shape = str(shape)
+            if not cmds.attributeQuery("uvSet", node=shape, exists=True):
                 continue
 
             deleted: list[str] = []
-            all_sets = pm.polyUVSet(shape, query=True, allUVSets=True) or []
-            current = pm.polyUVSet(shape, query=True, currentUVSet=True)
+            all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+            current = cmds.polyUVSet(shape, query=True, currentUVSet=True)
 
             for uv_set in list(all_sets):
                 try:
-                    pm.polyUVSet(shape, currentUVSet=True, uvSet=uv_set)
-                    uv_count = pm.polyEvaluate(shape, uvcoord=True)
+                    cmds.polyUVSet(shape, currentUVSet=True, uvSet=uv_set)
+                    uv_count = cmds.polyEvaluate(shape, uvcoord=True)
                     if uv_count > 0:
                         continue
 
                     index = all_sets.index(uv_set)
                     if index == 0 and len(all_sets) > 1:
-                        pm.polyUVSet(
+                        cmds.polyUVSet(
                             shape, reorder=True, uvSet=all_sets[1], newUVSet=uv_set
                         )
-                        all_sets = pm.polyUVSet(shape, query=True, allUVSets=True)
+                        all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
 
                     if uv_set == current:
                         fallback = next((s for s in all_sets if s != uv_set), None)
                         if fallback:
-                            pm.polyUVSet(shape, currentUVSet=True, uvSet=fallback)
+                            cmds.polyUVSet(shape, currentUVSet=True, uvSet=fallback)
 
-                    pm.polyUVSet(shape, delete=True, uvSet=uv_set)
+                    cmds.polyUVSet(shape, delete=True, uvSet=uv_set)
                     deleted.append(uv_set)
 
                 except RuntimeError:
                     continue
 
-            remaining = pm.polyUVSet(shape, query=True, allUVSets=True) or []
+            remaining = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
             if current in remaining:
-                pm.polyUVSet(shape, currentUVSet=True, uvSet=current)
+                cmds.polyUVSet(shape, currentUVSet=True, uvSet=current)
 
             if deleted and not quiet:
                 print(

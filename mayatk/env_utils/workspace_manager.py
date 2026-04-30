@@ -1,12 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
+import maya.cmds as cmds
 import os
 from typing import Optional
 
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 import pythontk as ptk
 
 # from this package:
@@ -26,7 +23,7 @@ class WorkspaceManager(ptk.HelpMixin):
     def current_workspace(self):
         """Get the current Maya workspace with fallback handling."""
         try:
-            workspace = pm.workspace(q=True, rd=True)
+            workspace = cmds.workspace(q=True, rd=True)
             # If Maya returns "." or an invalid/relative path, use a reasonable default
             if (
                 workspace == "."

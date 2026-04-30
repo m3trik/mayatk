@@ -22,7 +22,14 @@ mock_pm = sys.modules["pymel.core"]
 
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 
+# Detect whether pymel is mocked (pytest path) or real (run_tests.py path).
+# When real, this entire suite is incompatible — skip cleanly.
+_PYMEL_IS_MOCKED = isinstance(mock_pm, MagicMock)
 
+
+@unittest.skipUnless(
+    _PYMEL_IS_MOCKED, "Mock-based test — run via pytest, not run_tests.py"
+)
 class ScriptJobManagerTestCase(unittest.TestCase):
     """Base that resets the singleton before each test."""
 

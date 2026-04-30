@@ -19,12 +19,12 @@ This document provides practical examples of using mayatk in real-world Maya sce
 
 ```python
 import mayatk as mtk
-import pymel.core as pm
+import maya.cmds as cmds
 
 # Create test objects
-cube = pm.polyCube(name="testCube")[0]
-group = pm.group(empty=True, name="testGroup")
-sphere = pm.polySphere(name="testSphere")[0]
+cube = cmds.polyCube(name="testCube")[0]
+group = cmds.group(empty=True, name="testGroup")
+sphere = cmds.polySphere(name="testSphere")[0]
 
 # Check object types
 print(f"Is cube a group? {mtk.is_group(cube)}")        # False
@@ -48,11 +48,11 @@ print(f"Combined center: {multi_bbox}")
 # Create and select some geometry
 cubes = []
 for i in range(3):
-    cube = pm.polyCube(name=f"cube_{i}")[0]
+    cube = cmds.polyCube(name=f"cube_{i}")[0]
     cube.translateX.set(i * 3)
     cubes.append(cube)
 
-pm.select(cubes)
+cmds.select(cubes)
 
 # Use selection decorator
 @mtk.selected
@@ -75,10 +75,10 @@ print_object_info([cubes[0]])
 
 ```python
 # Create a cube and prepare for modeling
-cube = pm.polyCube(name="modelingCube", subdivisions=[4, 4, 4])[0]
+cube = cmds.polyCube(name="modelingCube", subdivisions=[4, 4, 4])[0]
 
 # Select face components and convert to edges
-pm.select(f"{cube}.f[20:23]")  # Select some faces
+cmds.select(f"{cube}.f[20:23]")  # Select some faces
 
 selection = mtk.Selection()
 edges = selection.convert_selection("edges")
@@ -97,7 +97,7 @@ mtk.bevel_faces(faces, offset=0.2, segments=2)
 
 ```python
 # Create source geometry
-source = pm.polyCylinder(name="sourceGeometry")[0]
+source = cmds.polyCylinder(name="sourceGeometry")[0]
 source.translateX.set(2)
 source.rotateZ.set(15)
 
@@ -117,7 +117,7 @@ def create_detailed_mesh():
     """Create a detailed mesh using various mayatk operations"""
     
     # Start with basic geometry
-    mesh = pm.polyCube(name="detailedMesh", subdivisions=[6, 6, 6])[0]
+    mesh = cmds.polyCube(name="detailedMesh", subdivisions=[6, 6, 6])[0]
     
     # Select random faces for detail work
     face_count = mesh.numFaces()
@@ -125,7 +125,7 @@ def create_detailed_mesh():
     random_faces = random.sample(range(face_count), k=min(10, face_count//3))
     
     face_list = [f"{mesh}.f[{i}]" for i in random_faces]
-    pm.select(face_list)
+    cmds.select(face_list)
     
     # Bevel selected faces
     mtk.bevel_faces(face_list, offset=0.1, segments=1)
@@ -136,7 +136,7 @@ def create_detailed_mesh():
     
     # Apply random displacement
     for vertex in vertices[:len(vertices)//2]:  # Only half the vertices
-        pm.move(
+        cmds.move(
             random.uniform(-0.2, 0.2),
             random.uniform(-0.2, 0.2), 
             random.uniform(-0.2, 0.2),
@@ -160,18 +160,18 @@ def create_arm_rig():
     """Create a basic arm rig with FK and IK"""
     
     # Clear selection
-    pm.select(clear=True)
+    cmds.select(clear=True)
     
     # Create joint chain
     joints = []
     positions = [(0, 0, 0), (0, -3, 0), (0, -6, 0), (0, -8, 0)]
     
     for i, pos in enumerate(positions):
-        joint = pm.joint(name=f"arm_joint_{i+1}", position=pos)
+        joint = cmds.joint(name=f"arm_joint_{i+1}", position=pos)
         joints.append(joint)
     
     # Orient joints
-    pm.joint(joints[0], edit=True, orientJoint="xyz", secondaryAxisOrient="yup")
+    cmds.joint(joints[0], edit=True, orientJoint="xyz", secondaryAxisOrient="yup")
     
     # Create FK controls
     mtk.create_fk_controls(joints[:-1])  # Don't control end joint
@@ -180,7 +180,7 @@ def create_arm_rig():
     ik_handle, effector = mtk.create_ik_chain(joints[0], joints[-1])
     
     # Create IK control
-    ik_ctrl = pm.circle(name="arm_ik_ctrl", normal=(0, 1, 0))[0]
+    ik_ctrl = cmds.circle(name="arm_ik_ctrl", normal=(0, 1, 0))[0]
     ik_ctrl.translateY.set(-8)
     
     # Constrain IK handle to control
@@ -201,16 +201,16 @@ print(f"Created arm rig with {len(arm_rig['joints'])} joints")
 
 ```python
 # Create objects for constraint examples
-target = pm.spaceLocator(name="constraintTarget")
+target = cmds.spaceLocator(name="constraintTarget")
 target.translateX.set(3)
 
-constrained = pm.polyCube(name="constrainedObject")[0]
+constrained = cmds.polyCube(name="constrainedObject")[0]
 
 # Point constraint
 point_constraint = mtk.create_point_constraint(target, constrained)
 
 # Orient constraint with multiple targets
-target2 = pm.spaceLocator(name="constraintTarget2")
+target2 = cmds.spaceLocator(name="constraintTarget2")
 target2.translateZ.set(3)
 
 orient_constraint = mtk.create_orient_constraint([target, target2], constrained)
@@ -227,7 +227,7 @@ parent_constraint = mtk.create_parent_constraint(target, constrained)
 # Create animated objects
 animated_objects = []
 for i in range(3):
-    obj = pm.polyCube(name=f"animatedCube_{i}")[0]
+    obj = cmds.polyCube(name=f"animatedCube_{i}")[0]
     obj.translateX.set(i * 2)
     animated_objects.append(obj)
 
@@ -237,7 +237,7 @@ def create_bounce_animation():
     """Create a bouncing animation"""
     
     for frame in [1, 12, 24]:
-        pm.currentTime(frame)
+        cmds.currentTime(frame)
         
         for i, obj in enumerate(animated_objects):
             if frame == 1:
@@ -270,14 +270,14 @@ def setup_character_animation(character_rig):
     """Setup animation on a character rig"""
     
     # Get all controls (assuming they're named with '_ctrl' suffix)
-    controls = [node for node in pm.ls() if '_ctrl' in node.name()]
+    controls = [node for node in cmds.ls() if '_ctrl' in node.name()]
     
     # Set initial pose
-    pm.currentTime(1)
+    cmds.currentTime(1)
     mtk.set_keyframe(controls)
     
     # Create action pose
-    pm.currentTime(24)
+    cmds.currentTime(24)
     
     # Modify some controls
     for ctrl in controls:
@@ -325,20 +325,20 @@ def organize_scene():
     
     groups = []
     if cubes:
-        cube_group = pm.group(cubes, name="Cubes_GRP")
+        cube_group = cmds.group(cubes, name="Cubes_GRP")
         groups.append(cube_group)
     
     if spheres:
-        sphere_group = pm.group(spheres, name="Spheres_GRP")
+        sphere_group = cmds.group(spheres, name="Spheres_GRP")
         groups.append(sphere_group)
     
     if cylinders:
-        cylinder_group = pm.group(cylinders, name="Cylinders_GRP")
+        cylinder_group = cmds.group(cylinders, name="Cylinders_GRP")
         groups.append(cylinder_group)
     
     # Create master group
     if groups:
-        master_group = pm.group(groups, name="GEOMETRY_GRP")
+        master_group = cmds.group(groups, name="GEOMETRY_GRP")
         return master_group
 
 # Organize the scene
@@ -355,30 +355,30 @@ mtk.clean_scene(remove_unused=True, optimize=True)
 # Create two different scene hierarchies for comparison
 def create_hierarchy_a():
     """Create first hierarchy version"""
-    root = pm.group(empty=True, name="sceneA_root")
+    root = cmds.group(empty=True, name="sceneA_root")
     
-    geo_group = pm.group(empty=True, name="geometry", parent=root)
-    rig_group = pm.group(empty=True, name="rig", parent=root)
+    geo_group = cmds.group(empty=True, name="geometry", parent=root)
+    rig_group = cmds.group(empty=True, name="rig", parent=root)
     
     # Add some geometry
-    cube = pm.polyCube(name="cube_A")[0]
-    sphere = pm.polySphere(name="sphere_A")[0]
-    pm.parent([cube, sphere], geo_group)
+    cube = cmds.polyCube(name="cube_A")[0]
+    sphere = cmds.polySphere(name="sphere_A")[0]
+    cmds.parent([cube, sphere], geo_group)
     
     return root
 
 def create_hierarchy_b():
     """Create second hierarchy version"""
-    root = pm.group(empty=True, name="sceneB_root")
+    root = cmds.group(empty=True, name="sceneB_root")
     
-    geo_group = pm.group(empty=True, name="geometry", parent=root)
-    rig_group = pm.group(empty=True, name="rig", parent=root)
-    lights_group = pm.group(empty=True, name="lights", parent=root)  # New group
+    geo_group = cmds.group(empty=True, name="geometry", parent=root)
+    rig_group = cmds.group(empty=True, name="rig", parent=root)
+    lights_group = cmds.group(empty=True, name="lights", parent=root)  # New group
     
     # Add some geometry (different objects)
-    cube = pm.polyCube(name="cube_B")[0]
-    cylinder = pm.polyCylinder(name="cylinder_B")[0]  # Different object
-    pm.parent([cube, cylinder], geo_group)
+    cube = cmds.polyCube(name="cube_B")[0]
+    cylinder = cmds.polyCylinder(name="cylinder_B")[0]  # Different object
+    cmds.parent([cube, cylinder], geo_group)
     
     return root
 
@@ -404,17 +404,17 @@ def demonstrate_object_swapping():
     """Demonstrate object swapping functionality"""
     
     # Create original object with some properties
-    original = pm.polyCube(name="original_object")[0]
+    original = cmds.polyCube(name="original_object")[0]
     original.translateX.set(3)
     original.rotateY.set(45)
     
     # Create connections (material, constraints, etc.)
-    material = pm.shadingNode("lambert", asShader=True, name="test_material")
-    pm.select(original)
-    pm.hyperShade(assign=material)
+    material = cmds.shadingNode("lambert", asShader=True, name="test_material")
+    cmds.select(original)
+    cmds.hyperShade(assign=material)
     
     # Create replacement object
-    replacement = pm.polySphere(name="replacement_object")[0]
+    replacement = cmds.polySphere(name="replacement_object")[0]
     replacement.translateX.set(3)  # Match position
     replacement.rotateY.set(45)    # Match rotation
     
@@ -459,9 +459,9 @@ def complete_uv_workflow(objects):
 
 # Create test objects
 uv_objects = []
-uv_objects.append(pm.polyCube(name="uvCube")[0])
-uv_objects.append(pm.polySphere(name="uvSphere")[0])
-uv_objects.append(pm.polyCylinder(name="uvCylinder")[0])
+uv_objects.append(cmds.polyCube(name="uvCube")[0])
+uv_objects.append(cmds.polySphere(name="uvSphere")[0])
+uv_objects.append(cmds.polyCylinder(name="uvCylinder")[0])
 
 # Apply UV workflow
 complete_uv_workflow(uv_objects)
@@ -522,11 +522,11 @@ def optimized_batch_process(objects):
     """Process objects with timing and undo grouping"""
     for obj in objects:
         mtk.freeze_transforms(obj)
-        pm.delete(obj, constructionHistory=True)
+        cmds.delete(obj, constructionHistory=True)
         
         # Add custom attribute
         if not obj.hasAttr("optimized"):
-            pm.addAttr(obj, longName="optimized", attributeType="bool")
+            cmds.addAttr(obj, longName="optimized", attributeType="bool")
             obj.optimized.set(True)
 
 # Usage: select objects and run
@@ -560,13 +560,13 @@ def batch_process_with_progress(objects, operation_func):
 def cleanup_object(obj):
     """Clean up a single object"""
     mtk.freeze_transforms(obj)
-    pm.delete(obj, constructionHistory=True)
+    cmds.delete(obj, constructionHistory=True)
     
     # Reset pivot
-    pm.xform(obj, centerPivots=True)
+    cmds.xform(obj, centerPivots=True)
 
 # Usage
-test_objects = pm.ls(type="transform")[:10]  # First 10 transforms
+test_objects = cmds.ls(type="transform")[:10]  # First 10 transforms
 batch_process_with_progress(test_objects, cleanup_object)
 ```
 
@@ -577,17 +577,17 @@ def safe_modeling_operation(objects, operation_name="modeling"):
     """Safely perform modeling operations with rollback capability"""
     
     # Store initial state
-    initial_selection = pm.selected()
+    initial_selection = cmds.selected()
     
     try:
         # Begin undo chunk
-        pm.undoInfo(openChunk=True, chunkName=operation_name)
+        cmds.undoInfo(openChunk=True, chunkName=operation_name)
         
         success_count = 0
         for obj in objects:
             try:
                 # Validate object
-                if not pm.objExists(obj):
+                if not cmds.objExists(obj):
                     print(f"Warning: Object {obj} does not exist, skipping")
                     continue
                 
@@ -597,7 +597,7 @@ def safe_modeling_operation(objects, operation_name="modeling"):
                 
                 # Perform operations
                 mtk.freeze_transforms(obj)
-                pm.delete(obj, constructionHistory=True)
+                cmds.delete(obj, constructionHistory=True)
                 
                 success_count += 1
                 
@@ -611,19 +611,19 @@ def safe_modeling_operation(objects, operation_name="modeling"):
     except Exception as e:
         print(f"Critical error in {operation_name}: {e}")
         # Rollback by closing undo chunk and undoing
-        pm.undoInfo(closeChunk=True)
-        pm.undo()
+        cmds.undoInfo(closeChunk=True)
+        cmds.undo()
         raise
         
     finally:
         # Always close undo chunk
-        pm.undoInfo(closeChunk=True)
+        cmds.undoInfo(closeChunk=True)
         
         # Restore selection
-        pm.select(initial_selection, replace=True)
+        cmds.select(initial_selection, replace=True)
 
 # Usage
-safe_objects = [obj for obj in pm.ls(type="transform") if obj.getShape()]
+safe_objects = [obj for obj in cmds.ls(type="transform") if obj.getShape()]
 safe_modeling_operation(safe_objects[:5], "cleanup_geometry")
 ```
 
@@ -650,7 +650,7 @@ class SceneAudit:
         }
         
         # Analyze geometry
-        meshes = pm.ls(type="mesh", transforms=True)
+        meshes = cmds.ls(type="mesh", transforms=True)
         report['objects']['meshes'] = len(meshes)
         
         # Get geometry statistics
@@ -678,15 +678,15 @@ class SceneAudit:
         report['geometry_stats']['total_faces'] = total_faces
         
         # Analyze materials
-        materials = pm.ls(materials=True)
+        materials = cmds.ls(materials=True)
         report['materials']['count'] = len(materials)
         
         # Analyze lights
-        lights = pm.ls(type="light", transforms=True)
+        lights = cmds.ls(type="light", transforms=True)
         report['lights']['count'] = len(lights)
         
         # Analyze cameras
-        cameras = pm.ls(type="camera", transforms=True)
+        cameras = cmds.ls(type="camera", transforms=True)
         report['cameras']['count'] = len(cameras)
         
         return report
@@ -774,7 +774,7 @@ class AutoRigger:
         # Bind skin
         if character_mesh:
             all_joints = spine_joints + arm_l_joints + arm_r_joints + leg_l_joints + leg_r_joints
-            pm.skinCluster(all_joints, character_mesh, name=f"{character_mesh}_skinCluster")
+            cmds.skinCluster(all_joints, character_mesh, name=f"{character_mesh}_skinCluster")
         
         return {
             'spine': spine_joints,
@@ -786,16 +786,16 @@ class AutoRigger:
     
     def create_joint_chain(self, name_prefix, positions):
         """Create a joint chain at specified positions"""
-        pm.select(clear=True)
+        cmds.select(clear=True)
         joints = []
         
         for i, pos in enumerate(positions):
-            joint = pm.joint(name=f"{name_prefix}_{i+1}", position=pos)
+            joint = cmds.joint(name=f"{name_prefix}_{i+1}", position=pos)
             joints.append(joint)
         
         # Orient joints
         if len(joints) > 1:
-            pm.joint(joints[0], edit=True, orientJoint="xyz", secondaryAxisOrient="yup")
+            cmds.joint(joints[0], edit=True, orientJoint="xyz", secondaryAxisOrient="yup")
         
         self.joints.extend(joints)
         return joints
@@ -812,8 +812,8 @@ class AutoRigger:
             mirrored_pos = (-pos[0], pos[1], pos[2])
             
             # Create mirrored joint
-            pm.select(clear=True)
-            mirrored_joint = pm.joint(
+            cmds.select(clear=True)
+            mirrored_joint = cmds.joint(
                 name=joint.name().replace("_L", "_R").replace("arm", new_prefix.split("_")[0]),
                 position=mirrored_pos
             )
@@ -825,7 +825,7 @@ class AutoRigger:
         """Create controls for joints"""
         for joint in joints:
             # Create control curve
-            ctrl = pm.circle(name=f"{joint.name()}_ctrl", normal=(0, 1, 0))[0]
+            ctrl = cmds.circle(name=f"{joint.name()}_ctrl", normal=(0, 1, 0))[0]
             
             # Match joint position
             joint_pos = joint.getTranslation(space="world")
@@ -841,7 +841,7 @@ class AutoRigger:
 auto_rigger = AutoRigger()
 
 # Select a character mesh first
-character = pm.selected()[0] if pm.selected() else None
+character = cmds.selected()[0] if cmds.selected() else None
 if character:
     rig_data = auto_rigger.create_simple_biped_rig(character)
     print(f"Created rig with {len(auto_rigger.joints)} joints and {len(auto_rigger.controls)} controls")

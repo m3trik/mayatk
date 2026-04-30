@@ -47,6 +47,13 @@ except ImportError as e:
     raise
 
 
+# Skip when pymel is real (run_tests.py path) — this whole suite is mock-based.
+_PYMEL_IS_MOCKED = isinstance(mock_pm, MagicMock)
+
+
+@unittest.skipUnless(
+    _PYMEL_IS_MOCKED, "Mock-based test — run via pytest, not run_tests.py"
+)
 class TestTelescopeRig(unittest.TestCase):
     def setUp(self):
         # Reload to ensure mocks are fresh if needed, but for now simple cleanup
@@ -148,6 +155,9 @@ class TestTelescopeRig(unittest.TestCase):
             )
 
 
+@unittest.skipUnless(
+    _PYMEL_IS_MOCKED, "Mock-based test — run via pytest, not run_tests.py"
+)
 class TestTelescopeRigSlots(unittest.TestCase):
     def setUp(self):
         mock_pm.reset_mock()

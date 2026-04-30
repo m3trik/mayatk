@@ -1,17 +1,18 @@
 # !/usr/bin/python
 # coding=utf-8
+try:
+    import maya.cmds as cmds
+except ImportError:
+    cmds = None
+
 from typing import List, Union, Optional, Dict
 import re
 import string
 
-try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils._core_utils import CoreUtils, as_strings
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 
@@ -24,7 +25,7 @@ class Naming(ptk.HelpMixin):
     def rename(
         cls,
         objects: Union[
-            str, "pm.nodetypes.Transform", List[Union[str, "pm.nodetypes.Transform"]]
+            str, "object", List[Union[str, "object"]]
         ],
         to: str,
         fltr: str = "",
@@ -32,7 +33,7 @@ class Naming(ptk.HelpMixin):
         ignore_case: bool = False,
         retain_suffix: bool = False,
         valid_suffixes: Optional[List[str]] = None,
-    ) -> None:
+    ) -> List[str]:
         """Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's naming conventions.
 
         Parameters:
@@ -58,7 +59,8 @@ class Naming(ptk.HelpMixin):
                 If None, any suffix (text after last underscore) will be retained. Default is None.
 
         Returns:
-            None: Objects are renamed in the scene directly.
+            list[str]: The new names of the renamed objects (parallel to ``objects``).
+                Returns the original name for any object that could not be renamed.
 
         Example:
             rename(['pCube1'], '*001', '*Cube*') # Matches objects containing 'Cube', replaces suffix: 'pCube1' becomes 'pCube001'.
@@ -66,14 +68,15 @@ class Naming(ptk.HelpMixin):
             rename(['polyCube'], 'newName', 'Cube') # Exact match required: 'polyCube' won't match, 'Cube' would match.
             rename(['pCube1'], '*GEO', retain_suffix=True) # Appends the original suffix (e.g. _GEO) to the new name.
         """
-        objects = pm.ls(objects, flatten=True)
 
-        # Create a mapping of short names to a LIST of their PyMEL objects
+        objects = cmds.ls(as_strings(objects), flatten=True)
+
+        # Create a mapping of short names to a LIST of their objects
         # This prevents issues when renaming changes hierarchy paths and handles duplicates
         short_name_to_objs = {}
         short_names = []
         for obj in objects:
-            long_name = obj.name()
+            long_name = obj.split('|')[-1].split(':')[-1]
             _, short_name = ptk.split_delimited_string(long_name, occurrence=-1)
             short_name = short_name if short_name else long_name
 
@@ -123,9 +126,10 @@ class Naming(ptk.HelpMixin):
                 print(
                     f"// Try using wildcard patterns like '*{fltr}*' for partial matches"
                 )
-                return
+                return list(objects)
 
         count = 0
+        rename_map = {}  # original obj path -> final new name
         for oldName, newName in names:
             # Optionally retain suffix from oldName
             if retain_suffix:
@@ -160,23 +164,25 @@ class Naming(ptk.HelpMixin):
             # Strip illegal characters from newName
             newName = cls.strip_illegal_chars(newName)
 
-            # Map short name to the PyMEL object for renaming
+            # Map short name to the object for renaming
             # Using the object reference instead of cached paths prevents issues
             # when earlier renames in the batch change the hierarchy
             if oldName in short_name_to_objs and short_name_to_objs[oldName]:
                 obj = short_name_to_objs[oldName].pop(0)
                 try:
-                    n = pm.rename(obj, newName)  # Rename using the object reference
+                    n = cmds.rename(obj, newName)  # Rename using the object reference
                     if not n == newName:
-                        pm.warning(
+                        cmds.warning(
                             f"'{oldName}' renamed to: '{n}' instead of '{newName}'"
                         )
                     else:
                         print(f"'{oldName}' renamed to: '{newName}'")
+                    rename_map[obj] = n
                     count += 1
                 except Exception as e:
-                    if not pm.ls(obj, readOnly=True) == []:  # Ignore read-only errors
+                    if not cmds.ls(obj, readOnly=True) == []:  # Ignore read-only errors
                         print(f"// Error: renaming '{oldName}' to '{newName}': {e}")
+                    rename_map[obj] = obj
             else:
                 print(
                     f"// Warning: '{oldName}' not found in the original short names list."
@@ -184,6 +190,8 @@ class Naming(ptk.HelpMixin):
                 continue  # Skip renaming if the object was not in the original list
 
         print(f"// Result: Renamed {count} objects.")
+        # Return new names parallel to the original ``objects`` list (string-only).
+        return [rename_map.get(obj, obj) for obj in objects]
 
     @classmethod
     def generate_unique_name(cls, base_name, suffix="_", padding=3):
@@ -201,7 +209,7 @@ class Naming(ptk.HelpMixin):
             generate_unique_name("Cube") # Returns "Cube_001"
             generate_unique_name("Cube", suffix="-", padding=2) # Returns "Cube-01"
         """
-        if not pm.objExists(base_name):
+        if not cmds.objExists(base_name):
             return base_name
 
         counter = 1
@@ -209,10 +217,10 @@ class Naming(ptk.HelpMixin):
             new_name = f"{base_name}{suffix}{str(counter).zfill(padding)}"
             new_name_clean = cls.strip_illegal_chars(new_name)
             if new_name != new_name_clean:
-                pm.warning(
+                cmds.warning(
                     f"// Warning: Illegal characters found in generated name: {new_name}, replacing with: {new_name_clean}"
                 )
-            if not pm.objExists(new_name_clean):
+            if not cmds.objExists(new_name_clean):
                 return new_name_clean
             counter += 1
 
@@ -252,19 +260,19 @@ class Naming(ptk.HelpMixin):
         ensuring legality in Maya names.
 
         Parameters:
-            objects (Union[str, pm.PyNode, List[Union[str, pm.PyNode]]]): Input objects.
+            objects (Union[str, List[str]]): Input objects.
             num_chars (int): Number of characters to delete.
             trailing (bool): If True, delete from end, else from start.
 
         Returns:
             List[str]: New names assigned.
         """
-        objects = pm.ls(objects, flatten=True)
+        objects = cmds.ls(objects, flatten=True)
         name_pairs = []
         for obj in objects:
-            s = obj.shortName().split("|")[-1]
+            s = obj.split('|')[-1].split('|')[-1]
             if num_chars > len(s):
-                pm.warning(
+                cmds.warning(
                     f'Cannot remove {num_chars} characters from "{s}" as it is shorter than {num_chars} characters.'
                 )
                 continue
@@ -280,7 +288,7 @@ class Naming(ptk.HelpMixin):
 
             # Ensure name is not empty and legal
             if not new_name or not (new_name[0].isalpha() or new_name[0] == "_"):
-                pm.warning(
+                cmds.warning(
                     f'Name "{new_name}" is not a legal Maya identifier, skipping.'
                 )
                 continue
@@ -289,7 +297,7 @@ class Naming(ptk.HelpMixin):
 
         for obj, new_name in name_pairs:
             try:
-                pm.rename(obj, new_name)
+                cmds.rename(obj, new_name)
             except Exception as e:
                 print(f"// Error: Unable to rename {obj}: {e}")
                 continue
@@ -305,16 +313,16 @@ class Naming(ptk.HelpMixin):
             case (str): Desired case using python case operators.
                     valid: 'upper', 'lower', 'caplitalize', 'swapcase' 'title'. default:'caplitalize'
         Example:
-            set_case(pm.ls(sl=1), 'upper')
+            set_case(cmds.ls(sl=1), 'upper')
         """
-        for obj in pm.ls(objects):
-            name = obj.name()
+        for obj in cmds.ls(objects):
+            name = obj.split('|')[-1].split(':')[-1]
 
             newName = getattr(name, case)()
             try:
-                pm.rename(name, newName)
+                cmds.rename(name, newName)
             except Exception as error:
-                if not pm.ls(obj, readOnly=True) == []:  # Ignore read-only errors.
+                if not cmds.ls(obj, readOnly=True) == []:  # Ignore read-only errors.
                     print(name + ": ", error)
 
     @staticmethod
@@ -377,11 +385,11 @@ class Naming(ptk.HelpMixin):
         if strip:
             all_suffixes.update(ptk.make_iterable(strip))
 
-        objects = pm.ls(objects, flatten=True)
+        objects = cmds.ls(objects, flatten=True)
         name_pairs = []
 
         for obj in objects:
-            short_name = obj.shortName().split("|")[-1]
+            short_name = obj.split('|')[-1].split('|')[-1]
             # Use NodeUtils for object type resolution
             typ = NodeUtils.get_type(obj)
             target_suffix = default_map.get(typ, "")
@@ -429,7 +437,7 @@ class Naming(ptk.HelpMixin):
 
         for obj, new_name in name_pairs:
             try:
-                pm.rename(obj, new_name)
+                cmds.rename(obj, new_name)
             except Exception as e:
                 print(f"// Error: Unable to rename {obj}: {e}")
                 continue
@@ -460,14 +468,15 @@ class Naming(ptk.HelpMixin):
             reverse (bool): Reverse the naming order. (Farthest object first)
             independent_groups (bool): When True, objects matching the same base name (after stripping) are grouped and suffixed independently.
         """
-        objects = pm.ls(objects, flatten=True)
+
+        objects = cmds.ls(as_strings(objects), flatten=True)
         if not objects:
             return
 
         # Determine the reference point
         reference_point = [0, 0, 0]
         if first_obj_as_ref and objects:
-            first_obj_bbox = pm.exactWorldBoundingBox(objects[0])
+            first_obj_bbox = cmds.exactWorldBoundingBox(objects[0])
             reference_point = [
                 (first_obj_bbox[i] + first_obj_bbox[i + 3]) / 2 for i in range(3)
             ]
@@ -518,7 +527,7 @@ class Naming(ptk.HelpMixin):
             for obj in objects:
                 # Use nodeName() to ignore namespace/path for grouping purposes
                 # This ensures similar objects in different hierarchies are grouped together
-                short_name = obj.nodeName()
+                short_name = obj.split('|')[-1]
                 base_name = get_base_name(short_name)
 
                 if base_name not in groups:
@@ -582,17 +591,26 @@ class Naming(ptk.HelpMixin):
                 ]  # 1-based index
 
             for n, obj in enumerate(ordered_objs):
-                base_name = get_base_name(obj.name())
+                base_name = get_base_name(obj.split('|')[-1].split(':')[-1])
                 obj_suffix = suffix_list[n]
                 newNames[obj] = base_name + "_" + obj_suffix
 
             all_ordered_objs = ordered_objs
 
         # Rename all with a placeholder first so that there are no conflicts.
+        # ``order_by_distance`` may return nodes from un-migrated callers;
+        # ``cmds.rename`` does not accept those, so str-coerce here.
+        # The legacy wrapper re-bound the node after rename automatically; bare strings
+        # don't, so we capture each placeholder and pair it with the
+        # intended final name.
+        placeholders = []
         for obj in all_ordered_objs:
-            pm.rename(obj, "p0000000000")
-        for obj in all_ordered_objs:  # Rename all with the new names.
-            pm.rename(obj, newNames[obj])
+            placeholder_name = cmds.rename(str(obj), "p0000000000")
+            placeholders.append((placeholder_name, newNames[obj]))
+        final_names = []
+        for placeholder_name, new_name in placeholders:
+            final_names.append(cmds.rename(placeholder_name, new_name))
+        return final_names
 
 
 # -----------------------------------------------------------------------------

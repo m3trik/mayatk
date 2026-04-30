@@ -114,28 +114,27 @@ class TestCalculator(unittest.TestCase):
         self.calc.on_convert_units()
         self.mock_ui.txt_display.setText.assert_called_with("1.0")
 
-    @patch("mayatk.ui_utils.calculator.pm")
-    def test_maya_fps(self, mock_pm):
+    @patch("mayatk.ui_utils.calculator.mel")
+    def test_maya_fps(self, mock_mel):
         """Test getting FPS from Maya."""
-        # Mock pm.mel.currentTimeUnitToFPS
-        mock_pm.mel.currentTimeUnitToFPS.return_value = 24.0
+        mock_mel.eval.return_value = 24.0
 
         self.calc.get_fps()
         self.mock_ui.txt_display.setText.assert_called_with("24.0")
 
-    @patch("mayatk.ui_utils.calculator.pm")
-    def test_frames_to_sec(self, mock_pm):
+    @patch("mayatk.ui_utils.calculator.mel")
+    def test_frames_to_sec(self, mock_mel):
         """Test frames to seconds conversion."""
-        mock_pm.mel.currentTimeUnitToFPS.return_value = 24.0
+        mock_mel.eval.return_value = 24.0
         self.mock_ui.txt_display.text.return_value = "48"
 
         self.calc.frames_to_sec()
         self.mock_ui.txt_display.setText.assert_called_with("2.0")
 
-    @patch("mayatk.ui_utils.calculator.pm")
-    def test_sec_to_frames(self, mock_pm):
+    @patch("mayatk.ui_utils.calculator.mel")
+    def test_sec_to_frames(self, mock_mel):
         """Test seconds to frames conversion."""
-        mock_pm.mel.currentTimeUnitToFPS.return_value = 24.0
+        mock_mel.eval.return_value = 24.0
         self.mock_ui.txt_display.text.return_value = "2"
 
         self.calc.sec_to_frames()

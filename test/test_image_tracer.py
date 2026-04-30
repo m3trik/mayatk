@@ -1,7 +1,35 @@
 import unittest
 import os
 import sys
+import maya.cmds as cmds
 
+
+# --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
+from contextlib import contextmanager as _contextmanager
+
+
+def _pm_open_file(*args, **kw):
+    kw.setdefault("open", True)
+    return cmds.file(*args, **kw)
+
+
+def _pm_new_file(**kw):
+    kw.setdefault("new", True)
+    return cmds.file(**kw)
+
+
+def _pm_rename_file(path):
+    return cmds.file(rename=path)
+
+
+@_contextmanager
+def _pm_undo_chunk():
+    cmds.undoInfo(openChunk=True)
+    try:
+        yield
+    finally:
+        cmds.undoInfo(closeChunk=True)
+# --- end shims ---
 try:
     import cv2
     import numpy as np
@@ -13,6 +41,7 @@ try:
     import pymel.core as pm
 except ImportError:
     pm = None
+    cmds = None
 
 # Try to initialize QApplication to avoid "Cannot create a QWidget without QApplication" error
 # which might be triggered by mayatk imports
@@ -102,14 +131,18 @@ class TestImageTracer(unittest.TestCase):
 
         # Verify degree is 1 (linear) as smoothing is disabled
         if curves:
-            # curves[0] is a Transform, we need the shape to check degree
-            shape = curves[0].getShape()
-            self.assertEqual(shape.degree(), 1, "Curve should be degree 1 (linear)")
+            # curves[0] is a transform string; use cmds to query the shape
+            shapes = cmds.listRelatives(str(curves[0]), shapes=True, fullPath=True) or []
+            self.assertTrue(shapes, "Curve should have a shape child")
+            self.assertEqual(
+                cmds.getAttr(f"{shapes[0]}.degree"), 1,
+                "Curve should be degree 1 (linear)",
+            )
 
         # Cleanup for this specific test if we want to be strict,
         # but we are keeping scene for now.
         if self.keep_scene:
-            grp = pm.group(curves, name="test_trace_curves_grp")
+            grp = cmds.group(curves, name="test_trace_curves_grp")
 
     def test_create_mesh(self):
         if ImageTracer is None:
@@ -117,7 +150,7 @@ class TestImageTracer(unittest.TestCase):
 
         tracer = ImageTracer(self.test_image_path, scale=0.1)
         result_grp = tracer.create_mesh(name="positive_mesh")
-        self.assertTrue(pm.objExists(result_grp), "Result group should exist")
+        self.assertTrue(cmds.objExists(result_grp), "Result group should exist")
 
     def test_create_negative_space(self):
         if ImageTracer is None:
@@ -125,7 +158,7 @@ class TestImageTracer(unittest.TestCase):
 
         tracer = ImageTracer(self.test_image_path, scale=0.1)
         result_grp = tracer.create_negative_space_mesh(name="negative_mesh")
-        self.assertTrue(pm.objExists(result_grp), "Result group should exist")
+        self.assertTrue(cmds.objExists(result_grp), "Result group should exist")
 
     def test_project_on_plane(self):
         if ImageTracer is None:
@@ -133,7 +166,7 @@ class TestImageTracer(unittest.TestCase):
 
         tracer = ImageTracer(self.test_image_path, scale=0.1)
         result_grp = tracer.project_on_plane(name="projected_curves")
-        self.assertTrue(pm.objExists(result_grp), "Result group should exist")
+        self.assertTrue(cmds.objExists(result_grp), "Result group should exist")
 
     def test_blue_pencil_tracing(self):
         if ImageTracer is None:
@@ -160,34 +193,25 @@ class TestImageTracer(unittest.TestCase):
         with zipfile.ZipFile(zip_source_path, "w") as zf:
             zf.write(png_path, "test_stroke.png")
 
-        # Mock pm.bluePencilFrame
+        # Mock cmds.bluePencilFrame (production now uses cmds, not pm)
         module_name = ImageTracer.__module__
 
         def side_effect(exportArchive=None, **kwargs):
             if exportArchive:
                 shutil.copy2(zip_source_path, exportArchive)
 
-        with patch(f"{module_name}.pm") as mock_pm:
-            # Setup the mock to behave like pymel.core
-            mock_pm.pluginInfo.return_value = True  # Plugin loaded
-
-            # Fail Attempt 1 (Native Command)
-            mock_pm.mel.exists.return_value = False
-
-            # Attempt 2 (Export Archive)
-            mock_pm.bluePencilFrame.side_effect = side_effect
-
-            # Mock curve creation
-            mock_curve = MagicMock()
-            mock_curve.getParent.return_value = MagicMock()  # Transform
-            mock_pm.curve.return_value = mock_curve
-            mock_pm.ls.return_value = []  # For existing curves check
+        with patch(f"{module_name}.cmds") as mock_cmds:
+            mock_cmds.pluginInfo.return_value = True  # Plugin loaded
+            mock_cmds.bluePencilFrame.side_effect = side_effect
+            mock_cmds.curve.return_value = "curve1"
+            mock_cmds.ls.return_value = []  # For existing curves check
+            mock_cmds.listRelatives.return_value = ["curve1"]
 
             tracer = ImageTracer(use_blue_pencil=True)
             curves = tracer.trace_curves()
 
             self.assertTrue(
-                mock_pm.bluePencilFrame.called, "bluePencilFrame should be called"
+                mock_cmds.bluePencilFrame.called, "bluePencilFrame should be called"
             )
             self.assertTrue(len(curves) > 0, "Should return curves")
 
@@ -196,7 +220,7 @@ class TestImageTracer(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    pm.newFile(f=True)
+    _pm_new_file(f=True)
     import mayatk as mtk
 
     mtk.clear_scrollfield_reporters()

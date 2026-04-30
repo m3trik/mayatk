@@ -7,20 +7,71 @@ import math
 from typing import List, Tuple, Dict, Union, Optional, Set, Any
 
 try:
-    import pymel.core as pm
-except ImportError as error:
-    print(__file__, error)
-try:
+    import maya.cmds as cmds
+    import maya.mel as mel
     from maya.api import OpenMaya as om  # For MPoint, MVector, etc.
-except Exception:
-    om = None  # Allow module to import outside Maya; guard at call sites
+except Exception as error:
+    cmds = None
+    mel = None
+    om = None
+    print(__file__, error)
+
 import pythontk as ptk
 
 # From this package:
-from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils._core_utils import CoreUtils, as_strings, short_name
 from mayatk.core_utils.components import Components
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
+
+
+def get_translation(node, world: bool = False):
+    """Translation as ``om.MVector``.
+
+    ``world=False`` returns the object-space translation (the default for
+    child translation); ``world=True`` returns world space.
+    """
+    flag = {"ws": True} if world else {"os": True}
+    t = cmds.xform(str(node), q=True, t=True, **flag)
+    return om.MVector(*t)
+
+
+def get_object_matrix(node, world: bool = False):
+    """Local or world matrix as ``om.MMatrix``."""
+    flag = {"ws": True} if world else {"os": True}
+    flat = cmds.xform(str(node), q=True, m=True, **flag)
+    return om.MMatrix(flat)
+
+
+def set_object_matrix(node, value, world: bool = False) -> None:
+    """Apply *value* to *node*'s local or world transformation matrix.
+
+    *value* may be an ``om.MMatrix`` (anything with ``getElement(r, c)``)
+    or a 16-element iterable in row-major order.
+    """
+    if hasattr(value, "getElement"):
+        flat = [value.getElement(r, c) for r in range(4) for c in range(4)]
+    else:
+        flat = list(value)
+    if len(flat) != 16:
+        raise ValueError(f"set_object_matrix expected 16 elements, got {len(flat)}")
+    flag = {"worldSpace": True} if world else {"objectSpace": True}
+    cmds.xform(str(node), matrix=flat, **flag)
+
+
+def _set_matrix_plug(plug: str, mmatrix) -> None:
+    """Write an ``om.MMatrix`` (or 16-flat iterable) to a matrix attribute plug."""
+    if hasattr(mmatrix, "getElement"):
+        flat = [mmatrix.getElement(r, c) for r in range(4) for c in range(4)]
+    else:
+        flat = list(mmatrix)
+    cmds.setAttr(plug, *flat, type="matrix")
+
+
+def _mmatrix_to_flat(m) -> List[float]:
+    if hasattr(m, "getElement"):
+        return [m.getElement(r, c) for r in range(4) for c in range(4)]
+    return list(m)
 
 
 class XformUtilsInternals:
@@ -51,8 +102,7 @@ class XformUtilsInternals:
         # Note: We let RuntimeError bubble up so freeze_transforms can handle
         # connection/locking strategies.
         try:
-            # Try with preserveNormals=True (standard for meshes)
-            pm.makeIdentity(
+            cmds.makeIdentity(
                 obj,
                 apply=True,
                 t=freeze_t,
@@ -62,9 +112,7 @@ class XformUtilsInternals:
                 normal=False,
             )
         except RuntimeError:
-            # Fallback for non-polygonal objects or when preserveNormals fails
-            # (e.g. malformed geometry, locked normals, or tool limitations)
-            pm.makeIdentity(
+            cmds.makeIdentity(
                 obj,
                 apply=True,
                 t=freeze_t,
@@ -107,11 +155,9 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         index_to_axis = {0: "x", 1: "-x", 2: "y", 3: "-y", 4: "z", 5: "-z"}
         axis_to_index = {v: k for k, v in index_to_axis.items()}
 
-        # Function to handle inversion of the axis
         def get_inverted_axis(axis):
             return axis[1:] if axis.startswith("-") else "-" + axis
 
-        # Define orthogonal axes
         orthogonal_axis_map = {
             "x": "y",
             "-x": "y",
@@ -121,7 +167,6 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             "-z": "x",
         }
 
-        # Determine the result based on input type
         if isinstance(value, int):
             axis = index_to_axis[value]
         elif isinstance(value, str):
@@ -131,44 +176,28 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 "Input must be an integer or a string representing an axis."
             )
 
-        # Apply inversion if needed
         if invert:
             axis = get_inverted_axis(axis)
 
-        # Handle orthogonal axis request
         if ortho:
             axis = orthogonal_axis_map[axis]
 
-        # Return the result based on the to_integer flag
         if to_integer:
             return axis_to_index[axis]
-        else:
-            return axis  # Always returns a string unless to_integer is True
+        return axis
 
     @classmethod
     @CoreUtils.undoable
     def move_to(cls, source, target, group_move=False):
         """Move source object(s) to align with the target object(s).
 
-        This method allows the user to move a source object or a list of source objects
-        to a target object or a list of target objects. The objects are moved to the
-        center of the bounding box of the target by default.
-
         Parameters:
-            source (str/obj/list): The Maya object(s) to move. Can be a single object or a list of objects.
-            target (str/obj/list): The Maya object(s) to move to. Can be a single object or a list of objects.
+            source (str/obj/list): The Maya object(s) to move.
+            target (str/obj/list): The Maya object(s) to move to.
             group_move (bool): If True, move the source objects as a single group centered around their common bounding box.
-
-        Example:
-        >>> move_to(['pCube1', 'pCube2'], 'pSphere1')
-        # Moves both pCube1 and pCube2 to the center of pSphere1.
-
-        >>> move_to(['pCube1', 'pCube2'], ['pSphere1', 'pSphere2'], group_move=True)
-        # Moves both pCube1 and pCube2 as a single group to the center of the combined bounding box of pSphere1 and pSphere2.
         """
-
-        source = pm.ls(source, flatten=True)
-        target = pm.ls(target, flatten=True)
+        source = cmds.ls(as_strings(source), flatten=True) or []
+        target = cmds.ls(as_strings(target), flatten=True) or []
 
         target_pos = cls.get_bounding_box(target, "center")
 
@@ -177,14 +206,14 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             translation_vector = [t - g for t, g in zip(target_pos, group_center)]
 
             for src in source:
-                current_pos = pm.xform(
+                current_pos = cmds.xform(
                     src, query=True, translation=True, worldSpace=True
                 )
                 new_pos = [c + t for c, t in zip(current_pos, translation_vector)]
-                pm.xform(src, translation=new_pos, worldSpace=True)
+                cmds.xform(src, translation=new_pos, worldSpace=True)
         else:
             for src in source:
-                pm.xform(src, translation=target_pos, worldSpace=True)
+                cmds.xform(src, translation=target_pos, worldSpace=True)
 
     @staticmethod
     @CoreUtils.undoable
@@ -199,34 +228,27 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             origin (bool): Move to world grid's center.
             center_pivot (bool): Center the object's pivot.
             freeze_transforms (bool): Reset the selected transform and all of its children down to the shape level.
-
-        Example:
-            drop_to_grid(obj, align='Min') #set the object onto the grid.
         """
-        for obj in pm.ls(objects, transforms=1):
-            # Save the object space obj pivot.
-            osPivot = pm.xform(obj, q=True, rotatePivot=1, objectSpace=1)
-            # Save the world space obj pivot.
-            wsPivot = pm.xform(obj, q=True, rotatePivot=1, worldSpace=1)
+        for obj in cmds.ls(as_strings(objects), transforms=True) or []:
+            osPivot = cmds.xform(obj, q=True, rotatePivot=True, objectSpace=True)
+            wsPivot = cmds.xform(obj, q=True, rotatePivot=True, worldSpace=True)
 
-            pm.xform(obj, centerPivots=1)  # center pivot
-            plane = pm.polyPlane(name="temp#")[0]
+            cmds.xform(obj, centerPivots=True)
+            plane = cmds.polyPlane(name="temp#")[0]
 
             if not origin:
-                # Move the object to the pivot location
-                pm.xform(
-                    plane, translation=(wsPivot[0], 0, wsPivot[2]), absolute=1, ws=1
+                cmds.xform(
+                    plane, translation=(wsPivot[0], 0, wsPivot[2]), absolute=True, ws=True
                 )
 
-            pm.align(obj, plane, atl=1, x="Mid", y=align, z="Mid")
-            pm.delete(plane)
+            cmds.align(obj, plane, atl=True, x="Mid", y=align, z="Mid")
+            cmds.delete(plane)
 
             if not center_pivot:
-                # Return pivot to orig position.
-                pm.xform(obj, rotatePivot=osPivot, objectSpace=1)
+                cmds.xform(obj, rotatePivot=osPivot, objectSpace=True)
 
             if freeze_transforms:
-                pm.makeIdentity(obj, apply=True)
+                cmds.makeIdentity(obj, apply=True)
 
     @classmethod
     def match_scale(cls, a, b, scale=True, average=False):
@@ -241,14 +263,12 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         Returns:
             (list) scale values as [x,y,z,x,y,z...]
         """
-        to_scale = pm.ls(a, flatten=True)
+        to_scale = cmds.ls(as_strings(a), flatten=True) or []
 
-        # Use the get_bounding_box method to compute the bounding box of objects in `b`
         bx, by, bz = cls.get_bounding_box(b, "size", world_space=True)
 
         result = []
         for obj in to_scale:
-            # Compute the bounding box of the current object to scale
             ax, ay, az = cls.get_bounding_box(obj, "size", world_space=True)
 
             try:
@@ -262,7 +282,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 scaleNew = [sum(scaleNew) / len(scaleNew)] * 3
 
             if scale:
-                pm.xform(obj, s=scaleNew, worldSpace=True, relative=True)
+                cmds.xform(obj, s=scaleNew, worldSpace=True, relative=True)
 
             [result.append(i) for i in scaleNew]
 
@@ -274,71 +294,51 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     def scale_connected_edges(objects, scale_factor=1.1) -> None:
         """Scales each set of connected edges separately, either uniformly or non-uniformly.
 
-        This function scales each set of connected edges around their center point. If a single float or int is provided
-        as the scale factor, uniform scaling is applied. If a tuple or list of three numbers is provided, non-uniform
-        scaling is applied to the x, y, and z axes respectively.
-
         Parameters:
             objects (list): A list of selected edge components to be scaled.
             scale_factor (float, int, tuple, list): The factor by which to scale the edges.
-                - float/int: Apply uniform scaling.
-                - tuple/list of three floats: Apply non-uniform scaling to x, y, and z axes.
-
-        Examples:
-            # Uniform scaling: Scale all connected edges by a factor of 1.5
-            scale_connected_edges(pm.ls(selection=True), 1.5)
-
-            # Non-uniform scaling: Scale connected edges by 1.5 in x, 1.0 in y, and 0.5 in z
-            scale_connected_edges(pm.ls(selection=True), (1.5, 1.0, 0.5))
         """
-        # Get the selected edges
         if not objects:
-            pm.warning("No edges selected.")
+            cmds.warning("No edges selected.")
             return
 
-        # Group edges by connected sets using the existing method
         connected_edges_sets = Components.get_contigious_edges(objects)
 
         for edge_set in connected_edges_sets:
-            # Get the vertices of the edge set
-            vertices = pm.polyListComponentConversion(
+            vertices = cmds.polyListComponentConversion(
                 edge_set, fromEdge=True, toVertex=True
             )
-            vertices = pm.ls(vertices, flatten=True)
+            vertices = cmds.ls(vertices, flatten=True) or []
 
             # Calculate the center point of the vertices
-            center_point = pm.dt.Vector(0, 0, 0)
-            for vertex in vertices:
-                center_point += vertex.getPosition(space="world")
-            center_point /= len(vertices)
+            positions = [cmds.pointPosition(v, world=True) for v in vertices]
+            if not positions:
+                continue
+            center_point = om.MVector(
+                sum(p[0] for p in positions) / len(positions),
+                sum(p[1] for p in positions) / len(positions),
+                sum(p[2] for p in positions) / len(positions),
+            )
 
-            # Determine if scale_factor is a float/int (uniform scaling) or tuple/list (non-uniform scaling)
             if isinstance(scale_factor, (tuple, list)):
                 scale_x, scale_y, scale_z = scale_factor
             else:
                 scale_x = scale_y = scale_z = scale_factor
 
-            # Scale each vertex around the center point
-            for vertex in vertices:
-                pos = vertex.getPosition(space="world")
+            for vertex, pos_arr in zip(vertices, positions):
+                pos = om.MVector(*pos_arr)
                 direction = pos - center_point
-                new_pos = pm.dt.Vector(
+                new_pos = om.MVector(
                     center_point.x + direction.x * scale_x,
                     center_point.y + direction.y * scale_y,
                     center_point.z + direction.z * scale_z,
                 )
-                vertex.setPosition(new_pos, space="world")
+                cmds.xform(vertex, ws=True, t=[new_pos.x, new_pos.y, new_pos.z])
 
     @staticmethod
     @CoreUtils.undoable
     def store_transforms(objects, prefix="original", accumulate=True):
         """Store the current world-space transforms as custom attributes.
-
-        This captures the object's world matrix and pivot positions so they can
-        be restored later using `restore_transforms`. When `accumulate=True`,
-        subsequent calls will compose with the previously stored matrix, allowing
-        you to freeze transforms multiple times while still being able to restore
-        to the very first original position.
 
         Parameters:
             objects (str/obj/list): Transform nodes to store transforms for.
@@ -346,58 +346,48 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             accumulate (bool): If True and attributes already exist, compose the
                 current local transforms with the stored matrix. If False, overwrite.
         """
-        for obj in pm.ls(objects, type="transform"):
-            # Get current world matrix and pivots
-            current_world_matrix = pm.dt.Matrix(
-                pm.xform(obj, query=True, matrix=True, worldSpace=True)
+        for obj in cmds.ls(as_strings(objects), type="transform") or []:
+            current_world_matrix = om.MMatrix(
+                cmds.xform(obj, query=True, matrix=True, worldSpace=True)
             )
-            rotate_pivot = pm.xform(obj, query=True, rotatePivot=True, worldSpace=True)
-            scale_pivot = pm.xform(obj, query=True, scalePivot=True, worldSpace=True)
+            rotate_pivot = cmds.xform(obj, query=True, rotatePivot=True, worldSpace=True)
+            scale_pivot = cmds.xform(obj, query=True, scalePivot=True, worldSpace=True)
 
-            # Check if attributes already exist
-            has_existing = pm.hasAttr(obj, f"{prefix}_worldMatrix")
+            mat_attr = f"{prefix}_worldMatrix"
+            rp_attr = f"{prefix}_rotatePivot"
+            sp_attr = f"{prefix}_scalePivot"
+            has_existing = bool(cmds.attributeQuery(mat_attr, node=obj, exists=True))
 
             if has_existing and accumulate:
-                # Get the previously stored matrix
-                stored_matrix_list = pm.getAttr(f"{obj}.{prefix}_worldMatrix")
-                # Flatten if nested (matrix attr returns as 4x4 list of lists)
+                stored_matrix_list = cmds.getAttr(f"{obj}.{mat_attr}")
+                # cmds.getAttr on a matrix returns a flat list of 16 floats.
                 if stored_matrix_list and isinstance(
                     stored_matrix_list[0], (list, tuple)
                 ):
                     stored_matrix_flat = [v for row in stored_matrix_list for v in row]
                 else:
                     stored_matrix_flat = list(stored_matrix_list)
-                stored_matrix = pm.dt.Matrix(stored_matrix_flat)
+                stored_matrix = om.MMatrix(stored_matrix_flat)
 
                 # Compose: new total = current * stored
-                # This means: starting from identity, first apply stored, then current
                 accumulated = current_world_matrix * stored_matrix
-
-                # Store the accumulated matrix
-                accum_flat = [accumulated[r][c] for r in range(4) for c in range(4)]
-                pm.setAttr(f"{obj}.{prefix}_worldMatrix", accum_flat, type="matrix")
-                pm.setAttr(f"{obj}.{prefix}_rotatePivot", type="double3", *rotate_pivot)
-                pm.setAttr(f"{obj}.{prefix}_scalePivot", type="double3", *scale_pivot)
+                accum_flat = _mmatrix_to_flat(accumulated)
+                cmds.setAttr(f"{obj}.{mat_attr}", *accum_flat, type="matrix")
+                cmds.setAttr(f"{obj}.{rp_attr}", *rotate_pivot, type="double3")
+                cmds.setAttr(f"{obj}.{sp_attr}", *scale_pivot, type="double3")
 
             else:
-                # Create attributes if they don't exist
-                if not pm.hasAttr(obj, f"{prefix}_worldMatrix"):
-                    pm.addAttr(obj, ln=f"{prefix}_worldMatrix", at="matrix", k=True)
-                if not pm.hasAttr(obj, f"{prefix}_rotatePivot"):
-                    pm.addAttr(obj, ln=f"{prefix}_rotatePivot", dt="double3", k=True)
-                if not pm.hasAttr(obj, f"{prefix}_scalePivot"):
-                    pm.addAttr(obj, ln=f"{prefix}_scalePivot", dt="double3", k=True)
+                if not cmds.attributeQuery(mat_attr, node=obj, exists=True):
+                    cmds.addAttr(obj, ln=mat_attr, at="matrix", k=True)
+                if not cmds.attributeQuery(rp_attr, node=obj, exists=True):
+                    cmds.addAttr(obj, ln=rp_attr, dt="double3", k=True)
+                if not cmds.attributeQuery(sp_attr, node=obj, exists=True):
+                    cmds.addAttr(obj, ln=sp_attr, dt="double3", k=True)
 
-                # Store the current world matrix and pivots
-                # Matrix needs to be a flat list of 16 values
-                matrix_flat = pm.xform(obj, query=True, matrix=True, worldSpace=True)
-                pm.setAttr(
-                    f"{obj}.{prefix}_worldMatrix",
-                    matrix_flat,
-                    type="matrix",
-                )
-                pm.setAttr(f"{obj}.{prefix}_rotatePivot", type="double3", *rotate_pivot)
-                pm.setAttr(f"{obj}.{prefix}_scalePivot", type="double3", *scale_pivot)
+                matrix_flat = cmds.xform(obj, query=True, matrix=True, worldSpace=True)
+                cmds.setAttr(f"{obj}.{mat_attr}", *matrix_flat, type="matrix")
+                cmds.setAttr(f"{obj}.{rp_attr}", *rotate_pivot, type="double3")
+                cmds.setAttr(f"{obj}.{sp_attr}", *scale_pivot, type="double3")
 
     @classmethod
     @CoreUtils.undoable
@@ -413,35 +403,14 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         from_channel_box=False,
         **kwargs,
     ):
-        """Freezes transformations on the given objects.
-
-        Parameters:
-            objects (list): List of transform nodes.
-            center_pivot (int/bool): Controls pivot centering behavior.
-                0 or False: Don't center pivot.
-                1: Center pivot on mesh objects only.
-                2 or True: Center pivot on all objects.
-            force (bool): If True, unlocks locked transform attributes and restores them after.
-            delete_history (bool): If True, deletes construction history after freeze.
-            freeze_children (bool): If True, also freeze descendant transforms.
-            unlock_children (bool): If True (and force is True), also unlock descendant transforms.
-            connection_strategy (str): How to handle incoming connections on TRS channels.
-                "preserve" (default) -> raise a descriptive error,
-                "disconnect" -> break the incoming connections,
-                "delete" -> break incoming connections and delete their source nodes when possible.
-                Note: "preserve" skips affected objects (reported at the end); "disconnect"/"delete" modify shared drivers, so downstream instances will also lose those connections.
-            from_channel_box (bool): If True, use the selected attributes in the channel box to determine what to freeze.
-            **kwargs: Flags passed to determine what to freeze (t=True, r=True, s=True).
-        """
-        # Normalize center_pivot to int (handle bool for backwards compatibility)
+        """Freezes transformations on the given objects."""
         if center_pivot is True:
-            center_pivot = 2  # True means "All"
+            center_pivot = 2
         elif center_pivot is False:
-            center_pivot = 0  # False means "None"
-        # Determine which axes to freeze
+            center_pivot = 0
+
         axes_to_freeze = set()
 
-        # Helper map for channel names to axes
         channel_map = {
             "translate": ["tx", "ty", "tz"],
             "t": ["tx", "ty", "tz"],
@@ -472,25 +441,43 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         if from_channel_box:
             selected_channels = set(Attributes.get_selected_channels() or [])
             for ch in selected_channels:
-                # Handle long names like 'pCube1.translateX'
                 if "." in ch:
                     ch = ch.split(".")[-1]
                 if ch in channel_map:
                     axes_to_freeze.update(channel_map[ch])
         else:
-            # Check kwargs for standard flags
-            if kwargs.get("translate") or kwargs.get("t"):
-                axes_to_freeze.update(["tx", "ty", "tz"])
-            if kwargs.get("rotate") or kwargs.get("r"):
-                axes_to_freeze.update(["rx", "ry", "rz"])
-            if kwargs.get("scale") or kwargs.get("s"):
-                axes_to_freeze.update(["sx", "sy", "sz"])
+            # Detect whether the caller specified any per-channel flag.
+            channel_keys = {
+                "translate", "t", "rotate", "r", "scale", "s",
+                "translateX", "tx", "translateY", "ty", "translateZ", "tz",
+                "rotateX", "rx", "rotateY", "ry", "rotateZ", "rz",
+                "scaleX", "sx", "scaleY", "sy", "scaleZ", "sz",
+                "normal",
+            }
+            any_channel_flag = any(k in kwargs for k in channel_keys)
 
-        # If no axes selected, nothing to do
+            if not any_channel_flag:
+                # No explicit channels → freeze all (matches Maya's default
+                # ``makeIdentity -apply true`` behaviour).
+                axes_to_freeze.update(["tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz"])
+            else:
+                if kwargs.get("translate") or kwargs.get("t"):
+                    axes_to_freeze.update(["tx", "ty", "tz"])
+                if kwargs.get("rotate") or kwargs.get("r"):
+                    axes_to_freeze.update(["rx", "ry", "rz"])
+                if kwargs.get("scale") or kwargs.get("s"):
+                    axes_to_freeze.update(["sx", "sy", "sz"])
+                # Per-axis flags (rare).
+                for ch in (
+                    "tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz",
+                ):
+                    if kwargs.get(ch):
+                        axes_to_freeze.add(ch)
+
         if not axes_to_freeze:
             return
 
-        objects = pm.ls(objects, type="transform", long=True)
+        objects = cmds.ls(as_strings(objects), type="transform", long=True) or []
 
         strategy = (connection_strategy or "preserve").lower()
         valid_strategies = {"preserve", "disconnect", "delete"}
@@ -500,12 +487,11 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 f"Valid options: {sorted(valid_strategies)}"
             )
 
-        # Expand selection to children up front when requested
         if freeze_children:
             objects_set = set(objects)
             for obj in list(objects):
                 descendants = (
-                    pm.listRelatives(obj, ad=True, type="transform", fullPath=True)
+                    cmds.listRelatives(obj, ad=True, type="transform", fullPath=True)
                     or []
                 )
                 for child in descendants:
@@ -513,7 +499,6 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                         objects.append(child)
                         objects_set.add(child)
 
-        # Determine which channels are involved for connection checking
         freeze_channels: Set[str] = set()
         if not axes_to_freeze.isdisjoint({"tx", "ty", "tz"}):
             freeze_channels.add("translate")
@@ -522,68 +507,76 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         if not axes_to_freeze.isdisjoint({"sx", "sy", "sz"}):
             freeze_channels.add("scale")
 
-        skipped_connections: List[
-            Tuple[str, Dict[pm.general.Attribute, List[pm.general.Attribute]]]
-        ] = []
+        skipped_connections: List[Tuple[str, Dict[str, List[str]]]] = []
         instanced_skips: List[str] = []
         frozen_objects: List[str] = []
 
-        def get_blockers(node):
-            """Helper to find input connections on specified channels."""
-            # Query top-level attributes (e.g. 'translate') to catch all child connections (e.g. 'translateX')
-            plugs = [node.attr(ch) for ch in freeze_channels if node.hasAttr(ch)]
+        def get_blockers(node: str) -> Dict[str, List[str]]:
+            """Helper to find input connections on specified channels.
+
+            Returns ``{dest_plug: [src_plug, ...]}``.
+            """
+            plugs = []
+            for ch in freeze_channels:
+                if cmds.attributeQuery(ch, node=node, exists=True):
+                    plugs.append(f"{node}.{ch}")
             if not plugs:
                 return {}
 
-            # Get all input connections (source, destination) pairs
+            # cmds.listConnections with connections=True returns a flat list:
+            # [dest, src, dest, src, ...] when plugs=True.
             connections = (
-                pm.listConnections(
-                    plugs, source=True, destination=False, plugs=True, connections=True
+                cmds.listConnections(
+                    plugs,
+                    source=True,
+                    destination=False,
+                    plugs=True,
+                    connections=True,
                 )
                 or []
             )
 
-            found_blockers = {}
-            for src, dest in connections:
+            found_blockers: Dict[str, List[str]] = {}
+            it = iter(connections)
+            for dest, src in zip(it, it):
                 found_blockers.setdefault(dest, []).append(src)
-
             return found_blockers
 
         for obj in objects:
-            if not pm.objExists(obj):
+            if not cmds.objExists(obj):
                 continue
 
-            # Handle center_pivot: 0=None, 1=Mesh only, 2=All
             if center_pivot == 2:
-                # Center pivot on all objects
-                pm.xform(obj, centerPivots=True)
+                cmds.xform(obj, centerPivots=True)
             elif center_pivot == 1:
-                # Center pivot on mesh objects only
-                shapes = pm.listRelatives(
+                shapes = cmds.listRelatives(
                     obj, shapes=True, noIntermediate=True, type="mesh"
                 )
                 if shapes:
-                    pm.xform(obj, centerPivots=True)
+                    cmds.xform(obj, centerPivots=True)
 
             shapes = (
-                pm.listRelatives(obj, shapes=True, noIntermediate=False, fullPath=True)
+                cmds.listRelatives(
+                    obj, shapes=True, noIntermediate=False, fullPath=True
+                )
                 or []
             )
             if shapes:
                 try:
                     if NodeUtils.get_instances(obj):
-                        instanced_skips.append(obj.name())
+                        instanced_skips.append(short_name(obj))
                         continue
                 except Exception:
                     pass
 
-            # Determine nodes to unlock
             nodes_to_unlock = []
             if force:
                 nodes_to_unlock.append(obj)
                 if unlock_children:
                     descendants = (
-                        pm.listRelatives(obj, ad=True, type="transform", fullPath=True)
+                        cmds.listRelatives(
+                            obj, ad=True, type="transform", fullPath=True
+                        )
                         or []
                     )
                     nodes_to_unlock.extend(descendants)
@@ -591,67 +584,59 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             with Attributes.temporarily_unlock(nodes_to_unlock):
                 try:
                     if delete_history:
-                        pm.delete(obj, constructionHistory=True)
+                        cmds.delete(obj, constructionHistory=True)
 
-                    # Freeze using Maya's native makeIdentity which preserves
-                    # world-space pivot positions automatically.
                     if cls._apply_freeze_deltas(obj, axes_to_freeze):
-                        frozen_objects.append(obj.name())
+                        frozen_objects.append(short_name(obj))
 
                 except RuntimeError as exc:
                     msg = str(exc).lower()
-                    # Check if failure is due to incoming connections
                     if "incoming connection" in msg or "locked" in msg:
-                        # Analyze blockers
                         blockers = get_blockers(obj)
 
                         if not blockers and "locked" not in msg:
-                            # Failed due to connections but none found on target channels
-                            skipped_connections.append((obj.name(), {}))
-                            pm.warning(
+                            skipped_connections.append((short_name(obj), {}))
+                            cmds.warning(
                                 f"XformUtils.freeze_transforms: Skipping '{obj}' due to connection error: {exc}"
                             )
                             continue
 
                         if strategy == "preserve":
-                            skipped_connections.append((obj.name(), blockers))
+                            skipped_connections.append((short_name(obj), blockers))
                             continue
 
-                        # Handle disconnect/delete strategy
-                        nodes_to_delete = set()
+                        nodes_to_delete: Set[str] = set()
                         for plug, sources in blockers.items():
                             for src in sources:
                                 try:
-                                    pm.disconnectAttr(src, plug)
+                                    cmds.disconnectAttr(src, plug)
                                 except Exception as disconnect_exc:
                                     raise RuntimeError(
                                         f"Failed to disconnect {src} -> {plug}: {disconnect_exc}"
                                     ) from disconnect_exc
 
                                 if strategy == "delete":
+                                    src_node = src.split(".")[0]
+                                    if not src_node or src_node == obj:
+                                        continue
                                     try:
-                                        node = src.node()
+                                        if cmds.referenceQuery(
+                                            src_node, isNodeReferenced=True
+                                        ):
+                                            continue
                                     except Exception:
-                                        continue
-                                    if not node or node == obj:
-                                        continue
-                                    if (
-                                        hasattr(node, "isReferenced")
-                                        and node.isReferenced()
-                                    ):
-                                        continue
-                                    nodes_to_delete.add(node)
+                                        pass
+                                    nodes_to_delete.add(src_node)
 
                         if nodes_to_delete:
-                            pm.delete(list(nodes_to_delete))
+                            cmds.delete(list(nodes_to_delete))
 
-                        # Retry freeze after clearing connections
                         try:
                             if cls._apply_freeze_deltas(obj, axes_to_freeze):
-                                frozen_objects.append(obj.name())
+                                frozen_objects.append(short_name(obj))
                         except RuntimeError as retry_exc:
-                            skipped_connections.append((obj.name(), blockers))
-                            pm.warning(
+                            skipped_connections.append((short_name(obj), blockers))
+                            cmds.warning(
                                 f"XformUtils.freeze_transforms: Skipping '{obj}' after clearing connections: {retry_exc}"
                             )
 
@@ -663,7 +648,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         )
         if total_processed:
             skipped_total = len(skipped_connections) + len(instanced_skips)
-            pm.displayInfo(
+            print(
                 "XformUtils.freeze_transforms: "
                 f"{len(frozen_objects)} frozen, {skipped_total} skipped."
             )
@@ -675,202 +660,194 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         reset_rotate_axis: bool = False,
         reset_joint_orient: bool = False,
     ) -> None:
-        """Freeze transforms into offsetParentMatrix while preserving pivot placement.
-
-        Parameters:
-            objects (str/obj/list): Transform nodes to process.
-            reset_rotate_axis (bool): Zero rotateAxis after the bake. Default keeps current values.
-            reset_joint_orient (bool): Zero jointOrient after the bake. Default keeps current values.
-        """
-
-        transforms = pm.ls(objects, type="transform", flatten=True)
+        """Freeze transforms into offsetParentMatrix while preserving pivot placement."""
+        transforms = cmds.ls(as_strings(objects), type="transform", flatten=True) or []
         if not transforms:
             return
 
-        identity_matrix = pm.datatypes.Matrix()
+        identity_matrix = om.MMatrix()
 
         for obj in transforms:
-            if not pm.objExists(obj):
+            if not cmds.objExists(obj):
                 continue
 
-            obj = pm.PyNode(obj)
-
             with Attributes.temporarily_unlock([obj]):
-                rotate_pivot_ws = pm.xform(obj, q=True, ws=True, rp=True)
-                scale_pivot_ws = pm.xform(obj, q=True, ws=True, sp=True)
+                rotate_pivot_ws = cmds.xform(obj, q=True, ws=True, rp=True)
+                scale_pivot_ws = cmds.xform(obj, q=True, ws=True, sp=True)
 
                 rotate_pivot_translate = (
-                    obj.rotatePivotTranslate.get()
-                    if obj.hasAttr("rotatePivotTranslate")
+                    cmds.getAttr(f"{obj}.rotatePivotTranslate")[0]
+                    if cmds.attributeQuery("rotatePivotTranslate", node=obj, exists=True)
                     else None
                 )
                 scale_pivot_translate = (
-                    obj.scalePivotTranslate.get()
-                    if obj.hasAttr("scalePivotTranslate")
+                    cmds.getAttr(f"{obj}.scalePivotTranslate")[0]
+                    if cmds.attributeQuery("scalePivotTranslate", node=obj, exists=True)
                     else None
                 )
 
-                original_local = pm.datatypes.Matrix(
-                    pm.xform(obj, q=True, matrix=True, objectSpace=True)
+                original_local = om.MMatrix(
+                    cmds.xform(obj, q=True, matrix=True, objectSpace=True)
                 )
 
-                temp = pm.duplicate(obj, parentOnly=True)[0]
+                temp = cmds.duplicate(obj, parentOnly=True)[0]
                 try:
-                    temp.offsetParentMatrix.set(identity_matrix)
-                    temp.translate.set((0.0, 0.0, 0.0))
-                    temp.rotate.set((0.0, 0.0, 0.0))
-                    temp.scale.set((1.0, 1.0, 1.0))
-                    if temp.hasAttr("shear"):
-                        temp.shear.set((0.0, 0.0, 0.0))
+                    _set_matrix_plug(f"{temp}.offsetParentMatrix", identity_matrix)
+                    cmds.setAttr(f"{temp}.translate", 0.0, 0.0, 0.0, type="double3")
+                    cmds.setAttr(f"{temp}.rotate", 0.0, 0.0, 0.0, type="double3")
+                    cmds.setAttr(f"{temp}.scale", 1.0, 1.0, 1.0, type="double3")
+                    if cmds.attributeQuery("shear", node=temp, exists=True):
+                        cmds.setAttr(f"{temp}.shear", 0.0, 0.0, 0.0, type="double3")
 
-                    rest_matrix = pm.datatypes.Matrix(
-                        pm.xform(temp, q=True, matrix=True, objectSpace=True)
+                    rest_matrix = om.MMatrix(
+                        cmds.xform(temp, q=True, matrix=True, objectSpace=True)
                     )
                 finally:
-                    pm.delete(temp)
+                    cmds.delete(temp)
 
                 try:
                     compensation = rest_matrix.inverse()
                 except RuntimeError:
-                    pm.warning(
+                    cmds.warning(
                         f"XformUtils.freeze_to_opm: Skipping '{obj}' due to singular pivot matrix."
                     )
                     continue
 
                 opm_matrix = compensation * original_local
-                obj.offsetParentMatrix.set(opm_matrix)
+                _set_matrix_plug(f"{obj}.offsetParentMatrix", opm_matrix)
 
-                obj.translate.set((0.0, 0.0, 0.0))
-                obj.rotate.set((0.0, 0.0, 0.0))
-                obj.scale.set((1.0, 1.0, 1.0))
-                if obj.hasAttr("shear"):
-                    obj.shear.set((0.0, 0.0, 0.0))
+                cmds.setAttr(f"{obj}.translate", 0.0, 0.0, 0.0, type="double3")
+                cmds.setAttr(f"{obj}.rotate", 0.0, 0.0, 0.0, type="double3")
+                cmds.setAttr(f"{obj}.scale", 1.0, 1.0, 1.0, type="double3")
+                if cmds.attributeQuery("shear", node=obj, exists=True):
+                    cmds.setAttr(f"{obj}.shear", 0.0, 0.0, 0.0, type="double3")
 
-                pm.xform(obj, ws=True, rp=rotate_pivot_ws, preserve=True)
-                pm.xform(obj, ws=True, sp=scale_pivot_ws, preserve=True)
+                cmds.xform(obj, ws=True, rp=rotate_pivot_ws, preserve=True)
+                cmds.xform(obj, ws=True, sp=scale_pivot_ws, preserve=True)
 
                 if rotate_pivot_translate is not None:
-                    obj.rotatePivotTranslate.set(rotate_pivot_translate)
+                    cmds.setAttr(
+                        f"{obj}.rotatePivotTranslate",
+                        *rotate_pivot_translate,
+                        type="double3",
+                    )
                 if scale_pivot_translate is not None:
-                    obj.scalePivotTranslate.set(scale_pivot_translate)
+                    cmds.setAttr(
+                        f"{obj}.scalePivotTranslate",
+                        *scale_pivot_translate,
+                        type="double3",
+                    )
 
-                if reset_rotate_axis and obj.hasAttr("rotateAxis"):
-                    obj.rotateAxis.set((0.0, 0.0, 0.0))
+                if reset_rotate_axis and cmds.attributeQuery(
+                    "rotateAxis", node=obj, exists=True
+                ):
+                    cmds.setAttr(f"{obj}.rotateAxis", 0.0, 0.0, 0.0, type="double3")
 
-                if reset_joint_orient and obj.hasAttr("jointOrient"):
-                    obj.jointOrient.set((0.0, 0.0, 0.0))
+                if reset_joint_orient and cmds.attributeQuery(
+                    "jointOrient", node=obj, exists=True
+                ):
+                    cmds.setAttr(f"{obj}.jointOrient", 0.0, 0.0, 0.0, type="double3")
 
     @staticmethod
     @CoreUtils.undoable
     def restore_transforms(objects, prefix="original", delete_attrs=False):
         """Restore transforms from stored custom attributes.
 
-        This restores the object's world-space position, orientation, and scale
-        to the values captured by `store_transforms`. The geometry will be
-        transformed to maintain its current world-space vertex positions.
-
-        Parameters:
-            objects (str/obj/list): Transform nodes to restore.
-            prefix (str): Attribute name prefix (default: "original").
-            delete_attrs (bool): If True, remove the stored attributes after restore.
-
         Returns:
             list: Objects that were successfully restored.
         """
         restored = []
 
-        for obj in pm.ls(objects, type="transform"):
-            # Check if stored attributes exist
+        for obj in cmds.ls(as_strings(objects), type="transform") or []:
             matrix_attr = f"{prefix}_worldMatrix"
             rp_attr = f"{prefix}_rotatePivot"
             sp_attr = f"{prefix}_scalePivot"
 
-            if not pm.hasAttr(obj, matrix_attr):
-                pm.warning(
+            if not cmds.attributeQuery(matrix_attr, node=obj, exists=True):
+                cmds.warning(
                     f"restore_transforms: '{obj}' has no stored transforms "
                     f"(missing {matrix_attr} attribute). Skipping."
                 )
                 continue
 
-            # Get the stored original matrix and current matrix
-            stored_matrix_list = pm.getAttr(f"{obj}.{matrix_attr}")
-            stored_matrix = pm.dt.Matrix(stored_matrix_list)
+            stored_matrix_flat = cmds.getAttr(f"{obj}.{matrix_attr}")
+            if stored_matrix_flat and isinstance(
+                stored_matrix_flat[0], (list, tuple)
+            ):
+                stored_matrix_flat = [
+                    v for row in stored_matrix_flat for v in row
+                ]
+            stored_matrix = om.MMatrix(list(stored_matrix_flat))
 
-            # Flatten matrix for xform command (needs 16 floats, not 4x4)
-            stored_matrix_flat = [
-                stored_matrix[r][c] for r in range(4) for c in range(4)
-            ]
-
-            # To restore transforms while preserving vertex world positions:
-            # After setting matrix to M, vertex world pos = v_local * M
-            # Current vertex world pos = v_current_local * C (current matrix)
-            # We want: v_new_local * M = v_current_local * C (preserve world pos)
-            # So: v_new_local = v_current_local * C * M.inverse()
-            # Since v_world = v_current_local * C:
-            # v_new_local = v_world * M.inverse()
             try:
                 inverse_stored = stored_matrix.inverse()
             except Exception:
-                pm.warning(
+                cmds.warning(
                     f"restore_transforms: '{obj}' has singular matrix. Skipping."
                 )
                 continue
 
-            # Get shapes to transform their geometry
-            shapes = pm.listRelatives(obj, shapes=True, noIntermediate=True) or []
+            shapes = cmds.listRelatives(obj, shapes=True, noIntermediate=True) or []
 
-            # For mesh shapes, transform the vertices by M.inverse()
+            # Transform geometry by M.inverse() so vertex world positions are preserved.
             for shape in shapes:
-                if shape.nodeType() == "mesh":
-                    # Get all vertices
-                    verts = shape.vtx[:]
-                    for vert in verts:
-                        pos = pm.dt.Point(vert.getPosition(space="world"))
+                node_type = cmds.nodeType(shape)
+                if node_type == "mesh":
+                    num_verts = cmds.polyEvaluate(shape, vertex=True) or 0
+                    for i in range(num_verts):
+                        vert = f"{shape}.vtx[{i}]"
+                        pos_arr = cmds.pointPosition(vert, world=True)
+                        pos = om.MPoint(pos_arr[0], pos_arr[1], pos_arr[2])
                         new_local = pos * inverse_stored
-                        # Set in object space since we calculated local coords
-                        vert.setPosition(list(new_local)[:3], space="object")
+                        cmds.xform(
+                            vert,
+                            os=True,
+                            t=[new_local[0], new_local[1], new_local[2]],
+                        )
 
-                elif shape.nodeType() == "nurbsCurve":
-                    # Transform CVs for NURBS curves
-                    cvs = shape.cv[:]
+                elif node_type == "nurbsCurve":
+                    cvs = cmds.ls(f"{shape}.cv[*]", flatten=True) or []
                     for cv in cvs:
-                        pos = pm.dt.Point(pm.xform(cv, q=True, ws=True, t=True))
+                        pos_arr = cmds.xform(cv, q=True, ws=True, t=True)
+                        pos = om.MPoint(pos_arr[0], pos_arr[1], pos_arr[2])
                         new_local = pos * inverse_stored
-                        pm.xform(cv, os=True, t=list(new_local)[:3])
+                        cmds.xform(
+                            cv,
+                            os=True,
+                            t=[new_local[0], new_local[1], new_local[2]],
+                        )
 
-                elif shape.nodeType() == "nurbsSurface":
-                    # Transform CVs for NURBS surfaces
-                    num_u = shape.numCVsInU()
-                    num_v = shape.numCVsInV()
-                    for u in range(num_u):
-                        for v in range(num_v):
-                            cv = shape.cv[u][v]
-                            pos = pm.dt.Point(pm.xform(cv, q=True, ws=True, t=True))
-                            new_local = pos * inverse_stored
-                            pm.xform(cv, os=True, t=list(new_local)[:3])
+                elif node_type == "nurbsSurface":
+                    cvs = cmds.ls(f"{shape}.cv[*][*]", flatten=True) or []
+                    for cv in cvs:
+                        pos_arr = cmds.xform(cv, q=True, ws=True, t=True)
+                        pos = om.MPoint(pos_arr[0], pos_arr[1], pos_arr[2])
+                        new_local = pos * inverse_stored
+                        cmds.xform(
+                            cv,
+                            os=True,
+                            t=[new_local[0], new_local[1], new_local[2]],
+                        )
 
-            # Apply the stored world matrix (as flat list)
-            pm.xform(obj, matrix=stored_matrix_flat, worldSpace=True)
+            cmds.xform(obj, matrix=list(stored_matrix_flat), worldSpace=True)
 
-            # Restore pivots if stored
-            if pm.hasAttr(obj, rp_attr):
-                rotate_pivot = pm.getAttr(f"{obj}.{rp_attr}")
-                pm.xform(obj, rotatePivot=rotate_pivot, worldSpace=True)
+            if cmds.attributeQuery(rp_attr, node=obj, exists=True):
+                rotate_pivot = cmds.getAttr(f"{obj}.{rp_attr}")[0]
+                cmds.xform(obj, rotatePivot=rotate_pivot, worldSpace=True)
 
-            if pm.hasAttr(obj, sp_attr):
-                scale_pivot = pm.getAttr(f"{obj}.{sp_attr}")
-                pm.xform(obj, scalePivot=scale_pivot, worldSpace=True)
+            if cmds.attributeQuery(sp_attr, node=obj, exists=True):
+                scale_pivot = cmds.getAttr(f"{obj}.{sp_attr}")[0]
+                cmds.xform(obj, scalePivot=scale_pivot, worldSpace=True)
 
-            # Optionally delete the stored attributes
             if delete_attrs:
                 for attr in [matrix_attr, rp_attr, sp_attr]:
-                    if pm.hasAttr(obj, attr):
-                        pm.deleteAttr(f"{obj}.{attr}")
+                    if cmds.attributeQuery(attr, node=obj, exists=True):
+                        cmds.deleteAttr(f"{obj}.{attr}")
 
             restored.append(obj)
 
         if restored:
-            pm.displayInfo(f"restore_transforms: Restored {len(restored)} object(s).")
+            print(f"restore_transforms: Restored {len(restored)} object(s).")
 
         return restored
 
@@ -878,27 +855,22 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     def has_stored_transforms(objects, prefix="original"):
         """Check if objects have stored transform attributes.
 
-        Parameters:
-            objects (str/obj/list): Transform nodes to check.
-            prefix (str): Attribute name prefix (default: "original").
-
         Returns:
             dict: Mapping of object names to bool (True if has stored transforms).
         """
         result = {}
-        for obj in pm.ls(objects, type="transform"):
-            has_stored = pm.hasAttr(obj, f"{prefix}_worldMatrix")
-            result[obj.name()] = has_stored
+        for obj in cmds.ls(as_strings(objects), type="transform") or []:
+            has_stored = bool(
+                cmds.attributeQuery(f"{prefix}_worldMatrix", node=obj, exists=True)
+            )
+            short = obj.split("|")[-1].split(":")[-1]
+            result[short] = has_stored
         return result
 
     @staticmethod
     @CoreUtils.undoable
     def clear_stored_transforms(objects, prefix="original"):
         """Remove stored transform attributes from objects.
-
-        Parameters:
-            objects (str/obj/list): Transform nodes to clear.
-            prefix (str): Attribute name prefix (default: "original").
 
         Returns:
             list: Objects that had attributes removed.
@@ -910,86 +882,62 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             f"{prefix}_scalePivot",
         ]
 
-        for obj in pm.ls(objects, type="transform"):
+        for obj in cmds.ls(as_strings(objects), type="transform") or []:
             had_attrs = False
             for attr in attrs:
-                if pm.hasAttr(obj, attr):
-                    pm.deleteAttr(f"{obj}.{attr}")
+                if cmds.attributeQuery(attr, node=obj, exists=True):
+                    cmds.deleteAttr(f"{obj}.{attr}")
                     had_attrs = True
             if had_attrs:
                 cleared.append(obj)
 
         if cleared:
-            pm.displayInfo(
-                f"clear_stored_transforms: Cleared {len(cleared)} object(s)."
-            )
+            print(f"clear_stored_transforms: Cleared {len(cleared)} object(s).")
 
         return cleared
 
     @classmethod
     @CoreUtils.undoable
     def reset_translation(cls, objects):
-        """Reset the translation transformations on the given object(s).
-
-        Parameters:
-            objects (str/obj/list): The object(s) to reset the translation values for.
-        """
-        for obj in pm.ls(objects):
-            pos = pm.objectCenter(obj)  # Get the object's current position.
-            # Move to origin and center pivot.
-            cls.drop_to_grid(obj, origin=1, center_pivot=1)
-            pm.makeIdentity(obj, apply=1, t=1, r=0, s=0, n=0, pn=1)  # Bake transforms
-            # Move the object back to it's original position.
-            pm.xform(obj, translation=pos)
+        """Reset the translation transformations on the given object(s)."""
+        for obj in cmds.ls(as_strings(objects)) or []:
+            pos = cmds.objectCenter(obj)
+            cls.drop_to_grid(obj, origin=True, center_pivot=True)
+            cmds.makeIdentity(obj, apply=True, t=True, r=False, s=False, n=False, pn=True)
+            cmds.xform(obj, translation=pos)
 
     @staticmethod
     def set_translation_to_pivot(node):
-        """Set an object’s translation value from its pivot location.
-
-        Parameters:
-            obj (str/obj/list): The object(s) to set the translation value for.
-            node (str/obj/list): An object, or it's name.
-        """
-        x, y, z = pm.xform(node, query=True, worldSpace=True, rotatePivot=True)
-        pm.xform(node, relative=True, translation=[-x, -y, -z])
-        pm.makeIdentity(node, apply=True, translate=True)
-        pm.xform(node, translation=[x, y, z])
+        """Set an object's translation value from its pivot location."""
+        node = str(node)
+        x, y, z = cmds.xform(node, query=True, worldSpace=True, rotatePivot=True)
+        cmds.xform(node, relative=True, translation=[-x, -y, -z])
+        cmds.makeIdentity(node, apply=True, translate=True)
+        cmds.xform(node, translation=[x, y, z])
 
     @staticmethod
-    def get_manip_pivot_matrix(
-        obj: Union[str, object, list], **kwargs
-    ) -> "pm.datatypes.Matrix":
+    def get_manip_pivot_matrix(obj, **kwargs):
         """Return the object's transform matrix using xform, allowing kwargs override.
 
-        Parameters:
-            obj (str/object/list): Object to query.
-            **kwargs: Passed directly to pm.xform() in query mode.
-
         Returns:
-            pm.datatypes.Matrix: The resulting transformation matrix.
+            om.MMatrix: The resulting transformation matrix.
         """
-        matrix = pm.xform(obj, q=True, matrix=True, **kwargs)
-        return pm.datatypes.Matrix(matrix)
+        matrix = cmds.xform(obj, q=True, matrix=True, **kwargs)
+        return om.MMatrix(matrix)
 
     @staticmethod
-    def set_manip_pivot_matrix(
-        obj: Union[str, object, list],
-        matrix: "pm.datatypes.Matrix",
-        **kwargs,
-    ) -> None:
-        """Apply a transformation matrix's position and orientation to the manip pivot.
+    def set_manip_pivot_matrix(obj, matrix, **kwargs) -> None:
+        """Apply a transformation matrix's position and orientation to the manip pivot."""
+        if not hasattr(matrix, "getElement"):
+            matrix = om.MMatrix(list(matrix))
+        tm = om.MTransformationMatrix(matrix)
+        pos_v = tm.translation(om.MSpace.kWorld)
+        pos = (pos_v.x, pos_v.y, pos_v.z)
+        euler = tm.rotation()
+        rot = [math.degrees(euler.x), math.degrees(euler.y), math.degrees(euler.z)]
 
-        Parameters:
-            obj (str/object/list): Object to set pivot on.
-            matrix (pm.datatypes.Matrix): Source matrix.
-            **kwargs: Passed directly to pm.manipPivot().
-        """
-        tm = pm.datatypes.TransformationMatrix(matrix)
-        pos = tm.getTranslation(pm.datatypes.Space.kWorld)
-        rot = [pm.util.degrees(a) for a in tm.eulerRotation()]
-
-        pm.select(obj, replace=True)
-        pm.manipPivot(p=pos, o=rot, **kwargs)
+        cmds.select(obj, replace=True)
+        cmds.manipPivot(p=pos, o=rot, **kwargs)
 
     @classmethod
     def get_pivot_options(cls):
@@ -1017,22 +965,15 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
 
     @classmethod
     def snapshot_manip_pivot(cls, node):
-        """Snapshots the current manipulator pivot state for the given node into the cache.
-
-        If the manipulator pivot matches the rotate pivot (default), the cache is cleared for this node.
-        This allows capturing the 'live' state before operations like Undo destroy it.
-        """
+        """Snapshot the current manipulator pivot state for the given node into the cache."""
         try:
-            # We rely on existing selection if possible, assuming node is selected if we are snapshooting it
-            # But better be safe
-            current_selection = pm.selected()
+            current_selection = cmds.ls(selection=True) or []
             if node not in current_selection:
-                return  # Can't snapshot manip pivot of unselected object reliably
+                return
 
-            manip_pivot_pos = pm.manipPivot(q=True, p=True)[0]
-            manip_pivot_rot = pm.manipPivot(q=True, o=True)[0]
+            manip_pivot_pos = cmds.manipPivot(q=True, p=True)[0]
+            manip_pivot_rot = cmds.manipPivot(q=True, o=True)[0]
 
-            # Normalize potential nested lists
             if (
                 isinstance(manip_pivot_rot, (list, tuple))
                 and len(manip_pivot_rot) == 1
@@ -1040,7 +981,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             ):
                 manip_pivot_rot = manip_pivot_rot[0]
 
-            rp_pos = pm.xform(node, q=True, ws=True, rp=True)
+            rp_pos = cmds.xform(node, q=True, ws=True, rp=True)
 
             def is_diff(v1, v2):
                 if not v1 or not v2:
@@ -1050,10 +991,8 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 return sum([abs(a - b) for a, b in zip(v1, v2)]) > 0.0001
 
             if is_diff(manip_pivot_pos, rp_pos):
-                # Custom pivot detected
                 cls._manip_cache[node] = (manip_pivot_rot, manip_pivot_pos)
             else:
-                # Pivot is default, clear cache to respect this reset
                 if node in cls._manip_cache:
                     del cls._manip_cache[node]
 
@@ -1061,64 +1000,38 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             pass
 
     @classmethod
-    def get_operation_axis_matrix(cls, node, pivot: str) -> om.MMatrix:
+    def get_operation_axis_matrix(cls, node, pivot: str):
         """Determines the pivot matrix (orientation + position) for transformations.
-
-        Parameters:
-            node (PyNode): The object to query.
-            pivot (str): "object", "manip", "world", "center", etc.
 
         Returns:
             om.MMatrix: The 4x4 transfomation matrix.
         """
-        # 1. Get Position (Translation)
         pos = cls.get_operation_axis_pos(node, pivot)
-        # Construct translation matrix manually as MMatrix constructor is flat list or identity
         mat_pos_list = [
-            1.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-            0.0,
-            pos[0],
-            pos[1],
-            pos[2],
-            1.0,
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            pos[0], pos[1], pos[2], 1.0,
         ]
         mat_pos = om.MMatrix(mat_pos_list)
 
-        # 2. Get Rotation (Orientation)
         mat_rot = om.MMatrix.kIdentity
 
         if pivot == "object":
-            # Use object's world rotation
-            # Note: pm.xform returns flat list for matrix
-            m_obj_arr = pm.xform(node, query=True, worldSpace=True, matrix=True)
+            m_obj_arr = cmds.xform(node, query=True, worldSpace=True, matrix=True)
             m_obj = om.MMatrix(m_obj_arr)
             tm_obj = om.MTransformationMatrix(m_obj)
             mat_rot = tm_obj.rotation().asMatrix()
 
         elif pivot == "manip":
-            # Use manipulator's orientation
-            current_selection = pm.selected()
-
-            # Minimize selection changes to preserve manipulator context
+            current_selection = cmds.ls(selection=True) or []
             needs_selection_change = node not in current_selection
 
             if needs_selection_change:
-                pm.select(node, replace=True)
+                cmds.select(node, replace=True)
             try:
-                # Query orientation in degrees
-                manip_rot_queries = pm.manipPivot(query=True, o=True)
+                manip_rot_queries = cmds.manipPivot(query=True, o=True)
                 manip_rot_deg = manip_rot_queries[0]
-                # Defensive check for list nesting (some maya versions return nested lists)
                 if (
                     isinstance(manip_rot_deg, (list, tuple))
                     and len(manip_rot_deg) == 1
@@ -1126,29 +1039,19 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 ):
                     manip_rot_deg = manip_rot_deg[0]
 
-                # --- Persistence Logic ---
-                # Check if this "read" matches the object's physical rotate pivot?
-                # If so, we might have lost the custom pivot context (e.g. after Undo).
-                # If we have a cached value for this node, use it.
-
-                # Get current world-space Rotation Pivot for comparison
-                rp_pos = pm.xform(node, q=True, ws=True, rp=True)
-                manip_pos = pm.manipPivot(q=True, p=True)[0]
+                rp_pos = cmds.xform(node, q=True, ws=True, rp=True)
+                manip_pos = cmds.manipPivot(q=True, p=True)[0]
 
                 def is_diff(v1, v2):
                     return sum([abs(a - b) for a, b in zip(v1, v2)]) > 0.0001
 
-                # If Manip Pivot != RP, we assume it's a specialized custom pivot -> Cache it.
                 if is_diff(manip_pos, rp_pos):
                     cls._manip_cache[node] = (manip_rot_deg, manip_pos)
                 elif node in cls._manip_cache:
-                    # It looks reset, but we have a cache. Use the cache.
-                    # We only use the cached ROTATION here.
                     cached_vals = cls._manip_cache[node]
                     if cached_vals and len(cached_vals) == 2:
                         manip_rot_deg = cached_vals[0]
 
-                # Convert rotation (degrees) to Matrix
                 euler = om.MEulerRotation(
                     math.radians(manip_rot_deg[0]),
                     math.radians(manip_rot_deg[1]),
@@ -1159,32 +1062,15 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             except Exception:
                 pass
             finally:
-                if needs_selection_change:
-                    pm.select(current_selection, replace=True)
+                if needs_selection_change and current_selection:
+                    cmds.select(current_selection, replace=True)
 
-        # 3. Combine: M_pivot = R_pivot * T_pivot (Rotate then Translate = Frame at T with Basis R)
         return mat_rot * mat_pos
 
     @classmethod
     def get_operation_axis_pos(cls, node, pivot, axis_index=None):
-        """Determines the pivot position for mirroring/cutting along a specified axis or all axes.
-
-        Parameters:
-            node (PyNode): The object whose reference position is determined.
-            pivot (str/tuple/list): Mode or explicit position.
-                - `"center"` → Uses bounding box center.
-                - `"object"` → Uses the object's rotate pivot.
-                - `"world"` → Uses world origin `(0,0,0)`.
-                - `"manip"` → Uses the manipulator/tool pivot (not the object's scale pivot).
-                - `"xmin"`, `"xmax"`, etc. → Uses specific bounding box limits.
-                - `"baked"` → Uses the baked (original) rotate pivot in world space.
-                - `(x, y, z)` → Uses a specified world-space pivot.
-            axis_index (int or None): Axis index (0=X, 1=Y, 2=Z). If `None`, returns full (x, y, z) list.
-
-        Returns:
-            float or list: The computed pivot position (single float if `axis_index` is specified, list if `None`).
-        """
-        # Return full vector if axis_index is None
+        """Determines the pivot position for mirroring/cutting along a specified axis or all axes."""
+        node = str(node)
         if axis_index is None:
             return [
                 cls.get_operation_axis_pos(node, pivot, 0),
@@ -1192,70 +1078,35 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 cls.get_operation_axis_pos(node, pivot, 2),
             ]
 
-        # Explicit world-space point
         if isinstance(pivot, (tuple, list)) and len(pivot) == 3:
             return float(pivot[axis_index])
 
-        # Manipulator pivot (actual manipulator/tool position in world space)
         if pivot == "manip":
-            # Ensure object is selected for consistent manipulator pivot query
-            current_selection = pm.selected()
-
+            current_selection = cmds.ls(selection=True) or []
             needs_selection_change = node not in current_selection
 
-            # Note: We rely on the EXISTING selection state for the manipulator if possible.
-            # Changing selection resets the tool context, which usually wipes custom pivot changes.
-
             if needs_selection_change:
-                pm.select(node, replace=True)
+                cmds.select(node, replace=True)
 
+            manip_pivot_ws = [0.0, 0.0, 0.0]
             try:
-                # Query the current manipulator pivot position
-                manip_pivot_result = pm.manipPivot(q=True, p=True)
-
-                # --- Persistence Logic for Position ---
-                rp_pos = pm.xform(node, q=True, ws=True, rp=True)
+                manip_pivot_result = cmds.manipPivot(q=True, p=True)
+                rp_pos = cmds.xform(node, q=True, ws=True, rp=True)
 
                 def is_diff(v1, v2):
                     if not v1 or not v2:
                         return False
-                    # v1 is list of lists [[x,y,z]] sometimes?
                     if isinstance(v1[0], (list, tuple)):
                         v1 = v1[0]
                     return sum([abs(a - b) for a, b in zip(v1, v2)]) > 0.0001
 
                 current_pos_val = manip_pivot_result[0] if manip_pivot_result else None
 
-                if current_pos_val and is_diff(current_pos_val, rp_pos):
-                    # Cache logic is primarily handled in get_operation_axis_matrix (which calls this)
-                    # But this might be called independently.
-                    # We only READ from cache here if needed.
-                    # But wait, get_operation_axis_matrix calls get_operation_axis_pos FIRST.
-                    # So the cache might not be populated yet if this is the first call!
-                    # So we should populate cache here too?
-
-                    # Or rely on get_operation_axis_matrix to manage caching.
-                    # If we rely on get_operation_axis_matrix, then this method returns the "raw" value (which might be default).
-                    # And get_operation_axis_matrix will overwrite the translation part using the cache logic?
-                    # get_operation_axis_matrix logic:
-                    #   1. pos = get_operation_axis_pos()
-                    #   2. ... logic ... if cached: updates cache.
-
-                    # But 'pos' from step 1 is used to build the Matrix.
-                    # If pos is "lost" here, the matrix will have wrong translation.
-
-                    # So we MUST use cache here too.
-                    pass
-
-                # Check cache availability
                 if node in cls._manip_cache:
                     cached_rot, cached_pos = cls._manip_cache[node]
-                    # If current is "Default/Reset", use cache.
                     if current_pos_val and not is_diff(current_pos_val, rp_pos):
-                        manip_pivot_result = [cached_pos]  # Override return value
+                        manip_pivot_result = [cached_pos]
 
-                # Normalize to [x,y,z]
-                manip_pivot_ws = [0.0, 0.0, 0.0]
                 if manip_pivot_result:
                     temp = (
                         manip_pivot_result[0]
@@ -1263,12 +1114,12 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                         else manip_pivot_result
                     )
                     if isinstance(temp, (list, tuple)) and len(temp) == 3:
-                        manip_pivot_ws = temp
+                        manip_pivot_ws = list(temp)
                     elif (
                         isinstance(manip_pivot_result, (list, tuple))
                         and len(manip_pivot_result) == 3
                     ):
-                        manip_pivot_ws = manip_pivot_result
+                        manip_pivot_ws = list(manip_pivot_result)
 
             except Exception as e:
                 print(
@@ -1280,67 +1131,53 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 manip_pivot_ws = [0.0, 0.0, 0.0]
 
             finally:
-                # Restore original selection if it was changed
-                if needs_selection_change:
-                    pm.select(current_selection, replace=True)
+                if needs_selection_change and current_selection:
+                    cmds.select(current_selection, replace=True)
 
-            return (
-                float(manip_pivot_ws[axis_index])
-                if axis_index is not None
-                else manip_pivot_ws
-            )
+            return float(manip_pivot_ws[axis_index]) if axis_index is not None else manip_pivot_ws
 
-        # Object pivot (rotate pivot in world space)
         if pivot == "object":
-            obj_pivot_ws = pm.xform(node, q=True, ws=True, rp=True)
+            obj_pivot_ws = cmds.xform(node, q=True, ws=True, rp=True)
             return (
                 float(obj_pivot_ws[axis_index])
                 if axis_index is not None
                 else obj_pivot_ws
             )
 
-        # Baked pivot (local-space rotate pivot transformed to world space)
         if pivot == "baked":
-            local_rp = pm.xform(node, q=True, rp=True, os=True)
-            world_rp = pm.dt.Point(local_rp) * pm.PyNode(node).getMatrix(
-                worldSpace=True
-            )
+            local_rp = cmds.xform(node, q=True, rp=True, os=True)
+            world_matrix = get_object_matrix(node, world=True)
+            world_rp = om.MPoint(local_rp[0], local_rp[1], local_rp[2]) * world_matrix
             return (
                 float(world_rp[axis_index])
                 if axis_index is not None
-                else list(world_rp)
+                else [world_rp[0], world_rp[1], world_rp[2]]
             )
 
-        # World origin
         if pivot == "world":
             return 0.0 if axis_index is not None else [0.0, 0.0, 0.0]
 
-        # Bounding box center
         if pivot == "center":
             center = cls.get_bounding_box(node, "center")
             return float(center[axis_index]) if axis_index is not None else list(center)
 
-        # Bounding box limits (xmin, ymax, etc.)
         limit_pivots = {"xmin", "xmax", "ymin", "ymax", "zmin", "zmax"}
         if isinstance(pivot, str) and pivot in limit_pivots:
-            # Get center only once
             center = cls.get_bounding_box(node, "center")
-            limit_value = float(cls.get_bounding_box(node, pivot))  # single float
+            limit_value = float(cls.get_bounding_box(node, pivot))
             axis_for_limit = {"x": 0, "y": 1, "z": 2}[pivot[0]]
 
             if axis_index is None:
                 result = list(center)
                 result[axis_for_limit] = limit_value
                 return result
-            else:
-                return (
-                    limit_value
-                    if axis_index == axis_for_limit
-                    else float(center[axis_index])
-                )
+            return (
+                limit_value
+                if axis_index == axis_for_limit
+                else float(center[axis_index])
+            )
 
-        # Fallback to center
-        pm.warning(
+        cmds.warning(
             f"Invalid pivot type '{pivot}' for {node}. Defaulting to bounding box center."
         )
         fallback = cls.get_bounding_box(node, "center")
@@ -1349,33 +1186,28 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     @staticmethod
     @CoreUtils.undoable
     def align_pivot_to_selection(align_from=None, align_to=None, translate=True):
-        """Align one object's pivot point to another using 3-point alignment.
-
-        Parameters:
-            align_from (str/obj/list): At minimum; 1 object, 1 Face, 2 Edges, or 3 Vertices.
-            align_to (str/obj/list): The object/components to align with (needs at least 3 vertices).
-            translate (bool): Move the object with its pivot.
-        """
+        """Align one object's pivot point to another using 3-point alignment."""
         if align_from is None:
             align_from = []
         if align_to is None:
             align_to = []
-        pos = pm.xform(align_to, q=1, translation=True, worldSpace=True)
-        center_pos = [  # Get center by averaging of all x,y,z points.
+        align_from = as_strings(align_from)
+        align_to = as_strings(align_to)
+        pos = cmds.xform(align_to, q=True, translation=True, worldSpace=True)
+        center_pos = [
             sum(pos[0::3]) / len(pos[0::3]),
             sum(pos[1::3]) / len(pos[1::3]),
             sum(pos[2::3]) / len(pos[2::3]),
         ]
 
-        vertices = pm.ls(
-            pm.polyListComponentConversion(align_to, toVertex=True), flatten=True
-        )
+        vertices = cmds.ls(
+            cmds.polyListComponentConversion(align_to, toVertex=True), flatten=True
+        ) or []
         if len(vertices) < 3:
             return
 
-        for obj in pm.ls(align_from, flatten=1):
-            # Create and align helper plane.
-            plane = pm.polyPlane(
+        for obj in cmds.ls(as_strings(align_from), flatten=True) or []:
+            plane = cmds.polyPlane(
                 name="_hptemp#",
                 width=1,
                 height=1,
@@ -1386,70 +1218,66 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 constructionHistory=True,
             )[0]
 
-            pm.select("%s.vtx[0:2]" % plane, vertices[0:3])
-            pm.mel.snap3PointsTo3Points(0)
+            cmds.select(f"{plane}.vtx[0:2]", vertices[0:3])
+            mel.eval("snap3PointsTo3Points(0)")
 
-            pm.xform(
+            cmds.xform(
                 obj,
-                rotation=pm.xform(plane, q=True, rotation=True, worldSpace=True),
+                rotation=cmds.xform(plane, q=True, rotation=True, worldSpace=True),
                 worldSpace=True,
             )
 
             if translate:
-                pm.xform(obj, translation=center_pos, worldSpace=True)
+                cmds.xform(obj, translation=center_pos, worldSpace=True)
 
-            pm.delete(plane)
+            cmds.delete(plane)
 
     @staticmethod
-    def reset_pivot_transforms(
-        objects: Optional[List[Union[str, object]]] = None,
-    ) -> None:
-        """Reset Pivot Transforms for the specified objects or selected objects.
-
-        Parameters:
-            objects (str/obj/list): List of objects to reset pivots. If None, the currently selected objects are used.
-        """
+    def reset_pivot_transforms(objects=None) -> None:
+        """Reset Pivot Transforms for the specified objects or selected objects."""
         if objects is None:
-            objs = pm.ls(sl=True, type="transform", flatten=True)
+            objs = cmds.ls(sl=True, type="transform", flatten=True) or []
         else:
-            objs = pm.ls(objects, type="transform", flatten=True)
+            objs = cmds.ls(as_strings(objects), type="transform", flatten=True) or []
 
         for obj in objs:
-            pm.xform(obj, centerPivots=True)
-            pm.manipPivot(obj, rotatePivot=True, scalePivot=True)
+            cmds.xform(obj, centerPivots=True)
+            # The legacy ``manipPivot(obj, rotatePivot=True, scalePivot=True)``
+            # was a wrapper that re-aligned the manipulator pivot to the
+            # object's rotate/scale pivots. ``cmds.manipPivot`` only takes
+            # ``-p`` (position) / ``-o`` (orientation) — replicate by
+            # querying and pushing.
+            try:
+                rp = cmds.xform(obj, q=True, ws=True, rp=True)
+                cmds.manipPivot(p=rp, o=(0.0, 0.0, 0.0))
+            except Exception:
+                pass
 
     @staticmethod
     def world_align_pivot(
-        objects: Optional[List[Union[str, object]]] = None,
+        objects=None,
         pivot_type: str = "object",
         mode: str = "set",
-    ) -> Optional[Union[bool, Dict[str, Any]]]:
-        """Get or set a world-aligned pivot for the specified objects.
-
-        Parameters:
-            objects: Transform nodes to operate on. Defaults to current selection.
-            pivot_type: Either "manip" to adjust the manipulator pivot only or "object" to bake into objects.
-            mode: "get" returns pivot info, "set" applies the alignment.
-        """
-
+    ):
+        """Get or set a world-aligned pivot for the specified objects."""
         if objects is None:
-            selected = pm.selected()
+            selected = cmds.ls(selection=True) or []
             if not selected:
-                pm.warning("No objects specified and nothing is selected.")
+                cmds.warning("No objects specified and nothing is selected.")
                 return False if mode == "set" else None
             objects = selected
         else:
-            objects = pm.ls(objects, flatten=True)
+            objects = cmds.ls(as_strings(objects), flatten=True) or []
 
         if not objects:
-            pm.warning("No valid objects found.")
+            cmds.warning("No valid objects found.")
             return False if mode == "set" else None
 
-        original_selection = pm.selected()
-        pm.select(objects, replace=True)
+        original_selection = cmds.ls(selection=True) or []
+        cmds.select(objects, replace=True)
 
         pivot_positions = [
-            pm.xform(obj, q=True, rotatePivot=True, worldSpace=True) for obj in objects
+            cmds.xform(obj, q=True, rotatePivot=True, worldSpace=True) for obj in objects
         ]
         avg_pivot_pos = [sum(coords) / len(coords) for coords in zip(*pivot_positions)]
 
@@ -1459,70 +1287,74 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 "orientation": [0, 0, 0],
                 "objects": [str(obj) for obj in objects],
             }
-            pm.select(original_selection, replace=True)
+            if original_selection:
+                cmds.select(original_selection, replace=True)
             return result
 
         if mode == "set":
             if pivot_type == "manip":
-                pm.manipPivot(p=avg_pivot_pos, o=(0, 0, 0))
+                cmds.manipPivot(p=avg_pivot_pos, o=(0, 0, 0))
                 return True
 
             if pivot_type == "object":
                 for obj in objects:
-                    pivot_pos = pm.xform(obj, q=True, rotatePivot=True, worldSpace=True)
-                    pm.xform(obj, worldSpace=True, pivots=pivot_pos, preserve=True)
-                    pm.manipPivot(obj, rotatePivot=True, scalePivot=True)
-                    pm.xform(obj, preserve=True, rotateOrient=(0, 0, 0))
+                    pivot_pos = cmds.xform(
+                        obj, q=True, rotatePivot=True, worldSpace=True
+                    )
+                    cmds.xform(obj, worldSpace=True, pivots=pivot_pos, preserve=True)
+                    # See ``reset_pivot_transforms`` for why this differs
+                    # from the legacy overload.
+                    try:
+                        cmds.manipPivot(p=pivot_pos, o=(0.0, 0.0, 0.0))
+                    except Exception:
+                        pass
+                    cmds.xform(obj, preserve=True, rotateAxis=(0, 0, 0))
 
-                pm.select(original_selection, replace=True)
+                if original_selection:
+                    cmds.select(original_selection, replace=True)
                 return True
 
-            pm.warning(f"Invalid pivot_type: {pivot_type}. Use 'manip' or 'object'.")
-            pm.select(original_selection, replace=True)
+            cmds.warning(f"Invalid pivot_type: {pivot_type}. Use 'manip' or 'object'.")
+            if original_selection:
+                cmds.select(original_selection, replace=True)
             return False
 
-        pm.warning(f"Invalid mode: {mode}. Use 'get' or 'set'.")
-        pm.select(original_selection, replace=True)
+        cmds.warning(f"Invalid mode: {mode}. Use 'get' or 'set'.")
+        if original_selection:
+            cmds.select(original_selection, replace=True)
         return False
 
     @staticmethod
     @CoreUtils.undoable
     def bake_pivot(objects, position=False, orientation=False):
-        """Bake the pivot orientation and position of the given object(s).
-
-        Parameters:
-            objects (str/obj/list): The object(s) to bake the pivot orientation and position for.
-            position (bool): Whether to bake the pivot position.
-            orientation (bool): Whether to bake the pivot orientation
-        """
-        transforms = pm.ls(objects, transforms=1)
-        shapes = pm.ls(objects, shapes=1)
-        objects = transforms + pm.listRelatives(
-            shapes, path=1, parent=1, type="transform"
+        """Bake the pivot orientation and position of the given object(s)."""
+        objects = as_strings(objects)
+        transforms = cmds.ls(objects, transforms=True) or []
+        shapes = cmds.ls(objects, shapes=True) or []
+        objects = transforms + (
+            cmds.listRelatives(shapes, path=True, parent=True, type="transform") or []
         )
 
-        ctx = pm.currentCtx()
+        ctx = cmds.currentCtx()
         pivotModeActive = 0
         customModeActive = 0
-        if ctx in ("RotateSuperContext", "manipRotateContext"):  # Rotate tool
-            customOri = pm.manipRotateContext("Rotate", q=1, orientAxes=1)
-            pivotModeActive = pm.manipRotateContext("Rotate", q=1, editPivotMode=1)
-            customModeActive = pm.manipRotateContext("Rotate", q=1, mode=1) == 3
-        elif ctx in ("scaleSuperContext", "manipScaleContext"):  # Scale tool
-            customOri = pm.manipScaleContext("Scale", q=1, orientAxes=1)
-            pivotModeActive = pm.manipScaleContext("Scale", q=1, editPivotMode=1)
-            customModeActive = pm.manipScaleContext("Scale", q=1, mode=1) == 6
-        else:  # use the move tool orientation
-            customOri = pm.manipMoveContext(
-                "Move", q=1, orientAxes=1
-            )  # get custom orientation
-            pivotModeActive = pm.manipMoveContext("Move", q=1, editPivotMode=1)
-            customModeActive = pm.manipMoveContext("Move", q=1, mode=1) == 6
+        if ctx in ("RotateSuperContext", "manipRotateContext"):
+            customOri = cmds.manipRotateContext("Rotate", q=True, orientAxes=True)
+            pivotModeActive = cmds.manipRotateContext("Rotate", q=True, editPivotMode=True)
+            customModeActive = cmds.manipRotateContext("Rotate", q=True, mode=True) == 3
+        elif ctx in ("scaleSuperContext", "manipScaleContext"):
+            customOri = cmds.manipScaleContext("Scale", q=True, orientAxes=True)
+            pivotModeActive = cmds.manipScaleContext("Scale", q=True, editPivotMode=True)
+            customModeActive = cmds.manipScaleContext("Scale", q=True, mode=True) == 6
+        else:
+            customOri = cmds.manipMoveContext("Move", q=True, orientAxes=True)
+            pivotModeActive = cmds.manipMoveContext("Move", q=True, editPivotMode=True)
+            customModeActive = cmds.manipMoveContext("Move", q=True, mode=True) == 6
 
         if orientation and customModeActive:
             if not position:
-                pm.mel.error(
-                    (pm.mel.uiRes("m_bakeCustomToolPivot.kWrongAxisOriToolError"))
+                mel.eval(
+                    'error (uiRes("m_bakeCustomToolPivot.kWrongAxisOriToolError"))'
                 )
                 return
 
@@ -1534,49 +1366,49 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 degrees(customOri[2]),
             ]
 
-            pm.rotate(
-                objects, cX, cY, cZ, a=1, pcp=1, pgp=1, ws=1, fo=1
-            )  # Set object(s) rotation to the custom one (preserving child transform positions and geometry positions)
+            cmds.rotate(cX, cY, cZ, objects, a=True, pcp=True, pgp=True, ws=True, fo=True)
 
         if position:
             for obj in objects:
-                # Get pivot in parent space
-                m = pm.xform(obj, q=1, m=1)
-                p = pm.xform(obj, q=1, os=1, sp=1)
+                m = cmds.xform(obj, q=True, m=True)
+                p = cmds.xform(obj, q=True, os=True, sp=True)
                 oldX, oldY, oldZ = [
                     (p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12]),
                     (p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13]),
                     (p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14]),
                 ]
 
-                pm.xform(obj, zeroTransformPivots=1)  # Zero out pivots
+                cmds.xform(obj, zeroTransformPivots=True)
 
-                # Translate obj(s) back to previous pivot (preserving child transform positions and geometry positions)
-                newX, newY, newZ = pm.getAttr(
-                    obj.name() + ".translate"
-                )  # obj.translate
-                pm.move(
-                    obj, oldX - newX, oldY - newY, oldZ - newZ, pcp=1, pgp=1, ls=1, r=1
+                newX, newY, newZ = cmds.getAttr(f"{obj}.translate")[0]
+                cmds.move(
+                    oldX - newX,
+                    oldY - newY,
+                    oldZ - newZ,
+                    obj,
+                    pcp=True,
+                    pgp=True,
+                    ls=True,
+                    r=True,
                 )
 
         if pivotModeActive:
-            pm.ctxEditMode()  # exit pivot mode
+            cmds.ctxEditMode()
 
-        # Set the axis orientation mode back to obj
         if orientation and customModeActive:
             if ctx in ("RotateSuperContext", "manipRotateContext"):
-                pm.manipPivot(rotateToolOri=0)
+                cmds.manipPivot(rotateToolOri=0)
             elif ctx in ("scaleSuperContext", "manipScaleContext"):
-                pm.manipPivot(scaleToolOri=0)
-            else:  # Some other tool #Set move tool to obj mode and clear the custom ori. (so the tool won't restore it when activated)
-                pm.manipPivot(moveToolOri=0)
+                cmds.manipPivot(scaleToolOri=0)
+            else:
+                cmds.manipPivot(moveToolOri=0)
                 if ctx not in ("moveSuperContext", "manipMoveContext"):
-                    pm.manipPivot(ro=1)
+                    cmds.manipPivot(ro=True)
 
     @staticmethod
     @CoreUtils.undoable
     def transfer_pivot(
-        objects: List[Union[str, object]],
+        objects,
         translate: bool = False,
         rotate: bool = False,
         scale: bool = False,
@@ -1584,240 +1416,242 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         world_space: bool = True,
         select_targets_after_transfer: bool = False,
     ):
-        """Transfer the pivot orientation from the first given object to the remaining given objects.
-
-        Parameters:
-            objects (List[Union[str, object]]): List of objects. The first object is the source, and the rest are targets.
-            translate (bool): Whether to transfer the translation pivot.
-            rotate (bool): Whether to transfer the rotation pivot and orientation.
-            scale (bool): Whether to transfer the scale pivot.
-            bake (bool): Whether to bake the pivot orientation into the transform node.
-            world_space (bool): Whether to use world space for transformations.
-            select_targets_after_transfer (bool): Whether to select the target objects after the transfer.
-        """
-        objects = pm.ls(objects, type="transform")
+        """Transfer the pivot orientation from the first given object to the remaining given objects."""
+        objects = cmds.ls(as_strings(objects), type="transform") or []
         if not objects or len(objects) < 2:
-            pm.warning("At least two objects are required to transfer pivot.")
+            cmds.warning("At least two objects are required to transfer pivot.")
             return
 
         source = objects[0]
         targets = objects[1:]
 
         for target in targets:
-            # 1. Transfer Translate Pivot (Position)
             if translate:
-                rp = pm.xform(source, q=True, ws=world_space, rp=True)
-                pm.xform(target, ws=world_space, rp=rp)
+                rp = cmds.xform(source, q=True, ws=world_space, rp=True)
+                cmds.xform(target, ws=world_space, rp=rp)
                 if scale:
-                    sp = pm.xform(source, q=True, ws=world_space, sp=True)
-                    pm.xform(target, ws=world_space, sp=sp)
-            elif scale:  # Transfer Scale Pivot only
-                sp = pm.xform(source, q=True, ws=world_space, sp=True)
-                pm.xform(target, ws=world_space, sp=sp)
+                    sp = cmds.xform(source, q=True, ws=world_space, sp=True)
+                    cmds.xform(target, ws=world_space, sp=sp)
+            elif scale:
+                sp = cmds.xform(source, q=True, ws=world_space, sp=True)
+                cmds.xform(target, ws=world_space, sp=sp)
 
-            # 2. Transfer Rotate Pivot (Orientation)
             if rotate:
                 if world_space:
-                    # Capture geometry state to preserve visual position
-                    children = target.getChildren(type="transform")
+                    children = (
+                        cmds.listRelatives(
+                            target, children=True, type="transform", fullPath=True
+                        )
+                        or []
+                    )
                     if children:
-                        pm.parent(children, world=True)
+                        cmds.parent(children, world=True)
 
+                    shapes = (
+                        cmds.listRelatives(
+                            target, shapes=True, noIntermediate=True, fullPath=True
+                        )
+                        or []
+                    )
                     shape_points = {}
-                    shapes = target.getShapes()
                     for sh in shapes:
                         try:
-                            # Capture world points
-                            shape_points[sh] = sh.getPoints(space="world")
+                            stype = cmds.nodeType(sh)
+                            if stype == "mesh":
+                                num = cmds.polyEvaluate(sh, vertex=True) or 0
+                                pts = []
+                                for i in range(num):
+                                    pts.append(
+                                        cmds.pointPosition(
+                                            f"{sh}.vtx[{i}]", world=True
+                                        )
+                                    )
+                                shape_points[sh] = pts
                         except Exception:
                             pass
 
-                    # Step A: Align Target Transform Rotation to Source
-                    # We utilize matchTransform to robustly align the frame (Rotate logic)
-                    # This rotates the object to align its axes with source
                     try:
-                        pm.matchTransform(
-                            target, source, rot=True, pos=False, piv=False, scl=False
+                        cmds.matchTransform(
+                            target,
+                            source,
+                            rot=True,
+                            pos=False,
+                            piv=False,
+                            scl=False,
                         )
                     except Exception as e:
-                        pm.warning(f"matchTransform failed in transfer_pivot: {e}")
+                        cmds.warning(f"matchTransform failed in transfer_pivot: {e}")
 
-                    # Step B: Handle `bake=False` (Move Rotate -> RotateAxis)
-                    # If we don't bake, we want to keep `rotate` attribute clean (e.g. 0,0,0)
-                    # and push the alignment into `rotateAxis`.
                     if not bake:
-                        # Get current rotation matrix (Object Space)
-                        # This includes the rotation we just applied
-                        m = pm.dt.Matrix(pm.xform(target, q=True, matrix=True, os=True))
-                        # Invert matrix to account for RotateAxis inverse logic
+                        m = om.MMatrix(
+                            cmds.xform(target, q=True, matrix=True, os=True)
+                        )
                         m_inv = m.inverse()
-                        tm = pm.dt.TransformationMatrix(m_inv)
-                        # Get Euler rotation in radians
-                        euler_rad = tm.getRotation()
-                        # Convert to degrees
-                        euler_deg = [pm.dt.degrees(x) for x in euler_rad]
+                        tm = om.MTransformationMatrix(m_inv)
+                        euler = tm.rotation()
+                        euler_deg = [
+                            math.degrees(euler.x),
+                            math.degrees(euler.y),
+                            math.degrees(euler.z),
+                        ]
 
-                        # Zero out rotate, Set RotateAxis
-                        pm.xform(target, ro=(0, 0, 0))
-                        pm.xform(target, ra=euler_deg)
+                        cmds.xform(target, ro=(0, 0, 0))
+                        cmds.xform(target, ra=euler_deg)
 
-                    # Step C: Restore Geometry
                     if children:
-                        pm.parent(children, target)
+                        try:
+                            cmds.parent(children, target)
+                        except Exception:
+                            pass
                     for sh, pts in shape_points.items():
                         try:
-                            sh.setPoints(pts, space="world")
+                            for i, p in enumerate(pts):
+                                cmds.xform(f"{sh}.vtx[{i}]", ws=True, t=p)
                         except Exception:
                             pass
 
                 else:
-                    # Local space transfer
-                    source_ra = pm.xform(source, q=True, ra=True)
-                    pm.xform(target, ra=source_ra)
+                    source_ra = cmds.xform(source, q=True, ra=True)
+                    cmds.xform(target, ra=source_ra)
 
-            # 3. Bake (if requested)
             if bake:
-                # If bake=True, `makeIdentity` will normalize the transforms.
-                # Since we restored geometry to World Positions, `makeIdentity`
-                # will simply set transforms to Identity and leave geometry where it is.
-                pm.makeIdentity(
-                    target, apply=True, t=translate, r=rotate, s=scale, n=0, pn=True
+                cmds.makeIdentity(
+                    target, apply=True, t=translate, r=rotate, s=scale, n=False, pn=True
                 )
 
         if select_targets_after_transfer:
-            pm.select(targets, replace=True)
+            cmds.select(targets, replace=True)
 
     @staticmethod
     @CoreUtils.undoable
     def aim_object_at_point(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0)):
-        """Aim the given object(s) at the given world space position.
-
-        Parameters:
-            objects (str/obj/list): Transform node(s) of the objects to orient.
-            target_pos (tuple/str/obj): A point as (x, y, z), or a transform node
-                at which to aim the other given 'objects'.
-            aim_vect (tuple): The vector in local coordinates that points at the target.
-            up_vect (tuple): The vector in local coordinates that aligns with the world up vector.
-
-        Example:
-            aim_object_at_point(['cube1', 'cube2'], (0, 15, 15))
-        """
+        """Aim the given object(s) at the given world space position."""
         created_target = False
         if isinstance(target_pos, (tuple, set, list)):
-            target = pm.createNode("transform", name="target_helper")
-            pm.xform(target, translation=target_pos, absolute=True)
+            target = cmds.createNode("transform", name="target_helper")
+            cmds.xform(target, translation=target_pos, absolute=True)
             created_target = True
         else:
-            target = target_pos  # Assume it's an existing object's name
+            target = str(target_pos)
 
         constraints = []
         for obj in ptk.make_iterable(objects):
-            const = pm.aimConstraint(
+            obj = str(obj)
+            const = cmds.aimConstraint(
                 target, obj, aim=aim_vect, worldUpVector=up_vect, worldUpType="vector"
             )
             constraints.append(const)
 
-        pm.delete(constraints)
+        flat_constraints = []
+        for c in constraints:
+            if isinstance(c, list):
+                flat_constraints.extend(c)
+            else:
+                flat_constraints.append(c)
+        if flat_constraints:
+            cmds.delete(flat_constraints)
         if created_target:
-            pm.delete(target)
+            cmds.delete(target)
 
     @staticmethod
     def orient_to_vector(
-        transform: "pm.nodetypes.Transform",
-        aim_vector: "pm.datatypes.Vector" = (1, 0, 0),
-        up_vector: "pm.datatypes.Vector" = (0, 1, 0),
+        transform,
+        aim_vector=(1, 0, 0),
+        up_vector=(0, 1, 0),
     ):
         """Orients a transform so its local +X aims along the given world-space vector."""
         transform = NodeUtils.get_transform_node(transform)
         if not transform:
             raise ValueError(f"// Error: Invalid transform node: {transform}")
+        transform = str(transform)
 
-        up_vector_X, up_vector_Y, up_vector_Z = up_vector
-        up_vector = pm.datatypes.Vector(up_vector_X, up_vector_Y, up_vector_Z)
+        up_vector = om.MVector(up_vector[0], up_vector[1], up_vector[2])
+        aim_vector = om.MVector(aim_vector[0], aim_vector[1], aim_vector[2])
 
-        aim_vector_X, aim_vector_Y, aim_vector_Z = aim_vector
-        aim_vector = pm.datatypes.Vector(aim_vector_X, aim_vector_Y, aim_vector_Z)
+        temp = cmds.spaceLocator()[0]
+        target = cmds.spaceLocator()[0]
 
-        temp = pm.spaceLocator()
-        target = pm.spaceLocator()
+        pos_arr = cmds.xform(transform, q=True, ws=True, t=True)
+        pos = om.MVector(pos_arr[0], pos_arr[1], pos_arr[2])
+        cmds.xform(temp, ws=True, t=[pos.x, pos.y, pos.z])
+        new_pos = pos + aim_vector
+        cmds.xform(target, ws=True, t=[new_pos.x, new_pos.y, new_pos.z])
 
-        pos = transform.getTranslation(space="world")
-        temp.setTranslation(pos, space="world")
-        target.setTranslation(pos + aim_vector, space="world")
-
-        pm.delete(
-            pm.aimConstraint(
+        cmds.delete(
+            cmds.aimConstraint(
                 target,
                 temp,
                 aimVector=(1, 0, 0),
-                upVector=up_vector,
+                upVector=(up_vector.x, up_vector.y, up_vector.z),
                 worldUpType="vector",
-                worldUpVector=up_vector,
+                worldUpVector=(up_vector.x, up_vector.y, up_vector.z),
                 maintainOffset=False,
             )
         )
 
-        transform.setRotation(temp.getRotation(space="world"), space="world")
-        pm.delete([temp, target])
+        rot = cmds.xform(temp, q=True, ws=True, ro=True)
+        cmds.xform(transform, ws=True, ro=rot)
+        cmds.delete([temp, target])
 
     @classmethod
     @CoreUtils.undoable
     def rotate_axis(cls, objects, target_pos):
-        """Aim the given object at the given world space position.
-        All rotations in rotated channel, geometry is transformed so
-        it does not appear to move during this transformation
-
-        Parameters:
-            objects (str/obj/list): Transform node(s) of the objects to orient.
-            target_pos (obj)(tuple): A point as xyz, or one or more transform nodes at which to aim the other given 'objects'.
+        """Aim the given object at the given world space position. Rotations applied to
+        rotated channel; geometry is transformed so it does not appear to move.
         """
-        for obj in pm.ls(objects, type="transform"):
+        for obj in cmds.ls(as_strings(objects), type="transform") or []:
             cls.aim_object_at_point(obj, target_pos)
 
-            try:
-                c = obj.verts
-            except TypeError:
-                c = obj.cp
+            shapes = cmds.listRelatives(obj, shapes=True, noIntermediate=True) or []
+            comp = None
+            if shapes:
+                stype = cmds.nodeType(shapes[0])
+                if stype == "mesh":
+                    comp = f"{obj}.vtx[*]"
+                elif stype in ("nurbsCurve", "nurbsSurface"):
+                    comp = f"{obj}.cv[*]"
+                else:
+                    comp = f"{obj}.cp[*]"
+            else:
+                comp = f"{obj}.cp[*]"
 
-            wim = pm.getAttr(obj.worldInverseMatrix)
-            pm.xform(c, matrix=wim)
+            wim = cmds.getAttr(f"{obj}.worldInverseMatrix[0]")
+            cmds.xform(comp, matrix=wim)
 
-            pos = pm.xform(
+            pos = cmds.xform(
                 obj, q=True, translation=True, absolute=True, worldSpace=True
             )
-            pm.xform(c, translation=pos, relative=True, worldSpace=True)
+            cmds.xform(comp, translation=pos, relative=True, worldSpace=True)
 
     @staticmethod
     def get_orientation(objects, returned_type="point"):
         """Get an objects orientation as a point or vector.
 
-        Parameters:
-            objects (str/obj/list): The object(s) to get the orientation of.
-            returned_type (str): The desired returned value type. (valid: 'point'(default), 'vector')
-
         Returns:
             (tuple)(list) If 'objects' given as a list, a list of tuples will be returned.
         """
         result = []
-        for obj in pm.ls(objects, objectsOnly=True):
-            world_matrix = pm.xform(obj, q=True, matrix=True, worldSpace=True)
-            rAxis = pm.getAttr(obj.rotateAxis)
+        for obj in cmds.ls(as_strings(objects), objectsOnly=True) or []:
+            world_matrix = cmds.xform(obj, q=True, matrix=True, worldSpace=True)
+            rAxis = cmds.getAttr(f"{obj}.rotateAxis")[0]
             if any((rAxis[0], rAxis[1], rAxis[2])):
                 print(
                     f"# Warning: {obj} has a modified .rotateAxis of {rAxis} which is included in the result. #"
                 )
 
             if returned_type == "vector":
-                from maya.api.OpenMaya import MVector
-
                 ori = (
-                    MVector(world_matrix[0:3]),
-                    MVector(world_matrix[4:7]),
-                    MVector(world_matrix[8:11]),
+                    om.MVector(world_matrix[0], world_matrix[1], world_matrix[2]),
+                    om.MVector(world_matrix[4], world_matrix[5], world_matrix[6]),
+                    om.MVector(world_matrix[8], world_matrix[9], world_matrix[10]),
                 )
 
             else:
-                ori = (world_matrix[0:3], world_matrix[4:7], world_matrix[8:11])
+                ori = (
+                    world_matrix[0:3],
+                    world_matrix[4:7],
+                    world_matrix[8:11],
+                )
             result.append(ori)
 
         return ptk.format_return(result, objects)
@@ -1826,42 +1660,35 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     def get_dist_between_two_objects(a, b):
         """Get the magnatude of a vector using the center points of two given objects.
 
-        Parameters:
-            a (obj)(str): Object, object name, or point (x,y,z).
-            b (obj)(str): Object, object name, or point (x,y,z).
-
         Returns:
             (float)
         """
-        x1, y1, z1 = pm.objectCenter(a)
-        x2, y2, z2 = pm.objectCenter(b)
+        x1, y1, z1 = cmds.objectCenter(a)
+        x2, y2, z2 = cmds.objectCenter(b)
 
         from math import sqrt
 
-        distance = sqrt(pow((x1 - x2), 2) + pow((y1 - y2), 2) + pow((z1 - z2), 2))
-
-        return distance
+        return sqrt(pow((x1 - x2), 2) + pow((y1 - y2), 2) + pow((z1 - z2), 2))
 
     @staticmethod
     def get_center_point(objects):
         """Get the bounding box center point of any given object(s).
 
-        Parameters:
-            objects (str)(obj(list): The objects or components to get the center of.
-
         Returns:
             (tuple) position as xyz float values.
         """
-        objects = pm.ls(objects, flatten=True)
+        objects = cmds.ls(as_strings(objects), flatten=True) or []
         pos = [
             i
             for sublist in [
-                pm.xform(s, q=1, translation=1, worldSpace=1, absolute=1)
+                cmds.xform(s, q=True, translation=True, worldSpace=True, absolute=True)
                 for s in objects
             ]
             for i in sublist
         ]
-        center_pos = (  # Get center by averaging of all x,y,z points.
+        if not pos:
+            return (0.0, 0.0, 0.0)
+        center_pos = (
             sum(pos[0::3]) / len(pos[0::3]),
             sum(pos[1::3]) / len(pos[1::3]),
             sum(pos[2::3]) / len(pos[2::3]),
@@ -1870,18 +1697,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
 
     @staticmethod
     def get_bounding_box(objects, value="", world_space=True, return_valid_keys=False):
-        """Calculate and retrieve specific properties of the bounding box for the given object(s) or component(s).
-
-        Parameters:
-            objects (str/obj/list): The object(s) or component(s) to query.
-            value (str): A string representing the specific bounding box data to return.
-                        Multiple properties can be requested using '|'.
-            world_space (bool): If True, computes the bounding box in world space.
-            return_valid_keys (bool): If True, returns all valid bbox keys instead of computing the bbox.
-
-        Returns:
-            float/tuple/list: The requested bounding box value(s), or a list of valid keys if `return_valid_keys=True`.
-        """
+        """Calculate and retrieve specific properties of the bounding box for the given object(s) or component(s)."""
         bbox_values = {
             "xmin": None,
             "xmax": None,
@@ -1900,22 +1716,24 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             "maxsize": None,
         }
 
-        # Return only the valid keys if requested
         if return_valid_keys:
             return list(bbox_values.keys())
 
-        # Validate input objects
         if not objects:
             raise ValueError("No objects provided for bounding box calculation.")
 
-        objs = objects if isinstance(objects, (list, tuple)) else [objects]
+        objs = (
+            list(objects)
+            if isinstance(objects, (list, tuple))
+            else [objects]
+        )
+        objs = [str(o) for o in objs]
         bbox = (
-            pm.exactWorldBoundingBox(objs)
+            cmds.exactWorldBoundingBox(objs)
             if world_space
-            else pm.xform(objs, q=True, bb=True, ws=False)
+            else cmds.xform(objs, q=True, bb=True, ws=False)
         )
 
-        # Assign real values to the dictionary
         xmin, ymin, zmin, xmax, ymax, zmax = bbox
         size = (xmax - xmin, ymax - ymin, zmax - zmin)
         center = ((xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2)
@@ -1955,20 +1773,9 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     def sort_by_bounding_box_value(
         cls, objects, value="volume", descending=True, also_return_value=False
     ):
-        """Sort the given objects by their bounding box value.
-
-        Parameters:
-            objects (str/obj/list): The objects or components to sort.
-            value (str): See 'getBoundingBoxInfo' 'value' parameter.
-                            ex. 'xmin', 'xmax', 'sizex', 'volume', 'center' etc.
-            descending (bool): Sort the list from the largest value down.
-            also_return_value (bool): Instead of just the object; return a
-                            list of two element tuples as [(<value>, <obj>)].
-        Returns:
-            (list)
-        """
+        """Sort the given objects by their bounding box value."""
         valueAndObjs = []
-        for obj in pm.ls(objects, flatten=False):
+        for obj in cmds.ls(as_strings(objects), flatten=False) or []:
             v = cls.get_bounding_box(obj, value)
             valueAndObjs.append((v, obj))
 
@@ -1980,111 +1787,79 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     @staticmethod
     @CoreUtils.undoable
     def align_using_three_points(vertices):
-        """Move and align the object defined by the first 3 points to the last 3 points.
-
-        Builds a coordinate frame from each set of 3 points and computes the
-        rigid-body transformation (rotation + translation) that maps the source
-        frame onto the target frame.
-
-        Parameters:
-            vertices (list): Exactly 6 vertices. The first 3 must be on the same
-                object (the object to be transformed). The second 3 define
-                the target position and orientation.
-        """
-        import maya.api.OpenMaya as om
-
-        vertices = pm.ls(vertices, flatten=True)
+        """Move and align the object defined by the first 3 points to the last 3 points."""
+        vertices = cmds.ls(as_strings(vertices), flatten=True) or []
         if len(vertices) < 6:
-            pm.warning("align_using_three_points requires exactly 6 vertices.")
+            cmds.warning("align_using_three_points requires exactly 6 vertices.")
             return
 
-        object_to_move = pm.ls(vertices[:3], objectsOnly=True)
+        # Resolve the owning transform for the first 3 vertices.
+        # ``cmds.ls(objectsOnly=True)`` on a vertex returns the *shape*, not
+        # the transform. Walk up to the parent if needed.
+        owners = cmds.ls(vertices[:3], objectsOnly=True) or []
+        object_to_move = []
+        for owner in owners:
+            if cmds.objectType(owner, isAType="transform"):
+                object_to_move.append(owner)
+            else:
+                parents = cmds.listRelatives(owner, parent=True, fullPath=True) or []
+                if parents:
+                    object_to_move.append(parents[0])
         if not object_to_move:
-            pm.warning("First 3 vertices must belong to a transform node.")
+            cmds.warning("First 3 vertices must belong to a transform node.")
             return
 
-        # Source and target points
-        p0, p1, p2 = [om.MVector(*pm.pointPosition(v, w=True)) for v in vertices[0:3]]
-        p3, p4, p5 = [om.MVector(*pm.pointPosition(v, w=True)) for v in vertices[3:6]]
+        p0, p1, p2 = [om.MVector(*cmds.pointPosition(v, world=True)) for v in vertices[0:3]]
+        p3, p4, p5 = [om.MVector(*cmds.pointPosition(v, world=True)) for v in vertices[3:6]]
 
         def _build_frame(a, b, c):
-            """Build an orthonormal frame from 3 points."""
             x_axis = (b - a).normal()
             temp = (c - a).normal()
-            z_axis = (x_axis ^ temp).normal()  # cross product
+            z_axis = (x_axis ^ temp).normal()
             y_axis = (z_axis ^ x_axis).normal()
             return x_axis, y_axis, z_axis
 
         src_x, src_y, src_z = _build_frame(p0, p1, p2)
         tgt_x, tgt_y, tgt_z = _build_frame(p3, p4, p5)
 
-        # Build 4x4 matrices from the frames (column-major for Maya)
-        # Source matrix (rows = axes, 4th row = origin)
         src_mat = om.MMatrix(
             [
-                src_x.x,
-                src_x.y,
-                src_x.z,
-                0,
-                src_y.x,
-                src_y.y,
-                src_y.z,
-                0,
-                src_z.x,
-                src_z.y,
-                src_z.z,
-                0,
-                p0.x,
-                p0.y,
-                p0.z,
-                1,
+                src_x.x, src_x.y, src_x.z, 0,
+                src_y.x, src_y.y, src_y.z, 0,
+                src_z.x, src_z.y, src_z.z, 0,
+                p0.x, p0.y, p0.z, 1,
             ]
         )
         tgt_mat = om.MMatrix(
             [
-                tgt_x.x,
-                tgt_x.y,
-                tgt_x.z,
-                0,
-                tgt_y.x,
-                tgt_y.y,
-                tgt_y.z,
-                0,
-                tgt_z.x,
-                tgt_z.y,
-                tgt_z.z,
-                0,
-                p3.x,
-                p3.y,
-                p3.z,
-                1,
+                tgt_x.x, tgt_x.y, tgt_x.z, 0,
+                tgt_y.x, tgt_y.y, tgt_y.z, 0,
+                tgt_z.x, tgt_z.y, tgt_z.z, 0,
+                p3.x, p3.y, p3.z, 1,
             ]
         )
 
-        # Transform = src_inverse * target  (maps source space to target space)
         delta = src_mat.inverse() * tgt_mat
 
-        # Apply: multiply the object's current world matrix by the delta
         current_mat = om.MMatrix(
-            pm.xform(object_to_move[0], q=True, matrix=True, worldSpace=True)
+            cmds.xform(object_to_move[0], q=True, matrix=True, worldSpace=True)
         )
         new_mat = current_mat * delta
-        pm.xform(object_to_move[0], matrix=list(new_mat), worldSpace=True)
+        cmds.xform(
+            object_to_move[0],
+            matrix=_mmatrix_to_flat(new_mat),
+            worldSpace=True,
+        )
 
     @staticmethod
     def is_overlapping(a, b, tolerance=0.001):
-        """Check if the vertices in a and b are overlapping within the given tolerance.
-
-        Parameters:
-            a (str/obj): The first object to check. Object can be a component.
-            b (str/obj): The second object to check. Object can be a component.
-            tolerance (float) = The maximum search distance before a vertex is considered not overlapping.
-
-        Returns:
-            (bool)
-        """
-        vert_setA = pm.ls(pm.polyListComponentConversion(a, toVertex=1), flatten=1)
-        vert_setB = pm.ls(pm.polyListComponentConversion(b, toVertex=1), flatten=1)
+        """Check if the vertices in a and b are overlapping within the given tolerance."""
+        vert_setA = cmds.ls(
+            cmds.polyListComponentConversion(a, toVertex=True), flatten=True
+        ) or []
+        vert_setB = cmds.ls(
+            cmds.polyListComponentConversion(b, toVertex=True), flatten=True
+        ) or []
 
         closestVerts = Components.get_closest_verts(
             vert_setA, vert_setB, tolerance=tolerance
@@ -2094,75 +1869,50 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
 
     @staticmethod
     def check_objects_against_plane(
-        objects: List["pm.nodetypes.Transform"],
-        plane_point: Tuple[float, float, float],
-        plane_normal: Tuple[float, float, float],
+        objects,
+        plane_point,
+        plane_normal,
         return_type: str = "bool",
-    ) -> Union[
-        List[Tuple["pm.nodetypes.Transform", bool]],
-        List[Tuple["pm.nodetypes.Transform", Any]],
-        List[Tuple["pm.nodetypes.Transform", "pm.datatypes.Vector"]],
-        List[Tuple["pm.nodetypes.Transform", "pm.MeshVertex"]],
-    ]:
-        """General method to check if any object's geometry is below a defined plane.
-
-        Parameters:
-            objects: List of objects to check.
-            plane_point: A point on the plane as a tuple (x, y, z).
-            plane_normal: The normal vector of the plane as a tuple (x, y, z).
-            return_type: Type of return value ("bool", "mpoint", "vector", "vertex").
-
-        Return:
-            List of objects with their status relative to the plane.
-        """
-        from maya.api import OpenMaya as om
-
-        # Convert plane_point and plane_normal from tuples to MPoint and MVector
+    ):
+        """General method to check if any object's geometry is below a defined plane."""
         plane_point = om.MPoint(*plane_point)
         plane_normal = om.MVector(*plane_normal).normalize()
 
         objects_below_threshold = []
 
-        for obj in objects:  # Validate if object is the correct type
-            if not isinstance(obj, pm.nodetypes.Transform):
-                print(f"Invalid object type: {obj}. Expected Transform node.")
+        for obj in objects:
+            obj = str(obj)
+            try:
+                if not cmds.objectType(obj, isAType="transform"):
+                    print(f"Invalid object type: {obj}. Expected Transform node.")
+                    continue
+            except Exception:
+                print(f"Invalid object: {obj}.")
                 continue
 
-            # Get the MDagPath of the object
             try:
                 sel_list = om.MSelectionList()
-                sel_list.add(obj.name())
+                sel_list.add(obj)
                 dag_path = sel_list.getDagPath(0)
             except Exception as e:
                 print(f"Error getting dag path for {obj}: {e}")
                 continue
 
-            # Ensure the object has a mesh shape
             dag_path_shape = dag_path.extendToShape()
             if dag_path_shape.apiType() != om.MFn.kMesh:
                 continue
 
-            # Get the world transformation matrix of the object
             world_matrix = dag_path.inclusiveMatrix()
 
-            # Use MFnMesh to access the mesh vertices
             mesh_fn = om.MFnMesh(dag_path_shape)
-            points = mesh_fn.getPoints(
-                om.MSpace.kObject
-            )  # Get vertices in object space
+            points = mesh_fn.getPoints(om.MSpace.kObject)
 
-            # Prepare to collect vertices that fall behind the plane
             falling_vertices = []
 
-            # Transform vertices to world space and check their distance to the plane
-            for point in points:
-                # Transform the point to world space
+            for idx, point in enumerate(points):
                 transformed_point = point * world_matrix
-
-                # Calculate the distance from the point to the plane
                 distance = (transformed_point - plane_point) * plane_normal
 
-                # Check if the point is below the plane
                 if distance < 0:
                     if return_type == "bool":
                         objects_below_threshold.append((obj, True))
@@ -2171,14 +1921,14 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                         falling_vertices.append(transformed_point)
                     elif return_type == "vector":
                         falling_vertices.append(
-                            pm.datatypes.Vector(
+                            om.MVector(
                                 transformed_point.x,
                                 transformed_point.y,
                                 transformed_point.z,
                             )
                         )
                     elif return_type == "vertex":
-                        falling_vertices.append(obj.vtx[points.index(point)])
+                        falling_vertices.append(f"{obj}.vtx[{idx}]")
                     else:
                         print(
                             f"Invalid return_type: {return_type}. Expected 'bool', 'mpoint', 'vector', or 'vertex'."
@@ -2197,20 +1947,16 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     def get_vertex_positions(objects, worldSpace=True):
         """Get all vertex positions for the given objects.
 
-        Parameters:
-            objects (str/obj/list): The polygon object(s).
-            worldSpace (bool): Sample in world or object space.
-
         Returns:
             (list) Nested lists if multiple objects given.
         """
-        import maya.OpenMaya as om
+        import maya.OpenMaya as om1
 
-        space = om.MSpace.kWorld if worldSpace else om.MSpace.kObject
+        space = om1.MSpace.kWorld if worldSpace else om1.MSpace.kObject
 
         result = []
         for mesh in CoreUtils.get_mfn_mesh(objects, api_version=1):
-            points = om.MPointArray()
+            points = om1.MPointArray()
             mesh.getPoints(points, space)
 
             result.append(
@@ -2224,11 +1970,6 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     @classmethod
     def get_matching_verts(cls, a, b, world_space=False):
         """Find any vertices which point locations match between two given mesh.
-
-        Parameters:
-            a (str/obj/list): The first polygon object.
-            a (str/obj/list): A second polygon object.
-            world_space (bool): Sample in world or object space.
 
         Returns:
             (list) nested tuples with int values representing matching vertex pairs.
@@ -2247,95 +1988,61 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     def order_by_distance(cls, objects, reference_point=None, reverse=False):
         """Order the given objects by their distance from the given reference point.
 
-        Parameters:
-            objects (str)(int/list): The object(s) to order.
-            reference_point (list): A three value float list x, y, z.
-            reverse (bool): Reverse the naming order. (Farthest object first)
-
         Returns:
-            (list) ordered objects
+            (list) ordered objects (as plain strings)
         """
         if reference_point is None:
             reference_point = [0, 0, 0]
 
-        # Create a list to store tuples of (distance, object)
         distance_object_pairs = []
 
-        for obj in pm.ls(objects, flatten=True):
-            # Get the bounding box center
+        for obj in cmds.ls(as_strings(objects), flatten=True) or []:
             bb_center = cls.get_bounding_box(obj, "center")
-            # Calculate the distance from the reference point
             distance = (
                 (bb_center[0] - reference_point[0]) ** 2
                 + (bb_center[1] - reference_point[1]) ** 2
                 + (bb_center[2] - reference_point[2]) ** 2
             ) ** 0.5
-            # Append the tuple to the list
             distance_object_pairs.append((distance, obj))
 
-        # Sort the list based on the distance
         distance_object_pairs.sort(key=lambda x: x[0], reverse=reverse)
 
-        # Extract the ordered list of objects from the sorted list of tuples
-        ordered_objs = [pair[1] for pair in distance_object_pairs]
-
-        return ordered_objs
+        return [pair[1] for pair in distance_object_pairs]
 
     @staticmethod
     @CoreUtils.undoable
     def align_vertices(mode, average=False, edgeloop=False):
-        """Align selected vertices along one or more axes.
-
-        Vertices are aligned to either the last selected vertex's position or
-        the average position of all selected vertices.
-
-        Parameters:
-            mode (int): Which axes to flatten/align:
-                0 - Align YZ (vertices share the same Y and Z as the reference)
-                1 - Align XZ (vertices share the same X and Z)
-                2 - Align XY (vertices share the same X and Y)
-                3 - Align X  (vertices share the same X only)
-                4 - Align Y  (vertices share the same Y only)
-                5 - Align Z  (vertices share the same Z only)
-                6 - Align XYZ (snap all vertices to the same point)
-            average (bool): If True, align to the average position of all selected
-                vertices.  If False, align to the last selected vertex.
-            edgeloop (bool): If True, expand the current edge selection to a full
-                edge loop before converting to vertices.
-
-        Example:
-            align_vertices(mode=3, average=True, edgeloop=True)
-        """
-        selectTypeEdge = pm.selectType(query=True, edge=True)
+        """Align selected vertices along one or more axes."""
+        selectTypeEdge = cmds.selectType(query=True, edge=True)
 
         if edgeloop:
-            pm.mel.SelectEdgeLoopSp()  # select edgeloop
+            mel.eval("SelectEdgeLoopSp")
 
-        pm.mel.PolySelectConvert(3)  # convert to vertices
+        mel.eval("PolySelectConvert 3")
 
-        selection = pm.ls(sl=True, flatten=1)
+        selection = cmds.ls(sl=True, flatten=True) or []
 
         if len(selection) < 2:
             if len(selection) == 0:
-                return pm.inViewMessage(
+                return cmds.inViewMessage(
                     statusMessage="<hl>No vertices selected.</hl>",
                     pos="topCenter",
                     fade=True,
                 )
-            return pm.inViewMessage(
+            return cmds.inViewMessage(
                 statusMessage="<hl>Selection must contain at least two vertices.</hl>",
                 pos="topCenter",
                 fade=True,
             )
 
-        lastSelected = pm.ls(tail=1, sl=True, flatten=1)
-        align_to = pm.xform(lastSelected, q=True, translation=1, worldSpace=1)
+        lastSelected = cmds.ls(tail=1, sl=True, flatten=True) or []
+        align_to = cmds.xform(lastSelected, q=True, translation=True, worldSpace=True)
         alignX = align_to[0]
         alignY = align_to[1]
         alignZ = align_to[2]
 
         if average:
-            xyz = pm.xform(selection, q=True, translation=1, worldSpace=1)
+            xyz = cmds.xform(selection, q=True, translation=True, worldSpace=True)
             x = xyz[0::3]
             y = xyz[1::3]
             z = xyz[2::3]
@@ -2344,25 +2051,25 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             alignZ = float(sum(z)) / (len(xyz) / 3)
 
         for vertex in selection:
-            vertexXYZ = pm.xform(vertex, q=True, translation=1, worldSpace=1)
+            vertexXYZ = cmds.xform(vertex, q=True, translation=True, worldSpace=True)
             vertX = vertexXYZ[0]
             vertY = vertexXYZ[1]
             vertZ = vertexXYZ[2]
 
             modes = {
-                0: (vertX, alignY, alignZ),  # align YZ
-                1: (alignX, vertY, alignZ),  # align XZ
-                2: (alignX, alignY, vertZ),  # align XY
+                0: (vertX, alignY, alignZ),
+                1: (alignX, vertY, alignZ),
+                2: (alignX, alignY, vertZ),
                 3: (alignX, vertY, vertZ),
                 4: (vertX, alignY, vertZ),
                 5: (vertX, vertY, alignZ),
-                6: (alignX, alignY, alignZ),  # align XYZ
+                6: (alignX, alignY, alignZ),
             }
 
-            pm.xform(vertex, translation=modes[mode], worldSpace=1)
+            cmds.xform(vertex, translation=modes[mode], worldSpace=True)
 
         if selectTypeEdge:
-            pm.selectType(edge=True)
+            cmds.selectType(edge=True)
 
 
 # -----------------------------------------------------------------------------

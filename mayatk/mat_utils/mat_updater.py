@@ -1,14 +1,15 @@
 # !/usr/bin/python
 # coding=utf-8
+try:
+    import maya.cmds as cmds
+except ImportError:
+    cmds = None
+
 import os
 import logging
 from qtpy import QtCore
 from typing import List, Dict, Any, Union, Callable
 
-try:
-    import pymel.core as pm
-except ImportError:
-    pass
 import pythontk as ptk
 
 # From this package:
@@ -87,8 +88,10 @@ class MatUpdater(ptk.LoggingMixin):
             results = {}
             texture_cache = {}
 
-            # Pre-resolve materials
-            materials = MatUtils.get_mats(materials)
+            # Pre-resolve materials. Force string returns — un-migrated
+            # ``MatUtils.get_mats`` defaults to node wrapping which the
+            # downstream cmds.* calls don't accept in Maya 2025.
+            materials = MatUtils.get_mats(materials, as_strings=True)
 
             cls.logger.info(f"Processing {len(materials)} material(s)...")
 
@@ -112,22 +115,24 @@ class MatUpdater(ptk.LoggingMixin):
                 all_files = set()
 
                 for mat in materials:
-                    # Get source files
-                    file_nodes = pm.listHistory(mat, type="file")
+                    # Get source files. ``cmds.listHistory`` has no ``type``
+                    # flag; filter manually.
+                    history = cmds.listHistory(mat) or []
+                    file_nodes = [h for h in history if cmds.nodeType(h) == "file"]
                     files = []
                     for f in file_nodes:
                         try:
-                            path = f.fileTextureName.get()
+                            path = cmds.getAttr(f"{f}.fileTextureName")
                             resolved = MatUtils.resolve_path(path)
                             if resolved and os.path.isfile(resolved):
                                 files.append(resolved)
                             elif resolved:
                                 cls.logger.warning(
-                                    f"Resolved path is not a file: '{resolved}' for node '{f.name()}'"
+                                    f"Resolved path is not a file: '{resolved}' for node '{f}'"
                                 )
                             elif path:
                                 cls.logger.info(
-                                    f"Could not resolve path: '{path}' for node '{f.name()}'"
+                                    f"Could not resolve path: '{path}' for node '{f}'"
                                 )
                         except Exception:
                             continue
@@ -165,8 +170,8 @@ class MatUpdater(ptk.LoggingMixin):
                 cls.logger.notice(f"Output Folder: {move_to_folder}")
 
             for mat in materials:
-                mat_name = mat.name()
-                mat_link = cls.logger.log_link(mat_name, "select", node=mat_name)
+                mat_name = str(mat).split("|")[-1].split(":")[-1]
+                mat_link = cls.logger.log_link(mat_name, "select", node=str(mat))
                 cls.logger.log_divider()
                 cls.logger.info(f"Material: {mat_link}")
 
@@ -174,7 +179,8 @@ class MatUpdater(ptk.LoggingMixin):
                 if run_factory and mat in mat_to_files:
                     files = mat_to_files[mat]
                 else:
-                    file_nodes = pm.listHistory(mat, type="file")
+                    history = cmds.listHistory(mat) or []
+                    file_nodes = [h for h in history if cmds.nodeType(h) == "file"]
                     if not file_nodes:
                         cls.logger.info(f"No file nodes found connected to {mat_link}.")
                         continue
@@ -182,20 +188,21 @@ class MatUpdater(ptk.LoggingMixin):
                     files = []
                     for f in file_nodes:
                         try:
-                            path = f.fileTextureName.get()
+                            path = cmds.getAttr(f"{f}.fileTextureName")
+                            f_name = str(f).split("|")[-1].split(":")[-1]
                             resolved = MatUtils.resolve_path(path)
                             if resolved and os.path.isfile(resolved):
                                 files.append(resolved)
                             elif resolved:
                                 node_link = cls.logger.log_link(
-                                    f.name(), "select", node=f.name()
+                                    f_name, "select", node=f_name
                                 )
                                 cls.logger.warning(
                                     f"Resolved path is not a file: '{resolved}' for node {node_link}"
                                 )
                             elif path:
                                 node_link = cls.logger.log_link(
-                                    f.name(), "select", node=f.name()
+                                    f_name, "select", node=f_name
                                 )
                                 cls.logger.info(
                                     f"Could not resolve path: '{path}' for node {node_link}"
@@ -489,9 +496,10 @@ class MatUpdater(ptk.LoggingMixin):
 
         # Identify file nodes that match our paths
         matching_nodes = set()
-        for node in pm.listHistory(material, type="file"):
+        history = cmds.listHistory(material) or []
+        for node in [h for h in history if cmds.nodeType(h) == "file"]:
             try:
-                path = MatUtils.resolve_path(node.fileTextureName.get())
+                path = MatUtils.resolve_path(cmds.getAttr(f"{node}.fileTextureName"))
                 if path and os.path.normpath(path) in target_paths:
                     matching_nodes.add(node)
             except Exception:
@@ -501,7 +509,7 @@ class MatUpdater(ptk.LoggingMixin):
             return
 
         # Define attributes to check
-        node_type = material.nodeType()
+        node_type = cmds.nodeType(material)
         attributes = []
         if node_type == "standardSurface":
             attributes = [
@@ -528,27 +536,27 @@ class MatUpdater(ptk.LoggingMixin):
             ]
 
         for attr_name in attributes:
-            if not material.hasAttr(attr_name):
+            if not cmds.attributeQuery(attr_name, node=material, exists=True):
                 continue
 
-            attr = material.attr(attr_name)
-            inputs = pm.listConnections(attr, source=True, destination=False)
+            attr = f"{material}.{attr_name}"
+            inputs = cmds.listConnections(attr, source=True, destination=False)
             if inputs:
                 input_node = inputs[0]
                 # Check if input_node is one of our matching nodes OR driven by them
                 # We check history of input_node (including itself)
-                history = pm.listHistory(input_node)
+                history = cmds.listHistory(input_node)
                 if any(n in matching_nodes for n in history):
                     # Disconnect
                     cls.logger.info(
                         f"Disconnecting {attr_name} (driven by updated file)"
                     )
                     # Get the plug
-                    input_plugs = pm.listConnections(
+                    input_plugs = cmds.listConnections(
                         attr, source=True, plugs=True, destination=False
                     )
                     if input_plugs:
-                        pm.disconnectAttr(input_plugs[0], attr)
+                        cmds.disconnectAttr(input_plugs[0], attr)
 
     @classmethod
     def update_network(cls, material, texture_paths, config) -> Dict[str, str]:
@@ -575,7 +583,7 @@ class MatUpdater(ptk.LoggingMixin):
 
         # Use GameShader for connections to avoid duplication
         gs = GameShader()
-        node_type = material.nodeType()
+        node_type = cmds.nodeType(material)
 
         for map_type, path in inventory.items():
             try:
@@ -800,7 +808,7 @@ class MatUpdaterSlots(MatUpdater):
 
         materials = None
         if self.selection_mode == "Selected Materials":
-            materials = pm.selected()
+            materials = cmds.ls(selection=True) or []
             if not materials:
                 self.ui.txt001.append("No materials selected.")
                 return

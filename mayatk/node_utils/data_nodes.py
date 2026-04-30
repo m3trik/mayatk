@@ -2,10 +2,6 @@
 # coding=utf-8
 import logging
 
-try:
-    import pymel.core as pm
-except ImportError:
-    pm = None
 
 try:
     import maya.cmds as cmds
@@ -55,14 +51,14 @@ class DataNodes:
         write attributes.
 
         Returns:
-            pm.PyNode: The ``data_internal`` network node.
+            str: Name of the ``data_internal`` network node.
         """
         name = DataNodes.INTERNAL
 
-        if pm.objExists(name):
-            node = pm.PyNode(name)
+        if cmds.objExists(name):
+            node = name
         else:
-            node = pm.createNode("network", name=name)
+            node = cmds.createNode("network", name=name)
 
         # Migrate: older scenes may have the node fully locked.
         node_str = str(node)
@@ -82,14 +78,14 @@ class DataNodes:
         All nine transform channels are locked and hidden.
 
         Returns:
-            pm.PyNode: The ``data_export`` transform.
+            str: Name of the ``data_export`` transform.
         """
         name = DataNodes.EXPORT
 
-        if pm.objExists(name):
-            return pm.PyNode(name)
+        if cmds.objExists(name):
+            return name
 
-        node = pm.group(empty=True, name=name)
+        node = cmds.group(empty=True, name=name)
         node_str = str(node)
 
         # Add protective locator shape (prevents Optimize Scene Size
