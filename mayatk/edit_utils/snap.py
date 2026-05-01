@@ -246,7 +246,7 @@ class Snap(ptk.HelpMixin):
                         new_pos[i] = round(pos[i] / grid_size) * grid_size
                 # Calculate the delta and move
                 delta = [new_pos[i] - pos[i] for i in range(3)]
-                cmds.move(obj, delta, relative=True, worldSpace=True)
+                cmds.move(delta[0], delta[1], delta[2], obj, relative=True, worldSpace=True)
                 snap_count += 1
 
         return snap_count

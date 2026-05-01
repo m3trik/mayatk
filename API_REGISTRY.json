@@ -1,7 +1,7 @@
 {
   "name": "mayatk",
   "source_root": "mayatk/mayatk",
-  "generated_at": "2026-04-29",
+  "generated_at": "2026-05-01",
   "modules": [
     {
       "relpath": "anim_utils/_anim_utils.py",
@@ -366,6 +366,515 @@
               "signature": "(objects=None, padding: float = 0) -> bool",
               "summary": "Set the playback range to encompass keyframes on all (or given) scene objects.",
               "line": 5816,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relpath": "anim_utils/blendshape_animator/_blendshape_animator.py",
+      "summary": "Main workflow facade for blendShape morph-animation creation, editing, and export.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "BlendshapeAnimator",
+          "summary": "Main workflow facade for blendShape animations.",
+          "line": 23,
+          "bases": [
+            "ptk.LoggingMixin"
+          ],
+          "members": [
+            {
+              "name": "create",
+              "qualname": "BlendshapeAnimator.create",
+              "kind": "method",
+              "signature": "(self, base_mesh: Optional[str] = None, target_mesh: Optional[str] = None, start_frame: int = 5500, end_frame: int = 5800, name: str = 'morph', test_setup: bool = True) -> bool",
+              "summary": "Set up basic morph animation between two meshes.",
+              "line": 46,
+              "deprecated": false
+            },
+            {
+              "name": "edit_weight_based",
+              "qualname": "BlendshapeAnimator.edit_weight_based",
+              "kind": "method",
+              "signature": "(self, weights: Optional[List[float]] = None, count: int = 3, weight_range: Tuple[float, float] = (0.0, 1.0)) -> List[Target]",
+              "summary": "Create tweens at specific weights or evenly spaced.",
+              "line": 115,
+              "deprecated": false
+            },
+            {
+              "name": "edit_frame_based",
+              "qualname": "BlendshapeAnimator.edit_frame_based",
+              "kind": "method",
+              "signature": "(self, frames: Optional[List[int]] = None, target_frame: Optional[int] = None) -> List[Target]",
+              "summary": "Create tweens at specific animation frames.",
+              "line": 141,
+              "deprecated": false
+            },
+            {
+              "name": "edit_apply_tweens",
+              "qualname": "BlendshapeAnimator.edit_apply_tweens",
+              "kind": "method",
+              "signature": "(self, tweens: Optional[List[Target]] = None) -> List[Target]",
+              "summary": "Apply tween mesh edits back to blendShape.",
+              "line": 172,
+              "deprecated": false
+            },
+            {
+              "name": "basic_workflow",
+              "qualname": "BlendshapeAnimator.basic_workflow",
+              "kind": "classmethod",
+              "signature": "(cls, base_mesh: Optional[str] = None, target_mesh: Optional[str] = None, inbetween_meshes: Optional[List[str]] = None, start_frame: Optional[int] = None, end_frame: Optional[int] = None, frame_range: Optional[Union[Tuple[int, int], List[int]]] = None, name: str = 'morph') -> Optional['BlendshapeAnimator']",
+              "summary": "Complete basic workflow: create setup with targets ready for editing.",
+              "line": 236,
+              "deprecated": false
+            },
+            {
+              "name": "apply_all_edits",
+              "qualname": "BlendshapeAnimator.apply_all_edits",
+              "kind": "method",
+              "signature": "(self) -> bool",
+              "summary": "Apply all target edits to the current setup.",
+              "line": 292,
+              "deprecated": false
+            },
+            {
+              "name": "finalize_for_export",
+              "qualname": "BlendshapeAnimator.finalize_for_export",
+              "kind": "method",
+              "signature": "(self, cleanup_scene: bool = True, delete_construction_history: bool = True, hide_target_mesh: bool = True, delete_inbetween_meshes: bool = True) -> bool",
+              "summary": "Finalize the morph animation and clean up the scene for baking/export.",
+              "line": 310,
+              "deprecated": false
+            },
+            {
+              "name": "from_existing",
+              "qualname": "BlendshapeAnimator.from_existing",
+              "kind": "classmethod",
+              "signature": "(cls, base_mesh: Optional[str] = None) -> Optional['BlendshapeAnimator']",
+              "summary": "Create animator from existing blendShape setup on ``base_mesh``.",
+              "line": 419,
+              "deprecated": false
+            },
+            {
+              "name": "recover_animation",
+              "qualname": "BlendshapeAnimator.recover_animation",
+              "kind": "method",
+              "signature": "(self) -> bool",
+              "summary": "Recover lost animation keyframes and validate setup.",
+              "line": 477,
+              "deprecated": false
+            },
+            {
+              "name": "diagnose_topology_issues",
+              "qualname": "BlendshapeAnimator.diagnose_topology_issues",
+              "kind": "method",
+              "signature": "(self) -> bool",
+              "summary": "Diagnose topology mismatches between base mesh and in-between meshes.",
+              "line": 519,
+              "deprecated": false
+            },
+            {
+              "name": "cleanup_topology_mismatches",
+              "qualname": "BlendshapeAnimator.cleanup_topology_mismatches",
+              "kind": "method",
+              "signature": "(self, delete_mismatched: bool = True, apply_valid_only: bool = True) -> bool",
+              "summary": "Clean up topology mismatches by deleting bad meshes and applying good ones.",
+              "line": 587,
+              "deprecated": false
+            },
+            {
+              "name": "remove_target_for_export",
+              "qualname": "BlendshapeAnimator.remove_target_for_export",
+              "kind": "method",
+              "signature": "(self) -> bool",
+              "summary": "Remove target mesh for clean export.",
+              "line": 690,
+              "deprecated": false
+            },
+            {
+              "name": "recover_setup",
+              "qualname": "BlendshapeAnimator.recover_setup",
+              "kind": "classmethod",
+              "signature": "(cls, base_mesh: Optional[str] = None, target_mesh: Optional[str] = None) -> Optional['BlendshapeAnimator']",
+              "summary": "Recover corrupted blendShape setup.",
+              "line": 725,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relpath": "anim_utils/blendshape_animator/applicator.py",
+      "summary": "Applies tween mesh edits back to blendShape in-between targets.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "ApplyStatus",
+          "summary": "",
+          "line": 18,
+          "bases": [
+            "Enum"
+          ],
+          "members": []
+        },
+        {
+          "name": "Applicator",
+          "summary": "Applies tween mesh edits back to blendShape in-between targets.",
+          "line": 24,
+          "bases": [
+            "ptk.LoggingMixin"
+          ],
+          "members": [
+            {
+              "name": "validate_topology",
+              "qualname": "Applicator.validate_topology",
+              "kind": "method",
+              "signature": "(self, tweens: List[Target]) -> List[Target]",
+              "summary": "Filter ``tweens`` to those matching base mesh vertex count.",
+              "line": 31,
+              "deprecated": false
+            },
+            {
+              "name": "apply_tweens",
+              "qualname": "Applicator.apply_tweens",
+              "kind": "method",
+              "signature": "(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]",
+              "summary": "Apply tween mesh edits to blendShape in-between targets.",
+              "line": 61,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relpath": "anim_utils/blendshape_animator/creator.py",
+      "summary": "Creates in-between target meshes for custom blendShape animation curves.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "Creator",
+          "summary": "Creates in-between target meshes for custom animation curves.",
+          "line": 20,
+          "bases": [
+            "ptk.LoggingMixin"
+          ],
+          "members": [
+            {
+              "name": "create_weight_based_tweens",
+              "qualname": "Creator.create_weight_based_tweens",
+              "kind": "method",
+              "signature": "(self, weights: List[float], group_name: str = '_morphInbetweens_GRP', name_prefix: str = 'morph_ib') -> List[Target]",
+              "summary": "Create tween meshes at specific weight values.",
+              "line": 27,
+              "deprecated": false
+            },
+            {
+              "name": "create_frame_based_tween",
+              "qualname": "Creator.create_frame_based_tween",
+              "kind": "method",
+              "signature": "(self, target_frame: int) -> Optional[Target]",
+              "summary": "Create a tween mesh at a specific animation frame.",
+              "line": 96,
+              "deprecated": false
+            },
+            {
+              "name": "tag_tween_mesh",
+              "qualname": "Creator.tag_tween_mesh",
+              "kind": "method",
+              "signature": "(self, mesh: str, weight: float, target_frame: Optional[int] = None) -> None",
+              "summary": "Add metadata attributes to ``mesh``.",
+              "line": 180,
+              "deprecated": false
+            },
+            {
+              "name": "get_existing_weights",
+              "qualname": "Creator.get_existing_weights",
+              "kind": "method",
+              "signature": "(self) -> Set[float]",
+              "summary": "Return all in-between weights known for the current blendShape.",
+              "line": 213,
+              "deprecated": false
+            },
+            {
+              "name": "find_nearby_weight",
+              "qualname": "Creator.find_nearby_weight",
+              "kind": "method",
+              "signature": "(self, target_weight: float, existing_weights: Set[float], tolerance: float = 0.01) -> Optional[float]",
+              "summary": "Find a nearby weight that doesn't conflict with existing weights.",
+              "line": 227,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relpath": "anim_utils/blendshape_animator/helpers.py",
+      "summary": "Shared helpers internal to the blendshape_animator subpackage.",
+      "functions": [
+        {
+          "name": "list_history",
+          "qualname": "list_history",
+          "kind": "function",
+          "signature": "(node: str, type_filter: Optional[str] = None) -> List[str]",
+          "summary": "List the construction history of a node, optionally filtered by node type.",
+          "line": 12,
+          "deprecated": false
+        }
+      ],
+      "classes": []
+    },
+    {
+      "relpath": "anim_utils/blendshape_animator/keyframes.py",
+      "summary": "Core blendShape keyframe animation operations.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "Keyframes",
+          "summary": "Core blendShape animation functionality.",
+          "line": 16,
+          "bases": [
+            "ptk.LoggingMixin"
+          ],
+          "members": [
+            {
+              "name": "create_keyframes",
+              "qualname": "Keyframes.create_keyframes",
+              "kind": "method",
+              "signature": "(self, start_frame: int, end_frame: int) -> bool",
+              "summary": "Create linear keyframe animation from weight 0.0 -> 1.0.",
+              "line": 26,
+              "deprecated": false
+            },
+            {
+              "name": "test_morph",
+              "qualname": "Keyframes.test_morph",
+              "kind": "method",
+              "signature": "(self) -> bool",
+              "summary": "Test the blendShape by temporarily setting weight to 0.5.",
+              "line": 55,
+              "deprecated": false
+            },
+            {
+              "name": "get_frame_range",
+              "qualname": "Keyframes.get_frame_range",
+              "kind": "method",
+              "signature": "(self) -> Tuple[int, int]",
+              "summary": "Return (start, end) frame range from keyframes on weight[0].",
+              "line": 72,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relpath": "anim_utils/blendshape_animator/recovery.py",
+      "summary": "Recovery utilities for corrupted blendShape setups.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "Recovery",
+          "summary": "Utilities for recovering from corrupted blendShape setups.",
+          "line": 17,
+          "bases": [
+            "ptk.LoggingMixin"
+          ],
+          "members": [
+            {
+              "name": "fix_corrupted_animation",
+              "qualname": "Recovery.fix_corrupted_animation",
+              "kind": "classmethod",
+              "signature": "(cls, base_mesh: str, target_mesh: str) -> bool",
+              "summary": "Rebuild corrupted blendShape animation.",
+              "line": 21,
+              "deprecated": false
+            },
+            {
+              "name": "recover_with_targets",
+              "qualname": "Recovery.recover_with_targets",
+              "kind": "classmethod",
+              "signature": "(cls, base_mesh: str, target_mesh: str) -> bool",
+              "summary": "Complete recovery: fix animation AND restore tween customizations.",
+              "line": 84,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relpath": "anim_utils/blendshape_animator/target.py",
+      "summary": "Tween mesh wrappers and registry for blendShape in-between targets.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "Target",
+          "summary": "Represents a single target/in-between target mesh.",
+          "line": 18,
+          "bases": [],
+          "members": [
+            {
+              "name": "weight",
+              "qualname": "Target.weight",
+              "kind": "property",
+              "signature": "(self) -> float",
+              "summary": "Get the weight value for this tween.",
+              "line": 38,
+              "deprecated": false
+            },
+            {
+              "name": "blendshape_name",
+              "qualname": "Target.blendshape_name",
+              "kind": "property",
+              "signature": "(self) -> str",
+              "summary": "Get the blendShape node name this tween targets.",
+              "line": 43,
+              "deprecated": false
+            },
+            {
+              "name": "base_mesh_name",
+              "qualname": "Target.base_mesh_name",
+              "kind": "property",
+              "signature": "(self) -> str",
+              "summary": "Get the base mesh name this tween applies to.",
+              "line": 48,
+              "deprecated": false
+            },
+            {
+              "name": "target_frame",
+              "qualname": "Target.target_frame",
+              "kind": "property",
+              "signature": "(self) -> Optional[int]",
+              "summary": "Get target frame if this tween was created from a specific frame.",
+              "line": 53,
+              "deprecated": false
+            },
+            {
+              "name": "update_references",
+              "qualname": "Target.update_references",
+              "kind": "method",
+              "signature": "(self, new_blendshape: str, new_base_mesh: str) -> None",
+              "summary": "Update this tween's references to new blendShape/base mesh.",
+              "line": 59,
+              "deprecated": false
+            }
+          ]
+        },
+        {
+          "name": "Targets",
+          "summary": "Manages collections of tween meshes.",
+          "line": 66,
+          "bases": [
+            "ptk.LoggingMixin"
+          ],
+          "members": [
+            {
+              "name": "find_all_targets",
+              "qualname": "Targets.find_all_targets",
+              "kind": "classmethod",
+              "signature": "(cls) -> List[Target]",
+              "summary": "Find all tween meshes in the scene (deduplicated).",
+              "line": 72,
+              "deprecated": false
+            },
+            {
+              "name": "group_by_weight",
+              "qualname": "Targets.group_by_weight",
+              "kind": "classmethod",
+              "signature": "(cls, tweens: List[Target]) -> Dict[float, List[Target]]",
+              "summary": "Group tweens by weight value, handling duplicates.",
+              "line": 109,
+              "deprecated": false
+            },
+            {
+              "name": "update_all_references",
+              "qualname": "Targets.update_all_references",
+              "kind": "classmethod",
+              "signature": "(cls, new_blendshape: str, new_base_mesh: str) -> int",
+              "summary": "Update all tween mesh references to new nodes.",
+              "line": 117,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relpath": "anim_utils/blendshape_animator/validator.py",
+      "summary": "Mesh and blendShape validation for blendShape animation setup.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "Validator",
+          "summary": "Handles validation of meshes and blendShape setups.",
+          "line": 14,
+          "bases": [
+            "ptk.LoggingMixin"
+          ],
+          "members": [
+            {
+              "name": "validate_meshes",
+              "qualname": "Validator.validate_meshes",
+              "kind": "classmethod",
+              "signature": "(cls, mesh1: str, mesh2: str) -> bool",
+              "summary": "Validate that both objects are compatible meshes.",
+              "line": 18,
+              "deprecated": false
+            },
+            {
+              "name": "validate_blendshape",
+              "qualname": "Validator.validate_blendshape",
+              "kind": "classmethod",
+              "signature": "(cls, blendshape: str) -> bool",
+              "summary": "Validate blendShape node configuration.",
+              "line": 39,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relpath": "anim_utils/blendshape_animator/weights.py",
+      "summary": "Weight calculations and Maya-compatible precision handling for blendShape animation.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "Weights",
+          "summary": "Handles weight calculations and Maya's precision requirements.",
+          "line": 7,
+          "bases": [],
+          "members": [
+            {
+              "name": "round_weight",
+              "qualname": "Weights.round_weight",
+              "kind": "classmethod",
+              "signature": "(cls, weight: float) -> float",
+              "summary": "Round weight to Maya-compatible precision.",
+              "line": 13,
+              "deprecated": false
+            },
+            {
+              "name": "frame_to_weight",
+              "qualname": "Weights.frame_to_weight",
+              "kind": "classmethod",
+              "signature": "(cls, frame: int, start_frame: int, end_frame: int) -> float",
+              "summary": "Convert frame number to blendShape weight.",
+              "line": 18,
+              "deprecated": false
+            },
+            {
+              "name": "generate_weights",
+              "qualname": "Weights.generate_weights",
+              "kind": "classmethod",
+              "signature": "(cls, count: int, weight_range: Tuple[float, float] = (0.0, 1.0), include_endpoints: bool = False) -> List[float]",
+              "summary": "Generate ``count`` evenly spaced weights within ``weight_range``.",
+              "line": 30,
               "deprecated": false
             }
           ]
@@ -4230,7 +4739,7 @@
               "kind": "staticmethod",
               "signature": "(lst, returned_type='str', flatten=False)",
               "summary": "Convert the given element(s) to <obj>, 'str', or int values.",
-              "line": 394,
+              "line": 401,
               "deprecated": false
             },
             {
@@ -4239,7 +4748,7 @@
               "kind": "staticmethod",
               "signature": "(node, cmd, parameters)",
               "summary": "Query a specified Maya command and return a dict mapping parameters to their values.",
-              "line": 468,
+              "line": 475,
               "deprecated": false
             },
             {
@@ -4248,7 +4757,7 @@
               "kind": "staticmethod",
               "signature": "(node, cmd, parameters)",
               "summary": "Apply a set of parameter values to a specified Maya node using a given Maya command.",
-              "line": 478,
+              "line": 485,
               "deprecated": false
             },
             {
@@ -4257,7 +4766,7 @@
               "kind": "classmethod",
               "signature": "(cls, source, target, tolerance: float = 0.1) -> dict",
               "summary": "Build a mapping of source meshes to target meshes based on geometric similarity.",
-              "line": 489,
+              "line": 496,
               "deprecated": false
             },
             {
@@ -4266,7 +4775,7 @@
               "kind": "staticmethod",
               "signature": "(keyword=None, ignore_case=True)",
               "summary": "Get global MEL variables.",
-              "line": 517,
+              "line": 524,
               "deprecated": false
             },
             {
@@ -4275,7 +4784,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, method='name', reverse=False)",
               "summary": "Reorder a given set of objects using various sorting methods.",
-              "line": 535,
+              "line": 542,
               "deprecated": false
             }
           ]
@@ -7294,7 +7803,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Multi-Component Selection.",
-              "line": 886,
+              "line": 889,
               "deprecated": false
             },
             {
@@ -7303,7 +7812,7 @@
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.001) -> None",
               "summary": "Merge Vertices.",
-              "line": 897,
+              "line": 900,
               "deprecated": false
             }
           ]
@@ -7311,7 +7820,7 @@
         {
           "name": "SelectionMacros",
           "summary": "",
-          "line": 938,
+          "line": 941,
           "bases": [],
           "members": [
             {
@@ -7320,7 +7829,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set object selection mask.",
-              "line": 942,
+              "line": 945,
               "deprecated": false
             },
             {
@@ -7329,7 +7838,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set vertex selection mask.",
-              "line": 950,
+              "line": 953,
               "deprecated": false
             },
             {
@@ -7338,7 +7847,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set edge selection mask.",
-              "line": 956,
+              "line": 959,
               "deprecated": false
             },
             {
@@ -7347,7 +7856,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set face selection mask.",
-              "line": 962,
+              "line": 965,
               "deprecated": false
             },
             {
@@ -7356,7 +7865,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the current selection of geometry or components.",
-              "line": 968,
+              "line": 971,
               "deprecated": false
             },
             {
@@ -7365,7 +7874,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle selectability of the given objects.",
-              "line": 986,
+              "line": 989,
               "deprecated": false
             },
             {
@@ -7374,7 +7883,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles between UV shell and UV component selection.",
-              "line": 1055,
+              "line": 1058,
               "deprecated": false
             },
             {
@@ -7383,7 +7892,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the component selection on the currently selected objects.",
-              "line": 1079,
+              "line": 1082,
               "deprecated": false
             }
           ]
@@ -7391,7 +7900,7 @@
         {
           "name": "UiMacros",
           "summary": "",
-          "line": 1109,
+          "line": 1112,
           "bases": [],
           "members": [
             {
@@ -7400,7 +7909,7 @@
               "kind": "staticmethod",
               "signature": "(toggle_menu: bool = True, toggle_panels: bool = True) -> None",
               "summary": "Toggle UI toolbars and menu bar in sync.",
-              "line": 1113,
+              "line": 1116,
               "deprecated": false
             }
           ]
@@ -7408,7 +7917,7 @@
         {
           "name": "AnimationMacros",
           "summary": "",
-          "line": 1145,
+          "line": 1148,
           "bases": [],
           "members": [
             {
@@ -7417,7 +7926,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 1150,
+              "line": 1153,
               "deprecated": false
             },
             {
@@ -7426,7 +7935,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Un-set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 1161,
+              "line": 1164,
               "deprecated": false
             }
           ]
@@ -7434,7 +7943,7 @@
         {
           "name": "Macros",
           "summary": "",
-          "line": 1173,
+          "line": 1176,
           "bases": [
             "MacroManager",
             "DisplayMacros",
@@ -7596,7 +8105,7 @@
               "name": "rename",
               "qualname": "Naming.rename",
               "kind": "classmethod",
-              "signature": "(cls, objects: Union[str, 'object', List[Union[str, 'object']]], to: str, fltr: str = '', regex: bool = False, ignore_case: bool = False, retain_suffix: bool = False, valid_suffixes: Optional[List[str]] = None) -> None",
+              "signature": "(cls, objects: Union[str, 'object', List[Union[str, 'object']]], to: str, fltr: str = '', regex: bool = False, ignore_case: bool = False, retain_suffix: bool = False, valid_suffixes: Optional[List[str]] = None) -> List[str]",
               "summary": "Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's namin…",
               "line": 25,
               "deprecated": false
@@ -7607,7 +8116,7 @@
               "kind": "classmethod",
               "signature": "(cls, base_name, suffix='_', padding=3)",
               "summary": "Generate a unique name based on the base_name.",
-              "line": 191,
+              "line": 197,
               "deprecated": false
             },
             {
@@ -7616,7 +8125,7 @@
               "kind": "staticmethod",
               "signature": "(input_data, replace_with='_')",
               "summary": "Strips illegal characters from a string or a list of strings, replacing them with a specified chara…",
-              "line": 222,
+              "line": 228,
               "deprecated": false
             },
             {
@@ -7625,7 +8134,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, object, List[Union[str, object]]], num_chars: int = 1, trailing: bool = False) -> List[str]",
               "summary": "Deletes leading or trailing characters from the names of the provided objects,",
-              "line": 248,
+              "line": 254,
               "deprecated": false
             },
             {
@@ -7634,7 +8143,7 @@
               "kind": "staticmethod",
               "signature": "(objects=[], case='caplitalize')",
               "summary": "Rename objects following the given case.",
-              "line": 302,
+              "line": 308,
               "deprecated": false
             },
             {
@@ -7643,7 +8152,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, object, List[Union[str, object]]], group_suffix: str = '_GRP', locator_suffix: str = '_LOC', joint_suffix: str = '_JNT', mesh_suffix: str = '_GEO', nurbs_curve_suffix: str = '_CRV', camera_suffix: str = '_CAM', light_suffix: str = '_LGT', display_layer_suffix: str = '_LYR', custom_suffixes: Optional[Dict[str, str]] = None, strip: Union[str, List[str]] = None, strip_trailing_ints: bool = False, strip_trailing_underscores: bool = False, strip_trailing_padding: bool = True) -> List[str]",
               "summary": "Appends a conventional suffix based on Maya object type, stripping any existing known suffix.",
-              "line": 324,
+              "line": 330,
               "deprecated": false
             },
             {
@@ -7652,7 +8161,7 @@
               "kind": "staticmethod",
               "signature": "(objects, first_obj_as_ref=False, alphabetical=False, strip_trailing_ints=True, strip_defined_suffixes=True, valid_suffixes=None, reverse=False, independent_groups=False)",
               "summary": "Rename objects with a suffix defined by its location from origin.",
-              "line": 443,
+              "line": 449,
               "deprecated": false
             }
           ]
@@ -8109,7 +8618,7 @@
         {
           "name": "EnvUtils",
           "summary": "",
-          "line": 15,
+          "line": 16,
           "bases": [
             "ptk.HelpMixin"
           ],
@@ -8120,7 +8629,7 @@
               "kind": "staticmethod",
               "signature": "(key)",
               "summary": "Fetch specific information about the current Maya environment based on the provided key.",
-              "line": 30,
+              "line": 31,
               "deprecated": false
             },
             {
@@ -8129,7 +8638,7 @@
               "kind": "staticmethod",
               "signature": "(maya_version=None)",
               "summary": "Appends various Maya-related paths to the system's Python environment and sys.path.",
-              "line": 121,
+              "line": 122,
               "deprecated": false
             },
             {
@@ -8138,7 +8647,7 @@
               "kind": "staticmethod",
               "signature": "(plugin_name)",
               "summary": "Loads a specified plugin.",
-              "line": 181,
+              "line": 182,
               "deprecated": false
             },
             {
@@ -8147,7 +8656,7 @@
               "kind": "staticmethod",
               "signature": "(load=False, unload=False, query=False)",
               "summary": "Load/Unload/Query the Maya Vray Plugin.",
-              "line": 201,
+              "line": 202,
               "deprecated": false
             },
             {
@@ -8156,7 +8665,7 @@
               "kind": "staticmethod",
               "signature": "(index=None)",
               "summary": "Get a list of recent files sorted by modification time.",
-              "line": 230,
+              "line": 231,
               "deprecated": false
             },
             {
@@ -8165,7 +8674,7 @@
               "kind": "staticmethod",
               "signature": "(index=None, format='standard')",
               "summary": "Get a list of recently set projects.",
-              "line": 276,
+              "line": 277,
               "deprecated": false
             },
             {
@@ -8174,7 +8683,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Search for and compile a list of existing autosave directories based on",
-              "line": 324,
+              "line": 325,
               "deprecated": false
             },
             {
@@ -8183,7 +8692,7 @@
               "kind": "classmethod",
               "signature": "(cls, filter_time=None, timestamp_format='%Y-%m-%d %H:%M:%S')",
               "summary": "Retrieves a list of recent autosave files from Maya autosave directories, optionally filtered by ag…",
-              "line": 354,
+              "line": 355,
               "deprecated": false
             },
             {
@@ -8192,7 +8701,7 @@
               "kind": "staticmethod",
               "signature": "(root_dir: str, return_type: str = 'dir', ignore_empty: bool = True, recursive: bool = True) -> list",
               "summary": "Recursively find Maya workspaces under a root directory.",
-              "line": 410,
+              "line": 411,
               "deprecated": false
             },
             {
@@ -8201,7 +8710,7 @@
               "kind": "staticmethod",
               "signature": "(root_dir: Optional[str] = None, full_path: bool = True, recursive: bool = False, omit_autosave: bool = True, file_types=['*.ma', '*.mb']) -> list[str]",
               "summary": "Return a list of Maya scene files (.ma/.mb) from the given or current workspace directory.",
-              "line": 476,
+              "line": 477,
               "deprecated": false
             },
             {
@@ -8210,7 +8719,7 @@
               "kind": "classmethod",
               "signature": "(cls, scene_path: Optional[str] = None) -> Optional[str]",
               "summary": "Determine the workspace directory for a given scene by moving up directory levels until a workspace…",
-              "line": 513,
+              "line": 514,
               "deprecated": false
             },
             {
@@ -8219,7 +8728,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Reference a Maya scene.",
-              "line": 543,
+              "line": 544,
               "deprecated": false
             },
             {
@@ -8228,7 +8737,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Remove a reference to a Maya scene.",
-              "line": 555,
+              "line": 556,
               "deprecated": false
             },
             {
@@ -8237,7 +8746,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Check if a Maya scene is referenced.",
-              "line": 569,
+              "line": 570,
               "deprecated": false
             },
             {
@@ -8246,7 +8755,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Get the nodes from a referenced Maya scene.",
-              "line": 584,
+              "line": 585,
               "deprecated": false
             },
             {
@@ -8255,7 +8764,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "List all references in the current Maya scene.",
-              "line": 602,
+              "line": 603,
               "deprecated": false
             },
             {
@@ -8264,7 +8773,7 @@
               "kind": "staticmethod",
               "signature": "(file_path: str = None, **fbx_options: Any) -> None",
               "summary": "Export the entire Maya scene as an FBX file with flexible MEL command options.",
-              "line": 619,
+              "line": 620,
               "deprecated": false
             },
             {
@@ -8273,7 +8782,7 @@
               "kind": "staticmethod",
               "signature": "(namespace: str) -> str",
               "summary": "Sanitize the namespace by replacing or removing illegal characters.",
-              "line": 688,
+              "line": 689,
               "deprecated": false
             },
             {
@@ -8282,7 +8791,7 @@
               "kind": "staticmethod",
               "signature": "(selected_file: str, workspace_files: dict) -> Optional[str]",
               "summary": "Resolve a file name to its full path by searching in workspace files.",
-              "line": 702,
+              "line": 703,
               "deprecated": false
             },
             {
@@ -8291,7 +8800,7 @@
               "kind": "classmethod",
               "signature": "(cls, workspaces: list, recursive: bool = True) -> dict",
               "summary": "Build a cache of workspace files for multiple workspaces.",
-              "line": 725,
+              "line": 726,
               "deprecated": false
             },
             {
@@ -8300,7 +8809,7 @@
               "kind": "staticmethod",
               "signature": "(filename: str) -> bool",
               "summary": "Check if a file matches the Maya autosave pattern.",
-              "line": 750,
+              "line": 751,
               "deprecated": false
             },
             {
@@ -8309,7 +8818,7 @@
               "kind": "staticmethod",
               "signature": "(backup_path: Optional[Union[str, bool]] = True, suffix: str = '_backup', file_type: str = 'mayaAscii', force: bool = True, preserve_scene_name: bool = True) -> Optional[str]",
               "summary": "Save a backup copy of the current scene.",
-              "line": 765,
+              "line": 766,
               "deprecated": false
             }
           ]
@@ -8747,7 +9256,7 @@
         {
           "name": "HierarchyMapBuilder",
           "summary": "Builds hierarchy path maps for Maya transforms.",
-          "line": 221,
+          "line": 220,
           "bases": [],
           "members": [
             {
@@ -8756,7 +9265,7 @@
               "kind": "staticmethod",
               "signature": "(root, exclude_namespace_prefixes: List[str] = None, strip_namespaces: bool = False) -> Dict[str, Any]",
               "summary": "Build a mapping of hierarchical paths to transform nodes.",
-              "line": 230,
+              "line": 229,
               "deprecated": false
             },
             {
@@ -8765,7 +9274,7 @@
               "kind": "staticmethod",
               "signature": "(nodes: List[Any], strip_namespaces: bool = False) -> Dict[str, Any]",
               "summary": "Build a path map from an arbitrary list of transform node names.",
-              "line": 289,
+              "line": 288,
               "deprecated": false
             }
           ]
@@ -8773,7 +9282,7 @@
         {
           "name": "MayaObjectMatcher",
           "summary": "Maya-specific object matching with fuzzy logic and container searches.",
-          "line": 325,
+          "line": 324,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -8784,7 +9293,7 @@
               "kind": "method",
               "signature": "(self, target_objects: List[str], imported_transforms: List, dry_run: bool = False) -> Tuple[List, Dict]",
               "summary": "Find matching objects using exact and fuzzy matching.",
-              "line": 333,
+              "line": 332,
               "deprecated": false
             }
           ]
@@ -8792,7 +9301,7 @@
         {
           "name": "HierarchyManager",
           "summary": "Core hierarchy analysis and repair manager.",
-          "line": 431,
+          "line": 430,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -8803,7 +9312,7 @@
               "kind": "method",
               "signature": "(self, current_tree_root=None, reference_tree_root=None, reference_objects: List = None, filter_meshes: bool = True, filter_cameras: bool = False, filter_lights: bool = False, inc_names: Optional[List[str]] = None, exc_names: Optional[List[str]] = None, inc_types: Optional[List[str]] = None, exc_types: Optional[List[str]] = None) -> Dict[str, Any]",
               "summary": "Analyze differences between current and reference hierarchies.",
-              "line": 456,
+              "line": 455,
               "deprecated": false
             },
             {
@@ -8812,7 +9321,7 @@
               "kind": "method",
               "signature": "(self, paths: Optional[List[str]] = None) -> List[str]",
               "summary": "Create empty transform stubs for missing hierarchy paths.",
-              "line": 1014,
+              "line": 1013,
               "deprecated": false
             },
             {
@@ -8821,7 +9330,7 @@
               "kind": "method",
               "signature": "(self, group: str = '_QUARANTINE', paths: Optional[List[str]] = None, skip_animated: bool = True) -> List[str]",
               "summary": "Move extra (scene-only) items to a root-level quarantine group.",
-              "line": 1493,
+              "line": 1492,
               "deprecated": false
             },
             {
@@ -8830,7 +9339,7 @@
               "kind": "method",
               "signature": "(self, items: Optional[List[Dict[str, str]]] = None, skip_animated: bool = True) -> List[str]",
               "summary": "Rename nodes identified as fuzzy matches to their reference names.",
-              "line": 1664,
+              "line": 1663,
               "deprecated": false
             },
             {
@@ -8839,7 +9348,7 @@
               "kind": "method",
               "signature": "(self, items: Optional[List[Dict[str, str]]] = None) -> List[str]",
               "summary": "Move reparented nodes to match their reference hierarchy position.",
-              "line": 1730,
+              "line": 1729,
               "deprecated": false
             }
           ]
@@ -8847,7 +9356,7 @@
         {
           "name": "ObjectSwapper",
           "summary": "Handles cross-scene object operations like push/pull.",
-          "line": 1821,
+          "line": 1820,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -8858,7 +9367,7 @@
               "kind": "method",
               "signature": "(self, target_objects: List[str], target_file: Union[str, Path], backup: bool = True) -> bool",
               "summary": "Push objects from current scene to target scene.",
-              "line": 1841,
+              "line": 1840,
               "deprecated": false
             },
             {
@@ -8867,7 +9376,7 @@
               "kind": "method",
               "signature": "(self, target_objects: List[str], source_file: Union[str, Path], backup: bool = True) -> bool",
               "summary": "Pull objects from source scene into current scene.",
-              "line": 1859,
+              "line": 1858,
               "deprecated": false
             }
           ]
@@ -9829,7 +10338,7 @@
         {
           "name": "MayaImporter",
           "summary": "Handles Maya-specific import operations (.ma/.mb files).",
-          "line": 1001,
+          "line": 1032,
           "bases": [],
           "members": [
             {
@@ -9838,7 +10347,7 @@
               "kind": "method",
               "signature": "(self, file_path: Union[str, Path]) -> bool",
               "summary": "Check if the file is a Maya file (.ma or .mb).",
-              "line": 1008,
+              "line": 1039,
               "deprecated": false
             },
             {
@@ -9847,7 +10356,7 @@
               "kind": "method",
               "signature": "(self, source_file: Path, namespace: str, temp_namespace_prefix: str, force_complete_import: bool = False) -> Optional[Dict]",
               "summary": "Import Maya file with namespace - original logic.",
-              "line": 1013,
+              "line": 1044,
               "deprecated": false
             },
             {
@@ -9856,7 +10365,7 @@
               "kind": "method",
               "signature": "(self, source_file: Path, namespace: str) -> Optional[List[Any]]",
               "summary": "Import Maya file for analysis purposes.",
-              "line": 1150,
+              "line": 1181,
               "deprecated": false
             }
           ]
@@ -9864,7 +10373,7 @@
         {
           "name": "CameraTracker",
           "summary": "Tracks cameras before and after import operations for proper cleanup.",
-          "line": 1180,
+          "line": 1211,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -9875,7 +10384,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Capture camera state before import.",
-              "line": 1193,
+              "line": 1224,
               "deprecated": false
             },
             {
@@ -9884,7 +10393,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Capture camera state after import.",
-              "line": 1200,
+              "line": 1231,
               "deprecated": false
             },
             {
@@ -9893,7 +10402,7 @@
               "kind": "method",
               "signature": "(self, namespace_filter=None)",
               "summary": "Get cameras that were imported (optionally filtered by namespace).",
-              "line": 1209,
+              "line": 1240,
               "deprecated": false
             },
             {
@@ -9902,7 +10411,7 @@
               "kind": "method",
               "signature": "(self, namespace_filter=None, preserve_user_cameras=True)",
               "summary": "Clean up imported cameras with optional preservation of user cameras.",
-              "line": 1219,
+              "line": 1250,
               "deprecated": false
             },
             {
@@ -9911,7 +10420,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Reset tracking state.",
-              "line": 1290,
+              "line": 1321,
               "deprecated": false
             }
           ]
@@ -9919,7 +10428,7 @@
         {
           "name": "NamespaceSandbox",
           "summary": "Handles temporary importing and namespace management for Maya scenes.",
-          "line": 1297,
+          "line": 1328,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -9930,7 +10439,7 @@
               "kind": "method",
               "signature": "(self, source_file: Union[str, Path], namespace_prefix: str = None, force_complete_import: bool = False) -> Optional[Dict]",
               "summary": "Import file and return import information.",
-              "line": 1332,
+              "line": 1363,
               "deprecated": false
             },
             {
@@ -9939,7 +10448,7 @@
               "kind": "method",
               "signature": "(self, source_file: Union[str, Path], namespace: str = None) -> Optional[List[Any]]",
               "summary": "Import file into temporary namespace for analysis (dry-run mode).",
-              "line": 1407,
+              "line": 1438,
               "deprecated": false
             },
             {
@@ -9948,7 +10457,7 @@
               "kind": "method",
               "signature": "(self) -> List[str]",
               "summary": "Get list of supported file formats from all importers.",
-              "line": 1458,
+              "line": 1489,
               "deprecated": false
             },
             {
@@ -9957,7 +10466,7 @@
               "kind": "method",
               "signature": "(self, namespace: str, target_objects: List[str]) -> List[Any]",
               "summary": "Find objects in the specified namespace with optional fuzzy matching.",
-              "line": 1472,
+              "line": 1503,
               "deprecated": false
             },
             {
@@ -9966,7 +10475,7 @@
               "kind": "method",
               "signature": "(self, namespace: str, target_objects: List[str]) -> List[Any]",
               "summary": "Find objects using hierarchical path matching (only if fuzzy_matching enabled).",
-              "line": 1523,
+              "line": 1554,
               "deprecated": false
             },
             {
@@ -9975,7 +10484,7 @@
               "kind": "method",
               "signature": "(self, namespace: str) -> Dict[str, Any]",
               "summary": "Get complete hierarchy information for objects in namespace.",
-              "line": 1570,
+              "line": 1601,
               "deprecated": false
             },
             {
@@ -9984,7 +10493,7 @@
               "kind": "method",
               "signature": "(self, namespace: str, imported_objects: List[Any] = None) -> bool",
               "summary": "Safely remove imported objects and cleanup namespace tracking.",
-              "line": 1603,
+              "line": 1634,
               "deprecated": false
             },
             {
@@ -9993,7 +10502,7 @@
               "kind": "method",
               "signature": "(self, namespace: str) -> bool",
               "summary": "Backward compatibility alias for cleanup_import.",
-              "line": 1668,
+              "line": 1699,
               "deprecated": false
             },
             {
@@ -10002,7 +10511,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Clean up all temp imports managed by this instance.",
-              "line": 1672,
+              "line": 1703,
               "deprecated": false
             },
             {
@@ -10011,7 +10520,7 @@
               "kind": "method",
               "signature": "(self, namespace_filter=None)",
               "summary": "Get cameras that were imported during the last import operation.",
-              "line": 1778,
+              "line": 1809,
               "deprecated": false
             },
             {
@@ -10020,7 +10529,7 @@
               "kind": "method",
               "signature": "(self, namespace_filter=None, preserve_user_cameras=True)",
               "summary": "Clean up imported cameras for a specific namespace.",
-              "line": 1789,
+              "line": 1820,
               "deprecated": false
             },
             {
@@ -10029,7 +10538,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Force cleanup of ALL temp namespaces in Maya, not just tracked ones.",
-              "line": 1816,
+              "line": 1847,
               "deprecated": false
             },
             {
@@ -10038,7 +10547,7 @@
               "kind": "method",
               "signature": "(self, target_objects: List[str]) -> Optional[Path]",
               "summary": "Export objects to temporary file using cmds.ls() for robust object handling.",
-              "line": 1856,
+              "line": 1887,
               "deprecated": false
             },
             {
@@ -10047,7 +10556,7 @@
               "kind": "method",
               "signature": "(self, source_file: Union[str, Path]) -> Optional[Dict]",
               "summary": "Import objects from source scene for object swapping operations.",
-              "line": 1892,
+              "line": 1923,
               "deprecated": false
             },
             {
@@ -10056,7 +10565,7 @@
               "kind": "method",
               "signature": "(self, temp_file: Union[str, Path], target_scene: Union[str, Path], backup: bool = True) -> bool",
               "summary": "Import objects into target scene.",
-              "line": 1925,
+              "line": 1956,
               "deprecated": false
             },
             {
@@ -10065,7 +10574,7 @@
               "kind": "method",
               "signature": "(self, namespace: str = None) -> bool",
               "summary": "Clean up analysis namespace and its contents.",
-              "line": 1967,
+              "line": 1998,
               "deprecated": false
             }
           ]
@@ -12020,7 +12529,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, ai_node: object, aiMult_node: object, bump_node: object) -> bool",
               "summary": "Connects texture files to the corresponding slots in the Arnold shader nodes based on the texture t…",
-              "line": 730,
+              "line": 739,
               "deprecated": false
             },
             {
@@ -12029,7 +12538,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, std_node: object) -> bool",
               "summary": "Connects texture files to Maya Standard Surface shader slots.",
-              "line": 918,
+              "line": 927,
               "deprecated": false
             },
             {
@@ -12038,7 +12547,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], desired_normal_type: str) -> List[str]",
               "summary": "Filters and ensures only the desired type of normal map is in the textures list.",
-              "line": 1113,
+              "line": 1122,
               "deprecated": false
             },
             {
@@ -12047,7 +12556,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]",
               "summary": "Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…",
-              "line": 1165,
+              "line": 1174,
               "deprecated": false
             },
             {
@@ -12056,7 +12565,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], output_extension: str = 'png') -> List[str]",
               "summary": "Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.",
-              "line": 1288,
+              "line": 1297,
               "deprecated": false
             },
             {
@@ -12065,7 +12574,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], use_albedo_transparency: bool) -> List[str]",
               "summary": "Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…",
-              "line": 1391,
+              "line": 1400,
               "deprecated": false
             }
           ]
@@ -12073,7 +12582,7 @@
         {
           "name": "CallbackLogHandler",
           "summary": "Log handler that calls a callback function with the formatted message.",
-          "line": 1436,
+          "line": 1445,
           "bases": [
             "logging.Handler"
           ],
@@ -12084,7 +12593,7 @@
               "kind": "method",
               "signature": "(self, record)",
               "summary": "",
-              "line": 1443,
+              "line": 1452,
               "deprecated": false
             }
           ]
@@ -12092,7 +12601,7 @@
         {
           "name": "GameShaderSlots",
           "summary": "",
-          "line": 1448,
+          "line": 1457,
           "bases": [
             "GameShader"
           ],
@@ -12103,7 +12612,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the header widget.",
-              "line": 1480,
+              "line": 1489,
               "deprecated": false
             },
             {
@@ -12112,7 +12621,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Graph the material in the Hypershade.",
-              "line": 1503,
+              "line": 1512,
               "deprecated": false
             },
             {
@@ -12121,7 +12630,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the mat name from the user input text field.",
-              "line": 1513,
+              "line": 1522,
               "deprecated": false
             },
             {
@@ -12130,7 +12639,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the material prefix from the UI.",
-              "line": 1523,
+              "line": 1532,
               "deprecated": false
             },
             {
@@ -12139,7 +12648,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the normal map type from the comboBoxes current text.",
-              "line": 1530,
+              "line": 1539,
               "deprecated": false
             },
             {
@@ -12148,7 +12657,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the output map extension from the comboBox current text.",
-              "line": 1540,
+              "line": 1549,
               "deprecated": false
             },
             {
@@ -12157,7 +12666,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the shader type selection.",
-              "line": 1550,
+              "line": 1559,
               "deprecated": false
             },
             {
@@ -12166,7 +12675,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Presets",
-              "line": 1564,
+              "line": 1573,
               "deprecated": false
             },
             {
@@ -12175,7 +12684,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Output Extension",
-              "line": 1578,
+              "line": 1587,
               "deprecated": false
             },
             {
@@ -12184,7 +12693,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Create network.",
-              "line": 1585,
+              "line": 1594,
               "deprecated": false
             },
             {
@@ -12193,7 +12702,7 @@
               "kind": "method",
               "signature": "(self, string, progress=None, clear=False)",
               "summary": "Callback function to output messages to the UI textEdit and update progress bar.",
-              "line": 1635,
+              "line": 1644,
               "deprecated": false
             }
           ]
@@ -13742,7 +14251,7 @@
               "kind": "staticmethod",
               "signature": "(long_name: str, node: str = '') -> str",
               "summary": "Return the short attribute name for a long attribute name.",
-              "line": 141,
+              "line": 145,
               "deprecated": false
             },
             {
@@ -13751,7 +14260,7 @@
               "kind": "classmethod",
               "signature": "(cls, attrs: List[str]) -> str",
               "summary": "Return a compact summary string for a list of attribute names.",
-              "line": 175,
+              "line": 179,
               "deprecated": false
             },
             {
@@ -13760,7 +14269,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, objects) -> List[str]",
               "summary": "Look up a named preset and create its attributes on *objects*.",
-              "line": 234,
+              "line": 238,
               "deprecated": false
             },
             {
@@ -13769,7 +14278,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, objects) -> None",
               "summary": "Remove a preset's attributes from *objects*.",
-              "line": 260,
+              "line": 264,
               "deprecated": false
             },
             {
@@ -13778,7 +14287,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, template: AttributeTemplate) -> List[str]",
               "summary": "Apply an ``AttributeTemplate`` to a list of objects.",
-              "line": 288,
+              "line": 292,
               "deprecated": false
             },
             {
@@ -13787,7 +14296,7 @@
               "kind": "classmethod",
               "signature": "(cls, obj, template: AttributeTemplate) -> bool",
               "summary": "Create an attribute on *obj* from *template* if it doesn't already exist.",
-              "line": 297,
+              "line": 301,
               "deprecated": false
             },
             {
@@ -13796,7 +14305,7 @@
               "kind": "staticmethod",
               "signature": "(node, inc=None, exc=None, exc_defaults=False, quiet=True, **kwargs) -> dict",
               "summary": "Retrieve a node's attributes and their current values.",
-              "line": 348,
+              "line": 352,
               "deprecated": false
             },
             {
@@ -13805,7 +14314,7 @@
               "kind": "classmethod",
               "signature": "(cls, value) -> str",
               "summary": "Determine the Maya attribute type string for a given Python value.",
-              "line": 410,
+              "line": 414,
               "deprecated": false
             },
             {
@@ -13814,7 +14323,7 @@
               "kind": "staticmethod",
               "signature": "() -> List[str]",
               "summary": "Get attributes selected in the channel box.",
-              "line": 452,
+              "line": 456,
               "deprecated": false
             },
             {
@@ -13823,7 +14332,7 @@
               "kind": "staticmethod",
               "signature": "(objects, *args, include_locked=False, include_nonkeyable=False, include_object_name=False, as_group=False) -> dict",
               "summary": "Retrieve current channel-box attribute values for *objects*.",
-              "line": 463,
+              "line": 467,
               "deprecated": false
             },
             {
@@ -13832,7 +14341,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, create: bool = False, quiet: bool = False, keyable: bool = False, lock: bool = False, **attributes) -> None",
               "summary": "Set values on existing node attributes.",
-              "line": 518,
+              "line": 522,
               "deprecated": false
             },
             {
@@ -13841,7 +14350,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, keyable=True, **attributes) -> None",
               "summary": "Set attribute values, creating them first if they don't exist.",
-              "line": 560,
+              "line": 564,
               "deprecated": false
             },
             {
@@ -13850,7 +14359,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name: str, weighted: bool = False, min_value: float = 0.0, max_value: float = 1.0) -> str",
               "summary": "Create a bool or float (weighted) switch attribute if it doesn't exist.",
-              "line": 623,
+              "line": 627,
               "deprecated": false
             },
             {
@@ -13859,7 +14368,7 @@
               "kind": "staticmethod",
               "signature": "(attr: str, place: str, file: str) -> None",
               "summary": "Connect a same-named attribute between two nodes.",
-              "line": 665,
+              "line": 669,
               "deprecated": false
             },
             {
@@ -13868,7 +14377,7 @@
               "kind": "staticmethod",
               "signature": "(*args, force=True) -> None",
               "summary": "Connect multiple attribute pairs at once.",
-              "line": 676,
+              "line": 680,
               "deprecated": false
             },
             {
@@ -13877,7 +14386,7 @@
               "kind": "classmethod",
               "signature": "(cls, plug: str, passthrough_types: Optional[set] = None, visited: Optional[set] = None) -> Tuple[Optional[str], Optional[str]]",
               "summary": "Trace upstream through passthrough nodes to find the true driver.",
-              "line": 721,
+              "line": 725,
               "deprecated": false
             },
             {
@@ -13886,7 +14395,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, unlock: bool = False) -> Dict[str, Dict[str, Any]]",
               "summary": "Return lock state for standard transform attributes.",
-              "line": 829,
+              "line": 833,
               "deprecated": false
             },
             {
@@ -13895,7 +14404,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, lock_state: Optional[Dict[str, Dict[str, bool]]] = None, translate: Optional[bool] = None, rotate: Optional[bool] = None, scale: Optional[bool] = None, **kwargs) -> None",
               "summary": "Restore lock state from a saved dict, or bulk lock/unlock.",
-              "line": 886,
+              "line": 890,
               "deprecated": false
             },
             {
@@ -13904,7 +14413,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, attributes=None)",
               "summary": "Context manager: temporarily unlock attributes and restore state on exit.",
-              "line": 947,
+              "line": 951,
               "deprecated": false
             },
             {
@@ -13913,7 +14422,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, attributes: Optional[List[str]] = None) -> Dict[str, Any]",
               "summary": "Copy attribute values from the first object into the class clipboard.",
-              "line": 969,
+              "line": 973,
               "deprecated": false
             },
             {
@@ -13922,7 +14431,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, values: Optional[Dict[str, Any]] = None) -> None",
               "summary": "Paste attribute values onto *objects*.",
-              "line": 1003,
+              "line": 1007,
               "deprecated": false
             },
             {
@@ -13931,7 +14440,7 @@
               "kind": "staticmethod",
               "signature": "(objects, attributes: List[str]) -> None",
               "summary": "Reset attributes to their default values.",
-              "line": 1025,
+              "line": 1029,
               "deprecated": false
             },
             {
@@ -13940,7 +14449,7 @@
               "kind": "staticmethod",
               "signature": "(objects, attributes: Optional[List[str]] = None) -> None",
               "summary": "Mute channels to suppress animation evaluation.",
-              "line": 1042,
+              "line": 1046,
               "deprecated": false
             },
             {
@@ -13949,7 +14458,7 @@
               "kind": "staticmethod",
               "signature": "(objects, attributes: Optional[List[str]] = None) -> None",
               "summary": "Unmute previously muted channels.",
-              "line": 1059,
+              "line": 1063,
               "deprecated": false
             },
             {
@@ -13958,7 +14467,7 @@
               "kind": "staticmethod",
               "signature": "(objects, attributes: List[str], visible: bool = True) -> None",
               "summary": "Show or hide attributes in the channel box.",
-              "line": 1076,
+              "line": 1080,
               "deprecated": false
             },
             {
@@ -13967,7 +14476,7 @@
               "kind": "staticmethod",
               "signature": "(objects, attributes: List[str]) -> None",
               "summary": "Lock attributes and hide them from the channel box.",
-              "line": 1100,
+              "line": 1104,
               "deprecated": false
             },
             {
@@ -13976,7 +14485,7 @@
               "kind": "staticmethod",
               "signature": "(attributes: List[str], exclude: Union[str, List[str], None] = None, include: Union[str, List[str], None] = None, case_sensitive: bool = False) -> List[str]",
               "summary": "Filter attribute names by inclusion/exclusion patterns.",
-              "line": 1121,
+              "line": 1125,
               "deprecated": false
             },
             {
@@ -13985,7 +14494,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name)",
               "summary": "Return ``[(label, index), ...]`` for an enum attribute.",
-              "line": 1188,
+              "line": 1192,
               "deprecated": false
             },
             {
@@ -13994,7 +14503,7 @@
               "kind": "staticmethod",
               "signature": "(pairs)",
               "summary": "Build an ``enumName`` string from ``[(label, index), ...]``.",
-              "line": 1225,
+              "line": 1229,
               "deprecated": false
             },
             {
@@ -14003,7 +14512,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name)",
               "summary": "Return the list of enum field labels for *attr_name*.",
-              "line": 1248,
+              "line": 1252,
               "deprecated": false
             },
             {
@@ -14012,7 +14521,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name)",
               "summary": "Return the current enum label for an enum attribute, or ``None``.",
-              "line": 1263,
+              "line": 1267,
               "deprecated": false
             },
             {
@@ -14021,7 +14530,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name, label)",
               "summary": "Return the integer index for an enum label, or ``-1`` if not found.",
-              "line": 1281,
+              "line": 1285,
               "deprecated": false
             },
             {
@@ -14030,7 +14539,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name, old_label, new_label)",
               "summary": "Rename a single enum field from *old_label* to *new_label*.",
-              "line": 1296,
+              "line": 1300,
               "deprecated": false
             },
             {
@@ -14039,7 +14548,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name, new_label)",
               "summary": "Append a new enum field *new_label* to *attr_name*.",
-              "line": 1341,
+              "line": 1345,
               "deprecated": false
             },
             {
@@ -14048,7 +14557,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name, label)",
               "summary": "Remove the enum field *label* from *attr_name*.",
-              "line": 1382,
+              "line": 1386,
               "deprecated": false
             }
           ]
@@ -16350,7 +16859,7 @@
         {
           "name": "PersistentMenu",
           "summary": "A QMenu that ignores attempts to hide it (e.g.",
-          "line": 19,
+          "line": 14,
           "bases": [
             "QtWidgets.QMenu"
           ],
@@ -16361,15 +16870,15 @@
               "kind": "method",
               "signature": "(self, visible)",
               "summary": "",
-              "line": 22,
+              "line": 17,
               "deprecated": false
             }
           ]
         },
         {
           "name": "EmbeddedMenuWidget",
-          "summary": "",
-          "line": 28,
+          "summary": "Embeds a Maya QMenu into a sizeable widget that fits content exactly.",
+          "line": 23,
           "bases": [
             "QtWidgets.QWidget"
           ],
@@ -16380,7 +16889,34 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 34,
+              "line": 42,
+              "deprecated": false
+            },
+            {
+              "name": "content_size",
+              "qualname": "EmbeddedMenuWidget.content_size",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Exact size needed for header + populated menu, no dead space.",
+              "line": 116,
+              "deprecated": false
+            },
+            {
+              "name": "sizeHint",
+              "qualname": "EmbeddedMenuWidget.sizeHint",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "",
+              "line": 136,
+              "deprecated": false
+            },
+            {
+              "name": "minimumSizeHint",
+              "qualname": "EmbeddedMenuWidget.minimumSizeHint",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "",
+              "line": 139,
               "deprecated": false
             },
             {
@@ -16389,7 +16925,7 @@
               "kind": "method",
               "signature": "(self, event)",
               "summary": "",
-              "line": 110,
+              "line": 142,
               "deprecated": false
             },
             {
@@ -16397,26 +16933,8 @@
               "qualname": "EmbeddedMenuWidget.showEvent",
               "kind": "method",
               "signature": "(self, event)",
-              "summary": "Ensure menu z-order is correct when shown.",
-              "line": 137,
-              "deprecated": false
-            },
-            {
-              "name": "minimumSizeHint",
-              "qualname": "EmbeddedMenuWidget.minimumSizeHint",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Allow horizontal contraction while preserving minimum usability.",
-              "line": 149,
-              "deprecated": false
-            },
-            {
-              "name": "sizeHint",
-              "qualname": "EmbeddedMenuWidget.sizeHint",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Calculate preferred size based on menu content plus layout overhead.",
-              "line": 153,
+              "summary": "",
+              "line": 171,
               "deprecated": false
             },
             {
@@ -16424,8 +16942,8 @@
               "qualname": "EmbeddedMenuWidget.fit_to_window",
               "kind": "method",
               "signature": "(self)",
-              "summary": "Resize the parent window to fit menu content.",
-              "line": 191,
+              "summary": "Resize and lock the parent window to exact content size.",
+              "line": 177,
               "deprecated": false
             }
           ]
@@ -16433,7 +16951,7 @@
         {
           "name": "MayaNativeMenus",
           "summary": "Handles Maya's menu retrieval and embedding into UI components.",
-          "line": 203,
+          "line": 204,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -16443,8 +16961,8 @@
               "qualname": "MayaNativeMenus.get_menu",
               "kind": "method",
               "signature": "(self, menu_key: str) -> Optional[QtWidgets.QWidget]",
-              "summary": "Retrieves a Maya menu and embeds it in a UI component.",
-              "line": 409,
+              "summary": "Retrieve a Maya menu, populated synchronously, and return its wrapper.",
+              "line": 410,
               "deprecated": false
             },
             {
@@ -16453,16 +16971,7 @@
               "kind": "method",
               "signature": "(self, menu_key: str)",
               "summary": "Displays the specified Maya menu in a standalone window.",
-              "line": 456,
-              "deprecated": false
-            },
-            {
-              "name": "deferred_duplicate_menu",
-              "qualname": "MayaNativeMenus.deferred_duplicate_menu",
-              "kind": "method",
-              "signature": "(self, menu_key: str, maya_menu_name: str, orig_menu_set: str, placeholder_widget: EmbeddedMenuWidget)",
-              "summary": "Properly deferred function to duplicate and populate a Maya menu in UI.",
-              "line": 480,
+              "line": 524,
               "deprecated": false
             }
           ]
@@ -16483,12 +16992,21 @@
           ],
           "members": [
             {
+              "name": "instance",
+              "qualname": "MayaUiHandler.instance",
+              "kind": "classmethod",
+              "signature": "(cls, switchboard: Switchboard = None, **kwargs) -> 'MayaUiHandler'",
+              "summary": "Return the MayaUiHandler singleton, bootstrapping if needed.",
+              "line": 58,
+              "deprecated": false
+            },
+            {
               "name": "get",
               "qualname": "MayaUiHandler.get",
               "kind": "method",
               "signature": "(self, name: str, reload: bool = False, **kwargs) -> 'QtWidgets.QMainWindow'",
               "summary": "Retrieve a UI, checking Maya menus first.",
-              "line": 45,
+              "line": 89,
               "deprecated": false
             },
             {
@@ -16497,7 +17015,7 @@
               "kind": "method",
               "signature": "(self, ui, style=None)",
               "summary": "Override to give mayatk-sourced UIs a hide button instead of pin.",
-              "line": 53,
+              "line": 97,
               "deprecated": false
             }
           ]

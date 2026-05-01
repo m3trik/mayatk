@@ -15,7 +15,13 @@ class TestSmartBake(unittest.TestCase):
             from maya import cmds
             from maya import standalone
 
-            standalone.initialize(name="python")
+            # Initialize only when running standalone (mayapy script).
+            # When invoked via run_tests.py inside an already-running Maya,
+            # standalone.initialize() raises — that's expected and harmless.
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
             cls.maya_available = True
         except ImportError:
             cls.maya_available = False
@@ -622,7 +628,7 @@ class TestSmartBake(unittest.TestCase):
 
         # Should have created an override layer
         self.assertIsNotNone(result.override_layer)
-        self.assertTrue(cmds.objExists(f"{result}.override_layer"))
+        self.assertTrue(cmds.objExists(result.override_layer))
 
         # Should have optimized the baked curves
         self.assertTrue(len(result.optimized) > 0)

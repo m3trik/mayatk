@@ -38,6 +38,7 @@ DEFAULT_INCLUDE = {
     "anim_utils.smart_bake": ["SmartBake", "smart_bake"],
     "anim_utils.shots.shot_sequencer._shot_sequencer": ["ShotSequencer", "ShotBlock"],
     "anim_utils.shots._shots": "ShotStore",
+    "anim_utils.blendshape_animator._blendshape_animator": "BlendshapeAnimator",
     # Attribute utils
     "node_utils.attributes._attributes": ["Attributes"],
     "node_utils.attributes.event_triggers": "EventTriggers",
