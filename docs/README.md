@@ -54,6 +54,36 @@ pip install mayatk
 
 
 
+## Bundled UITK Editors
+
+`MayaUiHandler` ships with a one-line entry point for launching the
+[uitk](https://github.com/m3trik/uitk) editor windows from a Maya shelf
+button or script:
+
+```python
+from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
+MayaUiHandler.instance().editors.show("browser")
+```
+
+| Editor key | Description |
+|------------|-------------|
+| `browser`  | Searchable launcher for every UI registered with the switchboard — supports tagging, filtering by name/tag, hide lists, launch options, and JSON-portable presets. |
+| `style`    | Theme + QSS variable editor for live restyling of the dark/light themes. |
+| `hotkey`   | Keyboard-shortcut editor for slots registered with the switchboard. |
+
+`MayaUiHandler.instance()` is reentrant:
+
+- If `tentacle` (or any other tool) already created the handler, the
+  call returns the existing singleton — opening the editor on top of
+  the same switchboard the rest of the application is using.
+- If nothing has set up a handler yet, the call bootstraps one with a
+  fresh `Switchboard`, so the shelf button is the only line of code
+  needed.
+
+The editor is cached per-handler — clicking the shelf button twice
+focuses the existing window rather than spawning a duplicate; closing
+it via the OS close button + reopening rebuilds transparently.
+
 ## License
 
 MIT License - See [LICENSE](../LICENSE) file for details

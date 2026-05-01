@@ -24,12 +24,24 @@ class MayaUiHandler(UiHandler):
 
     def __init__(
         self,
-        switchboard: Switchboard,
+        switchboard: Switchboard = None,
         log_level: str = "WARNING",
         **kwargs,
     ) -> None:
-        """Initialize Maya UI Handler."""
+        """Initialize Maya UI Handler.
+
+        ``switchboard`` is optional. When omitted, a fresh ``Switchboard``
+        is constructed so the handler can be stood up by a shelf script
+        without any prior setup. Production callers (e.g. tentacle's
+        ``tcl_maya``) still pass an explicit instance to share state
+        with the rest of the application.
+        """
         self.root_dir = os.path.dirname(sys.modules["mayatk"].__file__)
+
+        if switchboard is None:
+            from uitk import Switchboard as _Switchboard
+
+            switchboard = _Switchboard()
 
         super().__init__(
             switchboard=switchboard,
@@ -41,6 +53,38 @@ class MayaUiHandler(UiHandler):
             source_tags={"mayatk"},
             **kwargs,
         )
+
+    @classmethod
+    def instance(cls, switchboard: Switchboard = None, **kwargs) -> "MayaUiHandler":
+        """Return the MayaUiHandler singleton, bootstrapping if needed.
+
+        Overrides :meth:`UiHandler.instance` so a shelf-style call works
+        regardless of prior setup state:
+
+        - **Pre-existing handler** (e.g. tentacle's ``tcl_maya`` already
+          ran ``MayaUiHandler.instance(switchboard=tentacle_sb)``): the
+          existing instance is returned, even when this call is made
+          without a switchboard argument. The base implementation keys
+          singletons by ``id(switchboard)``, which would otherwise treat
+          ``id(None)`` as a separate slot and try to build a fresh,
+          broken handler.
+        - **No handler yet, switchboard given**: standard UiHandler path,
+          singleton keyed by ``id(switchboard)``.
+        - **No handler yet, no switchboard**: ``MayaUiHandler.__init__``
+          bootstraps a fresh ``Switchboard`` (see __init__).
+
+        This makes the one-liner pattern reliable from a Maya shelf::
+
+            from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
+            MayaUiHandler.instance().editors.show("browser")
+        """
+        if switchboard is None:
+            # SingletonMixin._instances is shared across all subclasses;
+            # filter to our class so we don't return a sibling handler.
+            for inst in cls._instances.values():
+                if isinstance(inst, cls):
+                    return inst
+        return super().instance(switchboard=switchboard, **kwargs)
 
     def get(self, name: str, reload: bool = False, **kwargs) -> "QtWidgets.QMainWindow":
         """Retrieve a UI, checking Maya menus first."""
