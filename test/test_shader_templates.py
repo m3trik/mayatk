@@ -214,14 +214,6 @@ class TestShaderTemplates(MayaTkTestCase):
         # Save
         ShaderTemplates.save_template([shader, file_node], self.template_path)
 
-        # DEBUG: Copy YAML to a visible location
-        try:
-            shutil.copy(
-                self.template_path, "O:/Cloud/Code/_scripts/debug_template.yaml"
-            )
-        except Exception:
-            pass
-
         # Delete
         cmds.delete(shader, file_node)
 
