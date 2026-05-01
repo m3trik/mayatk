@@ -1,9 +1,0 @@
-[ERROR] No module named 'maya'
-Traceback (most recent call last):
-  File "O:\Cloud\Code\_scripts\mayatk\test\temp_tests\run_preview_test.py", line 32, in <module>
-    import pymel.core as pm
-  File "C:\Users\m3tri\AppData\Roaming\Python\Python311\site-packages\pymel\core\__init__.py", line 9, in <module>
-    import pymel.internal.startup as _startup
-  File "C:\Users\m3tri\AppData\Roaming\Python\Python311\site-packages\pymel\internal\startup.py", line 10, in <module>
-    import maya
-ModuleNotFoundError: No module named 'maya'
