@@ -1,0 +1,55 @@
+name: Static Analysis
+
+# mayatk's runtime tests require Maya, which isn't available in CI.
+# This workflow runs the Maya-free checks: AST parse-walk (catches syntax errors)
+# and pyflakes-based static analysis (catches undefined names like unimported `cmds`).
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+jobs:
+  static-analysis:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyflakes
+
+      - name: AST parse-walk (syntax check, no imports)
+        run: |
+          python -c "
+          import ast, os, sys
+          count, failed = 0, []
+          for root, _, files in os.walk('mayatk'):
+              for f in files:
+                  if f.endswith('.py'):
+                      path = os.path.join(root, f)
+                      try:
+                          ast.parse(open(path, encoding='utf-8').read())
+                          count += 1
+                      except SyntaxError as e:
+                          failed.append(f'{path}: {e}')
+          print(f'{count} files parsed OK')
+          if failed:
+              print('SYNTAX ERRORS:')
+              for line in failed: print(f'  {line}')
+              sys.exit(1)
+          "
+
+      - name: pyflakes static analysis
+        # Run the test file directly via its __main__ block. Avoids importing
+        # mayatk package (which requires pythontk) or test package; only needs
+        # stdlib + pyflakes already installed above.
+        run: |
+          python test/test_static_analysis.py
