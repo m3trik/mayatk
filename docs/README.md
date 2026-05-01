@@ -24,7 +24,7 @@ pip install mayatk
 - Python 3.11+
 - Autodesk Maya 2025+
 
-
+mayatk ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-package-manager.bat) — an interactive Windows menu for installing, updating, and backing up packages in Maya's bundled Python interpreter.
 
 ## Package Structure
 
