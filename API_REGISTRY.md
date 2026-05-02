@@ -2,11 +2,20 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-04-29_
+_Generated: 2026-05-01_
 
 ## Index
 
 - [`anim_utils/_anim_utils.py`](#anim_utils--_anim_utils)
+- [`anim_utils/blendshape_animator/_blendshape_animator.py`](#anim_utils--blendshape_animator--_blendshape_animator) — Main workflow facade for blendShape morph-animation creation, editing, and export.
+- [`anim_utils/blendshape_animator/applicator.py`](#anim_utils--blendshape_animator--applicator) — Applies tween mesh edits back to blendShape in-between targets.
+- [`anim_utils/blendshape_animator/creator.py`](#anim_utils--blendshape_animator--creator) — Creates in-between target meshes for custom blendShape animation curves.
+- [`anim_utils/blendshape_animator/helpers.py`](#anim_utils--blendshape_animator--helpers) — Shared helpers internal to the blendshape_animator subpackage.
+- [`anim_utils/blendshape_animator/keyframes.py`](#anim_utils--blendshape_animator--keyframes) — Core blendShape keyframe animation operations.
+- [`anim_utils/blendshape_animator/recovery.py`](#anim_utils--blendshape_animator--recovery) — Recovery utilities for corrupted blendShape setups.
+- [`anim_utils/blendshape_animator/target.py`](#anim_utils--blendshape_animator--target) — Tween mesh wrappers and registry for blendShape in-between targets.
+- [`anim_utils/blendshape_animator/validator.py`](#anim_utils--blendshape_animator--validator) — Mesh and blendShape validation for blendShape animation setup.
+- [`anim_utils/blendshape_animator/weights.py`](#anim_utils--blendshape_animator--weights) — Weight calculations and Maya-compatible precision handling for blendShape animation.
 - [`anim_utils/playblast_exporter.py`](#anim_utils--playblast_exporter) — Utilities for creating playblasts and alternative preview renders in Maya.
 - [`anim_utils/scale_keys.py`](#anim_utils--scale_keys) — Dedicated scale-keys module to keep AnimUtils lean and testable.
 - [`anim_utils/segment_keys.py`](#anim_utils--segment_keys)
@@ -187,6 +196,109 @@ _Generated: 2026-04-29_
   - `AnimUtils.paste_keys(objects=None, copied_data: Optional[Dict[str, Dict[str, Any]]] = None, target_time=None, match_source: bool = True, refresh_channel_box: bool = True, **kwargs) -> int` *(static)* — Paste previously copied attribute values as keyframes.
   - `AnimUtils.delete_animation_layer(layer: str, merge_to_base: bool = False) -> bool` *(static)* — Delete an animation layer.
   - `AnimUtils.fit_playback_range(objects=None, padding: float = 0) -> bool` *(static)* — Set the playback range to encompass keyframes on all (or given) scene objects.
+
+<a id="anim_utils--blendshape_animator--_blendshape_animator"></a>
+### `anim_utils/blendshape_animator/_blendshape_animator.py`
+
+Main workflow facade for blendShape morph-animation creation, editing, and export.
+
+- **[`class BlendshapeAnimator(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/_blendshape_animator.py#L23)** — Main workflow facade for blendShape animations.
+  - `BlendshapeAnimator.create(self, base_mesh: Optional[str] = None, target_mesh: Optional[str] = None, start_frame: int = 5500, end_frame: int = 5800, name: str = 'morph', test_setup: bool = True) -> bool` — Set up basic morph animation between two meshes.
+  - `BlendshapeAnimator.edit_weight_based(self, weights: Optional[List[float]] = None, count: int = 3, weight_range: Tuple[float, float] = (0.0, 1.0)) -> List[Target]` — Create tweens at specific weights or evenly spaced.
+  - `BlendshapeAnimator.edit_frame_based(self, frames: Optional[List[int]] = None, target_frame: Optional[int] = None) -> List[Target]` — Create tweens at specific animation frames.
+  - `BlendshapeAnimator.edit_apply_tweens(self, tweens: Optional[List[Target]] = None) -> List[Target]` — Apply tween mesh edits back to blendShape.
+  - `BlendshapeAnimator.basic_workflow(cls, base_mesh: Optional[str] = None, target_mesh: Optional[str] = None, inbetween_meshes: Optional[List[str]] = None, start_frame: Optional[int] = None, end_frame: Optional[int] = None, frame_range: Optional[Union[Tuple[int, int], List[int]]] = None, name: str = 'morph') -> Optional['BlendshapeAnimator']` *(class)* — Complete basic workflow: create setup with targets ready for editing.
+  - `BlendshapeAnimator.apply_all_edits(self) -> bool` — Apply all target edits to the current setup.
+  - `BlendshapeAnimator.finalize_for_export(self, cleanup_scene: bool = True, delete_construction_history: bool = True, hide_target_mesh: bool = True, delete_inbetween_meshes: bool = True) -> bool` — Finalize the morph animation and clean up the scene for baking/export.
+  - `BlendshapeAnimator.from_existing(cls, base_mesh: Optional[str] = None) -> Optional['BlendshapeAnimator']` *(class)* — Create animator from existing blendShape setup on ``base_mesh``.
+  - `BlendshapeAnimator.recover_animation(self) -> bool` — Recover lost animation keyframes and validate setup.
+  - `BlendshapeAnimator.diagnose_topology_issues(self) -> bool` — Diagnose topology mismatches between base mesh and in-between meshes.
+  - `BlendshapeAnimator.cleanup_topology_mismatches(self, delete_mismatched: bool = True, apply_valid_only: bool = True) -> bool` — Clean up topology mismatches by deleting bad meshes and applying good ones.
+  - `BlendshapeAnimator.remove_target_for_export(self) -> bool` — Remove target mesh for clean export.
+  - `BlendshapeAnimator.recover_setup(cls, base_mesh: Optional[str] = None, target_mesh: Optional[str] = None) -> Optional['BlendshapeAnimator']` *(class)* — Recover corrupted blendShape setup.
+
+<a id="anim_utils--blendshape_animator--applicator"></a>
+### `anim_utils/blendshape_animator/applicator.py`
+
+Applies tween mesh edits back to blendShape in-between targets.
+
+- **[`class ApplyStatus(Enum)`](mayatk/mayatk/anim_utils/blendshape_animator/applicator.py#L18)**
+- **[`class Applicator(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/applicator.py#L24)** — Applies tween mesh edits back to blendShape in-between targets.
+  - `Applicator.validate_topology(self, tweens: List[Target]) -> List[Target]` — Filter ``tweens`` to those matching base mesh vertex count.
+  - `Applicator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]` — Apply tween mesh edits to blendShape in-between targets.
+
+<a id="anim_utils--blendshape_animator--creator"></a>
+### `anim_utils/blendshape_animator/creator.py`
+
+Creates in-between target meshes for custom blendShape animation curves.
+
+- **[`class Creator(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/creator.py#L20)** — Creates in-between target meshes for custom animation curves.
+  - `Creator.create_weight_based_tweens(self, weights: List[float], group_name: str = '_morphInbetweens_GRP', name_prefix: str = 'morph_ib') -> List[Target]` — Create tween meshes at specific weight values.
+  - `Creator.create_frame_based_tween(self, target_frame: int) -> Optional[Target]` — Create a tween mesh at a specific animation frame.
+  - `Creator.tag_tween_mesh(self, mesh: str, weight: float, target_frame: Optional[int] = None) -> None` — Add metadata attributes to ``mesh``.
+  - `Creator.get_existing_weights(self) -> Set[float]` — Return all in-between weights known for the current blendShape.
+  - `Creator.find_nearby_weight(self, target_weight: float, existing_weights: Set[float], tolerance: float = 0.01) -> Optional[float]` — Find a nearby weight that doesn't conflict with existing weights.
+
+<a id="anim_utils--blendshape_animator--helpers"></a>
+### `anim_utils/blendshape_animator/helpers.py`
+
+Shared helpers internal to the blendshape_animator subpackage.
+
+- [`list_history(node: str, type_filter: Optional[str] = None) -> List[str]`](mayatk/mayatk/anim_utils/blendshape_animator/helpers.py#L12) — List the construction history of a node, optionally filtered by node type.
+
+<a id="anim_utils--blendshape_animator--keyframes"></a>
+### `anim_utils/blendshape_animator/keyframes.py`
+
+Core blendShape keyframe animation operations.
+
+- **[`class Keyframes(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/keyframes.py#L16)** — Core blendShape animation functionality.
+  - `Keyframes.create_keyframes(self, start_frame: int, end_frame: int) -> bool` — Create linear keyframe animation from weight 0.0 -> 1.0.
+  - `Keyframes.test_morph(self) -> bool` — Test the blendShape by temporarily setting weight to 0.5.
+  - `Keyframes.get_frame_range(self) -> Tuple[int, int]` — Return (start, end) frame range from keyframes on weight[0].
+
+<a id="anim_utils--blendshape_animator--recovery"></a>
+### `anim_utils/blendshape_animator/recovery.py`
+
+Recovery utilities for corrupted blendShape setups.
+
+- **[`class Recovery(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/recovery.py#L17)** — Utilities for recovering from corrupted blendShape setups.
+  - `Recovery.fix_corrupted_animation(cls, base_mesh: str, target_mesh: str) -> bool` *(class)* — Rebuild corrupted blendShape animation.
+  - `Recovery.recover_with_targets(cls, base_mesh: str, target_mesh: str) -> bool` *(class)* — Complete recovery: fix animation AND restore tween customizations.
+
+<a id="anim_utils--blendshape_animator--target"></a>
+### `anim_utils/blendshape_animator/target.py`
+
+Tween mesh wrappers and registry for blendShape in-between targets.
+
+- **[`class Target`](mayatk/mayatk/anim_utils/blendshape_animator/target.py#L18)** — Represents a single target/in-between target mesh.
+  - `Target.weight(self) -> float` *(property)* — Get the weight value for this tween.
+  - `Target.blendshape_name(self) -> str` *(property)* — Get the blendShape node name this tween targets.
+  - `Target.base_mesh_name(self) -> str` *(property)* — Get the base mesh name this tween applies to.
+  - `Target.target_frame(self) -> Optional[int]` *(property)* — Get target frame if this tween was created from a specific frame.
+  - `Target.update_references(self, new_blendshape: str, new_base_mesh: str) -> None` — Update this tween's references to new blendShape/base mesh.
+- **[`class Targets(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/target.py#L66)** — Manages collections of tween meshes.
+  - `Targets.find_all_targets(cls) -> List[Target]` *(class)* — Find all tween meshes in the scene (deduplicated).
+  - `Targets.group_by_weight(cls, tweens: List[Target]) -> Dict[float, List[Target]]` *(class)* — Group tweens by weight value, handling duplicates.
+  - `Targets.update_all_references(cls, new_blendshape: str, new_base_mesh: str) -> int` *(class)* — Update all tween mesh references to new nodes.
+
+<a id="anim_utils--blendshape_animator--validator"></a>
+### `anim_utils/blendshape_animator/validator.py`
+
+Mesh and blendShape validation for blendShape animation setup.
+
+- **[`class Validator(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/validator.py#L14)** — Handles validation of meshes and blendShape setups.
+  - `Validator.validate_meshes(cls, mesh1: str, mesh2: str) -> bool` *(class)* — Validate that both objects are compatible meshes.
+  - `Validator.validate_blendshape(cls, blendshape: str) -> bool` *(class)* — Validate blendShape node configuration.
+
+<a id="anim_utils--blendshape_animator--weights"></a>
+### `anim_utils/blendshape_animator/weights.py`
+
+Weight calculations and Maya-compatible precision handling for blendShape animation.
+
+- **[`class Weights`](mayatk/mayatk/anim_utils/blendshape_animator/weights.py#L7)** — Handles weight calculations and Maya's precision requirements.
+  - `Weights.round_weight(cls, weight: float) -> float` *(class)* — Round weight to Maya-compatible precision.
+  - `Weights.frame_to_weight(cls, frame: int, start_frame: int, end_frame: int) -> float` *(class)* — Convert frame number to blendShape weight.
+  - `Weights.generate_weights(cls, count: int, weight_range: Tuple[float, float] = (0.0, 1.0), include_endpoints: bool = False) -> List[float]` *(class)* — Generate ``count`` evenly spaced weights within ``weight_range``.
 
 <a id="anim_utils--playblast_exporter"></a>
 ### `anim_utils/playblast_exporter.py`
@@ -1247,7 +1359,7 @@ Centralized Maya event subscription manager.
   - `EditMacros.m_paste_and_rename() -> None` *(static)* — Paste and rename by removing 'pasted__' prefix and reference file names,
   - `EditMacros.m_multi_component() -> None` *(static)* — Multi-Component Selection.
   - `EditMacros.m_merge_vertices(objects, tolerance=0.001) -> None` *(static)* — Merge Vertices.
-- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L938)**
+- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L941)**
   - `SelectionMacros.m_object_selection() -> None` *(static)* — Set object selection mask.
   - `SelectionMacros.m_vertex_selection() -> None` *(static)* — Set vertex selection mask.
   - `SelectionMacros.m_edge_selection() -> None` *(static)* — Set edge selection mask.
@@ -1256,12 +1368,12 @@ Centralized Maya event subscription manager.
   - `SelectionMacros.m_toggle_selectability(objects)` *(static)* — Toggle selectability of the given objects.
   - `SelectionMacros.m_toggle_UV_select_type() -> None` *(static)* — Toggles between UV shell and UV component selection.
   - `SelectionMacros.m_invert_component_selection() -> None` *(static)* — Invert the component selection on the currently selected objects.
-- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1109)**
+- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1112)**
   - `UiMacros.m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None` *(static)* — Toggle UI toolbars and menu bar in sync.
-- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L1145)**
+- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L1148)**
   - `AnimationMacros.m_set_selected_keys(objects) -> None` *(static)* — Set keys for any attributes (channels) that are selected in the channel box.
   - `AnimationMacros.m_unset_selected_keys(objects) -> None` *(static)* — Un-set keys for any attributes (channels) that are selected in the channel box.
-- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L1173)**
+- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L1176)**
 
 <a id="edit_utils--mesh_graph"></a>
 ### `edit_utils/mesh_graph.py`
@@ -1288,7 +1400,7 @@ Centralized Maya event subscription manager.
 ### `edit_utils/naming/_naming.py`
 
 - **[`class Naming(ptk.HelpMixin)`](mayatk/mayatk/edit_utils/naming/_naming.py#L20)**
-  - `Naming.rename(cls, objects: Union[str, 'object', List[Union[str, 'object']]], to: str, fltr: str = '', regex: bool = False, ignore_case: bool = False, retain_suffix: bool = False, valid_suffixes: Optional[List[str]] = None) -> None` *(class)* — Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's namin…
+  - `Naming.rename(cls, objects: Union[str, 'object', List[Union[str, 'object']]], to: str, fltr: str = '', regex: bool = False, ignore_case: bool = False, retain_suffix: bool = False, valid_suffixes: Optional[List[str]] = None) -> List[str]` *(class)* — Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's namin…
   - `Naming.generate_unique_name(cls, base_name, suffix='_', padding=3)` *(class)* — Generate a unique name based on the base_name.
   - `Naming.strip_illegal_chars(input_data, replace_with='_')` *(static)* — Strips illegal characters from a string or a list of strings, replacing them with a specified chara…
   - `Naming.strip_chars(objects: Union[str, object, List[Union[str, object]]], num_chars: int = 1, trailing: bool = False) -> List[str]` *(static)* — Deletes leading or trailing characters from the names of the provided objects,
@@ -1366,7 +1478,7 @@ Primitive creation utilities for Maya.
 <a id="env_utils--_env_utils"></a>
 ### `env_utils/_env_utils.py`
 
-- **[`class EnvUtils(ptk.HelpMixin)`](mayatk/mayatk/env_utils/_env_utils.py#L15)**
+- **[`class EnvUtils(ptk.HelpMixin)`](mayatk/mayatk/env_utils/_env_utils.py#L16)**
   - `EnvUtils.get_env_info(key)` *(static)* — Fetch specific information about the current Maya environment based on the provided key.
   - `EnvUtils.append_maya_paths(maya_version=None)` *(static)* — Appends various Maya-related paths to the system's Python environment and sys.path.
   - `EnvUtils.load_plugin(plugin_name)` *(static)* — Loads a specified plugin.
@@ -1446,18 +1558,18 @@ Primitive creation utilities for Maya.
 - [`filter_path_map_by_cameras(path_map: Dict[str, Any]) -> Dict[str, Any]`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L141) — Remove Maya default cameras from *path_map*.
 - [`filter_path_map_by_types(path_map: Dict[str, Any], node_types: List[str], exclude: bool = True) -> Dict[str, Any]`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L150) — Filter *path_map* by shape node types.
 - [`select_objects_in_maya(object_names: List[str]) -> int`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L161) — Select objects in Maya scene by name.
-- **[`class HierarchyMapBuilder`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L221)** — Builds hierarchy path maps for Maya transforms.
+- **[`class HierarchyMapBuilder`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L220)** — Builds hierarchy path maps for Maya transforms.
   - `HierarchyMapBuilder.build_path_map(root, exclude_namespace_prefixes: List[str] = None, strip_namespaces: bool = False) -> Dict[str, Any]` *(static)* — Build a mapping of hierarchical paths to transform nodes.
   - `HierarchyMapBuilder.build_path_map_from_nodes(nodes: List[Any], strip_namespaces: bool = False) -> Dict[str, Any]` *(static)* — Build a path map from an arbitrary list of transform node names.
-- **[`class MayaObjectMatcher(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L325)** — Maya-specific object matching with fuzzy logic and container searches.
+- **[`class MayaObjectMatcher(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L324)** — Maya-specific object matching with fuzzy logic and container searches.
   - `MayaObjectMatcher.find_matches(self, target_objects: List[str], imported_transforms: List, dry_run: bool = False) -> Tuple[List, Dict]` — Find matching objects using exact and fuzzy matching.
-- **[`class HierarchyManager(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L431)** — Core hierarchy analysis and repair manager.
+- **[`class HierarchyManager(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L430)** — Core hierarchy analysis and repair manager.
   - `HierarchyManager.analyze_hierarchies(self, current_tree_root=None, reference_tree_root=None, reference_objects: List = None, filter_meshes: bool = True, filter_cameras: bool = False, filter_lights: bool = False, inc_names: Optional[List[str]] = None, exc_names: Optional[List[str]] = None, inc_types: Optional[List[str]] = None, exc_types: Optional[List[str]] = None) -> Dict[str, Any]` — Analyze differences between current and reference hierarchies.
   - `HierarchyManager.create_stubs(self, paths: Optional[List[str]] = None) -> List[str]` — Create empty transform stubs for missing hierarchy paths.
   - `HierarchyManager.quarantine_extras(self, group: str = '_QUARANTINE', paths: Optional[List[str]] = None, skip_animated: bool = True) -> List[str]` — Move extra (scene-only) items to a root-level quarantine group.
   - `HierarchyManager.fix_fuzzy_renames(self, items: Optional[List[Dict[str, str]]] = None, skip_animated: bool = True) -> List[str]` — Rename nodes identified as fuzzy matches to their reference names.
   - `HierarchyManager.fix_reparented(self, items: Optional[List[Dict[str, str]]] = None) -> List[str]` — Move reparented nodes to match their reference hierarchy position.
-- **[`class ObjectSwapper(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L1821)** — Handles cross-scene object operations like push/pull.
+- **[`class ObjectSwapper(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L1820)** — Handles cross-scene object operations like push/pull.
   - `ObjectSwapper.push_objects_to_scene(self, target_objects: List[str], target_file: Union[str, Path], backup: bool = True) -> bool` — Push objects from current scene to target scene.
   - `ObjectSwapper.pull_objects_from_scene(self, target_objects: List[str], source_file: Union[str, Path], backup: bool = True) -> bool` — Pull objects from source scene into current scene.
 
@@ -1593,17 +1705,17 @@ Maya Connection Module
   - `FBXImporter.is_supported_file(self, file_path: Union[str, Path]) -> bool` — Check if the file is an FBX file.
   - `FBXImporter.import_with_namespace(self, source_file: Path, namespace: str, temp_namespace_prefix: str, force_complete_import: bool = False) -> Optional[Dict]` — Import FBX file with namespace - handles the complete import process.
   - `FBXImporter.import_for_analysis(self, source_file: Path, namespace: str) -> Optional[List[Any]]` — Import FBX file for analysis purposes.
-- **[`class MayaImporter`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1001)** — Handles Maya-specific import operations (.ma/.mb files).
+- **[`class MayaImporter`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1032)** — Handles Maya-specific import operations (.ma/.mb files).
   - `MayaImporter.is_supported_file(self, file_path: Union[str, Path]) -> bool` — Check if the file is a Maya file (.ma or .mb).
   - `MayaImporter.import_with_namespace(self, source_file: Path, namespace: str, temp_namespace_prefix: str, force_complete_import: bool = False) -> Optional[Dict]` — Import Maya file with namespace - original logic.
   - `MayaImporter.import_for_analysis(self, source_file: Path, namespace: str) -> Optional[List[Any]]` — Import Maya file for analysis purposes.
-- **[`class CameraTracker(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1180)** — Tracks cameras before and after import operations for proper cleanup.
+- **[`class CameraTracker(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1211)** — Tracks cameras before and after import operations for proper cleanup.
   - `CameraTracker.capture_pre_import_state(self)` — Capture camera state before import.
   - `CameraTracker.capture_post_import_state(self)` — Capture camera state after import.
   - `CameraTracker.get_imported_cameras(self, namespace_filter=None)` — Get cameras that were imported (optionally filtered by namespace).
   - `CameraTracker.cleanup_imported_cameras(self, namespace_filter=None, preserve_user_cameras=True)` — Clean up imported cameras with optional preservation of user cameras.
   - `CameraTracker.reset(self)` — Reset tracking state.
-- **[`class NamespaceSandbox(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1297)** — Handles temporary importing and namespace management for Maya scenes.
+- **[`class NamespaceSandbox(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1328)** — Handles temporary importing and namespace management for Maya scenes.
   - `NamespaceSandbox.import_with_namespace(self, source_file: Union[str, Path], namespace_prefix: str = None, force_complete_import: bool = False) -> Optional[Dict]` — Import file and return import information.
   - `NamespaceSandbox.import_for_analysis(self, source_file: Union[str, Path], namespace: str = None) -> Optional[List[Any]]` — Import file into temporary namespace for analysis (dry-run mode).
   - `NamespaceSandbox.get_supported_formats(self) -> List[str]` — Get list of supported file formats from all importers.
@@ -1875,9 +1987,9 @@ Maya Connection Module
   - `GameShader.filter_for_correct_metallic_map(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]` — Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…
   - `GameShader.filter_for_mask_map(self, textures: List[str], output_extension: str = 'png') -> List[str]` — Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
   - `GameShader.filter_for_correct_base_color_map(self, textures: List[str], use_albedo_transparency: bool) -> List[str]` — Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…
-- **[`class CallbackLogHandler(logging.Handler)`](mayatk/mayatk/mat_utils/game_shader.py#L1436)** — Log handler that calls a callback function with the formatted message.
+- **[`class CallbackLogHandler(logging.Handler)`](mayatk/mayatk/mat_utils/game_shader.py#L1445)** — Log handler that calls a callback function with the formatted message.
   - `CallbackLogHandler.emit(self, record)`
-- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1448)**
+- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1457)**
   - `GameShaderSlots.header_init(self, widget)` — Initialize the header widget.
   - `GameShaderSlots.lbl_graph_material(self)` — Graph the material in the Hypershade.
   - `GameShaderSlots.mat_name(self) -> str` *(property)* — Get the mat name from the user input text field.
@@ -2489,24 +2601,25 @@ Programmatic access to Maya's Channel Box.
 <a id="ui_utils--maya_native_menus"></a>
 ### `ui_utils/maya_native_menus.py`
 
-- **[`class PersistentMenu(QtWidgets.QMenu)`](mayatk/mayatk/ui_utils/maya_native_menus.py#L19)** — A QMenu that ignores attempts to hide it (e.g.
+- **[`class PersistentMenu(QtWidgets.QMenu)`](mayatk/mayatk/ui_utils/maya_native_menus.py#L14)** — A QMenu that ignores attempts to hide it (e.g.
   - `PersistentMenu.setVisible(self, visible)`
-- **[`class EmbeddedMenuWidget(QtWidgets.QWidget)`](mayatk/mayatk/ui_utils/maya_native_menus.py#L28)**
+- **[`class EmbeddedMenuWidget(QtWidgets.QWidget)`](mayatk/mayatk/ui_utils/maya_native_menus.py#L23)** — Embeds a Maya QMenu into a sizeable widget that fits content exactly.
   - `EmbeddedMenuWidget.init_ui(self)`
+  - `EmbeddedMenuWidget.content_size(self)` — Exact size needed for header + populated menu, no dead space.
+  - `EmbeddedMenuWidget.sizeHint(self)`
+  - `EmbeddedMenuWidget.minimumSizeHint(self)`
   - `EmbeddedMenuWidget.resizeEvent(self, event)`
-  - `EmbeddedMenuWidget.showEvent(self, event)` — Ensure menu z-order is correct when shown.
-  - `EmbeddedMenuWidget.minimumSizeHint(self)` — Allow horizontal contraction while preserving minimum usability.
-  - `EmbeddedMenuWidget.sizeHint(self)` — Calculate preferred size based on menu content plus layout overhead.
-  - `EmbeddedMenuWidget.fit_to_window(self)` — Resize the parent window to fit menu content.
-- **[`class MayaNativeMenus(ptk.LoggingMixin)`](mayatk/mayatk/ui_utils/maya_native_menus.py#L203)** — Handles Maya's menu retrieval and embedding into UI components.
-  - `MayaNativeMenus.get_menu(self, menu_key: str) -> Optional[QtWidgets.QWidget]` — Retrieves a Maya menu and embeds it in a UI component.
+  - `EmbeddedMenuWidget.showEvent(self, event)`
+  - `EmbeddedMenuWidget.fit_to_window(self)` — Resize and lock the parent window to exact content size.
+- **[`class MayaNativeMenus(ptk.LoggingMixin)`](mayatk/mayatk/ui_utils/maya_native_menus.py#L204)** — Handles Maya's menu retrieval and embedding into UI components.
+  - `MayaNativeMenus.get_menu(self, menu_key: str) -> Optional[QtWidgets.QWidget]` — Retrieve a Maya menu, populated synchronously, and return its wrapper.
   - `MayaNativeMenus.display_menu(self, menu_key: str)` — Displays the specified Maya menu in a standalone window.
-  - `MayaNativeMenus.deferred_duplicate_menu(self, menu_key: str, maya_menu_name: str, orig_menu_set: str, placeholder_widget: EmbeddedMenuWidget)` — Properly deferred function to duplicate and populate a Maya menu in UI.
 
 <a id="ui_utils--maya_ui_handler"></a>
 ### `ui_utils/maya_ui_handler.py`
 
 - **[`class MayaUiHandler(UiHandler)`](mayatk/mayatk/ui_utils/maya_ui_handler.py#L18)** — UI Handler for Maya applications.
+  - `MayaUiHandler.instance(cls, switchboard: Switchboard = None, **kwargs) -> 'MayaUiHandler'` *(class)* — Return the MayaUiHandler singleton, bootstrapping if needed.
   - `MayaUiHandler.get(self, name: str, reload: bool = False, **kwargs) -> 'QtWidgets.QMainWindow'` — Retrieve a UI, checking Maya menus first.
   - `MayaUiHandler.apply_styles(self, ui, style=None)` — Override to give mayatk-sourced UIs a hide button instead of pin.
 

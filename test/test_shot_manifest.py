@@ -3581,10 +3581,11 @@ class TestSetClipBehavior(unittest.TestCase):
 class TestAudioResolverPath(unittest.TestCase):
     """Audio resolvers create BuilderObject(kind='audio') in step.objects."""
 
-    _TEMP = Path(__file__).parent / "temp_tests" / "audio_resolver"
-
     def setUp(self):
-        self._TEMP.mkdir(parents=True, exist_ok=True)
+        import tempfile
+        # Per-test tempdir avoids Windows file-handle collisions between
+        # successive setUp/tearDown cycles when run as part of --all.
+        self._TEMP = Path(tempfile.mkdtemp(prefix="audio_resolver_"))
         for name in ("A01_narration.wav", "A02_intro.mp3"):
             (self._TEMP / name).write_bytes(b"RIFF")
         self._tmpdir = str(self._TEMP)
