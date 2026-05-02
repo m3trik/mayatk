@@ -207,3 +207,6 @@ mayatk/mat_utils/resources/hdr/empty_warehouse_01_4k.tx
 upload_errors.txt
 
 test/temp_tests/
+
+# Test runner output (regenerated each run)
+test/logs/
