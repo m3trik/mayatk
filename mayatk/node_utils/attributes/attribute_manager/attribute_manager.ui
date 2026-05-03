@@ -159,12 +159,12 @@ Exact name (no wildcards) matches that attribute only.</string>
       </column>
       <column>
        <property name="text">
-        <string/>
+        <string />
        </property>
       </column>
       <column>
        <property name="text">
-        <string/>
+        <string />
        </property>
       </column>
       <column>
@@ -219,6 +219,6 @@ Exact name (no wildcards) matches that attribute only.</string>
    <header>uitk.widgets.comboBox.ComboBox.h</header>
   </customwidget>
  </customwidgets>
- <resources/>
- <connections/>
+ <resources />
+ <connections />
 </ui>

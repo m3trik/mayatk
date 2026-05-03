@@ -8,11 +8,11 @@ FBXHeaderExtension:  {
 		Version: 1000
 		Year: 2026
 		Month: 5
-		Day: 1
+		Day: 3
 		Hour: 9
-		Minute: 41
-		Second: 47
-		Millisecond: 822
+		Minute: 23
+		Second: 46
+		Millisecond: 959
 	}
 	Creator: "FBX SDK/FBX Plugins version 2020.3.6"
 	OtherFlags:  {
@@ -37,13 +37,13 @@ FBXHeaderExtension:  {
 			P: "Original|ApplicationVendor", "KString", "", "", "Autodesk"
 			P: "Original|ApplicationName", "KString", "", "", "Maya"
 			P: "Original|ApplicationVersion", "KString", "", "", "2025"
-			P: "Original|DateTime_GMT", "DateTime", "", "", "01/05/2026 13:41:47.822"
+			P: "Original|DateTime_GMT", "DateTime", "", "", "03/05/2026 13:23:46.958"
 			P: "Original|FileName", "KString", "", "", "O:\Cloud\Code\_scripts\mayatk\test\debug_shared_mat.fbx"
 			P: "LastSaved", "Compound", "", ""
 			P: "LastSaved|ApplicationVendor", "KString", "", "", "Autodesk"
 			P: "LastSaved|ApplicationName", "KString", "", "", "Maya"
 			P: "LastSaved|ApplicationVersion", "KString", "", "", "2025"
-			P: "LastSaved|DateTime_GMT", "DateTime", "", "", "01/05/2026 13:41:47.822"
+			P: "LastSaved|DateTime_GMT", "DateTime", "", "", "03/05/2026 13:23:46.958"
 			P: "Original|ApplicationActiveProject", "KString", "", "", "C:\Users\m3tri\Documents\maya\projects"
 		}
 	}
@@ -79,7 +79,7 @@ GlobalSettings:  {
 
 Documents:  {
 	Count: 1
-	Document: 2899457816160, "", "Scene" {
+	Document: 2106225557392, "", "Scene" {
 		Properties70:  {
 			P: "SourceObject", "object", "", ""
 			P: "ActiveAnimStackName", "KString", "", "", "Take 001"
@@ -263,7 +263,7 @@ Definitions:  {
 ;------------------------------------------------------------------
 
 Objects:  {
-	Geometry: 2899567395840, "Geometry::", "Mesh" {
+	Geometry: 2103684297136, "Geometry::", "Mesh" {
 		Vertices: *24 {
 			a: -0.5,-0.5,0.5,0.5,-0.5,0.5,-0.5,0.5,0.5,0.5,0.5,0.5,-0.5,0.5,-0.5,0.5,0.5,-0.5,-0.5,-0.5,-0.5,0.5,-0.5,-0.5
 		} 
@@ -336,7 +336,7 @@ Objects:  {
 			}
 		}
 	}
-	Geometry: 2899567394048, "Geometry::", "Mesh" {
+	Geometry: 2103684293104, "Geometry::", "Mesh" {
 		Vertices: *24 {
 			a: -0.5,-0.5,0.5,0.5,-0.5,0.5,-0.5,0.5,0.5,0.5,0.5,0.5,-0.5,0.5,-0.5,0.5,0.5,-0.5,-0.5,-0.5,-0.5,0.5,-0.5,-0.5
 		} 
@@ -409,7 +409,7 @@ Objects:  {
 			}
 		}
 	}
-	Model: 2901373748624, "Model::piece_A", "Mesh" {
+	Model: 2105767445056, "Model::piece_A", "Mesh" {
 		Version: 232
 		Properties70:  {
 			P: "RotationActive", "bool", "", "",1
@@ -422,7 +422,7 @@ Objects:  {
 		Shading: T
 		Culling: "CullingOff"
 	}
-	Model: 2901373750944, "Model::piece_B", "Mesh" {
+	Model: 2105767417216, "Model::piece_B", "Mesh" {
 		Version: 232
 		Properties70:  {
 			P: "RotationActive", "bool", "", "",1
@@ -436,7 +436,7 @@ Objects:  {
 		Shading: T
 		Culling: "CullingOff"
 	}
-	Material: 2901363398560, "Material::shared_mat", "" {
+	Material: 2106201236960, "Material::shared_mat", "" {
 		Version: 102
 		ShadingModel: "lambert"
 		MultiLayer: 0
@@ -451,13 +451,13 @@ Objects:  {
 			P: "Opacity", "double", "Number", "",1
 		}
 	}
-	AnimationStack: 2901365789072, "AnimStack::Take 001", "" {
+	AnimationStack: 2103613443376, "AnimStack::Take 001", "" {
 		Properties70:  {
 			P: "LocalStop", "KTime", "Time", "",17319809250000
 			P: "ReferenceStop", "KTime", "Time", "",17319809250000
 		}
 	}
-	AnimationCurve: 2900838603952, "AnimCurve::", "" {
+	AnimationCurve: 2103673703024, "AnimCurve::", "" {
 		Default: 0
 		KeyVer: 4009
 		KeyTime: *2 {
@@ -478,7 +478,7 @@ Objects:  {
 			a: 1,1
 		} 
 	}
-	AnimationCurve: 2900838596752, "AnimCurve::", "" {
+	AnimationCurve: 2103673703504, "AnimCurve::", "" {
 		Default: 0
 		KeyVer: 4009
 		KeyTime: *2 {
@@ -499,17 +499,17 @@ Objects:  {
 			a: 1,1
 		} 
 	}
-	AnimationCurveNode: 2901365789280, "AnimCurveNode::opacity", "" {
+	AnimationCurveNode: 2103613459392, "AnimCurveNode::opacity", "" {
 		Properties70:  {
 			P: "d|opacity", "Number", "", "A",0
 		}
 	}
-	AnimationCurveNode: 2901365780960, "AnimCurveNode::opacity", "" {
+	AnimationCurveNode: 2103613449824, "AnimCurveNode::opacity", "" {
 		Properties70:  {
 			P: "d|opacity", "Number", "", "A",0
 		}
 	}
-	AnimationLayer: 2899064530352, "AnimLayer::BaseLayer", "" {
+	AnimationLayer: 2106380516128, "AnimLayer::BaseLayer", "" {
 	}
 }
 
@@ -519,43 +519,43 @@ Objects:  {
 Connections:  {
 	
 	;Model::piece_A, Model::RootNode
-	C: "OO",2901373748624,0
+	C: "OO",2105767445056,0
 	
 	;Model::piece_B, Model::RootNode
-	C: "OO",2901373750944,0
+	C: "OO",2105767417216,0
 	
 	;AnimLayer::BaseLayer, AnimStack::Take 001
-	C: "OO",2899064530352,2901365789072
+	C: "OO",2106380516128,2103613443376
 	
 	;AnimCurveNode::opacity, AnimLayer::BaseLayer
-	C: "OO",2901365789280,2899064530352
+	C: "OO",2103613459392,2106380516128
 	
 	;AnimCurveNode::opacity, AnimLayer::BaseLayer
-	C: "OO",2901365780960,2899064530352
+	C: "OO",2103613449824,2106380516128
 	
 	;Geometry::, Model::piece_A
-	C: "OO",2899567395840,2901373748624
+	C: "OO",2103684297136,2105767445056
 	
 	;Material::shared_mat, Model::piece_A
-	C: "OO",2901363398560,2901373748624
+	C: "OO",2106201236960,2105767445056
 	
 	;AnimCurveNode::opacity, Model::piece_A
-	C: "OP",2901365789280,2901373748624, "opacity"
+	C: "OP",2103613459392,2105767445056, "opacity"
 	
 	;Geometry::, Model::piece_B
-	C: "OO",2899567394048,2901373750944
+	C: "OO",2103684293104,2105767417216
 	
 	;Material::shared_mat, Model::piece_B
-	C: "OO",2901363398560,2901373750944
+	C: "OO",2106201236960,2105767417216
 	
 	;AnimCurveNode::opacity, Model::piece_B
-	C: "OP",2901365780960,2901373750944, "opacity"
+	C: "OP",2103613449824,2105767417216, "opacity"
 	
 	;AnimCurve::, AnimCurveNode::opacity
-	C: "OP",2900838603952,2901365789280, "d|opacity"
+	C: "OP",2103673703024,2103613459392, "d|opacity"
 	
 	;AnimCurve::, AnimCurveNode::opacity
-	C: "OP",2900838596752,2901365780960, "d|opacity"
+	C: "OP",2103673703504,2103613449824, "d|opacity"
 }
 ;Takes section
 ;----------------------------------------------------

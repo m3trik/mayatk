@@ -95,7 +95,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
 
     def header_init(self, widget) -> None:
         """Configure header buttons + about menu."""
-        widget.config_buttons("menu", "pin", "minimize", "hide")
+        widget.config_buttons("menu", "minimize", "hide")
 
         widget.menu.add("Separator", setTitle="About")
         widget.menu.add(
