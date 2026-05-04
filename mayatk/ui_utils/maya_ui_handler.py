@@ -121,9 +121,11 @@ class MayaUiHandler(UiHandler):
             self._maya_native_menus = maya_native_menus.MayaNativeMenus()
         handler = self._maya_native_menus
 
-        if not overwrite and menu_key in self.sb.loaded_ui:
-            self.logger.debug(f"[{menu_key}] Returning cached Maya UI")
-            return self.sb.loaded_ui[menu_key]
+        if not overwrite:
+            cached = self.sb.loaded_ui.peek(menu_key)
+            if cached is not None:
+                self.logger.debug(f"[{menu_key}] Returning cached Maya UI")
+                return cached
 
         menu_widget = handler.get_menu(menu_key)
         if not menu_widget:

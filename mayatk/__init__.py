@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.10.100"
+__version__ = "0.11.3"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -99,6 +99,7 @@ DEFAULT_INCLUDE = {
     "mat_utils.marmoset.bridge": "MarmosetBridge",
     # UI utils
     "ui_utils.channel_box": "ChannelBox",
+    "ui_utils.hotkey_collisions": ["maya_collision_checker", "parse_qt_sequence"],
     "ui_utils.maya_native_menus": "MayaNativeMenus",
     "ui_utils.maya_ui_handler": "MayaUiHandler",
     "ui_utils.node_icons": "NodeIcons",
