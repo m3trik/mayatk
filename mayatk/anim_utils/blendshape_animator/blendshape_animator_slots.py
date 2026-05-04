@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Switchboard slots controller for blendshape_animator.ui."""
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 try:
     import maya.cmds as cmds
@@ -17,6 +17,9 @@ from mayatk.anim_utils.blendshape_animator._blendshape_animator import (
 from mayatk.anim_utils.blendshape_animator.applicator import ApplyStatus
 from mayatk.anim_utils.blendshape_animator.target import Target, Targets
 from mayatk.anim_utils.blendshape_animator.weights import Weights
+from mayatk.anim_utils.blendshape_animator.helpers import list_history
+from mayatk.core_utils.script_job_manager import ScriptJobManager
+from mayatk.node_utils.attributes._attributes import Attributes
 
 
 # Tree column indices — kept as constants so refresh logic + formatters
@@ -79,6 +82,10 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         # Filter toggle from the tree's header action bar
         self._show_only_mismatches = False
 
+        # Selection-sync state
+        self._sel_token: Optional[int] = None
+        self._syncing_selection = False
+
         self._wire_tree()
         self._wire_dynamic_tooltips()
 
@@ -86,8 +93,97 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
 
     def _on_first_show(self) -> None:
         """Auto-load existing setup from selection on first display, if any."""
+        bound = self._try_bind_from_selection()
         self._refresh_tree()
-        self._set_status("Ready. Select 2 meshes (source, target) and click Create Setup.")
+        self._update_setup_active()
+        self._install_selection_sync()
+        if bound and self._has_setup():
+            self._set_status(f"Loaded existing setup on {self.base_mesh}")
+        else:
+            self._set_status(
+                "Ready. Select 2 meshes (source, target) and click Create Setup."
+            )
+
+    # =========================================================================
+    # Setup-state gating + Maya selection sync
+    # =========================================================================
+
+    _GATED_GROUPS = ("edit_group", "diagnostics_group", "export_group")
+
+    def _has_setup(self) -> bool:
+        """True when a base mesh + blendShape are bound and exist in scene."""
+        return bool(
+            self.base_mesh
+            and self.blendshape
+            and cmds.objExists(self.base_mesh)
+            and cmds.objExists(self.blendshape)
+        )
+
+    def _update_setup_active(self) -> None:
+        """Enable/disable edit/diagnostics/export groups based on setup state."""
+        active = self._has_setup()
+        for name in self._GATED_GROUPS:
+            grp = getattr(self.ui, name, None)
+            if grp is not None:
+                grp.setEnabled(active)
+
+    def _install_selection_sync(self) -> None:
+        """Subscribe to Maya SelectionChanged so the UI tracks the user's pick.
+
+        Persistent (not ephemeral) — the callback re-resolves all node names
+        from selection on every fire, so it stays valid across scene changes.
+        """
+        if self._sel_token is not None:
+            return
+        try:
+            mgr = ScriptJobManager.instance()
+            self._sel_token = mgr.subscribe(
+                "SelectionChanged",
+                self._on_maya_selection_changed,
+                owner=self,
+            )
+            mgr.connect_cleanup(self.ui, owner=self)
+        except RuntimeError:
+            pass
+
+    def _try_bind_from_selection(self) -> bool:
+        """Bind to the first selected base mesh that has a blendShape.
+
+        Returns ``True`` only when state actually changed (a different mesh
+        was adopted). Returns ``False`` when nothing matched OR when the
+        already-bound mesh is still the right one.
+        """
+        sel = cmds.ls(selection=True, long=False) or []
+        if not sel:
+            return False
+        for node in sel:
+            if not cmds.objExists(node):
+                continue
+            # Skip tween meshes — they are bs targets, not base meshes
+            if Attributes.has_attr(node, "isInbetweenTarget"):
+                continue
+            try:
+                history = list_history(node, type_filter="blendShape")
+            except RuntimeError:
+                continue
+            if not history:
+                continue
+            if self.base_mesh == node and self._has_setup():
+                # No-op rebind: same mesh, state still valid.
+                return False
+            return self._adopt_state(BlendshapeAnimator.from_existing(node))
+        return False
+
+    def _on_maya_selection_changed(self) -> None:
+        """SelectionChanged callback — rebind UI to the selected mesh's bs setup."""
+        # Tree-driven selection uses cmds.select(...) too, so guard against
+        # bouncing the rebind back when the user just clicked a tree row.
+        if self._syncing_selection:
+            return
+        if self._try_bind_from_selection():
+            self._set_status(f"Loaded existing setup on {self.base_mesh}")
+            self._refresh_tree()
+            self._update_setup_active()
 
     # =========================================================================
     # Header
@@ -111,8 +207,9 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
                 bullets=[
                     "<b>Setup</b> — select 2 meshes (source, target) and click Create Setup.",
                     "<b>Edit</b> — add tweens by weight (count or CSV) or by frame.",
-                    "<b>Tween list</b> — click rows to select; right-click for per-tween actions.",
-                    "<b>Apply</b> — push manual edits back into the blendShape.",
+                    "<b>Tween list</b> — click rows to select; right-click for per-tween "
+                    "actions including re-apply (single or multi-select).",
+                    "<b>Apply</b> — bulk via Export &gt; Apply All Edits.",
                     "<b>Diagnostics</b> — flag topology mismatches and recover lost keys.",
                     "<b>Export</b> — finalize the scene for baking/FBX.",
                 ],
@@ -171,6 +268,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         else:
             self._set_status("Create Setup failed — see Script Editor.")
         self._refresh_tree()
+        self._update_setup_active()
 
     # ``BlendshapeAnimator.from_existing`` and ``recover_setup`` are
     # classmethods that return a NEW instance — we transplant their state
@@ -199,6 +297,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             else "Load From Existing failed — see Script Editor."
         )
         self._refresh_tree()
+        self._update_setup_active()
 
     def _action_recover_setup(self) -> None:
         ok = self._adopt_state(BlendshapeAnimator.recover_setup())
@@ -207,9 +306,10 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             else "Recover Setup failed — see Script Editor."
         )
         self._refresh_tree()
+        self._update_setup_active()
 
     # =========================================================================
-    # Edit section (cmb000, le001, b001, b002)
+    # Edit section (cmb000, le001, b001)
     # =========================================================================
 
     def cmb000_init(self, widget) -> None:
@@ -224,7 +324,6 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         mode = self.ui.cmb000.currentText()
         weight_mode = mode == MODE_WEIGHT
         # Weight-mode inputs
-        self.ui.s002.setVisible(weight_mode)
         self.ui.le001.setVisible(weight_mode)
         # Frame-mode inputs
         self.ui.s003.setVisible(not weight_mode)
@@ -248,8 +347,20 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             btn.clicked.connect(lambda _checked=False, c=csv: widget.setText(c))
 
     def b001_init(self, widget) -> None:
-        """Add Tweens — option_box exposes group / prefix overrides."""
+        """Add Tweens — option_box exposes count + group / prefix overrides."""
         widget.option_box.menu.setTitle("Add Tweens")
+        widget.option_box.menu.add(
+            "QSpinBox",
+            setObjectName="count",
+            setMinimum=1,
+            setMaximum=20,
+            setValue=3,
+            setPrefix="Count:  ",
+            setToolTip=(
+                "Number of evenly-spaced weight-based tweens to create when no\n"
+                "explicit weights are provided. Ignored in Frame-based mode."
+            ),
+        )
         widget.option_box.menu.add(
             "QLineEdit",
             setText="_morphInbetweens_GRP",
@@ -281,7 +392,12 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
                     )
                     return
             else:
-                weights = Weights.generate_weights(self.ui.s002.value())
+                count = 3
+                try:
+                    count = widget.option_box.menu.count.value()
+                except (AttributeError, RuntimeError):
+                    pass
+                weights = Weights.generate_weights(count)
 
             kwargs = {}
             try:
@@ -305,51 +421,6 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
                 else "Frame-based tween creation failed — see Script Editor."
             )
 
-        self._refresh_tree()
-
-    def b002_init(self, widget) -> None:
-        """Apply Tween Edits — option_box for skip_duplicates, validate_topology."""
-        widget.option_box.menu.setTitle("Apply Tween Edits")
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Skip duplicates",
-            setChecked=True,
-            setObjectName="skip_duplicates",
-            setToolTip="Treat 'Weights must be unique' as a skip, not an error.",
-        )
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Validate topology first",
-            setChecked=False,
-            setObjectName="validate_topology",
-            setToolTip=(
-                "Filter out tweens whose vertex count no longer matches the base.\n"
-                "Off by default to avoid silently masking problems."
-            ),
-        )
-
-    def b002(self, widget) -> None:
-        """Apply Tween Edits — apply current tweens (or selected, if any)."""
-        if not self._validate_setup():
-            self._set_status("Setup not complete — Create or Load first.")
-            return
-        selected = self._selected_tweens()
-        tweens = selected or None  # None => apply all
-        skip = widget.option_box.menu.skip_duplicates.isChecked()
-        validate = widget.option_box.menu.validate_topology.isChecked()
-        results = self.tween_applicator.apply_tweens(
-            tweens, skip_duplicates=skip, validate_topology=validate
-        )
-        # Stash per-row status for the tree refresh
-        for tween, status in results:
-            self._row_status[tween.mesh] = status
-        applied = sum(1 for _, s in results if s is ApplyStatus.APPLIED)
-        skipped = sum(1 for _, s in results if s is ApplyStatus.SKIPPED_DUPLICATE)
-        errors = sum(1 for _, s in results if s is ApplyStatus.ERROR)
-        scope = "selected" if selected else "all"
-        self._set_status(
-            f"Applied {applied}/{len(results)} ({scope}) — skipped {skipped}, errors {errors}"
-        )
         self._refresh_tree()
 
     # =========================================================================
@@ -406,13 +477,51 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
     # Export section (b006, b007, b008)
     # =========================================================================
 
+    def b006_init(self, widget) -> None:
+        """Apply All Edits — option_box for skip_duplicates, validate_topology."""
+        widget.option_box.menu.setTitle("Apply All Edits")
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Skip duplicates",
+            setChecked=True,
+            setObjectName="skip_duplicates",
+            setToolTip="Treat 'Weights must be unique' as a skip, not an error.",
+        )
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Validate topology first",
+            setChecked=False,
+            setObjectName="validate_topology",
+            setToolTip=(
+                "Filter out tweens whose vertex count no longer matches the base.\n"
+                "Off by default to avoid silently masking problems."
+            ),
+        )
+
     def b006(self, widget) -> None:
-        """Apply All Edits."""
+        """Apply All Edits — bulk apply with optional flags from the option_box."""
         if not self._validate_setup():
             self._set_status("Setup not complete — Create or Load first.")
             return
-        ok = self.apply_all_edits()
-        self._set_status("All edits applied." if ok else "No edits to apply.")
+        try:
+            skip = widget.option_box.menu.skip_duplicates.isChecked()
+            validate = widget.option_box.menu.validate_topology.isChecked()
+        except (AttributeError, RuntimeError):
+            skip, validate = True, False
+        results = self.tween_applicator.apply_tweens(
+            None, skip_duplicates=skip, validate_topology=validate
+        )
+        for tween, status in results:
+            self._row_status[tween.mesh] = status
+        applied = sum(1 for _, s in results if s is ApplyStatus.APPLIED)
+        skipped = sum(1 for _, s in results if s is ApplyStatus.SKIPPED_DUPLICATE)
+        errors = sum(1 for _, s in results if s is ApplyStatus.ERROR)
+        if results:
+            self._set_status(
+                f"Applied {applied}/{len(results)} — skipped {skipped}, errors {errors}"
+            )
+        else:
+            self._set_status("No tweens to apply.")
         self._refresh_tree()
 
     def b007(self, widget) -> None:
@@ -628,8 +737,15 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
     def _on_tree_selection_changed(self) -> None:
         """Sync tree selection -> Maya selection."""
         meshes = [t.mesh for t in self._selected_tweens() if cmds.objExists(t.mesh)]
-        if meshes:
+        if not meshes:
+            return
+        # Guard against rebinding the UI to a tween mesh that obviously
+        # doesn't carry its own blendShape — we just selected its tween.
+        self._syncing_selection = True
+        try:
             cmds.select(meshes, replace=True)
+        finally:
+            self._syncing_selection = False
 
     def _selected_tweens(self) -> List[Target]:
         items = self.ui.tree000.selectedItems()
@@ -642,45 +758,74 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
 
     def _show_tree_context_menu(self, pos) -> None:
         tree = self.ui.tree000
-        item = tree.itemAt(pos)
-        if item is None:
-            return
-        tween: Target = item.data(COL_NAME, QtCore.Qt.UserRole)
-        if not isinstance(tween, Target):
+        clicked = tree.itemAt(pos)
+        if clicked is None:
             return
 
+        # Right-click on an unselected row promotes it to the selection so
+        # the context-menu actions operate on what the user clicked. Right-
+        # click on a selected row leaves multi-selection intact.
+        if not clicked.isSelected():
+            tree.setCurrentItem(clicked)
+
+        tweens = self._selected_tweens()
+        if not tweens:
+            tween_one = clicked.data(COL_NAME, QtCore.Qt.UserRole)
+            if isinstance(tween_one, Target):
+                tweens = [tween_one]
+        if not tweens:
+            return
+
+        multi = len(tweens) > 1
+        # Jump-to-frame is single-row only — a multi-row jump is ambiguous.
+        single = tweens[0]
+
         menu = QtWidgets.QMenu(tree)
-        act_select = menu.addAction("Select in Maya")
+        act_select = menu.addAction(
+            f"Select {len(tweens)} in Maya" if multi else "Select in Maya"
+        )
         act_jump = menu.addAction("Jump to Frame")
-        act_jump.setEnabled(tween.target_frame is not None)
+        act_jump.setEnabled(not multi and single.target_frame is not None)
         menu.addSeparator()
-        act_reapply = menu.addAction("Re-apply This Tween")
+        act_reapply = menu.addAction(
+            f"Re-apply {len(tweens)} Tweens" if multi else "Re-apply This Tween"
+        )
         menu.addSeparator()
-        act_delete = menu.addAction("Delete Tween Mesh")
+        act_delete = menu.addAction(
+            f"Delete {len(tweens)} Tween Meshes" if multi else "Delete Tween Mesh"
+        )
 
         chosen = menu.exec_(tree.viewport().mapToGlobal(pos))
         if chosen is act_select:
-            cmds.select(tween.mesh, replace=True)
-            self._set_status(f"Selected {tween.mesh}")
+            meshes = [t.mesh for t in tweens if cmds.objExists(t.mesh)]
+            if meshes:
+                cmds.select(meshes, replace=True)
+                self._set_status(f"Selected {len(meshes)} mesh(es)")
         elif chosen is act_jump:
-            cmds.currentTime(tween.target_frame)
-            self._set_status(f"Jumped to frame {tween.target_frame}")
+            cmds.currentTime(single.target_frame)
+            self._set_status(f"Jumped to frame {single.target_frame}")
         elif chosen is act_reapply:
-            results = self.tween_applicator.apply_tweens([tween])
+            results = self.tween_applicator.apply_tweens(list(tweens))
             for t, s in results:
                 self._row_status[t.mesh] = s
-            outcome = results[0][1].value if results else "no-op"
-            self._set_status(f"Re-applied {tween.mesh}: {outcome}")
+            applied = sum(1 for _, s in results if s is ApplyStatus.APPLIED)
+            self._set_status(
+                f"Re-applied {applied}/{len(results)} tween(s)"
+            )
             self._refresh_tree()
         elif chosen is act_delete:
-            try:
-                cmds.delete(tween.mesh)
-                self._row_status.pop(tween.mesh, None)
-                self._set_status(f"Deleted {tween.mesh}")
-                self._refresh_tree()
-            except RuntimeError as e:
-                self.logger.error(f"Could not delete {tween.mesh}: {e}")
-                self._set_status(f"Delete failed: {e}")
+            deleted = 0
+            for tween in tweens:
+                try:
+                    cmds.delete(tween.mesh)
+                    self._row_status.pop(tween.mesh, None)
+                    deleted += 1
+                except RuntimeError as e:
+                    self.logger.error(f"Could not delete {tween.mesh}: {e}")
+            self._set_status(
+                f"Deleted {deleted}/{len(tweens)} tween mesh(es)"
+            )
+            self._refresh_tree()
 
     def _toggle_filter_mismatches(self, checked: bool) -> None:
         self._show_only_mismatches = bool(checked)
