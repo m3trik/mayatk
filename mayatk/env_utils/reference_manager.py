@@ -413,6 +413,112 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
         for ref in self.current_references:
             ref.load()
 
+    def get_reference_top_transforms(self, ref):
+        """Return top-level (parent-less) transforms belonging to the given reference."""
+        transforms = []
+        nodes = []
+        try:
+            nodes = cmds.referenceQuery(ref._ref_node, nodes=True) or []
+        except Exception as e:
+            self.logger.debug(f"referenceQuery failed for {ref._ref_node}: {e}")
+
+        candidates = []
+        if nodes:
+            try:
+                candidates = cmds.ls(nodes, type="transform", long=True) or []
+            except Exception as e:
+                self.logger.debug(f"cmds.ls(transforms) failed: {e}")
+
+        # Fallback: transforms living under the reference's namespace
+        if not candidates:
+            ns = ""
+            try:
+                ns = ref.namespace
+            except Exception:
+                pass
+            if ns:
+                try:
+                    candidates = cmds.ls(
+                        f"{ns}:*", long=True, type="transform"
+                    ) or []
+                except Exception as e:
+                    self.logger.debug(f"namespace transform lookup failed: {e}")
+
+        for t in candidates:
+            parents = cmds.listRelatives(t, parent=True, fullPath=True) or []
+            if not parents:
+                transforms.append(t)
+        return transforms
+
+    # Display mode constants — keys map to overrideDisplayType values.
+    DISPLAY_MODES = ("off", "reference", "template")
+    _DISPLAY_TYPE_VALUES = {"off": 0, "reference": 2, "template": 1}
+
+    def get_reference_display_mode(self, ref) -> str:
+        """Return the active display mode for the reference's top-level transforms.
+
+        Returns one of ``"off"``, ``"reference"``, or ``"template"``. Mixed or
+        partial states fall back to ``"off"`` (i.e. only reported as ``on``
+        when *all* top transforms agree)."""
+        transforms = self.get_reference_top_transforms(ref)
+        if not transforms:
+            return "off"
+        seen = set()
+        for t in transforms:
+            try:
+                if not cmds.getAttr(f"{t}.overrideEnabled"):
+                    seen.add(0)
+                else:
+                    seen.add(cmds.getAttr(f"{t}.overrideDisplayType"))
+            except Exception:
+                seen.add(0)
+        if seen == {1}:
+            return "template"
+        if seen == {2}:
+            return "reference"
+        return "off"
+
+    def set_reference_display_mode(self, ref, mode: str) -> bool:
+        """Set the display override mode on the reference's top-level transforms.
+
+        ``mode`` must be one of :attr:`DISPLAY_MODES`. Returns True if at least
+        one transform was successfully updated."""
+        if mode not in self._DISPLAY_TYPE_VALUES:
+            raise ValueError(
+                f"Invalid display mode {mode!r}; expected one of {self.DISPLAY_MODES}"
+            )
+        dt = self._DISPLAY_TYPE_VALUES[mode]
+        enable = 0 if mode == "off" else 1
+
+        transforms = self.get_reference_top_transforms(ref)
+        if not transforms:
+            self.logger.warning(
+                f"Display mode toggle: no top-level transforms found for reference "
+                f"{ref.namespace!r} ({ref._ref_node})."
+            )
+            return False
+
+        self.logger.debug(
+            f"Display mode {mode!r} on {len(transforms)} transform(s) "
+            f"under {ref.namespace!r}"
+        )
+        success = 0
+        with CoreUtils.undo_chunk():
+            for t in transforms:
+                try:
+                    cmds.setAttr(f"{t}.overrideEnabled", enable)
+                    cmds.setAttr(f"{t}.overrideDisplayType", dt)
+                    success += 1
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to set display override on {t}: {e}"
+                    )
+        try:
+            cmds.refresh()
+        except Exception:
+            pass
+        return success > 0
+
     def remove_references(self, namespaces=None):
         """Remove references based on their namespaces.
 
@@ -1194,11 +1300,20 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 os.path.normcase(os.path.normpath(_scene)) if _scene else ""
             )
 
-            # Build a set of referenced file paths for fast lookup
-            ref_path_set = {
-                os.path.normcase(os.path.normpath(ref.path))
-                for ref in self.current_references
-            }
+            # Build a set of referenced file paths for fast lookup, plus a
+            # mapping of paths to active display mode (off/reference/template).
+            ref_path_set = set()
+            display_mode_by_path = {}
+            for ref in self.current_references:
+                try:
+                    norm = os.path.normcase(os.path.normpath(ref.path))
+                except Exception:
+                    continue
+                ref_path_set.add(norm)
+                mode = self.get_reference_display_mode(ref)
+                # If multiple refs share a path, prefer any non-off mode
+                if mode != "off" or norm not in display_mode_by_path:
+                    display_mode_by_path[norm] = mode
 
             for row, (scene_name, file_path) in enumerate(zip(file_names, file_list)):
                 item = t.item(row, 0)  # Files column is at index 0
@@ -1244,14 +1359,21 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 # Open action column (index 2)
                 t.actions.set(row, 2, "current" if is_current else "default")
 
-                # Column 3: Notes (Metadata)
-                item_notes = t.item(row, 3)
+                # Display mode action column (index 3): off/reference/template/unavailable
+                if is_referenced:
+                    disp_state = display_mode_by_path.get(norm_fp, "off")
+                else:
+                    disp_state = "unavailable"
+                t.actions.set(row, 3, disp_state)
+
+                # Column 4: Notes (Metadata)
+                item_notes = t.item(row, 4)
                 if not item_notes:
                     item_notes = self.sb.QtWidgets.QTableWidgetItem()
                     item_notes.setFlags(
                         item_notes.flags() | self.sb.QtCore.Qt.ItemIsEditable
                     )
-                    t.setItem(row, 3, item_notes)
+                    t.setItem(row, 4, item_notes)
 
                 # Store file path in notes item too for easy access during edit
                 item_notes.setData(self.sb.QtCore.Qt.UserRole, file_path)
@@ -1293,7 +1415,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
                 for row in range(t.rowCount()):
                     item = t.item(row, 0)
-                    notes_item = t.item(row, 3)
+                    notes_item = t.item(row, 4)
                     filename = (
                         os.path.basename(item.data(self.sb.QtCore.Qt.UserRole) or "")
                         if item
@@ -1329,12 +1451,16 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             t.setUpdatesEnabled(True)  # Restore updates
 
     def _sync_reference_icons(self):
-        """Update the reference action icon (col 1) for every row to match current references."""
+        """Update the reference (col 1) and display-mode (col 3) action icons for every row."""
         t = self.ui.tbl000
-        ref_path_set = {
-            os.path.normcase(os.path.normpath(ref.path))
-            for ref in self.current_references
-        }
+        path_to_refs = {}
+        for ref in self.current_references:
+            try:
+                key = os.path.normcase(os.path.normpath(ref.path))
+            except Exception:
+                continue
+            path_to_refs.setdefault(key, []).append(ref)
+
         for row in range(t.rowCount()):
             item = t.item(row, 0)
             if not item:
@@ -1343,9 +1469,20 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             if not file_path:
                 continue
             norm_fp = os.path.normcase(os.path.normpath(file_path))
-            t.actions.set(
-                row, 1, "referenced" if norm_fp in ref_path_set else "unreferenced"
-            )
+            matched = path_to_refs.get(norm_fp, [])
+            if matched:
+                t.actions.set(row, 1, "referenced")
+                # Prefer any non-off mode if refs disagree
+                mode = "off"
+                for r in matched:
+                    m = self.get_reference_display_mode(r)
+                    if m != "off":
+                        mode = m
+                        break
+                t.actions.set(row, 3, mode)
+            else:
+                t.actions.set(row, 1, "unreferenced")
+                t.actions.set(row, 3, "unavailable")
 
     def open_scene(self, file_path: str, set_workspace: bool = True):
         """Open a scene file, optionally setting the workspace to match the file.
@@ -1772,6 +1909,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         )
         mgr.connect_cleanup(self.ui, owner=self)
 
+        self._setup_footer_actions()
+
         # Initialization complete
         self._initializing = False
 
@@ -1782,6 +1921,17 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         )
 
         self.logger.debug("ReferenceManagerSlots initialized.")
+
+    def _setup_footer_actions(self):
+        """Add action buttons to the footer."""
+        footer = getattr(self.ui, "footer", None)
+        if footer is None or not hasattr(footer, "add_action_button"):
+            return
+        footer.add_action_button(
+            text="Un-Reference All",
+            tooltip="Remove all references from the scene.",
+            callback=self.btn_unreference_all,
+        )
 
     def header_init(self, widget):
         """Initialize the header for the reference manager."""
@@ -1909,8 +2059,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     def tbl000_init(self, widget):
         if not widget.is_initialized:
-            widget.setColumnCount(4)
-            widget.setHorizontalHeaderLabels(["FILES:", "", "", "COMMENTS:"])
+            widget.setColumnCount(5)
+            widget.setHorizontalHeaderLabels(["FILES:", "", "", "", "COMMENTS:"])
             # Use NoEditTriggers and handle editing manually to prevent conflicts with double-click
             widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.NoEditTriggers)
             widget.setSelectionBehavior(self.sb.QtWidgets.QAbstractItemView.SelectRows)
@@ -1959,8 +2109,39 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 },
             )
 
-            # Make the Notes column (index 3) non-selecting so clicking it doesn't trigger reference logic
-            widget.set_column_selectable(3, False)
+            # Action column (index 3) — tri-state display-mode icon
+            widget.actions.add(
+                3,
+                states={
+                    "off": {
+                        "icon": "grid",
+                        "color": "#555555",
+                        "tooltip": "Display: Normal — click to lock (Reference)",
+                        "action": self._cycle_display_mode_at_row,
+                    },
+                    "reference": {
+                        "icon": "lock",
+                        "color": "#d4a84a",
+                        "tooltip": "Display: Reference (locked, normal shading) — click for Template (wireframe + locked)",
+                        "action": self._cycle_display_mode_at_row,
+                    },
+                    "template": {
+                        "icon": "grid",
+                        "color": "#6b8fa3",
+                        "tooltip": "Display: Template (wireframe + locked) — click to restore Normal",
+                        "action": self._cycle_display_mode_at_row,
+                    },
+                    "unavailable": {
+                        "icon": "grid",
+                        "color": "#3a3a3a",
+                        "tooltip": "Display overrides are only available for active references",
+                        "action": self._cycle_display_mode_at_row,
+                    },
+                },
+            )
+
+            # Make the Notes column (index 4) non-selecting so clicking it doesn't trigger reference logic
+            widget.set_column_selectable(4, False)
             widget.setAlternatingRowColors(False)
             widget.setWordWrap(False)
             widget.set_stretch_column(0)
@@ -2054,7 +2235,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             table = self.ui.tbl000
             table.editItem(item)
 
-        elif item and item.column() == 3:  # Notes column
+        elif item and item.column() == 4:  # Notes column
             self.logger.debug(f"Starting edit for notes: {item.text()}")
             table = self.ui.tbl000
             table.editItem(item)
@@ -2120,7 +2301,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 self.sb.message_box(f"Rename failed:<br>{e}")
                 self.controller.restore_item_display(item)
 
-        elif item.column() == 3:  # Notes column
+        elif item.column() == 4:  # Notes column
             file_path = item.data(self.sb.QtCore.Qt.UserRole)
             if not file_path:
                 return
@@ -2208,6 +2389,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             # Currently referenced — remove it
             self.controller.remove_references(ref_match.namespace)
             t.actions.set(row, 1, "unreferenced")
+            t.actions.set(row, 3, "unavailable")
             item.setSelected(False)
             self.logger.debug(f"Unreferenced: {file_path}")
         else:
@@ -2216,8 +2398,64 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             success = self.controller.add_reference(namespace, file_path)
             if success:
                 t.actions.set(row, 1, "referenced")
+                t.actions.set(row, 3, "off")
                 item.setSelected(True)
                 self.logger.debug(f"Referenced: {file_path}")
+
+    # off -> reference -> template -> off
+    _DISPLAY_MODE_CYCLE = {
+        "off": "reference",
+        "reference": "template",
+        "template": "off",
+    }
+
+    def _cycle_display_mode_at_row(self, row, col):
+        """Cycle the display mode (off → reference → template → off) at the given row."""
+        t = self.ui.tbl000
+        item = t.item(row, 0)
+        if not item:
+            return
+
+        file_path = item.data(self.sb.QtCore.Qt.UserRole)
+        if not file_path:
+            return
+
+        norm_fp = os.path.normcase(os.path.normpath(file_path))
+        matched_refs = [
+            ref
+            for ref in self.controller.current_references
+            if os.path.normcase(os.path.normpath(ref.path)) == norm_fp
+        ]
+
+        if not matched_refs:
+            t.actions.set(row, 3, "unavailable")
+            self.sb.message_box(
+                "Display overrides are only available for active references."
+            )
+            return
+
+        current = "off"
+        for ref in matched_refs:
+            mode = self.controller.get_reference_display_mode(ref)
+            if mode != "off":
+                current = mode
+                break
+        new_mode = self._DISPLAY_MODE_CYCLE.get(current, "off")
+
+        any_success = False
+        for ref in matched_refs:
+            if self.controller.set_reference_display_mode(ref, new_mode):
+                any_success = True
+        if not any_success:
+            self.sb.message_box(
+                "Display override had no effect — no top-level transforms "
+                "found for the selected reference."
+            )
+            return
+        t.actions.set(row, 3, new_mode)
+        self.logger.debug(
+            f"Display mode {current!r} -> {new_mode!r}: {file_path}"
+        )
 
     def _open_scene_at_row(self, row, col):
         """Open the scene file associated with the given table row."""

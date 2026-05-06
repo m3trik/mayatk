@@ -333,6 +333,7 @@ class _TaskChecksMixin(_TaskDataMixin):
     """ """
 
     _LOD_SUFFIX_REGEX = re.compile(r"_lod\d*$", re.IGNORECASE)
+    _MAX_LISTED_OBJECTS = 25
 
     def _obj_link(self, node: str, action: str = "reveal") -> str:
         """Return a clickable log link for a Maya scene node.
@@ -343,6 +344,20 @@ class _TaskChecksMixin(_TaskDataMixin):
         """
         short = node.rsplit("|", 1)[-1]
         return self.logger.log_link(short, action, node=node)
+
+    def _truncate_obj_entries(
+        self, entries: List[str], limit: Optional[int] = None
+    ) -> List[str]:
+        """Cap per-object log entries with a summary tail when the list is long.
+
+        Returns the entries unchanged when ``len(entries) <= limit``; otherwise
+        returns the first ``limit`` entries followed by ``"... and N more (omitted)"``.
+        """
+        cap = self._MAX_LISTED_OBJECTS if limit is None else limit
+        if len(entries) <= cap:
+            return entries
+        remaining = len(entries) - cap
+        return entries[:cap] + [f"... and {remaining} more (omitted)"]
 
     def check_geometry_lod_suffix(self) -> tuple:
         """Check for geometry whose names end with '_LOD' or '_LOD' followed by digits.
@@ -658,8 +673,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         Args:
             tolerance: Allowable distance (in scene units) beneath the plane before failing.
         """
-        log_messages = []
-        has_objects_below = False
+        offenders: List[str] = []
 
         tolerance = 0.0 if tolerance is None else max(0.0, float(tolerance))
         limit = -tolerance
@@ -676,20 +690,19 @@ class _TaskChecksMixin(_TaskDataMixin):
 
             ymin = bbox[1]
             if ymin < limit:
-                has_objects_below = True
                 link = self._obj_link(obj)
-                log_messages.append(
+                offenders.append(
                     f"Object: {link} - Below Floor: True (Y-min: {ymin:.3f})"
                 )
 
-        if has_objects_below:
-            log_messages.insert(
-                0,
-                f"Tolerance used: {tolerance:.3f} unit{'s' if tolerance != 1 else ''}",
-            )
-            return False, log_messages  # Failed, log objects below the floor threshold
+        if offenders:
+            header = [
+                f"{len(offenders)} object(s) below floor "
+                f"(tolerance: {tolerance:.3f} unit{'s' if tolerance != 1 else ''})"
+            ]
+            return False, header + self._truncate_obj_entries(offenders)
 
-        return True, log_messages  # All checks passed, no objects below the floor
+        return True, []  # All checks passed, no objects below the floor
 
     def check_overlapping_duplicate_mesh(self) -> tuple:
         """Check if there are any duplicate overlapping geometry objects in the current selection.

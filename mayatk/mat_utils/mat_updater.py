@@ -601,6 +601,7 @@ class MatUpdater(ptk.LoggingMixin):
 class MatUpdaterSlots(MatUpdater):
     msg_intro = "Update existing materials with processed textures."
     msg_completed = '<br><hl style="color:rgb(0, 255, 255);"><b>COMPLETED.</b></hl>'
+    SUPPORTED_MAT_TYPES = ("StingrayPBS", "standardSurface", "aiStandardSurface")
 
     def __init__(self, switchboard):
         self.sb = switchboard
@@ -636,8 +637,13 @@ class MatUpdaterSlots(MatUpdater):
         widget.menu.add(
             "QComboBox",
             setObjectName="cmb_selection_mode",
-            addItems=["Selected Materials", "All Scene Materials"],
-            setToolTip="Choose which materials to process.",
+            addItems=["Selected Objects", "All Scene Materials", "Browse..."],
+            setToolTip=(
+                "Choose the texture/material source:\n"
+                "• Selected Objects — textures from materials on the current selection.\n"
+                "• All Scene Materials — every supported material in the scene.\n"
+                "• Browse… — pick texture files; updates materials that reference them."
+            ),
         )
         widget.menu.add("Separator", setTitle="Processing")
         # Convert Format
@@ -793,6 +799,41 @@ class MatUpdaterSlots(MatUpdater):
                         widget.count() - 1, description, QtCore.Qt.ToolTipRole
                     )
 
+    @staticmethod
+    def _normalize_path(p):
+        """Normalize for case-insensitive comparison on case-insensitive filesystems."""
+        return os.path.normcase(os.path.normpath(os.path.abspath(p)))
+
+    def _filter_supported(self, materials):
+        """Drop materials whose node type ``update_network`` doesn't know how to wire."""
+        return [m for m in materials if cmds.nodeType(m) in self.SUPPORTED_MAT_TYPES]
+
+    def _materials_from_texture_paths(self, paths):
+        """Find scene materials that reference any of the given texture paths."""
+        if not paths:
+            return []
+        target = set()
+        for p in paths:
+            try:
+                target.add(self._normalize_path(p))
+            except Exception:
+                continue
+
+        matching_nodes = []
+        for node in cmds.ls(type="file") or []:
+            try:
+                resolved = MatUtils.resolve_path(
+                    cmds.getAttr(f"{node}.fileTextureName")
+                )
+            except Exception:
+                continue
+            if resolved and self._normalize_path(resolved) in target:
+                matching_nodes.append(node)
+
+        if not matching_nodes:
+            return []
+        return self._filter_supported(MatUtils.get_connected_shaders(matching_nodes))
+
     def b001(self, widget):
         """Update Materials"""
         config_name = self.ui.cmb001.currentText()
@@ -806,11 +847,44 @@ class MatUpdaterSlots(MatUpdater):
 
         max_size = self.max_size
 
+        # Resolve target materials from the header selection mode.
+        # `None` means "let update_materials default to all scene materials".
+        mode = self.selection_mode
         materials = None
-        if self.selection_mode == "Selected Materials":
-            materials = cmds.ls(selection=True) or []
+
+        if mode == "Selected Objects":
+            sel = cmds.ls(selection=True, long=True) or []
+            if not sel:
+                self.ui.txt001.append("No objects selected.")
+                return
+            materials = self._filter_supported(
+                MatUtils.get_mats(sel, as_strings=True) or []
+            )
             if not materials:
-                self.ui.txt001.append("No materials selected.")
+                self.ui.txt001.append(
+                    "No supported materials "
+                    f"({', '.join(self.SUPPORTED_MAT_TYPES)}) "
+                    "found on the selected objects."
+                )
+                return
+        elif mode == "Browse...":
+            try:
+                start_dir = EnvUtils.get_env_info("sourceimages") or ""
+            except Exception:
+                start_dir = ""
+            paths = self.sb.file_dialog(
+                file_types=[f"*.{ext}" for ext in ptk.ImgUtils.texture_file_types],
+                title="Select textures whose materials should be updated:",
+                start_dir=start_dir,
+                allow_multiple=True,
+            )
+            if not paths:
+                return
+            materials = self._materials_from_texture_paths(paths)
+            if not materials:
+                self.ui.txt001.append(
+                    "No supported materials reference the selected textures."
+                )
                 return
 
         self.ui.txt001.clear()

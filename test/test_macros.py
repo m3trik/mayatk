@@ -196,5 +196,120 @@ class TestEditMacros(MayaTkTestCase):
         self.assertLessEqual(after, before)
 
 
+class TestMacroDiscovery(QuickTestCase):
+    """Every public m_* method declared on a mixin must resolve on Macros.
+
+    Catches the class of bug where a hotkey/runtimeCommand is registered for a
+    name that no longer exists on the class (rename, deletion, typo).
+    """
+
+    MIXINS = (DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)
+
+    @classmethod
+    def all_macro_names(cls):
+        names = set()
+        for mixin in cls.MIXINS:
+            for n, v in vars(mixin).items():
+                if n.startswith("m_") and callable(
+                    v.__func__ if isinstance(v, (staticmethod, classmethod)) else v
+                ):
+                    names.add(n)
+        return sorted(names)
+
+    def test_every_mixin_macro_resolves_on_Macros(self):
+        missing = [n for n in self.all_macro_names() if not hasattr(Macros, n)]
+        self.assertFalse(
+            missing, f"Macros class is missing methods declared on mixins: {missing}"
+        )
+
+    def test_every_macro_is_callable(self):
+        non_callable = [
+            n for n in self.all_macro_names() if not callable(getattr(Macros, n))
+        ]
+        self.assertFalse(non_callable, f"Non-callable m_* attributes: {non_callable}")
+
+
+class TestMacroSmokeInvocation(MayaTkTestCase):
+    """Invoke every m_* macro on a fresh selection to catch latent code bugs.
+
+    We tolerate failures that depend on a real viewport (RuntimeError from
+    missing modelPanel, KeyError from MEL globals, etc.) but FAIL on the
+    AttributeError/NameError/TypeError-on-string class — exactly the bug
+    pattern produced by leftover PyMel attribute access on string node names.
+    """
+
+    # Bugs we want to catch; everything else is tolerated as environment-related.
+    FATAL = (AttributeError, NameError)
+
+    # Macros that legitimately need user input or destructive scene state we
+    # don't want to set up generically. Skipped from invocation but still
+    # discovered/required to exist by TestMacroDiscovery.
+    SKIP_INVOCATION = {
+        "m_paste_and_rename",  # depends on the cut/copy buffer
+        "m_boolean",           # needs >=2 specific meshes
+        "m_toggle_panels",     # needs main Maya window (Qt) — None in mayapy
+    }
+
+    def _selected_cube(self, name="smoke_cube"):
+        cube = cmds.polyCube(name=name)[0]
+        cmds.select(cube, replace=True)
+        return cube
+
+    def test_every_macro_invokes_without_python_bug(self):
+        names = TestMacroDiscovery.all_macro_names()
+        bug_failures = []
+
+        for name in names:
+            if name in self.SKIP_INVOCATION:
+                continue
+            cmds.file(new=True, force=True)
+            self._selected_cube()
+            fn = getattr(Macros, name)
+            try:
+                fn()
+            except self.FATAL as e:
+                bug_failures.append(f"{name}: {type(e).__name__}: {e}")
+            except Exception:
+                # Tolerated: runtime/UI/state errors that depend on a real
+                # viewport, focused panel, or MEL globals. Not what we're
+                # testing here.
+                pass
+
+        self.assertFalse(
+            bug_failures,
+            "Macros raised Python-level bugs (likely PyMel-on-string or "
+            "missing-symbol):\n  " + "\n  ".join(bug_failures),
+        )
+
+
+class TestMacroRegistration(MayaTkTestCase):
+    """set_macro must succeed for every discovered macro name.
+
+    Mirrors the real registration path the user invokes from userSetup.py;
+    any name that fails here would also fail at startup.
+    """
+
+    def tearDown(self):
+        for name in TestMacroDiscovery.all_macro_names():
+            try:
+                if cmds.runTimeCommand(name, exists=True) and not cmds.runTimeCommand(
+                    name, query=True, default=True
+                ):
+                    cmds.runTimeCommand(name, edit=True, delete=True)
+            except Exception:
+                pass
+        super().tearDown()
+
+    def test_register_every_macro(self):
+        failures = []
+        for i, name in enumerate(TestMacroDiscovery.all_macro_names()):
+            try:
+                # Use F-key slots to avoid clobbering common shortcuts.
+                Macros.set_macro(name, key=f"F{(i % 12) + 1}", cat="SmokeTest")
+            except Exception as e:
+                failures.append(f"{name}: {type(e).__name__}: {e}")
+        self.assertFalse(failures, "set_macro failed for:\n  " + "\n  ".join(failures))
+
+
 if __name__ == "__main__":
     unittest.main()

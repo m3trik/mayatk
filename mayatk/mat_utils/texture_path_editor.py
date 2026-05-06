@@ -3,12 +3,14 @@
 try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
-    import maya.mel as mel
 except ImportError:
     cmds = None
 
 import os
 
+from pythontk.img_utils._img_utils import ImgUtils
+from pythontk.img_utils.map_factory import MapFactory
+from pythontk.str_utils.fuzzy_matcher import FuzzyMatcher
 from uitk.widgets.footer import FooterStatusController
 
 # From this package:
@@ -29,16 +31,13 @@ class TexturePathEditorSlots:
         self.ui = self.sb.loaded_ui.texture_path_editor
         self._refresh_pending = False  # Flag to debounce refresh calls
         self._footer_controller = self._create_footer_controller()
+        self._setup_footer_actions()
+        self._previous_paths = {}  # node_name -> path before last in-session repath (for tooltips)
+        self._browse_in_progress = False  # re-entry guard for row_browse_for_file
 
     def header_init(self, widget):
         """Initialize the header for the texture path editor."""
         widget.menu.add("Separator", setTitle="General")
-        widget.menu.add(
-            self.sb.registered_widgets.Label,
-            setText="Refresh Texture List",
-            setToolTip="Rescan the current scene and update the texture table.",
-            setObjectName="refresh_texture_table",
-        )
         widget.menu.add(
             self.sb.registered_widgets.Label,
             setText="Open Source Images",
@@ -63,6 +62,24 @@ class TexturePathEditorSlots:
             setText="Convert to Relative Paths",
             setToolTip="Convert all texture paths in the scene to relative paths based on the project's sourceimages directory.",
             setObjectName="lbl013",
+        )
+        widget.menu.add(
+            self.sb.registered_widgets.Label,
+            setText="Resolve Missing by Stem",
+            setToolTip="For each missing texture, search the project's sourceimages directory for a file with the same name but a different extension and repath the file node.",
+            setObjectName="resolve_missing_by_stem",
+        )
+        widget.menu.add(
+            self.sb.registered_widgets.Label,
+            setText="Resolve Missing by Fuzzy Match",
+            setToolTip="For each missing texture, search the project's sourceimages directory for a file with a similar name (e.g. added '_demo' suffix) and repath the file node. Skips ambiguous matches.",
+            setObjectName="resolve_missing_by_fuzzy",
+        )
+        widget.menu.add(
+            self.sb.registered_widgets.Label,
+            setText="Resolve Missing by Texture Name",
+            setToolTip="For each missing texture, restrict candidates to files of the same map type (AO/DIFF/NORM/SPEC/etc.) and match on the map-stripped base name. Safest mode for typical texture sets.",
+            setObjectName="resolve_missing_by_texture",
         )
         widget.menu.add("Separator", setTitle="Selection")
         widget.menu.add(
@@ -102,7 +119,7 @@ class TexturePathEditorSlots:
             cmds.warning(f"Source images directory not found: {path}")
 
     def lbl010(self):
-        """Set Texture Paths for All File Nodes."""
+        """Set Texture Paths for All File Nodes (flattened — drops original subdirs)."""
         texture_dir = self.sb.dir_dialog(
             title="Set Texture Paths for All File Nodes",
             start_dir=EnvUtils.get_env_info("sourceimages"),
@@ -116,7 +133,8 @@ class TexturePathEditorSlots:
             return
 
         om.MGlobal.displayInfo(f"Setting texture paths to: {texture_dir}")
-        MatUtils.remap_texture_paths(file_nodes=all_file_nodes, new_dir=texture_dir)
+        count = self._set_texture_dir_flat(all_file_nodes, texture_dir)
+        om.MGlobal.displayInfo(f"Updated {count}/{len(all_file_nodes)} file nodes.")
 
         # Refresh the table widget to show updated paths
         self.ui.tbl000.init_slot()
@@ -247,6 +265,384 @@ class TexturePathEditorSlots:
         # Refresh the table widget to show updated paths
         self.ui.tbl000.init_slot()
 
+    def resolve_missing_by_stem(self):
+        """Resolve missing textures by exact stem match (different extension) in sourceimages."""
+        self._resolve_missing_textures(mode="stem")
+
+    def resolve_missing_by_fuzzy(self):
+        """Resolve missing textures by fuzzy filename match in sourceimages."""
+        self._resolve_missing_textures(mode="fuzzy")
+
+    def resolve_missing_by_texture(self):
+        """Resolve missing textures using map-type-aware matching in sourceimages."""
+        self._resolve_missing_textures(mode="texture")
+
+    def row_browse_for_file(self, selection=None):
+        """Open a file dialog at sourceimages and repath the selected file node to the chosen file."""
+        # Re-entry guard: the menu's QPushButton item is wired to this slot via
+        # both the menu dispatcher AND QPushButton.clicked (matching object name →
+        # slot auto-wire). Modal dialogs occasionally deliver a trailing release
+        # event after closing, which retriggers the dispatcher and pops a second
+        # dialog. Suppress with a short post-completion guard.
+        if getattr(self, "_browse_in_progress", False):
+            return
+        self._browse_in_progress = True
+        try:
+            self._do_browse_for_file(selection)
+        finally:
+            from qtpy.QtCore import QTimer
+
+            QTimer.singleShot(
+                250, lambda: setattr(self, "_browse_in_progress", False)
+            )
+
+    def _do_browse_for_file(self, selection):
+        nodes = self._file_nodes_from_selection(selection)
+        if not nodes:
+            return
+        if len(nodes) > 1:
+            cmds.warning("Browse for File: select a single row.")
+            return
+
+        node_name = nodes[0]
+        sourceimages = EnvUtils.get_env_info("sourceimages") or ""
+        try:
+            current = cmds.getAttr(f"{node_name}.fileTextureName") or ""
+        except Exception:
+            current = ""
+
+        start_dir = sourceimages
+        if current:
+            workspace = EnvUtils.get_env_info("workspace") or ""
+            current_abs = (
+                current if os.path.isabs(current)
+                else os.path.normpath(os.path.join(workspace, current))
+            )
+            current_dir = os.path.dirname(current_abs)
+            if current_dir and os.path.isdir(current_dir):
+                start_dir = current_dir
+
+        chosen = self.sb.file_dialog(
+            file_types=[
+                "*.png", "*.jpg", "*.jpeg", "*.tga", "*.tif", "*.tiff",
+                "*.exr", "*.hdr", "*.bmp", "*.psd", "*.iff", "*.tx", "*.*",
+            ],
+            title=f"Select texture file for {node_name}",
+            start_dir=start_dir,
+            filter_description="Texture Files",
+            allow_multiple=False,
+        )
+        if not chosen:
+            return
+
+        new_path = self._project_relative_converter()(chosen)
+        cmds.undoInfo(openChunk=True, chunkName="Browse Texture File")
+        try:
+            cmds.setAttr(f"{node_name}.fileTextureName", new_path, type="string")
+            if current and current != new_path:
+                self._previous_paths[node_name] = current
+            om.MGlobal.displayInfo(f"{node_name}: '{current}' -> '{new_path}'")
+        except Exception as e:
+            cmds.warning(f"{node_name}: failed to set path: {e}")
+        finally:
+            cmds.undoInfo(closeChunk=True)
+
+        self.ui.tbl000.init_slot()
+
+    def row_resolve_by_stem(self, selection=None):
+        nodes = self._file_nodes_from_selection(selection)
+        if nodes:
+            self._resolve_missing_textures(mode="stem", file_nodes=nodes)
+
+    def row_resolve_by_fuzzy(self, selection=None):
+        nodes = self._file_nodes_from_selection(selection)
+        if nodes:
+            self._resolve_missing_textures(mode="fuzzy", file_nodes=nodes)
+
+    def row_resolve_by_texture(self, selection=None):
+        nodes = self._file_nodes_from_selection(selection)
+        if nodes:
+            self._resolve_missing_textures(mode="texture", file_nodes=nodes)
+
+    def _file_nodes_from_selection(self, selection):
+        contexts = self._get_selected_contexts(selection)
+        if not contexts:
+            return []
+        nodes = []
+        for ctx in contexts:
+            nodes.extend(ctx.get("file_nodes") or [])
+        return list(dict.fromkeys(nodes))
+
+    def _project_relative_converter(self):
+        """Build a closure that converts an absolute path to a project-relative one (under sourceimages)."""
+        si = EnvUtils.get_env_info("sourceimages") or ""
+        si_abs = os.path.abspath(si).replace("\\", "/") if si else ""
+        si_name = os.path.basename(si) if si else ""
+
+        def to_relative(abs_path: str) -> str:
+            norm = os.path.normpath(abs_path).replace("\\", "/")
+            if si_abs and norm.lower().startswith(si_abs.lower()):
+                rel = os.path.relpath(norm, si_abs).replace("\\", "/")
+                if si_name and not rel.startswith(si_name + "/"):
+                    return f"{si_name}/{rel}"
+                return rel
+            return norm
+
+        return to_relative
+
+    def _set_texture_dir_flat(self, file_nodes, target_dir: str) -> int:
+        """Repath each file node so its texture lives directly under target_dir (basename only).
+
+        Records the prior path in self._previous_paths so the table tooltip can show it.
+        Returns the number of nodes actually updated.
+        """
+        if not file_nodes:
+            return 0
+
+        node_names = [
+            str(n).split('|')[-1].split(':')[-1] if hasattr(n, "name") else str(n)
+            for n in file_nodes
+        ]
+        target_dir_norm = os.path.normpath(target_dir).replace("\\", "/")
+        to_relative = self._project_relative_converter()
+
+        count = 0
+        cmds.undoInfo(openChunk=True, chunkName="Set Texture Directory")
+        try:
+            for node_name in node_names:
+                try:
+                    old_path = cmds.getAttr(f"{node_name}.fileTextureName") or ""
+                except Exception:
+                    continue
+                if not old_path:
+                    continue
+
+                new_abs = os.path.normpath(
+                    os.path.join(target_dir_norm, os.path.basename(old_path))
+                ).replace("\\", "/")
+                new_path = to_relative(new_abs)
+                if new_path == old_path:
+                    continue
+
+                try:
+                    cmds.setAttr(
+                        f"{node_name}.fileTextureName", new_path, type="string"
+                    )
+                    self._previous_paths[node_name] = old_path
+                    count += 1
+                except Exception as e:
+                    cmds.warning(f"{node_name}: failed to set path: {e}")
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        return count
+
+    def _strategies_for_mode(self, mode: str, index_stems):
+        """Build the FuzzyMatcher strategy pipeline for a resolve mode.
+
+        Modes share an "exact" first tier (handles extension-only changes); fuzzy and
+        texture modes add progressively looser fallbacks. The texture tier is a custom
+        callable that requires same map type and matches on the map-stripped base name.
+        """
+        if mode == "stem":
+            return ["exact"]
+        if mode == "fuzzy":
+            # use_base_name is intentionally NOT in the pipeline: numbered variants
+            # like texture_001 / texture_002 should not auto-fuse.
+            return ["exact", "substring", "ratio"]
+        if mode == "texture":
+            return [
+                "exact",
+                self._texture_aware_strategy(index_stems),
+                "substring",
+                "ratio",
+            ]
+        raise ValueError(f"Unknown resolve mode: {mode!r}")
+
+    def _texture_aware_strategy(self, index_stems):
+        """Build a custom strategy that filters by map type then fuzzy-matches the base name.
+
+        For a missing `c130j_..._ao`, this restricts candidates to other `_AO` files,
+        so an `_AO` file node can never get repathed to a `_DIFF` / `_NORM` / `_SPEC` file.
+        """
+
+        # Pre-compute (base_lower, map_type) for every candidate stem once.
+        candidate_meta = []
+        for stem in index_stems:
+            try:
+                map_type = MapFactory.resolve_map_type(stem + ".png", key=True)
+            except Exception:
+                map_type = None
+            try:
+                base = ImgUtils.get_base_texture_name(stem + ".png").lower()
+            except Exception:
+                base = stem
+            candidate_meta.append((stem, base, map_type))
+
+        def texture(target, candidates):
+            try:
+                target_map = MapFactory.resolve_map_type(target + ".png", key=True)
+            except Exception:
+                target_map = None
+            if not target_map:
+                return None, 0.0, "no_match"
+
+            try:
+                target_base = ImgUtils.get_base_texture_name(target + ".png").lower()
+            except Exception:
+                target_base = target
+
+            # Filter to same map type; carry parallel lists so we can map back.
+            same_map_stems = []
+            same_map_bases = []
+            for stem, base, map_type in candidate_meta:
+                if map_type == target_map:
+                    same_map_stems.append(stem)
+                    same_map_bases.append(base)
+
+            if not same_map_bases:
+                return None, 0.0, "no_match"
+
+            base_match, score, status = FuzzyMatcher.find_unique_match(
+                target_base,
+                same_map_bases,
+                score_threshold=0.5,
+                ambiguity_delta=0.05,
+                use_base_name=False,
+                use_substring=True,
+                use_prefix=False,
+                use_ratio=False,
+            )
+            if status == "no_match":
+                return None, 0.0, "no_match"
+            # Map the base hit back to its original (un-stripped) candidate stem.
+            idx = same_map_bases.index(base_match)
+            return same_map_stems[idx], score, status
+
+        return texture
+
+    def _resolve_missing_textures(self, mode: str, file_nodes=None):
+        if mode not in ("stem", "fuzzy", "texture"):
+            raise ValueError(f"Unknown resolve mode: {mode!r}")
+        sourceimages = EnvUtils.get_env_info("sourceimages")
+        if not sourceimages or not os.path.isdir(sourceimages):
+            cmds.warning(f"sourceimages directory not found: {sourceimages}")
+            return
+
+        workspace = EnvUtils.get_env_info("workspace") or ""
+        if file_nodes is None:
+            all_file_nodes = cmds.ls(type="file") or []
+        else:
+            all_file_nodes = [
+                str(n).split('|')[-1].split(':')[-1] if hasattr(n, "name") else str(n)
+                for n in file_nodes
+            ]
+        if not all_file_nodes:
+            cmds.warning("No file nodes to process.")
+            return
+
+        missing = []
+        for node in all_file_nodes:
+            try:
+                path = cmds.getAttr(f"{node}.fileTextureName") or ""
+            except Exception:
+                continue
+            if not path or "<udim>" in path.lower():
+                continue
+            abs_path = (
+                path if os.path.isabs(path)
+                else os.path.normpath(os.path.join(workspace, path))
+            )
+            if os.path.exists(abs_path):
+                continue
+            stem = os.path.splitext(os.path.basename(path))[0]
+            if stem:
+                missing.append((node, path, stem))
+
+        if not missing:
+            om.MGlobal.displayInfo("No missing textures to resolve.")
+            return
+
+        # Index sourceimages by stem
+        index = []
+        for root, _, files in os.walk(sourceimages):
+            for f in files:
+                stem = os.path.splitext(f)[0]
+                if stem:
+                    index.append((stem.lower(), os.path.join(root, f)))
+
+        if not index:
+            cmds.warning("No files in sourceimages to match against.")
+            return
+
+        to_project_relative = self._project_relative_converter()
+
+        # Build a stem-key -> abs-path map (multiple files may share a stem)
+        by_stem = {}
+        for stem_key, abs_path in index:
+            by_stem.setdefault(stem_key, []).append(abs_path)
+        index_stems = list(by_stem.keys())
+
+        strategies = self._strategies_for_mode(mode, index_stems)
+
+        resolved = 0
+        ambiguous = 0
+        no_match = 0
+
+        cmds.undoInfo(openChunk=True, chunkName="Resolve Missing Textures")
+        try:
+            for node, current_path, stem in missing:
+                stem_lower = stem.lower()
+
+                match_name, _score, status, strat_name = (
+                    FuzzyMatcher.find_with_fallbacks(
+                        stem_lower,
+                        index_stems,
+                        strategies=strategies,
+                        score_threshold=0.6,
+                        ambiguity_delta=0.05,
+                    )
+                )
+                if status == "no_match":
+                    no_match += 1
+                    continue
+                if status == "ambiguous":
+                    ambiguous += 1
+                    cmds.warning(
+                        f"{node}: ambiguous {strat_name} match for '{stem}', skipped."
+                    )
+                    continue
+
+                matches = by_stem.get(match_name) or []
+                if not matches:
+                    no_match += 1
+                    continue
+                if len(matches) > 1:
+                    ambiguous += 1
+                    cmds.warning(
+                        f"{node}: '{match_name}' resolves to {len(matches)} files, skipped."
+                    )
+                    continue
+                final_abs = matches[0]
+
+                new_path = to_project_relative(final_abs)
+                try:
+                    cmds.setAttr(f"{node}.fileTextureName", new_path, type="string")
+                    self._previous_paths[node] = current_path
+                    resolved += 1
+                    om.MGlobal.displayInfo(
+                        f"{node}: '{current_path}' -> '{new_path}'"
+                    )
+                except Exception as e:
+                    cmds.warning(f"{node}: failed to set path: {e}")
+        finally:
+            cmds.undoInfo(closeChunk=True)
+
+        om.MGlobal.displayInfo(
+            f"Resolved {resolved}/{len(missing)} missing "
+            f"(no match: {no_match}, ambiguous: {ambiguous})."
+        )
+        self.ui.tbl000.init_slot()
+
     def refresh_texture_table(self):
         """Manual refresh trigger from the header menu."""
         table = getattr(self.ui, "tbl000", None)
@@ -280,6 +676,30 @@ class TexturePathEditorSlots:
                 setText="Convert to Relative Path",
                 setObjectName="remap_to_relative",
                 setToolTip="Convert the selected file node's texture path to a relative path",
+            )
+            widget.menu.add(
+                "QPushButton",
+                setText="Resolve Missing by Stem",
+                setObjectName="row_resolve_by_stem",
+                setToolTip="Search sourceimages for a file with the same name but a different extension and repath this file node.",
+            )
+            widget.menu.add(
+                "QPushButton",
+                setText="Resolve Missing by Fuzzy Match",
+                setObjectName="row_resolve_by_fuzzy",
+                setToolTip="Search sourceimages for a file with a similar name (e.g. added '_demo' suffix) and repath this file node. Skips ambiguous matches.",
+            )
+            widget.menu.add(
+                "QPushButton",
+                setText="Resolve Missing by Texture Name",
+                setObjectName="row_resolve_by_texture",
+                setToolTip="Restrict candidates to the same map type (AO/DIFF/NORM/SPEC/etc.) and match on the map-stripped base name. Safest mode for typical texture sets.",
+            )
+            widget.menu.add(
+                "QPushButton",
+                setText="Browse for File...",
+                setObjectName="row_browse_for_file",
+                setToolTip="Open a file browser starting at sourceimages and pick a file to repath this file node to. Single selection only.",
             )
 
             widget.menu.add("Separator", setTitle="Selection")
@@ -325,6 +745,10 @@ class TexturePathEditorSlots:
             )
 
             _bind_menu_action("remap_to_relative", self.remap_to_relative)
+            _bind_menu_action("row_resolve_by_stem", self.row_resolve_by_stem)
+            _bind_menu_action("row_resolve_by_fuzzy", self.row_resolve_by_fuzzy)
+            _bind_menu_action("row_resolve_by_texture", self.row_resolve_by_texture)
+            _bind_menu_action("row_browse_for_file", self.row_browse_for_file)
             _bind_menu_action("select_material", self.select_material)
             _bind_menu_action("select_file_node", self.select_file_node)
             _bind_menu_action("row_show_in_hypershade", self.row_show_in_hypershade)
@@ -361,6 +785,7 @@ class TexturePathEditorSlots:
 
         def do_refresh():
             self._refresh_pending = False
+            self._previous_paths.clear()
             try:
                 # Check if widget is still valid
                 try:
@@ -388,9 +813,6 @@ class TexturePathEditorSlots:
         cmds.waitCursor(state=True)
         try:
             widget.setUpdatesEnabled(False)
-            widget.blockSignals(
-                True
-            )  # Prevent cellChanged from firing during population
             widget.clear()
             # Optimization: Request strings only to avoid node creation overhead
             rows = MatUtils.get_file_nodes(
@@ -401,8 +823,15 @@ class TexturePathEditorSlots:
 
             formatted = []
             for shader_name, path, file_node_name in rows:
-                # Pass strings for display; nodes will be resolved on-demand by context menu actions
-                formatted.append([shader_name, path, file_node_name])
+                # Stash node names in UserRole so handle_cell_edit can recover the
+                # old name after the user edits a cell (item.text() is the new value).
+                # Column 1 (path) is left as plain text — its column formatter reads
+                # UserRole-or-text and would otherwise misinterpret a stashed identifier.
+                formatted.append([
+                    (shader_name, shader_name),
+                    path,
+                    (file_node_name, file_node_name),
+                ])
 
             # Populate table (triggers cellChanged if signals not blocked)
             widget.add(formatted, headers=["Shader", "Texture Path", "File Node"])
@@ -430,7 +859,6 @@ class TexturePathEditorSlots:
             # custom formatter applied, so we call it once more after setup
             widget.apply_formatting()
         finally:
-            widget.blockSignals(False)
             widget.setUpdatesEnabled(True)
             cmds.waitCursor(state=False)
 
@@ -507,7 +935,14 @@ class TexturePathEditorSlots:
                 path_cache[path] = (exists, abs_path)
 
             widget.format_item(item, key="reset" if exists else "invalid")
-            item.setToolTip("" if exists else f"Missing file:\n{abs_path}")
+
+            tooltip_lines = [abs_path if exists else f"Missing file:\n{abs_path}"]
+            fn_item = widget.item(row, 2)
+            fn_name = str(fn_item.text()).strip() if fn_item else ""
+            previous = self._previous_paths.get(fn_name) if fn_name else None
+            if previous and previous != path:
+                tooltip_lines.append(f"Previous: {previous}")
+            item.setToolTip("\n\n".join(tooltip_lines))
 
         widget.set_column_formatter(1, format_if_invalid)
 
@@ -772,8 +1207,12 @@ class TexturePathEditorSlots:
         if not target_dir:
             return
 
-        self._remap_context_textures(contexts, new_dir=target_dir)
+        file_nodes = []
+        for ctx in contexts:
+            file_nodes.extend(ctx.get("file_nodes") or [])
+        file_nodes = list(dict.fromkeys(file_nodes))
 
+        self._set_texture_dir_flat(file_nodes, target_dir)
         self.ui.tbl000.init_slot()
 
     def row_find_and_copy_texture(self, selection=None):
@@ -793,53 +1232,68 @@ class TexturePathEditorSlots:
 
     def handle_cell_edit(self, row: int, col: int):
         tbl = self.ui.tbl000
-        value = tbl.item(row, col).text()
+        item = tbl.item(row, col)
+        if not item:
+            return
+        new_value = item.text()
+        UserRole = self.sb.QtCore.Qt.UserRole
+
+        def _restore_text(target_item, original):
+            tbl.blockSignals(True)
+            try:
+                target_item.setText(original)
+            finally:
+                tbl.blockSignals(False)
+
+        def _rename_node(label):
+            old_name = item.data(UserRole)
+            if not old_name:
+                _restore_text(item, new_value)
+                return
+            if new_value == old_name:
+                return
+            if not cmds.objExists(old_name):
+                cmds.warning(f"{label} '{old_name}' no longer exists; cannot rename.")
+                _restore_text(item, old_name)
+                return
+            try:
+                actual = cmds.rename(old_name, new_value)
+            except Exception as e:
+                cmds.warning(f"Failed to rename {label}: {e}")
+                _restore_text(item, old_name)
+                return
+            item.setData(UserRole, actual)
+            if actual != new_value:
+                _restore_text(item, actual)
+            om.MGlobal.displayInfo(f"Renamed {label} '{old_name}' -> '{actual}'")
 
         if col == 0:  # Shader rename
-            shader_node = tbl.item_data(row, 0)
-            if shader_node and hasattr(shader_node, "rename"):
-                try:
-                    shader_node.rename(value)
-                    om.MGlobal.displayInfo(f"Renamed shader to: {value}")
-                except Exception as e:
-                    cmds.warning(f"Failed to rename shader: {e}")
+            _rename_node("shader")
 
         elif col == 1:  # File path update
-            file_node = tbl.item_data(row, 2)
-            if file_node and hasattr(file_node, "fileTextureName"):
-                file_node.fileTextureName.set(value)
-                om.MGlobal.displayInfo(f"Updated texture path to: {value}")
-                tbl.apply_formatting()  # Recheck path formatting after update
+            fn_item = tbl.item(row, 2)
+            file_node = fn_item.data(UserRole) if fn_item else None
+            if not file_node:
+                cmds.warning("No file node associated with this row.")
+                return
+            if not cmds.objExists(file_node):
+                cmds.warning(f"File node '{file_node}' no longer exists.")
+                return
+            try:
+                cmds.setAttr(
+                    f"{file_node}.fileTextureName", new_value, type="string"
+                )
+                om.MGlobal.displayInfo(
+                    f"{file_node}: texture path -> '{new_value}'"
+                )
+                tbl.apply_formatting()
                 if self._footer_controller:
                     self._footer_controller.update()
+            except Exception as e:
+                cmds.warning(f"Failed to update texture path: {e}")
 
         elif col == 2:  # File node rename
-            file_node = tbl.item_data(row, 2)
-            if file_node and hasattr(file_node, "rename"):
-                try:
-                    file_node.rename(value)
-                    om.MGlobal.displayInfo(f"Renamed file node to: {value}")
-                except Exception as e:
-                    cmds.warning(f"Failed to rename file node: {e}")
-
-        if col in (0, 2):
-            node_name = value
-            if cmds.objExists(node_name):
-                cmds.select(node_name, r=True)
-                try:
-                    mel.eval("NodeEditorWindow;")
-                    # Attempt to find the Node Editor panel
-                    editors = cmds.getPanel(scriptType="nodeEditorPanel")
-                    if editors:
-                        # Use the first found editor
-                        editor_name = editors[0] + "NodeEditorEd"
-                        mel.eval(f"nodeEditor -e -f true {editor_name};")
-                    else:
-                        # Fallback to default name if query fails
-                        mel.eval("nodeEditor -e -f true nodeEditor1;")
-                except Exception:
-                    # Fail silently if Node Editor interaction doesn't work (non-critical)
-                    pass
+            _rename_node("file node")
 
     def _create_footer_controller(self):
         footer = getattr(self.ui, "footer", None)
@@ -850,6 +1304,17 @@ class TexturePathEditorSlots:
             resolver=self._resolve_source_images_path,
             default_text="",
             truncate_kwargs={"length": 96, "mode": "middle"},
+        )
+
+    def _setup_footer_actions(self):
+        """Add action buttons to the footer."""
+        footer = getattr(self.ui, "footer", None)
+        if footer is None or not hasattr(footer, "add_action_button"):
+            return
+        footer.add_action_button(
+            icon_name="refresh",
+            tooltip="Rescan the current scene and update the texture table.",
+            callback=self.refresh_texture_table,
         )
 
     def _resolve_source_images_path(self) -> str:
