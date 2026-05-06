@@ -371,10 +371,10 @@ class DisplayMacros:
             return
 
         # Validate the object and attributes existence
-        is_visible = first_obj.visibility.get()
-        is_templated = (
-            getattr(first_obj, "template", False) and first_obj.template.get()
-        )
+        is_visible = cmds.getAttr(f"{first_obj}.visibility")
+        is_templated = cmds.attributeQuery(
+            "template", node=first_obj, exists=True
+        ) and cmds.getAttr(f"{first_obj}.template")
         xray_query_result = cmds.displaySurface(first_obj, xRay=True, query=True)
         is_xray = xray_query_result[0] if xray_query_result else False
 
@@ -386,14 +386,17 @@ class DisplayMacros:
             next_state = "Templated"
             action = lambda obj: (
                 cmds.displaySurface(obj, xRay=False),
-                obj.template.set(True),
+                cmds.setAttr(f"{obj}.template", True),
             )
         elif is_templated:
             next_state = "Hidden"
-            action = lambda obj: (obj.template.set(False), obj.visibility.set(False))
+            action = lambda obj: (
+                cmds.setAttr(f"{obj}.template", False),
+                cmds.setAttr(f"{obj}.visibility", False),
+            )
         else:  # Assume hidden if not visible, templated, or x-ray
             next_state = "Visible"
-            action = lambda obj: obj.visibility.set(True)
+            action = lambda obj: cmds.setAttr(f"{obj}.visibility", True)
 
         # Apply the state transition to all selected objects
         for obj in sel:
@@ -412,7 +415,7 @@ class DisplayMacros:
         objects = objects or cmds.ls(type="mesh")
         if objects:
             # Check the current state of the first object in the list
-            current_state: bool = cmds.getAttr(objects[0].overrideShading) == 1
+            current_state: bool = cmds.getAttr(f"{objects[0]}.overrideShading") == 1
             # Toggle the overrideDisplayType attribute for all objects
             for obj in objects:
                 cmds.setAttr(f"{obj}.overrideEnabled", 1)
@@ -508,8 +511,8 @@ class DisplayMacros:
         """Toggle smooth mesh preview."""
         objs = NodeUtils.get_unique_children(objects)
         for obj in objs:
-            if cmds.getAttr(obj.displaySmoothMesh) != 2:
-                cmds.setAttr(obj.displaySmoothMesh, 2)  # smooth preview on
+            if cmds.getAttr(f"{obj}.displaySmoothMesh") != 2:
+                cmds.setAttr(f"{obj}.displaySmoothMesh", 2)  # smooth preview on
                 cmds.displayPref(wireframeOnShadedActive="none")
                 cmds.inViewMessage(
                     position="topCenter",
@@ -518,12 +521,12 @@ class DisplayMacros:
                 )
 
             elif (
-                cmds.getAttr(obj.displaySmoothMesh) == 2
+                cmds.getAttr(f"{obj}.displaySmoothMesh") == 2
                 and cmds.displayPref(query=1, wireframeOnShadedActive=1) == "none"
             ):
-                cmds.setAttr(obj.displaySmoothMesh, 2)  # smooth preview on
-                shapes = cmds.listRelatives(objects, children=1, shapes=1)
-                [cmds.setAttr(s.displaySubdComps, 1) for s in shapes]
+                cmds.setAttr(f"{obj}.displaySmoothMesh", 2)  # smooth preview on
+                shapes = cmds.listRelatives(objects, children=1, shapes=1) or []
+                [cmds.setAttr(f"{s}.displaySubdComps", 1) for s in shapes]
                 cmds.displayPref(wireframeOnShadedActive="full")
                 cmds.inViewMessage(
                     position="topCenter",
@@ -532,7 +535,7 @@ class DisplayMacros:
                 )
 
             else:
-                cmds.setAttr(obj.displaySmoothMesh, 0)  # smooth preview off
+                cmds.setAttr(f"{obj}.displaySmoothMesh", 0)  # smooth preview off
                 cmds.displayPref(wireframeOnShadedActive="full")
                 cmds.inViewMessage(
                     position="topCenter",
@@ -540,8 +543,8 @@ class DisplayMacros:
                     statusMessage="S-Div Preview <hl>OFF</hl>.<br>Wireframe <hl>Full</hl>.",
                 )
 
-            if cmds.getAttr(obj.smoothLevel) != 1:
-                cmds.setAttr(obj.smoothLevel, 1)
+            if cmds.getAttr(f"{obj}.smoothLevel") != 1:
+                cmds.setAttr(f"{obj}.smoothLevel", 1)
 
     @staticmethod
     def m_wireframe() -> None:
@@ -996,55 +999,45 @@ class SelectionMacros:
             )
             return
 
+        def _attr_ok(node, attr):
+            if not cmds.attributeQuery(attr, node=node, exists=True):
+                return False
+            return not cmds.getAttr(f"{node}.{attr}", lock=True)
+
         for obj in cmds.ls(objects, flatten=True):
             try:
-                # Ensure attributes exist and are not locked or connected before modifying
-                if not cmds.attributeQuery("overrideEnabled", node=str(obj), exists=True) or obj.overrideEnabled.isLocked():
+                required = (
+                    "overrideEnabled",
+                    "overrideDisplayType",
+                    "useOutlinerColor",
+                    "outlinerColor",
+                )
+                blocked = next((a for a in required if not _attr_ok(obj, a)), None)
+                if blocked:
                     cmds.warning(
-                        f"Cannot modify overrideEnabled for {obj}: Attribute is locked."
-                    )
-                    continue
-                if (
-                    not cmds.attributeQuery("overrideDisplayType", node=str(obj), exists=True)
-                    or obj.overrideDisplayType.isLocked()
-                ):
-                    cmds.warning(
-                        f"Cannot modify overrideDisplayType for {obj}: Attribute is locked."
-                    )
-                    continue
-                if (
-                    not cmds.attributeQuery("useOutlinerColor", node=str(obj), exists=True)
-                    or obj.useOutlinerColor.isLocked()
-                ):
-                    cmds.warning(
-                        f"Cannot modify useOutlinerColor for {obj}: Attribute is locked."
-                    )
-                    continue
-                if not cmds.attributeQuery("outlinerColor", node=str(obj), exists=True) or obj.outlinerColor.isLocked():
-                    cmds.warning(
-                        f"Cannot modify outlinerColor for {obj}: Attribute is locked."
+                        f"Cannot modify {blocked} for {obj}: missing or locked."
                     )
                     continue
 
-                override_enabled = obj.overrideEnabled.get()
-                current_state = obj.overrideDisplayType.get()
+                override_enabled = cmds.getAttr(f"{obj}.overrideEnabled")
+                current_state = cmds.getAttr(f"{obj}.overrideDisplayType")
 
                 if override_enabled and current_state == 2:
                     # Object is currently non-selectable, make it selectable
-                    obj.overrideDisplayType.set(0)  # Normal mode
-                    obj.useOutlinerColor.set(0)  # Disable custom outliner color
+                    cmds.setAttr(f"{obj}.overrideDisplayType", 0)  # Normal mode
+                    cmds.setAttr(f"{obj}.useOutlinerColor", 0)
                     cmds.inViewMessage(
                         statusMessage=f"{obj} <hl>Selectable</hl>.",
                         pos="topCenter",
                         fade=True,
                     )
                 else:  # Object is currently selectable, make it non-selectable
-                    obj.overrideEnabled.set(1)
-                    obj.overrideDisplayType.set(2)  # Reference mode
-                    obj.useOutlinerColor.set(1)  # Enable custom outliner color
-                    obj.outlinerColor.set(
-                        0.3, 0.6, 0.6
-                    )  # Set color to desaturated teal
+                    cmds.setAttr(f"{obj}.overrideEnabled", 1)
+                    cmds.setAttr(f"{obj}.overrideDisplayType", 2)  # Reference mode
+                    cmds.setAttr(f"{obj}.useOutlinerColor", 1)
+                    cmds.setAttr(
+                        f"{obj}.outlinerColor", 0.3, 0.6, 0.6, type="double3"
+                    )  # desaturated teal
                     cmds.inViewMessage(
                         statusMessage=f"{obj} <hl>Non-selectable</hl>.",
                         pos="topCenter",
@@ -1155,8 +1148,7 @@ class AnimationMacros:
         for obj in objects:
             attrs = Attributes.get_selected_channels()
             for attr in attrs:
-                attr_ = getattr(obj, attr)
-                cmds.setKeyframe(attr_)
+                cmds.setKeyframe(f"{obj}.{attr}")
                 # cutKey -cl -t ":" -f ":" -at "tx" -at "ty" -at "tz" pSphere1; #remove keys
 
     @staticmethod
@@ -1166,9 +1158,9 @@ class AnimationMacros:
         for obj in objects:
             attrs = Attributes.get_selected_channels()
             for attr in attrs:
-                attr_ = getattr(obj, attr)
-                cmds.setKeyframe(attr_)
-                cmds.cutKey(attr_, cl=True)  # remove keys
+                target = f"{obj}.{attr}"
+                cmds.setKeyframe(target)
+                cmds.cutKey(target, cl=True)  # remove keys
 
     # ========================================================================================
 

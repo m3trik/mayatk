@@ -212,6 +212,14 @@ class TestMatUpdater(MayaTkTestCase):
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
 
+        # The shared self.temp_tex is named generically; swap in a properly-
+        # named texture so MapFactory.resolve_map_type can classify it.
+        named_tex = os.path.join(os.environ["TEMP"], "asset_BaseColor.png")
+        with open(named_tex, "w") as f:
+            f.write("dummy")
+        self.addCleanup(lambda: os.path.exists(named_tex) and os.remove(named_tex))
+        cmds.setAttr(f"{self.file_node}.fileTextureName", named_tex, type="string")
+
         config = {
             "move_to_folder": output_folder,
             "convert": False,
@@ -225,23 +233,19 @@ class TestMatUpdater(MayaTkTestCase):
             materials=[self.mat], config=config, verbose=False
         )
 
-        # Get the connected texture path
-        mat_results = results.get(self.mat, {})
-        connected = mat_results.get("connected", {})
+        # Production keys results dict by material short name (string), not PyNode.
+        mat_key = str(self.mat).split("|")[-1].split(":")[-1]
+        self.assertIn(mat_key, results, f"Expected key '{mat_key}' in results: {list(results)}")
+        connected = results[mat_key].get("connected", {})
 
-        # Since we have a standardSurface with a file connected to baseColor,
-        # it should be resolved as Base_Color.
-        # Since convert/optimize are False, it should be passed through.
-
-        # Check if any file is in the output folder
-        # If rename is False (default), it should return the original path
-
-        # Note: The test texture is self.temp_tex
-
-        # We expect the path to be the ORIGINAL path
-        for map_type, path in connected.items():
-            self.assertEqual(os.path.normpath(path), os.path.normpath(self.temp_tex))
-            self.assertFalse(path.startswith(output_folder))
+        self.assertTrue(connected, "Expected at least one connected map")
+        # With move_to_folder set (transfer_mode defaults to 'move'), the file
+        # should now live in the output folder under its original basename.
+        for _map_type, path in connected.items():
+            self.assertEqual(
+                os.path.normpath(path),
+                os.path.normpath(os.path.join(output_folder, "asset_BaseColor.png")),
+            )
 
     @patch(
         "mayatk.mat_utils.mat_updater.MatUpdater.disconnect_associated_attributes"
