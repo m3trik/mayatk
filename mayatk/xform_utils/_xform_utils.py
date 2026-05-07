@@ -1088,38 +1088,43 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             if needs_selection_change:
                 cmds.select(node, replace=True)
 
-            manip_pivot_ws = [0.0, 0.0, 0.0]
+            rp_pos = list(cmds.xform(node, q=True, ws=True, rp=True))
+            manip_pivot_ws = list(rp_pos)
             try:
                 manip_pivot_result = cmds.manipPivot(q=True, p=True)
-                rp_pos = cmds.xform(node, q=True, ws=True, rp=True)
 
-                def is_diff(v1, v2):
-                    if not v1 or not v2:
-                        return False
-                    if isinstance(v1[0], (list, tuple)):
-                        v1 = v1[0]
-                    return sum([abs(a - b) for a, b in zip(v1, v2)]) > 0.0001
-
-                current_pos_val = manip_pivot_result[0] if manip_pivot_result else None
-
-                if node in cls._manip_cache:
-                    cached_rot, cached_pos = cls._manip_cache[node]
-                    if current_pos_val and not is_diff(current_pos_val, rp_pos):
-                        manip_pivot_result = [cached_pos]
-
+                # Unwrap nested return shape: cmds.manipPivot may return either
+                # [(x, y, z)] or [x, y, z] depending on context.
+                queried_pos = None
                 if manip_pivot_result:
-                    temp = (
-                        manip_pivot_result[0]
-                        if isinstance(manip_pivot_result, (list, tuple))
-                        else manip_pivot_result
-                    )
-                    if isinstance(temp, (list, tuple)) and len(temp) == 3:
-                        manip_pivot_ws = list(temp)
+                    head = manip_pivot_result[0]
+                    if isinstance(head, (list, tuple)) and len(head) == 3:
+                        queried_pos = list(head)
                     elif (
                         isinstance(manip_pivot_result, (list, tuple))
                         and len(manip_pivot_result) == 3
                     ):
-                        manip_pivot_ws = list(manip_pivot_result)
+                        queried_pos = list(manip_pivot_result)
+
+                # cmds.manipPivot returns (0, 0, 0) when no Move/Rotate/Scale
+                # context is active, regardless of what's selected. In that
+                # case the manipulator hasn't been customized — fall back to
+                # the object's rotate pivot, which is where Maya places the
+                # gizmo by default when a transform tool is activated.
+                is_default_origin = (
+                    queried_pos is not None
+                    and all(abs(v) < 1e-6 for v in queried_pos)
+                )
+
+                if queried_pos is not None and not is_default_origin:
+                    manip_pivot_ws = queried_pos
+                elif node in cls._manip_cache:
+                    # Manip is at default state but we previously cached a
+                    # custom position for this node — restore it.
+                    _cached_rot, cached_pos = cls._manip_cache[node]
+                    if cached_pos is not None:
+                        manip_pivot_ws = list(cached_pos)
+                # else: manip_pivot_ws stays at rp_pos (the natural default).
 
             except Exception as e:
                 print(
@@ -1128,7 +1133,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 import traceback
 
                 traceback.print_exc()
-                manip_pivot_ws = [0.0, 0.0, 0.0]
+                manip_pivot_ws = list(rp_pos)
 
             finally:
                 if needs_selection_change and current_selection:

@@ -3,7 +3,7 @@
 """
 Test Suite for mayatk.mat_utils.render_opacity module
 
-Tests for the non-animating AttributeManager-based implementation.
+Tests for the non-animating Channels-based implementation.
 """
 import os
 import unittest

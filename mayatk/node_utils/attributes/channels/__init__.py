@@ -1,18 +1,18 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Attribute Manager — Switchboard UI for inspecting and editing Maya attributes."""
-from mayatk.node_utils.attributes.attribute_manager._attribute_manager import (
-    AttributeManager,
+"""Channels — Switchboard UI for inspecting and editing Maya attributes."""
+from mayatk.node_utils.attributes.channels._channels import (
+    Channels,
 )
-from mayatk.node_utils.attributes.attribute_manager.attribute_manager_slots import (
-    AttributeManagerSlots,
+from mayatk.node_utils.attributes.channels.channels_slots import (
+    ChannelsSlots,
 )
 
-__all__ = ["AttributeManager", "AttributeManagerSlots", "launch"]
+__all__ = ["Channels", "ChannelsSlots", "launch"]
 
 
 def launch(sb=None, targets=None, filter=None, search=None):
-    """Open the Attribute Manager, optionally pre-targeted.
+    """Open the Channels UI, optionally pre-targeted.
 
     Parameters
     ----------
@@ -26,7 +26,7 @@ def launch(sb=None, targets=None, filter=None, search=None):
     targets : list[str] | None
         Node names to pin.  ``None`` clears any existing pin.
     filter : str | None
-        :attr:`AttributeManager.FILTER_MAP` key to select on open.
+        :attr:`Channels.FILTER_MAP` key to select on open.
     search : str | None
         Text-filter pattern to pre-populate the search field.  Pass
         ``""`` to clear.
@@ -35,12 +35,12 @@ def launch(sb=None, targets=None, filter=None, search=None):
         from uitk import Switchboard
 
         sb = Switchboard(
-            ui_source="attribute_manager.ui", slot_source=AttributeManagerSlots
+            ui_source="channels.ui", slot_source=ChannelsSlots
         )
-        ui = sb.loaded_ui.attribute_manager
+        ui = sb.loaded_ui.channels
         ui.show(pos="screen")
     else:
-        ui = sb.handlers.marking_menu.show("attribute_manager")
+        ui = sb.handlers.marking_menu.show("channels")
 
     slots = sb.get_slots_instance(ui)
     if slots is not None:

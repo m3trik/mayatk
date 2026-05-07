@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>attribute_manager</class>
- <widget class="QMainWindow" name="attribute_manager">
+ <class>channels</class>
+ <widget class="QMainWindow" name="channels">
   <property name="geometry">
    <rect>
     <x>0</x>
@@ -48,7 +48,7 @@
        </font>
       </property>
       <property name="text" stdset="0">
-       <string>ATTRIBUTE MGR</string>
+       <string>CHANNELS</string>
       </property>
      </widget>
     </item>

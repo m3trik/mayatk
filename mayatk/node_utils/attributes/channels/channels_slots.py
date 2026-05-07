@@ -1,27 +1,28 @@
 # !/usr/bin/python
 # coding=utf-8
-"""UI slots for the Attribute Manager.
+"""UI slots for the Channels UI.
 
-``AttributeManagerSlots`` — a single-table Switchboard interface for
+``ChannelsSlots`` — a single-table Switchboard interface for
 inspecting, editing, locking, and managing Maya node attributes.
-Delegates all non-UI logic to :class:`AttributeManager`.
+Delegates all non-UI logic to :class:`Channels`.
 """
 import maya.cmds as cmds
 import maya.mel as mel
 
+from qtpy import QtCore, QtWidgets
 from uitk.widgets.footer import FooterStatusController
 from uitk.widgets.widgetComboBox import WidgetComboBox
 from mayatk.core_utils.script_job_manager import ScriptJobManager
-from mayatk.node_utils.attributes.attribute_manager._attribute_manager import (
-    AttributeManager,
+from mayatk.node_utils.attributes.channels._channels import (
+    Channels,
 )
 
 import pythontk as ptk
 from uitk.widgets.mixins.tooltip_mixin import fmt
 
 
-class AttributeManagerSlots:
-    """Switchboard slots for the Attribute Manager UI.
+class ChannelsSlots:
+    """Switchboard slots for the Channels UI.
 
     Layout
     ------
@@ -66,8 +67,8 @@ class AttributeManagerSlots:
 
     def __init__(self, switchboard):
         self.sb = switchboard
-        self.ui = self.sb.loaded_ui.attribute_manager
-        self.controller = AttributeManager()
+        self.ui = self.sb.loaded_ui.channels
+        self.controller = Channels()
         self._refresh_pending = False
         self._compact_view = False
         self._base_row_height = None  # snapshotted on first _apply_row_height
@@ -89,6 +90,9 @@ class AttributeManagerSlots:
         self._pending_lock_attrs: set = set()
         self._attr_flush_pending = False
         self._destroyed = False
+
+        # MMB scrub-edit drag state — set by ``_setup_scrub_edit``.
+        self._scrub_state = None
 
         # Re-entry guards for ``_refresh_table``.  Filter-combobox
         # spamming (or any code path that pumps the event loop during
@@ -122,8 +126,6 @@ class AttributeManagerSlots:
         self._combo_setting = False
 
         # Debounced refresh for the text filter.
-        from uitk.widgets.header import QtCore
-
         self._filter_timer = QtCore.QTimer()
         self._filter_timer.setSingleShot(True)
         self._filter_timer.setInterval(200)
@@ -241,7 +243,7 @@ class AttributeManagerSlots:
         self.controller.pin_targets(targets)
 
         if filter:
-            if filter in AttributeManager.FILTER_MAP:
+            if filter in Channels.FILTER_MAP:
                 cmb = getattr(self.ui, "cmb000", None)
                 if cmb is not None:
                     cmb.setCurrentText(filter)
@@ -251,7 +253,7 @@ class AttributeManagerSlots:
                 logging.getLogger(__name__).warning(
                     "launch(filter=%r) ignored — not a FILTER_MAP key. Valid: %s",
                     filter,
-                    sorted(AttributeManager.FILTER_MAP.keys()),
+                    sorted(Channels.FILTER_MAP.keys()),
                 )
 
         if search is not None:
@@ -292,6 +294,15 @@ class AttributeManagerSlots:
             setObjectName="chk_compact_view",
         )
         self._chk_compact.toggled.connect(self._on_toggle_compact_view)
+        self._chk_auto_fit = widget.menu.add(
+            "QCheckBox",
+            setText="Auto-fit Window",
+            setChecked=False,
+            setToolTip="Resize columns to fit contents and grow/shrink the "
+            "window to match on every refresh.",
+            setObjectName="chk_auto_fit",
+        )
+        self._chk_auto_fit.toggled.connect(self._on_toggle_auto_fit)
 
         # --- Selection ---
         widget.menu.add("Separator", setTitle="Selection")
@@ -336,7 +347,7 @@ class AttributeManagerSlots:
             setText="Instructions",
             setObjectName="btn_instructions",
             setToolTip=fmt(
-                title="Attribute Manager",
+                title="Channels",
                 body="Inspect, edit, and manage Maya node attributes.",
                 bullets=[
                     "Filter attributes by type: Custom, Keyable, Locked, Connected, etc.",
@@ -525,6 +536,92 @@ class AttributeManagerSlots:
         """Show or hide the Type column."""
         self.ui.tbl000.setColumnHidden(self.COL_TYPE, not visible)
 
+    def _on_toggle_auto_fit(self, _enabled):
+        """Re-apply column sizing when the auto-fit toggle changes."""
+        self._refresh_table(self.ui.tbl000)
+
+    def _autofit_window(self, widget):
+        """Resize the window so the table's content width fits exactly.
+
+        Runs only when ``Auto-fit Window`` is checked.  Deferred twice:
+        once to let ``_refresh_table``'s setUpdatesEnabled / signal-block
+        unwind, then a second tick so ``ResizeToContents`` columns have
+        applied their final widths before we measure them.
+        """
+        chk = getattr(self, "_chk_auto_fit", None)
+        if not (chk and chk.isChecked()):
+            return
+
+        def _do_fit():
+            try:
+                if not self._is_widget_alive(widget):
+                    return
+
+                win = widget.window()
+                if win is None:
+                    return
+
+                # Force only ResizeToContents columns to recompute — using
+                # ``widget.resizeColumnsToContents()`` would override the
+                # Fixed-width action columns (sized to row height by
+                # TableActions) and inflate them to icon-padding width,
+                # which masks the real content total.
+                QHV = self.sb.QtWidgets.QHeaderView
+                header = widget.horizontalHeader()
+                for col in range(widget.columnCount()):
+                    if (
+                        not widget.isColumnHidden(col)
+                        and header.sectionResizeMode(col) == QHV.ResizeToContents
+                    ):
+                        widget.resizeColumnToContents(col)
+
+                lay = win.layout()
+                if lay is not None:
+                    lay.activate()
+                cw = win.centralWidget() if hasattr(win, "centralWidget") else None
+                if cw is not None and cw.layout() is not None:
+                    cw.layout().activate()
+
+                header_len = header.length()
+                if header_len <= 0:
+                    return
+
+                # Width
+                vbar = widget.verticalScrollBar()
+                vsb_w = (
+                    vbar.sizeHint().width() if vbar and vbar.isVisible() else 0
+                )
+                fr_w = widget.frameWidth() * 2
+                chrome_w = max(win.width() - widget.viewport().width(), 0)
+                target_w = header_len + fr_w + vsb_w + chrome_w
+                target_w = max(target_w, win.minimumWidth())
+
+                # Height — sum of (visible) row heights + horizontal header
+                # height (when shown) + horizontal scrollbar (when shown).
+                rows_h = 0
+                for row in range(widget.rowCount()):
+                    if not widget.isRowHidden(row):
+                        rows_h += widget.rowHeight(row)
+                hhdr = widget.horizontalHeader()
+                hhdr_h = hhdr.height() if hhdr.isVisible() else 0
+                hbar = widget.horizontalScrollBar()
+                hsb_h = (
+                    hbar.sizeHint().height() if hbar and hbar.isVisible() else 0
+                )
+                fr_h = widget.frameWidth() * 2
+                chrome_h = max(win.height() - widget.viewport().height(), 0)
+                target_h = rows_h + hhdr_h + fr_h + hsb_h + chrome_h
+                target_h = max(target_h, win.minimumHeight())
+
+                if target_w != win.width() or target_h != win.height():
+                    win.resize(target_w, target_h)
+            except RuntimeError:
+                pass
+
+        QtCore.QTimer.singleShot(
+            0, lambda: QtCore.QTimer.singleShot(0, _do_fit)
+        )
+
     def _on_toggle_compact_view(self, enabled):
         """Toggle compact view: shorter rows, hide table header, swap txt001↔footer name."""
         leaving_compact = self._compact_view and not enabled
@@ -603,6 +700,14 @@ class AttributeManagerSlots:
         for row in range(widget.rowCount()):
             widget.setRowHeight(row, height)
 
+        # Re-fit action-column widths and icons to the new row height —
+        # without this, icons stay at their original size and clip in
+        # the shorter compact rows.
+        try:
+            widget.actions.update_for_row_height()
+        except AttributeError:
+            pass
+
     # ------------------------------------------------------------------
     # Target display (txt001) and footer warnings
     # ------------------------------------------------------------------
@@ -674,7 +779,7 @@ class AttributeManagerSlots:
         cycle as the name-filter / single-object toggles.
         """
         widget.addItems(
-            [k for k in AttributeManager.FILTER_MAP.keys() if not k.startswith("_")]
+            [k for k in Channels.FILTER_MAP.keys() if not k.startswith("_")]
         )
 
         clr = self.ACTION_COLOR_MAP
@@ -733,6 +838,7 @@ class AttributeManagerSlots:
             self._setup_action_columns(widget)
             self._setup_context_menu(widget)
             self._setup_scene_change_callbacks(widget)
+            self._setup_value_input(widget)
 
             try:
                 widget.destroyed.connect(self.cleanup_scene_callbacks)
@@ -749,10 +855,15 @@ class AttributeManagerSlots:
     def _wire_table_signals(self, widget):
         """Clear stale signal bindings and wire this instance's handlers.
 
-        Must be called exactly once per slots-instance lifetime (from
-        ``__init__``).  Every handler for ``cellChanged`` /
-        ``itemSelectionChanged`` that this class depends on is listed
-        here so the full signal contract is visible in one place.
+        Every handler for ``cellChanged`` / ``itemSelectionChanged`` /
+        scrub signals that this class depends on is listed here so the
+        full signal contract is visible in one place.
+
+        Idempotent: called from ``__init__`` *and* from ``tbl000_init``
+        on every UI show.  Re-wiring is mandatory because the QWidget
+        can outlive the slots instance, leaving stale bindings pointing
+        at a dead ``self``.  Disconnect-then-connect on every call so
+        each signal is bound to exactly the live handlers.
         """
         # cellChanged → attribute-value / rename dispatch.
         try:
@@ -767,6 +878,24 @@ class AttributeManagerSlots:
         except (RuntimeError, TypeError):
             pass
         widget.itemSelectionChanged.connect(self._on_table_selection_changed)
+
+        # Value-input signals (MMB scrub + wheel scroll).  Column
+        # registration lives in ``_setup_scrub_edit`` (one-time per
+        # widget); the connections belong here because the widget can
+        # persist across slots rebuilds while ``self`` does not.
+        for sig, slot in (
+            (getattr(widget, "cellScrubStarted", None), self._on_scrub_started),
+            (getattr(widget, "cellScrubMoved", None), self._on_scrub_moved),
+            (getattr(widget, "cellScrubFinished", None), self._on_scrub_finished),
+            (getattr(widget, "cellWheelScrolled", None), self._on_wheel_scrolled),
+        ):
+            if sig is None:
+                continue  # older TableWidget without the signal
+            try:
+                sig.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            sig.connect(slot)
         if self._footer_controller:
             widget.itemSelectionChanged.connect(self._footer_controller.update)
 
@@ -1038,7 +1167,7 @@ class AttributeManagerSlots:
             import logging
 
             logging.getLogger(__name__).debug(
-                "attribute_manager refresh failed", exc_info=True
+                "channels refresh failed", exc_info=True
             )
         finally:
             try:
@@ -1070,6 +1199,8 @@ class AttributeManagerSlots:
                 self._footer_controller.update()
             except Exception:
                 pass
+
+        self._autofit_window(widget)
 
     def _teardown_cell_widgets(self, widget):
         """Defer-destroy enum-combobox cell widgets before ``clear()``.
@@ -1237,14 +1368,20 @@ class AttributeManagerSlots:
         header.setSectionsMovable(False)
         QHV = self.sb.QtWidgets.QHeaderView
 
-        # Data columns — Name fits its content (right-aligned text then
-        # appears flush within whatever width the longest name demands).
+        chk = getattr(self, "_chk_auto_fit", None)
+        auto_fit = bool(chk and chk.isChecked())
+
+        # Name fits its content (right-aligned text appears flush within
+        # whatever width the longest name demands) regardless of mode.
         header.setSectionResizeMode(self.COL_NAME, QHV.ResizeToContents)
 
-        # Remaining data columns
-        header.setSectionResizeMode(self.COL_VALUE, QHV.Stretch)
-        header.setSectionResizeMode(self.COL_TYPE, QHV.Interactive)
-        widget.setColumnWidth(self.COL_TYPE, 80)
+        if auto_fit:
+            header.setSectionResizeMode(self.COL_VALUE, QHV.ResizeToContents)
+            header.setSectionResizeMode(self.COL_TYPE, QHV.ResizeToContents)
+        else:
+            header.setSectionResizeMode(self.COL_VALUE, QHV.Stretch)
+            header.setSectionResizeMode(self.COL_TYPE, QHV.Interactive)
+            widget.setColumnWidth(self.COL_TYPE, 80)
 
     # ------------------------------------------------------------------
     # Inline editing
@@ -1743,6 +1880,322 @@ class AttributeManagerSlots:
         self._refresh_table(self.ui.tbl000)
 
     # ------------------------------------------------------------------
+    # Value-cell input (MMB scrub, wheel scroll, single-click edit)
+    # ------------------------------------------------------------------
+
+    # Attribute storage types that accept numeric input (scrub or wheel).
+    # Includes both the user-facing "float"/"int" aliases and the raw
+    # Maya types returned by ``cmds.getAttr(plug, type=True)``.
+    _SCRUBBABLE_TYPES = frozenset({
+        "float", "int",
+        "double", "doubleAngle", "doubleLinear", "time",
+        "long", "short", "byte",
+    })
+
+    # Pixels per unit for the default (unmodified) scrub.  Modifiers
+    # multiply: Ctrl=0.1 (fine), Shift=10 (coarse).
+    _SCRUB_FLOAT_STEP = 0.01
+    _SCRUB_INT_PIXELS_PER_UNIT = 4
+
+    # Wheel-scroll step per Qt notch.  Modifiers select between three
+    # step sizes — see ``WHEEL_MOD_FINE`` and ``WHEEL_MOD_SMALLEST``
+    # below for the modifier mapping.  ``_WHEEL_SMALLEST_STEP`` should
+    # match the controller's display precision so the user can step
+    # the *visible* last decimal place — currently 4 decimals
+    # (``Channels._fmt_float`` default), so ``1e-4``.
+    _WHEEL_FLOAT_STEP = 0.1  # default (no modifier)
+    _WHEEL_SMALLEST_STEP = 0.0001  # ``WHEEL_MOD_SMALLEST`` modifier
+
+    # ------------------------------------------------------------------
+    # Wheel-scroll hotkeys (overrideable per app / per instance)
+    # ------------------------------------------------------------------
+    # Apps embedding this slots class can reassign these to fit their
+    # hotkey scheme — either as class-level overrides in a subclass or
+    # as instance assignment after construction.  Both are
+    # ``Qt.KeyboardModifier`` masks; matching uses ``(mods & MASK) ==
+    # MASK`` so combined modifiers (Ctrl+Alt) take priority over the
+    # less-specific Ctrl-only mapping.
+    WHEEL_MOD_FINE = QtCore.Qt.ControlModifier  # whole-number step
+    WHEEL_MOD_SMALLEST = (
+        QtCore.Qt.ControlModifier | QtCore.Qt.AltModifier
+    )  # smallest-decimal step
+
+    def _setup_value_input(self, widget):
+        """Enable MMB-drag scrub, wheel-scroll, and click-to-edit on the
+        value column.
+
+        Idempotent — registers per-column behaviors on the widget.
+        Signal connections are wired in :meth:`_wire_table_signals`
+        because the widget can outlive the slots instance.
+        """
+        widget.set_scrub_columns([self.COL_VALUE])
+        widget.set_wheel_scrub_columns([self.COL_VALUE])
+        widget.set_single_click_edit_columns([self.COL_VALUE])
+
+    def _on_scrub_started(self, row, col):
+        """Capture starting values for an MMB scrub-drag."""
+        if self._destroyed:
+            return
+        widget = self.ui.tbl000
+        name_item = widget.item(row, self.COL_NAME)
+        if not name_item:
+            return
+        attr_name = name_item.text().strip()
+        if not attr_name:
+            return
+
+        nodes = self.controller.get_selected_nodes()
+        if not nodes:
+            return
+
+        primary = nodes[0]
+        attr_type = self.controller.get_attr_type(primary, attr_name)
+        if attr_type not in self._SCRUBBABLE_TYPES:
+            return
+
+        # Snapshot current value per node so each drag step computes
+        # ``start + delta`` (avoids cumulative-rounding drift).
+        starts = {}
+        for node in nodes:
+            try:
+                if not cmds.attributeQuery(attr_name, node=node, exists=True):
+                    continue
+                if cmds.getAttr(f"{node}.{attr_name}", lock=True):
+                    continue
+                val = cmds.getAttr(f"{node}.{attr_name}")
+                if isinstance(val, (int, float)):
+                    starts[node] = float(val)
+            except Exception:
+                continue
+
+        if not starts:
+            return
+
+        cmds.undoInfo(openChunk=True, chunkName=f"Scrub {attr_name}")
+        self._scrub_state = {
+            "attr": attr_name,
+            "type": attr_type,
+            "starts": starts,
+            "is_int": attr_type in {"long", "short", "byte", "int"},
+        }
+
+    def _on_scrub_moved(self, row, col, dx, dy):
+        """Apply a delta to all snapshotted nodes for the active scrub."""
+        state = self._scrub_state
+        if not state or self._destroyed:
+            return
+
+        # Sensitivity modifiers — Ctrl=fine, Shift=coarse.  Read modifiers
+        # live from the application so the user can switch mid-drag.
+        mods = QtWidgets.QApplication.keyboardModifiers()
+        scale = 1.0
+        if mods & QtCore.Qt.ControlModifier:
+            scale *= 0.1
+        if mods & QtCore.Qt.ShiftModifier:
+            scale *= 10.0
+
+        if state["is_int"]:
+            delta = int(dx / self._SCRUB_INT_PIXELS_PER_UNIT * scale)
+        else:
+            delta = dx * self._SCRUB_FLOAT_STEP * scale
+
+        attr = state["attr"]
+        for node, start in state["starts"].items():
+            new_val = start + delta
+            if state["is_int"]:
+                new_val = int(round(new_val))
+            try:
+                cmds.setAttr(f"{node}.{attr}", new_val)
+            except Exception:
+                continue
+
+    def _on_scrub_finished(self, row, col):
+        """Close the undo chunk and clear scrub state."""
+        if self._scrub_state is not None:
+            try:
+                cmds.undoInfo(closeChunk=True)
+            except Exception:
+                pass
+            self._scrub_state = None
+
+    def _wheel_step(self, mods, is_int):
+        """Per-notch step size given the active modifier state.
+
+        Modifier precedence (most-specific first):
+        - ``WHEEL_MOD_SMALLEST`` (default Ctrl+Alt) → smallest decimal,
+          ignored for int attrs (already whole).
+        - ``WHEEL_MOD_FINE`` (default Ctrl) → whole-number step.
+        - none → ``_WHEEL_FLOAT_STEP`` for floats, ``1.0`` for ints.
+        """
+        if (
+            not is_int
+            and (mods & self.WHEEL_MOD_SMALLEST) == self.WHEEL_MOD_SMALLEST
+        ):
+            return self._WHEEL_SMALLEST_STEP
+        if (mods & self.WHEEL_MOD_FINE) == self.WHEEL_MOD_FINE:
+            return 1.0
+        return 1.0 if is_int else self._WHEEL_FLOAT_STEP
+
+    def _on_wheel_scrolled(self, row, col, steps):
+        """Adjust a numeric attribute by *steps* notches (signed).
+
+        Two paths.
+
+        **Edit mode** — when the cell has an open editor, it is the
+        user-visible source of truth.  Read its text, parse, add the
+        delta, write the new text back, and call ``cmds.setAttr`` to
+        match.  This single-direction flow avoids the model→editor
+        sync problems that plague the alternative (model.setText
+        followed by ``setEditorData`` is brittle on focused editors;
+        repaints are inconsistent across Qt styles).
+
+        **Display mode** — no editor open; read current value via
+        ``cmds.getAttr``, add delta, ``cmds.setAttr``, then refresh
+        the cell text via ``_on_attr_value_set`` (the async callback
+        path would also do this but only on the next idle, leaving
+        a visible lag).
+
+        Locked attrs and non-numeric types skip silently.
+        """
+        if self._destroyed or steps == 0:
+            return
+
+        widget = self.ui.tbl000
+        name_item = widget.item(row, self.COL_NAME)
+        if not name_item:
+            return
+        attr_name = name_item.text().strip()
+        if not attr_name:
+            return
+
+        nodes = self.controller.get_selected_nodes()
+        if not nodes:
+            return
+
+        primary = nodes[0]
+        attr_type = self.controller.get_attr_type(primary, attr_name)
+        if attr_type not in self._SCRUBBABLE_TYPES:
+            return
+
+        is_int = attr_type in {"long", "short", "byte", "int"}
+        mods = QtWidgets.QApplication.keyboardModifiers()
+        delta = self._wheel_step(mods, is_int) * steps
+
+        # Detect an open editor on the wheel-scrubbed cell.  If found,
+        # treat its text as the source of truth.
+        editor = None
+        if hasattr(widget, "active_editor"):
+            candidate = widget.active_editor()
+            cur_idx = widget.currentIndex()
+            if (
+                isinstance(candidate, QtWidgets.QLineEdit)
+                and cur_idx.isValid()
+                and cur_idx.row() == row
+                and cur_idx.column() == col
+            ):
+                editor = candidate
+
+        if editor is not None:
+            # ----- Edit-mode path -----
+            # Editor provides primary's source-of-truth value (it may
+            # include un-committed user edits).  Other selected nodes
+            # apply the delta to their *own* current Maya values so
+            # multi-select divergence is preserved — same per-node
+            # semantics as the display-mode path below.
+            try:
+                primary_cur = float(editor.text())
+            except (TypeError, ValueError):
+                # Editor text isn't numeric (mid-typing, etc.) — fall
+                # back to Maya's current value for primary.
+                cur_raw = self.controller.get_attr_value(primary, attr_name)
+                try:
+                    primary_cur = float(cur_raw) if cur_raw is not None else 0.0
+                except (TypeError, ValueError):
+                    primary_cur = 0.0
+
+            new_primary = primary_cur + delta
+            if is_int:
+                new_primary = int(round(new_primary))
+            new_text = self.controller.format_value(new_primary)
+
+            # Update the editor first so the user sees the change
+            # immediately, regardless of what happens to the model.
+            cursor_from_end = len(editor.text()) - editor.cursorPosition()
+            editor.blockSignals(True)
+            try:
+                editor.setText(new_text)
+            finally:
+                editor.blockSignals(False)
+            editor.setCursorPosition(max(0, len(new_text) - cursor_from_end))
+
+            # Apply per-node — primary takes the editor-derived value,
+            # others get ``their_cur + delta`` so divergence between
+            # selected nodes is retained across wheel notches.
+            cmds.undoInfo(openChunk=True, chunkName=f"Wheel {attr_name}")
+            try:
+                for node in nodes:
+                    try:
+                        if not cmds.attributeQuery(attr_name, node=node, exists=True):
+                            continue
+                        if cmds.getAttr(f"{node}.{attr_name}", lock=True):
+                            continue
+                        if node == primary:
+                            new_val = new_primary
+                        else:
+                            cur = cmds.getAttr(f"{node}.{attr_name}")
+                            if not isinstance(cur, (int, float)):
+                                continue
+                            new_val = cur + delta
+                            if is_int:
+                                new_val = int(round(new_val))
+                        cmds.setAttr(f"{node}.{attr_name}", new_val)
+                    except Exception:
+                        continue
+            finally:
+                cmds.undoInfo(closeChunk=True)
+            return
+
+        # ----- Display-mode path -----
+        # Pre-resolve targets so we don't open an empty undo chunk if
+        # nothing is going to change.
+        targets = []  # list of (node, current_value)
+        for node in nodes:
+            try:
+                if not cmds.attributeQuery(attr_name, node=node, exists=True):
+                    continue
+                if cmds.getAttr(f"{node}.{attr_name}", lock=True):
+                    continue
+                cur = cmds.getAttr(f"{node}.{attr_name}")
+                if not isinstance(cur, (int, float)):
+                    continue
+                targets.append((node, cur))
+            except Exception:
+                continue
+
+        if not targets:
+            return
+
+        cmds.undoInfo(openChunk=True, chunkName=f"Wheel {attr_name}")
+        try:
+            for node, cur in targets:
+                new_val = cur + delta
+                if is_int:
+                    new_val = int(round(new_val))
+                try:
+                    cmds.setAttr(f"{node}.{attr_name}", new_val)
+                except Exception:
+                    continue
+        finally:
+            cmds.undoInfo(closeChunk=True)
+
+        # Refresh the cell text synchronously so the user sees the
+        # change without waiting for the async callback to flush.
+        try:
+            self._on_attr_value_set(widget, attr_name)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
     # ScriptJob lifecycle
     # ------------------------------------------------------------------
 
@@ -1877,6 +2330,19 @@ class AttributeManagerSlots:
             except Exception:
                 pass
 
+        # Matrix-modified fires during interactive viewport manipulator
+        # drags (transform tools bypass setAttr and write the data block
+        # directly, so kAttributeSet only arrives on mouse-release).
+        # Routed through a values-only refresh — preserves selection /
+        # scroll and coalesces drag bursts into one UI pass per idle.
+        def _on_matrix_modified(*_args):
+            try:
+                if self._destroyed:
+                    return
+                self._schedule_values_only_refresh(widget)
+            except Exception:
+                pass
+
         mgr = ScriptJobManager.instance()
         sel = om2.MSelectionList()
         for node_name in nodes:
@@ -1896,6 +2362,22 @@ class AttributeManagerSlots:
                 token = mgr.add_om_callback(register_fn, mobj, callback, owner=self)
                 if token is not None:
                     self._attr_change_tokens.append(token)
+
+            # MDagMessage.addMatrixModifiedCallback wants an MDagPath;
+            # only DAG nodes have one.  Non-DAG nodes (shaders, utility
+            # nodes, …) skip silently.
+            try:
+                dag_path = om2.MDagPath.getAPathTo(mobj)
+            except Exception:
+                continue
+            token = mgr.add_om_callback(
+                om2.MDagMessage.addMatrixModifiedCallback,
+                dag_path,
+                _on_matrix_modified,
+                owner=self,
+            )
+            if token is not None:
+                self._attr_change_tokens.append(token)
 
     def _is_widget_alive(self, widget):
         """Return ``True`` if *widget*'s C++ pointer is still valid.
@@ -2051,7 +2533,7 @@ class AttributeManagerSlots:
 
         Driven by ``kAttributeLocked`` / ``kAttributeUnlocked`` messages so
         external lock toggles (channel box, scripts, other tools) keep
-        the attribute manager's lock icon in sync.  No full rebuild —
+        the Channels UI's lock icon in sync.  No full rebuild —
         preserves selection and scroll.
         """
         nodes = self.controller.get_selected_nodes()
@@ -2092,13 +2574,29 @@ class AttributeManagerSlots:
         existing rows in place so the user's selection and scroll position
         are preserved during scrubbing.
         """
-        # Coalesce bursts of timeChanged events.
-        if getattr(self, "_time_refresh_pending", False) or self._destroyed:
+        self._schedule_values_only_refresh(widget)
+
+    def _schedule_values_only_refresh(self, widget):
+        """Schedule a single deferred values-only update of the table.
+
+        Shared by ``timeChanged`` and viewport matrix-modified callbacks
+        — both want the same in-place refresh that preserves selection /
+        scroll.  Coalesces repeated calls (drag bursts collapse into one
+        UI pass per Qt event-loop tick).
+
+        Uses ``QTimer.singleShot(0, ...)`` rather than
+        ``cmds.evalDeferred`` because Maya's idle queue does *not* drain
+        during interactive viewport tool drags (Move/Rotate/Scale
+        manipulators) — values stay frozen until mouse-release.  Qt's
+        event loop *does* tick during drags (the viewport repaints
+        through it), so the Qt path keeps cells live during the drag.
+        """
+        if getattr(self, "_values_refresh_pending", False) or self._destroyed:
             return
-        self._time_refresh_pending = True
+        self._values_refresh_pending = True
 
         def _do():
-            self._time_refresh_pending = False
+            self._values_refresh_pending = False
             if self._destroyed:
                 return
             if not self._is_widget_alive(widget):
@@ -2109,7 +2607,7 @@ class AttributeManagerSlots:
             except Exception:
                 pass
 
-        cmds.evalDeferred(_do)
+        QtCore.QTimer.singleShot(0, _do)
 
     def _update_values_only(self, widget):
         """Update value cells and connection-state icons for current rows.
