@@ -1,23 +1,23 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Attribute Manager — Maya attribute query / mutation logic.
+"""Channels — Maya attribute query / mutation logic.
 
-``AttributeManager`` encapsulates all non-UI attribute operations:
-filtering, connection classification, table-data building, and
-mutation helpers.  The companion ``attribute_manager_slots`` module
-wraps this class in a Switchboard UI.
+``Channels`` encapsulates all non-UI attribute operations: filtering,
+connection classification, table-data building, and mutation helpers.
+The companion ``channels_slots`` module wraps this class in a
+Switchboard UI.
 """
 import maya.cmds as cmds
 
 from mayatk.node_utils.attributes._attributes import Attributes
 
 
-class AttributeManager:
+class Channels:
     """Maya attribute query / mutation logic.
 
     Encapsulates attribute querying, filtering, connection
-    classification, and mutation so that ``AttributeManagerSlots``
-    only handles UI wiring.
+    classification, and mutation so that ``ChannelsSlots`` only handles
+    UI wiring.
     """
 
     # Maps ComboBox items → kwargs for ``cmds.listAttr``.
@@ -106,8 +106,8 @@ class AttributeManager:
             If ``True`` the ``_invert`` flag is added so ``collect_attr_names``
             will return the complement set.
         """
-        kwargs = AttributeManager.FILTER_MAP.get(
-            filter_key, AttributeManager.FILTER_MAP["Custom"]
+        kwargs = Channels.FILTER_MAP.get(
+            filter_key, Channels.FILTER_MAP["Custom"]
         ).copy()
         if invert:
             kwargs["_invert"] = True
@@ -150,7 +150,7 @@ class AttributeManager:
                 common &= sk | sc
         elif custom_filter == "connected":
             # Attrs with incoming connections (not a native listAttr flag)
-            sets = [AttributeManager.query_connected_attrs(n) for n in nodes]
+            sets = [Channels.query_connected_attrs(n) for n in nodes]
             common = sets[0]
             for s in sets[1:]:
                 common &= s
@@ -194,7 +194,7 @@ class AttributeManager:
             common = vis_common - common
 
         if priority_sort or custom_filter == "channel_box":
-            return AttributeManager._sort_channel_box(common)
+            return Channels._sort_channel_box(common)
         return sorted(common)
 
     # Canonical channel-box attribute ordering:
@@ -517,13 +517,21 @@ class AttributeManager:
 
     @staticmethod
     def _fmt_float(val, decimals=4):
-        """Format a float with fixed *decimals* places.
+        """Format a float, stripping all trailing zeros and the trailing
+        decimal point if no fractional digits remain.
 
-        Fixed-width formatting (no trailing-zero stripping) so column-style
-        UIs and the test suite see consistent output: ``1.0`` → ``"1.0000"``,
-        ``1.23456789`` → ``"1.2346"``.
+        Examples (with default *decimals=4*):
+
+        - ``0.0`` → ``"0"``
+        - ``1.0`` → ``"1"``
+        - ``1.5`` → ``"1.5"``
+        - ``0.0001`` → ``"0.0001"``
+        - ``1.23456789`` → ``"1.2346"`` (rounded to 4 decimals)
         """
-        return f"{val:.{decimals}f}"
+        s = f"{val:.{decimals}f}"
+        if "." in s:
+            s = s.rstrip("0").rstrip(".")
+        return s
 
     @staticmethod
     def format_value(val):
@@ -533,10 +541,10 @@ class AttributeManager:
         if val is None:
             return ""
         if isinstance(val, float):
-            return AttributeManager._fmt_float(val)
+            return Channels._fmt_float(val)
         if isinstance(val, (list, tuple)):
             inner = ", ".join(
-                AttributeManager._fmt_float(v) if isinstance(v, float) else str(v)
+                Channels._fmt_float(v) if isinstance(v, float) else str(v)
                 for v in val
             )
             return f"({inner})"

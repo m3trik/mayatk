@@ -137,14 +137,14 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
         widget.menu.add("Separator", setTitle="Inspect")
         btn_attrs = widget.menu.add(
             "QPushButton",
-            setText="Attribute Manager",
-            setObjectName="btn_attribute_manager",
+            setText="Channels",
+            setObjectName="btn_channels",
             setToolTip=(
-                "Open the Attribute Manager pinned to the audio\n"
+                "Open the Channels UI pinned to the audio\n"
                 "carrier node, filtered to per-track attributes."
             ),
         )
-        btn_attrs.clicked.connect(self._launch_attribute_manager)
+        btn_attrs.clicked.connect(self._launch_channels)
 
         widget.menu.add("Separator", setTitle="About")
         widget.menu.add(
@@ -165,8 +165,8 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             ),
         )
 
-    def _launch_attribute_manager(self, *_):
-        """Open the Attribute Manager pinned to the audio carrier node."""
+    def _launch_channels(self, *_):
+        """Open the Channels UI pinned to the audio carrier node."""
         carrier = _audio_utils.CARRIER_NODE
         if not cmds.objExists(carrier):
             self.sb.message_box(
@@ -175,7 +175,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             )
             return
 
-        from mayatk.node_utils.attributes.attribute_manager import launch
+        from mayatk.node_utils.attributes.channels import launch
 
         launch(sb=self.sb, targets=[carrier], filter="Custom", search="audio_clip_*")
 

@@ -1,5 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
+import math
 from typing import List, Union, Optional
 
 try:
@@ -426,11 +427,17 @@ class EditUtils(ptk.HelpMixin):
             pivot (str or tuple): Defines the face selection pivot:
                 - `"center"` (default) → Bounding box center.
                 - `"xmin"`, `"xmax"`, `"ymin"`, `"ymax"`, `"zmin"`, `"zmax"` → Bounding box min/max.
-                - `"object"` → Uses the object's pivot.
-                - `"manip"` → Uses the manipulator pivot.
+                - `"object"` → Uses the object's pivot. (object-space frame)
+                - `"manip"` → Uses the manipulator pivot. (object-space frame)
+                - `"baked"` → Uses the baked rotate pivot. (object-space frame)
                 - `"world"` → Uses world origin (0,0,0).
-                - A tuple `(x, y, z)` → Uses a specified world-space pivot.
-            use_object_axes (bool): If True, uses object's local axes for face selection when pivot suggests object space.
+                - A tuple `(x, y, z)` → World-space pivot. Treated as object-space
+                  when ``use_object_axes`` is True (object axes were the active frame
+                  upstream).
+            use_object_axes (bool): When True, the pivot value is evaluated in the
+                object's local frame; faces are compared in object-space coordinates.
+                Only takes effect when ``pivot`` is an object-space type
+                (``"object"`` / ``"manip"`` / ``"baked"``) or a tuple.
 
         Returns:
             list: A list of faces on the specified axis.
@@ -443,73 +450,89 @@ class EditUtils(ptk.HelpMixin):
         axis = XformUtils.convert_axis(axis)
         axis_index = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}[axis]
 
-        # Determine if we should use object space
-        use_object_space = use_object_axes and pivot in {"object", "manip", "baked"}
+        # Pivot type controls the cutting frame. Object-y pivots and tuples
+        # carried over from object-space cuts evaluate in the object frame;
+        # everything else (world, center, bbox keys) stays in world space.
+        is_tuple_pivot = isinstance(pivot, (tuple, list)) and len(pivot) == 3
+        is_object_pivot = pivot in {"object", "manip", "baked"}
+        use_object_space = use_object_axes and (is_object_pivot or is_tuple_pivot)
 
         if use_object_space:
-            # For object space, we need to work in local coordinates
-            if pivot == "object":
-                # Object pivot in object space is at origin
-                pivot_value = 0.0
-            elif pivot == "manip":
-                # Get manip pivot in world space, then transform to object space
-                world_manip = XformUtils.get_operation_axis_pos(obj, "manip")
-                obj_matrix = obj.getMatrix(worldSpace=True)
-                local_manip = om.MPoint(world_manip) * obj_matrix.inverse()
-                pivot_value = float(local_manip[axis_index])
-            else:  # "baked" or other
-                # Transform world space pivot to object space
-                world_pivot = XformUtils.get_operation_axis_pos(obj, pivot)
-                obj_matrix = obj.getMatrix(worldSpace=True)
-                local_pivot = om.MPoint(world_pivot) * obj_matrix.inverse()
-                pivot_value = float(local_pivot[axis_index])
-
-            # Decide which side of pivot_value to keep
-            if axis.startswith("-"):
-                compare = lambda v: v <= pivot_value + 0.00001
-                bbox_values = ["xmax", "ymax", "zmax"]
+            obj_matrix = om.MMatrix(cmds.xform(obj, q=True, m=True, ws=True))
+            if is_tuple_pivot:
+                world_pt = [float(v) for v in pivot]
             else:
-                compare = lambda v: v >= pivot_value - 0.00001
-                bbox_values = ["xmin", "ymin", "zmin"]
-
-            bbox_value = bbox_values[axis_index]
-            relevant_faces = []
-
-            for shape in NodeUtils.get_shapes(obj):
-                if cmds.nodeType(shape) in ["mesh", "nurbsSurface", "subdiv"]:
-                    for face in cmds.ls(f"{shape}.f[*]", fl=True) or []:
-                        # Get face bounding box in object space
-                        bb_val = XformUtils.get_bounding_box(
-                            face, value=bbox_value, world_space=False
-                        )
-                        if compare(bb_val):
-                            relevant_faces.append(face)
-
+                world_pt = list(XformUtils.get_operation_axis_pos(obj, pivot))
+            local_pt = om.MPoint(*world_pt) * obj_matrix.inverse()
+            pivot_value = float(local_pt[axis_index])
+            face_world_space = False
         else:
-            # Original world space logic
             pivot_value = XformUtils.get_operation_axis_pos(obj, pivot, axis_index)
+            face_world_space = True
 
-            # Decide which side of pivot_value to keep
-            if axis.startswith("-"):
-                compare = lambda v: v <= pivot_value + 0.00001
-                bbox_values = ["xmax", "ymax", "zmax"]
-            else:
-                compare = lambda v: v >= pivot_value - 0.00001
-                bbox_values = ["xmin", "ymin", "zmin"]
+        if axis.startswith("-"):
+            compare = lambda v: v <= pivot_value + 1e-5
+            bbox_keys = ["xmax", "ymax", "zmax"]
+        else:
+            compare = lambda v: v >= pivot_value - 1e-5
+            bbox_keys = ["xmin", "ymin", "zmin"]
 
-            bbox_value = bbox_values[axis_index]
-            relevant_faces = []
-
-            for shape in NodeUtils.get_shapes(obj):
-                if cmds.nodeType(shape) in ["mesh", "nurbsSurface", "subdiv"]:
-                    for face in cmds.ls(f"{shape}.f[*]", fl=True) or []:
-                        bb_val = XformUtils.get_bounding_box(
-                            face, value=bbox_value, world_space=True
-                        )
-                        if compare(bb_val):
-                            relevant_faces.append(face)
+        bbox_value = bbox_keys[axis_index]
+        relevant_faces = []
+        for shape in NodeUtils.get_shapes(obj):
+            if cmds.nodeType(shape) in ["mesh", "nurbsSurface", "subdiv"]:
+                for face in cmds.ls(f"{shape}.f[*]", fl=True) or []:
+                    bb_val = XformUtils.get_bounding_box(
+                        face, value=bbox_value, world_space=face_world_space
+                    )
+                    if compare(bb_val):
+                        relevant_faces.append(face)
 
         return relevant_faces
+
+    @staticmethod
+    def _compose_cut_rotation(axis, world_matrix=None):
+        """Compose the polyCut ``ro`` (euler degrees, XYZ order) for the given axis.
+
+        The base rotation orients the default cut plane (normal = +Z) so that its
+        normal aligns with ``axis``. When ``world_matrix`` is supplied, the
+        object's world rotation is composed *after* the base rotation so the cut
+        plane follows object-local axes.
+
+        Parameters:
+            axis (str): One of 'x', '-x', 'y', '-y', 'z', '-z'.
+            world_matrix (om.MMatrix, optional): The object's world matrix. When
+                ``None`` the rotation is for world-aligned cutting.
+
+        Returns:
+            list[float]: Euler angles in degrees (XYZ order).
+        """
+        base_rotations = {
+            "x": (0.0, 90.0, 0.0),
+            "-x": (0.0, -90.0, 0.0),
+            "y": (-90.0, 0.0, 0.0),
+            "-y": (90.0, 0.0, 0.0),
+            "z": (0.0, 0.0, 0.0),
+            "-z": (0.0, 0.0, 180.0),
+        }
+        base = base_rotations.get(axis, (0.0, 0.0, 0.0))
+
+        if world_matrix is None:
+            return list(base)
+
+        base_eul = om.MEulerRotation(
+            math.radians(base[0]), math.radians(base[1]), math.radians(base[2])
+        )
+        obj_eul = om.MTransformationMatrix(world_matrix).rotation()
+        # Apply base first, then object rotation. With row-vector convention:
+        # point * base * obj == (point * base) * obj.
+        combined_mat = base_eul.asMatrix() * obj_eul.asMatrix()
+        combined = om.MTransformationMatrix(combined_mat).rotation()
+        return [
+            math.degrees(combined.x),
+            math.degrees(combined.y),
+            math.degrees(combined.z),
+        ]
 
     @classmethod
     @CoreUtils.undoable
@@ -528,196 +551,112 @@ class EditUtils(ptk.HelpMixin):
     ):
         """Cut objects along the specified axis.
 
+        The pivot type chooses the cutting frame:
+            - ``"object"`` / ``"manip"`` / ``"baked"`` → cuts follow the object's
+              local axes (so rotated objects are cut along their own X/Y/Z).
+            - ``"world"`` / ``"center"`` / ``"xmin"`` / etc. → cuts use world axes.
+            - tuple ``(x, y, z)`` → world-space pivot, world axes.
+
         Parameters:
             objects (str/obj/list): The object(s) to cut.
-            axis (str): The axis to cut along ('x', '-x', 'y', '-y', 'z', '-z'). Default is 'x'.
-            amount (int): The number of cuts to make. Default is 1.
-            pivot (str or tuple): Defines the cutting pivot (passed to get_operation_axis_pos).
-            offset (float): The offset amount from the pivot for the cut. Default is 0.
+            axis (str): The axis to cut along ('x', '-x', 'y', '-y', 'z', '-z').
+            amount (int): Number of cuts.
+            pivot (str or tuple): See above.
+            offset (float): Offset along the axis from the pivot.
             invert (bool): Invert the axis direction.
-            ortho (bool): Use orthographic projection.
-            delete (bool): If True, delete the faces on the specified axis. Default is False.
-            mirror (bool): If True, mirror the result after deletion using the cut position as the pivot.
-            use_object_axes (bool): If True, uses object's local axes for cutting direction when pivot is "object", "manip", or "baked".
-                If False, uses world axes (legacy behavior).
+            ortho (bool): Use the orthogonal axis.
+            delete (bool): Delete faces on the +axis half after cutting.
+            mirror (bool): When delete=True, mirror the surviving half across the cut.
+            use_object_axes (bool): Master switch for object-space behavior. When
+                False, all cuts use world axes regardless of pivot. Default True.
         """
         axis = XformUtils.convert_axis(axis, invert=invert, ortho=ortho)
         axis_index = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}[axis]
+        sign = -1 if axis.startswith("-") else 1
 
-        # Determine if we should use object axes for cutting
+        # The pivot type drives the cutting frame; ``use_object_axes`` is a
+        # global override that can force world space.
         use_object_space = use_object_axes and pivot in {"object", "manip", "baked"}
 
         for node in cmds.ls(as_strings(objects), type="transform", flatten=True):
             if NodeUtils.is_group(node):
                 continue
 
+            world_matrix = (
+                om.MMatrix(cmds.xform(node, q=True, m=True, ws=True))
+                if use_object_space
+                else None
+            )
+
+            bbox = XformUtils.get_bounding_box(
+                node,
+                "xmin|ymin|zmin|xmax|ymax|zmax",
+                world_space=not use_object_space,
+            )
+            if not bbox or len(bbox) < 6:
+                cmds.warning(
+                    f"Skipping cut_along_axis: Unable to retrieve bounding box for {node}"
+                )
+                continue
+
+            axis_length = bbox[axis_index + 3] - bbox[axis_index]
+            if axis_length == 0:
+                cmds.warning(
+                    f"Skipping cut: Axis length is zero along {axis} for {node}."
+                )
+                continue
+
+            # Pivot value in the cutting frame (object-local or world).
             if use_object_space:
-                # For object space cutting, we need to work in the object's local coordinate system
-                # Get the object's bounding box in object space
-                local_bbox = XformUtils.get_bounding_box(
-                    node, "xmin|ymin|zmin|xmax|ymax|zmax", world_space=False
-                )
-                if not local_bbox or len(local_bbox) < 6:
-                    cmds.warning(
-                        f"Skipping cut_along_axis: Unable to retrieve local bounding box for {node}"
-                    )
-                    continue
-
-                axis_length = local_bbox[axis_index + 3] - local_bbox[axis_index]
-                if axis_length == 0:
-                    cmds.warning(
-                        f"Skipping cut: Local axis length is zero along {axis} for {node}."
-                    )
-                    continue
-
-                # Get pivot position in object space
-                if pivot == "object":
-                    # Object pivot in object space is at origin
-                    pivot_value = 0.0
-                elif pivot == "manip":
-                    # Get manip pivot in world space, then transform to object space
-                    world_manip = XformUtils.get_operation_axis_pos(node, "manip")
-                    obj_matrix = node.getMatrix(worldSpace=True)
-                    local_manip = om.MPoint(world_manip) * obj_matrix.inverse()
-                    pivot_value = float(local_manip[axis_index])
-                else:  # "baked" or other object-space pivots
-                    # Transform world space pivot to object space
-                    world_pivot = XformUtils.get_operation_axis_pos(node, pivot)
-                    obj_matrix = node.getMatrix(worldSpace=True)
-                    local_pivot = om.MPoint(world_pivot) * obj_matrix.inverse()
-                    pivot_value = float(local_pivot[axis_index])
-
-                # Apply offset in object space
-                sign = -1 if axis.startswith("-") else 1
-                pivot_value += offset * sign
-
-                cut_spacing = axis_length / (amount + 1)
-
-                # For object space, use object-aligned cutting planes
-                # The rotation should be relative to the object's orientation
-                cut_positions = []
-                for i in range(amount):
-                    # Calculate cut position in object space
-                    local_cut_position = list(local_bbox[:3])
-                    local_cut_position[axis_index] = (
-                        pivot_value
-                        - ((amount - 1) * cut_spacing / 2)
-                        + (cut_spacing * i)
-                    )
-                    cut_positions.append(local_cut_position[axis_index])
-
-                    # Transform cut position to world space for polyCut
-                    obj_matrix = node.getMatrix(worldSpace=True)
-                    world_cut_position = list(
-                        om.MPoint(local_cut_position) * obj_matrix
-                    )
-
-                    # Calculate rotation for object-aligned cutting plane
-                    # Get the object's rotation matrix components
-                    obj_rotation = node.getRotation(space="world")
-
-                    # Base rotations for each axis (in object space)
-                    base_rotations = {
-                        "x": (0, 90, 0),
-                        "-x": (0, -90, 0),
-                        "y": (-90, 0, 0),
-                        "-y": (90, 0, 0),
-                        "z": (0, 0, 0),
-                        "-z": (0, 0, 180),
-                    }
-                    base_rotation = base_rotations.get(axis, (0, 0, 0))
-
-                    # Combine base rotation with object rotation
-                    combined_rotation = [
-                        base_rotation[i] + obj_rotation[i] for i in range(3)
-                    ]
-
-                    cmds.polyCut(
-                        node,
-                        df=False,
-                        pc=world_cut_position,
-                        ro=combined_rotation,
-                        ch=True,
-                    )
-
+                world_pivot = list(XformUtils.get_operation_axis_pos(node, pivot))
+                local_pivot = om.MPoint(*world_pivot) * world_matrix.inverse()
+                pivot_value = float(local_pivot[axis_index])
+            elif isinstance(pivot, (tuple, list)) and len(pivot) == 3:
+                pivot_value = float(pivot[axis_index])
             else:
-                # Original world space cutting logic
-                bounding_box = XformUtils.get_bounding_box(
-                    node, "xmin|ymin|zmin|xmax|ymax|zmax", True
-                )
-                if not bounding_box or len(bounding_box) < 6:
-                    cmds.warning(
-                        f"Skipping cut_along_axis: Unable to retrieve bounding box for {node}"
-                    )
-                    continue
-
-                axis_length = bounding_box[axis_index + 3] - bounding_box[axis_index]
-                if axis_length == 0:
-                    cmds.warning(
-                        f"Skipping cut: Axis length is zero along {axis} for {node}."
-                    )
-                    continue
-
-                # Get pivot position from get_operation_axis_pos
                 pivot_value = XformUtils.get_operation_axis_pos(node, pivot, axis_index)
 
-                # Apply offset after resolving pivot
-                sign = -1 if axis.startswith("-") else 1
-                pivot_value += offset * sign
+            pivot_value += offset * sign
+            cut_spacing = axis_length / (amount + 1)
+            rotation = cls._compose_cut_rotation(axis, world_matrix)
 
-                cut_spacing = axis_length / (amount + 1)
+            cut_positions = []
+            for i in range(amount):
+                # bbox min as anchor for non-axis components — any point on the
+                # cut plane works since rotation alone defines orientation.
+                cut_point = list(bbox[:3])
+                cut_point[axis_index] = (
+                    pivot_value
+                    - ((amount - 1) * cut_spacing / 2)
+                    + (cut_spacing * i)
+                )
+                cut_positions.append(cut_point[axis_index])
 
-                # Rotation dictionary for world space
-                rotations = {
-                    "x": (0, 90, 0),
-                    "-x": (0, -90, 0),
-                    "y": (-90, 0, 0),
-                    "-y": (90, 0, 0),
-                    "z": (0, 0, 0),
-                    "-z": (0, 0, 180),
-                }
-                rotation = rotations.get(axis, (0, 0, 0))
+                if use_object_space:
+                    world_cut_point = list(om.MPoint(*cut_point) * world_matrix)[:3]
+                else:
+                    world_cut_point = cut_point
 
-                cut_positions = []
-                for i in range(amount):
-                    cut_position = list(bounding_box[:3])
-                    cut_position[axis_index] = (
-                        pivot_value
-                        - ((amount - 1) * cut_spacing / 2)
-                        + (cut_spacing * i)
-                    )
-                    cut_positions.append(
-                        cut_position[axis_index]
-                    )  # Store cut positions
-
-                    cmds.polyCut(node, df=False, pc=cut_position, ro=rotation, ch=True)
+                cmds.polyCut(
+                    node, df=False, pc=world_cut_point, ro=rotation, ch=True
+                )
 
             if delete:
+                deepest_cut = cut_positions[-1] if sign == 1 else cut_positions[0]
+                pivot_point = list(bbox[:3])
+                pivot_point[axis_index] = deepest_cut
+
                 if use_object_space:
-                    # For object space, create a tuple for the adjusted pivot
-                    adjusted_pivot = [0.0, 0.0, 0.0]  # Object space origin
-                    adjusted_pivot[axis_index] = (
-                        cut_positions[-1] if sign == 1 else cut_positions[0]
-                    )
-                    # Transform to world space for the delete operation
-                    obj_matrix = node.getMatrix(worldSpace=True)
-                    world_adjusted_pivot = list(
-                        om.MPoint(adjusted_pivot) * obj_matrix
-                    )
+                    world_pivot_point = list(
+                        om.MPoint(*pivot_point) * world_matrix
+                    )[:3]
                 else:
-                    # Original world space logic
-                    adjusted_pivot = list(
-                        XformUtils.get_operation_axis_pos(node, pivot)
-                    )
-                    adjusted_pivot[axis_index] = (
-                        cut_positions[-1] if sign == 1 else cut_positions[0]
-                    )
-                    world_adjusted_pivot = adjusted_pivot
+                    world_pivot_point = pivot_point
 
                 cls.delete_along_axis(
                     node,
                     axis,
-                    pivot=tuple(world_adjusted_pivot),
+                    pivot=tuple(world_pivot_point),
                     delete_history=False,
                     mirror=mirror,
                     use_object_axes=use_object_axes,
