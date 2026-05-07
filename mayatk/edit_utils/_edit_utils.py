@@ -149,19 +149,30 @@ class EditUtils(ptk.HelpMixin):
     def separate_objects(
         objects=None,
         by_material: bool = False,
+        group_by_material: bool = False,
         center_pivots: bool = True,
         rename: bool = False,
     ) -> List:
         """Separate meshes into individual objects.
 
         Args:
-            objects (list, optional): Mesh transforms to process. Defaults to selection.
-            by_material (bool): If True, also separate by material assignments.
-            center_pivots (bool): If True, center pivots on resulting objects.
-            rename (bool): If True, rename resulting objects using original name and location suffix.
+            objects: Mesh transforms to process. Defaults to selection.
+            by_material: If True, ensure each result has exactly one material —
+                faces of each non-residual material are detached into their own
+                shell before separation, so a connected mesh with multiple
+                materials still splits cleanly.
+            group_by_material: If True, parent the results under per-material
+                transform groups (mirror of
+                ``combine_objects(group_by_material=True)``). When this is set
+                the return value is the list of new groups instead of the
+                separated meshes.
+            center_pivots: If True, center pivots on resulting transforms.
+            rename: If True, rename resulting objects using the original name
+                plus a location-based suffix.
 
         Returns:
-            list: List of separated transform nodes.
+            List of separated transform nodes — or, when ``group_by_material``
+            is True, the list of created group transforms.
         """
         if objects is None:
             objects = cmds.ls(sl=True, objectsOnly=True)
@@ -170,57 +181,49 @@ class EditUtils(ptk.HelpMixin):
             cmds.warning("Nothing selected. Operation requires an object selection.")
             return []
 
-        separated_objects = []
+        separated_objects: List[str] = []
 
         for obj in cmds.ls(as_strings(objects), objectsOnly=True, transforms=True):
             original_name = str(obj).split("|")[-1]
-            current_results = []
+            current_results: List[str] = []
             separated = False
 
-            # Strategy 1: Native Material Separation
+            # Material-based pre-pass: detach each non-residual material's
+            # faces into their own shell so the subsequent polySeparate
+            # produces one transform per material. Without this, a connected
+            # multi-material mesh would not split, and a mesh with disjoint
+            # shells that each carry multiple materials would only split per
+            # shell.
             if by_material:
                 mats = MatUtils.get_mats(obj, as_strings=True)
                 if mats and len(mats) > 1:
-                    try:
-                        # Note: mat=True in polySeparate splits disjoint shells AND materials
-                        sep = cmds.polySeparate(obj, ch=False)
-                        if sep:
-                            current_results = [s for s in sep]
-                            separated = True
-                    except Exception:
-                        pass
+                    chipped = False
+                    for mat in mats[:-1]:
+                        try:
+                            faces = MatUtils.find_by_mat_id(mat, [obj], shell=False)
+                            if faces:
+                                cmds.polyChipOff(
+                                    faces, dup=False, kft=True, ch=True, off=0
+                                )
+                                chipped = True
+                        except Exception as e:
+                            cmds.warning(
+                                f"polyChipOff failed for '{obj}' / '{mat}': {e}"
+                            )
+                    if chipped:
+                        cmds.delete(obj, ch=True)
 
-                    # Strategy 2: Manual Material Hull Separation (Fallback)
-                    if not separated:
-                        valid_operation = False
-                        # Optimization: We only need to detach N-1 materials
-                        for mat in mats[:-1]:
-                            try:
-                                faces = MatUtils.find_by_mat_id(mat, [obj], shell=False)
-                                if faces:
-                                    cmds.polyChipOff(
-                                        faces, dup=False, kft=True, ch=True, off=0
-                                    )
-                                    valid_operation = True
-                            except Exception:
-                                pass
+            # Split disjoint shells. After the by_material pre-pass these
+            # include one shell per material; otherwise it splits whatever
+            # disjoint shells already existed on the input mesh.
+            try:
+                sep = cmds.polySeparate(obj, ch=False)
+                if sep:
+                    current_results = list(sep)
+                    separated = True
+            except Exception:
+                pass
 
-                        if valid_operation:
-                            cmds.delete(obj, ch=True)
-                            # Fall through to standard separate to split the now-detached shells
-
-            # Strategy 3: Standard Separation (Disjoint Shells)
-            # Run if no separation has occurred yet (e.g. standard mode, or material separation fallback)
-            if not separated:
-                try:
-                    sep = cmds.polySeparate(obj, ch=False)
-                    if sep:
-                        current_results = [s for s in sep]
-                        separated = True
-                except Exception:
-                    pass
-
-            # If no separation occurred, keep original
             if not separated:
                 current_results = [obj]
 
@@ -261,7 +264,39 @@ class EditUtils(ptk.HelpMixin):
 
             separated_objects.extend(current_results)
 
+        if group_by_material and separated_objects:
+            return EditUtils._group_results_by_material(separated_objects)
+
         return separated_objects
+
+    @staticmethod
+    def _group_results_by_material(objects: List[str]) -> List[str]:
+        """Parent ``objects`` under per-material transform groups.
+
+        Returns the list of group transforms (one per unique material key).
+        """
+        buckets = MatUtils.group_objects_by_material(objects)
+        groups: List[str] = []
+        for mat_key, members in buckets.items():
+            members = [m for m in members if cmds.objExists(m)]
+            if not members:
+                continue
+            if isinstance(mat_key, tuple):
+                label = "_".join(str(m).split("|")[-1].split(":")[-1] for m in mat_key)
+            else:
+                label = str(mat_key).split("|")[-1].split(":")[-1]
+            grp = cmds.group(empty=True, name=f"{label}_grp")
+            for m in members:
+                try:
+                    cmds.parent(m, grp)
+                except Exception as e:
+                    cmds.warning(f"Failed to parent {m} under {grp}: {e}")
+            try:
+                cmds.xform(grp, centerPivots=True)
+            except Exception:
+                pass
+            groups.append(grp)
+        return groups
 
     @staticmethod
     def merge_vertices(objects, tolerance=0.001, selected_only=False):

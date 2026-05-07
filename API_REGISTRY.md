@@ -2,13 +2,14 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-05-01_
+_Generated: 2026-05-07_
 
 ## Index
 
 - [`anim_utils/_anim_utils.py`](#anim_utils--_anim_utils)
 - [`anim_utils/blendshape_animator/_blendshape_animator.py`](#anim_utils--blendshape_animator--_blendshape_animator) — Main workflow facade for blendShape morph-animation creation, editing, and export.
 - [`anim_utils/blendshape_animator/applicator.py`](#anim_utils--blendshape_animator--applicator) — Applies tween mesh edits back to blendShape in-between targets.
+- [`anim_utils/blendshape_animator/blendshape_animator_slots.py`](#anim_utils--blendshape_animator--blendshape_animator_slots) — Switchboard slots controller for blendshape_animator.ui.
 - [`anim_utils/blendshape_animator/creator.py`](#anim_utils--blendshape_animator--creator) — Creates in-between target meshes for custom blendShape animation curves.
 - [`anim_utils/blendshape_animator/helpers.py`](#anim_utils--blendshape_animator--helpers) — Shared helpers internal to the blendshape_animator subpackage.
 - [`anim_utils/blendshape_animator/keyframes.py`](#anim_utils--blendshape_animator--keyframes) — Core blendShape keyframe animation operations.
@@ -127,9 +128,9 @@ _Generated: 2026-05-01_
 - [`mat_utils/texture_path_editor.py`](#mat_utils--texture_path_editor)
 - [`node_utils/_node_utils.py`](#node_utils--_node_utils)
 - [`node_utils/attributes/_attributes.py`](#node_utils--attributes--_attributes) — Consolidated attribute utilities for Maya.
-- [`node_utils/attributes/attribute_manager/__init__.py`](#node_utils--attributes--attribute_manager--__init__) — Attribute Manager — Switchboard UI for inspecting and editing Maya attributes.
-- [`node_utils/attributes/attribute_manager/_attribute_manager.py`](#node_utils--attributes--attribute_manager--_attribute_manager) — Attribute Manager — Maya attribute query / mutation logic.
-- [`node_utils/attributes/attribute_manager/attribute_manager_slots.py`](#node_utils--attributes--attribute_manager--attribute_manager_slots) — UI slots for the Attribute Manager.
+- [`node_utils/attributes/channels/__init__.py`](#node_utils--attributes--channels--__init__) — Channels — Switchboard UI for inspecting and editing Maya attributes.
+- [`node_utils/attributes/channels/_channels.py`](#node_utils--attributes--channels--_channels) — Channels — Maya attribute query / mutation logic.
+- [`node_utils/attributes/channels/channels_slots.py`](#node_utils--attributes--channels--channels_slots) — UI slots for the Channels UI.
 - [`node_utils/attributes/event_triggers.py`](#node_utils--attributes--event_triggers) — Per-object event trigger attributes for game-engine export.
 - [`node_utils/data_nodes.py`](#node_utils--data_nodes)
 - [`nurbs_utils/_nurbs_utils.py`](#nurbs_utils--_nurbs_utils)
@@ -143,6 +144,7 @@ _Generated: 2026-05-01_
 - [`ui_utils/_ui_utils.py`](#ui_utils--_ui_utils)
 - [`ui_utils/calculator.py`](#ui_utils--calculator)
 - [`ui_utils/channel_box.py`](#ui_utils--channel_box) — Programmatic access to Maya's Channel Box.
+- [`ui_utils/hotkey_collisions.py`](#ui_utils--hotkey_collisions) — Maya hotkey collision checker for the uitk HotkeyEditor.
 - [`ui_utils/maya_native_menus.py`](#ui_utils--maya_native_menus)
 - [`ui_utils/maya_ui_handler.py`](#ui_utils--maya_ui_handler)
 - [`ui_utils/node_icons.py`](#ui_utils--node_icons) — Reusable helper for resolving Maya node icons at runtime.
@@ -226,6 +228,29 @@ Applies tween mesh edits back to blendShape in-between targets.
 - **[`class Applicator(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/applicator.py#L24)** — Applies tween mesh edits back to blendShape in-between targets.
   - `Applicator.validate_topology(self, tweens: List[Target]) -> List[Target]` — Filter ``tweens`` to those matching base mesh vertex count.
   - `Applicator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]` — Apply tween mesh edits to blendShape in-between targets.
+
+<a id="anim_utils--blendshape_animator--blendshape_animator_slots"></a>
+### `anim_utils/blendshape_animator/blendshape_animator_slots.py`
+
+Switchboard slots controller for blendshape_animator.ui.
+
+- **[`class BlendshapeAnimatorSlots(BlendshapeAnimator)`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L57)** — Controller wiring blendshape_animator.ui to the BlendshapeAnimator domain class.
+  - `BlendshapeAnimatorSlots.header_init(self, widget) -> None` — Configure header buttons + about menu.
+  - `BlendshapeAnimatorSlots.b000_init(self, widget) -> None` — Create Setup button — option_box exposes alternative entrypoints.
+  - `BlendshapeAnimatorSlots.b000(self, widget) -> None` — Create Setup.
+  - `BlendshapeAnimatorSlots.cmb000_init(self, widget) -> None` — Populate the edit-mode combo.
+  - `BlendshapeAnimatorSlots.le001_init(self, widget) -> None` — CSV weights field — option_box menu offers preset lists.
+  - `BlendshapeAnimatorSlots.b001_init(self, widget) -> None` — Add Tweens — option_box exposes count + group / prefix overrides.
+  - `BlendshapeAnimatorSlots.b001(self, widget) -> None` — Add Tweens — dispatches by mode.
+  - `BlendshapeAnimatorSlots.b003(self, widget) -> None` — Diagnose Topology.
+  - `BlendshapeAnimatorSlots.b004_init(self, widget) -> None` — Cleanup Topology Mismatches — option_box for the two flags.
+  - `BlendshapeAnimatorSlots.b004(self, widget) -> None`
+  - `BlendshapeAnimatorSlots.b005(self, widget) -> None` — Recover Animation.
+  - `BlendshapeAnimatorSlots.b006_init(self, widget) -> None` — Apply All Edits — option_box for skip_duplicates, validate_topology.
+  - `BlendshapeAnimatorSlots.b006(self, widget) -> None` — Apply All Edits — bulk apply with optional flags from the option_box.
+  - `BlendshapeAnimatorSlots.b007(self, widget) -> None` — Remove Target Mesh.
+  - `BlendshapeAnimatorSlots.b008_init(self, widget) -> None` — Finalize for Export — option_box for the four boolean flags.
+  - `BlendshapeAnimatorSlots.b008(self, widget) -> None`
 
 <a id="anim_utils--blendshape_animator--creator"></a>
 ### `anim_utils/blendshape_animator/creator.py`
@@ -1194,7 +1219,7 @@ Centralized Maya event subscription manager.
 <a id="edit_utils--_edit_utils"></a>
 ### `edit_utils/_edit_utils.py`
 
-- **[`class EditUtils(ptk.HelpMixin)`](mayatk/mayatk/edit_utils/_edit_utils.py#L27)**
+- **[`class EditUtils(ptk.HelpMixin)`](mayatk/mayatk/edit_utils/_edit_utils.py#L28)**
   - `EditUtils.combine_objects(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)` *(static)* — Combine multiple meshes.
   - `EditUtils.group_objects(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditUtils.separate_objects(objects=None, by_material: bool = False, center_pivots: bool = True, rename: bool = False) -> List` *(static)* — Separate meshes into individual objects.
@@ -1351,7 +1376,7 @@ Centralized Maya event subscription manager.
   - `DisplayMacros.m_material_override()` *(static)* — Toggle Material Override
   - `DisplayMacros.m_shading(cls) -> None` *(class)* — Toggles viewport display mode between wireframe, smooth shaded with textures off,
   - `DisplayMacros.m_lighting(cls) -> None` *(class)* — Toggles viewport lighting between different states: default, all lights, active lights,
-- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L694)**
+- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L697)**
   - `EditMacros.m_group(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditMacros.m_combine(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)` *(static)* — Combine multiple meshes.
   - `EditMacros.m_boolean(objects, repair_mesh=True, keep_boolean=True, **kwargs)` *(static)* — Perform a boolean operation on two meshes using cmds, managing shorthand and full parameter names d…
@@ -1359,7 +1384,7 @@ Centralized Maya event subscription manager.
   - `EditMacros.m_paste_and_rename() -> None` *(static)* — Paste and rename by removing 'pasted__' prefix and reference file names,
   - `EditMacros.m_multi_component() -> None` *(static)* — Multi-Component Selection.
   - `EditMacros.m_merge_vertices(objects, tolerance=0.001) -> None` *(static)* — Merge Vertices.
-- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L941)**
+- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L944)**
   - `SelectionMacros.m_object_selection() -> None` *(static)* — Set object selection mask.
   - `SelectionMacros.m_vertex_selection() -> None` *(static)* — Set vertex selection mask.
   - `SelectionMacros.m_edge_selection() -> None` *(static)* — Set edge selection mask.
@@ -1368,12 +1393,12 @@ Centralized Maya event subscription manager.
   - `SelectionMacros.m_toggle_selectability(objects)` *(static)* — Toggle selectability of the given objects.
   - `SelectionMacros.m_toggle_UV_select_type() -> None` *(static)* — Toggles between UV shell and UV component selection.
   - `SelectionMacros.m_invert_component_selection() -> None` *(static)* — Invert the component selection on the currently selected objects.
-- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1112)**
+- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1105)**
   - `UiMacros.m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None` *(static)* — Toggle UI toolbars and menu bar in sync.
-- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L1148)**
+- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L1141)**
   - `AnimationMacros.m_set_selected_keys(objects) -> None` *(static)* — Set keys for any attributes (channels) that are selected in the channel box.
   - `AnimationMacros.m_unset_selected_keys(objects) -> None` *(static)* — Un-set keys for any attributes (channels) that are selected in the channel box.
-- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L1176)**
+- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L1168)**
 
 <a id="edit_utils--mesh_graph"></a>
 ### `edit_utils/mesh_graph.py`
@@ -1747,8 +1772,11 @@ Maya Connection Module
   - `ReferenceManager.add_reference(self, namespace: str, file_path: str) -> bool`
   - `ReferenceManager.import_references(self, namespaces=None, remove_namespace=False)` — Import referenced objects into the scene.
   - `ReferenceManager.update_references(self)` — Update all references to reflect the latest changes from the original files.
+  - `ReferenceManager.get_reference_top_transforms(self, ref)` — Return top-level (parent-less) transforms belonging to the given reference.
+  - `ReferenceManager.get_reference_display_mode(self, ref) -> str` — Return the active display mode for the reference's top-level transforms.
+  - `ReferenceManager.set_reference_display_mode(self, ref, mode: str) -> bool` — Set the display override mode on the reference's top-level transforms.
   - `ReferenceManager.remove_references(self, namespaces=None)` — Remove references based on their namespaces.
-- **[`class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L440)** — Controller that bridges Maya reference functionality with UI interactions.
+- **[`class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L546)** — Controller that bridges Maya reference functionality with UI interactions.
   - `ReferenceManagerController.current_working_dir(self)` *(property)*
   - `ReferenceManagerController.current_working_dir(self, value)`
   - `ReferenceManagerController.block_table_selection_method(method)`
@@ -1769,7 +1797,7 @@ Maya Connection Module
   - `ReferenceManagerController.save_scene(self)` — Save the current scene to the workspace, prompting for a name.
   - `ReferenceManagerController.rename_scene(self)` — Rename the selected scene file.
   - `ReferenceManagerController.delete_scene(self)` — Delete the selected scene file.
-- **[`class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L1728)** — UI event handlers and widget initialization for the Reference Manager interface.
+- **[`class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L1865)** — UI event handlers and widget initialization for the Reference Manager interface.
   - `ReferenceManagerSlots.header_init(self, widget)` — Initialize the header for the reference manager.
   - `ReferenceManagerSlots.tbl000_init(self, widget)`
   - `ReferenceManagerSlots.tbl000_item_double_clicked(self, item)` — Handle double-click to prepare item for editing.
@@ -1815,7 +1843,7 @@ Maya Connection Module
   - `SceneExporter.close_file_handlers(self)` — Close and remove file handlers after logging is complete.
   - `SceneExporter.load_fbx_export_preset(self, preset_file: str = None, verify: bool = False) -> Optional[dict]` — Load an FBX export preset and optionally verify it.
   - `SceneExporter.verify_fbx_preset(self) -> dict` — Verify a set of predefined FBX export settings and log their values.
-- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L428)**
+- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L439)**
   - `SceneExporterSlots.workspace(self) -> Optional[str]` *(property)*
   - `SceneExporterSlots.presets(self) -> Dict[str, Optional[str]]` *(property)* — Return available presets, using cached values if the preset directory has not changed.
   - `SceneExporterSlots.header_init(self, widget)` — Initialize the header widget.
@@ -1844,7 +1872,7 @@ Maya Connection Module
 <a id="env_utils--scene_exporter--task_manager"></a>
 ### `env_utils/scene_exporter/task_manager.py`
 
-- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L999)** — Contains all task-related UI definitions for the Scene Exporter.
+- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L1032)** — Contains all task-related UI definitions for the Scene Exporter.
   - `TaskManager.objects(self)` *(property)*
   - `TaskManager.objects(self, value)` — Invalidate the materials cache whenever objects change.
   - `TaskManager.task_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the task definitions for the UI.
@@ -1939,11 +1967,12 @@ Maya Connection Module
 
 - **[`class MatUtilsInternals(ptk.HelpMixin)`](mayatk/mayatk/mat_utils/_mat_utils.py#L31)** — Internal helper utilities shared across MatUtils operations.
   - `MatUtilsInternals.get_texture_file_node(material, attr_name, _depth=0)` *(static)* — Locate the file texture node feeding a material attribute.
-- **[`class MatUtils(MatUtilsInternals)`](mayatk/mayatk/mat_utils/_mat_utils.py#L267)**
+- **[`class MatUtils(MatUtilsInternals)`](mayatk/mayatk/mat_utils/_mat_utils.py#L277)**
   - `MatUtils.resolve_path(path: str) -> Union[str, None]` *(static)* — Resolves a texture path by expanding env vars, checking workspace, and handling UDIMs.
   - `MatUtils.get_mats(objs=None, as_strings=True, mat_type=None) -> List[str]` *(static)* — Returns the set of materials assigned to a given list of objects or components.
   - `MatUtils.group_objects_by_material(objects, cluster_by_distance=False, threshold=10000.0)` *(static)* — Groups objects based on their assigned material(s).
-  - `MatUtils.get_texture_info(cls, objects=None, materials=None, file_nodes=None, texture_names=None)` *(class)* — Get information about texture files.
+  - `MatUtils.get_texture_paths(cls, objects: Optional[List[Any]] = None, materials: Optional[List[Any]] = None, file_nodes: Optional[List[Any]] = None, texture_names: Optional[List[str]] = None, absolute: bool = True) -> List[str]` *(class)* — Resolve unique texture file paths for the given scope.
+  - `MatUtils.get_texture_info(cls, objects=None, materials=None, file_nodes=None, texture_names=None)` *(class)* — Get image metadata (size, mode, format) for texture files in scope.
   - `MatUtils.get_scene_mats(inc=None, exc=None, node_type=None, sort: bool = False, as_dict: bool = False, **filter_kwargs)` *(static)* — Retrieves all materials from the current scene, with flexible name/type filtering.
   - `MatUtils.get_connected_shaders(file_nodes) -> List[str]` *(static)* — Return surface shaders connected to one or more file nodes, ignoring intermediates.
   - `MatUtils.get_file_nodes(cls, materials: Optional[List[str]] = None, raw: bool = False, return_type: str = 'fileNode') -> list` *(class)* — Returns file node info in any column order based on return_type.
@@ -1980,16 +2009,18 @@ Maya Connection Module
   - `GameShader.setup_stringray_node(self, name: str, opacity: bool) -> object` — Initializes and sets up a StingrayPBS shader node in Maya.
   - `GameShader.setup_arnold_nodes(self, name: str, shader_node: object) -> Tuple[object, object, object]` — Sets up a basic Arnold shader network for use with a Stingray PBS or Standard Surface shader.
   - `GameShader.setup_standard_surface_node(self, name: str, opacity: bool) -> object` — Creates and sets up a Maya Standard Surface shader node.
+  - `GameShader.setup_open_pbr_node(self, name: str, opacity: bool) -> object` — Creates and sets up a Maya OpenPBR Surface shader node.
   - `GameShader.connect_stingray_nodes(self, texture: str, texture_type: str, sr_node: object) -> bool` — Connects texture files to the corresponding slots in the StingrayPBS shader node
   - `GameShader.connect_arnold_nodes(self, texture: str, texture_type: str, ai_node: object, aiMult_node: object, bump_node: object) -> bool` — Connects texture files to the corresponding slots in the Arnold shader nodes based on the texture t…
   - `GameShader.connect_standard_surface_nodes(self, texture: str, texture_type: str, std_node: object) -> bool` — Connects texture files to Maya Standard Surface shader slots.
+  - `GameShader.connect_open_pbr_nodes(self, texture: str, texture_type: str, op_node: object) -> bool` — Connects texture files to Maya OpenPBR Surface shader slots.
   - `GameShader.filter_for_correct_normal_map(self, textures: List[str], desired_normal_type: str) -> List[str]` — Filters and ensures only the desired type of normal map is in the textures list.
   - `GameShader.filter_for_correct_metallic_map(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]` — Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…
   - `GameShader.filter_for_mask_map(self, textures: List[str], output_extension: str = 'png') -> List[str]` — Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
   - `GameShader.filter_for_correct_base_color_map(self, textures: List[str], use_albedo_transparency: bool) -> List[str]` — Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…
-- **[`class CallbackLogHandler(logging.Handler)`](mayatk/mayatk/mat_utils/game_shader.py#L1445)** — Log handler that calls a callback function with the formatted message.
+- **[`class CallbackLogHandler(logging.Handler)`](mayatk/mayatk/mat_utils/game_shader.py#L1695)** — Log handler that calls a callback function with the formatted message.
   - `CallbackLogHandler.emit(self, record)`
-- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1457)**
+- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1707)**
   - `GameShaderSlots.header_init(self, widget)` — Initialize the header widget.
   - `GameShaderSlots.lbl_graph_material(self)` — Graph the material in the Hypershade.
   - `GameShaderSlots.mat_name(self) -> str` *(property)* — Get the mat name from the user input text field.
@@ -2175,12 +2206,19 @@ Switchboard slots for the Render Opacity UI.
 <a id="mat_utils--texture_path_editor"></a>
 ### `mat_utils/texture_path_editor.py`
 
-- **[`class TexturePathEditorSlots`](mayatk/mayatk/mat_utils/texture_path_editor.py#L20)**
+- **[`class TexturePathEditorSlots`](mayatk/mayatk/mat_utils/texture_path_editor.py#L22)**
   - `TexturePathEditorSlots.header_init(self, widget)` — Initialize the header for the texture path editor.
   - `TexturePathEditorSlots.open_source_images(self)` — Open the project's sourceimages directory.
-  - `TexturePathEditorSlots.lbl010(self)` — Set Texture Paths for All File Nodes.
+  - `TexturePathEditorSlots.lbl010(self)` — Set Texture Paths for All File Nodes (flattened — drops original subdirs).
   - `TexturePathEditorSlots.lbl_find_copy(self)` — Find and Copy Textures (Global)
   - `TexturePathEditorSlots.lbl013(self)` — Convert to Relative Paths (Global)
+  - `TexturePathEditorSlots.resolve_missing_by_stem(self)` — Resolve missing textures by exact stem match (different extension) in sourceimages.
+  - `TexturePathEditorSlots.resolve_missing_by_fuzzy(self)` — Resolve missing textures by fuzzy filename match in sourceimages.
+  - `TexturePathEditorSlots.resolve_missing_by_texture(self)` — Resolve missing textures using map-type-aware matching in sourceimages.
+  - `TexturePathEditorSlots.row_browse_for_file(self, selection=None)` — Open a file dialog at sourceimages and repath the selected file node to the chosen file.
+  - `TexturePathEditorSlots.row_resolve_by_stem(self, selection=None)`
+  - `TexturePathEditorSlots.row_resolve_by_fuzzy(self, selection=None)`
+  - `TexturePathEditorSlots.row_resolve_by_texture(self, selection=None)`
   - `TexturePathEditorSlots.refresh_texture_table(self)` — Manual refresh trigger from the header menu.
   - `TexturePathEditorSlots.tbl000_init(self, widget)`
   - `TexturePathEditorSlots.cleanup_scene_callbacks(self)` — Clean up scene-change subscriptions via ScriptJobManager.
@@ -2282,73 +2320,73 @@ Consolidated attribute utilities for Maya.
   - `Attributes.add_enum_field(nodes, attr_name, new_label)` *(static)* — Append a new enum field *new_label* to *attr_name*.
   - `Attributes.delete_enum_field(nodes, attr_name, label)` *(static)* — Remove the enum field *label* from *attr_name*.
 
-<a id="node_utils--attributes--attribute_manager--__init__"></a>
-### `node_utils/attributes/attribute_manager/__init__.py`
+<a id="node_utils--attributes--channels--__init__"></a>
+### `node_utils/attributes/channels/__init__.py`
 
-Attribute Manager — Switchboard UI for inspecting and editing Maya attributes.
+Channels — Switchboard UI for inspecting and editing Maya attributes.
 
-- [`launch(sb=None, targets=None, filter=None, search=None)`](mayatk/mayatk/node_utils/attributes/attribute_manager/__init__.py#L14) — Open the Attribute Manager, optionally pre-targeted.
+- [`launch(sb=None, targets=None, filter=None, search=None)`](mayatk/mayatk/node_utils/attributes/channels/__init__.py#L14) — Open the Channels UI, optionally pre-targeted.
 
-<a id="node_utils--attributes--attribute_manager--_attribute_manager"></a>
-### `node_utils/attributes/attribute_manager/_attribute_manager.py`
+<a id="node_utils--attributes--channels--_channels"></a>
+### `node_utils/attributes/channels/_channels.py`
 
-Attribute Manager — Maya attribute query / mutation logic.
+Channels — Maya attribute query / mutation logic.
 
-- **[`class AttributeManager`](mayatk/mayatk/node_utils/attributes/attribute_manager/_attribute_manager.py#L15)** — Maya attribute query / mutation logic.
-  - `AttributeManager.is_pinned(self)` *(property)*
-  - `AttributeManager.single_object_mode(self)` *(property)*
-  - `AttributeManager.single_object_mode(self, value)`
-  - `AttributeManager.pin_targets(self, nodes)` — Pin the manager to a fixed node list;
-  - `AttributeManager.get_selected_nodes(self)` — Return the target node list.
-  - `AttributeManager.get_channel_box_selection()` *(static)* — Return all attribute names currently selected in Maya's channel box.
-  - `AttributeManager.get_filter_kwargs(filter_key='Custom', invert=False)` *(static)* — Return the ``cmds.listAttr`` kwargs for the given *filter_key*.
-  - `AttributeManager.query_connected_attrs(node)` *(static)* — Return set of attribute names on *node* that have incoming connections.
-  - `AttributeManager.collect_attr_names(nodes, filter_kwargs)` *(static)* — Return the intersection of attribute names across *nodes*.
-  - `AttributeManager.collect_value_strings(cls, nodes, attr_names)` *(class)* — Return ``{attr_name: (value_str, conn_type)}`` for the given attrs.
-  - `AttributeManager.get_attr_value(node, attr_name)` *(static)* — Safely get an attribute value, returning ``None`` on failure.
-  - `AttributeManager.get_attr_type(node, attr_name)` *(static)* — Return the Maya attribute type string.
-  - `AttributeManager.get_incoming_connection(node, attr_name)` *(static)* — Return ``'→ src.attr'`` if there is an incoming connection, else ``''``.
-  - `AttributeManager.classify_connection(cls, node, attr_name)` *(class)* — Classify the incoming connection on *node.attr_name*.
-  - `AttributeManager.has_key_at_current_time(plug)` *(static)* — Return ``True`` if *plug* has a keyframe set exactly at the current time.
-  - `AttributeManager.build_table_data(cls, nodes, filter_kwargs)` *(class)* — Build row data and state tuples for the table.
-  - `AttributeManager.format_value(val)` *(static)* — Convert a Maya attribute value to a display string.
-  - `AttributeManager.parse_value(text, attr_type)` *(static)* — Convert user-entered text to a Python value for ``cmds.setAttr``.
-  - `AttributeManager.toggle_lock(nodes, attr_name)` *(static)* — Toggle the lock state for *attr_name* on *nodes*.
-  - `AttributeManager.break_connections(nodes, attr_name)` *(static)* — Break all incoming connections for *attr_name* on *nodes*.
-  - `AttributeManager.set_lock(nodes, attr_names, lock)` *(static)* — Lock or unlock *attr_names* across all *nodes*.
-  - `AttributeManager.reset_to_default(nodes, attr_names)` *(static)* — Reset *attr_names* to their default values across all *nodes*.
-  - `AttributeManager.toggle_keyable(nodes, attr_names)` *(static)* — Toggle the keyable state for *attr_names* across all *nodes*.
-  - `AttributeManager.delete_attributes(nodes, attr_names)` *(static)* — Delete custom *attr_names* across all *nodes*.
-  - `AttributeManager.set_attribute_value(cls, nodes, attr_name, text)` *(class)* — Parse *text* and set *attr_name* on all *nodes*.
-  - `AttributeManager.create_attribute(cls, nodes, name, attr_type, keyable=True, min_val=None, max_val=None, default_val=0.0, enum_names='')` *(class)* — Create a custom attribute on *nodes*.
-  - `AttributeManager.copy_attr_values(nodes, attr_names)` *(static)* — Copy attribute values from the primary node to the clipboard.
-  - `AttributeManager.paste_attr_values(nodes)` *(static)* — Paste previously copied attribute values onto *nodes*.
-  - `AttributeManager.rename_attribute(nodes, old_name, new_name)` *(static)* — Rename a user-defined attribute on *nodes*.
-  - `AttributeManager.rename_node(old_name, new_name)` *(static)* — Rename a Maya node and return its new full path.
-  - `AttributeManager.get_shape_nodes(nodes)` *(static)* — Return the shape node name(s) for *nodes*.
-  - `AttributeManager.get_history_nodes(nodes)` *(static)* — Return the construction-history input node(s) for *nodes*.
-  - `AttributeManager.toggle_key_at_current_time(nodes, attr_name)` *(static)* — Set or remove a keyframe on *attr_name* for *nodes* at the current time.
-  - `AttributeManager.set_breakdown_key(nodes, attr_names)` *(static)* — Set a breakdown key on *attr_names* for all *nodes* at the current time.
-  - `AttributeManager.mute_attrs(nodes, attr_names)` *(static)* — Mute *attr_names* across all *nodes*.
-  - `AttributeManager.unmute_attrs(nodes, attr_names)` *(static)* — Unmute *attr_names* across all *nodes*.
-  - `AttributeManager.hide_attrs(nodes, attr_names)` *(static)* — Hide *attr_names* from the channel box.
-  - `AttributeManager.show_attrs(nodes, attr_names)` *(static)* — Show (unhide) *attr_names* in the channel box.
-  - `AttributeManager.lock_and_hide_attrs(nodes, attr_names)` *(static)* — Lock and hide *attr_names*.
-  - `AttributeManager.select_connections(nodes, attr_name)` *(static)* — Select the upstream node driving *attr_name* on the primary node.
+- **[`class Channels`](mayatk/mayatk/node_utils/attributes/channels/_channels.py#L15)** — Maya attribute query / mutation logic.
+  - `Channels.is_pinned(self)` *(property)*
+  - `Channels.single_object_mode(self)` *(property)*
+  - `Channels.single_object_mode(self, value)`
+  - `Channels.pin_targets(self, nodes)` — Pin the manager to a fixed node list;
+  - `Channels.get_selected_nodes(self)` — Return the target node list.
+  - `Channels.get_channel_box_selection()` *(static)* — Return all attribute names currently selected in Maya's channel box.
+  - `Channels.get_filter_kwargs(filter_key='Custom', invert=False)` *(static)* — Return the ``cmds.listAttr`` kwargs for the given *filter_key*.
+  - `Channels.query_connected_attrs(node)` *(static)* — Return set of attribute names on *node* that have incoming connections.
+  - `Channels.collect_attr_names(nodes, filter_kwargs)` *(static)* — Return the intersection of attribute names across *nodes*.
+  - `Channels.collect_value_strings(cls, nodes, attr_names)` *(class)* — Return ``{attr_name: (value_str, conn_type)}`` for the given attrs.
+  - `Channels.get_attr_value(node, attr_name)` *(static)* — Safely get an attribute value, returning ``None`` on failure.
+  - `Channels.get_attr_type(node, attr_name)` *(static)* — Return the Maya attribute type string.
+  - `Channels.get_incoming_connection(node, attr_name)` *(static)* — Return ``'→ src.attr'`` if there is an incoming connection, else ``''``.
+  - `Channels.classify_connection(cls, node, attr_name)` *(class)* — Classify the incoming connection on *node.attr_name*.
+  - `Channels.has_key_at_current_time(plug)` *(static)* — Return ``True`` if *plug* has a keyframe set exactly at the current time.
+  - `Channels.build_table_data(cls, nodes, filter_kwargs)` *(class)* — Build row data and state tuples for the table.
+  - `Channels.format_value(val)` *(static)* — Convert a Maya attribute value to a display string.
+  - `Channels.parse_value(text, attr_type)` *(static)* — Convert user-entered text to a Python value for ``cmds.setAttr``.
+  - `Channels.toggle_lock(nodes, attr_name)` *(static)* — Toggle the lock state for *attr_name* on *nodes*.
+  - `Channels.break_connections(nodes, attr_name)` *(static)* — Break all incoming connections for *attr_name* on *nodes*.
+  - `Channels.set_lock(nodes, attr_names, lock)` *(static)* — Lock or unlock *attr_names* across all *nodes*.
+  - `Channels.reset_to_default(nodes, attr_names)` *(static)* — Reset *attr_names* to their default values across all *nodes*.
+  - `Channels.toggle_keyable(nodes, attr_names)` *(static)* — Toggle the keyable state for *attr_names* across all *nodes*.
+  - `Channels.delete_attributes(nodes, attr_names)` *(static)* — Delete custom *attr_names* across all *nodes*.
+  - `Channels.set_attribute_value(cls, nodes, attr_name, text)` *(class)* — Parse *text* and set *attr_name* on all *nodes*.
+  - `Channels.create_attribute(cls, nodes, name, attr_type, keyable=True, min_val=None, max_val=None, default_val=0.0, enum_names='')` *(class)* — Create a custom attribute on *nodes*.
+  - `Channels.copy_attr_values(nodes, attr_names)` *(static)* — Copy attribute values from the primary node to the clipboard.
+  - `Channels.paste_attr_values(nodes)` *(static)* — Paste previously copied attribute values onto *nodes*.
+  - `Channels.rename_attribute(nodes, old_name, new_name)` *(static)* — Rename a user-defined attribute on *nodes*.
+  - `Channels.rename_node(old_name, new_name)` *(static)* — Rename a Maya node and return its new full path.
+  - `Channels.get_shape_nodes(nodes)` *(static)* — Return the shape node name(s) for *nodes*.
+  - `Channels.get_history_nodes(nodes)` *(static)* — Return the construction-history input node(s) for *nodes*.
+  - `Channels.toggle_key_at_current_time(nodes, attr_name)` *(static)* — Set or remove a keyframe on *attr_name* for *nodes* at the current time.
+  - `Channels.set_breakdown_key(nodes, attr_names)` *(static)* — Set a breakdown key on *attr_names* for all *nodes* at the current time.
+  - `Channels.mute_attrs(nodes, attr_names)` *(static)* — Mute *attr_names* across all *nodes*.
+  - `Channels.unmute_attrs(nodes, attr_names)` *(static)* — Unmute *attr_names* across all *nodes*.
+  - `Channels.hide_attrs(nodes, attr_names)` *(static)* — Hide *attr_names* from the channel box.
+  - `Channels.show_attrs(nodes, attr_names)` *(static)* — Show (unhide) *attr_names* in the channel box.
+  - `Channels.lock_and_hide_attrs(nodes, attr_names)` *(static)* — Lock and hide *attr_names*.
+  - `Channels.select_connections(nodes, attr_name)` *(static)* — Select the upstream node driving *attr_name* on the primary node.
 
-<a id="node_utils--attributes--attribute_manager--attribute_manager_slots"></a>
-### `node_utils/attributes/attribute_manager/attribute_manager_slots.py`
+<a id="node_utils--attributes--channels--channels_slots"></a>
+### `node_utils/attributes/channels/channels_slots.py`
 
-UI slots for the Attribute Manager.
+UI slots for the Channels UI.
 
-- **[`class AttributeManagerSlots`](mayatk/mayatk/node_utils/attributes/attribute_manager/attribute_manager_slots.py#L23)** — Switchboard slots for the Attribute Manager UI.
-  - `AttributeManagerSlots.apply_launch_config(self, targets=None, filter=None, search=None)` — Configure the window from a :func:`launch` call.
-  - `AttributeManagerSlots.header_init(self, widget)` — Populate the header menu with global actions.
-  - `AttributeManagerSlots.show_create_menu(self, *args)` — Show the *Create Attribute* popup.
-  - `AttributeManagerSlots.cmb000_init(self, widget)` — Populate filter combobox and wire its option_box invert action.
-  - `AttributeManagerSlots.cmb000(self, index)` — Filter changed — refresh table.
-  - `AttributeManagerSlots.tbl000_init(self, widget)` — One-time table setup: action columns, context menu, scriptJobs.
-  - `AttributeManagerSlots.cleanup_scene_callbacks(self)` — Tear down every event subscription owned by this slots instance.
+- **[`class ChannelsSlots`](mayatk/mayatk/node_utils/attributes/channels/channels_slots.py#L24)** — Switchboard slots for the Channels UI.
+  - `ChannelsSlots.apply_launch_config(self, targets=None, filter=None, search=None)` — Configure the window from a :func:`launch` call.
+  - `ChannelsSlots.header_init(self, widget)` — Populate the header menu with global actions.
+  - `ChannelsSlots.show_create_menu(self, *args)` — Show the *Create Attribute* popup.
+  - `ChannelsSlots.cmb000_init(self, widget)` — Populate filter combobox and wire its option_box invert action.
+  - `ChannelsSlots.cmb000(self, index)` — Filter changed — refresh table.
+  - `ChannelsSlots.tbl000_init(self, widget)` — One-time table setup: action columns, context menu, scriptJobs.
+  - `ChannelsSlots.cleanup_scene_callbacks(self)` — Tear down every event subscription owned by this slots instance.
 
 <a id="node_utils--attributes--event_triggers"></a>
 ### `node_utils/attributes/event_triggers.py`
@@ -2597,6 +2635,14 @@ Programmatic access to Maya's Channel Box.
   - `ChannelBox.dump_model(cls, max_rows=50)` *(class)* — Print the item-model contents of the main channel box view.
   - `ChannelBox.list_signals(cls)` *(class)* — List signals on the channel box widget.
   - `ChannelBox.list_item_views(cls)` *(class)* — List all QAbstractItemView children (main, shape, history, output).
+
+<a id="ui_utils--hotkey_collisions"></a>
+### `ui_utils/hotkey_collisions.py`
+
+Maya hotkey collision checker for the uitk HotkeyEditor.
+
+- [`parse_qt_sequence(sequence: str) -> Optional[dict]`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L41) — Convert a Qt key sequence string to ``cmds.hotkey`` query kwargs.
+- [`maya_collision_checker(sequence, scope, ui_name, method_name)`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L170) — Check a proposed binding against Maya's active hotkey set.
 
 <a id="ui_utils--maya_native_menus"></a>
 ### `ui_utils/maya_native_menus.py`

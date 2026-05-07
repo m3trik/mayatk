@@ -255,6 +255,8 @@ class GameShader(ptk.LoggingMixin):
         # Create the base shader based on shader_type
         if shader_type == "standard_surface":
             shader_node = self.setup_standard_surface_node(name, opacity_map)
+        elif shader_type == "open_pbr":
+            shader_node = self.setup_open_pbr_node(name, opacity_map)
         else:  # Default to stingray
             shader_node = self.setup_stringray_node(name, opacity_map)
 
@@ -292,6 +294,10 @@ class GameShader(ptk.LoggingMixin):
             # Connect shader nodes based on type
             if shader_type == "standard_surface":
                 success = self.connect_standard_surface_nodes(
+                    texture, texture_type, shader_node
+                )
+            elif shader_type == "open_pbr":
+                success = self.connect_open_pbr_nodes(
                     texture, texture_type, shader_node
                 )
             else:
@@ -446,6 +452,41 @@ class GameShader(ptk.LoggingMixin):
             cmds.setAttr(f"{std_node}.thinWalled", True)
 
         return std_node
+
+    def setup_open_pbr_node(self, name: str, opacity: bool) -> object:
+        """Creates and sets up a Maya OpenPBR Surface shader node.
+
+        OpenPBR Surface is the open-standard PBR shader (Maya 2025+) that unifies
+        Autodesk Standard Surface and Adobe Standard Material. Suitable for
+        glTF/USD/MaterialX export targeting modern game engines and renderers.
+
+        Parameters:
+            name (str): The desired name for the OpenPBR Surface shader node.
+            opacity (bool): Whether the shader should support cutout transparency.
+                          If True, enables thin-walled mode for correct cutout/foliage behavior.
+
+        Returns:
+            str: The created OpenPBR Surface shader node.
+        """
+        try:
+            op_node = cmds.shadingNode("openPBRSurface", asShader=True, name=name)
+        except RuntimeError as err:
+            raise RuntimeError(
+                "Cannot create openPBRSurface — node type unavailable. "
+                "OpenPBR Surface requires a recent Maya 2025 update or newer. "
+                "Use 'Stingray PBS' or 'Standard Surface' on earlier versions."
+            ) from err
+
+        sg_node = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{op_node}.outColor", f"{sg_node}.surfaceShader", force=True)
+
+        if opacity:
+            if cmds.attributeQuery("geometryThinWalled", node=op_node, exists=True):
+                cmds.setAttr(f"{op_node}.geometryThinWalled", True)
+
+        return op_node
 
     def _connect_channel(self, source_plug, node, attr_name):
         """Helper to connect a source plug to a target attribute, handling compound attributes.
@@ -1119,6 +1160,215 @@ class GameShader(ptk.LoggingMixin):
 
         return True
 
+    def connect_open_pbr_nodes(
+        self, texture: str, texture_type: str, op_node: object
+    ) -> bool:
+        """Connects texture files to Maya OpenPBR Surface shader slots.
+
+        OpenPBR attribute mapping:
+            Base Color           -> baseColor (color3)
+            Metallic             -> baseMetalness (float)
+            Roughness            -> specularRoughness (float)
+            Normal               -> bump2d.outNormal -> geometryNormal (vector)
+            Emissive             -> emissionColor (color3) + emissionLuminance
+            Opacity              -> geometryOpacity (color3, RGB driven by alpha)
+            AO                   -> multiplied with baseColor (no native AO input)
+
+        Parameters:
+            texture (str): The file path of the texture image to be connected.
+            texture_type (str): The type of texture (e.g., "Base_Color", "Roughness", "Metallic").
+            op_node (str): The OpenPBR Surface shader node.
+
+        Returns:
+            bool: True if connection successful, False otherwise.
+        """
+        if texture_type in ["Base_Color", "Diffuse"]:
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
+            )
+            cmds.connectAttr(f"{texture_node}.outColor", f"{op_node}.baseColor", force=True)
+
+        elif texture_type == "Albedo_Transparency":
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
+            )
+            cmds.connectAttr(f"{texture_node}.outColor", f"{op_node}.baseColor", force=True)
+            # geometryOpacity is color3 — drive all channels from alpha
+            for chan in ("R", "G", "B"):
+                cmds.connectAttr(
+                    f"{texture_node}.outAlpha",
+                    f"{op_node}.geometryOpacity{chan}",
+                    force=True,
+                )
+            return True
+
+        elif texture_type == "Roughness":
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                alphaIsLuminance=1,
+                name=ptk.format_path(texture, section="name"),
+            )
+            cmds.connectAttr(
+                f"{texture_node}.outAlpha", f"{op_node}.specularRoughness", force=True
+            )
+
+        elif texture_type == "Metallic":
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                alphaIsLuminance=1,
+                name=ptk.format_path(texture, section="name"),
+            )
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{op_node}.baseMetalness", force=True)
+
+        elif texture_type == "Metallic_Smoothness":
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                alphaIsLuminance=1,
+                name=ptk.format_path(texture, section="name"),
+            )
+            # Metallic in RGB, smoothness in alpha (need to invert for roughness)
+            reverse_node = NodeUtils.create_render_node(
+                "reverse", name="invertSmoothness"
+            )
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{reverse_node}.inputX", force=True)
+            cmds.connectAttr(f"{reverse_node}.outputX", f"{op_node}.specularRoughness", force=True)
+            cmds.connectAttr(f"{texture_node}.outColorR", f"{op_node}.baseMetalness", force=True)
+
+            self._ensure_fbx_safe_connection(
+                texture_node, op_node, "Metallic_Smoothness_Map"
+            )
+
+        elif texture_type == "ORM":
+            # Unreal/glTF ORM Map: R=AO, G=Roughness, B=Metallic
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                alphaIsLuminance=0,
+                name=ptk.format_path(texture, section="name"),
+            )
+            cmds.connectAttr(f"{texture_node}.outColorB", f"{op_node}.baseMetalness", force=True)
+            cmds.connectAttr(
+                f"{texture_node}.outColorG", f"{op_node}.specularRoughness", force=True
+            )
+            # AO (R) -> Multiply with Base Color
+            existing_conn = cmds.listConnections(
+                f"{op_node}.baseColor", source=True, destination=False
+            )
+            if existing_conn:
+                mult_node = cmds.shadingNode("multiplyDivide", asUtility=True)
+                cmds.connectAttr(f"{existing_conn[0]}.outColor", f"{mult_node}.input1", force=True)
+                cmds.connectAttr(f"{texture_node}.outColorR", f"{mult_node}.input2X", force=True)
+                cmds.connectAttr(f"{texture_node}.outColorR", f"{mult_node}.input2Y", force=True)
+                cmds.connectAttr(f"{texture_node}.outColorR", f"{mult_node}.input2Z", force=True)
+                cmds.connectAttr(f"{mult_node}.output", f"{op_node}.baseColor", force=True)
+
+            self._ensure_fbx_safe_connection(texture_node, op_node, "ORM_Map")
+
+        elif texture_type == "MSAO":
+            # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                alphaIsLuminance=1,
+                name=ptk.format_path(texture, section="name"),
+            )
+            cmds.connectAttr(f"{texture_node}.outColorR", f"{op_node}.baseMetalness", force=True)
+            # Smoothness (alpha) -> invert -> roughness
+            reverse_node = NodeUtils.create_render_node(
+                "reverse", name="invertSmoothness"
+            )
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{reverse_node}.inputX", force=True)
+            cmds.connectAttr(f"{reverse_node}.outputX", f"{op_node}.specularRoughness", force=True)
+            # AO (G) -> multiply with base color if already connected
+            existing_conn = cmds.listConnections(
+                f"{op_node}.baseColor", source=True, destination=False
+            )
+            if existing_conn:
+                mult_node = cmds.shadingNode("multiplyDivide", asUtility=True)
+                cmds.connectAttr(f"{existing_conn[0]}.outColor", f"{mult_node}.input1", force=True)
+                cmds.connectAttr(f"{texture_node}.outColorG", f"{mult_node}.input2X", force=True)
+                cmds.connectAttr(f"{texture_node}.outColorG", f"{mult_node}.input2Y", force=True)
+                cmds.connectAttr(f"{texture_node}.outColorG", f"{mult_node}.input2Z", force=True)
+                cmds.connectAttr(f"{mult_node}.output", f"{op_node}.baseColor", force=True)
+
+            self._ensure_fbx_safe_connection(texture_node, op_node, "MSAO_Map")
+
+        elif "Normal" in texture_type:
+            # OpenPBR uses geometryNormal — feed via bump2d in tangent-space mode
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                name=ptk.format_path(texture, section="name"),
+            )
+            bump_node = cmds.shadingNode("bump2d", asUtility=True)
+            cmds.setAttr(f"{bump_node}.bumpInterp", 1)  # Tangent space normals
+            cmds.connectAttr(f"{texture_node}.outAlpha", f"{bump_node}.bumpValue", force=True)
+            cmds.connectAttr(f"{bump_node}.outNormal", f"{op_node}.geometryNormal", force=True)
+
+        elif texture_type == "Emissive":
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                fileTextureName=texture,
+                name=ptk.format_path(texture, section="name"),
+            )
+            cmds.connectAttr(f"{texture_node}.outColor", f"{op_node}.emissionColor", force=True)
+            # OpenPBR emissionLuminance is in nits (cd/m^2); default 0 means no
+            # emission. 1000 nits is a reasonable starting point for a visibly
+            # glowing surface (typical emissive panel/screen). Tweak per scene.
+            if cmds.attributeQuery("emissionLuminance", node=op_node, exists=True):
+                cmds.setAttr(f"{op_node}.emissionLuminance", 1000.0)
+
+        elif texture_type == "Ambient_Occlusion":
+            # OpenPBR has no native AO input — multiply with base color
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                name=ptk.format_path(texture, section="name"),
+            )
+            mult_node = cmds.shadingNode("multiplyDivide", asUtility=True)
+            existing_conn = cmds.listConnections(
+                f"{op_node}.baseColor", source=True, destination=False
+            )
+            if existing_conn:
+                cmds.connectAttr(f"{existing_conn[0]}.outColor", f"{mult_node}.input1", force=True)
+            cmds.connectAttr(f"{texture_node}.outColor", f"{mult_node}.input2", force=True)
+            cmds.connectAttr(f"{mult_node}.output", f"{op_node}.baseColor", force=True)
+
+        elif texture_type == "Opacity":
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                fileTextureName=texture,
+                colorSpace="Raw",
+                alphaIsLuminance=1,
+                name=ptk.format_path(texture, section="name"),
+            )
+            # geometryOpacity is color3 — drive all channels from alpha
+            for chan in ("R", "G", "B"):
+                cmds.connectAttr(
+                    f"{texture_node}.outAlpha",
+                    f"{op_node}.geometryOpacity{chan}",
+                    force=True,
+                )
+
+        else:
+            return False
+
+        return True
+
     def filter_for_correct_normal_map(
         self, textures: List[str], desired_normal_type: str
     ) -> List[str]:
@@ -1501,7 +1751,8 @@ class GameShaderSlots(GameShader):
             setObjectName="btn_instructions",
             setToolTip=(
                 "Game Shader — Create PBR shader networks from texture maps.\n\n"
-                "• Supports Arnold StandardSurface and Stingray PBS.\n"
+                "• Supports Stingray PBS, Standard Surface, and OpenPBR Surface\n"
+                "  (with optional Arnold aiStandardSurface bridging).\n"
                 "• Auto-detects texture map types (Base Color, Normal,\n"
                 "  Roughness, Metallic, etc.).\n"
                 "• Browse a texture folder to build complete shader networks.\n"
@@ -1560,12 +1811,12 @@ class GameShaderSlots(GameShader):
         """Get the shader type selection.
 
         Returns:
-            (str) Either 'stingray' or 'standard_surface'
+            (str) One of 'stingray', 'standard_surface', or 'open_pbr'.
         """
-        # This will be cmb004 or whichever combo box is added for shader type
-        # For now, default to stingray for backwards compatibility
         if hasattr(self.ui, "cmb004"):
             text = self.ui.cmb004.currentText()
+            if "Open PBR" in text or "OpenPBR" in text:
+                return "open_pbr"
             if "Standard Surface" in text:
                 return "standard_surface"
         return "stingray"

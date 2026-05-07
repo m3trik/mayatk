@@ -54,13 +54,23 @@ class MatUtilsInternals(ptk.HelpMixin):
         fallback_to_scene: bool = False,
         as_strings: bool = False,
     ) -> Dict[str, List[Any]]:
-        """Normalize objects/materials/file nodes for texture operations."""
+        """Normalize objects/materials/file nodes for texture operations.
+
+        The ``fallback_to_scene`` flag means "return every ``file`` node in
+        the scene when the caller passed *no scope at all*". An empty list
+        (``objects=[]``) counts as "user explicitly scoped to nothing" —
+        the caller gets an empty result, never the entire scene.
+        """
 
         def to_long(nodes):
             if not nodes:
                 return []
             names = _to_strs(nodes)
             return cmds.ls(names, long=True, flatten=True) or []
+
+        no_scope_passed = (
+            objects is None and materials is None and file_nodes is None
+        )
 
         resolved_objects = to_long(objects) if objects else []
 
@@ -86,7 +96,7 @@ class MatUtilsInternals(ptk.HelpMixin):
             files = cmds.ls(to_long(file_nodes), type="file", long=True) or []
             resolved_file_nodes_set.update(files)
 
-        if not resolved_file_nodes_set and fallback_to_scene:
+        if fallback_to_scene and no_scope_passed and not resolved_file_nodes_set:
             files = cmds.ls(type="file", long=True) or []
             resolved_file_nodes_set.update(files)
 
@@ -505,6 +515,51 @@ class MatUtils(MatUtilsInternals):
         return groups
 
     @classmethod
+    def get_texture_paths(
+        cls,
+        objects: Optional[List[Any]] = None,
+        materials: Optional[List[Any]] = None,
+        file_nodes: Optional[List[Any]] = None,
+        texture_names: Optional[List[str]] = None,
+        absolute: bool = True,
+    ) -> List[str]:
+        """Resolve unique texture file paths for the given scope.
+
+        Lightweight counterpart to :meth:`get_texture_info` — reads only the
+        ``fileTextureName`` attribute from each resolved ``file`` node, so it
+        is safe to call from interactive UI providers on selections with many
+        high-resolution textures (no PIL decoding).
+
+        Parameters:
+            objects: Scene objects (transforms / shapes / face components).
+                Materials are resolved from their assigned shading engines.
+            materials: Materials to scope by directly.
+            file_nodes: Pre-resolved ``file`` nodes to read paths from.
+            texture_names: Extra raw texture paths to include verbatim.
+            absolute: If True (default), paths are made absolute against the
+                project ``sourceimages`` directory; if False, relative when
+                the texture lives under ``sourceimages``.
+
+        Returns:
+            list[str]: Unique non-empty paths in resolution order.
+        """
+        # ``_resolve_texture_targets`` already guards the scene fallback
+        # against scoped queries (objects/materials/file_nodes); we only
+        # need to additionally suppress it when the caller passed
+        # ``texture_names`` as their sole scope.
+        targets = cls._resolve_texture_targets(
+            objects=objects,
+            materials=materials,
+            file_nodes=file_nodes,
+            fallback_to_scene=(texture_names is None),
+            as_strings=True,
+        )
+        paths = cls._paths_from_file_nodes(targets["file_nodes"], absolute=absolute)
+        if texture_names:
+            paths.extend(texture_names)
+        return list(dict.fromkeys(p for p in paths if p))
+
+    @classmethod
     def get_texture_info(
         cls,
         objects=None,
@@ -512,24 +567,18 @@ class MatUtils(MatUtilsInternals):
         file_nodes=None,
         texture_names=None,
     ):
-        """Get information about texture files."""
-        targets = cls._resolve_texture_targets(
+        """Get image metadata (size, mode, format) for texture files in scope.
+
+        Heavy: opens every texture with PIL. For path-only callers, use
+        :meth:`get_texture_paths` instead.
+        """
+        paths = cls.get_texture_paths(
             objects=objects,
             materials=materials,
             file_nodes=file_nodes,
-            fallback_to_scene=(not texture_names),
-            as_strings=True,
+            texture_names=texture_names,
         )
-
-        resolved_file_nodes = targets["file_nodes"]
-        file_paths = cls._paths_from_file_nodes(resolved_file_nodes, absolute=True)
-
-        if texture_names:
-            file_paths.extend(texture_names)
-
-        file_paths = list(set(file_paths))
-
-        return ptk.ImgUtils.get_image_info(file_paths)
+        return ptk.ImgUtils.get_image_info(paths)
 
     @staticmethod
     def get_scene_mats(
@@ -639,12 +688,10 @@ class MatUtils(MatUtilsInternals):
                         pass
 
         if materials:
-            mat_names = set(_short_name(m) if hasattr(m, "name") else str(m) for m in materials)
-            mat_names = set(str(m) for m in materials)
-            filtered_nodes = [
+            mat_names = {str(m) for m in materials}
+            file_node_names = [
                 fn for fn in file_node_names if file_to_shader_name.get(fn) in mat_names
             ]
-            file_node_names = filtered_nodes
 
         file_paths = {}
         for fn in file_node_names:
@@ -1105,13 +1152,11 @@ class MatUtils(MatUtilsInternals):
             cmds.warning(f"Invalid directory: {new_dir}")
             return
 
-        fallback_to_scene = objects is None and materials is None and file_nodes is None
-
         scope = cls._resolve_texture_targets(
             objects=objects,
             materials=materials,
             file_nodes=file_nodes,
-            fallback_to_scene=fallback_to_scene,
+            fallback_to_scene=True,
             as_strings=True,
         )
         resolved_nodes = scope["file_nodes"]

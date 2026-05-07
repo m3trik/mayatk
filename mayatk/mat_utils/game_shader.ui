@@ -585,6 +585,11 @@
                <string>Standard Surface</string>
               </property>
              </item>
+             <item>
+              <property name="text">
+               <string>Open PBR</string>
+              </property>
+             </item>
             </widget>
            </item>
           </layout>

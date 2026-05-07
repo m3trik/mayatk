@@ -191,6 +191,79 @@ class TestMatUtils(MayaTkTestCase):
         # collect_material_paths returns a list of tuples
         self.assertTrue(any("test.jpg" in p[0] for p in paths))
 
+    def test_get_texture_paths_from_object(self):
+        """Resolves texture paths via object → material → file-node chain
+        without opening the image files (path-only fast path)."""
+        file_node = cmds.shadingNode("file", asTexture=True, name="tp_test_file")
+        cmds.setAttr(
+            f"{file_node}.fileTextureName", "c:/textures/albedo.png", type="string"
+        )
+        cmds.connectAttr(f"{file_node}.outColor", f"{self.lambert1}.color", force=True)
+        cmds.sets(self.sphere, edit=True, forceElement=self.sg1)
+
+        paths = MatUtils.get_texture_paths(objects=[self.sphere])
+        self.assertTrue(any("albedo.png" in p for p in paths))
+
+    def test_get_texture_paths_traverses_bump2d(self):
+        """File nodes wired through utility nodes (bump2d) must still resolve."""
+        bump = cmds.shadingNode("bump2d", asUtility=True, name="tp_bump")
+        file_node = cmds.shadingNode("file", asTexture=True, name="tp_height_file")
+        cmds.setAttr(
+            f"{file_node}.fileTextureName", "c:/textures/height.png", type="string"
+        )
+        cmds.connectAttr(f"{file_node}.outAlpha", f"{bump}.bumpValue", force=True)
+        cmds.connectAttr(
+            f"{bump}.outNormal", f"{self.lambert1}.normalCamera", force=True
+        )
+        cmds.sets(self.sphere, edit=True, forceElement=self.sg1)
+
+        paths = MatUtils.get_texture_paths(objects=[self.sphere])
+        self.assertTrue(any("height.png" in p for p in paths))
+
+    def test_get_texture_paths_no_scene_fallback_when_scoped(self):
+        """Regression: any explicit scope (even an empty list) must NOT
+        fall back to scanning every file node in the scene. That caused
+        the optimize-selection hang on a polygon whose material had no
+        textures wired in (or whose scope query was empty)."""
+        # Scene has unrelated textures (simulates "real" scene)
+        unrelated = cmds.shadingNode("file", asTexture=True, name="unrelated_file")
+        cmds.setAttr(
+            f"{unrelated}.fileTextureName", "c:/textures/unrelated.png", type="string"
+        )
+
+        # Case 1: scoped object whose material has no textures → []
+        cmds.sets(self.sphere, edit=True, forceElement=self.sg1)
+        self.assertEqual(MatUtils.get_texture_paths(objects=[self.sphere]), [])
+
+        # Case 2: explicit empty list (e.g. caller's selection was empty)
+        # must also be treated as "scoped to nothing", NOT "no scope"
+        self.assertEqual(MatUtils.get_texture_paths(objects=[]), [])
+        self.assertEqual(MatUtils.get_texture_paths(materials=[]), [])
+        self.assertEqual(MatUtils.get_texture_paths(file_nodes=[]), [])
+
+        # Case 3: no-arg call still scans the whole scene (legitimate fallback)
+        scene_paths = MatUtils.get_texture_paths()
+        self.assertTrue(any("unrelated.png" in p for p in scene_paths))
+
+    def test_get_texture_paths_dedup_and_order(self):
+        """Duplicates removed, first-seen order preserved."""
+        f1 = cmds.shadingNode("file", asTexture=True, name="tp_f1")
+        f2 = cmds.shadingNode("file", asTexture=True, name="tp_f2")
+        cmds.setAttr(f"{f1}.fileTextureName", "c:/textures/a.png", type="string")
+        cmds.setAttr(f"{f2}.fileTextureName", "c:/textures/b.png", type="string")
+        cmds.connectAttr(f"{f1}.outColor", f"{self.lambert1}.color", force=True)
+        cmds.connectAttr(f"{f2}.outColor", f"{self.lambert1}.ambientColor", force=True)
+
+        paths = MatUtils.get_texture_paths(
+            materials=[self.lambert1],
+            texture_names=["c:/textures/a.png"],  # duplicate of f1
+        )
+        # No duplicates
+        self.assertEqual(len(paths), len(set(paths)))
+        # Both unique entries present
+        self.assertTrue(any("a.png" in p for p in paths))
+        self.assertTrue(any("b.png" in p for p in paths))
+
     # -------------------------------------------------------------------------
     # Material ID Tests
     # -------------------------------------------------------------------------
