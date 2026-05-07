@@ -328,6 +328,26 @@ class _TaskActionsMixin(_TaskDataMixin):
         AnimUtils.snap_keys_to_frames(self.objects)
         self.logger.info("Keyframes have been snapped.")
 
+    def create_glb(self):
+        """Convert the just-exported FBX to a GLB sidecar via pythontk's MeshConvert.
+
+        Runs after the FBX has been written; ``perform_export`` invokes this
+        explicitly rather than as part of the pre-export task pipeline.
+        """
+        self.logger.info("Converting FBX to GLB...")
+        try:
+            glb_path = ptk.MeshConvert.fbx_to_glb(
+                self.export_path,
+                overwrite=True,
+                auto_install=True,
+                prompt=False,
+            )
+        except (FileNotFoundError, RuntimeError) as e:
+            self.logger.error(f"GLB conversion failed: {e}")
+            return
+
+        self.logger.success(f"GLB created: {glb_path}")
+
 
 class _TaskChecksMixin(_TaskDataMixin):
     """ """
@@ -1161,6 +1181,20 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setToolTip": "Comma-separated names of top-level groups to exclude from export (case-insensitive).\nExample: temp, proxy\nLeave empty to skip.",
                 "setText": "temp",
                 "value_method": "text",
+            },
+            "sep_output": {
+                "widget_type": "Separator",
+                "title": "Output",
+            },
+            "create_glb": {
+                "widget_type": "QCheckBox",
+                "setText": "Create GLB Alongside FBX",
+                "setToolTip": (
+                    "After the FBX is written, convert it to a binary glTF (.glb)\n"
+                    "in the same directory using pythontk's MeshConvert (FBX2glTF).\n"
+                    "FBX2glTF is downloaded on first use into ~/.pythontk/tools/."
+                ),
+                "setChecked": False,
             },
         }
 

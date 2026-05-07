@@ -100,10 +100,10 @@ class ShaderAttributeMap:
             emission=("emissionColor", "outColor"),
             specular=("specularColor", "outColor"),
             roughness=("specularRoughness", "outAlpha"),
-            metallic=("metalness", "outAlpha"),
-            opacity=("opacity", "outAlpha"),
-            normal=("normalCamera", "outColor"),
-            ambientOcclusion=("ambientOcclusion", "outColor"),
+            metallic=("baseMetalness", "outAlpha"),
+            opacity=("geometryOpacity", "outAlpha"),
+            normal=("geometryNormal", "outColor"),
+            ambientOcclusion=None,
         ),
     }
 

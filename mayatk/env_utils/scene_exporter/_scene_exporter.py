@@ -159,6 +159,11 @@ class SceneExporter(ptk.LoggingMixin):
         # Make export path available to checks (e.g. hierarchy diff)
         self.task_manager.export_path = self.export_path
 
+        # Separate post-export tasks (run after the FBX is written) from the
+        # pre-export pipeline.  Copy so the caller's dict is not mutated.
+        tasks = dict(tasks) if tasks else {}
+        create_glb_enabled = bool(tasks.pop("create_glb", False))
+
         export_succeeded = False
         try:
             # Run tasks and checks
@@ -216,6 +221,12 @@ class SceneExporter(ptk.LoggingMixin):
                 self.logger.log_box(
                     "EXPORT SUCCESSFUL", export_info_lines, level="SUCCESS"
                 )
+
+                # Post-export GLB sidecar — runs after the banner so the FBX
+                # success message isn't visually preceded by an unrelated
+                # GLB error if conversion fails.
+                if create_glb_enabled:
+                    self.task_manager.create_glb()
             except Exception as e:
                 self.logger.error(f"Failed to export objects: {e}")
                 raise RuntimeError(f"Failed to export objects: {e}")
