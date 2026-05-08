@@ -422,6 +422,97 @@ class TestMayaConnectionMocked(unittest.TestCase):
             conn.shutdown()  # should not raise
             mock_close.assert_not_called()
 
+    # ---- auto_cleanup ---------------------------------------------------
+
+    def test_auto_cleanup_registers_atexit_handler(self):
+        """connect(auto_cleanup=True) registers an atexit handler exactly once."""
+        conn = MayaConnection()
+
+        with patch("atexit.register") as mock_register, \
+             patch.object(conn, "_connect_interactive", return_value=True):
+            conn.connect(mode="interactive", auto_cleanup=True)
+            self.assertEqual(mock_register.call_count, 1)
+
+            # Calling connect again must NOT register a second handler.
+            conn.connect(mode="interactive", auto_cleanup=True)
+            self.assertEqual(mock_register.call_count, 1)
+
+    def test_auto_cleanup_skipped_when_connect_fails(self):
+        """A failed connect must NOT register the cleanup handler."""
+        conn = MayaConnection()
+
+        with patch("atexit.register") as mock_register, \
+             patch.object(conn, "_connect_interactive", return_value=False):
+            conn.connect(mode="interactive", auto_cleanup=True)
+            mock_register.assert_not_called()
+
+    def test_auto_cleanup_default_off(self):
+        """Without auto_cleanup, no atexit handler is registered."""
+        conn = MayaConnection()
+
+        with patch("atexit.register") as mock_register, \
+             patch.object(conn, "_connect_interactive", return_value=True):
+            conn.connect(mode="interactive")
+            mock_register.assert_not_called()
+
+    def test_auto_cleanup_handler_calls_shutdown_when_connected(self):
+        """The registered handler must shutdown an active connection."""
+        conn = MayaConnection()
+        captured_handler = []
+
+        def _fake_connect():
+            conn.is_connected = True
+            return True
+
+        with patch("atexit.register", side_effect=captured_handler.append), \
+             patch.object(conn, "_connect_interactive", side_effect=_fake_connect):
+            conn.connect(mode="interactive", auto_cleanup=True)
+
+        self.assertEqual(len(captured_handler), 1)
+        self.assertTrue(conn.is_connected)
+
+        with patch.object(conn, "shutdown") as mock_shutdown:
+            captured_handler[0]()
+            mock_shutdown.assert_called_once_with(force=True)
+
+    def test_auto_cleanup_handler_skips_when_already_shut_down(self):
+        """The handler must NOT call shutdown if already shut down."""
+        conn = MayaConnection()
+        captured_handler = []
+
+        def _fake_connect():
+            conn.is_connected = True
+            return True
+
+        with patch("atexit.register", side_effect=captured_handler.append), \
+             patch.object(conn, "_connect_interactive", side_effect=_fake_connect):
+            conn.connect(mode="interactive", auto_cleanup=True)
+
+        # Caller already shut down explicitly.
+        conn.is_connected = False
+
+        with patch.object(conn, "shutdown") as mock_shutdown:
+            captured_handler[0]()
+            mock_shutdown.assert_not_called()
+
+    def test_auto_cleanup_handler_swallows_shutdown_errors(self):
+        """An exception during shutdown must not propagate out of the handler."""
+        conn = MayaConnection()
+        captured_handler = []
+
+        def _fake_connect():
+            conn.is_connected = True
+            return True
+
+        with patch("atexit.register", side_effect=captured_handler.append), \
+             patch.object(conn, "_connect_interactive", side_effect=_fake_connect):
+            conn.connect(mode="interactive", auto_cleanup=True)
+
+        with patch.object(conn, "shutdown", side_effect=RuntimeError("boom")):
+            # Must not raise — atexit handlers should swallow errors so the
+            # interpreter can finish exiting cleanly.
+            captured_handler[0]()
+
 
 if __name__ == "__main__":
     unittest.main()

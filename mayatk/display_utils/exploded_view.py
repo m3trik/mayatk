@@ -115,10 +115,10 @@ class ExplodedView:
             cmds.warning("arrange_objects: no nodes to arrange.")
             return 0
 
-        node_group_key = tuple(sorted([node.name() for node in nodes]))
+        node_group_key = tuple(sorted(nodes))
         if node_group_key in self.exploded_objects:
             for node in nodes:
-                cached_position = self.exploded_objects[node_group_key][node.name()]
+                cached_position = self.exploded_objects[node_group_key][node]
                 cmds.move(
                     cached_position[0],
                     cached_position[1],
@@ -157,7 +157,7 @@ class ExplodedView:
             iteration_count += 1
 
         self.exploded_objects[node_group_key] = {
-            node.name(): cmds.xform(node, query=True, translation=True, worldSpace=True)
+            node: cmds.xform(node, query=True, translation=True, worldSpace=True)
             for node in nodes
         }
         return iteration_count
@@ -189,8 +189,8 @@ class ExplodedView:
         objects = self._get_target_objects(exploded=True)
 
         for obj in objects:
-            pos = cmds.getAttr(obj.original_position)
-            cmds.move(pos[0], pos[1], pos[2], obj, absolute=True)
+            x, y, z = cmds.getAttr(f"{obj}.original_position")[0]
+            cmds.move(x, y, z, obj, absolute=True)
             cmds.deleteAttr(obj, attribute="original_position")
 
     @_inject_objects_if_given
@@ -215,9 +215,9 @@ class ExplodedView:
         """Un-explode all"""
         all_objects_with_original_position = cmds.ls("*.original_position")
         for obj_attr in all_objects_with_original_position:
-            obj = obj_attr.node()
-            pos = cmds.getAttr(obj.original_position)
-            cmds.move(pos[0], pos[1], pos[2], obj, absolute=True)
+            obj = obj_attr.split(".")[0]
+            x, y, z = cmds.getAttr(f"{obj}.original_position")[0]
+            cmds.move(x, y, z, obj, absolute=True)
             cmds.deleteAttr(obj, attribute="original_position")
 
 

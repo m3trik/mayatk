@@ -14,6 +14,21 @@ from mayatk.env_utils._env_utils import EnvUtils
 class HdrManager:
     hdr_env_name = "aiSkyDomeLight_"
 
+    @staticmethod
+    def ensure_plugin_loaded() -> bool:
+        """Ensure the Arnold (mtoa) plugin is loaded.
+
+        Returns True on success, False if loading failed (e.g. plugin
+        not installed). Callers that need Arnold should bail when this
+        returns False.
+        """
+        try:
+            if not cmds.pluginInfo("mtoa", query=True, loaded=True):
+                cmds.loadPlugin("mtoa")
+            return True
+        except Exception:
+            return False
+
     @property
     def hdr_env(self) -> object:
         """ """
@@ -26,6 +41,9 @@ class HdrManager:
     @hdr_env.setter
     def hdr_env(self, tex) -> None:
         """ """
+        if not self.ensure_plugin_loaded():
+            cmds.warning("Arnold (mtoa) plugin not available — cannot set HDR env.")
+            return
         node = self.hdr_env
         if not node:
             node = NodeUtils.create_render_node(
@@ -35,7 +53,9 @@ class HdrManager:
                 camera=0,
                 skyRadius=0,
             )  # turn off skydome and viewport visibility.
-            self.hdr_env_transform.hiddenInOutliner.set(1)
+            transform = self.hdr_env_transform
+            if transform:
+                cmds.setAttr(f"{transform}.hiddenInOutliner", 1)
             cmds.outlinerEditor("outlinerPanel1", edit=True, refresh=True)
 
         file_node = NodeUtils.get_connected_nodes(
@@ -45,9 +65,9 @@ class HdrManager:
             file_node = NodeUtils.create_render_node(
                 "file", "as2DTexture", texture_node=True
             )
-            cmds.connectAttr(file_node.outColor, node.color, force=True)
+            cmds.connectAttr(f"{file_node}.outColor", f"{node}.color", force=True)
 
-        file_node.fileTextureName.set(str(tex))
+        cmds.setAttr(f"{file_node}.fileTextureName", str(tex), type="string")
 
     @property
     def hdr_env_transform(self) -> object:
@@ -59,9 +79,11 @@ class HdrManager:
 
     def set_hdr_map_visibility(self, state):
         """ """
+        if not self.ensure_plugin_loaded():
+            return
         node = self.hdr_env
         if node:
-            node.camera.set(state)
+            cmds.setAttr(f"{node}.camera", state)
 
     @CoreUtils.undoable
     def create_network(
@@ -96,7 +118,7 @@ class HdrManagerSlots(HdrManager):
 
         node = self.hdr_env_transform
         if node:
-            rotation = node.rotateY.get()
+            rotation = cmds.getAttr(f"{node}.rotateY")
             self.ui.slider000.setSliderPosition(rotation)
 
     def header_init(self, widget):

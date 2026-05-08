@@ -7497,5 +7497,152 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         sandbox.cleanup_all_namespaces()
 
 
+class TestHierarchyManagerSlotsUserDataPaths(MayaTkTestCase):
+    """Regression: tree-driven slot ops must work against string user data.
+
+    Bug fixed 2026-05-07: ``b018`` (delete), ``b017`` (fuzzy rename),
+    ``_on_current_tree_item_renamed`` (in-place rename), and
+    ``_on_tree001_drop_reparent`` (drag reparent) all skipped tree items
+    whose user data was a string — but the renderer only ever stores cmds
+    string node names there. Result: every UI op was a silent no-op.
+    Fix: drop the ``isinstance(node, str)`` skip and use ``cmds.objExists``
+    + ``cmds.rename`` instead of PyMel ``node.exists()`` / ``node.rename()``.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from mayatk.env_utils.hierarchy_manager.hierarchy_manager_slots import (
+            HierarchyManagerSlots,
+        )
+
+        self.HierarchyManagerSlots = HierarchyManagerSlots
+
+        # Minimal slot scaffold.
+        self.slot = HierarchyManagerSlots.__new__(HierarchyManagerSlots)
+        self.slot.sb = SimpleNamespace(QtCore=QtCore)
+        self.slot.ui = MagicMock()
+        self.slot.controller = MagicMock()
+        self.slot.logger = MagicMock()
+
+    def _make_item(self, node_path):
+        """Create a real QTreeWidgetItem with the node path as user data."""
+        item = _QtWidgets.QTreeWidgetItem([node_path.split("|")[-1]])
+        item.setData(0, QtCore.Qt.UserRole, node_path)
+        return item
+
+    # ------------------------------------------------------------------
+    # b018 — delete selected
+    # ------------------------------------------------------------------
+
+    def test_b018_deletes_string_user_data(self):
+        """b018 must delete nodes whose user data is a string DAG path."""
+        a = cmds.group(empty=True, name="HM_DEL_A")
+        b = cmds.group(empty=True, name="HM_DEL_B")
+
+        items = [self._make_item(a), self._make_item(b)]
+        self.slot.ui.tree001.selectedItems.return_value = items
+
+        self.slot.b018()
+
+        self.assertFalse(cmds.objExists(a), "HM_DEL_A should have been deleted")
+        self.assertFalse(cmds.objExists(b), "HM_DEL_B should have been deleted")
+        self.slot.controller.refresh_trees.assert_called_once()
+
+    def test_b018_skips_placeholders(self):
+        """b018 must ignore items whose user data is a placeholder string."""
+        a = cmds.group(empty=True, name="HM_DEL_REAL")
+        placeholder = _QtWidgets.QTreeWidgetItem(["Open Scene"])
+        placeholder.setData(0, QtCore.Qt.UserRole, "open_scene_placeholder")
+
+        items = [self._make_item(a), placeholder]
+        self.slot.ui.tree001.selectedItems.return_value = items
+
+        self.slot.b018()
+
+        self.assertFalse(cmds.objExists(a))
+
+    def test_b018_warns_when_nothing_valid_selected(self):
+        """If only placeholders are selected, b018 warns and returns."""
+        placeholder = _QtWidgets.QTreeWidgetItem(["Open Scene"])
+        placeholder.setData(0, QtCore.Qt.UserRole, "open_scene_placeholder")
+        self.slot.ui.tree001.selectedItems.return_value = [placeholder]
+
+        self.slot.b018()
+
+        self.slot.logger.warning.assert_called()
+        self.slot.controller.refresh_trees.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # _on_current_tree_item_renamed — in-place rename
+    # ------------------------------------------------------------------
+
+    def test_in_place_rename_updates_maya_and_user_data(self):
+        """Editing a tree item's name must rename the Maya node and update user data."""
+        node = cmds.group(empty=True, name="HM_RN_OLD")
+        item = self._make_item(node)
+        item.setText(0, "HM_RN_NEW")
+
+        self.slot._on_current_tree_item_renamed(item, 0)
+
+        self.assertFalse(cmds.objExists("HM_RN_OLD"))
+        self.assertTrue(cmds.objExists("HM_RN_NEW"))
+        # User data must point at the post-rename path.
+        new_data = item.data(0, QtCore.Qt.UserRole)
+        self.assertIn("HM_RN_NEW", new_data)
+
+    def test_in_place_rename_skips_when_unchanged(self):
+        """If the new name equals the old name, no rename happens."""
+        node = cmds.group(empty=True, name="HM_RN_SAME")
+        item = self._make_item(node)
+        item.setText(0, "HM_RN_SAME")
+
+        self.slot._on_current_tree_item_renamed(item, 0)
+
+        self.assertTrue(cmds.objExists("HM_RN_SAME"))
+
+    # ------------------------------------------------------------------
+    # _on_tree001_drop_reparent — drag-drop reparent
+    # ------------------------------------------------------------------
+
+    def test_drop_reparent_to_node(self):
+        """Drag-drop reparent must move the Maya node under the new parent."""
+        parent = cmds.group(empty=True, name="HM_RP_PARENT")
+        child = cmds.group(empty=True, name="HM_RP_CHILD")
+        # Currently child is at world root.
+        self.assertIsNone(cmds.listRelatives(child, parent=True))
+
+        child_item = self._make_item(child)
+        parent_item = self._make_item(parent)
+
+        self.slot._on_tree001_drop_reparent(child_item, parent_item)
+
+        new_parent = cmds.listRelatives(child, parent=True)
+        self.assertIsNotNone(new_parent, "Child should now have a parent")
+        self.assertEqual(new_parent[0].split("|")[-1].split(":")[-1], "HM_RP_PARENT")
+        self.slot.controller.refresh_trees.assert_called_once()
+
+    def test_drop_reparent_to_world(self):
+        """Drag-drop with no target must world-parent the node."""
+        parent = cmds.group(empty=True, name="HM_RP_W_PARENT")
+        child = cmds.group(empty=True, name="HM_RP_W_CHILD", parent=parent)
+        self.assertEqual(
+            cmds.listRelatives(child, parent=True)[0].split("|")[-1], "HM_RP_W_PARENT"
+        )
+
+        child_item = self._make_item(
+            cmds.ls(child, long=True)[0]  # use the long path post-parent
+        )
+
+        self.slot._on_tree001_drop_reparent(child_item, None)
+
+        self.assertIsNone(
+            cmds.listRelatives("HM_RP_W_CHILD", parent=True),
+            "Child should now be at world root",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

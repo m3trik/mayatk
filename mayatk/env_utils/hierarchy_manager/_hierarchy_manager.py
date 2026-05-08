@@ -2287,8 +2287,8 @@ class ObjectSwapper(ptk.LoggingMixin):
                             # For "Add to Scene" mode: Let Maya handle naming automatically
                             # Maya will automatically add suffixes like INTERACTIVE1, INTERACTIVE2, etc.
                             try:
-                                obj.rename(clean_name)
-                                final_name = str(obj).split('|')[-1]
+                                final_path = _rename(obj, clean_name)
+                                final_name = str(final_path).split("|")[-1]
                                 if final_name != clean_name:
                                     self.logger.debug(
                                         f"Maya auto-renamed {current_name} to {final_name}"
@@ -2319,7 +2319,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                                 while cmds.objExists(unique_name):
                                     counter += 1
                                     unique_name = f"{clean_name}_{counter}"
-                                obj.rename(unique_name)
+                                _rename(obj, unique_name)
                                 self.logger.debug(
                                     f"Renamed {current_name} to {unique_name} (conflict resolved)"
                                 )
@@ -2347,15 +2347,27 @@ class ObjectSwapper(ptk.LoggingMixin):
 
             for obj in all_objects:
                 try:
-                    # Get all shapes under this object
-                    shapes = obj.getShapes(allDescendents=True)
+                    obj_name = str(obj)
+                    # Get all shapes under this object (transforms only -> shapes)
+                    shapes = (
+                        cmds.listRelatives(
+                            obj_name,
+                            shapes=True,
+                            allDescendents=True,
+                            fullPath=True,
+                        )
+                        or []
+                    )
 
                     for shape in shapes:
                         try:
                             # Get shading engines connected to this shape
-                            shading_groups = shape.outputs(type="shadingEngine")
+                            shading_groups = (
+                                cmds.listConnections(shape, type="shadingEngine")
+                                or []
+                            )
                             for sg in shading_groups:
-                                sg_name = str(sg).split('|')[-1]
+                                sg_name = str(sg).split("|")[-1]
                                 if ":" in sg_name and sg_name not in [
                                     "initialShadingGroup",
                                     "initialParticleSE",
@@ -2364,37 +2376,49 @@ class ObjectSwapper(ptk.LoggingMixin):
 
                                     # Get materials connected to this shading engine
                                     materials = []
-                                    if sg.surfaceShader.inputs():
-                                        materials.extend(sg.surfaceShader.inputs())
-                                    if sg.displacementShader.inputs():
-                                        materials.extend(sg.displacementShader.inputs())
-                                    if sg.volumeShader.inputs():
-                                        materials.extend(sg.volumeShader.inputs())
+                                    for sg_attr in (
+                                        "surfaceShader",
+                                        "displacementShader",
+                                        "volumeShader",
+                                    ):
+                                        materials.extend(
+                                            cmds.listConnections(
+                                                f"{sg}.{sg_attr}",
+                                                source=True,
+                                                destination=False,
+                                            )
+                                            or []
+                                        )
 
                                     for mat in materials:
-                                        if mat and hasattr(mat, "nodeType"):
-                                            mat_name = str(mat).split('|')[-1]
-                                            if ":" in mat_name and mat_name not in [
-                                                "lambert1",
-                                                "particleCloud1",
-                                                "shaderGlow1",
-                                            ]:
-                                                materials_to_process.add(mat)
+                                        if not mat:
+                                            continue
+                                        mat_name = str(mat).split("|")[-1]
+                                        if ":" in mat_name and mat_name not in [
+                                            "lambert1",
+                                            "particleCloud1",
+                                            "shaderGlow1",
+                                        ]:
+                                            materials_to_process.add(mat)
 
-                                                # Also get textures and utility nodes
-                                                try:
-                                                    connected_nodes = mat.inputs()
-                                                    for node in connected_nodes:
-                                                        if node and hasattr(
-                                                            node, "nodeType"
-                                                        ):
-                                                            node_name = str(node).split('|')[-1]
-                                                            if ":" in node_name:
-                                                                materials_to_process.add(
-                                                                    node
-                                                                )
-                                                except Exception:
-                                                    pass
+                                            # Also get textures and utility nodes
+                                            try:
+                                                connected_nodes = (
+                                                    cmds.listConnections(
+                                                        mat,
+                                                        source=True,
+                                                        destination=False,
+                                                    )
+                                                    or []
+                                                )
+                                                for node in connected_nodes:
+                                                    if not node:
+                                                        continue
+                                                    node_name = str(node).split("|")[-1]
+                                                    if ":" in node_name:
+                                                        materials_to_process.add(node)
+                                            except Exception:
+                                                pass
 
                         except Exception as e:
                             self.logger.debug(
@@ -2413,16 +2437,16 @@ class ObjectSwapper(ptk.LoggingMixin):
             # Process materials first
             for material in materials_to_process:
                 try:
-                    current_name = str(material).split('|')[-1]
+                    mat_str = str(material)
+                    current_name = mat_str.split("|")[-1]
                     if ":" in current_name:
                         clean_name = current_name.split(":")[-1]
 
                         if allow_maya_auto_rename:
                             try:
-                                material.rename(clean_name)
-                                final_name = str(material).split('|')[-1]
+                                final = cmds.rename(mat_str, clean_name)
                                 self.logger.debug(
-                                    f"Renamed material {current_name} to {final_name}"
+                                    f"Renamed material {current_name} to {final}"
                                 )
                             except Exception as e:
                                 self.logger.debug(
@@ -2431,7 +2455,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                         else:
                             # Manual conflict resolution for materials
                             if not cmds.objExists(clean_name):
-                                material.rename(clean_name)
+                                cmds.rename(mat_str, clean_name)
                                 self.logger.debug(
                                     f"Renamed material {current_name} to {clean_name}"
                                 )
@@ -2441,7 +2465,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                                 while cmds.objExists(unique_name):
                                     counter += 1
                                     unique_name = f"{clean_name}_{counter}"
-                                material.rename(unique_name)
+                                cmds.rename(mat_str, unique_name)
                                 self.logger.debug(
                                     f"Renamed material {current_name} to {unique_name}"
                                 )
@@ -2452,16 +2476,16 @@ class ObjectSwapper(ptk.LoggingMixin):
             # Process shading engines
             for sg in shading_engines_to_process:
                 try:
-                    current_name = str(sg).split('|')[-1]
+                    sg_str = str(sg)
+                    current_name = sg_str.split("|")[-1]
                     if ":" in current_name:
                         clean_name = current_name.split(":")[-1]
 
                         if allow_maya_auto_rename:
                             try:
-                                sg.rename(clean_name)
-                                final_name = str(sg).split('|')[-1]
+                                final = cmds.rename(sg_str, clean_name)
                                 self.logger.debug(
-                                    f"Renamed shading engine {current_name} to {final_name}"
+                                    f"Renamed shading engine {current_name} to {final}"
                                 )
                             except Exception as e:
                                 self.logger.debug(
@@ -2470,7 +2494,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                         else:
                             # Manual conflict resolution for shading engines
                             if not cmds.objExists(clean_name):
-                                sg.rename(clean_name)
+                                cmds.rename(sg_str, clean_name)
                                 self.logger.debug(
                                     f"Renamed shading engine {current_name} to {clean_name}"
                                 )
@@ -2480,7 +2504,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                                 while cmds.objExists(unique_name):
                                     counter += 1
                                     unique_name = f"{clean_name}_{counter}"
-                                sg.rename(unique_name)
+                                cmds.rename(sg_str, unique_name)
                                 self.logger.debug(
                                     f"Renamed shading engine {current_name} to {unique_name}"
                                 )

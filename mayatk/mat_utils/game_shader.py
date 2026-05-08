@@ -166,7 +166,7 @@ class GameShader(ptk.LoggingMixin):
                 results.append(node)
 
                 status = "Success" if node else "Failed"
-                node_name = node.name() if hasattr(node, "name") else str(node)
+                node_name = str(node).split("|")[-1].split(":")[-1]
                 created_shaders.append([set_name, node_name, status])
 
             # Log Summary
@@ -195,7 +195,7 @@ class GameShader(ptk.LoggingMixin):
             )
 
             if node:
-                node_name = node.name() if hasattr(node, "name") else str(node)
+                node_name = str(node).split("|")[-1].split(":")[-1]
                 self.logger.success(f"Successfully created shader: {node_name}")
             else:
                 self.logger.error("Failed to create shader.")

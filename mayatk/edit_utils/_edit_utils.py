@@ -86,11 +86,7 @@ class EditUtils(ptk.HelpMixin):
 
                 # Get name before combine destroys the object
                 first_obj = group_objs[0]
-                name = (
-                    first_obj.name()
-                    if hasattr(first_obj, "name")
-                    else str(first_obj).split("|")[-1]
-                )
+                name = str(first_obj).split("|")[-1].split(":")[-1]
 
                 try:
                     mesh = cmds.polyUnite(group_objs, centerPivot=True, ch=False)[0]
@@ -107,11 +103,7 @@ class EditUtils(ptk.HelpMixin):
 
         else:
             # Get name before combine destroys the object
-            name = (
-                objects[0].name()
-                if hasattr(objects[0], "name")
-                else str(objects[0]).split("|")[-1]
-            )
+            name = str(objects[0]).split("|")[-1].split(":")[-1]
             combined_mesh = cmds.polyUnite(objects, centerPivot=True, ch=False)[0]
             combined_mesh = cmds.rename(combined_mesh, name)
             return combined_mesh

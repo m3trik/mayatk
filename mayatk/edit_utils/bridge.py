@@ -127,24 +127,8 @@ class BridgeSlots:
             # Get mesh nodes from the selected edges
             selected_edges = cmds.ls(sl=True, flatten=True)
             if selected_edges:
-                mesh_nodes = list(
-                    set(
-                        [
-                            edge.node()
-                            for edge in selected_edges
-                            if hasattr(edge, "node")
-                        ]
-                    )
-                )
-                # Convert mesh shapes to transform nodes
-                mesh_nodes = [
-                    (
-                        cmds.listRelatives(mesh, parent=True)[0]
-                        if cmds.objectType(mesh) == "mesh"
-                        else mesh
-                    )
-                    for mesh in mesh_nodes
-                ]
+                # Strip component suffix ("pCube1.e[12]" -> "pCube1")
+                mesh_nodes = list({edge.split(".")[0] for edge in selected_edges})
 
         # Perform the bridge operation
         Bridge.bridge(objects, **kwargs)

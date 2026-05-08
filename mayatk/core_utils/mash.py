@@ -199,9 +199,9 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
     @staticmethod
     def _create_distribute(waiter):
         node = cmds.createNode("MASH_Distribute", n="{}_Distribute".format(waiter.split("|")[-1].split(":")[-1]))
-        cmds.setAttr(node.mapDirection, 4)
-        cmds.connectAttr(node.outputPoints, waiter.inputPoints, force=1)
-        cmds.connectAttr(node.waiterMessage, waiter.waiterMessage, f=1)
+        cmds.setAttr(f"{node}.mapDirection", 4)
+        cmds.connectAttr(f"{node}.outputPoints", f"{waiter}.inputPoints", force=1)
+        cmds.connectAttr(f"{node}.waiterMessage", f"{waiter}.waiterMessage", f=1)
         return node
 
     @staticmethod
@@ -217,22 +217,22 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
         else:
             instancerName = "{}_Instancer".format(waiter.split("|")[-1].split(":")[-1])
             instancer = cmds.createNode("instancer", name=instancerName)
-        cmds.connectAttr(waiter.outputPoints, instancer.inputPoints, force=1)
+        cmds.connectAttr(f"{waiter}.outputPoints", f"{instancer}.inputPoints", force=1)
         cmds.addAttr(instancer, hidden=True, at="message", longName="instancerMessage")
-        cmds.connectAttr(waiter.instancerMessage, instancer.instancerMessage, f=1)
+        cmds.connectAttr(f"{waiter}.instancerMessage", f"{instancer}.instancerMessage", f=1)
         return instancer
 
     @staticmethod
     def _configure_distribution(node, distType, object_count):
         if object_count > 1:
-            cmds.setAttr(node.pointCount, object_count)
+            cmds.setAttr(f"{node}.pointCount", object_count)
         arrangement_values = {
             "radialNetwork": 2,
             "gridNetwork": 6,
             "initialNetwork": 7,
         }
         if distType == "zeroNetwork":
-            cmds.setAttr(node.amplitudeX, 0.0)
+            cmds.setAttr(f"{node}.amplitudeX", 0.0)
         elif distType in arrangement_values:
             cmds.setAttr(f"{node}.arrangement", arrangement_values[distType])
 
@@ -380,7 +380,7 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
     @staticmethod
     def _parent_and_key_visibility(node, group, visibility, bakeAnimation):
         parents = cmds.listRelatives(node, p=True) or []
-        parent_name = parents[0].name() if parents else None
+        parent_name = parents[0] if parents else None
         already_parented = parent_name == group
         if not already_parented:
             try:

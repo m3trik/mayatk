@@ -782,3 +782,53 @@ class TestPrepareForExport(MayaTkTestCase):
 
         self.assertEqual(synced, [opacity_obj])
         self.assertFalse(cmds.attributeQuery("opacity", node=str(plain), exists=True))
+
+
+class TestRenderOpacitySlots(MayaTkTestCase):
+    """Regression: slot wrappers around RenderOpacity must accept the plain
+    string node names that ``cmds.ls(selection=True)`` returns.
+
+    Bug fixed 2026-05-07: ``_apply_opacity`` / ``_remove_opacity`` called
+    ``[o.name() for o in objects]`` — a PyMEL idiom — which raised
+    ``AttributeError: 'str' object has no attribute 'name'`` against the
+    cmds-style strings actually in use.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.mat_utils.render_opacity import render_opacity_slots as ros
+        from unittest.mock import MagicMock
+
+        self.ros = ros
+        self.cube = cmds.polyCube(name="slot_cube")[0]
+        cmds.select(self.cube, replace=True)
+
+        self.slot = ros.RenderOpacitySlots.__new__(ros.RenderOpacitySlots)
+        self.slot.ui = MagicMock()
+        self.slot.ui.cmb_mode.currentText.return_value = "Attribute"
+        self.slot.ui.header.menu.chk_last_selected.isChecked.return_value = False
+        self.slot.ui.header.menu.chk_delete_vis_keys.isChecked.return_value = False
+        self.slot.sb = MagicMock()
+        self.slot._update_fade_enabled = MagicMock()
+
+    def test_apply_opacity_with_string_selection(self):
+        """_apply_opacity must succeed against cmds-style string selection."""
+        self.slot._apply_opacity()
+
+        self.assertTrue(
+            cmds.attributeQuery("opacity", node=self.cube, exists=True),
+            "opacity attribute should be added by _apply_opacity",
+        )
+        self.slot.sb.message_box.assert_not_called()
+
+    def test_remove_opacity_with_string_selection(self):
+        """_remove_opacity must succeed against cmds-style string selection."""
+        self.slot._apply_opacity()
+        self.assertTrue(cmds.attributeQuery("opacity", node=self.cube, exists=True))
+
+        self.slot._remove_opacity()
+
+        self.assertFalse(
+            cmds.attributeQuery("opacity", node=self.cube, exists=True),
+            "opacity attribute should be removed by _remove_opacity",
+        )

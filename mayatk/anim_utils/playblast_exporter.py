@@ -527,7 +527,7 @@ class PlayblastExporter:
             shapes = (cmds.listRelatives(cam_node, shapes=True, noIntermediate=True, fullPath=True) or [])
             if shapes:
                 return shapes[0]
-        except cmds.MayaNodeError:
+        except Exception:
             return None
         return None
 

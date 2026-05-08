@@ -23,14 +23,41 @@ from unittest.mock import MagicMock, patch, PropertyMock, call
 from collections import defaultdict
 
 # ---------------------------------------------------------------------------
-# Import shared Maya mocks from conftest (injected into sys.modules there)
+# Mock-only suite — meant to run under pytest where conftest.py auto-loads
+# and replaces maya.cmds / pymel.core with MagicMocks. Under run_tests.py /
+# mayapy, the real Maya runtime is already loaded; importing conftest there
+# would clobber sys.modules["maya.cmds"] and break production code. So:
+#   1. If real maya.cmds is already loaded, skip conftest import entirely.
+#   2. The suite is also stale w.r.t. current production (refactored APIs
+#      like ``_register_time_change_job`` no longer exist) — needs rewrite.
 # ---------------------------------------------------------------------------
-from conftest import (  # noqa: E402  (test dir on sys.path)
-    mock_pm,
-    mock_cmds,
-    mock_undo_chunk,
-    mock_om2,
+_existing_cmds = sys.modules.get("maya.cmds")
+_REAL_MAYA_PRELOADED = _existing_cmds is not None and not isinstance(
+    _existing_cmds, MagicMock
 )
+
+if _REAL_MAYA_PRELOADED:
+    mock_pm = MagicMock()
+    mock_cmds = MagicMock()
+    mock_undo_chunk = MagicMock()
+    mock_om2 = MagicMock()
+    _CONFTEST_LOADED = False
+else:
+    try:
+        from conftest import (  # noqa: E402  (test dir on sys.path)
+            mock_pm,
+            mock_cmds,
+            mock_undo_chunk,
+            mock_om2,
+        )
+        _CONFTEST_LOADED = True
+    except ImportError:
+        mock_pm = MagicMock()
+        mock_cmds = MagicMock()
+        mock_undo_chunk = MagicMock()
+        mock_om2 = MagicMock()
+        _CONFTEST_LOADED = False
+
 import maya.cmds as cmds
 
 # Aliases for backward-compat with existing test code
@@ -265,12 +292,36 @@ def make_segments(obj_name, spans, stepped_times=None):
 
 def _running_under_mayapy():
     """Detect whether we're executing inside real Maya — pollution-tracker tests
-    were never designed for mayapy."""
+    were never designed for mayapy.
+
+    The reliable signal is whether ``maya.cmds`` is the real module or the
+    MagicMock stand-in that conftest.py installs under pytest. ``maya.standalone``
+    isn't imported in port-mode runs (run_tests.py launches Maya GUI), so checking
+    that alone produced false negatives.
+    """
     import sys as _sys
-    return "maya.standalone" in _sys.modules
+    cmds_mod = _sys.modules.get("maya.cmds")
+    return cmds_mod is not None and not isinstance(cmds_mod, MagicMock)
 
 
-_RUNNING_UNDER_MAYAPY = _running_under_mayapy()
+_RUNNING_UNDER_MAYAPY = (
+    _running_under_mayapy() or not _CONFTEST_LOADED or _REAL_MAYA_PRELOADED
+)
+
+
+def setUpModule():
+    """Skip the entire mock-only suite when the real Maya runtime is loaded.
+
+    The class decorator below covers ``ControllerTestCase`` and its direct
+    subclasses, but ``unittest.skipIf`` does not propagate through class
+    inheritance — every test class needs its own skip. ``setUpModule`` is
+    called once before any test in the module and skips everything if it
+    raises ``SkipTest``.
+    """
+    if _RUNNING_UNDER_MAYAPY:
+        raise unittest.SkipTest(
+            "Mock-based test suite — runs under pytest only, not run_tests.py/mayapy"
+        )
 
 
 @unittest.skipIf(
@@ -4477,6 +4528,23 @@ class TestCallbackIdempotency(unittest.TestCase):
 
         timer.stop.assert_called_once()
         self.assertIsNone(self.ctrl._keyframe_debounce)
+
+
+# unittest.makeSuite (used by run_tests.py) does NOT invoke setUpModule, and
+# class-level @unittest.skipIf doesn't propagate through inheritance. Apply
+# the skip to every TestCase in this module so ad-hoc loaders honour it.
+if _RUNNING_UNDER_MAYAPY:
+    _skip = unittest.skipIf(
+        True,
+        "Mock-based test suite — runs under pytest only, not run_tests.py/mayapy",
+    )
+    for _name, _obj in list(globals().items()):
+        if (
+            isinstance(_obj, type)
+            and issubclass(_obj, unittest.TestCase)
+            and _obj is not unittest.TestCase
+        ):
+            globals()[_name] = _skip(_obj)
 
 
 if __name__ == "__main__":
