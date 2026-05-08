@@ -1392,7 +1392,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         self._renaming_in_progress = True
         try:
             node = item.data(0, self.sb.QtCore.Qt.UserRole)
-            if node is None or isinstance(node, str):
+            if not node or not cmds.objExists(node):
                 return
 
             new_name = item.text(0).strip()
@@ -1400,12 +1400,15 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 return
 
             try:
-                old_name = str(node).split('|')[-1]
+                old_name = node.split('|')[-1].split(':')[-1]
                 if new_name == old_name:
                     return
 
-                node.rename(new_name)
-                actual_name = str(node).split('|')[-1]
+                new_path = cmds.rename(node, new_name)
+                actual_name = new_path.split('|')[-1].split(':')[-1]
+                # Persist the post-rename DAG path so subsequent ops on this
+                # item resolve correctly.
+                item.setData(0, self.sb.QtCore.Qt.UserRole, new_path)
                 item._raw_name = actual_name
 
                 # Maya may have appended a number to avoid clashes
@@ -1418,7 +1421,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             except Exception as e:
                 # Revert the tree item text on failure
                 try:
-                    item.setText(0, str(node).split('|')[-1])
+                    item.setText(0, node.split('|')[-1].split(':')[-1])
                 except Exception:
                     pass
                 self.controller.logger.error(f"Rename failed: {e}")
@@ -1436,13 +1439,13 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             new_parent_item: Its new parent item (``None`` if dropped at root).
         """
         node = item.data(0, self.sb.QtCore.Qt.UserRole)
-        if node is None or isinstance(node, str):
+        if not node or not cmds.objExists(node):
             return
 
         try:
             if new_parent_item is not None:
                 parent_node = new_parent_item.data(0, self.sb.QtCore.Qt.UserRole)
-                if parent_node is None or isinstance(parent_node, str):
+                if not parent_node or not cmds.objExists(parent_node):
                     self.controller.logger.warning(
                         "Drop target has no Maya node â€” reparent skipped."
                     )
@@ -1455,6 +1458,9 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 # Dropped at root level â†’ world-parent
                 cmds.parent(node, world=True)
                 self.controller.logger.info(f"Reparented '{node}' to world")
+            # DAG paths change after parent; rebuild trees so user data
+            # reflects the new scene state.
+            self.controller.refresh_trees()
         except Exception as e:
             self.controller.logger.error(f"Maya reparent failed for '{node}': {e}")
             # Refresh tree to revert the visual move
@@ -2248,17 +2254,13 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             self.logger.warning("No items selected to delete.")
             return
 
-        # Collect valid Maya nodes (skip placeholders)
+        # Collect valid Maya nodes (skip placeholders + nonexistent)
         nodes = []
         for item in items:
             node = item.data(0, self.sb.QtCore.Qt.UserRole)
-            if node is None or isinstance(node, str):
+            if not node or not cmds.objExists(node):
                 continue
-            try:
-                if node.exists():
-                    nodes.append(node)
-            except Exception:
-                continue
+            nodes.append(node)
 
         if not nodes:
             self.logger.warning("No valid Maya objects found in selection.")
@@ -2267,17 +2269,16 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         # Sort deepest-first so children are deleted before parents
         def _depth(n):
             try:
-                return len(n.longName().split("|"))
+                return len((cmds.ls(n, long=True) or [n])[0].split("|"))
             except Exception:
                 return 0
 
         nodes.sort(key=_depth, reverse=True)
 
-        names = [str(n) for n in nodes]
         try:
             cmds.undoInfo(openChunk=True, chunkName="Delete Selected Objects")
             cmds.delete(nodes)
-            self.logger.info(f"Deleted {len(names)} object(s): {', '.join(names)}")
+            self.logger.info(f"Deleted {len(nodes)} object(s): {', '.join(nodes)}")
         except Exception as e:
             self.logger.error(f"Delete failed: {e}")
             return
@@ -2371,18 +2372,19 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         renamed = 0
         for cur_item, new_name in rename_pairs:
             node = cur_item.data(0, self.sb.QtCore.Qt.UserRole)
-            if node is None or isinstance(node, str):
+            if not node or not cmds.objExists(node):
                 continue
             if not new_name:
                 continue
 
             try:
-                old_name = str(node).split('|')[-1]
+                old_name = node.split('|')[-1].split(':')[-1]
                 if new_name == old_name:
                     continue
 
-                node.rename(new_name)
-                actual_name = str(node).split('|')[-1]
+                new_path = cmds.rename(node, new_name)
+                actual_name = new_path.split('|')[-1].split(':')[-1]
+                cur_item.setData(0, self.sb.QtCore.Qt.UserRole, new_path)
                 cur_item._raw_name = actual_name
 
                 # Block signals to prevent itemChanged from interfering

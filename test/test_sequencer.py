@@ -502,6 +502,24 @@ class TestSequencerMaya(unittest.TestCase):
             seq.shot_by_id(1).start, original_s1_start + 20, places=1
         )
 
+    def test_set_shot_start_ripple(self):
+        """Moving shot 0's start ripples shot 1's start by the same delta."""
+        c1 = self._create_animated_cube("ssr_a", {0: 0, 30: 5})
+        c2 = self._create_animated_cube("ssr_b", {50: 0, 80: 5})
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "S0", 0, 30, [str(c1)]),
+                ShotBlock(1, "S1", 50, 80, [str(c2)]),
+            ]
+        )
+
+        s1_start_before = seq.shot_by_id(1).start
+        seq.set_shot_start(0, 10, ripple=True)
+
+        self.assertAlmostEqual(
+            seq.shot_by_id(1).start, s1_start_before + 10, places=1
+        )
+
     def test_apply_behavior_sets_keys(self):
         """apply_behavior should create keyframes on the object."""
         cube = self._create_animated_cube("obj", {0: 0, 100: 10})
@@ -511,6 +529,12 @@ class TestSequencerMaya(unittest.TestCase):
         vis_keys = cmds.keyframe(cube, attribute="visibility", query=True)
         self.assertIsNotNone(vis_keys)
         self.assertGreater(len(vis_keys), 0)
+
+    def test_apply_behavior_unknown_raises(self):
+        """apply_behavior with an unknown template raises FileNotFoundError."""
+        cube = self._create_animated_cube("ab_unknown", {0: 0, 10: 5})
+        with self.assertRaises(FileNotFoundError):
+            apply_behavior(str(cube), "nonexistent_xyz_behavior", 0, 100)
 
     # -- gap hold enforcement ----------------------------------------------
 
@@ -896,6 +920,125 @@ class TestSequencerMaya(unittest.TestCase):
         seq = ShotSequencer([ShotBlock(0, "S0", 0, 50, [])])
         head, tail = seq.fit_shot_to_content(0)
         self.assertEqual((head, tail), (0.0, 0.0))
+
+
+# ---------------------------------------------------------------------------
+# detect_shots() — functional clustering behavior (requires Maya)
+# ---------------------------------------------------------------------------
+
+
+@unittest.skipUnless(HAS_MAYA, "Requires Maya (standalone or GUI)")
+class TestDetectShotsBehavior(unittest.TestCase):
+    """Cover the actual clustering output of ``detect_shots`` — the
+    existence/signature checks in ``TestDetectShots`` only verify wiring.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _animated(self, name, keys):
+        cube = cmds.polyCube(name=name)[0]
+        for frame, value in keys.items():
+            cmds.setKeyframe(cube, attribute="translateX", time=frame, value=value)
+        return cube
+
+    def test_single_object_yields_one_shot(self):
+        cube = self._animated("ds_single", {1: 0, 10: 5, 20: 10})
+        shots = ShotSequencer().detect_shots(objects=[str(cube)])
+        self.assertEqual(len(shots), 1)
+        self.assertAlmostEqual(shots[0]["start"], 1.0, places=1)
+        self.assertAlmostEqual(shots[0]["end"], 20.0, places=1)
+
+    def test_gap_creates_two_shots(self):
+        c1 = self._animated("ds_early", {1: 0, 10: 5})
+        c2 = self._animated("ds_late", {100: 0, 110: 5})
+        shots = ShotSequencer().detect_shots(
+            objects=[str(c1), str(c2)], gap_threshold=10
+        )
+        self.assertEqual(len(shots), 2)
+
+    def test_overlapping_ranges_merge_into_one(self):
+        c1 = self._animated("ds_a", {0: 0, 50: 10})
+        c2 = self._animated("ds_b", {30: 0, 80: 10})
+        shots = ShotSequencer().detect_shots(
+            objects=[str(c1), str(c2)], gap_threshold=10
+        )
+        self.assertEqual(len(shots), 1)
+        self.assertAlmostEqual(shots[0]["start"], 0.0, places=1)
+        self.assertAlmostEqual(shots[0]["end"], 80.0, places=1)
+
+
+# ---------------------------------------------------------------------------
+# MayaScenePersistence — round-trip against a real data node
+# ---------------------------------------------------------------------------
+
+
+@unittest.skipUnless(HAS_MAYA, "Requires Maya (standalone or GUI)")
+class TestMayaScenePersistenceRoundTrip(unittest.TestCase):
+    """Mock-based suites cover the script-job wiring; this verifies the data
+    actually round-trips through a Maya network node.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def test_save_writes_node_and_load_reads_back(self):
+        from mayatk.anim_utils.shots._shots import MayaScenePersistence, NODE_NAME
+
+        persistence = MayaScenePersistence()
+        payload = {"shots": [{"id": 0, "name": "S0", "start": 0, "end": 50}]}
+        persistence.save(payload)
+
+        # Storage node should exist after save.
+        self.assertTrue(cmds.objExists(NODE_NAME))
+
+        # Load returns the same payload.
+        self.assertEqual(persistence.load(), payload)
+
+    def test_load_returns_none_when_no_node(self):
+        from mayatk.anim_utils.shots._shots import MayaScenePersistence
+
+        # Fresh scene — no storage node yet.
+        self.assertIsNone(MayaScenePersistence().load())
+
+
+# ---------------------------------------------------------------------------
+# Shot rename reconciliation — ShotSequencer.reconcile_all_shots()
+# ---------------------------------------------------------------------------
+
+
+@unittest.skipUnless(HAS_MAYA, "Requires Maya (standalone or GUI)")
+class TestReconcileStalePaths(unittest.TestCase):
+    """Renaming an object listed in a shot must resolve to the new name
+    on the next reconcile.  Replaces the old PyMEL ``test_load_resolves_renames``.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def test_parent_rename_resolves_child_via_short_name(self):
+        """When a parent is renamed, stored long paths to its children go
+        stale.  ``_reconcile_stale_paths`` re-resolves them by leaf name.
+        """
+        parent = cmds.group(empty=True, name="P")
+        cmds.select(clear=True)
+        child = cmds.polyCube(name="C")[0]
+        child = cmds.parent(child, parent)[0]
+        cmds.setKeyframe(child, attribute="translateX", time=0, value=0)
+        cmds.setKeyframe(child, attribute="translateX", time=50, value=10)
+
+        stored_long = cmds.ls(child, long=True)[0]  # "|P|C"
+        store = ShotStore()
+        store.define_shot("S", 0, 50, objects=[stored_long])
+        seq = ShotSequencer(store=store)
+
+        cmds.rename(parent, "P_renamed")
+        self.assertFalse(cmds.objExists(stored_long))
+
+        self.assertTrue(seq.reconcile_all_shots())
+        new_long = cmds.ls("C", long=True)[0]
+        self.assertIn(new_long, store.shots[0].objects)
+        self.assertNotIn(stored_long, store.shots[0].objects)
 
 
 # ---------------------------------------------------------------------------

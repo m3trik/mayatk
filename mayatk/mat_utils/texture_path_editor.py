@@ -159,7 +159,7 @@ class TexturePathEditorSlots:
         from maya import cmds
 
         # Normalize to string names for performance (avoids node overhead)
-        node_names = [n.split('|')[-1].split(':')[-1] if hasattr(n, "name") else str(n) for n in file_nodes]
+        node_names = [str(n).split("|")[-1].split(":")[-1] for n in file_nodes]
 
         start_dir = EnvUtils.get_env_info("sourceimages")
         source_dir = self.sb.dir_dialog(
@@ -400,7 +400,7 @@ class TexturePathEditorSlots:
             return 0
 
         node_names = [
-            str(n).split('|')[-1].split(':')[-1] if hasattr(n, "name") else str(n)
+            str(n).split("|")[-1].split(":")[-1]
             for n in file_nodes
         ]
         target_dir_norm = os.path.normpath(target_dir).replace("\\", "/")
@@ -533,7 +533,7 @@ class TexturePathEditorSlots:
             all_file_nodes = cmds.ls(type="file") or []
         else:
             all_file_nodes = [
-                str(n).split('|')[-1].split(':')[-1] if hasattr(n, "name") else str(n)
+                str(n).split("|")[-1].split(":")[-1]
                 for n in file_nodes
             ]
         if not all_file_nodes:
@@ -948,23 +948,14 @@ class TexturePathEditorSlots:
 
     def _resolve_context(self, shader_name, file_node_data):
         shader_name = str(shader_name).strip() if shader_name else ""
-        shader_node = None
-        if shader_name:
-            try:
-                shader_node = shader_name
-            except (cmds.MayaNodeError, TypeError):
-                shader_node = None
+        shader_node = shader_name if shader_name else None
 
         # Resolve actual node for the file node column payload
         if isinstance(file_node_data, (list, tuple)):
             file_node_data = next(
-                (value for value in file_node_data if hasattr(value, "name")), None
+                (v for v in file_node_data if v and cmds.objExists(str(v))),
+                None,
             )
-        elif file_node_data and not hasattr(file_node_data, "name"):
-            try:
-                file_node_data = file_node_data
-            except Exception:
-                file_node_data = None
 
         # OPTIMIZATION: Use file_node_data directly if available instead of
         # calling get_file_nodes which is expensive
@@ -1039,7 +1030,7 @@ class TexturePathEditorSlots:
 
     def _resolve_absolute_texture_path(self, file_node):
         try:
-            path_value = file_node.fileTextureName.get()
+            path_value = cmds.getAttr(f"{file_node}.fileTextureName")
         except Exception:
             return ""
         if not path_value:
@@ -1360,7 +1351,7 @@ class TexturePathEditorSlots:
                 continue
 
             node_name = (
-                node_data.split('|')[-1].split(':')[-1] if hasattr(node_data, "name") else str(node_data)
+                str(node_data).split("|")[-1].split(":")[-1]
             )
 
             if node_name in target_node_names:

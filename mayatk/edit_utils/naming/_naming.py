@@ -305,25 +305,24 @@ class Naming(ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def set_case(objects=[], case="caplitalize"):
+    def set_case(objects=None, case="capitalize"):
         """Rename objects following the given case.
 
         Parameters:
             objects (str/list): The objects to rename. default:all scene objects
             case (str): Desired case using python case operators.
-                    valid: 'upper', 'lower', 'caplitalize', 'swapcase' 'title'. default:'caplitalize'
+                    valid: 'upper', 'lower', 'capitalize', 'swapcase', 'title'. default:'capitalize'
         Example:
             set_case(cmds.ls(sl=1), 'upper')
         """
-        for obj in cmds.ls(objects):
-            name = obj.split('|')[-1].split(':')[-1]
-
-            newName = getattr(name, case)()
+        for obj in cmds.ls(objects) if objects else cmds.ls():
+            leaf = obj.split("|")[-1].split(":")[-1]
+            new_name = getattr(leaf, case)()
             try:
-                cmds.rename(name, newName)
+                cmds.rename(obj, new_name)
             except Exception as error:
                 if not cmds.ls(obj, readOnly=True) == []:  # Ignore read-only errors.
-                    print(name + ": ", error)
+                    print(leaf + ": ", error)
 
     @staticmethod
     @CoreUtils.undoable

@@ -24,6 +24,15 @@ def _mash_available():
         return False
 
 
+def _mash_loadable():
+    """Try loading MASH; True if it ends up loaded."""
+    try:
+        MashToolkit.ensure_plugin_loaded()
+        return bool(int(cmds.pluginInfo("MASH", q=True, l=1)))
+    except Exception:
+        return False
+
+
 class TestMashNetworkNodes(QuickTestCase):
     """MashNetworkNodes is a plain container — no Maya required."""
 
@@ -112,6 +121,63 @@ class TestCreateNetworkValidation(MayaTkTestCase):
             MashToolkit.create_network(objects=None)
         with self.assertRaises(ValueError):
             MashToolkit.create_network(objects=[])
+
+
+@unittest.skipUnless(_mash_loadable(), "MASH plugin not installed")
+class TestMashNetworkCreation(MayaTkTestCase):
+    """End-to-end MASH network creation.
+
+    Bug fixed 2026-05-07: ``_create_distribute`` / ``_create_instancer``
+    used PyMEL-style attribute proxies on cmds-returned strings
+    (``cmds.setAttr(node.mapDirection, 4)``,
+    ``cmds.connectAttr(node.outputPoints, waiter.inputPoints)``, etc.).
+    These were converted to ``f"{node}.attr"`` plug paths.
+    """
+
+    def test_create_network_succeeds_for_instancer(self):
+        cube = cmds.polyCube(name="mash_net_cube")[0]
+
+        result = MashToolkit.create_network(
+            objects=[cube], geometry="Instancer", hideOnCreate=False
+        )
+
+        self.assertIsNotNone(result, "create_network should not return None")
+        network, waiter, instancer, distribute = result
+        self.assertTrue(cmds.objExists(waiter), "waiter node should exist")
+        self.assertTrue(cmds.objExists(instancer), "instancer node should exist")
+        self.assertTrue(cmds.objExists(distribute), "distribute node should exist")
+
+    def test_distribute_mapDirection_set_via_fstring_plug(self):
+        """Regression: _create_distribute used to do cmds.setAttr(node.mapDirection, 4)
+        which crashed because node was a string, not a PyNode."""
+        cube = cmds.polyCube(name="mash_dist_cube")[0]
+
+        _, _, _, distribute = MashToolkit.create_network(
+            objects=[cube], geometry="Instancer", hideOnCreate=False
+        )
+
+        self.assertEqual(
+            cmds.getAttr(f"{distribute}.mapDirection"),
+            4,
+            "mapDirection should be set to 4 by _create_distribute",
+        )
+
+    def test_distribute_connected_to_waiter(self):
+        """Regression: distribute.outputPoints → waiter.inputPoints connection."""
+        cube = cmds.polyCube(name="mash_conn_cube")[0]
+
+        _, waiter, _, distribute = MashToolkit.create_network(
+            objects=[cube], geometry="Instancer", hideOnCreate=False
+        )
+
+        sources = cmds.listConnections(
+            f"{waiter}.inputPoints", source=True, destination=False
+        ) or []
+        self.assertIn(
+            distribute,
+            sources,
+            "distribute should be wired into waiter.inputPoints",
+        )
 
 
 if __name__ == "__main__":

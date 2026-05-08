@@ -16,8 +16,30 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-# Import shared mocks from conftest (injected into sys.modules there)
-from conftest import mock_pm, mock_cmds, mock_undo_chunk  # noqa: E402  (test dir on sys.path)
+# Mock-only suite — designed for pytest where conftest replaces maya.cmds
+# with MagicMocks. Under run_tests.py / mayapy the real Maya runtime is
+# already loaded; importing conftest there clobbers sys.modules["maya.cmds"]
+# and breaks production code. Detect the real-Maya path BEFORE conftest.
+_existing_cmds = sys.modules.get("maya.cmds")
+_REAL_MAYA_PRELOADED = _existing_cmds is not None and not isinstance(
+    _existing_cmds, MagicMock
+)
+
+if _REAL_MAYA_PRELOADED:
+    mock_pm = MagicMock()
+    mock_cmds = MagicMock()
+    mock_undo_chunk = MagicMock()
+    _CONFTEST_LOADED = False
+else:
+    try:
+        from conftest import mock_pm, mock_cmds, mock_undo_chunk  # noqa: E402
+        _CONFTEST_LOADED = True
+    except ImportError:
+        mock_pm = MagicMock()
+        mock_cmds = MagicMock()
+        mock_undo_chunk = MagicMock()
+        _CONFTEST_LOADED = False
+
 import maya.cmds as cmds
 
 _mock_pm = mock_pm
@@ -96,7 +118,20 @@ from test_sequencer_controller import FakeSlotsInstance  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
-_RUNNING_UNDER_MAYAPY = "maya.standalone" in sys.modules
+_RUNNING_UNDER_MAYAPY = _REAL_MAYA_PRELOADED or not _CONFTEST_LOADED
+
+
+def setUpModule():
+    """Skip the entire mock-only suite when the real Maya runtime is loaded.
+
+    ``unittest.skipIf`` decorators on a class do not propagate to subclasses,
+    and even on a single class are easy to bypass — this guards every test
+    in the module by raising ``SkipTest`` from ``setUpModule``.
+    """
+    if _RUNNING_UNDER_MAYAPY:
+        raise unittest.SkipTest(
+            "Mock-based test suite — runs under pytest only, not run_tests.py/mayapy"
+        )
 
 
 @unittest.skipIf(
@@ -409,6 +444,22 @@ class TestSequencerPerf(unittest.TestCase):
         )
         widget.close()
         widget.deleteLater()
+
+
+# unittest.makeSuite does not invoke setUpModule; apply the skip post hoc
+# to every TestCase in this module so ad-hoc loaders honour it.
+if _RUNNING_UNDER_MAYAPY:
+    _skip = unittest.skipIf(
+        True,
+        "Mock-based test suite — runs under pytest only, not run_tests.py/mayapy",
+    )
+    for _name, _obj in list(globals().items()):
+        if (
+            isinstance(_obj, type)
+            and issubclass(_obj, unittest.TestCase)
+            and _obj is not unittest.TestCase
+        ):
+            globals()[_name] = _skip(_obj)
 
 
 if __name__ == "__main__":

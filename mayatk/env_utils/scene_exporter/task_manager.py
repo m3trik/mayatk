@@ -525,7 +525,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         for mat, typ, pth in material_paths:
             if typ == "Absolute":
                 all_relative = False
-                mat_name = mat.split("|")[-1].split(":")[-1] if hasattr(mat, "name") else str(mat)
+                mat_name = str(mat).split("|")[-1].split(":")[-1]
                 link = self._obj_link(mat_name, "select")
                 log_messages.append(f"Absolute path - {link} - {pth}")
 

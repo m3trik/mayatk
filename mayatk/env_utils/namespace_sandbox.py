@@ -501,7 +501,7 @@ class FBXImporter:
                         recursive_transforms = [
                             obj
                             for obj in all_ns_objects
-                            if hasattr(obj, "type") and obj.type() == "transform"
+                            if cmds.objectType(obj) == "transform"
                         ]
                         namespaced_transforms.extend(recursive_transforms)
                         self.logger.debug(
@@ -736,36 +736,66 @@ class FBXImporter:
 
                     for shape in shapes:
                         try:
+                            shape_name = str(shape)
                             # Get shading engines connected to this shape
-                            shading_groups = shape.outputs(type="shadingEngine")
+                            shading_groups = (
+                                cmds.listConnections(
+                                    shape_name, type="shadingEngine"
+                                )
+                                or []
+                            )
                             for sg in shading_groups:
                                 shading_engines_to_move.add(sg)
 
                                 # Get materials connected to this shading engine
-                                materials = sg.surfaceShader.inputs()
-                                materials.extend(sg.displacementShader.inputs())
-                                materials.extend(sg.volumeShader.inputs())
+                                materials = []
+                                for sg_attr in (
+                                    "surfaceShader",
+                                    "displacementShader",
+                                    "volumeShader",
+                                ):
+                                    materials.extend(
+                                        cmds.listConnections(
+                                            f"{sg}.{sg_attr}",
+                                            source=True,
+                                            destination=False,
+                                        )
+                                        or []
+                                    )
 
                                 for mat in materials:
-                                    if mat and hasattr(mat, "nodeType"):
-                                        materials_to_move.add(mat)
+                                    if not mat:
+                                        continue
+                                    materials_to_move.add(mat)
 
-                                        # Also get textures connected to the material
-                                        file_textures = mat.inputs(type="file")
-                                        for tex in file_textures:
-                                            materials_to_move.add(tex)
+                                    # Textures connected to the material
+                                    file_textures = (
+                                        cmds.listConnections(
+                                            mat,
+                                            source=True,
+                                            destination=False,
+                                            type="file",
+                                        )
+                                        or []
+                                    )
+                                    materials_to_move.update(file_textures)
 
-                                        # Get other connected nodes (like bump2d, etc.)
-                                        connected_nodes = mat.inputs()
-                                        for node in connected_nodes:
-                                            if node and hasattr(node, "nodeType"):
-                                                node_type = node.nodeType()
-                                                if node_type in [
-                                                    "bump2d",
-                                                    "place2dTexture",
-                                                    "samplerInfo",
-                                                ]:
-                                                    materials_to_move.add(node)
+                                    # Other relevant connected nodes
+                                    connected_nodes = (
+                                        cmds.listConnections(
+                                            mat, source=True, destination=False
+                                        )
+                                        or []
+                                    )
+                                    for node in connected_nodes:
+                                        if not node or not cmds.objExists(node):
+                                            continue
+                                        if cmds.nodeType(node) in (
+                                            "bump2d",
+                                            "place2dTexture",
+                                            "samplerInfo",
+                                        ):
+                                            materials_to_move.add(node)
 
                         except Exception as e:
                             self.logger.debug(
@@ -1620,8 +1650,12 @@ class NamespaceSandbox(ptk.LoggingMixin):
                     "node": node_obj,
                     "parent": _get_parent(node_obj),
                     "children": _get_children(node_obj, type="transform"),
-                    "world_matrix": node_obj.getMatrix(worldSpace=True),
-                    "local_matrix": node_obj.getMatrix(worldSpace=False),
+                    "world_matrix": cmds.xform(
+                        node_obj, query=True, matrix=True, worldSpace=True
+                    ),
+                    "local_matrix": cmds.xform(
+                        node_obj, query=True, matrix=True, worldSpace=False
+                    ),
                     "full_path": node,
                 }
 

@@ -178,7 +178,7 @@ class Snap(ptk.HelpMixin):
             if moved_count > 0:
                 # Get the transform node for vertex access
                 transform = source
-                if transform.type() == "mesh":
+                if cmds.objectType(transform) == "mesh":
                     transform = (cmds.listRelatives(transform, parent=True, fullPath=True) or [None])[0]
 
                 for i in range(len(new_points)):

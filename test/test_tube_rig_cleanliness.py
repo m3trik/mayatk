@@ -88,5 +88,35 @@ class TestTubeRigCleanExport(unittest.TestCase):
         )
 
 
+class TestGetCenterlineUsingEdges(unittest.TestCase):
+    """Regression: get_centerline_using_edges feeds plain ``[x, y, z]``
+    lists from ``cmds.pointPosition`` into ``ptk.arrange_points_as_path``.
+
+    Bug fixed 2026-05-07: the default ``distance_metric`` did
+    ``(p1 - p2).length()`` — only valid for ``om.MPoint`` / PyMEL
+    ``dt.Point``. Plain lists raised ``TypeError`` on subtraction.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+        self.tube = cmds.polyCylinder(r=1, h=10, sy=10, sx=12, ax=(1, 0, 0))[0]
+        cmds.makeIdentity(self.tube, apply=True, t=1, r=1, s=1, n=0, pn=1)
+
+    def test_returns_ordered_points(self):
+        from mayatk.rig_utils.tube_rig import TubePath
+
+        # Sample a handful of edges around the tube.
+        edges = [f"{self.tube}.e[{i}]" for i in (0, 12, 24, 36, 48)]
+
+        # Should not raise — exercises the list-input arrange_points_as_path path.
+        result = TubePath.get_centerline_using_edges(edges)
+
+        self.assertIsInstance(result, list)
+        self.assertGreaterEqual(len(result), 2)
+        # Each point should be a 3-element sequence.
+        for p in result:
+            self.assertEqual(len(p), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

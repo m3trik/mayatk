@@ -17,8 +17,10 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 # conftest.py is auto-loaded by pytest and injects mock_pm into
-# sys.modules["pymel.core"].  Grab it from there.
-mock_pm = sys.modules["pymel.core"]
+# sys.modules["pymel.core"].  Under unittest/run_tests.py, conftest is not
+# auto-loaded — fall back to a placeholder so import succeeds and the
+# skipUnless guards below take effect.
+mock_pm = sys.modules.get("pymel.core")
 
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 

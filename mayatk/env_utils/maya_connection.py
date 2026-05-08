@@ -326,6 +326,7 @@ class MayaConnection:
         force_new_instance: bool = True,
         launch_args: Optional[List[str]] = None,
         confirm_existing: bool = True,
+        auto_cleanup: bool = False,
     ) -> bool:
         """
         Connect to Maya using the specified mode.
@@ -353,6 +354,12 @@ class MayaConnection:
             confirm_existing: If True (default), shows a confirmation dialog when
                 connecting to an existing Maya session (only applies when
                 ``force_new_instance=False``).  Set to False to skip the dialog.
+            auto_cleanup: If True, register an ``atexit`` handler that calls
+                :meth:`shutdown` (with ``force=True``) on interpreter exit —
+                including unhandled exceptions and ``KeyboardInterrupt``. Use
+                when the caller can't wrap connection use in a ``with`` block.
+                The handler is idempotent across repeated ``connect()`` calls
+                on the same instance and a no-op once shut down.
 
         Returns:
             bool: True if connection successful
@@ -393,14 +400,45 @@ class MayaConnection:
                     f"[MayaConnection] Connection failed. Launching Maya on port {port}..."
                 )
                 if self._launch_maya_gui(port, app_path, extra_args=launch_args):
-                    return self._connect_via_port(host, port)
+                    connected = self._connect_via_port(host, port)
+            if connected and auto_cleanup:
+                self._register_atexit_cleanup()
             return connected
         elif mode == "standalone":
-            return self._connect_standalone()
+            connected = self._connect_standalone()
+            if connected and auto_cleanup:
+                self._register_atexit_cleanup()
+            return connected
         elif mode == "interactive":
-            return self._connect_interactive()
+            connected = self._connect_interactive()
+            if connected and auto_cleanup:
+                self._register_atexit_cleanup()
+            return connected
         else:
             raise ValueError(f"Invalid connection mode: {mode}")
+
+    def _register_atexit_cleanup(self) -> None:
+        """Register an ``atexit`` handler that shuts this connection down.
+
+        Idempotent — repeated calls register only once. The handler is a
+        no-op if the connection has already been shut down by the time the
+        interpreter exits, so explicit ``shutdown()`` plus auto-cleanup is
+        safe.
+        """
+        if getattr(self, "_atexit_registered", False):
+            return
+        import atexit
+
+        def _cleanup():
+            if not getattr(self, "is_connected", False):
+                return
+            try:
+                self.shutdown(force=True)
+            except Exception as e:
+                print(f"[MayaConnection] atexit cleanup failed: {e}")
+
+        atexit.register(_cleanup)
+        self._atexit_registered = True
 
     def _launch_maya_gui(
         self,

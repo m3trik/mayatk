@@ -210,17 +210,17 @@ class NurbsUtils(ptk.HelpMixin):
         )
 
         curveNode = cmds.ls(mashNW.addNode("MASH_Curve").name)[0]
-        cmds.connectAttr(path.worldSpace[0], curveNode.inCurves[0], force=1)
+        cmds.connectAttr(f"{path}.worldSpace[0]", f"{curveNode}.inCurves[0]", force=1)
 
-        cmds.setAttr(curveNode.stopAtEnd, 1)  # 0=off, 1=on
-        cmds.setAttr(curveNode.clipStart, 0)
-        cmds.setAttr(curveNode.clipEnd, 1)
-        cmds.setAttr(curveNode.equalSpacing, 1)
-        cmds.setAttr(curveNode.timeStep, 1)
-        cmds.setAttr(curveNode.curveLengthAffectsSpeed, 1)
+        cmds.setAttr(f"{curveNode}.stopAtEnd", 1)  # 0=off, 1=on
+        cmds.setAttr(f"{curveNode}.clipStart", 0)
+        cmds.setAttr(f"{curveNode}.clipEnd", 1)
+        cmds.setAttr(f"{curveNode}.equalSpacing", 1)
+        cmds.setAttr(f"{curveNode}.timeStep", 1)
+        cmds.setAttr(f"{curveNode}.curveLengthAffectsSpeed", 1)
 
-        cmds.setAttr(distNode.pointCount, count)
-        cmds.setAttr(distNode.amplitudeX, 0)
+        cmds.setAttr(f"{distNode}.pointCount", count)
+        cmds.setAttr(f"{distNode}.amplitudeX", 0)
 
         baked_curves = MashToolkit.bake_instancer(mashNW, instNode)
 
@@ -228,7 +228,7 @@ class NurbsUtils(ptk.HelpMixin):
         for curve in reversed(baked_curves):
             result.append(curve)
 
-        cmds.delete(mashNW.waiter.name())  # delete the MASH network.
+        cmds.delete(mashNW.waiter)  # delete the MASH network.
         # cmds.undoInfo(closeChunk=1)
 
         return result

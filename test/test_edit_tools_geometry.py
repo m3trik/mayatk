@@ -97,6 +97,42 @@ class TestSnap(MayaTkTestCase):
         pos = cmds.xform(cube, q=True, ws=True, rp=True)
         self.assertAlmostEqual(pos[0], 1.5, places=4)
 
+    def test_snap_to_surface_with_transform_input(self):
+        """Regression: snap_to_surface's transform/mesh handling on string input.
+
+        Bug fixed 2026-05-07: ``transform.type() == "mesh"`` (PyMEL idiom)
+        crashed on cmds-style string nodes. Replaced with ``cmds.objectType``.
+        """
+        target = cmds.polyPlane(name="snap_target", w=4, h=4)[0]
+        source = cmds.polyCube(name="snap_source")[0]
+        cmds.move(0, 5, 0, source)  # source above target
+
+        # Move some vertices below the plane to force snap movement.
+        cmds.move(0, -3, 0, f"{source}.vtx[0]")
+
+        # Should not raise — exercises the .objectType("mesh") branch transitively.
+        Snap.snap_to_surface(source_meshes=source, target_mesh=target, offset=0.0)
+
+        # Source still exists post-snap.
+        self.assertTrue(cmds.objExists(source))
+
+    def test_snap_to_surface_with_shape_input(self):
+        """Regression: snap_to_surface explicitly handles mesh-shape inputs.
+
+        Passing the shape directly used to crash on ``transform.type()``.
+        Now the code calls ``cmds.objectType(transform)`` and walks up to the
+        parent transform.
+        """
+        target = cmds.polyPlane(name="snap_target_2", w=4, h=4)[0]
+        source_xform = cmds.polyCube(name="snap_src_2")[0]
+        source_shape = cmds.listRelatives(source_xform, shapes=True)[0]
+        cmds.move(0, -3, 0, f"{source_xform}.vtx[0]")
+
+        # Pass the shape, not the transform — exercises the .objectType branch.
+        Snap.snap_to_surface(source_meshes=source_shape, target_mesh=target, offset=0.0)
+
+        self.assertTrue(cmds.objExists(source_xform))
+
 
 class TestCutOnAxis(MayaTkTestCase):
     """CutOnAxis.perform_cut_on_axis — wraps EditUtils.cut_along_axis."""

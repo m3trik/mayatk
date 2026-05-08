@@ -535,12 +535,7 @@ class WheelRigSlots:
             rig = self._wheel_rig
             if rig is None:
                 raise AttributeError
-            # Validate the cached rig's control still exists in the scene.
-            # cmds stores DAG paths; if the node was renamed, reparented,
-            # or deleted the reference goes stale and .name() will raise.
-            try:
-                rig.control.name()
-            except Exception:
+            if not rig.control or not cmds.objExists(rig.control):
                 self._wheel_rig = None
                 raise AttributeError
             return rig
@@ -552,26 +547,18 @@ class WheelRigSlots:
 
             # Check persistent ID on control to recover correct name
             if cmds.attributeQuery("wheelRigId", node=control, exists=True):
-                rig_name = control.wheelRigId.get()
+                rig_name = cmds.getAttr(f"{control}.wheelRigId")
                 self.rig_name = rig_name  # Sync UI
             else:
                 rig_name = self.rig_name or f"{control.split('|')[-1].split(':')[-1]}_wheel_rig"
 
-            existing = getattr(control, "rig", None)
-            if isinstance(existing, WheelRig):
-                # Reuse and rename if needed
-                existing.rig_name = rig_name
-                self._wheel_rig = existing
-                print(f"Reusing existing wheel rig: {self._wheel_rig.rig_name}")
-            else:
-                # Create new and attach to control.rig via WheelRig.__init__
-                self._wheel_rig = WheelRig(
-                    control,
-                    wheels,
-                    rig_name=rig_name,
-                    freeze_transforms=self.ui.chk010.isChecked(),
-                )
-                print(f"Created new wheel rig: {self._wheel_rig.rig_name}")
+            self._wheel_rig = WheelRig(
+                control,
+                wheels,
+                rig_name=rig_name,
+                freeze_transforms=self.ui.chk010.isChecked(),
+            )
+            print(f"Created new wheel rig: {self._wheel_rig.rig_name}")
 
             return self._wheel_rig
 

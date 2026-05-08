@@ -124,10 +124,9 @@ class RenderOpacitySlots:
             objects = [cube]
             cmds.select(objects, replace=True)
 
-        names = [o.name() for o in objects]
-        label = ", ".join(names[:5])
-        if len(names) > 5:
-            label += f" … (+{len(names) - 5} more)"
+        label = ", ".join(objects[:5])
+        if len(objects) > 5:
+            label += f" … (+{len(objects) - 5} more)"
 
         delete_vis = self.ui.header.menu.chk_delete_vis_keys.isChecked()
 
@@ -274,10 +273,9 @@ class RenderOpacitySlots:
             )
             return
 
-        names = [o.name() for o in objects]
-        label = ", ".join(names[:5])
-        if len(names) > 5:
-            label += f" … (+{len(names) - 5} more)"
+        label = ", ".join(objects[:5])
+        if len(objects) > 5:
+            label += f" … (+{len(objects) - 5} more)"
 
         try:
             mtk.RenderOpacity.remove(objects)

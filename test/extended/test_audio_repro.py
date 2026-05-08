@@ -11,7 +11,6 @@ if test_dir not in sys.path:
     sys.path.insert(0, test_dir)
 
 import maya.cmds as cmds  # noqa: E402
-import pymel.core as pm  # noqa: E402
 
 from base_test import MayaTkTestCase  # noqa: E402
 
