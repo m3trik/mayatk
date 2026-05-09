@@ -84,9 +84,7 @@ from mayatk.anim_utils.shots._shots import ShotStore, ShotBlock
 # ---------------------------------------------------------------------------
 HAS_MAYA = False
 try:
-    import pymel.core as pm
-
-    # Quick sanity check â€” will succeed inside Maya or maya.standalone
+    # Quick sanity check — will succeed inside Maya or maya.standalone
     cmds.about(version=True)
     HAS_MAYA = True
 except Exception:
@@ -98,8 +96,6 @@ except Exception:
         if not _conn.is_connected:
             _conn.connect(mode="standalone")
         HAS_MAYA = _conn.is_connected
-        if HAS_MAYA:
-            import pymel.core as pm
     except Exception as exc:
         print(f"Maya bootstrap failed: {exc}")
 

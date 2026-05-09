@@ -28,21 +28,22 @@ except ImportError:
 if QApplication and not QApplication.instance():
     app = QApplication(sys.argv)
 
+_HAS_MAYA = False
 try:
-    import pymel.core as pm
+    import maya.cmds as _probe_cmds
 
-    # Detect if pymel is a mock (e.g. when collected alongside controller tests
-    # that inject sys.modules["pymel.core"] = MagicMock()).
-    if not hasattr(pm, "__file__"):
-        pm = None
+    # Detect if cmds is a mock (e.g. when collected alongside controller tests
+    # that inject sys.modules["maya.cmds"] = MagicMock()).
+    if hasattr(_probe_cmds, "__file__"):
+        _HAS_MAYA = True
 except ImportError:
-    pm = None
+    pass
 
 # Force reload of modules to pick up changes.
 # Only do this when running against real Maya — the delete pollutes
 # sys.modules when other test files have already imported these modules
 # with mocked Maya dependencies.
-if pm is not None:
+if _HAS_MAYA:
     if "mayatk.anim_utils.segment_keys" in sys.modules:
         del sys.modules["mayatk.anim_utils.segment_keys"]
     if "mayatk.anim_utils._anim_utils" in sys.modules:
@@ -88,7 +89,7 @@ except ImportError:
     MayaTkTestCase = unittest.TestCase
 
 
-class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
+class TestSegmentKeysBasic(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
     """Basic tests for SegmentKeys functionality."""
 
     def test_collect_segments_empty_list(self):
@@ -96,7 +97,7 @@ class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
         result = SegmentKeys.collect_segments([])
         self.assertEqual(result, [])
 
-    @unittest.skipIf(pm is None, "Requires Maya")
+    @unittest.skipIf(not _HAS_MAYA, "Requires Maya")
     def test_segment_keyframe_isolation_default_absorbs_trailing_holds(self):
         """Verify trailing holds are absorbed into segments by default.
 
@@ -144,7 +145,7 @@ class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
             f"Segment 2 should only have keys [20, 30], got {seg2['keyframes']}",
         )
 
-    @unittest.skipIf(pm is None, "Requires Maya")
+    @unittest.skipIf(not _HAS_MAYA, "Requires Maya")
     def test_segment_keyframe_isolation_ignore_holds_active_only(self):
         """Verify ignore_holds=True keeps active-only segments (no trailing holds)."""
         cube = cmds.polyCube(name="TestCubeIgnoreHolds")[0]
@@ -172,7 +173,7 @@ class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
         self.assertEqual(seg2["end"], 30)
         self.assertEqual(seg2["keyframes"], [20.0, 30.0])
 
-    @unittest.skipIf(pm is None, "Requires Maya")
+    @unittest.skipIf(not _HAS_MAYA, "Requires Maya")
     def test_print_scene_info(self):
         """Test print_scene_info runs without error."""
         cube = cmds.polyCube(name="print_test")[0]
@@ -368,7 +369,7 @@ class TestSegmentKeysBasic(MayaTkTestCase if pm else unittest.TestCase):
         self.assertEqual(len(result), 2)  # One for cube1, one for cube2
 
 
-class TestSegmentKeysFilters(MayaTkTestCase if pm else unittest.TestCase):
+class TestSegmentKeysFilters(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
     """Tests for filtering methods."""
 
     def test_filter_curves_by_ignore_empty_ignore(self):
@@ -390,12 +391,12 @@ class TestSegmentKeysFilters(MayaTkTestCase if pm else unittest.TestCase):
         self.assertEqual(len(result), 2)
 
 
-class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
+class TestSegmentKeysMaya(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
     """Maya-specific tests for SegmentKeys (require Maya connection)."""
 
     def setUp(self):
         """Set up test scene."""
-        if pm is None:
+        if not _HAS_MAYA:
             self.skipTest("PyMEL not available")
         super().setUp()
         _pm_new_file(force=True)
@@ -791,7 +792,7 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         self.assertEqual(result[0], (0, 10))
         self.assertEqual(result[1], (20, 30))
 
-    @unittest.skipIf(pm is None, "Requires Maya")
+    @unittest.skipIf(not _HAS_MAYA, "Requires Maya")
     def test_stepped_tangent_emits_full_interval(self):
         """Stepped tangent with value change emits full [t1, t2] interval.
 
@@ -823,7 +824,7 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         self.assertAlmostEqual(start, 400, places=0)
         self.assertAlmostEqual(end, 18388, places=0)
 
-    @unittest.skipIf(pm is None, "Requires Maya")
+    @unittest.skipIf(not _HAS_MAYA, "Requires Maya")
     def test_stepped_pass_through_pruned_by_collect(self):
         """Stepped interval fully outside shot range is pruned by collect_segments.
 
@@ -855,7 +856,7 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         # but neither key is inside it.
         self.assertEqual(len(segments), 0, f"Expected 0 segments, got {segments}")
 
-    @unittest.skipIf(pm is None, "Requires Maya")
+    @unittest.skipIf(not _HAS_MAYA, "Requires Maya")
     def test_stepped_partial_pass_through_emits_point(self):
         """Stepped interval with one key outside range emits only the in-range key.
 
@@ -887,7 +888,7 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         self.assertAlmostEqual(start, 1785, places=0)
         self.assertAlmostEqual(end, 1785, places=0)
 
-    @unittest.skipIf(pm is None, "Requires Maya")
+    @unittest.skipIf(not _HAS_MAYA, "Requires Maya")
     def test_stepped_same_value_is_pure_hold(self):
         """Stepped interval with same start/end value is a pure hold — no segment.
 
@@ -913,11 +914,11 @@ class TestSegmentKeysMaya(MayaTkTestCase if pm else unittest.TestCase):
         self.assertEqual(len(result), 0, f"Expected 0 segments, got {result}")
 
 
-class TestSegmentKeysEdgeCases(MayaTkTestCase if pm else unittest.TestCase):
+class TestSegmentKeysEdgeCases(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
     """Edge case tests for SegmentKeys."""
 
     def setUp(self):
-        if pm is None:
+        if not _HAS_MAYA:
             self.skipTest("Maya not available")
         super().setUp()
         _pm_new_file(force=True)

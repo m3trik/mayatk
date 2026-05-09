@@ -110,13 +110,13 @@ Note: Material mode creates a duplicate StingrayPBS material per object.</string
          <property name="minimumSize">
           <size>
            <width>0</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="maximumSize">
           <size>
            <width>60</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="toolTip">
@@ -157,13 +157,13 @@ If nothing is selected, creates a polyCube first.</string>
          <property name="minimumSize">
           <size>
            <width>0</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="maximumSize">
           <size>
            <width>16777215</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="toolTip">
@@ -204,13 +204,13 @@ Use the option box to configure frames, direction, and timing.</string>
          <property name="minimumSize">
           <size>
            <width>0</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="maximumSize">
           <size>
            <width>16777215</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="toolTip">

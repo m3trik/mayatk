@@ -54,10 +54,6 @@ except Exception:
     except Exception:
         pass
 
-if HAS_MAYA:
-    import pymel.core as pm
-
-
 class TestShotBlock(unittest.TestCase):
     """Test ShotBlock dataclass."""
 

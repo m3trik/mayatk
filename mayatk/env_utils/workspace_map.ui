@@ -36,6 +36,18 @@
       </item>
       <item>
        <widget class="QPushButton" name="b002">
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>19</height>
+         </size>
+        </property>
         <property name="text">
          <string>Refresh</string>
         </property>
@@ -109,6 +121,18 @@
      </item>
      <item>
       <widget class="QPushButton" name="b000">
+       <property name="maximumSize">
+        <size>
+         <width>16777215</width>
+         <height>19</height>
+        </size>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>19</height>
+        </size>
+       </property>
        <property name="text">
         <string>Browse</string>
        </property>
@@ -119,6 +143,18 @@
      </item>
      <item>
       <widget class="QPushButton" name="b001">
+       <property name="maximumSize">
+        <size>
+         <width>16777215</width>
+         <height>19</height>
+        </size>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>19</height>
+        </size>
+       </property>
        <property name="text">
         <string>Set to Workspace</string>
        </property>

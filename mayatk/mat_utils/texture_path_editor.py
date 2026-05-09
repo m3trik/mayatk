@@ -31,12 +31,13 @@ class TexturePathEditorSlots:
         self.ui = self.sb.loaded_ui.texture_path_editor
         self._refresh_pending = False  # Flag to debounce refresh calls
         self._footer_controller = self._create_footer_controller()
-        self._setup_footer_actions()
         self._previous_paths = {}  # node_name -> path before last in-session repath (for tooltips)
         self._browse_in_progress = False  # re-entry guard for row_browse_for_file
 
     def header_init(self, widget):
         """Initialize the header for the texture path editor."""
+        widget.config_buttons("refresh", "menu", "collapse", "pin")
+        widget.refresh_requested.connect(self.refresh_texture_table)
         widget.menu.add("Separator", setTitle="General")
         widget.menu.add(
             self.sb.registered_widgets.Label,
@@ -158,8 +159,8 @@ class TexturePathEditorSlots:
         """
         from maya import cmds
 
-        # Normalize to string names for performance (avoids node overhead)
-        node_names = [str(n).split("|")[-1].split(":")[-1] for n in file_nodes]
+        # Preserve namespaces; stripping breaks cmds.getAttr/setAttr.
+        node_names = [str(n) for n in file_nodes]
 
         start_dir = EnvUtils.get_env_info("sourceimages")
         source_dir = self.sb.dir_dialog(
@@ -399,10 +400,8 @@ class TexturePathEditorSlots:
         if not file_nodes:
             return 0
 
-        node_names = [
-            str(n).split("|")[-1].split(":")[-1]
-            for n in file_nodes
-        ]
+        # Preserve namespaces; stripping breaks cmds.getAttr/setAttr.
+        node_names = [str(n) for n in file_nodes]
         target_dir_norm = os.path.normpath(target_dir).replace("\\", "/")
         to_relative = self._project_relative_converter()
 
@@ -532,10 +531,8 @@ class TexturePathEditorSlots:
         if file_nodes is None:
             all_file_nodes = cmds.ls(type="file") or []
         else:
-            all_file_nodes = [
-                str(n).split("|")[-1].split(":")[-1]
-                for n in file_nodes
-            ]
+            # Preserve namespaces; stripping breaks cmds.getAttr/setAttr.
+            all_file_nodes = [str(n) for n in file_nodes]
         if not all_file_nodes:
             cmds.warning("No file nodes to process.")
             return
@@ -644,7 +641,7 @@ class TexturePathEditorSlots:
         self.ui.tbl000.init_slot()
 
     def refresh_texture_table(self):
-        """Manual refresh trigger from the header menu."""
+        """Manual refresh trigger from the header refresh button."""
         table = getattr(self.ui, "tbl000", None)
         if not table:
             return
@@ -1295,17 +1292,6 @@ class TexturePathEditorSlots:
             resolver=self._resolve_source_images_path,
             default_text="",
             truncate_kwargs={"length": 96, "mode": "middle"},
-        )
-
-    def _setup_footer_actions(self):
-        """Add action buttons to the footer."""
-        footer = getattr(self.ui, "footer", None)
-        if footer is None or not hasattr(footer, "add_action_button"):
-            return
-        footer.add_action_button(
-            icon_name="refresh",
-            tooltip="Rescan the current scene and update the texture table.",
-            callback=self.refresh_texture_table,
         )
 
     def _resolve_source_images_path(self) -> str:

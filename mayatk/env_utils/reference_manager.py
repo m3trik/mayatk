@@ -1935,14 +1935,10 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     def header_init(self, widget):
         """Initialize the header for the reference manager."""
+        widget.config_buttons("refresh", "menu", "collapse", "pin")
+        widget.refresh_requested.connect(self.btn_refresh)
         widget.menu.add_presets = True
         widget.menu.presets.preset_dir = "~/.mayatk/presets/reference_manager"
-        widget.menu.add(
-            "QPushButton",
-            setText="Refresh",
-            setObjectName="btn_refresh",
-            setToolTip="Refresh the file list.",
-        )
         widget.menu.add("Separator", setTitle="Naming:")
         widget.menu.add(
             "QPushButton",

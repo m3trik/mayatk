@@ -423,12 +423,12 @@ except Exception as e:
             total_skipped = 0
             results_summary = []
 
-            # Snapshot real Maya/pymel modules so tests that mock sys.modules
+            # Snapshot real Maya modules so tests that mock sys.modules
             # don't pollute later test modules.
             _real_module_keys = (
                 "maya", "maya.cmds", "maya.mel", "maya.OpenMaya", "maya.OpenMayaUI",
                 "maya.api", "maya.api.OpenMaya", "maya.api.OpenMayaAnim",
-                "maya.utils", "maya.app", "pymel", "pymel.core",
+                "maya.utils", "maya.app",
             )
             _real_modules_snapshot = {{
                 k: sys.modules[k] for k in _real_module_keys if k in sys.modules
@@ -523,7 +523,7 @@ except Exception as e:
                         f.write(f"\\n{{module_name}}: LOAD ERROR\\n")
                         f.write(f"  {{str(e)}}\\n")
                 finally:
-                    # Restore real Maya/pymel modules in case the just-loaded
+                    # Restore real Maya modules in case the just-loaded
                     # test patched sys.modules with mocks.
                     for _k, _real_mod in _real_modules_snapshot.items():
                         sys.modules[_k] = _real_mod

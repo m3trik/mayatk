@@ -20,7 +20,7 @@ except ImportError:
 
 import pythontk as ptk
 
-from mayatk.core_utils._core_utils import short_name, as_strings
+from mayatk.core_utils._core_utils import as_strings, leaf_name
 
 
 # ---------------------------------------------------------------------------
@@ -822,10 +822,13 @@ class Attributes(ptk.HelpMixin):
         If *obj* is a locator, returns its first child transform (the
         control underneath).  Returns ``None`` when no valid target exists.
         """
-        shapes = cmds.listRelatives(str(obj), shapes=True) or []
+        shapes = cmds.listRelatives(str(obj), shapes=True, fullPath=True) or []
         shape = shapes[0] if shapes else None
         if shape and cmds.nodeType(shape) == "locator":
-            children = cmds.listRelatives(str(obj), children=True, type="transform") or []
+            children = (
+                cmds.listRelatives(str(obj), children=True, type="transform", fullPath=True)
+                or []
+            )
             return children[0] if children else None
         return obj
 
@@ -879,10 +882,11 @@ class Attributes(ptk.HelpMixin):
                 else:
                     obj_state[group] = None
 
-            # Use leaf (namespace-stripped) name as the key — matches the
-            # legacy ``obj.name()`` semantics so callers reading
-            # this dict (and ``set_lock_state`` below) keep working.
-            result[short_name(obj)] = obj_state
+            # Key by namespaced leaf name (e.g. ``"ns:Foo"``): distinct
+            # across references/namespaces while keeping lookups natural
+            # for callers that pass plain node names. Symmetric with
+            # ``set_lock_state``.
+            result[leaf_name(obj)] = obj_state
 
         return result
 
@@ -912,7 +916,7 @@ class Attributes(ptk.HelpMixin):
             if obj is None:
                 continue
 
-            key = short_name(obj)
+            key = leaf_name(obj)
             if lock_state and key in lock_state:
                 state = lock_state[key]
                 for attr in ("tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz"):

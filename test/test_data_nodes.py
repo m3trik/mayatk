@@ -14,10 +14,9 @@ if scripts_dir not in sys.path:
     sys.path.insert(0, scripts_dir)
 
 try:
-    import pymel.core as pm
     import maya.cmds as cmds
 except ImportError:
-    pm = cmds = None
+    cmds = None
 
 from base_test import MayaTkTestCase
 from mayatk.node_utils.data_nodes import DataNodes

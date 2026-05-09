@@ -100,9 +100,6 @@ except Exception:
 # ---------------------------------------------------------------------------
 # Conditional imports (only available when Maya is running)
 # ---------------------------------------------------------------------------
-if HAS_MAYA:
-    import pymel.core as pm
-
 if HAS_MAYA and HAS_QT:
     from uitk.widgets.sequencer._sequencer import SequencerWidget
     from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (

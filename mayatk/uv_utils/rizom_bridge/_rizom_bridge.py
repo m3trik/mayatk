@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -40,6 +41,8 @@ class RizomUVBridge:
         self._export_name_map = {}
         # Suffix applied to temporary duplicate nodes to avoid FBX re-import overwriting originals
         self._temp_suffix = "__RZTMP"
+        # Per-run placeholder overrides (set by process_with_rizomuv)
+        self._params: dict = {}
 
     @property
     def rizom_path(self):
@@ -99,17 +102,21 @@ class RizomUVBridge:
         else:
             self._script_path = self._prepare_script_file(value)
 
-    def process_with_rizomuv(self, objects, uv_script=None, preset=None):
-        """Run the full export → RizomUV → re-import workflow.
+    def process_with_rizomuv(self, objects, uv_script=None, preset=None, params=None):
+        """Run the full export -> RizomUV -> re-import workflow.
 
         Parameters:
             objects: Maya transform nodes to process.
             uv_script: Raw Lua string **or** path to a ``.lua`` file.
                        Mutually exclusive with *preset*.
             preset: Name of a built-in preset (``"pack"``, ``"unwrap"``,
-                    ``"minimal"``, ``"auto_uv"``).  The corresponding file
-                    is loaded from ``scripts/<preset>.lua``.
-                    Mutually exclusive with *uv_script*.
+                    ``"optimize"``).  The corresponding file is loaded
+                    from ``scripts/<preset>.lua``. Mutually exclusive
+                    with *uv_script*.
+            params: Optional dict of placeholder overrides
+                    (e.g. ``{"MARGIN": 0.005, "ITERATIONS": 25}``).
+                    Keys map to ``__KEY__`` tokens in the script.
+                    Unknown keys are passed through verbatim.
         """
         if not objects:
             raise ValueError("No objects specified for processing.")
@@ -117,6 +124,8 @@ class RizomUVBridge:
         resolved = self._resolve_script(uv_script=uv_script, preset=preset)
         if resolved is not None:
             self.script_path = resolved
+
+        self._params = params or {}
 
         self._export_objects(objects)
         self._execute_uv_script()
@@ -514,8 +523,20 @@ class RizomUVBridge:
             print(f"Debug: User script contains ZomLoad/ZomSave; using as-is.")
             return user_script
 
+        from mayatk.uv_utils.rizom_bridge import parameters as _params
+
         export_path_normalized = str(self.export_path).replace("\\", "/")
         is_fbx = Path(self.export_path).suffix.lower() == ".fbx"
+
+        # Resolve param values: registered defaults, then user overrides.
+        merged = _params.defaults()
+        merged.update(self._params or {})
+        param_context = _params.render_context(merged)
+
+        # User-script substitution happens first so its placeholders see the
+        # resolved param values; the wrapper then sees the (already-substituted)
+        # user_script as a single block.
+        user_script = StrUtils.replace_delimited(user_script, param_context)
 
         wrapper = (_TEMPLATE_DIR / "wrapper.lua").read_text(encoding="utf-8")
         full_script = StrUtils.replace_delimited(wrapper, {
@@ -524,7 +545,14 @@ class RizomUVBridge:
             "USER_SCRIPT": user_script,
         })
 
-        print(f"Debug: Constructed full script:\n{full_script}")
+        try:
+            print(f"Debug: Constructed full script:\n{full_script}")
+        except UnicodeEncodeError:
+            enc = sys.stdout.encoding or "ascii"
+            print(
+                "Debug: Constructed full script:\n"
+                + full_script.encode(enc, errors="replace").decode(enc, errors="replace")
+            )
         return full_script
 
     def _prepare_script_file(self, script_contents):

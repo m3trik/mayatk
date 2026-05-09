@@ -56,10 +56,9 @@ Tests require Maya runtime (`maya.cmds`) — cannot run under plain `pytest` or 
 
 **maya.cmds / mel.eval command name check** (requires mayapy — validates names against the live Maya registry):
 ```powershell
-& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" mayatk\test\check_cmds_syntax.py            # mayatk only (default)
-& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" mayatk\test\check_cmds_syntax.py --all      # all packages
+& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" mayatk\test\check_cmds_syntax.py            # all ecosystem packages (default)
 & "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" mayatk\test\check_cmds_syntax.py --report   # write report file
-& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" mayatk\test\check_cmds_syntax.py mayatk/mayatk tentacle/tentacle
+& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" mayatk\test\check_cmds_syntax.py mayatk/mayatk tentacle/tentacle  # scope to subset
 ```
 
 **Test base classes**: `test/base_test.py` → `MayaTkTestCase` (full cleanup) or `QuickTestCase` (fast).

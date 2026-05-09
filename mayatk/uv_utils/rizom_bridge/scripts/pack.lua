@@ -1,8 +1,11 @@
--- Pack existing UVs into 0-1 space.
--- Use when islands are already cut and unfolded.
+-- Repack existing UV islands into the 0-1 tile.
+-- Use when seams are already cut and unfolded; this only redistributes shells.
 
 ZomSelect({PrimType="Island", Select=true, ResetBefore=true})
 
+-- Group every island under RootGroup and distribute across tiles.
+-- MergingPolicy=8322 is the canonical bitmask used by RizomUV's reference
+-- bridges (e.g. Cinema4D plugin) to auto-merge mirrored / stacked islands.
 ZomIslandGroups({
     Mode="DistributeInTilesEvenly",
     MergingPolicy=8322,
@@ -11,12 +14,10 @@ ZomIslandGroups({
 
 ZomPack({
     ProcessTileSelection=false,
-    RecursionDepth=2,
+    RecursionDepth=__RECURSION_DEPTH__,
     RootGroup="RootGroup",
-    Scaling={Mode=2},
-    Rotate={Step=90},
+    Scaling={Mode=__SCALING_MODE__},
+    Rotate={Step=__ROTATE_STEP__},
     Translate=true,
-    LayoutScalingMode=2,
-    Margin=2,
-    Quality=1,
+    LayoutScalingMode=__LAYOUT_SCALING_MODE__,
 })

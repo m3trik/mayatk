@@ -66,13 +66,57 @@ class ImageToPlaneSlots:
                 steps=[
                     "Press <b>Browse…</b> to select one or more image files.",
                     "Choose material type (Stingray PBS / Standard Surface).",
-                    "Set the material suffix (default: _MAT).",
+                    "Set the material suffix (default: _MAT). Use the option button to switch to prefix mode.",
                     "Set the plane height in scene units.",
                     "Press <b>Create Planes</b> to generate textured planes.",
                     "Use <b>Remove Selected</b> to delete planes and their materials.",
                 ],
             ),
         )
+
+    # ------------------------------------------------------------------
+    # Settings
+    # ------------------------------------------------------------------
+
+    def txt_suffix_init(self, widget):
+        """Add a prefix/suffix toggle to the affix field's option menu."""
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Use as Prefix",
+            setObjectName="chk_use_as_prefix",
+            setChecked=False,
+            setToolTip=(
+                "If checked, the value is prepended to the image name (prefix mode).\n"
+                "Otherwise it is appended (suffix mode)."
+            ),
+        )
+        widget.option_box.menu.chk_use_as_prefix.toggled.connect(
+            lambda checked, w=widget: self._on_affix_mode_toggled(w, checked)
+        )
+        self._apply_affix_placeholder(widget, prefix_mode=False)
+
+    def _on_affix_mode_toggled(self, widget, prefix_mode):
+        text = widget.text()
+        if prefix_mode and text == "_MAT":
+            widget.setText("MAT_")
+        elif not prefix_mode and text == "MAT_":
+            widget.setText("_MAT")
+        self._apply_affix_placeholder(widget, prefix_mode=prefix_mode)
+
+    @staticmethod
+    def _apply_affix_placeholder(widget, prefix_mode):
+        if prefix_mode:
+            widget.setPlaceholderText("Material Prefix")
+            widget.setToolTip(
+                'Prefix prepended to the image name for material naming.\n'
+                'Example: image "brick" with prefix "MAT_" → material "MAT_brick".'
+            )
+        else:
+            widget.setPlaceholderText("Material Suffix")
+            widget.setToolTip(
+                'Suffix appended to the image name for material naming.\n'
+                'Example: image "brick" with suffix "_MAT" → material "brick_MAT".'
+            )
 
     # ------------------------------------------------------------------
     # Images
@@ -124,7 +168,14 @@ class ImageToPlaneSlots:
         mat_type = (
             "stingray" if self.ui.cmb_mat_type.currentIndex() == 0 else "standard"
         )
-        suffix = self.ui.txt_suffix.text() or "_MAT"
+        affix_text = self.ui.txt_suffix.text()
+        prefix_mode = self.ui.txt_suffix.option_box.menu.chk_use_as_prefix.isChecked()
+        if prefix_mode:
+            prefix = affix_text or "MAT_"
+            suffix = ""
+        else:
+            prefix = ""
+            suffix = affix_text or "_MAT"
         plane_height = self.ui.spn_height.value()
 
         group = self.ui.header.menu.chk_group_result.isChecked()
@@ -134,6 +185,7 @@ class ImageToPlaneSlots:
                 image_paths,
                 mat_type=mat_type,
                 suffix=suffix,
+                prefix=prefix,
                 plane_height=plane_height,
                 group=group,
             )

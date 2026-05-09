@@ -139,6 +139,18 @@
          </item>
          <item row="2" column="3">
           <widget class="QRadioButton" name="chk004">
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
            <property name="text">
             <string>Z</string>
            </property>
@@ -157,13 +169,13 @@
              <property name="minimumSize">
               <size>
                <width>0</width>
-               <height>20</height>
+               <height>19</height>
               </size>
              </property>
              <property name="maximumSize">
               <size>
                <width>999</width>
-               <height>20</height>
+               <height>19</height>
               </size>
              </property>
              <property name="toolTip">
@@ -276,6 +288,18 @@
          </item>
          <item row="2" column="2">
           <widget class="QRadioButton" name="chk003">
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
            <property name="text">
             <string>Y</string>
            </property>
@@ -334,6 +358,18 @@
          </item>
          <item row="2" column="1">
           <widget class="QRadioButton" name="chk002">
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
            <property name="text">
             <string>X</string>
            </property>

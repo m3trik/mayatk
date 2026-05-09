@@ -262,6 +262,76 @@ class ScriptJobManager:
         """Re-enable a previously suppressed subscription."""
         self._suppressed.pop(token, None)
 
+    def status(self) -> Dict[str, Any]:
+        """Return a snapshot of managed and unmanaged Maya event listeners.
+
+        Pairs SJM's internal bookkeeping with ``cmds.scriptJob(listJobs=True)``
+        so callers can spot leaked or third-party jobs that bypass SJM.
+
+        Returns
+        -------
+        dict
+            ``managed_jobs`` — ``{event: job_id}`` for SJM-owned scriptJobs.
+            ``subscriptions`` — list of dicts (token, event, owner, ephemeral, suppressed).
+            ``om_callbacks`` — list of dicts (token, owner) for OpenMaya callbacks.
+            ``unmanaged_jobs`` — raw ``cmds.scriptJob(listJobs=True)`` entries
+            whose leading id is not present in ``managed_jobs.values()``.
+        """
+        managed_ids = set(self._jobs.values())
+        unmanaged: List[str] = []
+        if cmds is not None:
+            try:
+                for entry in cmds.scriptJob(listJobs=True) or []:
+                    head, _, _ = entry.partition(":")
+                    try:
+                        if int(head.strip()) not in managed_ids:
+                            unmanaged.append(entry)
+                    except ValueError:
+                        unmanaged.append(entry)
+            except Exception as exc:
+                logger.debug("ScriptJobManager.status: listJobs failed (%s)", exc)
+        return {
+            "managed_jobs": dict(self._jobs),
+            "subscriptions": [
+                {
+                    "token": s.token,
+                    "event": s.event,
+                    "owner": repr(s.owner),
+                    "ephemeral": s.ephemeral,
+                    "suppressed": t in self._suppressed,
+                }
+                for t, s in self._subs.items()
+            ],
+            "om_callbacks": [
+                {"token": s.token, "cb_id": s.cb_id, "owner": repr(s.owner)}
+                for s in self._om_subs.values()
+            ],
+            "unmanaged_jobs": unmanaged,
+        }
+
+    def print_status(self) -> None:
+        """Pretty-print :meth:`status` for interactive debugging in Maya."""
+        s = self.status()
+        print("ScriptJobManager status")
+        print(f"  managed jobs ({len(s['managed_jobs'])}):")
+        for event, job_id in s["managed_jobs"].items():
+            print(f"    [{job_id}] {event}")
+        print(f"  subscriptions ({len(s['subscriptions'])}):")
+        for sub in s["subscriptions"]:
+            flags = []
+            if sub["ephemeral"]:
+                flags.append("ephemeral")
+            if sub["suppressed"]:
+                flags.append("suppressed")
+            tag = f" ({', '.join(flags)})" if flags else ""
+            print(f"    #{sub['token']} {sub['event']} owner={sub['owner']}{tag}")
+        print(f"  OM callbacks ({len(s['om_callbacks'])}):")
+        for cb in s["om_callbacks"]:
+            print(f"    #{cb['token']} cb_id={cb['cb_id']} owner={cb['owner']}")
+        print(f"  unmanaged Maya scriptJobs ({len(s['unmanaged_jobs'])}):")
+        for entry in s["unmanaged_jobs"]:
+            print(f"    {entry}")
+
     def teardown(self) -> None:
         """Kill every managed scriptJob, OM callback, and subscription."""
         for event in list(self._jobs):

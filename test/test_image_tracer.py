@@ -38,9 +38,8 @@ except ImportError:
     np = None
 
 try:
-    import pymel.core as pm
+    import maya.cmds as cmds
 except ImportError:
-    pm = None
     cmds = None
 
 # Try to initialize QApplication to avoid "Cannot create a QWidget without QApplication" error
