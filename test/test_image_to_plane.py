@@ -23,10 +23,8 @@ if scripts_dir not in sys.path:
     sys.path.insert(0, scripts_dir)
 
 try:
-    import pymel.core as pm
     from maya import cmds
 except ImportError:
-    pm = None
     cmds = None
 
 import mayatk as mtk
@@ -331,6 +329,20 @@ class TestImageToPlane(MayaTkTestCase):
         img = _create_test_image(64, 64, "stone", self._tmp_dir)
         ImageToPlane.create([img], mat_type="standard", suffix="_proxy")
         self.assertTrue(cmds.objExists("stone_proxy"))
+
+    def test_material_prefix_only(self):
+        """Prefix-only naming: prefix + stem, no suffix."""
+        img = _create_test_image(64, 64, "marble", self._tmp_dir)
+        ImageToPlane.create([img], mat_type="standard", prefix="MAT_", suffix="")
+        self.assertTrue(cmds.objExists("MAT_marble"))
+
+    def test_material_prefix_and_suffix(self):
+        """Prefix and suffix can coexist."""
+        img = _create_test_image(64, 64, "wood", self._tmp_dir)
+        ImageToPlane.create(
+            [img], mat_type="standard", prefix="px_", suffix="_sx"
+        )
+        self.assertTrue(cmds.objExists("px_wood_sx"))
 
     def test_material_is_assigned(self):
         """The created material is assigned to the plane's shading group."""

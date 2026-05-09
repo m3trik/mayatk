@@ -249,6 +249,32 @@ class TestRigUtils(MayaTkTestCase):
         self.assertTrue(cmds.getAttr(f"{self.cube}.ty", lock=True))
         self.assertTrue(cmds.getAttr(f"{self.cube}.tz", lock=True))
 
+    def test_attr_lock_state_namespaced_duplicates(self):
+        """Round-trip lock state for two transforms sharing a leaf name across
+        namespaces — mirrors the referenced-module scene structure where
+        ``short_name`` keying silently collided.
+        """
+        cmds.namespace(add="nsA")
+        cmds.namespace(add="nsB")
+        a = cmds.polyCube(n="nsA:dup_xform")[0]
+        b = cmds.polyCube(n="nsB:dup_xform")[0]
+
+        # Distinct lock states: A locks tx, B locks ry — no overlap so a
+        # collision-driven overwrite would leave one of them wrongly locked
+        # or wrongly unlocked after restore.
+        cmds.setAttr(f"{a}.tx", lock=True)
+        cmds.setAttr(f"{b}.ry", lock=True)
+
+        with Attributes.temporarily_unlock([a, b]):
+            self.assertFalse(cmds.getAttr(f"{a}.tx", lock=True))
+            self.assertFalse(cmds.getAttr(f"{b}.ry", lock=True))
+
+        # Original state must be restored independently for each.
+        self.assertTrue(cmds.getAttr(f"{a}.tx", lock=True))
+        self.assertFalse(cmds.getAttr(f"{a}.ry", lock=True))
+        self.assertFalse(cmds.getAttr(f"{b}.tx", lock=True))
+        self.assertTrue(cmds.getAttr(f"{b}.ry", lock=True))
+
     def test_setup_telescope_rig(self):
         """Test setup_telescope_rig method."""
         # Setup

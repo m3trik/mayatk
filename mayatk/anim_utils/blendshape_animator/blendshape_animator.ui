@@ -168,13 +168,13 @@
          <property name="minimumSize">
           <size>
            <width>0</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="maximumSize">
           <size>
            <width>16777215</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="toolTip">
@@ -391,13 +391,13 @@ Color-coded: green = applied, yellow = pending edits, red = error.</string>
          <property name="minimumSize">
           <size>
            <width>0</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="maximumSize">
           <size>
            <width>16777215</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="toolTip">
@@ -445,13 +445,13 @@ Apply edits back to the blendShape via:
          <property name="minimumSize">
           <size>
            <width>0</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="maximumSize">
           <size>
            <width>16777215</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="toolTip">
@@ -468,13 +468,13 @@ and flag any topology mismatches.</string>
          <property name="minimumSize">
           <size>
            <width>0</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="maximumSize">
           <size>
            <width>16777215</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="toolTip">
@@ -491,13 +491,13 @@ Option box: delete_mismatched, apply_valid_only.</string>
          <property name="minimumSize">
           <size>
            <width>0</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="maximumSize">
           <size>
            <width>16777215</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="toolTip">
@@ -541,13 +541,13 @@ inferring the frame range from existing tween metadata where possible.</string>
          <property name="minimumSize">
           <size>
            <width>0</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="maximumSize">
           <size>
            <width>16777215</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="toolTip">
@@ -563,13 +563,13 @@ inferring the frame range from existing tween metadata where possible.</string>
          <property name="minimumSize">
           <size>
            <width>0</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="maximumSize">
           <size>
            <width>16777215</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="toolTip">
@@ -586,13 +586,13 @@ with its blendShape intact.</string>
          <property name="minimumSize">
           <size>
            <width>0</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="maximumSize">
           <size>
            <width>16777215</width>
-           <height>20</height>
+           <height>19</height>
           </size>
          </property>
          <property name="toolTip">

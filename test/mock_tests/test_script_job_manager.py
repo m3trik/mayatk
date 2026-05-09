@@ -16,29 +16,29 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-# conftest.py is auto-loaded by pytest and injects mock_pm into
-# sys.modules["pymel.core"].  Under unittest/run_tests.py, conftest is not
+# conftest.py is auto-loaded by pytest and injects mock_cmds into
+# sys.modules["maya.cmds"].  Under unittest/run_tests.py, conftest is not
 # auto-loaded — fall back to a placeholder so import succeeds and the
 # skipUnless guards below take effect.
-mock_pm = sys.modules.get("pymel.core")
+mock_cmds = sys.modules.get("maya.cmds")
 
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 
-# Detect whether pymel is mocked (pytest path) or real (run_tests.py path).
+# Detect whether maya.cmds is mocked (pytest path) or real (run_tests.py path).
 # When real, this entire suite is incompatible — skip cleanly.
-_PYMEL_IS_MOCKED = isinstance(mock_pm, MagicMock)
+_CMDS_IS_MOCKED = isinstance(mock_cmds, MagicMock)
 
 
 @unittest.skipUnless(
-    _PYMEL_IS_MOCKED, "Mock-based test — run via pytest, not run_tests.py"
+    _CMDS_IS_MOCKED, "Mock-based test — run via pytest, not run_tests.py"
 )
 class ScriptJobManagerTestCase(unittest.TestCase):
     """Base that resets the singleton before each test."""
 
     def setUp(self):
-        mock_pm.reset_mock()
-        mock_pm.scriptJob.return_value = 999
-        mock_pm.scriptJob.side_effect = lambda **kw: 999 if "event" in kw else True
+        mock_cmds.reset_mock()
+        mock_cmds.scriptJob.return_value = 999
+        mock_cmds.scriptJob.side_effect = lambda **kw: 999 if "event" in kw else True
         ScriptJobManager.reset()
         self.mgr = ScriptJobManager.instance()
 
@@ -69,23 +69,23 @@ class TestSubscribe(ScriptJobManagerTestCase):
 
     def test_subscribe_creates_one_job_per_event(self):
         """Multiple subscribers to the same event share one scriptJob."""
-        mock_pm.scriptJob.reset_mock()
+        mock_cmds.scriptJob.reset_mock()
         self.mgr.subscribe("SelectionChanged", lambda: None)
         self.mgr.subscribe("SelectionChanged", lambda: None)
 
         # pm.scriptJob(event=[...]) should be called exactly once
         event_calls = [
-            c for c in mock_pm.scriptJob.call_args_list if "event" in c.kwargs
+            c for c in mock_cmds.scriptJob.call_args_list if "event" in c.kwargs
         ]
         self.assertEqual(len(event_calls), 1)
 
     def test_subscribe_different_events_create_separate_jobs(self):
-        mock_pm.scriptJob.reset_mock()
+        mock_cmds.scriptJob.reset_mock()
         self.mgr.subscribe("SceneOpened", lambda: None)
         self.mgr.subscribe("SelectionChanged", lambda: None)
 
         event_calls = [
-            c for c in mock_pm.scriptJob.call_args_list if "event" in c.kwargs
+            c for c in mock_cmds.scriptJob.call_args_list if "event" in c.kwargs
         ]
         self.assertEqual(len(event_calls), 2)
 
@@ -103,15 +103,15 @@ class TestSubscribe(ScriptJobManagerTestCase):
 
     def test_unsubscribe_last_subscriber_kills_job(self):
         """When the last subscriber for an event is removed, the job is killed."""
-        mock_pm.scriptJob.reset_mock()
-        mock_pm.scriptJob.side_effect = lambda **kw: 42 if "event" in kw else True
+        mock_cmds.scriptJob.reset_mock()
+        mock_cmds.scriptJob.side_effect = lambda **kw: 42 if "event" in kw else True
         token = self.mgr.subscribe("SceneOpened", lambda: None)
 
         self.mgr.unsubscribe(token)
 
         # pm.scriptJob(kill=42, force=True) should have been called
         kill_calls = [
-            c for c in mock_pm.scriptJob.call_args_list if "kill" in c.kwargs
+            c for c in mock_cmds.scriptJob.call_args_list if "kill" in c.kwargs
         ]
         self.assertEqual(len(kill_calls), 1, "Expected exactly one kill call")
         self.assertEqual(kill_calls[0].kwargs["kill"], 42)
@@ -295,14 +295,14 @@ class TestTeardown(ScriptJobManagerTestCase):
         self.assertEqual(len(self.mgr._suppressed), 0)
 
     def test_teardown_kills_jobs(self):
-        mock_pm.scriptJob.reset_mock()
-        mock_pm.scriptJob.side_effect = lambda **kw: 42 if "event" in kw else True
+        mock_cmds.scriptJob.reset_mock()
+        mock_cmds.scriptJob.side_effect = lambda **kw: 42 if "event" in kw else True
         self.mgr.subscribe("SceneOpened", lambda: None)
 
         self.mgr.teardown()
 
         kill_calls = [
-            c for c in mock_pm.scriptJob.call_args_list if "kill" in c.kwargs
+            c for c in mock_cmds.scriptJob.call_args_list if "kill" in c.kwargs
         ]
         self.assertEqual(len(kill_calls), 1, "Expected exactly one kill call")
         self.assertEqual(kill_calls[0].kwargs["kill"], 42)

@@ -39,7 +39,7 @@ ALL_PACKAGES = [
     "uitk/uitk",
     "pythontk/pythontk",
 ]
-DEFAULT_PACKAGES = ["mayatk/mayatk"]
+DEFAULT_PACKAGES = ALL_PACKAGES
 
 # MEL statement-leading identifiers that are language keywords, not commands.
 MEL_KEYWORDS = frozenset(
@@ -59,6 +59,8 @@ PLUGIN_CMDS = frozenset(
         "gpuCache",                          # gpuCache plugin
         "AbcExport", "AbcImport",            # Alembic
         "FBXExport", "FBXImport",            # FBX plugin
+        "FBXImportMode", "FBXUICallBack",    # FBX plugin (UI/import-mode helpers)
+        "FBXExportBakeComplexAnimation",     # FBX plugin (export-option setter)
         "gameExporter",                      # Game Exporter
         "u3dLayout", "u3dAutoSeam",          # Unfold3D UV plugin
         "u3dUnfold", "u3dOptimize",          # Unfold3D UV plugin
@@ -398,7 +400,7 @@ def scan_paths(paths: List[Path]) -> Tuple[List[Finding], List[FlagUse]]:
 
 def validate(
     findings: List[Finding], flag_uses: List[FlagUse]
-) -> Dict[Finding, bool]:
+) -> Tuple[Dict[Finding, bool], int]:
     """
     Validate command names (via whatIs) and flags (by actual execution).
 
@@ -447,7 +449,7 @@ def validate(
         if probe_cache.get((fu.cmd, fu.flag)) == "flag_error":
             results[Finding(fu.file, fu.line, "flag", fu.flag, fu.cmd)] = False
 
-    return results
+    return results, len(unique_pairs)
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +457,7 @@ def validate(
 # ---------------------------------------------------------------------------
 
 
-def report(results: Dict[Finding, bool], out=None) -> int:
+def report(results: Dict[Finding, bool], flag_probe_count: int = 0, out=None) -> int:
     """Print a human-readable report. Returns total error count."""
     if out is None:
         out = sys.stdout
@@ -496,13 +498,12 @@ def report(results: Dict[Finding, bool], out=None) -> int:
 
     print(f"\n{'=' * 60}", file=out)
     cmd_refs = sum(1 for f in results if f.kind in ("cmds", "mel"))
-    flag_refs = sum(1 for f in results if f.kind == "flag")
     print(
         f"Commands : {cmd_refs} refs  |  {len(cmd_errors)} unknown  |  {len(suppressed)} suppressed",
         file=out,
     )
     print(
-        f"Flags    : {flag_refs} refs  |  {len(flag_errors)} unknown",
+        f"Flags    : {flag_probe_count} unique (cmd, flag) pairs probed  |  {len(flag_errors)} unknown",
         file=out,
     )
     if all_errors:
@@ -567,13 +568,13 @@ def main() -> int:
     error_count = 0
     try:
         print("\nPhase 3: validating...")
-        results = validate(findings, flag_uses)
-        error_count = report(results)
+        results, flag_probe_count = validate(findings, flag_uses)
+        error_count = report(results, flag_probe_count)
 
         if write_report:
             report_path = Path(__file__).parent / "cmds_syntax_report.txt"
             buf = io.StringIO()
-            report(results, out=buf)
+            report(results, flag_probe_count, out=buf)
             report_path.write_text(buf.getvalue(), encoding="utf-8")
             print(f"\nReport saved: {report_path}")
     finally:

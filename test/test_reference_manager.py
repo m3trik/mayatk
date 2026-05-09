@@ -291,14 +291,14 @@ class TestReferenceManager(unittest.TestCase):
         # Mock current_references (returns empty list — no Maya needed)
         self.controller.__class__.current_references = property(lambda self: [])
 
-        # Patch pm.sceneName so update_table doesn't need Maya
-        # pm may not exist as a module attr (try/except import), so use create=True
-        self._pm_patcher = patch.object(ref_mgr, "pm", create=True)
-        self._mock_pm = self._pm_patcher.start()
-        self._mock_pm.sceneName.return_value = ""
+        # Patch cmds.file so update_table doesn't need Maya
+        self._cmds_file_patcher = patch.object(
+            ref_mgr.cmds, "file", create=True, return_value=""
+        )
+        self._mock_cmds_file = self._cmds_file_patcher.start()
 
     def tearDown(self):
-        self._pm_patcher.stop()
+        self._cmds_file_patcher.stop()
 
     def test_update_table_replaces_rows_correctly(self):
         """Test that update_table correctly sets row count and updates items, removing old ones."""
@@ -565,12 +565,13 @@ class TestWorkspaceHistory(unittest.TestCase):
         self.controller.last_unlink_time = 0
         self.controller._warned_scene_placeholder_typo = False
 
-        self._pm_patcher = patch.object(ref_mgr, "pm", create=True)
-        self._mock_pm = self._pm_patcher.start()
-        self._mock_pm.sceneName.return_value = ""
+        self._cmds_file_patcher = patch.object(
+            ref_mgr.cmds, "file", create=True, return_value=""
+        )
+        self._mock_cmds_file = self._cmds_file_patcher.start()
 
     def tearDown(self):
-        self._pm_patcher.stop()
+        self._cmds_file_patcher.stop()
 
     # -- _save_workspace_selection / _get_workspace_history -----------------
 

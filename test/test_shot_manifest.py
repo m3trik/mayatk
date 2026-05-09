@@ -13,7 +13,7 @@ Covers:
     - Editable range column read-only post-build (Stage 7)
     - Context menu actions: set-to-current-frame, clear-range (Stage 8)
 
-All tests run WITHOUT Maya by mocking pymel/cmds.
+All tests run WITHOUT Maya by mocking maya.cmds/cmds.
 """
 import sys
 import types
@@ -24,11 +24,10 @@ from unittest.mock import MagicMock, patch
 # ---------------------------------------------------------------------------
 # Import shared Maya mocks from conftest (injected into sys.modules there)
 # ---------------------------------------------------------------------------
-from conftest import mock_pm, mock_cmds  # noqa: E402  (test dir on sys.path)
+from conftest import mock_cmds  # noqa: E402  (test dir on sys.path)
 import maya.cmds as cmds
 
 # Aliases for backward-compat with existing test code
-_mock_pm = mock_pm
 _mock_cmds = mock_cmds
 
 # Ensure workspace roots are on sys.path
@@ -1078,7 +1077,7 @@ class TestBuildDetectionMode(unittest.TestCase, _ControllerHarness):
         )
         mock_manifest_cls.return_value = mock_builder
 
-        # Ensure pymel.core mock has undoInfo (may be lost when
+        # Ensure maya.cmds mock has undoInfo (may be lost when
         # test_sequencer.py runs first and clobbers sys.modules)
         import maya.cmds as _cmds
 

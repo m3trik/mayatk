@@ -5,7 +5,6 @@ import sys
 
 try:
     import maya.cmds as cmds
-    import pymel.core as pm
 except ImportError:
     pass
 

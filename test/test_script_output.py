@@ -60,8 +60,6 @@ class TestScriptOutput(unittest.TestCase):
             "maya.app": mock_maya_app,
             "maya.app.general": mock_maya_app.general,
             "maya.app.general.mayaMixin": mock_maya_app.general.mayaMixin,
-            "pymel": MagicMock(),
-            "pymel.core": MagicMock(),
             "shiboken6": MagicMock(),
         }
 

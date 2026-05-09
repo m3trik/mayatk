@@ -1002,8 +1002,7 @@ class RigUtils(ptk.HelpMixin):
                 cmds.setAttr(inherits_plug, channelBox=True)
 
                 # Restore transform lock state
-                lock_key = transform if transform in lock_state else leaf_name(transform)
-                Attributes.set_lock_state(transform, **lock_state[lock_key])
+                Attributes.set_lock_state(transform, lock_state=lock_state)
 
                 print(f"[OK] Rebound: {transform_name}")
 

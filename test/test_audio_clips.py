@@ -22,7 +22,6 @@ if scripts_dir not in sys.path:
     sys.path.insert(0, scripts_dir)
 
 try:
-    import pymel.core as pm
     import maya.cmds as cmds
 except ImportError as exc:
     raise RuntimeError(

@@ -857,6 +857,170 @@ class EnvUtils(ptk.HelpMixin):
                     pass
             return None
 
+    @classmethod
+    def find_original_for_autosave(
+        cls, autosave_path: Optional[str] = None
+    ) -> Optional[str]:
+        """Resolve the original scene file an autosave was generated from.
+
+        Combines four signals in priority order: a `fileInfo "originalScene"`
+        stamp on the open scene, Maya's RecentFilesList optionVar, the active
+        workspace, and mtime as a tiebreaker (older-than-autosave preferred,
+        then nearest in time).
+
+        Parameters:
+            autosave_path: Path to an autosave file. Defaults to the currently
+                open scene.
+
+        Returns:
+            Absolute path to the most likely original, or None if unresolved.
+        """
+        import re
+
+        if autosave_path is None:
+            autosave_path = cmds.file(query=True, sceneName=True) or ""
+        if not autosave_path or not cls.matches_autosave_pattern(
+            os.path.basename(autosave_path)
+        ):
+            return None
+
+        autosave_mtime = (
+            os.path.getmtime(autosave_path)
+            if os.path.exists(autosave_path)
+            else None
+        )
+
+        # 1) fileInfo stamp on currently open scene (strongest signal)
+        current = cmds.file(query=True, sceneName=True) or ""
+        if current and os.path.normcase(os.path.abspath(current)) == os.path.normcase(
+            os.path.abspath(autosave_path)
+        ):
+            stamp = cmds.fileInfo("originalScene", q=True) or []
+            stamped = stamp[0] if stamp else ""
+            if stamped and os.path.isfile(stamped):
+                return stamped
+
+        # Strip ".NNNN" to derive candidate original basename(s)
+        m = re.match(r"(.+)\.\d{4}\.(ma|mb)$", os.path.basename(autosave_path))
+        if not m:
+            return None
+        stem, ext = m.group(1), m.group(2)
+        other = "mb" if ext == "ma" else "ma"
+        candidate_basenames = {f"{stem}.{ext}", f"{stem}.{other}"}
+
+        def _exists(p: str) -> bool:
+            return bool(p) and os.path.isfile(p)
+
+        # 2) RecentFilesList — order is most-recent-first
+        try:
+            recent = cmds.optionVar(q="RecentFilesList") or []
+        except RuntimeError:
+            recent = []
+        for entry in recent:
+            if entry and os.path.basename(entry) in candidate_basenames and _exists(entry):
+                return entry
+
+        # 3) Active workspace search
+        try:
+            workspace = cmds.workspace(q=True, rd=True) or ""
+        except RuntimeError:
+            workspace = ""
+        if workspace and os.path.isdir(workspace):
+            scenes = cls.get_workspace_scenes(
+                root_dir=workspace,
+                full_path=True,
+                recursive=True,
+                omit_autosave=True,
+            )
+            matches = [
+                s for s in scenes
+                if os.path.basename(s) in candidate_basenames and _exists(s)
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            # 4) mtime tiebreak — prefer originals older than the autosave,
+            # then nearest in time. Use a (newer_than_autosave, |diff|) key so
+            # all "older" candidates sort before any "newer" candidate, and
+            # within each group the closest-in-time wins.
+            if matches and autosave_mtime is not None:
+                def _key(p):
+                    diff = autosave_mtime - os.path.getmtime(p)
+                    return (diff < 0, abs(diff))
+                matches.sort(key=_key)
+                return matches[0]
+            if matches:
+                return matches[0]
+
+        return None
+
+    @classmethod
+    def save_autosave_to_original(
+        cls,
+        original_path: Optional[str] = None,
+        backup_existing: bool = True,
+    ) -> Optional[str]:
+        """Save the currently open autosave scene back to its original path.
+
+        Renames the in-memory scene to `original_path` and saves. The autosave
+        file on disk is left untouched. The existing original is optionally
+        copied to a `.bak` sibling first (or `.<timestamp>.bak` if a `.bak`
+        already exists, so prior backups are never clobbered). Stamps
+        `fileInfo "originalScene"` so future autosaves of this scene are
+        self-identifying.
+
+        Parameters:
+            original_path: Target path. If None, resolved via
+                `find_original_for_autosave`.
+            backup_existing: Copy the existing original to `<path>.bak` before
+                overwriting.
+
+        Returns:
+            Saved absolute path, or None on failure.
+        """
+        import shutil
+
+        current = cmds.file(query=True, sceneName=True) or ""
+        if not current or not cls.matches_autosave_pattern(os.path.basename(current)):
+            cmds.warning(
+                "EnvUtils.save_autosave_to_original: current scene is not an autosave."
+            )
+            return None
+
+        if original_path is None:
+            original_path = cls.find_original_for_autosave(current)
+        if not original_path:
+            cmds.warning(
+                "EnvUtils.save_autosave_to_original: could not resolve an original."
+            )
+            return None
+
+        if backup_existing and os.path.isfile(original_path):
+            from datetime import datetime
+
+            backup_path = f"{original_path}.bak"
+            # Never overwrite an existing .bak — it may hold the *real* original
+            # from a prior recovery attempt.
+            if os.path.exists(backup_path):
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_path = f"{original_path}.{stamp}.bak"
+            try:
+                shutil.copy2(original_path, backup_path)
+            except OSError as e:
+                cmds.warning(
+                    f"EnvUtils.save_autosave_to_original: backup failed: {e}"
+                )
+
+        file_type = (
+            "mayaBinary" if original_path.lower().endswith(".mb") else "mayaAscii"
+        )
+        try:
+            cmds.file(rename=original_path)
+            cmds.fileInfo("originalScene", original_path)
+            return cmds.file(save=True, type=file_type, force=True)
+        except Exception as e:
+            cmds.warning(f"EnvUtils.save_autosave_to_original: save failed: {e}")
+            return None
+
 
 # -----------------------------------------------------------------------------
 

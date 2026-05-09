@@ -45,6 +45,7 @@ class ImageToPlane(ptk.LoggingMixin):
         image_paths: List[str],
         mat_type: str = "stingray",
         suffix: str = "_MAT",
+        prefix: str = "",
         plane_height: float = 10.0,
         axis: Optional[List[float]] = None,
         group: bool = False,
@@ -58,6 +59,8 @@ class ImageToPlane(ptk.LoggingMixin):
                 for the preferred standard shader (standardSurface/lambert).
             suffix: Appended to the image stem for material naming
                 (e.g. ``"_MAT"`` → ``myImage_MAT``).
+            prefix: Prepended to the image stem for material naming
+                (e.g. ``"MAT_"`` → ``MAT_myImage``).
             plane_height: Height of each plane in scene units.  Width is
                 derived from the image aspect ratio.
             axis: Plane normal axis as ``[x, y, z]``.  Defaults to
@@ -83,6 +86,7 @@ class ImageToPlane(ptk.LoggingMixin):
                     path,
                     mat_type=mat_type,
                     suffix=suffix,
+                    prefix=prefix,
                     plane_height=plane_height,
                     axis=axis,
                 )
@@ -168,7 +172,7 @@ class ImageToPlane(ptk.LoggingMixin):
     # ------------------------------------------------------------------
 
     @classmethod
-    def _create_single(cls, image_path, mat_type, suffix, plane_height, axis):
+    def _create_single(cls, image_path, mat_type, suffix, plane_height, axis, prefix=""):
         """Create one plane + material from a single image path."""
         stem = os.path.splitext(os.path.basename(image_path))[0]
 
@@ -188,7 +192,7 @@ class ImageToPlane(ptk.LoggingMixin):
         )
 
         # --- Material ---
-        mat_name = f"{stem}{suffix}"
+        mat_name = f"{prefix}{stem}{suffix}"
         shader = cls._create_shader(mat_name, mat_type)
 
         # --- File node (shared helper) ---
