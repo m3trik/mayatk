@@ -167,6 +167,58 @@ class TestComponents(MayaTkTestCase):
         islands = Components.get_contigious_islands([f1, f3])
         self.assertEqual(len(islands), 1)
 
+    def test_get_components_preserves_namespace(self):
+        """Namespaced face strings must round-trip through get_components.
+
+        Regression: shape-prefix substitution stripped the namespace, so
+        ``ns1:cubeA.f[1]`` became ``cubeAShape.f[1]`` — silently empty, or
+        worse, pointing at a same-name root-namespace object.
+        """
+        if not cmds.namespace(exists="ns_test"):
+            cmds.namespace(add="ns_test")
+        cmds.namespace(set="ns_test")
+        ns_cube = cmds.polyCube(name="nscube", ch=False)[0]
+        cmds.namespace(set=":")
+
+        try:
+            seed = f"{ns_cube}.f[1]"
+            result = Components.get_components(
+                [seed], component_type="faces", flatten=True
+            )
+            self.assertTrue(result, "namespaced face dropped by get_components")
+            for f in result:
+                self.assertIn("ns_test:", f, f"namespace stripped from {f!r}")
+        finally:
+            cmds.delete(ns_cube)
+            if cmds.namespace(exists="ns_test"):
+                cmds.namespace(removeNamespace="ns_test", mergeNamespaceWithRoot=True)
+
+    def test_get_faces_with_similar_normals_multi_object(self):
+        """Multi-object face input must consider faces on every transform.
+
+        Regression: the helper used to capture only the first face's transform,
+        so faces selected on a second object were silently ignored.
+        """
+        c2 = cmds.polyCube(name="test_comp_cube2", ch=False)[0]
+        cmds.move(5, 0, 0, c2)
+
+        seed_a = f"{self.cube}.f[1]"  # +Y face on cubeA
+        seed_b = f"{c2}.f[1]"  # +Y face on cubeB
+        seeds = cmds.ls([seed_a, seed_b], flatten=True)
+
+        result = Components.get_faces_with_similar_normals(
+            seeds, range_x=0.1, range_y=0.1, range_z=0.1
+        )
+
+        # Strip shape suffix so the assertion is form-agnostic.
+        contributors = {
+            f.split(".")[0].split("|")[-1].removesuffix("Shape") for f in result
+        }
+        self.assertIn("test_comp_cube", contributors)
+        self.assertIn("test_comp_cube2", contributors)
+        # Each cube has one +Y face, so exactly two matches expected.
+        self.assertEqual(len(result), 2)
+
     def test_get_islands(self):
         """Test getting islands from object."""
         # Create combined object with 2 shells

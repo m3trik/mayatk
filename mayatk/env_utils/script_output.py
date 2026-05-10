@@ -272,64 +272,134 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
         self.setFocus()
 
     @classmethod
+    def _build_ui_script(cls) -> str:
+        """Self-contained string Maya stores in the workspace prefs file
+        and re-runs on next session to restore this panel."""
+        return (
+            "from mayatk.env_utils.script_output import ScriptConsole\n"
+            "ScriptConsole.show_console(restore=True)"
+        )
+
+    @classmethod
     def show_console(
-        cls, dock=None, width: int = None, height: int = None, tab_position: str = None
+        cls,
+        dock=None,
+        width: int = None,
+        height: int = None,
+        tab_position: str = None,
+        restore: bool = False,
     ):
+        """Show the Script Output console.
+
+        Persistence model:
+            On first creation we register a ``uiScript`` with the workspace
+            control. Maya stores this in its workspace prefs file and re-runs
+            it on next launch to restore the panel — including its docked
+            location and user-adjusted size — without ``userSetup.py`` having
+            to recreate it. ``dock``/``width``/``height``/``tab_position``
+            therefore apply only on the **first** creation; later sessions
+            inherit the user's saved layout.
+
+        Parameters:
+            dock: Initial dock target (only used on first creation).
+            width: Initial width in pixels (first creation only).
+            height: Initial height in pixels (first creation only).
+            tab_position: One of ``'top' | 'left' | 'right'``.
+            restore: Internal — set True when invoked by Maya's uiScript
+                during workspace restoration.
+        """
         ws_name = cls.WORKSPACE_CONTROL_NAME
 
+        # ---- restoration path (called by Maya via uiScript) -------------
+        if restore:
+            restored_control = MQtUtil.findControl(ws_name)
+            if not restored_control:
+                print(f"[ScriptConsole] No workspace control found for restore: {ws_name}")
+                return
+            cls._instance = cls()
+            mixin_ptr = MQtUtil.findControl(cls._instance.objectName())
+            if mixin_ptr:
+                MQtUtil.addWidgetToMayaLayout(int(mixin_ptr), int(restored_control))
+            return cls._instance
+
+        # ---- already exists (Maya kept it from prior session) ----------
+        if cmds.workspaceControl(ws_name, exists=True):
+            cmds.workspaceControl(ws_name, edit=True, restore=True, visible=True)
+            return cls._instance
+
+        # ---- first-time creation ---------------------------------------
         if cls._instance:
-            cls._instance.close()
-            cls._instance.deleteLater()
+            try:
+                cls._instance.close()
+                cls._instance.deleteLater()
+            except Exception:
+                pass
 
         cls._instance = cls()
-        cls._instance.show(dockable=True, workspaceControlName=ws_name)
+        cls._instance.show(
+            dockable=True,
+            workspaceControlName=ws_name,
+            uiScript=cls._build_ui_script(),
+            retain=False,
+        )
+
+        # MayaQWidgetDockableMixin.show() does not always propagate uiScript
+        # to the underlying workspaceControl. Set it explicitly so Maya can
+        # persist this panel across sessions.
+        if cmds.workspaceControl(ws_name, exists=True):
+            try:
+                cmds.workspaceControl(
+                    ws_name, edit=True, uiScript=cls._build_ui_script()
+                )
+            except Exception as e:
+                print(f"[ScriptConsole] Could not set uiScript: {e}")
 
         def force_dock_and_resize():
-            if cmds.workspaceControl(ws_name, exists=True):
-                try:
-                    # Set size
-                    if width is not None:
-                        cmds.workspaceControl(ws_name, edit=True, resizeWidth=width)
-                    if height is not None:
-                        cmds.workspaceControl(ws_name, edit=True, resizeHeight=height)
+            if not cmds.workspaceControl(ws_name, exists=True):
+                return
+            try:
+                if width is not None:
+                    cmds.workspaceControl(ws_name, edit=True, resizeWidth=width)
+                if height is not None:
+                    cmds.workspaceControl(ws_name, edit=True, resizeHeight=height)
 
-                    # Dock logic
-                    if dock:
-                        if isinstance(dock, str):
-                            cmds.workspaceControl(
-                                ws_name,
-                                edit=True,
-                                dockToMainWindow=(dock.lower(), False),
-                            )
-                        elif isinstance(dock, (tuple, list)) and len(dock) == 2:
-                            cmds.workspaceControl(
-                                ws_name,
-                                edit=True,
-                                dockToControl=(dock[0], dock[1].lower()),
-                            )
-                        else:
-                            print(f"Invalid dock parameter: {dock}")
+                if dock:
+                    if isinstance(dock, str):
+                        cmds.workspaceControl(
+                            ws_name,
+                            edit=True,
+                            dockToMainWindow=(dock.lower(), False),
+                        )
+                    elif isinstance(dock, (tuple, list)) and len(dock) == 2:
+                        cmds.workspaceControl(
+                            ws_name,
+                            edit=True,
+                            dockToControl=(dock[0], dock[1].lower()),
+                        )
+                    else:
+                        print(f"Invalid dock parameter: {dock}")
 
-                    # Set tab direction
-                    if tab_position:
-                        tab_dir = {
-                            "top": "north",
-                            "left": "west",
-                            "right": "east",
-                        }.get(tab_position.lower())
-                        if tab_dir:
-                            cmds.workspaceControl(
-                                ws_name, edit=True, tabPosition=(tab_dir, -1)
-                            )
-                        else:
-                            print(
-                                f"Invalid tab_position: {tab_position}. Must be 'top', 'left', or 'right'."
-                            )
+                if tab_position:
+                    tab_dir = {"top": "north", "left": "west", "right": "east"}.get(
+                        tab_position.lower()
+                    )
+                    if tab_dir:
+                        cmds.workspaceControl(
+                            ws_name, edit=True, tabPosition=(tab_dir, -1)
+                        )
+                    else:
+                        print(
+                            f"Invalid tab_position: {tab_position}. Must be 'top', 'left', or 'right'."
+                        )
 
-                except Exception as e:
-                    print(f"Docking, resizing, or tab direction failed: {e}")
+                if height is not None:
+                    cmds.workspaceControl(ws_name, edit=True, resizeHeight=height)
+
+            except Exception as e:
+                print(f"Docking, resizing, or tab direction failed: {e}")
 
         QtCore.QTimer.singleShot(200, force_dock_and_resize)
+        return cls._instance
 
 
 # -----------------------------------------------------------------------------
@@ -337,6 +407,21 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
 
 def show(*args, **kwargs):
     ScriptConsole.show_console(*args, **kwargs)
+
+
+def toggle(*args, **kwargs):
+    """Toggle the Script Output panel.
+
+    - If the workspace control is already visible, hide it.
+    - If it exists but is hidden, show it.
+    - Otherwise create it (forwarding any *args / **kwargs to ``show``).
+    """
+    ws = ScriptConsole.WORKSPACE_CONTROL_NAME
+    if cmds.workspaceControl(ws, exists=True):
+        visible = cmds.workspaceControl(ws, query=True, visible=True)
+        cmds.workspaceControl(ws, edit=True, visible=not visible)
+        return
+    show(*args, **kwargs)
 
 
 # Usage: Call this in Maya's script editor or shelf button to show the window

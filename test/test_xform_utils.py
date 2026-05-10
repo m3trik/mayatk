@@ -207,6 +207,34 @@ class TestXformUtils(MayaTkTestCase):
         self.assertAlmostEqual(pos[1], 20.0)
         self.assertAlmostEqual(pos[2], 30.0)
 
+    def test_store_transforms_attrs_hidden_from_channel_box(self):
+        """Stored attrs must be non-keyable and not displayed in the channel box."""
+        XformUtils.store_transforms(self.cube1, prefix="test")
+        for attr in ("test_worldMatrix", "test_rotatePivot", "test_scalePivot"):
+            plug = f"{self.cube1}.{attr}"
+            self.assertFalse(
+                cmds.getAttr(plug, keyable=True),
+                f"{attr} should not be keyable",
+            )
+            self.assertFalse(
+                cmds.getAttr(plug, channelBox=True),
+                f"{attr} should not be in the channel box",
+            )
+
+    def test_store_transforms_heals_legacy_keyable_attrs(self):
+        """Re-storing on attrs created keyable (legacy scenes) should normalize them."""
+        # Simulate legacy state: attrs added with keyable=True.
+        cmds.addAttr(self.cube1, ln="test_worldMatrix", at="matrix", keyable=True)
+        cmds.addAttr(self.cube1, ln="test_rotatePivot", dt="double3", keyable=True)
+        cmds.addAttr(self.cube1, ln="test_scalePivot", dt="double3", keyable=True)
+
+        XformUtils.store_transforms(self.cube1, prefix="test")
+
+        for attr in ("test_worldMatrix", "test_rotatePivot", "test_scalePivot"):
+            plug = f"{self.cube1}.{attr}"
+            self.assertFalse(cmds.getAttr(plug, keyable=True))
+            self.assertFalse(cmds.getAttr(plug, channelBox=True))
+
     def test_freeze_transforms(self):
         """Test freeze transforms."""
         cmds.move(10, 10, 10, self.cube1)

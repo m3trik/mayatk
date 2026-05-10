@@ -975,43 +975,68 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
     def get_faces_with_similar_normals(
         cls,
         faces,
-        transforms=[],
-        similar_faces=[],
+        transforms=None,
+        similar_faces=None,
         range_x=0.1,
         range_y=0.1,
         range_z=0.1,
         returned_type="str",
     ):
-        """Filter for faces with normals that fall within an X,Y,Z tolerance."""
+        """Filter for faces with normals that fall within an X,Y,Z tolerance.
+
+        Searches across every transform spanned by ``faces`` (or ``transforms``
+        if provided), so multi-object selections are honored. Each matching
+        face appears at most once in the returned list.
+        """
         faces = cmds.ls(as_strings(faces), flatten=True) or []
-        for face in faces:
-            normals = cls.get_normal_vector(face)
+        similar_faces = list(similar_faces) if similar_faces else []
+        if not faces:
+            return similar_faces
 
-            for k, v in normals.items():
-                sX, sY, sZ = v
+        if not transforms:
+            transforms = list(
+                dict.fromkeys(
+                    t for face in faces for t in (cmds.ls(face, objectsOnly=True) or [])
+                )
+            )
 
-                if not transforms:
-                    transforms = cmds.ls(face, objectsOnly=True) or []
+        # Source normals — one batched polyInfo call regardless of source count.
+        source_normals = list(cls.get_normal_vector(faces).values())
+        if not source_normals:
+            return similar_faces
 
-                for node in transforms:
-                    for f in cls.get_components(
-                        node, "faces", returned_type=returned_type, flatten=True
+        seen = set(similar_faces)
+        for node in transforms:
+            node_faces = (
+                cls.get_components(
+                    node, "faces", returned_type=returned_type, flatten=True
+                )
+                or []
+            )
+            if not node_faces:
+                continue
+            # One polyInfo per transform; keyed by face index.
+            normals_by_idx = cls.get_normal_vector(node_faces)
+            for f in node_faces:
+                if f in seen:
+                    continue
+                try:
+                    idx = int(str(f).rsplit("[", 1)[1].rstrip("]"))
+                except (IndexError, ValueError):
+                    continue
+                n = normals_by_idx.get(idx)
+                if n is None:
+                    continue
+                nX, nY, nZ = n
+                for sX, sY, sZ in source_normals:
+                    if (
+                        abs(sX - nX) <= range_x
+                        and abs(sY - nY) <= range_y
+                        and abs(sZ - nZ) <= range_z
                     ):
-                        n = cls.get_normal_vector(f)
-                        for k, v in n.items():
-                            nX, nY, nZ = v
-
-                            if (
-                                sX <= nX + range_x
-                                and sX >= nX - range_x
-                                and sY <= nY + range_y
-                                and sY >= nY - range_y
-                                and sZ <= nZ + range_z
-                                and sZ >= nZ - range_z
-                            ):
-                                similar_faces.append(f)
-                                if f in faces:
-                                    faces.remove(f)
+                        similar_faces.append(f)
+                        seen.add(f)
+                        break
 
         return similar_faces
 

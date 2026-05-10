@@ -208,6 +208,55 @@ class MayaConnection:
         )
 
     @staticmethod
+    def open_available_command_ports(
+        mel_start: int = 7001,
+        python_start: int = 7002,
+        max_offset: int = 50,
+        tag_window: bool = True,
+    ) -> dict:
+        """Open command ports auto-negotiating around port collisions.
+
+        Use from ``userSetup.py`` so multiple concurrent Maya instances each
+        get a unique pair of ports instead of fighting over 7001/7002.
+
+        Parameters:
+            mel_start: Preferred MEL port (default 7001).
+            python_start: Preferred Python port (default 7002).
+            max_offset: Max port-pair offset to scan (default 50).
+            tag_window: If True, append ``[Port: <python_port>]`` to the
+                main window title so the instance is identifiable.
+
+        Returns:
+            dict mapping ``{port_name: source_type}`` for the ports that
+            were actually opened (e.g. ``{':7003': 'mel', ':7004': 'python'}``).
+        """
+        import maya.cmds as cmds
+
+        mel_p, py_p = MayaConnection._find_port_pair(mel_start, python_start, max_offset)
+        MayaConnection.open_command_ports(mel=mel_p, python=py_p)
+        opened = {p: s for p, s in MayaConnection._open_command_ports.items() if p in (mel_p, py_p)}
+
+        if tag_window:
+            try:
+                py_num = int(py_p.lstrip(":"))
+                main_window = "MayaWindow"
+                if cmds.window(main_window, exists=True):
+                    current = cmds.window(main_window, query=True, title=True) or "Maya"
+                    tag = f" [Port: {py_num}]"
+                    if tag not in current:
+                        cmds.window(main_window, edit=True, title=f"{current}{tag}")
+            except Exception as e:
+                print(f"[commandPort] Could not tag window title: {e}")
+
+        # Silent on the happy path (default ports were free). Only announce
+        # when auto-negotiation kicked in — that's the interesting case.
+        if (mel_p, py_p) != (f":{mel_start}", f":{python_start}"):
+            print(
+                f"# Info: Command ports auto-negotiated - mel{mel_p}, python{py_p}"
+            )
+        return opened
+
+    @staticmethod
     def toggle_command_ports(mel_port: int = 7001, python_port: int = 7002) -> tuple:
         """Toggle Maya command ports on or off.
 
@@ -1153,6 +1202,13 @@ def open_command_ports(**kwargs):
 def toggle_command_ports(mel_port=7001, python_port=7002):
     """Wrapper for MayaConnection.toggle_command_ports."""
     return MayaConnection.toggle_command_ports(mel_port, python_port)
+
+
+def open_available_command_ports(mel_start=7001, python_start=7002, max_offset=50, tag_window=True):
+    """Wrapper for MayaConnection.open_available_command_ports."""
+    return MayaConnection.open_available_command_ports(
+        mel_start, python_start, max_offset, tag_window
+    )
 
 
 if __name__ == "__main__":
