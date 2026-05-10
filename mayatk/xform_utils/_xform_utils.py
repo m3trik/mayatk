@@ -378,16 +378,24 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
 
             else:
                 if not cmds.attributeQuery(mat_attr, node=obj, exists=True):
-                    cmds.addAttr(obj, ln=mat_attr, at="matrix", k=True)
+                    cmds.addAttr(obj, ln=mat_attr, at="matrix", keyable=False)
                 if not cmds.attributeQuery(rp_attr, node=obj, exists=True):
-                    cmds.addAttr(obj, ln=rp_attr, dt="double3", k=True)
+                    cmds.addAttr(obj, ln=rp_attr, dt="double3", keyable=False)
                 if not cmds.attributeQuery(sp_attr, node=obj, exists=True):
-                    cmds.addAttr(obj, ln=sp_attr, dt="double3", k=True)
+                    cmds.addAttr(obj, ln=sp_attr, dt="double3", keyable=False)
 
                 matrix_flat = cmds.xform(obj, query=True, matrix=True, worldSpace=True)
                 cmds.setAttr(f"{obj}.{mat_attr}", *matrix_flat, type="matrix")
                 cmds.setAttr(f"{obj}.{rp_attr}", *rotate_pivot, type="double3")
                 cmds.setAttr(f"{obj}.{sp_attr}", *scale_pivot, type="double3")
+
+            # Heal legacy attrs created with k=True so they leave the channel box.
+            for attr in (mat_attr, rp_attr, sp_attr):
+                plug = f"{obj}.{attr}"
+                if cmds.getAttr(plug, keyable=True) or cmds.getAttr(
+                    plug, channelBox=True
+                ):
+                    cmds.setAttr(plug, keyable=False, channelBox=False)
 
     @classmethod
     @CoreUtils.undoable

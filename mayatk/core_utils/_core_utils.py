@@ -424,7 +424,10 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
                         or []
                     )
                     if shapes:
-                        shape_leaf = shapes[0].split("|")[-1].split(":")[-1]
+                        # Keep namespace — the shape lives in the same one
+                        # as its transform. Stripping it would point at a
+                        # different (or non-existent) node.
+                        shape_leaf = shapes[0].split("|")[-1]
                         return f"{shape_leaf}.{rest}"
             except Exception:
                 pass

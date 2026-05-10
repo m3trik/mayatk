@@ -405,13 +405,37 @@ class TestEditUtils(MayaTkTestCase):
         EditUtils.delete_selected()
         self.assertFalse(cmds.objExists(self.sphere))
 
-        # Test component deletion
-        cmds.select(f"{self.cube}.f[0]")
-        # Need to set selection mask for function to work?
-        # The function checks pm.selectType.
-        # In batch mode, selectType might not reflect selection.
-        # We'll skip component delete test in batch if it relies on UI state.
-        pass
+    def test_delete_selected_faces_single_object(self):
+        """Selecting faces must delete only the faces, not the whole mesh."""
+        face_count = cmds.polyEvaluate(self.cube, f=True)
+        cmds.selectType(ocm=True, alc=False, polymeshFace=True)
+        cmds.select(f"{self.cube}.f[0]", f"{self.cube}.f[1]")
+        EditUtils.delete_selected()
+        self.assertTrue(cmds.objExists(self.cube))
+        self.assertEqual(cmds.polyEvaluate(self.cube, f=True), face_count - 2)
+
+    def test_delete_selected_faces_multi_object(self):
+        """Components selected across multiple meshes must all be deleted, no mesh removed."""
+        cube_faces = cmds.polyEvaluate(self.cube, f=True)
+        sphere_faces = cmds.polyEvaluate(self.sphere, f=True)
+        cmds.selectType(ocm=True, alc=False, polymeshFace=True)
+        cmds.select(f"{self.cube}.f[0]", f"{self.sphere}.f[0]", f"{self.sphere}.f[1]")
+        EditUtils.delete_selected()
+        self.assertTrue(cmds.objExists(self.cube))
+        self.assertTrue(cmds.objExists(self.sphere))
+        self.assertEqual(cmds.polyEvaluate(self.cube, f=True), cube_faces - 1)
+        self.assertEqual(cmds.polyEvaluate(self.sphere, f=True), sphere_faces - 2)
+
+    def test_delete_selected_mixed_components_and_objects(self):
+        """Mixed selection: components on one mesh + a whole second mesh."""
+        extra = cmds.polyCube(name="test_cube_extra")[0]
+        cube_faces = cmds.polyEvaluate(self.cube, f=True)
+        cmds.selectType(ocm=True, alc=False, polymeshFace=True)
+        cmds.select(f"{self.cube}.f[0]", extra)
+        EditUtils.delete_selected()
+        self.assertTrue(cmds.objExists(self.cube))
+        self.assertFalse(cmds.objExists(extra))
+        self.assertEqual(cmds.polyEvaluate(self.cube, f=True), cube_faces - 1)
 
     def test_create_curve_from_edges(self):
         """Test creating curve from edges."""

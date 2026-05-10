@@ -15,6 +15,7 @@ Also covers ``group_by_material=True`` regrouping (the mirror of
 ``combine_objects(group_by_material=True)``) and a combine→separate
 round-trip.
 """
+import re
 import unittest
 from typing import List
 
@@ -123,7 +124,8 @@ class TestSeparateObjects(MayaTkTestCase):
     # ---- group_by_material (mirror of combine) ------------------------------
 
     def test_separate_group_by_material_creates_groups(self):
-        """``group_by_material=True`` parents results under per-material groups."""
+        """``group_by_material=True`` parents results under per-material groups
+        named after the source object."""
         c = cmds.polyCube(sx=2, n="triMat")[0]
         mtk.MatUtils.assign_mat(c, self.mat1)
         cmds.select(f"{c}.f[0:1]")
@@ -135,25 +137,33 @@ class TestSeparateObjects(MayaTkTestCase):
             [c], by_material=True, group_by_material=True
         )
 
-        # One group per unique material.
         self.assertEqual(len(groups), 3)
         for grp in groups:
             self.assertTrue(cmds.objExists(grp))
             self.assertEqual(cmds.nodeType(grp), "transform")
             children = cmds.listRelatives(grp, children=True) or []
             self.assertGreaterEqual(len(children), 1)
-            # Every child of a material group should carry only that material.
             for child in children:
                 mats = _mats_on(child)
                 self.assertEqual(len(mats), 1)
 
-        # Groups should be named after the materials.
-        group_names = {_short(g) for g in groups}
-        for mat in (self.mat1, self.mat2, self.mat3):
-            self.assertTrue(
-                any(_short(mat) in name for name in group_names),
-                f"Expected a group named after '{mat}' in {group_names}",
-            )
+        # Group names must be derived from the source object name, not the
+        # material name, with a single-letter disambiguator + _grp suffix.
+        group_names = sorted(_short(g) for g in groups)
+        self.assertEqual(
+            group_names,
+            ["triMat_A_grp", "triMat_B_grp", "triMat_C_grp"],
+        )
+
+        # Single-child groups should rename their child to ``source_<suffix>``.
+        for grp in groups:
+            children = cmds.listRelatives(grp, children=True) or []
+            if len(children) == 1:
+                short = _short(children[0])
+                self.assertTrue(
+                    short.startswith("triMat_") and not short.endswith("_grp"),
+                    f"Expected child named after source object, got {short!r}",
+                )
 
     def test_group_by_material_alone_groups_existing_objects(self):
         """``group_by_material=True`` without ``by_material`` still groups by mat."""
@@ -171,18 +181,81 @@ class TestSeparateObjects(MayaTkTestCase):
             [a, b, d], by_material=False, group_by_material=True
         )
 
-        self.assertEqual(len(groups), 2)
-        # mat1 group should hold a + b, mat2 group should hold d.
-        size_to_mat = {}
+        # Three sources, but ``a`` and ``b`` share a material with their own
+        # source so each source produces only one group.
+        self.assertEqual(len(groups), 3)
         for grp in groups:
             children = cmds.listRelatives(grp, children=True) or []
-            mats = set()
-            for child in children:
-                mats.update(_mats_on(child))
+            self.assertEqual(len(children), 1)
+            mats = _mats_on(children[0])
             self.assertEqual(len(mats), 1)
-            size_to_mat[len(children)] = next(iter(mats))
-        self.assertEqual(size_to_mat[2], self.mat1)
-        self.assertEqual(size_to_mat[1], self.mat2)
+
+        # Groups should derive their name from each source.
+        group_names = sorted(_short(g) for g in groups)
+        self.assertEqual(group_names, ["a_A_grp", "b_A_grp", "d_A_grp"])
+
+    def test_group_by_material_multi_member_uses_inner_lowercase_suffix(self):
+        """A bucket with multiple members names children ``source_<X>_<a/b>``."""
+        # Build 4 disjoint cubes so the combined source has 4 shells:
+        # three painted with mat1 and one with mat2.
+        cubes = []
+        for i in range(4):
+            c = cmds.polyCube(n=f"piece{i}")[0]
+            cmds.move(i * 5, 0, 0, c)
+            cubes.append(c)
+        combined = cmds.polyUnite(*cubes, n="src", ch=False)[0]
+        # Rename in case Maya disambiguated "src" → "src1".
+        combined = cmds.rename(combined, "src")
+        # 6 faces per cube, 4 cubes → faces 0-17 are mat1, 18-23 are mat2.
+        cmds.select(f"{combined}.f[0:17]")
+        mtk.MatUtils.assign_mat(cmds.ls(selection=True), self.mat1)
+        cmds.select(f"{combined}.f[18:23]")
+        mtk.MatUtils.assign_mat(cmds.ls(selection=True), self.mat2)
+
+        groups = EditUtils.separate_objects(
+            [combined], by_material=True, group_by_material=True
+        )
+        self.assertEqual(len(groups), 2)
+
+        children_per_group = {
+            _short(g): sorted(
+                _short(c) for c in (cmds.listRelatives(g, children=True) or [])
+            )
+            for g in groups
+        }
+        # Big bucket (mat1, 3 members) uses lowercase inner suffix; small
+        # bucket (mat2, 1 member) collapses to ``source_<X>`` with no inner.
+        big = next(c for c in children_per_group.values() if len(c) == 3)
+        small = next(c for c in children_per_group.values() if len(c) == 1)
+        self.assertTrue(
+            all(re.fullmatch(r"src_[AB]_[abc]", n) for n in big),
+            f"Expected source_<X>_<a-c> names, got {big}",
+        )
+        self.assertRegex(small[0], r"^src_[AB]$")
+
+    def test_group_by_material_falls_back_to_numeric_above_26(self):
+        """When the bucket count exceeds 26, the suffix scheme switches to
+        zero-padded numerics."""
+        # Build 27 cubes, each with its own unique material.
+        cubes = []
+        mats = []
+        for i in range(27):
+            c = cmds.polyCube(n=f"piece{i}")[0]
+            cmds.move(i * 3, 0, 0, c)
+            m = mtk.MatUtils.create_mat("lambert", name=f"matX{i}")
+            mtk.MatUtils.assign_mat(c, m)
+            cubes.append(c)
+            mats.append(m)
+        combined = cmds.polyUnite(*cubes, n="big", ch=False)[0]
+
+        groups = EditUtils.separate_objects(
+            [combined], by_material=True, group_by_material=True
+        )
+        self.assertEqual(len(groups), 27)
+        names = sorted(_short(g) for g in groups)
+        # All names should match the numeric pattern when count > 26.
+        for n in names:
+            self.assertRegex(n, r"^big_\d{2}_grp$")
 
     # ---- Round-trip with combine_objects ------------------------------------
 

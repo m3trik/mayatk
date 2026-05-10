@@ -822,9 +822,11 @@ class NodeUtils(ptk.HelpMixin):
             )
             if objParent:
                 try:
-                    instance = cmds.parent(instance, objParent[0])[0]
+                    parented = cmds.parent(instance, objParent[0]) or []
                 except RuntimeError:
-                    pass
+                    parented = []
+                if parented:
+                    instance = parented[0]
             instance = cmds.rename(instance, name + append)
             cmds.delete(target)
             new_instances.append(instance)

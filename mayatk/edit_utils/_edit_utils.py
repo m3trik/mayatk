@@ -174,9 +174,12 @@ class EditUtils(ptk.HelpMixin):
             return []
 
         separated_objects: List[str] = []
+        # Per-source results so the grouping helper can name the groups and
+        # leaves after the originating object instead of after the material.
+        results_by_source: List[tuple] = []
 
         for obj in cmds.ls(as_strings(objects), objectsOnly=True, transforms=True):
-            original_name = str(obj).split("|")[-1]
+            original_name = str(obj).split("|")[-1].split(":")[-1]
             current_results: List[str] = []
             separated = False
 
@@ -227,10 +230,10 @@ class EditUtils(ptk.HelpMixin):
                     except Exception:
                         pass
 
-            if rename and len(current_results) > 1:
-                # Track via UUID so the returned list reflects post-rename names
-                # (Naming.rename mutates the scene in place; the input strings
-                # become stale immediately after).
+            # Location-suffix rename only applies on the flat-result path. The
+            # group-by-material path runs its own source-name + letter/number
+            # naming pass (see _group_results_by_material).
+            if rename and not group_by_material and len(current_results) > 1:
                 uuids = cmds.ls(current_results, uuid=True) or []
                 try:
                     Naming.rename(current_results, to=original_name)
@@ -254,41 +257,89 @@ class EditUtils(ptk.HelpMixin):
                 except Exception as e:
                     cmds.warning(f"Rename failed for {original_name}: {e}")
 
+            results_by_source.append((original_name, current_results))
             separated_objects.extend(current_results)
 
         if group_by_material and separated_objects:
-            return EditUtils._group_results_by_material(separated_objects)
+            return EditUtils._group_results_by_material(results_by_source)
 
         return separated_objects
 
     @staticmethod
-    def _group_results_by_material(objects: List[str]) -> List[str]:
-        """Parent ``objects`` under per-material transform groups.
+    def _group_results_by_material(
+        results_by_source: List[tuple],
+    ) -> List[str]:
+        """Parent material-bucketed results under per-source groups.
 
-        Returns the list of group transforms (one per unique material key).
+        For every ``(source_name, results)`` entry, results are bucketed by
+        material; one transform group is created per bucket. Groups are named
+        ``{source}_{suffix}_grp`` and child meshes are renamed
+        ``{source}_{suffix}`` (single child) or ``{source}_{suffix}_{inner}``
+        (multiple children per bucket). The suffix scheme is letters
+        (``A, B, ...``) when the count is ≤ 26, else zero-padded numerics.
+
+        Returns:
+            List of created group transforms.
         """
-        buckets = MatUtils.group_objects_by_material(objects)
         groups: List[str] = []
-        for mat_key, members in buckets.items():
-            members = [m for m in members if cmds.objExists(m)]
-            if not members:
+
+        for source_name, results in results_by_source:
+            results = [r for r in results if cmds.objExists(r)]
+            if not results:
                 continue
-            if isinstance(mat_key, tuple):
-                label = "_".join(str(m).split("|")[-1].split(":")[-1] for m in mat_key)
-            else:
-                label = str(mat_key).split("|")[-1].split(":")[-1]
-            grp = cmds.group(empty=True, name=f"{label}_grp")
-            for m in members:
+
+            buckets = MatUtils.group_objects_by_material(results)
+            items = [
+                (k, [m for m in v if cmds.objExists(m)])
+                for k, v in buckets.items()
+            ]
+            items = [(k, v) for k, v in items if v]
+            if not items:
+                continue
+
+            grp_suffixes = ptk.StrUtils.sequential_suffixes(len(items))
+
+            for grp_idx, (_mat_key, members) in enumerate(items):
+                grp_suffix = grp_suffixes[grp_idx]
+                grp = cmds.group(empty=True, name=f"{source_name}_{grp_suffix}_grp")
+
+                if len(members) == 1:
+                    new = EditUtils._safe_rename(members[0], f"{source_name}_{grp_suffix}")
+                    EditUtils._safe_parent(new, grp)
+                else:
+                    inner = ptk.StrUtils.sequential_suffixes(
+                        len(members), lowercase=True
+                    )
+                    for i, m in enumerate(members):
+                        new = EditUtils._safe_rename(
+                            m, f"{source_name}_{grp_suffix}_{inner[i]}"
+                        )
+                        EditUtils._safe_parent(new, grp)
+
                 try:
-                    cmds.parent(m, grp)
-                except Exception as e:
-                    cmds.warning(f"Failed to parent {m} under {grp}: {e}")
-            try:
-                cmds.xform(grp, centerPivots=True)
-            except Exception:
-                pass
-            groups.append(grp)
+                    cmds.xform(grp, centerPivots=True)
+                except Exception:
+                    pass
+                groups.append(grp)
+
         return groups
+
+    @staticmethod
+    def _safe_rename(node: str, name: str) -> str:
+        """Rename ``node`` to ``name``, returning the resulting name (which may
+        be auto-disambiguated by Maya). Falls back to the original on failure."""
+        try:
+            return cmds.rename(node, name)
+        except Exception as e:
+            cmds.warning(f"Rename '{node}' -> '{name}' failed: {e}")
+            return node
+
+    @staticmethod
+    def _safe_parent(node: str, parent: str) -> None:
+        try:
+            cmds.parent(node, parent)
+        except Exception as e:
+            cmds.warning(f"Parent '{node}' under '{parent}' failed: {e}")
 
     @staticmethod
     def merge_vertices(objects, tolerance=0.001, selected_only=False):
@@ -1596,52 +1647,67 @@ class EditUtils(ptk.HelpMixin):
 
     @staticmethod
     def delete_selected():
-        """Delete selected components or objects in Autodesk Maya based on user's selection mode.
+        """Delete selected components and/or objects in Autodesk Maya.
 
         Behavior:
-            - If joints are selected, they are removed using `pm.removeJoint`.
-            - If mesh vertices are selected and vertex mask is on, vertices are deleted.
-            - If mesh edges are selected and edge mask is on, edges are deleted.
-            - If no components are selected, the whole mesh object is deleted.
+            - Joints are removed via `removeJoint`.
+            - Components are deleted using the command matching the descriptor:
+              `.vtx[]` → polyDelVertex, `.e[]` → polyDelEdge, anything else
+              (`.f[]`, `.map[]`, ...) → cmds.delete. polyDelVertex / polyDelEdge
+              are dispatched per owning object (they reject multi-object input).
+            - Objects in the selection with no selected components are deleted
+              whole; objects that own selected components are spared.
         """
-        # Query mask settings
-        maskVertex = cmds.selectType(q=True, vertex=True)
-        maskEdge = cmds.selectType(q=True, edge=True)
-
-        # Get currently selected objects and components
-        objects = cmds.ls(sl=True, objectsOnly=True) or []
         all_selection = cmds.ls(sl=True, flatten=True) or []
-        # Components are descriptor strings like "obj.vtx[5]".
         components = [c for c in all_selection if "." in c and "[" in c]
+        objects = [str(o) for o in (cmds.ls(sl=True, objectsOnly=True) or [])]
 
-        for obj in objects:
-            obj = str(obj)
-            # For joints, use removeJoint
-            if cmds.objectType(obj) == "joint":
-                cmds.removeJoint(obj)
-            # For mesh objects, look for component selections
-            elif cmds.objectType(obj) == "mesh" or NodeUtils.is_mesh(obj):
-                long_paths = cmds.ls(as_strings(obj), long=True) or [obj]
-                obj_long_name = long_paths[0]
-                # Check for selected components of the object
-                selected_components = [
-                    comp
-                    for comp in components
-                    if obj_long_name in (
-                        cmds.ls(comp.split(".")[0], long=True) or [comp.split(".")[0]]
-                    )[0]
-                ]
-
-                # Delete based on selection and mask settings
-                if selected_components:
-                    if maskEdge:
-                        cmds.polyDelEdge(selected_components, cleanVertices=True)
-                    elif maskVertex:
-                        cmds.polyDelVertex(selected_components)
-                    else:
-                        cmds.delete(selected_components)
+        # Resolve every component's owner to a set of long paths (transform + shape),
+        # so a selection descriptor using either name matches the same object.
+        component_owner_paths = set()
+        for comp in components:
+            owner = comp.split(".")[0]
+            for lp in cmds.ls(owner, long=True) or [owner]:
+                component_owner_paths.add(lp)
+                if cmds.objectType(lp) == "transform":
+                    for sh in cmds.listRelatives(lp, shapes=True, fullPath=True) or []:
+                        component_owner_paths.add(sh)
                 else:
-                    cmds.delete(obj)  # Delete entire object if no components selected
+                    for tr in cmds.listRelatives(lp, parent=True, fullPath=True) or []:
+                        component_owner_paths.add(tr)
+
+        joints, whole_objects = [], []
+        for obj in objects:
+            if cmds.objectType(obj) == "joint":
+                joints.append(obj)
+                continue
+            obj_long = (cmds.ls(obj, long=True) or [obj])[0]
+            if obj_long not in component_owner_paths:
+                whole_objects.append(obj)
+
+        for j in joints:
+            cmds.removeJoint(j)
+
+        # Group components by descriptor type and owner — polyDel* are single-object.
+        verts_by_owner, edges_by_owner, other_components = {}, {}, []
+        for comp in components:
+            owner = comp.split(".")[0]
+            if ".vtx[" in comp:
+                verts_by_owner.setdefault(owner, []).append(comp)
+            elif ".e[" in comp:
+                edges_by_owner.setdefault(owner, []).append(comp)
+            else:
+                other_components.append(comp)
+
+        for verts in verts_by_owner.values():
+            cmds.polyDelVertex(verts)
+        for edges in edges_by_owner.values():
+            cmds.polyDelEdge(edges, cleanVertices=True)
+        if other_components:
+            cmds.delete(other_components)
+
+        if whole_objects:
+            cmds.delete(whole_objects)
 
     @staticmethod
     def create_curve_from_edges(edges: Optional[List[str]] = None, **kwargs):
