@@ -1925,17 +1925,18 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def _setup_footer_actions(self):
         """Add action buttons to the footer."""
         footer = getattr(self.ui, "footer", None)
-        if footer is None or not hasattr(footer, "add_action_button"):
+        if footer is None or not hasattr(footer, "add_widget"):
             return
-        footer.add_action_button(
-            text="Un-Reference All",
-            tooltip="Remove all references from the scene.",
-            callback=self.btn_unreference_all,
-        )
+        btn = self.sb.QtWidgets.QPushButton("Un-Reference All", footer)
+        btn.setToolTip("Remove all references from the scene.")
+        btn.setCursor(self.sb.QtGui.QCursor(self.sb.QtCore.Qt.ArrowCursor))
+        btn.setFixedHeight(max(footer.height() - 2, 1))
+        btn.clicked.connect(self.btn_unreference_all)
+        footer.add_widget(btn, side="right", background=True)
 
     def header_init(self, widget):
         """Initialize the header for the reference manager."""
-        widget.config_buttons("refresh", "menu", "collapse", "pin")
+        widget.config_buttons("refresh", "menu", "collapse", "hide")
         widget.refresh_requested.connect(self.btn_refresh)
         widget.menu.add_presets = True
         widget.menu.presets.preset_dir = "~/.mayatk/presets/reference_manager"
@@ -2131,7 +2132,6 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                         "icon": "grid",
                         "color": "#3a3a3a",
                         "tooltip": "Display overrides are only available for active references",
-                        "action": self._cycle_display_mode_at_row,
                     },
                 },
             )
@@ -2394,7 +2394,17 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             success = self.controller.add_reference(namespace, file_path)
             if success:
                 t.actions.set(row, 1, "referenced")
-                t.actions.set(row, 3, "off")
+                # Reflect any display-override state baked into the source file
+                disp_mode = "off"
+                for ref in self.controller.current_references:
+                    try:
+                        if os.path.normcase(os.path.normpath(ref.path)) == norm_fp:
+                            disp_mode = self.controller.get_reference_display_mode(ref)
+                            if disp_mode != "off":
+                                break
+                    except Exception:
+                        continue
+                t.actions.set(row, 3, disp_mode)
                 item.setSelected(True)
                 self.logger.debug(f"Referenced: {file_path}")
 
@@ -2424,10 +2434,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         ]
 
         if not matched_refs:
+            # Race: the reference was removed externally between table sync
+            # and this click. Reset the cell to its true state silently.
             t.actions.set(row, 3, "unavailable")
-            self.sb.message_box(
-                "Display overrides are only available for active references."
-            )
             return
 
         current = "off"

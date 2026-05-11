@@ -419,16 +419,21 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
                 return comp
             try:
                 if cmds.objectType(node) == "transform":
+                    # fullPath=True keeps the prefix unique when leaf names
+                    # collide (Maya allows duplicate shape leaf names under
+                    # different DAG parents); the short form would later
+                    # raise "No object matches name" on lookup.
                     shapes = (
-                        cmds.listRelatives(node, shapes=True, noIntermediate=True)
+                        cmds.listRelatives(
+                            node,
+                            shapes=True,
+                            noIntermediate=True,
+                            fullPath=True,
+                        )
                         or []
                     )
                     if shapes:
-                        # Keep namespace — the shape lives in the same one
-                        # as its transform. Stripping it would point at a
-                        # different (or non-existent) node.
-                        shape_leaf = shapes[0].split("|")[-1]
-                        return f"{shape_leaf}.{rest}"
+                        return f"{shapes[0]}.{rest}"
             except Exception:
                 pass
             return comp

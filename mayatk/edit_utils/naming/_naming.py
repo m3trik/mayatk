@@ -295,13 +295,14 @@ class Naming(ptk.HelpMixin):
 
             name_pairs.append((obj, new_name))
 
+        results = []
         for obj, new_name in name_pairs:
             try:
-                cmds.rename(obj, new_name)
+                results.append(cmds.rename(obj, new_name))
             except Exception as e:
                 print(f"// Error: Unable to rename {obj}: {e}")
-                continue
-        return [n for _, n in name_pairs]
+                results.append(new_name)
+        return results
 
     @staticmethod
     @CoreUtils.undoable
@@ -434,14 +435,15 @@ class Naming(ptk.HelpMixin):
 
             name_pairs.append((obj, new_name))
 
+        results = []
         for obj, new_name in name_pairs:
             try:
-                cmds.rename(obj, new_name)
+                results.append(cmds.rename(obj, new_name))
             except Exception as e:
                 print(f"// Error: Unable to rename {obj}: {e}")
-                continue
+                results.append(new_name)
 
-        return [n for _, n in name_pairs]
+        return results
 
     @staticmethod
     @CoreUtils.undoable
