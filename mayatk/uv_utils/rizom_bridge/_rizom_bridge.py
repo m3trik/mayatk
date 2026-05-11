@@ -12,7 +12,8 @@ except ModuleNotFoundError as error:
 
 # From this package:
 from mayatk import NodeUtils, UvUtils
-from mayatk.core_utils._core_utils import leaf_name, short_name
+from mayatk.core_utils._core_utils import leaf_name, short_name, CoreUtils
+from mayatk.env_utils.fbx_utils import FbxUtils
 from pythontk.core_utils.app_launcher import AppLauncher
 from pythontk.str_utils._str_utils import StrUtils
 
@@ -49,7 +50,11 @@ class RizomUVBridge:
         """Resolve the RizomUV executable path.
 
         If an explicit path was provided at init it is returned directly.
-        Otherwise ``AppLauncher.find_app`` is queried for each candidate.
+        Otherwise ``AppLauncher.find_app`` is queried for each candidate;
+        as a final fallback we walk the standard Rizom Lab install dirs
+        because the Rizom installer doesn't register the exe with the
+        Windows ``App Paths`` registry key (so PATH/registry lookup fails
+        even on a normal install).
         """
         if self._rizom_path:
             return self._rizom_path
@@ -59,7 +64,34 @@ class RizomUVBridge:
             if found:
                 self._rizom_path = found  # cache for next call
                 return found
+
+        for found in self._scan_rizom_install_dirs():
+            self._rizom_path = found
+            return found
         return None
+
+    @staticmethod
+    def _scan_rizom_install_dirs():
+        """Yield candidate Rizomuv_VS.exe paths under the standard install roots.
+
+        Newest install (lexicographically last folder name -- e.g. "RizomUV
+        2024.1" beats "RizomUV 2020.1") wins.
+        """
+        roots = [
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        ]
+        for root in roots:
+            rizom_lab = Path(root) / "Rizom Lab"
+            if not rizom_lab.is_dir():
+                continue
+            for sub in sorted(rizom_lab.iterdir(), reverse=True):
+                if not sub.is_dir():
+                    continue
+                for exe_name in ("Rizomuv_VS.exe", "rizomuv_RS.exe", "rizomuv.exe"):
+                    candidate = sub / exe_name
+                    if candidate.is_file():
+                        yield str(candidate)
 
     @rizom_path.setter
     def rizom_path(self, value):
@@ -105,6 +137,11 @@ class RizomUVBridge:
     def process_with_rizomuv(self, objects, uv_script=None, preset=None, params=None):
         """Run the full export -> RizomUV -> re-import workflow.
 
+        The entire round-trip is wrapped in a Maya undo chunk so a single
+        Ctrl+Z reverts the UV transfer, namespace creation, and any
+        temporary duplicate cleanup. The external RizomUV invocation
+        modifies a temp FBX on disk only -- nothing scene-state-relevant.
+
         Parameters:
             objects: Maya transform nodes to process.
             uv_script: Raw Lua string **or** path to a ``.lua`` file.
@@ -127,14 +164,16 @@ class RizomUVBridge:
 
         self._params = params or {}
 
-        self._export_objects(objects)
-        self._execute_uv_script()
+        chunk_name = f"RizomUV: {preset or 'script'}"
+        with CoreUtils.undo_chunk(chunk_name):
+            self._export_objects(objects)
+            self._execute_uv_script()
 
-        # Directly work with transforms for imported objects for consistency
-        imported_transforms = self._import_objects()
-        # Ensure only transforms are passed to the transfer method
-        original_transforms = NodeUtils.get_transform_node(objects)
-        self._transfer_uvs_and_cleanup(imported_transforms, original_transforms)
+            # Directly work with transforms for imported objects for consistency
+            imported_transforms = self._import_objects()
+            # Ensure only transforms are passed to the transfer method
+            original_transforms = NodeUtils.get_transform_node(objects)
+            self._transfer_uvs_and_cleanup(imported_transforms, original_transforms)
 
     def _import_objects(self):
         """Updated to ensure transform nodes are returned."""
@@ -279,6 +318,11 @@ class RizomUVBridge:
                 dup = cmds.duplicate(orig, rr=True, ic=True)[0]
                 new_name = f"{leaf_name(orig)}{self._temp_suffix}"
                 dup = cmds.rename(dup, new_name)
+                # Resolve to full DAG path so cmds.select can disambiguate when
+                # two duplicates collapse to the same leaf name in different parents.
+                dup_long = cmds.ls(dup, long=True) or []
+                if dup_long:
+                    dup = dup_long[0]
                 duplicates.append(dup)
                 # Store mapping using short (namespace-free) name
                 self._export_name_map[short_name(new_name)] = orig
@@ -300,41 +344,22 @@ class RizomUVBridge:
             f"Debug: Exporting {len(duplicates)} duplicated objects to: {self.export_path}"
         )
 
+        # Live Maya sessions don't always have fbxmaya on by default;
+        # cmds.file(type="FBX export") raises "Invalid file type" without it.
+        FbxUtils.load_plugin()
+
         try:
-            # Try FBX export first
-            cmds.file(self.export_path, exportSelected=True, type="FBX export", force=True)
+            cmds.file(
+                self.export_path,
+                exportSelected=True,
+                type="FBX export",
+                force=True,
+            )
             print("Debug: FBX export completed successfully")
         except Exception as e:
-            print(f"Debug: FBX export failed: {e}")
-            # Fallback to OBJ in a different location
-            try:
-                obj_path = str(Path(self.export_path).with_suffix(".obj"))
-                print(f"Debug: Trying OBJ export to: {obj_path}")
-                cmds.file(
-                    obj_path,
-                    exportSelected=True,
-                    type="OBJ",
-                    force=True,
-                    options="groups=1;ptgroups=1;materials=1;smoothing=1;normals=1",
-                )
-                # Update the export path to the successful export
-                self._export_path = Path(obj_path)
-                print("Debug: OBJ export completed successfully")
-            except Exception as obj_error:
-                # Last resort - try exporting to Maya's project directory
-                project_dir = cmds.workspace(query=True, rootDirectory=True)
-                fallback_path = Path(project_dir) / "rizomuv_temp.fbx"
-                try:
-                    print(
-                        f"Debug: Trying FBX export to project directory: {fallback_path}"
-                    )
-                    cmds.file(str(fallback_path), exportSelected=True, type="FBX export", force=True)
-                    self._export_path = fallback_path
-                    print("Debug: Fallback FBX export completed successfully")
-                except Exception as final_error:
-                    raise RuntimeError(
-                        f"All export attempts failed. FBX: {e}, OBJ: {obj_error}, Fallback: {final_error}"
-                    )
+            raise RuntimeError(
+                f"FBX export failed for {len(duplicates)} object(s) -> {self.export_path}: {e}"
+            ) from e
         finally:
             # Remove the temporary duplicates from the scene before re-import
             try:
@@ -374,39 +399,66 @@ class RizomUVBridge:
         else:
             print("Debug: Warning - Export file does not exist before RizomUV!")
 
-        # Execute RizomUV via AppLauncher
+        # Execute RizomUV via AppLauncher.
         exe = self.rizom_path
         if not exe:
-            print("Debug: Error - RizomUV executable not found. "
-                  "Pass rizom_path= or add RizomUV to your PATH.")
-            return
+            raise RuntimeError(
+                "RizomUV executable not found. Pass rizom_path= or add "
+                "RizomUV to PATH."
+            )
 
+        # Snapshot the export file's pre-run state so we can verify RizomUV
+        # actually wrote new UVs back to it. A non-zero exit, a Lua error
+        # before ZomSave, or a license/license-server failure all leave the
+        # file untouched -- detecting that here lets us raise a meaningful
+        # error instead of silently re-importing the original UVs.
+        pre_mtime = export_file.stat().st_mtime if export_file.exists() else 0
+        pre_size = export_file.stat().st_size if export_file.exists() else 0
+
+        print(f"Debug: Executing command: {exe} -cfi {self._script_path}")
         try:
-            print(f"Debug: Executing command: {exe} -cfi {self._script_path}")
             result = AppLauncher.run(
                 exe,
                 args=["-cfi", self._script_path],
                 timeout=120,
             )
-            print(f"Debug: RizomUV return code: {result.returncode}")
-            if result.stdout:
-                print(f"Debug: RizomUV stdout: {result.stdout}")
-            if result.stderr:
-                print(f"Debug: RizomUV stderr: {result.stderr}")
-        except subprocess.TimeoutExpired:
-            print("Debug: RizomUV process timed out after 2 minutes")
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(
+                "RizomUV did not exit within 120s -- killed."
+            ) from e
         except FileNotFoundError as e:
-            print(f"Debug: RizomUV not found: {e}")
-        except Exception as e:
-            print(f"Debug: Error executing RizomUV: {e}")
+            raise RuntimeError(f"RizomUV executable not runnable: {e}") from e
 
-        # Check if export file was modified by RizomUV
-        if export_file.exists():
-            print(
-                f"Debug: Export file exists after RizomUV: {export_file.stat().st_size} bytes"
+        print(f"Debug: RizomUV return code: {result.returncode}")
+        if result.stdout:
+            print(f"Debug: RizomUV stdout:\n{result.stdout}")
+        if result.stderr:
+            print(f"Debug: RizomUV stderr:\n{result.stderr}")
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"RizomUV exited with code {result.returncode}. "
+                f"See 'Debug: RizomUV stdout/stderr' above for the Lua "
+                f"error or crash report."
             )
-        else:
-            print("Debug: Warning - Export file does not exist after RizomUV!")
+
+        if not export_file.exists():
+            raise RuntimeError(
+                f"RizomUV claimed success but the export file is gone: {export_file}"
+            )
+
+        post_mtime = export_file.stat().st_mtime
+        post_size = export_file.stat().st_size
+        print(
+            f"Debug: Export file after RizomUV: {post_size} bytes "
+            f"(mtime_changed={post_mtime != pre_mtime})"
+        )
+        if post_mtime == pre_mtime and post_size == pre_size:
+            raise RuntimeError(
+                "RizomUV exited cleanly but did not modify the FBX. The "
+                "Lua script likely errored before reaching ZomSave -- "
+                "check the stdout above for a Lua traceback."
+            )
 
     def _transfer_uvs_and_cleanup(self, imported_objects, original_objects):
         """Transfer UVs from imported objects back to the original objects and clean up."""

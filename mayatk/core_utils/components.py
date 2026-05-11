@@ -927,6 +927,11 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         edge_angles = {}
         for edge in edges:
             angle = cls.get_normal_angle(edge)
+            # get_normal_angle returns None when the per-edge result list is
+            # empty (ptk.format_return contract) — e.g. an ambiguous or stale
+            # component name. Skip rather than crashing the whole selection.
+            if angle is None:
+                continue
             edge_angles[str(edge)] = angle
             if low_angle <= angle <= high_angle:
                 filtered_edges.append(edge)

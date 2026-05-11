@@ -36,7 +36,7 @@ class TexturePathEditorSlots:
 
     def header_init(self, widget):
         """Initialize the header for the texture path editor."""
-        widget.config_buttons("refresh", "menu", "collapse", "pin")
+        widget.config_buttons("refresh", "menu", "collapse", "hide")
         widget.refresh_requested.connect(self.refresh_texture_table)
         widget.menu.add("Separator", setTitle="General")
         widget.menu.add(

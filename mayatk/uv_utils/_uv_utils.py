@@ -1,7 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
-from typing import List, Union
+import uuid
+from typing import List, Sequence, Tuple, Union
 
 try:
     import maya.cmds as cmds
@@ -13,6 +14,9 @@ import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils, as_strings
 from mayatk.core_utils.components import Components
 from mayatk.node_utils._node_utils import NodeUtils
+
+
+UvSnapshot = Tuple[str, str, str]  # (shape_path, original_set_name, snapshot_set_name)
 
 
 class UvUtils(ptk.HelpMixin):
@@ -490,6 +494,108 @@ class UvUtils(ptk.HelpMixin):
 
             # Scale UVs
             cmds.polyEditUV(shell_uvs, pu=pU, pv=pV, su=scale, sv=scale)
+
+    @staticmethod
+    def _copy_uv_set_in_place(shape: str, source_set: str, dest_set: str) -> None:
+        """Overwrite ``dest_set`` with the UVs from ``source_set`` on the same mesh.
+
+        Uses ``cmds.polyCopyUV`` over all faces -- ``polyUVSet -copy`` only
+        reliably populates a new set, and is brittle for re-populating an
+        existing set after a destructive op.
+        """
+        face_count = cmds.polyEvaluate(shape, face=True)
+        if not isinstance(face_count, int) or face_count <= 0:
+            return
+        cmds.polyCopyUV(
+            f"{shape}.f[0:{face_count - 1}]",
+            uvSetNameInput=source_set,
+            uvSetName=dest_set,
+            createNewMap=False,
+            constructionHistory=False,
+        )
+
+    @staticmethod
+    @CoreUtils.undoable
+    def snapshot_uv_sets(
+        objects: Sequence[Union[str, object]], prefix: str = "_uv_snap"
+    ) -> List[UvSnapshot]:
+        """Copy each object's active UV set into a uniquely-named backup set.
+
+        Returns a list of ``(shape, original_set, snapshot_set)`` tuples
+        that can be passed to ``restore_uv_snapshot`` or ``discard_uv_snapshot``.
+
+        Pairs naturally with destructive UV ops (rizom bridge, auto-unwrap,
+        ...) to give users an explicit "revert" path that survives the
+        undo queue.
+
+        Parameters:
+            objects: Transforms or shapes to snapshot.
+            prefix: Base name for the snapshot set; a short hex token is
+                appended so multiple calls don't collide.
+        """
+        token = uuid.uuid4().hex[:8]
+        snapshots: List[UvSnapshot] = []
+        for obj in objects:
+            shape = NodeUtils.get_shape_node(obj, returned_type="str")
+            if isinstance(shape, list):
+                shape = shape[0] if shape else None
+            if not shape:
+                continue
+            shape = str(shape)
+            current_list = cmds.polyUVSet(shape, query=True, currentUVSet=True) or []
+            if not current_list:
+                continue
+            current = current_list[0]
+            # Ensure the snapshot name is unique on this shape.
+            existing = set(cmds.polyUVSet(shape, query=True, allUVSets=True) or [])
+            candidate = f"{prefix}_{token}"
+            n = 1
+            while candidate in existing:
+                candidate = f"{prefix}_{token}_{n}"
+                n += 1
+            # Create the set then explicitly populate it. `polyUVSet -copy`
+            # alone leaves the new set empty on some Maya builds.
+            cmds.polyUVSet(shape, create=True, uvSet=candidate)
+            UvUtils._copy_uv_set_in_place(shape, current, candidate)
+            snapshots.append((shape, current, candidate))
+        return snapshots
+
+    @staticmethod
+    @CoreUtils.undoable
+    def restore_uv_snapshot(snapshots: Sequence[UvSnapshot]) -> None:
+        """Restore UVs captured by ``snapshot_uv_sets``.
+
+        Copies the snapshot's UVs back into the original set, then
+        deletes the snapshot. We can't delete-and-rename instead because
+        ``polyUVSet -delete`` refuses to remove the default ``map1`` set.
+        """
+        for shape, original_set, snap_set in snapshots:
+            if not cmds.objExists(shape):
+                continue
+            all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+            if snap_set not in all_sets:
+                continue
+            if snap_set == original_set:
+                continue
+            if original_set in all_sets:
+                UvUtils._copy_uv_set_in_place(shape, snap_set, original_set)
+            cmds.polyUVSet(shape, currentUVSet=True, uvSet=original_set)
+            cmds.polyUVSet(shape, delete=True, uvSet=snap_set)
+
+    @staticmethod
+    @CoreUtils.undoable
+    def discard_uv_snapshot(snapshots: Sequence[UvSnapshot]) -> None:
+        """Delete the snapshot UV sets without restoring them.
+
+        Call after a destructive UV op succeeds and the user has signaled
+        they're committing to the result.
+        """
+        for shape, _original_set, snap_set in snapshots:
+            if not cmds.objExists(shape):
+                continue
+            all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+            if snap_set in all_sets:
+                cmds.polyUVSet(shape, delete=True, uvSet=snap_set)
 
     @staticmethod
     @CoreUtils.undoable

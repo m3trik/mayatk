@@ -233,6 +233,31 @@ class TestSeparateObjects(MayaTkTestCase):
         )
         self.assertRegex(small[0], r"^src_[AB]$")
 
+    def test_group_by_material_inner_suffix_falls_back_to_numeric(self):
+        """A single bucket with >26 members switches inner suffix to numerics."""
+        # 28 disjoint cubes, all sharing the same material → one bucket of 28.
+        cubes = []
+        for i in range(28):
+            c = cmds.polyCube(n=f"slab{i}")[0]
+            cmds.move(i * 3, 0, 0, c)
+            cubes.append(c)
+        combined = cmds.polyUnite(*cubes, n="slab", ch=False)[0]
+        combined = cmds.rename(combined, "slab")
+        mtk.MatUtils.assign_mat(combined, self.mat1)
+
+        groups = EditUtils.separate_objects(
+            [combined], by_material=True, group_by_material=True
+        )
+        self.assertEqual(len(groups), 1)
+        children = sorted(
+            _short(c) for c in (cmds.listRelatives(groups[0], children=True) or [])
+        )
+        self.assertEqual(len(children), 28)
+        # Group still gets a single 'A' letter (only one bucket); inner suffix
+        # is numeric because the bucket has >26 members.
+        for name in children:
+            self.assertRegex(name, r"^slab_A_\d{2}$")
+
     def test_group_by_material_falls_back_to_numeric_above_26(self):
         """When the bucket count exceeds 26, the suffix scheme switches to
         zero-padded numerics."""

@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import math
-from typing import List, Union, Optional
+from typing import List, Optional, Tuple, Union
 
 try:
     import maya.cmds as cmds
@@ -23,6 +23,26 @@ from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.edit_utils.naming._naming import Naming
+
+
+def _safe_rename(node: str, name: str) -> str:
+    """``cmds.rename`` wrapper that warns and falls back to ``node`` on failure.
+
+    Returns the resulting name (Maya may auto-disambiguate on conflict).
+    """
+    try:
+        return cmds.rename(node, name)
+    except Exception as e:
+        cmds.warning(f"Rename '{node}' -> '{name}' failed: {e}")
+        return node
+
+
+def _safe_parent(node: str, parent: str) -> None:
+    """``cmds.parent`` wrapper that warns and continues on failure."""
+    try:
+        cmds.parent(node, parent)
+    except Exception as e:
+        cmds.warning(f"Parent '{node}' under '{parent}' failed: {e}")
 
 
 class EditUtils(ptk.HelpMixin):
@@ -176,7 +196,7 @@ class EditUtils(ptk.HelpMixin):
         separated_objects: List[str] = []
         # Per-source results so the grouping helper can name the groups and
         # leaves after the originating object instead of after the material.
-        results_by_source: List[tuple] = []
+        results_by_source: List[Tuple[str, List[str]]] = []
 
         for obj in cmds.ls(as_strings(objects), objectsOnly=True, transforms=True):
             original_name = str(obj).split("|")[-1].split(":")[-1]
@@ -267,7 +287,7 @@ class EditUtils(ptk.HelpMixin):
 
     @staticmethod
     def _group_results_by_material(
-        results_by_source: List[tuple],
+        results_by_source: List[Tuple[str, List[str]]],
     ) -> List[str]:
         """Parent material-bucketed results under per-source groups.
 
@@ -284,11 +304,9 @@ class EditUtils(ptk.HelpMixin):
         groups: List[str] = []
 
         for source_name, results in results_by_source:
-            results = [r for r in results if cmds.objExists(r)]
-            if not results:
-                continue
-
-            buckets = MatUtils.group_objects_by_material(results)
+            buckets = MatUtils.group_objects_by_material(
+                [r for r in results if cmds.objExists(r)]
+            )
             items = [
                 (k, [m for m in v if cmds.objExists(m)])
                 for k, v in buckets.items()
@@ -304,17 +322,19 @@ class EditUtils(ptk.HelpMixin):
                 grp = cmds.group(empty=True, name=f"{source_name}_{grp_suffix}_grp")
 
                 if len(members) == 1:
-                    new = EditUtils._safe_rename(members[0], f"{source_name}_{grp_suffix}")
-                    EditUtils._safe_parent(new, grp)
+                    inner_suffixes = [""]
                 else:
-                    inner = ptk.StrUtils.sequential_suffixes(
-                        len(members), lowercase=True
-                    )
-                    for i, m in enumerate(members):
-                        new = EditUtils._safe_rename(
-                            m, f"{source_name}_{grp_suffix}_{inner[i]}"
+                    inner_suffixes = [
+                        f"_{s}"
+                        for s in ptk.StrUtils.sequential_suffixes(
+                            len(members), lowercase=True
                         )
-                        EditUtils._safe_parent(new, grp)
+                    ]
+                for member, inner in zip(members, inner_suffixes):
+                    new = _safe_rename(
+                        member, f"{source_name}_{grp_suffix}{inner}"
+                    )
+                    _safe_parent(new, grp)
 
                 try:
                     cmds.xform(grp, centerPivots=True)
@@ -323,23 +343,6 @@ class EditUtils(ptk.HelpMixin):
                 groups.append(grp)
 
         return groups
-
-    @staticmethod
-    def _safe_rename(node: str, name: str) -> str:
-        """Rename ``node`` to ``name``, returning the resulting name (which may
-        be auto-disambiguated by Maya). Falls back to the original on failure."""
-        try:
-            return cmds.rename(node, name)
-        except Exception as e:
-            cmds.warning(f"Rename '{node}' -> '{name}' failed: {e}")
-            return node
-
-    @staticmethod
-    def _safe_parent(node: str, parent: str) -> None:
-        try:
-            cmds.parent(node, parent)
-        except Exception as e:
-            cmds.warning(f"Parent '{node}' under '{parent}' failed: {e}")
 
     @staticmethod
     def merge_vertices(objects, tolerance=0.001, selected_only=False):
@@ -1662,19 +1665,32 @@ class EditUtils(ptk.HelpMixin):
         components = [c for c in all_selection if "." in c and "[" in c]
         objects = [str(o) for o in (cmds.ls(sl=True, objectsOnly=True) or [])]
 
-        # Resolve every component's owner to a set of long paths (transform + shape),
-        # so a selection descriptor using either name matches the same object.
-        component_owner_paths = set()
+        # Single pass: bucket each component by descriptor type per-owner
+        # (polyDel* reject multi-object input) and collect the owner names.
+        verts_by_owner, edges_by_owner, other_components = {}, {}, []
+        owner_names = set()
         for comp in components:
             owner = comp.split(".")[0]
+            owner_names.add(owner)
+            if ".vtx[" in comp:
+                verts_by_owner.setdefault(owner, []).append(comp)
+            elif ".e[" in comp:
+                edges_by_owner.setdefault(owner, []).append(comp)
+            else:
+                other_components.append(comp)
+
+        # Resolve each owner to long paths covering both transform and shape —
+        # cmds.ls(sl=True, objectsOnly=True) may return either form depending
+        # on selection path, and a substring-style match would misclassify.
+        component_owner_paths = set()
+        for owner in owner_names:
             for lp in cmds.ls(owner, long=True) or [owner]:
                 component_owner_paths.add(lp)
                 if cmds.objectType(lp) == "transform":
-                    for sh in cmds.listRelatives(lp, shapes=True, fullPath=True) or []:
-                        component_owner_paths.add(sh)
+                    related = cmds.listRelatives(lp, shapes=True, fullPath=True)
                 else:
-                    for tr in cmds.listRelatives(lp, parent=True, fullPath=True) or []:
-                        component_owner_paths.add(tr)
+                    related = cmds.listRelatives(lp, parent=True, fullPath=True)
+                component_owner_paths.update(related or [])
 
         joints, whole_objects = [], []
         for obj in objects:
@@ -1687,25 +1703,12 @@ class EditUtils(ptk.HelpMixin):
 
         for j in joints:
             cmds.removeJoint(j)
-
-        # Group components by descriptor type and owner — polyDel* are single-object.
-        verts_by_owner, edges_by_owner, other_components = {}, {}, []
-        for comp in components:
-            owner = comp.split(".")[0]
-            if ".vtx[" in comp:
-                verts_by_owner.setdefault(owner, []).append(comp)
-            elif ".e[" in comp:
-                edges_by_owner.setdefault(owner, []).append(comp)
-            else:
-                other_components.append(comp)
-
         for verts in verts_by_owner.values():
             cmds.polyDelVertex(verts)
         for edges in edges_by_owner.values():
             cmds.polyDelEdge(edges, cleanVertices=True)
         if other_components:
             cmds.delete(other_components)
-
         if whole_objects:
             cmds.delete(whole_objects)
 
