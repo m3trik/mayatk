@@ -436,12 +436,15 @@ class NodeUtils(ptk.HelpMixin):
     @classmethod
     def get_unique_children(cls, objects):
         """Retrieves a unique list of objects' children (if any) in the scene, excluding the groups themselves."""
-        objects = cmds.ls(as_strings(objects), flatten=True) or []
+        objects = cmds.ls(as_strings(objects), long=True, flatten=True) or []
 
         def recurse_children(obj, final_set):
             if cls.is_group(obj):
                 for child in (
-                    cmds.listRelatives(obj, children=True, type="transform") or []
+                    cmds.listRelatives(
+                        obj, children=True, type="transform", fullPath=True
+                    )
+                    or []
                 ):
                     recurse_children(child, final_set)
             else:
@@ -851,57 +854,93 @@ class NodeUtils(ptk.HelpMixin):
     def uninstance(cls, objects):
         """Un-Instance the given objects.
 
-        Replaces each instanced transform with a duplicated copy that
-        owns a unique shape — preserves the transform's name, world
-        matrix and parent.  Sibling instance transforms keep the
-        original shape.
+        For each transform, forks every instanced shape it carries into
+        a unique copy and swaps it in — without ever deleting the
+        transform itself.  Name, world matrix, parent, children and any
+        non-instanced shapes are preserved.  Sibling instance transforms
+        retain the original shape.
         """
+        import maya.api.OpenMaya as om
+
         if objects == "all":
             objects = cls.get_instances()
 
         results = []
         for obj in cmds.ls(as_strings(objects)) or []:
-            shapes = cmds.listRelatives(obj, shapes=True, fullPath=True) or []
-            if not shapes:
-                results.append(obj)
-                continue
-
-            shape = shapes[0]
-            instance_parents = (
-                cmds.listRelatives(shape, allParents=True, fullPath=True) or []
+            obj_long = (cmds.ls(obj, long=True) or [obj])[0]
+            shapes = (
+                cmds.listRelatives(
+                    obj_long, shapes=True, fullPath=True, noIntermediate=True
+                )
+                or []
             )
 
-            if len(instance_parents) <= 1:
-                # Not actually instanced — nothing to do.
-                results.append(obj)
-                continue
+            for shape in shapes:
+                instance_parents = (
+                    cmds.listRelatives(shape, allParents=True, fullPath=True) or []
+                )
+                if len(instance_parents) <= 1:
+                    continue  # shape is not instanced on this transform
 
-            # Capture identity before mutating the scene.
-            obj_long = (cmds.ls(obj, long=True) or [obj])[0]
-            short = obj_long.split("|")[-1]
-            parent = (
-                cmds.listRelatives(obj_long, parent=True, fullPath=True) or [None]
-            )[0]
-            world_matrix = cmds.xform(obj_long, q=True, m=True, ws=True)
+                shape_short = shape.split("|")[-1]
+                dup_xform = None
+                try:
+                    # Duplicate the shape (not the transform — avoids
+                    # walking children). ``cmds.duplicate`` always forks
+                    # geometry, so the new shape is unique even when the
+                    # source was instanced.
+                    dup_xform = cmds.duplicate(
+                        shape,
+                        returnRootsOnly=True,
+                        name=f"{shape_short}__uninst_tmp",
+                    )[0]
+                    dup_shapes = (
+                        cmds.listRelatives(
+                            dup_xform,
+                            shapes=True,
+                            fullPath=True,
+                            noIntermediate=True,
+                        )
+                        or []
+                    )
+                    if not dup_shapes:
+                        raise RuntimeError("duplicate produced no shape node")
+                    new_shape = dup_shapes[0]
 
-            try:
-                # ``cmds.duplicate`` always forks geometry — the dup gets
-                # its own unique mesh shape, even when the source was an
-                # instance. Then swap the dup in for the original.
-                dup_xform = cmds.duplicate(obj_long, name=f"{short}__uninst_tmp")[0]
-                cmds.delete(obj_long)
-                new_name = cmds.rename(dup_xform, short)
-                if parent:
-                    new_name = cmds.parent(new_name, parent)[0]
-                # ``rename`` strips the leading "|" — re-resolve to the
-                # post-reparent path so the caller can keep working with
-                # the same string identity.
-                resolved = (cmds.ls(new_name, long=False) or [new_name])[0]
-                cmds.xform(resolved, m=world_matrix, ws=True)
-                results.append(resolved)
-            except RuntimeError as e:
-                cmds.warning(f"uninstance failed for {obj}: {e}")
-                results.append(obj)
+                    # Graft the unique shape under obj_long first so the
+                    # transform is never momentarily shapeless.
+                    # ``relative`` keeps the local transform — the shape
+                    # is positioned by obj_long's matrix, which is
+                    # unchanged.
+                    cmds.parent(new_shape, obj_long, shape=True, relative=True)
+
+                    # Surgically remove this transform's instance link
+                    # to the original shape.  ``cmds.parent -rm -s`` does
+                    # NOT work — it tries to unparent shapes to world,
+                    # which Maya silently rejects, leaving the instance
+                    # link intact.  MFnDagNode.removeChild removes only
+                    # the (parent, child) edge — sibling instance
+                    # transforms keep the shape.
+                    sel = om.MSelectionList()
+                    sel.add(obj_long)
+                    sel.add(shape)
+                    om.MFnDagNode(sel.getDependNode(0)).removeChild(
+                        sel.getDependNode(1)
+                    )
+
+                    cmds.delete(dup_xform)
+                    dup_xform = None
+                except (RuntimeError, ValueError) as e:
+                    cmds.warning(
+                        f"uninstance failed for {obj_long} (shape {shape}): {e}"
+                    )
+                    if dup_xform and cmds.objExists(dup_xform):
+                        try:
+                            cmds.delete(dup_xform)
+                        except RuntimeError:
+                            pass
+
+            results.append(obj_long)
 
         return results
 

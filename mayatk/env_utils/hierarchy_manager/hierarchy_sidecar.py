@@ -10,6 +10,7 @@ to detect accidental structural changes (missing/extra nodes, reparenting).
 import hashlib
 import json
 import os
+import re
 from typing import Optional, Set, Tuple
 
 
@@ -19,25 +20,104 @@ class HierarchySidecar:
     Sidecar files:
         - ``.{stem}.hierarchy.json`` — manifest of DAG paths.
         - ``.{stem}.hierarchy_diff.txt`` — human-readable diff report.
+
+    When ``base_stem=True`` is passed to the path helpers, a trailing
+    ``_v\\d+`` suffix is stripped so that all versioned exports of a
+    series share a single sidecar (the baseline rolls forward to the
+    most recent export).  Used by the SceneExporter ``version`` task.
     """
+
+    # Anchored to end-of-stem so it only matches genuine version suffixes,
+    # not mid-name occurrences like 'arch_v2_proxy'.
+    VERSION_SUFFIX_RE = re.compile(r"_v\d+$", re.IGNORECASE)
 
     # ------------------------------------------------------------------
     # Path derivation
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def manifest_path_for(export_path: str) -> str:
-        """Return the sidecar manifest path for an export file."""
-        directory = os.path.dirname(export_path)
+    @classmethod
+    def base_stem(cls, export_path: str) -> str:
+        """Return the export stem with any trailing ``_vNN`` suffix stripped."""
         stem = os.path.splitext(os.path.basename(export_path))[0]
+        return cls.VERSION_SUFFIX_RE.sub("", stem)
+
+    @classmethod
+    def manifest_path_for(cls, export_path: str, *, base_stem: bool = False) -> str:
+        """Return the sidecar manifest path for an export file.
+
+        Parameters:
+            export_path: The export file path (e.g. ``shot_v003.fbx``).
+            base_stem: If True, strip the version suffix so all versions of a
+                series share one manifest. Opt-in: callers without an active
+                versioning context should leave this False to preserve
+                per-file sidecar behavior.
+        """
+        directory = os.path.dirname(export_path)
+        stem = cls.base_stem(export_path) if base_stem else os.path.splitext(
+            os.path.basename(export_path)
+        )[0]
         return os.path.join(directory, f".{stem}.hierarchy.json")
 
-    @staticmethod
-    def diff_report_path_for(export_path: str) -> str:
+    @classmethod
+    def diff_report_path_for(
+        cls, export_path: str, *, base_stem: bool = False
+    ) -> str:
         """Return the sidecar diff report path for an export file."""
         directory = os.path.dirname(export_path)
-        stem = os.path.splitext(os.path.basename(export_path))[0]
+        stem = cls.base_stem(export_path) if base_stem else os.path.splitext(
+            os.path.basename(export_path)
+        )[0]
         return os.path.join(directory, f".{stem}.hierarchy_diff.txt")
+
+    # ------------------------------------------------------------------
+    # Legacy sidecar migration (for version-task users)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def find_legacy_manifest(cls, export_path: str) -> Optional[str]:
+        """Return the path of a legacy per-version sidecar to migrate from.
+
+        Scans the export directory for ``.{base}_v<N>.hierarchy.json`` files
+        and returns the one with the highest version number (compared as
+        integers, so unpadded ``_v10`` ranks above ``_v2``).  Returns None
+        if no legacy sidecars exist.
+        """
+        directory = os.path.dirname(export_path)
+        base = cls.base_stem(export_path)
+        if not directory or not os.path.isdir(directory):
+            return None
+        legacy_re = re.compile(
+            rf"^\.{re.escape(base)}_v(\d+)\.hierarchy\.json$", re.IGNORECASE
+        )
+        matches = []
+        for f in os.listdir(directory):
+            m = legacy_re.match(f)
+            if m:
+                matches.append((int(m.group(1)), f))
+        if not matches:
+            return None
+        _, name = max(matches, key=lambda t: t[0])
+        return os.path.join(directory, name)
+
+    @classmethod
+    def ensure_base_name(cls, export_path: str) -> Optional[str]:
+        """Migrate a legacy per-version manifest to the base-stem name.
+
+        Called by callers that opt into ``base_stem=True``.  If a base-stem
+        manifest already exists, returns its path unchanged.  Otherwise, if
+        a legacy ``_v\\d+`` manifest exists, renames it to the base-stem
+        path and returns the new path.  Returns None if nothing was found.
+
+        Idempotent: callers can invoke this on every check without harm.
+        """
+        new_path = cls.manifest_path_for(export_path, base_stem=True)
+        if os.path.exists(new_path):
+            return new_path
+        legacy = cls.find_legacy_manifest(export_path)
+        if not legacy:
+            return None
+        os.replace(legacy, new_path)
+        return new_path
 
     # ------------------------------------------------------------------
     # Rename / move
@@ -163,7 +243,9 @@ class HierarchySidecar:
         return hashlib.sha256(payload).hexdigest()
 
     @classmethod
-    def write_manifest(cls, export_path: str, paths) -> Optional[str]:
+    def write_manifest(
+        cls, export_path: str, paths, *, base_stem: bool = False
+    ) -> Optional[str]:
         """Write *paths* to the sidecar manifest for *export_path*.
 
         Before overwriting, the existing manifest (if any) is preserved
@@ -173,11 +255,13 @@ class HierarchySidecar:
         Parameters:
             export_path: The export file the manifest accompanies.
             paths: Iterable of cleaned DAG path strings.
+            base_stem: If True, strip the version suffix from the path
+                derivation so all versions share one manifest.
 
         Returns:
             The manifest file path on success, ``None`` on failure.
         """
-        manifest_path = cls.manifest_path_for(export_path)
+        manifest_path = cls.manifest_path_for(export_path, base_stem=base_stem)
         sorted_paths = sorted(paths)
         path_hash = cls._paths_hash(sorted_paths)
 
@@ -208,14 +292,16 @@ class HierarchySidecar:
             return None
 
     @classmethod
-    def read_manifest(cls, export_path: str) -> Optional[Set[str]]:
+    def read_manifest(
+        cls, export_path: str, *, base_stem: bool = False
+    ) -> Optional[Set[str]]:
         """Read the manifest for *export_path*.
 
         Returns:
             A set of DAG path strings, or ``None`` if the manifest does
             not exist or cannot be read.
         """
-        manifest_path = cls.manifest_path_for(export_path)
+        manifest_path = cls.manifest_path_for(export_path, base_stem=base_stem)
         if not os.path.exists(manifest_path):
             return None
         try:
@@ -264,6 +350,8 @@ class HierarchySidecar:
         missing: list,
         extra: list,
         reparented: list = None,
+        *,
+        base_stem: bool = False,
     ) -> Optional[str]:
         """Write a human-readable diff report to the sidecar text file.
 
@@ -281,7 +369,7 @@ class HierarchySidecar:
         Returns:
             The diff report path on success, ``None`` on failure.
         """
-        diff_path = cls.diff_report_path_for(export_path)
+        diff_path = cls.diff_report_path_for(export_path, base_stem=base_stem)
         try:
             with open(diff_path, "w", encoding="utf-8") as f:
                 f.write("Hierarchy Diff Report\n")
@@ -338,9 +426,11 @@ class HierarchySidecar:
             return None
 
     @classmethod
-    def clean_stale_diff(cls, export_path: str) -> None:
+    def clean_stale_diff(
+        cls, export_path: str, *, base_stem: bool = False
+    ) -> None:
         """Remove a stale diff report left over from a previous failure."""
-        diff_path = cls.diff_report_path_for(export_path)
+        diff_path = cls.diff_report_path_for(export_path, base_stem=base_stem)
         if os.path.exists(diff_path):
             try:
                 os.remove(diff_path)
@@ -361,6 +451,8 @@ class HierarchySidecar:
         cls,
         export_path: str,
         current_paths: set,
+        *,
+        base_stem: bool = False,
     ) -> Tuple[bool, list, list]:
         """Compare *current_paths* against the stored manifest.
 
@@ -370,12 +462,14 @@ class HierarchySidecar:
         Parameters:
             export_path: The export file whose manifest to compare against.
             current_paths: Set of cleaned DAG paths from the current scene.
+            base_stem: If True, route manifest lookup through the version
+                base-stem so the diff baseline rolls forward across versions.
 
         Returns:
             ``(match, missing, extra)`` where *match* is ``True`` when
             the hierarchies are identical.
         """
-        manifest_path = cls.manifest_path_for(export_path)
+        manifest_path = cls.manifest_path_for(export_path, base_stem=base_stem)
         if not os.path.exists(manifest_path):
             return True, [], []
 

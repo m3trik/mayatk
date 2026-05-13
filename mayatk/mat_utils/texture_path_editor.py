@@ -33,6 +33,7 @@ class TexturePathEditorSlots:
         self._footer_controller = self._create_footer_controller()
         self._previous_paths = {}  # node_name -> path before last in-session repath (for tooltips)
         self._browse_in_progress = False  # re-entry guard for row_browse_for_file
+        self._find_copy_in_progress = False  # re-entry guard for _find_and_copy_workflow
 
     def header_init(self, widget):
         """Initialize the header for the texture path editor."""
@@ -159,6 +160,27 @@ class TexturePathEditorSlots:
         """
         from maya import cmds
 
+        # Re-entry guard. The menu's QPushButton items are wired via both
+        # the menu dispatcher AND objectName-based slot auto-wire, and
+        # modal dir dialogs can deliver trailing release events that
+        # retrigger the handler — causing multiple source/dest prompts
+        # for a single click. Hold the guard for the workflow's duration
+        # plus a short post-completion buffer (same pattern used by
+        # row_browse_for_file).
+        if getattr(self, "_find_copy_in_progress", False):
+            return
+        self._find_copy_in_progress = True
+        try:
+            self._do_find_and_copy_workflow(file_nodes)
+        finally:
+            from qtpy.QtCore import QTimer
+            QTimer.singleShot(
+                250, lambda: setattr(self, "_find_copy_in_progress", False)
+            )
+
+    def _do_find_and_copy_workflow(self, file_nodes):
+        from maya import cmds
+
         # Preserve namespaces; stripping breaks cmds.getAttr/setAttr.
         node_names = [str(n) for n in file_nodes]
 
@@ -170,9 +192,20 @@ class TexturePathEditorSlots:
         if not source_dir:
             return
 
-        found_textures = MatUtils.find_texture_files(
-            file_nodes=node_names, source_dir=source_dir, recursive=True
-        )
+        # Phase 1 — find. The walk has no progress signal, so use the
+        # indeterminate (busy) mode: pulsing bar + status text. Holding
+        # Escape cancels (handled by the ProgressBar event filter), but
+        # find_texture_files itself isn't interruptible — the bar just
+        # tells the user something is happening.
+        with self.sb.progress(
+            self.ui,
+            total=None,
+            text=f"Searching {source_dir}…",
+        ):
+            found_textures = MatUtils.find_texture_files(
+                file_nodes=node_names, source_dir=source_dir, recursive=True
+            )
+
         if not found_textures:
             cmds.warning("No textures found.")
             return
@@ -184,17 +217,66 @@ class TexturePathEditorSlots:
         if not dest_dir:
             return
 
-        MatUtils.move_texture_files(
-            found_files=found_textures, new_dir=dest_dir, delete_old=False
-        )
+        # Dedup by basename, keeping the newest mtime. The walk can return
+        # multiple matches per target filename (versioned/archived copies,
+        # conflict copies under Dropbox), and feeding all of them into the
+        # threaded copy pool would have two workers racing on the same
+        # destination path — a deadlock pattern on Windows + Dropbox.
+        # Newest-wins matches "I want the current version" almost always.
+        by_basename = {}
+        for fpath in found_textures:
+            bn = os.path.basename(fpath).lower()
+            try:
+                mtime = os.path.getmtime(fpath)
+            except OSError:
+                mtime = 0.0
+            existing = by_basename.get(bn)
+            if existing is None or mtime > existing[0]:
+                by_basename[bn] = (mtime, fpath)
+        deduped = [v[1] for v in by_basename.values()]
+        if len(deduped) < len(found_textures):
+            print(
+                f"// {len(found_textures)} candidates found, "
+                f"deduped to {len(deduped)} unique basenames (newest wins)."
+            )
 
-        # Filter file nodes to only remap ones that were successfully found and copied
-        found_basenames = {os.path.basename(f).lower() for f in found_textures}
+        # Phase 2 — copy. Use the footer's progress bar via the switchboard
+        # helper. ProgressBar.update_progress pumps QApplication events
+        # internally so the bar advances while the main thread is parked
+        # in ThreadPoolExecutor.as_completed between files. Falsy return
+        # from update() means the user cancelled.
+        with self.sb.progress(
+            self.ui,
+            total=len(deduped),
+            text=f"Copying 0/{len(deduped)}",
+        ) as update:
+
+            def _progress(done, total, last_name):
+                return update(
+                    done, f"Copying {done}/{total}: {last_name}"
+                )
+
+            copied = MatUtils.move_texture_files(
+                found_files=deduped,
+                new_dir=dest_dir,
+                delete_old=False,
+                progress_callback=_progress,
+            )
+
+        if not copied:
+            cmds.warning("No textures copied.")
+            return
+
+        # Remap only the file nodes whose texture was actually copied (or
+        # already up-to-date at the destination). The prior implementation
+        # keyed off "was found" — so a failed copy could leave a file node
+        # pointing at a path that doesn't exist.
+        copied_basenames = {os.path.basename(dst).lower() for _src, dst in copied}
         nodes_to_remap = []
         for node_name in node_names:
             try:
                 path = cmds.getAttr(f"{node_name}.fileTextureName")
-                if path and os.path.basename(path).lower() in found_basenames:
+                if path and os.path.basename(path).lower() in copied_basenames:
                     nodes_to_remap.append(node_name)
             except Exception:
                 continue

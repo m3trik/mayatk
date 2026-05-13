@@ -2,7 +2,18 @@
 # coding=utf-8
 import os
 import re
-from typing import List, Tuple, Union, Dict, Any, Optional
+from typing import List, Tuple, Union, Dict, Any, Optional, Callable
+
+# Directory names pruned during recursive texture searches. Keeps the walk
+# off Dropbox/OneDrive sync caches, Windows system folders, version control
+# noise, and Python bytecode caches — all of which can hold stale duplicates
+# of legitimate textures that would otherwise pollute the candidate set.
+_TEXTURE_WALK_SKIP_DIRS = frozenset({
+    ".dropbox.cache", ".dropbox",
+    "$RECYCLE.BIN", "System Volume Information",
+    ".git", ".svn", ".hg",
+    "node_modules", "__pycache__",
+})
 
 try:
     import maya.cmds as cmds
@@ -1431,14 +1442,38 @@ class MatUtils(MatUtilsInternals):
         new_dir: str,
         delete_old: bool = False,
         create_dir: bool = True,
-    ) -> None:
-        """Move or copy found texture files to a new directory."""
+        per_file_timeout: float = 120.0,
+        max_workers: int = 8,
+        progress_callback: Optional[Callable[[int, int, str], bool]] = None,
+    ) -> List[Tuple[str, str]]:
+        """Move or copy found texture files to a new directory.
+
+        Returns the list of (src, dst) pairs that completed successfully
+        (including those skipped as already up-to-date when delete_old is
+        False). Failed/timed-out files are omitted.
+
+        per_file_timeout: max seconds to wait for any single copy before
+            abandoning the pool. Python cannot kill a worker thread blocked
+            inside shutil.copy2, so on timeout we stop dispatching, cancel
+            pending futures, and shutdown(wait=False) — in-flight workers
+            leak until the OS unblocks them (or Maya exits). The win is
+            that Maya gets the UI back instead of hanging forever.
+        progress_callback: optional fn(done, total, last_filename) called
+            from the main thread after each future completes. Return False
+            to request early termination. Exceptions raised from the
+            callback are swallowed and treated as "keep going".
+        """
         import shutil
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import filecmp
+        from concurrent.futures import (
+            ThreadPoolExecutor,
+            as_completed,
+            TimeoutError as FuturesTimeout,
+        )
 
         if not found_files:
             cmds.warning("No texture files provided for moving.")
-            return
+            return []
 
         if create_dir:
             os.makedirs(new_dir, exist_ok=True)
@@ -1458,31 +1493,85 @@ class MatUtils(MatUtilsInternals):
             src_entries.append((src_path, filename))
 
         if not src_entries:
-            return
+            return []
 
         def _copy_one(src_path, filename):
             dst_path = os.path.join(new_dir, filename)
+            # Skip when the destination already matches the source.
+            # filecmp.cmp(shallow=True) compares st_mode + st_size + st_mtime;
+            # this avoids rewriting hundreds of files that the user already
+            # copied previously, which would otherwise force Dropbox /
+            # OneDrive to re-hash and re-upload every one of them.
+            if not delete_old and os.path.exists(dst_path):
+                try:
+                    if filecmp.cmp(src_path, dst_path, shallow=True):
+                        return src_path, dst_path, True  # was_skipped
+                except OSError:
+                    pass  # fall through to copy
             shutil.copy2(src_path, dst_path)
             if delete_old:
                 os.remove(src_path)
-            return src_path, dst_path
+            return src_path, dst_path, False
 
-        max_workers = min(8, len(src_entries))
-        copied = []
+        workers = max(1, min(max_workers, len(src_entries)))
+        copied: List[Tuple[str, str]] = []
+        skipped = 0
         errors = []
+        timed_out = []
+        cancelled = False
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Explicit executor management — a `with` block would call
+        # shutdown(wait=True) on exit, which defeats the timeout by
+        # blocking the main thread on stuck workers. On the cancelled
+        # path we shutdown(wait=False) so Maya gets the UI back even if
+        # a copy is permanently wedged inside the filesystem driver.
+        executor = ThreadPoolExecutor(max_workers=workers)
+        try:
             futures = {
                 executor.submit(_copy_one, src, fn): src
                 for src, fn in src_entries
             }
+            total = len(futures)
+            done = 0
             for future in as_completed(futures):
                 src = futures[future]
                 try:
-                    result = future.result()
-                    copied.append(result)
+                    src_p, dst_p, was_skipped = future.result(
+                        timeout=per_file_timeout
+                    )
+                    copied.append((src_p, dst_p))
+                    if was_skipped:
+                        skipped += 1
+                except FuturesTimeout:
+                    timed_out.append(src)
+                    cmds.warning(
+                        f"Copy timed out after {per_file_timeout:.0f}s "
+                        f"on {src}; abandoning remaining workers."
+                    )
+                    cancelled = True
                 except Exception as e:
                     errors.append((src, e))
+
+                done += 1
+                if progress_callback is not None and not cancelled:
+                    try:
+                        keep_going = progress_callback(
+                            done, total, os.path.basename(src)
+                        )
+                    except Exception:
+                        keep_going = True
+                    if not keep_going:
+                        cancelled = True
+
+                if cancelled:
+                    for f in futures:
+                        f.cancel()  # only cancels not-yet-started futures
+                    break
+        finally:
+            # cancel_futures=True drops anything not yet started.
+            # wait=not cancelled: normal completion drains workers cleanly;
+            # cancelled path returns immediately, leaking any wedged threads.
+            executor.shutdown(wait=not cancelled, cancel_futures=True)
 
         for src_path, dst_path in copied:
             print(f"// Copied: {src_path} -> {dst_path}")
@@ -1491,7 +1580,14 @@ class MatUtils(MatUtilsInternals):
         for src_path, err in errors:
             cmds.warning(f"// Failed to copy {src_path}: {err}")
 
-        print(f"// Result: Copied {len(copied)} texture(s).")
+        print(
+            f"// Result: {len(copied)} texture(s) ok "
+            f"({skipped} already up-to-date, "
+            f"{len(errors)} errors, "
+            f"{len(timed_out)} timed out"
+            f"{', cancelled' if cancelled and not timed_out else ''})."
+        )
+        return copied
 
     @classmethod
     def find_texture_files(
@@ -1555,6 +1651,10 @@ class MatUtils(MatUtilsInternals):
         results = []
 
         for root, dirs, files in os.walk(source_dir):
+            # Prune sync caches / system / VCS dirs in-place so os.walk
+            # never descends into them. Skip noise + stale duplicates.
+            dirs[:] = [d for d in dirs if d not in _TEXTURE_WALK_SKIP_DIRS]
+
             for file in files:
                 lower_file = file.lower()
                 matched = lower_file in target_filenames

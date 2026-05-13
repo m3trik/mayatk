@@ -10,7 +10,7 @@
     <x>0</x>
     <y>0</y>
     <width>500</width>
-    <height>469</height>
+    <height>401</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -151,14 +151,14 @@
              <widget class="ComboBox" name="cmb003">
               <property name="minimumSize">
                <size>
-                <width>0</width>
-                <height>20</height>
+                <width>80</width>
+                <height>19</height>
                </size>
               </property>
               <property name="maximumSize">
                <size>
-                <width>999</width>
-                <height>20</height>
+                <width>80</width>
+                <height>19</height>
                </size>
               </property>
               <property name="toolTip">
@@ -221,14 +221,14 @@
           <widget class="QCheckBox" name="chk000">
            <property name="minimumSize">
             <size>
-             <width>0</width>
-             <height>20</height>
+             <width>80</width>
+             <height>19</height>
             </size>
            </property>
            <property name="maximumSize">
             <size>
-             <width>16777215</width>
-             <height>20</height>
+             <width>80</width>
+             <height>19</height>
             </size>
            </property>
            <property name="toolTip">
@@ -276,14 +276,14 @@
              <widget class="ComboBox" name="cmb001">
               <property name="minimumSize">
                <size>
-                <width>0</width>
-                <height>20</height>
+                <width>80</width>
+                <height>19</height>
                </size>
               </property>
               <property name="maximumSize">
                <size>
-                <width>16777215</width>
-                <height>20</height>
+                <width>80</width>
+                <height>19</height>
                </size>
               </property>
               <property name="toolTip">
@@ -357,16 +357,22 @@
             </property>
             <item>
              <widget class="QLineEdit" name="txt002">
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
               <property name="minimumSize">
                <size>
-                <width>50</width>
-                <height>20</height>
+                <width>75</width>
+                <height>19</height>
                </size>
               </property>
               <property name="maximumSize">
                <size>
                 <width>75</width>
-                <height>16777215</height>
+                <height>19</height>
                </size>
               </property>
               <property name="toolTip">
@@ -382,13 +388,13 @@
               <property name="minimumSize">
                <size>
                 <width>0</width>
-                <height>20</height>
+                <height>19</height>
                </size>
               </property>
               <property name="maximumSize">
                <size>
                 <width>999</width>
-                <height>16777215</height>
+                <height>19</height>
                </size>
               </property>
               <property name="toolTip">
@@ -440,13 +446,13 @@
               <property name="minimumSize">
                <size>
                 <width>0</width>
-                <height>20</height>
+                <height>19</height>
                </size>
               </property>
               <property name="maximumSize">
                <size>
                 <width>999</width>
-                <height>20</height>
+                <height>19</height>
                </size>
               </property>
               <property name="toolTip">
@@ -524,13 +530,13 @@
            <property name="minimumSize">
             <size>
              <width>200</width>
-             <height>30</height>
+             <height>38</height>
             </size>
            </property>
            <property name="maximumSize">
             <size>
              <width>16777215</width>
-             <height>30</height>
+             <height>38</height>
             </size>
            </property>
            <property name="text">
@@ -545,13 +551,13 @@
              <property name="minimumSize">
               <size>
                <width>0</width>
-               <height>20</height>
+               <height>19</height>
               </size>
              </property>
              <property name="maximumSize">
               <size>
                <width>16777215</width>
-               <height>20</height>
+               <height>19</height>
               </size>
              </property>
              <property name="toolTip">
@@ -619,12 +625,18 @@
           <number>0</number>
          </property>
          <item>
-          <widget class="QTextEdit" name="txt001">
+          <widget class="QTextBrowser" name="txt001">
            <property name="verticalScrollBarPolicy">
             <enum>Qt::ScrollBarAlwaysOff</enum>
            </property>
            <property name="sizeAdjustPolicy">
             <enum>QAbstractScrollArea::AdjustIgnored</enum>
+           </property>
+           <property name="openExternalLinks">
+            <bool>false</bool>
+           </property>
+           <property name="openLinks">
+            <bool>false</bool>
            </property>
           </widget>
          </item>

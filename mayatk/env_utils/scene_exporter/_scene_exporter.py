@@ -22,6 +22,7 @@ import pythontk as ptk
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import HierarchySidecar
 
 
 class SceneExporter(ptk.LoggingMixin):
@@ -139,8 +140,16 @@ class SceneExporter(ptk.LoggingMixin):
         # Setup logging
         self._setup_logging(log_level, log_handler)
 
-        # Generate the export path
-        self.export_path = self.generate_export_path()
+        # Pop UI-defined settings that aren't actual task-pipeline methods.
+        # `version` influences path generation (resolved below); `create_glb`
+        # runs after FBX export.  Both are surfaced as task_definitions
+        # entries for uniform UI generation but consumed here directly.
+        tasks = dict(tasks) if tasks else {}
+        version_format = tasks.pop("version", "") or ""
+        create_glb_enabled = bool(tasks.pop("create_glb", False))
+
+        # Generate the export path (with versioning applied if requested).
+        self.export_path = self.generate_export_path(version_format=version_format)
         self.logger.debug(f"Generated export path: {self.export_path}")
 
         if self.create_log_file:
@@ -156,13 +165,12 @@ class SceneExporter(ptk.LoggingMixin):
         if self.preset_file:
             self.load_fbx_export_preset(self.preset_file, verify=True)
 
-        # Make export path available to checks (e.g. hierarchy diff)
+        # Make export path available to checks (e.g. hierarchy diff).  The
+        # `_version_format` flag tells the hierarchy check to route sidecar
+        # paths through HierarchySidecar.base_stem so all versions of a
+        # series share one manifest.
         self.task_manager.export_path = self.export_path
-
-        # Separate post-export tasks (run after the FBX is written) from the
-        # pre-export pipeline.  Copy so the caller's dict is not mutated.
-        tasks = dict(tasks) if tasks else {}
-        create_glb_enabled = bool(tasks.pop("create_glb", False))
+        self.task_manager._version_format = version_format
 
         export_succeeded = False
         try:
@@ -277,8 +285,14 @@ class SceneExporter(ptk.LoggingMixin):
         # Return True since tasks already ran successfully before export
         return True
 
-    def generate_export_path(self) -> str:
-        """Generate the full export file path."""
+    def generate_export_path(self, version_format: str = "") -> str:
+        """Generate the full export file path.
+
+        Parameters:
+            version_format: If non-empty, treat as a pythontk-style
+                placeholder template (e.g. ``{stem}_v{n:03d}``) and resolve
+                the next-version path via ``FileUtils.next_version_path``.
+        """
         # Handle wildcard matching for output_name to overwrite existing files
         if self.output_name and any(char in self.output_name for char in "*?"):
             import glob
@@ -292,10 +306,13 @@ class SceneExporter(ptk.LoggingMixin):
 
             if matches:
                 matches.sort()
+                action = "using as version seed" if version_format else "overwriting"
                 self.logger.info(
-                    f"Wildcard '{self.output_name}' matched {len(matches)} files. Overwriting: {matches[-1]}"
+                    f"Wildcard '{self.output_name}' matched {len(matches)} files; "
+                    f"{action}: {matches[-1]}"
                 )
-                return matches[-1]
+                # Wildcard + versioning composes: pick latest match, then bump.
+                return self._apply_versioning(matches[-1], version_format)
 
         scene_path = cmds.file(query=True, sceneName=True) or "untitled"
         scene_name = os.path.splitext(os.path.basename(scene_path))[0]
@@ -304,7 +321,116 @@ class SceneExporter(ptk.LoggingMixin):
         if self.timestamp:
             export_name += f"_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
         export_name = self.format_export_name(export_name)
-        return os.path.join(self.export_dir, f"{export_name}.fbx")
+        path = os.path.join(self.export_dir, f"{export_name}.fbx")
+        return self._apply_versioning(path, version_format)
+
+    def _apply_versioning(self, path: str, template: str) -> str:
+        """Resolve a version template into a concrete versioned path.
+
+        Two-stage substitution:
+          - Stage 1: substitute ``{date}``, ``{user}``, ``{scene}`` via
+            ``StrUtils.replace_placeholders`` (which preserves unresolved
+            ``{stem}``/``{n:NNd}`` placeholders along with their format spec).
+          - Stage 2: ``FileUtils.next_version_path`` resolves the next
+            available ``{n}`` by scanning the parent directory.
+
+        The user-facing template does not include ``{ext}``; the extension
+        from ``path`` is appended internally so that on-disk versioned
+        siblings (which carry the extension) are matched correctly.
+
+        Returns the original path unchanged when the template is empty or
+        a guard condition prevents safe versioning (logs a warning in that
+        case so the user sees what happened).
+        """
+        if not template:
+            return path
+
+        if "{ext}" in template:
+            self.logger.warning(
+                "Version format should not include '{ext}' — extension is "
+                "handled automatically. Versioning skipped."
+            )
+            return path
+
+        stem, ext = os.path.splitext(os.path.basename(path))
+        if not stem or stem.lower() == "untitled":
+            self.logger.warning(
+                "Skipping versioning: export name is untitled — save the scene "
+                "or pass an explicit output_name."
+            )
+            return path
+
+        # Stage 1: gather dynamic context and substitute.
+        import getpass
+
+        scene_path = cmds.file(query=True, sceneName=True) or ""
+        scene_name = (
+            os.path.splitext(os.path.basename(scene_path))[0] if scene_path else ""
+        )
+
+        if "{scene}" in template and not scene_name:
+            self.logger.error(
+                "Version format uses '{scene}' but the scene is unsaved. "
+                "Save the scene or remove '{scene}' from the format. "
+                "Versioning skipped."
+            )
+            return path
+
+        expanded = ptk.StrUtils.replace_placeholders(
+            template,
+            date=datetime.now().date().isoformat(),
+            user=getpass.getuser(),
+            scene=scene_name,
+        )
+
+        # Warn only when the resulting name carries no source identity at all
+        # — i.e., neither {stem} (output basename) nor {scene} (Maya scene
+        # name) was used in the template.
+        if "{stem}" not in expanded and "{scene}" not in template:
+            self.logger.warning(
+                "Version format missing '{stem}' and '{scene}' — output name "
+                "and scene identity will not appear in the resulting filename."
+            )
+
+        # Stage 2: append {ext} for next_version_path's matching.
+        internal_format = expanded + "{ext}"
+
+        # Validation: does the resulting name end in `_v\d+` so the hierarchy
+        # sidecar can pair across versions?  Use format_map with a defaulting
+        # dict so any user-typo placeholders don't crash the validator.
+        class _Dummy(dict):
+            def __missing__(self, key):
+                return "x"
+
+        try:
+            test_name = internal_format.format_map(
+                _Dummy(stem="test", n=1, ext=ext)
+            )
+            test_stem = os.path.splitext(test_name)[0]
+            if not HierarchySidecar.VERSION_SUFFIX_RE.search(test_stem):
+                self.logger.warning(
+                    f"Version format {template!r} produces names not matching "
+                    "'_v<N>' — hierarchy diff baseline will not carry across "
+                    "versions."
+                )
+        except (ValueError, IndexError, KeyError) as e:
+            self.logger.warning(f"Could not validate version format: {e}")
+
+        try:
+            new_path = ptk.FileUtils.next_version_path(
+                path, format=internal_format
+            )
+        except ValueError as e:
+            self.logger.error(
+                f"Version format invalid: {e}. Versioning skipped."
+            )
+            return path
+
+        self.logger.info(
+            f"Versioned export path: {os.path.basename(path)} -> "
+            f"{os.path.basename(new_path)}"
+        )
+        return new_path
 
     def format_export_name(self, name: str) -> str:
         """Format the export name using a regex pattern and replacement (e.g. 'pattern->replace')."""

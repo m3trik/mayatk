@@ -1069,6 +1069,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             sections=sections,
             settings=color_settings,
             title="Manifest Colors",
+            preset_dir="~/.mayatk/presets/shot_manifest_colors",
             parent=self.ui,
         )
 

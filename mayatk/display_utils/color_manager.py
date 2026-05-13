@@ -333,12 +333,25 @@ class ColorManager(ColorUtils):
 
 
 class ColorManagerSlots(ColorManager):
+    _PRESET_DIR = "~/.mayatk/presets/color_manager"
+    _DEFAULT_PRESET = "default"
+
     def __init__(self, switchboard):
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.color_manager
 
         self.button_grp = self.sb.create_button_groups(self.ui, "chk000-11")
         buttons = self.button_grp.buttons()
+
+        # Migrate away from a prior bug that wrote "#ffffff" over every
+        # swatch's saved color (uitk colorSwatch.loadColor used to fall
+        # back to white when nothing was stored, then auto-saved it).
+        # Clear those legacy values so _initialColor's pastel takes hold.
+        for button in buttons:
+            key = f"colorSwatch/{button.objectName()}/color"
+            if str(self.ui.settings.value(key, "")).lower() == "#ffffff":
+                self.ui.settings.clear(key)
+
         for i, button in enumerate(buttons):
             button._initialColor = self.sb.QtGui.QColor(
                 *ColorManager.DEFAULT_SWATCH_COLORS[
@@ -347,6 +360,43 @@ class ColorManagerSlots(ColorManager):
             )
             button.settings = self.ui.settings
         self.ui.chk000.setChecked(True)
+
+    # ── Preset I/O ─────────────────────────────────────────────────────────
+
+    def _export_swatch_colors(self) -> dict:
+        """``PresetManager.metadata_provider`` — capture current swatch colors."""
+        return {
+            "swatches": [
+                btn.color.name() for btn in self.button_grp.buttons()
+            ]
+        }
+
+    def _import_swatch_colors(self, meta: dict) -> None:
+        """``PresetManager.on_metadata_loaded`` — apply colors from a preset."""
+        colors = (meta or {}).get("swatches") or []
+        for btn, hex_color in zip(self.button_grp.buttons(), colors):
+            btn.color = self.sb.QtGui.QColor(hex_color)
+
+    @staticmethod
+    def _hex_from_rgb(rgb) -> str:
+        r, g, b = rgb
+        return f"#{int(r):02X}{int(g):02X}{int(b):02X}"
+
+    def _ensure_default_preset(self, presets) -> None:
+        """Write the factory-default preset on first use if it's missing."""
+        if presets.exists(self._DEFAULT_PRESET):
+            return
+        original = presets.metadata_provider
+        presets.metadata_provider = lambda: {
+            "swatches": [
+                self._hex_from_rgb(rgb)
+                for rgb in ColorManager.DEFAULT_SWATCH_COLORS
+            ]
+        }
+        try:
+            presets.save(self._DEFAULT_PRESET)
+        finally:
+            presets.metadata_provider = original
 
     def header_init(self, widget):
         """Configure header menu with tool instructions."""
@@ -364,6 +414,13 @@ class ColorManagerSlots(ColorManager):
                 "• Remove vertex colors when no longer needed."
             ),
         )
+        # Preset combobox — swatches aren't standard widgets, so colors
+        # are carried in metadata rather than per-widget value reads.
+        widget.menu.add_presets = True
+        widget.menu.presets.preset_dir = self._PRESET_DIR
+        widget.menu.presets.metadata_provider = self._export_swatch_colors
+        widget.menu.presets.on_metadata_loaded = self._import_swatch_colors
+        self._ensure_default_preset(widget.menu.presets)
 
     @property
     def selected_objects(self) -> List[str]:

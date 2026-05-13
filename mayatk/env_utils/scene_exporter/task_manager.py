@@ -916,6 +916,15 @@ class _TaskChecksMixin(_TaskDataMixin):
         """Build a clean path set including all descendants of ``self.objects``."""
         return HierarchySidecar.build_full_path_set(self.objects)
 
+    def _sidecar_kwargs(self) -> dict:
+        """Return sidecar path-derivation kwargs based on versioning state.
+
+        When SceneExporter has set ``_version_format`` (i.e. the ``version``
+        UI field is non-empty), sidecar paths route through the base stem so
+        every version in a series shares one manifest.
+        """
+        return {"base_stem": bool(getattr(self, "_version_format", ""))}
+
     def write_hierarchy_manifest(self) -> None:
         """Write a sidecar JSON manifest of the exported hierarchy paths.
 
@@ -926,14 +935,23 @@ class _TaskChecksMixin(_TaskDataMixin):
         if not export_path or not self.objects:
             return
 
-        manifest_path = HierarchySidecar.manifest_path_for(export_path)
+        sk = self._sidecar_kwargs()
+
+        # Symmetric with check_hierarchy_vs_existing_fbx: when versioning
+        # is active, promote any legacy `_v\d+` sidecar to the base-stem
+        # name so subsequent writes find it via the "manifest already
+        # exists" condition below.
+        if sk["base_stem"]:
+            HierarchySidecar.ensure_base_name(export_path)
+
+        manifest_path = HierarchySidecar.manifest_path_for(export_path, **sk)
 
         check_ran = getattr(self, "_hierarchy_check_ran", False)
         if not check_ran and not os.path.exists(manifest_path):
             return
 
         paths = HierarchySidecar.build_full_path_set(self.objects)
-        if HierarchySidecar.write_manifest(export_path, paths) is None:
+        if HierarchySidecar.write_manifest(export_path, paths, **sk) is None:
             self.logger.debug("Could not write hierarchy manifest")
 
     def check_hierarchy_vs_existing_fbx(self) -> tuple:
@@ -950,7 +968,14 @@ class _TaskChecksMixin(_TaskDataMixin):
         if not export_path:
             return True, []
 
-        manifest_path = HierarchySidecar.manifest_path_for(export_path)
+        sk = self._sidecar_kwargs()
+
+        # When versioning is active, migrate any legacy per-version sidecar
+        # to the base-stem name so the diff baseline carries forward.
+        if sk["base_stem"]:
+            HierarchySidecar.ensure_base_name(export_path)
+
+        manifest_path = HierarchySidecar.manifest_path_for(export_path, **sk)
 
         if not os.path.exists(manifest_path):
             if os.path.exists(export_path):
@@ -962,10 +987,12 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         current_paths = HierarchySidecar.build_full_path_set(self.objects)
 
-        match, missing, extra = HierarchySidecar.compare(export_path, current_paths)
+        match, missing, extra = HierarchySidecar.compare(
+            export_path, current_paths, **sk
+        )
 
         if match:
-            HierarchySidecar.clean_stale_diff(export_path)
+            HierarchySidecar.clean_stale_diff(export_path, **sk)
             return True, []
 
         messages = []
@@ -974,7 +1001,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         reparented = HierarchySidecar.detect_reparenting(missing, extra)
 
         diff_path = HierarchySidecar.write_diff_report(
-            export_path, missing, extra, reparented=reparented
+            export_path, missing, extra, reparented=reparented, **sk
         )
 
         if reparented:
@@ -1185,6 +1212,26 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "sep_output": {
                 "widget_type": "Separator",
                 "title": "Output",
+            },
+            # NOTE: `version` is a UI-only field — consumed by SceneExporter
+            # (pop'd before run_tasks), never executed by the task pipeline.
+            # Same pattern as `create_glb` below.
+            "version": {
+                "widget_type": "QLineEdit",
+                "setPlaceholderText": "{stem}_v{n:03d}  — empty disables",
+                "setToolTip": (
+                    "Version format for the export filename. Placeholders:\n"
+                    "  {stem}  output basename\n"
+                    "  {n:NNd} version number (zero-padded, NN digits)\n"
+                    "  {date}  YYYY-MM-DD\n"
+                    "  {user}  OS username (embeds dev identity — beware shared exports)\n"
+                    "  {scene} Maya scene basename (requires saved scene)\n"
+                    "Extension is handled automatically — do not include {ext}.\n"
+                    "Use a '_v<N>' suffix (e.g. '_v{n:03d}') so the hierarchy "
+                    "diff baseline can carry across versions."
+                ),
+                "setText": "",  # off by default — opt-in
+                "value_method": "text",
             },
             "create_glb": {
                 "widget_type": "QCheckBox",
