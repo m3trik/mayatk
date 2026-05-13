@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Tuple, Dict, Union, Optional
+from typing import List, Set, Tuple, Dict, Union, Optional
 
 try:
     import maya.cmds as cmds
@@ -400,6 +400,248 @@ class RigUtils(ptk.HelpMixin):
                 cmds.warning(f"Object '{obj}' is not a locator.")
 
         return objects
+
+    @classmethod
+    @CoreUtils.undoable
+    def restore_rig_anchors(
+        cls,
+        objects,
+        traverse: bool = True,
+        skip_animated: bool = True,
+        pivot_source: str = "bbox",
+    ) -> List[str]:
+        """Restore the world-space anchor on a GRP > LOC > GEO rig after a freeze.
+
+        After ``XformUtils.freeze_transforms`` collapses a static locator rig, the
+        GRP ends up at local identity and the world position lives in vertex
+        coordinates. A zeroed GRP holding a locator that will later be animated
+        is poor rig structure — the GRP is supposed to hold the world anchor so
+        the locator can animate locally. This function reads the geo's world
+        pivot, sets ``GRP.translate`` to it, and shifts the mesh vertices by the
+        inverse so the visual position is preserved. End state matches what
+        ``create_locator_at_object`` originally produced.
+
+        Animated rigs (LOC with incoming connections on translate/rotate) are
+        skipped by default — ``freeze_transforms`` doesn't disturb them, so they
+        don't need restoring.
+
+        Limitations:
+            * Only **translation** is restored. If the GRP originally held a
+              rotation that got baked through the freeze cascade, that
+              orientation cannot be recovered from geometry alone.
+            * Only **mesh** shapes are processed. Rigs whose geo is a NURBS
+              surface, NURBS curve, subdiv, or other non-mesh shape are
+              skipped silently (no candidate added).
+            * Vertex positions are modified. If the geo has downstream
+              deformers (skinClusters, blendShapes) that depend on the current
+              vertex layout, those may need to be re-bound after restoration.
+
+        Parameters:
+            objects (str/obj/list): GRP nodes to restore, or root containers when
+                ``traverse=True``. With ``traverse=True`` the subtree under each
+                input is scanned for locator-rig chains.
+            traverse (bool): When True (default), walk each input's subtree and
+                find every GRP > LOC > GEO chain to restore.
+            skip_animated (bool): When True (default), skip rigs whose LOC has
+                incoming connections on any translate or rotate channel.
+            pivot_source (str): How to determine the world anchor point.
+                * ``"bbox"`` (default) — geo's world bounding-box center
+                * ``"rp"`` — geo's world rotate pivot
+
+        Returns:
+            List of short names of GRPs whose translate was updated.
+        """
+        if om is None or cmds is None:
+            return []
+
+        valid_sources = {"bbox", "rp"}
+        if pivot_source not in valid_sources:
+            raise ValueError(
+                f"Invalid pivot_source {pivot_source!r}; "
+                f"expected one of {sorted(valid_sources)}"
+            )
+
+        nodes = cmds.ls(as_strings(objects), type="transform", long=True) or []
+        if not nodes:
+            return []
+
+        candidates: List[Tuple[str, str, List[str]]] = []  # (grp, loc, geos)
+        seen_grps: Set[str] = set()
+
+        def add_candidate(grp: str) -> None:
+            if grp in seen_grps:
+                return
+            children = (
+                cmds.listRelatives(grp, children=True, type="transform", fullPath=True)
+                or []
+            )
+            loc = None
+            for c in children:
+                if cmds.listRelatives(c, shapes=True, type="locator", fullPath=True):
+                    loc = c
+                    break
+            if not loc:
+                return
+            geo_xforms = (
+                cmds.listRelatives(loc, children=True, type="transform", fullPath=True)
+                or []
+            )
+            geos = [
+                g for g in geo_xforms
+                if cmds.listRelatives(
+                    g, shapes=True, type="mesh",
+                    noIntermediate=True, fullPath=True,
+                )
+            ]
+            if not geos:
+                return
+            seen_grps.add(grp)
+            candidates.append((grp, loc, geos))
+
+        for node in nodes:
+            if traverse:
+                loc_shapes = (
+                    cmds.listRelatives(
+                        node, allDescendents=True, type="locator", fullPath=True
+                    )
+                    or []
+                )
+                for shape in loc_shapes:
+                    loc_x = cmds.listRelatives(shape, parent=True, fullPath=True) or []
+                    if not loc_x:
+                        continue
+                    grp_list = (
+                        cmds.listRelatives(loc_x[0], parent=True, fullPath=True) or []
+                    )
+                    if not grp_list:
+                        continue
+                    add_candidate(grp_list[0])
+            else:
+                add_candidate(node)
+
+        restored: List[str] = []
+        anim_attrs = (
+            "translateX", "translateY", "translateZ",
+            "rotateX", "rotateY", "rotateZ",
+        )
+
+        for grp, loc, geos in candidates:
+            if skip_animated:
+                animated = False
+                for attr in anim_attrs:
+                    conns = (
+                        cmds.listConnections(
+                            f"{loc}.{attr}", source=True, destination=False
+                        )
+                        or []
+                    )
+                    if conns:
+                        animated = True
+                        break
+                if animated:
+                    continue
+
+            if pivot_source == "bbox":
+                bb_input = geos if len(geos) > 1 else geos[0]
+                bb = cmds.exactWorldBoundingBox(bb_input)
+                anchor = om.MVector(
+                    (bb[0] + bb[3]) / 2.0,
+                    (bb[1] + bb[4]) / 2.0,
+                    (bb[2] + bb[5]) / 2.0,
+                )
+            else:  # "rp"
+                rp = cmds.xform(geos[0], q=True, ws=True, rp=True)
+                anchor = om.MVector(*rp)
+
+            # Use worldMatrix translation (= world position of the local
+            # origin), not ``xform -q -ws -t`` which returns the rotate
+            # pivot's world position — they differ for nodes with non-zero
+            # rotatePivot. The LOC child sees the world-matrix translation.
+            grp_world_mat = cmds.xform(grp, q=True, ws=True, matrix=True)
+            grp_world = (grp_world_mat[12], grp_world_mat[13], grp_world_mat[14])
+            delta_world = anchor - om.MVector(*grp_world)
+            if delta_world.length() < 1e-5:
+                continue
+
+            grp_parent_list = (
+                cmds.listRelatives(grp, parent=True, fullPath=True) or []
+            )
+            if grp_parent_list:
+                parent_mat = om.MMatrix(
+                    cmds.xform(grp_parent_list[0], q=True, ws=True, matrix=True)
+                )
+                delta_in_parent = delta_world * parent_mat.inverse()
+            else:
+                delta_in_parent = delta_world
+
+            # ``makeIdentity`` bakes the parent's translation into the
+            # rotate/scale pivot of EVERY node in the chain (GRP, LOC, and
+            # every GEO), not just the leaf. We need to subtract delta from
+            # each — in each node's own local space — or the post-restore
+            # ws_rp ends up doubled and rotations happen at the wrong place.
+            def _shift_pivots(node: str) -> None:
+                node_world = om.MMatrix(
+                    cmds.xform(node, q=True, ws=True, matrix=True)
+                )
+                d = delta_world * node_world.inverse()
+                with Attributes.temporarily_unlock([node]):
+                    cur_rp = cmds.getAttr(f"{node}.rotatePivot")[0]
+                    cur_sp = cmds.getAttr(f"{node}.scalePivot")[0]
+                    cmds.setAttr(
+                        f"{node}.rotatePivot",
+                        cur_rp[0] - d.x, cur_rp[1] - d.y, cur_rp[2] - d.z,
+                        type="double3",
+                    )
+                    cmds.setAttr(
+                        f"{node}.scalePivot",
+                        cur_sp[0] - d.x, cur_sp[1] - d.y, cur_sp[2] - d.z,
+                        type="double3",
+                    )
+
+            _shift_pivots(grp)
+            _shift_pivots(loc)
+
+            for geo in geos:
+                geo_world = om.MMatrix(
+                    cmds.xform(geo, q=True, ws=True, matrix=True)
+                )
+                delta_in_geo = delta_world * geo_world.inverse()
+                # ``noIntermediate=True`` excludes the Orig shape on deformed
+                # meshes — shifting both Orig and Deformed corrupts the
+                # deformation graph.
+                mesh_shapes = (
+                    cmds.listRelatives(
+                        geo, shapes=True, type="mesh",
+                        noIntermediate=True, fullPath=True,
+                    )
+                    or []
+                )
+                for mesh in mesh_shapes:
+                    cmds.move(
+                        -delta_in_geo.x, -delta_in_geo.y, -delta_in_geo.z,
+                        f"{mesh}.vtx[*]",
+                        relative=True, objectSpace=True,
+                    )
+                _shift_pivots(geo)
+
+            with Attributes.temporarily_unlock([grp]):
+                current_t = cmds.getAttr(f"{grp}.translate")[0]
+                cmds.setAttr(
+                    f"{grp}.translate",
+                    current_t[0] + delta_in_parent.x,
+                    current_t[1] + delta_in_parent.y,
+                    current_t[2] + delta_in_parent.z,
+                    type="double3",
+                )
+
+            restored.append(leaf_name(grp))
+
+        if restored:
+            print(
+                f"RigUtils.restore_rig_anchors: restored {len(restored)} rig(s)."
+            )
+
+        return restored
 
     @classmethod
     @CoreUtils.undoable

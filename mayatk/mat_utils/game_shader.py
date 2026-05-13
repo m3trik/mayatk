@@ -3,7 +3,7 @@
 import os
 import logging
 from typing import List, Optional, Tuple, Callable, Union, Dict, Any
-from qtpy import QtCore, QtGui
+from qtpy import QtCore
 
 try:
     import maya.cmds as cmds
@@ -31,12 +31,22 @@ class GameShader(ptk.LoggingMixin):
     an Arnold shader network, linking necessary nodes and setting up the shader graph based on the provided textures.
     """
 
+    # Texture types whose connection produces an internal conversion node
+    # (e.g. invert smoothness → roughness, split a packed channel map).
+    CONVERSION_NOTES = {
+        "Metallic_Smoothness": "smoothness → roughness (inverted)",
+        "ORM": "split R/G/B → AO / Roughness / Metallic",
+        "MSAO": "smoothness → roughness; R/G channels split",
+        "Albedo_Transparency": "alpha → opacity",
+    }
+
     @CoreUtils.undoable
     def create_network(
         self,
         textures: List[str],
         name: str = "",
         prefix: str = "",
+        suffix: str = "",
         config: Union[str, Dict[str, Any]] = None,
         progress_callback: Callable = None,
         **kwargs,
@@ -46,6 +56,8 @@ class GameShader(ptk.LoggingMixin):
         Parameters:
             textures: List of texture file paths
             name: Shader name (auto-generated from texture if empty)
+            prefix: Optional prefix prepended to the resolved shader name.
+            suffix: Optional suffix appended to the resolved shader name.
             config: Configuration preset name (str) or dictionary.
             progress_callback: Optional callback(percent, message) for progress updates.
             **kwargs: Configuration overrides (e.g. shader_type, normal_type, etc.)
@@ -81,24 +93,21 @@ class GameShader(ptk.LoggingMixin):
             if k not in cfg:
                 cfg[k] = v
 
-        # Log Header
-        self.logger.info("Creating Shader Network...", preset="header")
-        self.logger.log_divider()
-
-        # Log Configuration
+        # Compact configuration banner: one boxed header + a 2-column table.
+        self.logger.log_box("Game Shader Network")
         config_info = [
             ["Shader Type", cfg["shader_type"]],
             ["Normal Type", cfg["normal_type"]],
             ["Create Arnold", str(cfg["create_arnold"])],
+            ["Opacity", str(cfg["opacity"])],
+            ["Emissive", str(cfg["emissive"])],
+            ["Ambient Occlusion", str(cfg["ambient_occlusion"])],
             ["Albedo Transparency", str(cfg["albedo_transparency"])],
             ["Metallic Smoothness", str(cfg["metallic_smoothness"])],
             ["Mask Map", str(cfg["mask_map"])],
             ["ORM Map", str(cfg["orm_map"])],
-            ["Opacity", str(cfg["opacity"])],
-            ["Emissive", str(cfg["emissive"])],
-            ["Ambient Occlusion", str(cfg["ambient_occlusion"])],
         ]
-        self.log_table(config_info, headers=["Option", "Value"], title="Configuration")
+        self.log_table(config_info, headers=["Option", "Value"])
 
         # Check for large input size
         try:
@@ -154,14 +163,13 @@ class GameShader(ptk.LoggingMixin):
                     pct = 50 + int((i / total) * 50)
                     progress_callback(pct, f"Building Network: {set_name}")
 
-                self.logger.log_divider()
-                self.logger.info(f"Set: {set_name}", preset="header")
                 node = self._create_single_network(
                     set_textures,
                     set_name,  # Use set name for shader name
                     cfg["shader_type"],
                     cfg["create_arnold"],
                     prefix=prefix,
+                    suffix=suffix,
                 )
                 results.append(node)
 
@@ -184,21 +192,14 @@ class GameShader(ptk.LoggingMixin):
             if progress_callback:
                 progress_callback(75, "Building Network...")
 
-            # Single mode
-            self.logger.log_divider()
             node = self._create_single_network(
                 prepared_data,
                 name,
                 cfg["shader_type"],
                 cfg["create_arnold"],
                 prefix=prefix,
+                suffix=suffix,
             )
-
-            if node:
-                node_name = str(node).split("|")[-1].split(":")[-1]
-                self.logger.success(f"Successfully created shader: {node_name}")
-            else:
-                self.logger.error("Failed to create shader.")
 
             if progress_callback:
                 progress_callback(100, "Completed")
@@ -212,6 +213,7 @@ class GameShader(ptk.LoggingMixin):
         shader_type: str,
         create_arnold: bool,
         prefix: str = "",
+        suffix: str = "",
     ) -> Optional[object]:
         """Internal method to create a single shader network from prepared textures."""
         if not textures:
@@ -222,13 +224,14 @@ class GameShader(ptk.LoggingMixin):
             textures, ["Opacity", "Albedo_Transparency"]
         )
 
-        name = name if name else ptk.MapFactory.get_base_texture_name(textures[0])
-
+        if not name:
+            name = ptk.MapFactory.get_base_texture_name(textures[0])
         if prefix:
             name = f"{prefix}{name}"
+        if suffix:
+            name = f"{name}{suffix}"
 
-        # Log creation start with fancy formatting
-        self.logger.info(f"Creating Shader: {name}", "INFO", "header")
+        self.logger.info(f"Shader: {name}")
 
         # Pre-compute map type for each texture to avoid redundant lookups
         type_cache = {t: ptk.MapFactory.resolve_map_type(t) for t in textures}
@@ -272,15 +275,15 @@ class GameShader(ptk.LoggingMixin):
         if create_arnold:
             ai_node, aiMult_node, bump_node = self.setup_arnold_nodes(name, shader_node)
 
-        # Process each texture
-        length = len(textures)
-        progress = 0
         base_dir = EnvUtils.get_env_info("sourceimages")
 
-        connection_log = []
+        # Per-map outcome rows: [status, type, file, note]
+        rows: List[List[str]] = []
+        connected_count = 0
+        failed_count = 0
+        conversion_count = 0
 
         for texture in ptk.convert_to_relative_path(textures, base_dir):
-            progress += 1
             texture_name = ptk.format_path(texture, "file")
             # Use pre-computed type cache; fall back to resolve for converted paths
             texture_type = type_cache.get(texture) or ptk.MapFactory.resolve_map_type(
@@ -288,7 +291,8 @@ class GameShader(ptk.LoggingMixin):
             )
 
             if texture_type is None:
-                self.logger.warning(f"Unknown map type: {texture_name}.")
+                rows.append(["✗", "Unknown", texture_name, "unrecognized map type"])
+                failed_count += 1
                 continue
 
             # Connect shader nodes based on type
@@ -305,10 +309,15 @@ class GameShader(ptk.LoggingMixin):
                     texture, texture_type, shader_node
                 )
 
+            note = self.CONVERSION_NOTES.get(texture_type, "")
             if success:
-                connection_log.append(f"  • {texture_type}: {texture_name}")
+                connected_count += 1
+                if note:
+                    conversion_count += 1
+                rows.append(["✓", texture_type, texture_name, note])
             else:
-                self.logger.warning(f"  • {texture_type}: Failed to connect")
+                failed_count += 1
+                rows.append(["✗", texture_type, texture_name, "shader has no matching slot"])
 
             # Conditional Arnold nodes connection
             if create_arnold and success:
@@ -316,16 +325,30 @@ class GameShader(ptk.LoggingMixin):
                     texture, texture_type, ai_node, aiMult_node, bump_node
                 )
 
-        # Log connections
-        if connection_log:
-            self.logger.info("\n".join(connection_log))
+        # Per-map connection table
+        self.log_table(rows, headers=["", "Map", "Source", "Conversion"])
 
-        # Return the shading engine (not the shader node itself)
-        # Find the connected shading engine
+        # Resolve created shading engine
         shading_groups = cmds.listConnections(shader_node, type="shadingEngine")
-        if shading_groups:
-            return shading_groups[0]
-        return shader_node
+        result_node = shading_groups[0] if shading_groups else shader_node
+        result_name = str(result_node).split("|")[-1].split(":")[-1]
+
+        # Clickable link — points at the shader node (not the SG) so users
+        # land on the editable material in the Hypershade.
+        link = self.logger.log_link(result_name, "select", node=str(shader_node))
+
+        # Final compact summary
+        if failed_count == 0:
+            self.logger.success(
+                f"{link} — {connected_count} connected, {conversion_count} converted"
+            )
+        else:
+            self.logger.warning(
+                f"{link} — {connected_count} connected, "
+                f"{failed_count} failed, {conversion_count} converted"
+            )
+
+        return result_node
 
     def setup_stringray_node(self, name: str, opacity: bool) -> object:
         """Initializes and sets up a StingrayPBS shader node in Maya.
@@ -1692,18 +1715,6 @@ class GameShader(ptk.LoggingMixin):
         return textures
 
 
-class CallbackLogHandler(logging.Handler):
-    """Log handler that calls a callback function with the formatted message."""
-
-    def __init__(self, callback: Callable):
-        super().__init__()
-        self.callback = callback
-
-    def emit(self, record):
-        msg = self.format(record)
-        self.callback(msg)
-
-
 class GameShaderSlots(GameShader):
     msg_intro = """<u>To setup the material:</u>
         <br>• Click the <b>Create Network</b> button to select texture maps and create the shader connections. This will bridge Stingray PBS and (optionally) Arnold aiStandardSurface shaders, create a shading network from provided textures, and manage OpenGL and DirectX normal map conversions.
@@ -1712,13 +1723,17 @@ class GameShaderSlots(GameShader):
         If Opaque is enabled, opacity will not work at all. Transmission will work, however any shadows cast by
         the object will always be solid and not pick up the Transparent Color or density of the shader.</p>
     """
-    msg_completed = '<br><hl style="color:rgb(0, 255, 255);"><b>COMPLETED.</b></hl>'
 
     def __init__(self, switchboard):
         super().__init__()
 
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.game_shader
+
+        # Don't keep this window glued above other tools — user can use the
+        # pin button to toggle stay-on-top when needed.
+        if hasattr(self.ui, "set_flags"):
+            self.ui.set_flags(WindowStaysOnTopHint=False)
 
         self.workspace_dir = EnvUtils.get_env_info("workspace_dir")
         self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
@@ -1727,14 +1742,22 @@ class GameShaderSlots(GameShader):
 
         self.ui.txt001.setText(self.msg_intro)
 
-        # Set monospace font for log output
-        font = QtGui.QFont("Consolas")
-        font.setStyleHint(QtGui.QFont.Monospace)
-        self.ui.txt001.setFont(font)
+        # Route the shared logger into the txt001 QTextBrowser with HTML
+        # colorization. Using setup_logging_redirect (instead of the old
+        # CallbackLogHandler) is what enables clickable <a href="action://…">
+        # links inside log messages.
+        self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
+        self.logger.setup_logging_redirect(self.ui.txt001)
 
-        # Redirect logs to UI callback
-        self.log_handler = CallbackLogHandler(self.callback)
-        self.logger.addHandler(self.log_handler)
+        # Dispatch action:// links (e.g. select the created shader).
+        if hasattr(self.ui.txt001, "anchorClicked"):
+            self.ui.txt001.anchorClicked.connect(self._on_log_link_clicked)
+
+    def _on_log_link_clicked(self, url) -> None:
+        """Dispatch clickable ``action://`` links from the log panel."""
+        from mayatk.ui_utils._ui_utils import UiUtils
+
+        UiUtils.dispatch_log_link(url, self.logger)
 
     def header_init(self, widget):
         """Initialize the header widget."""
@@ -1780,11 +1803,27 @@ class GameShaderSlots(GameShader):
         return text
 
     @property
+    def affix_is_prefix(self) -> bool:
+        """Whether the affix field (txt002) acts as a prefix or a suffix."""
+        if not hasattr(self.ui, "txt002"):
+            return True
+        chk = getattr(self.ui.txt002.option_box.menu, "chk_use_as_prefix", None)
+        # Default to prefix when the option box hasn't been initialized yet.
+        return chk.isChecked() if chk is not None else True
+
+    @property
     def mat_prefix(self) -> str:
-        """Get the material prefix from the UI."""
-        if hasattr(self.ui, "txt002"):
-            return self.ui.txt002.text()
-        return ""
+        """Return the affix text when in prefix mode, else empty string."""
+        if not hasattr(self.ui, "txt002"):
+            return ""
+        return self.ui.txt002.text() if self.affix_is_prefix else ""
+
+    @property
+    def mat_suffix(self) -> str:
+        """Return the affix text when in suffix mode, else empty string."""
+        if not hasattr(self.ui, "txt002"):
+            return ""
+        return "" if self.affix_is_prefix else self.ui.txt002.text()
 
     @property
     def normal_map_type(self) -> str:
@@ -1842,6 +1881,49 @@ class GameShaderSlots(GameShader):
             file_types = ptk.ImgUtils.texture_file_types
             widget.add(file_types)
 
+    def txt002_init(self, widget):
+        """Add a prefix/suffix toggle to the affix field's option menu."""
+        widget.option_box.menu.add(
+            "QCheckBox",
+            setText="Use as Prefix",
+            setObjectName="chk_use_as_prefix",
+            setChecked=True,
+            setToolTip=(
+                "Checked: value is prepended to the base name (prefix mode).\n"
+                "Unchecked: value is appended to the base name (suffix mode).\n\n"
+                "The base name is derived from the selected texture filenames\n"
+                "using pythontk.ImgUtils.get_base_texture_name."
+            ),
+        )
+        widget.option_box.menu.chk_use_as_prefix.toggled.connect(
+            lambda checked, w=widget: self._on_affix_mode_toggled(w, checked)
+        )
+        self._apply_affix_placeholder(widget, prefix_mode=True)
+
+    def _on_affix_mode_toggled(self, widget, prefix_mode):
+        text = widget.text()
+        # Auto-swap the conventional pattern when the user hasn't customized it
+        if prefix_mode and text == "_MAT":
+            widget.setText("MAT_")
+        elif not prefix_mode and text == "MAT_":
+            widget.setText("_MAT")
+        self._apply_affix_placeholder(widget, prefix_mode=prefix_mode)
+
+    @staticmethod
+    def _apply_affix_placeholder(widget, prefix_mode):
+        if prefix_mode:
+            widget.setPlaceholderText("Prefix")
+            widget.setToolTip(
+                'Prefix prepended to the base name.\n'
+                'Example: "MAT_" + "brick" → "MAT_brick".'
+            )
+        else:
+            widget.setPlaceholderText("Suffix")
+            widget.setToolTip(
+                'Suffix appended to the base name.\n'
+                'Example: "brick" + "_MAT" → "brick_MAT".'
+            )
+
     def b000(self):
         """Create network."""
         image_files = self.sb.file_dialog(
@@ -1850,73 +1932,35 @@ class GameShaderSlots(GameShader):
             start_dir=self.source_images_dir,
         )
 
-        if image_files:
-            self.image_files = image_files
-            self.ui.txt001.clear()
-
-            msg_mat_selection = self.image_files
-            for (
-                i
-            ) in msg_mat_selection:  # format msg_intro using the map_types in imtools.
-                self.callback(ptk.truncate(i, 60))
-        else:
+        if not image_files:
             return
 
-        if self.image_files:
-            # pm.mel.HypershadeWindow() #open the hypershade window.
+        self.image_files = image_files
+        self.ui.txt001.clear()
 
-            self.ui.txt001.clear()
-            self.callback("Creating network ..<br>")
+        create_arnold = self.ui.chk000.isChecked()
 
-            create_arnold = self.ui.chk000.isChecked()
+        # Get template configuration using combo box text
+        template_name = self.ui.cmb002.currentText()
 
-            # Get template configuration using combo box text
-            template_name = self.ui.cmb002.currentText()
-
-            def progress_adapter(p, m):
-                self.callback(m, progress=p)
-
-            self.last_created_shader = self.create_network(
-                self.image_files,
-                self.mat_name,
-                prefix=self.mat_prefix,
-                config=template_name,
-                shader_type=self.shader_type,
-                normal_type=self.normal_map_type,
-                create_arnold=create_arnold,
-                cleanup_base_color=False,  # Can be exposed in UI later if needed
-                output_extension=self.output_extension,
-                progress_callback=progress_adapter,
-            )
-
-            self.callback(self.msg_completed)
-            # pm.mel.hyperShadePanelGraphCommand('hyperShadePanel1', 'rearrangeGraph')
-
-    def callback(self, string, progress=None, clear=False):
-        """Callback function to output messages to the UI textEdit and update progress bar.
-
-        Parameters:
-            string (str): The text to output to a textEdit widget.
-            progress (int/list): The progress amount to register with the progressBar.
-                    Can be given as an int or a tuple as: (progress, total_len)
-        """
-        if clear:
-            if hasattr(self.ui, "txt003"):
-                self.ui.txt003.clear()
-
-        if isinstance(progress, (list, tuple, set)):
-            p, length = progress
-            if length > 0:
-                progress = (p / length) * 100
-            else:
-                progress = 0
-
-        self.ui.txt001.append(string)
-
-        if progress is not None:
+        def progress_adapter(p, m):
             if hasattr(self.ui, "progressBar"):
-                self.ui.progressBar.setValue(int(progress))
+                self.ui.progressBar.setValue(int(p))
             self.sb.QtWidgets.QApplication.instance().processEvents()
+
+        self.last_created_shader = self.create_network(
+            self.image_files,
+            self.mat_name,
+            prefix=self.mat_prefix,
+            suffix=self.mat_suffix,
+            config=template_name,
+            shader_type=self.shader_type,
+            normal_type=self.normal_map_type,
+            create_arnold=create_arnold,
+            cleanup_base_color=False,  # Can be exposed in UI later if needed
+            output_extension=self.output_extension,
+            progress_callback=progress_adapter,
+        )
 
 
 # -----------------------------------------------------------------------------

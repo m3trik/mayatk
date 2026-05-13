@@ -353,6 +353,73 @@ class TestNodeUtils(MayaTkTestCase):
         NodeUtils.uninstance(inst)
         self.assertFalse(len(cmds.ls(cmds.listRelatives(inst, shapes=True, ni=True)[0], allPaths=True)) > 1)
 
+    def test_uninstance_preserves_transform_and_siblings(self):
+        """Regression: uninstance must NOT delete the transform or its children,
+        and the sibling instance must keep the original shape.
+        """
+        src = cmds.polyCube()[0]
+        target = cmds.polyCube()[0]
+        instances = NodeUtils.replace_with_instances([src, target])
+        inst = instances[0]
+        # Source shape long path is shared with inst pre-uninstance.
+        src_shape_long = cmds.listRelatives(src, shapes=True, fullPath=True)[0]
+
+        # Anchor: a child locator under the instance. Pre-fix code deleted
+        # the transform and took the child with it.
+        child = cmds.spaceLocator()[0]
+        child = cmds.parent(child, inst)[0]
+        child_short = child.split("|")[-1]
+
+        result = NodeUtils.uninstance(inst)
+
+        # Transform survives.
+        self.assertTrue(cmds.objExists(inst), "uninstance deleted the transform")
+
+        # Child survives and is still parented under inst.
+        inst_children = cmds.listRelatives(inst, children=True, type="transform") or []
+        self.assertIn(
+            child_short,
+            [c.split("|")[-1] for c in inst_children],
+            "child was deleted or reparented away from inst",
+        )
+
+        # Forked shape is unique to inst (no longer shared).
+        new_shape = cmds.listRelatives(inst, shapes=True, ni=True, fullPath=True)[0]
+        self.assertEqual(
+            len(cmds.listRelatives(new_shape, allParents=True, fullPath=True) or []),
+            1,
+            "new shape is still instanced",
+        )
+
+        # Source kept its original shape.
+        self.assertTrue(
+            cmds.objExists(src_shape_long),
+            "source's original shape was destroyed",
+        )
+
+        # Result contract: returns the same transform identity.
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].split("|")[-1], inst.split("|")[-1])
+
+    def test_uninstance_all_siblings_each_become_unique(self):
+        """Uninstance applied to every member of an instance set leaves each
+        with its own unique shape.
+        """
+        src = cmds.polyCube()[0]
+        t1 = cmds.polyCube()[0]
+        t2 = cmds.polyCube()[0]
+        instances = NodeUtils.replace_with_instances([src, t1, t2])
+        # Set is now {src, instances[0], instances[1]} sharing src's shape.
+        members = [src] + instances
+
+        NodeUtils.uninstance(members)
+
+        for t in members:
+            self.assertTrue(cmds.objExists(t), f"{t} was deleted")
+            shp = cmds.listRelatives(t, shapes=True, ni=True, fullPath=True)[0]
+            parents = cmds.listRelatives(shp, allParents=True, fullPath=True) or []
+            self.assertEqual(len(parents), 1, f"{t} shape still instanced")
+
     # -------------------------------------------------------------------------
     # Assembly Tests
     # -------------------------------------------------------------------------

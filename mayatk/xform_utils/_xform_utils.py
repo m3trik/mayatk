@@ -74,6 +74,47 @@ def _mmatrix_to_flat(m) -> List[float]:
     return list(m)
 
 
+def _shift_shape_points(shape: str, transform_matrix) -> None:
+    """Bulk-transform a shape's points by *transform_matrix* (world-space).
+
+    Reads each point in world space, multiplies by *transform_matrix*, writes
+    back in object space. Used by ``restore_transforms`` to compensate vertex
+    positions before the transform's world matrix is reset. Vectorized via
+    the OpenMaya 2.0 API — O(1) cmds calls regardless of point count.
+
+    Supports mesh (``MFnMesh``), nurbsCurve (``MFnNurbsCurve``), and
+    nurbsSurface (``MFnNurbsSurface``). Other shape types are skipped.
+    """
+    if om is None or cmds is None:
+        return
+    node_type = cmds.nodeType(shape)
+    if node_type not in ("mesh", "nurbsCurve", "nurbsSurface"):
+        return
+    sel = om.MSelectionList()
+    sel.add(shape)
+    dag = sel.getDagPath(0)
+    if node_type == "mesh":
+        fn = om.MFnMesh(dag)
+        pts = fn.getPoints(om.MSpace.kWorld)
+        for i in range(len(pts)):
+            pts[i] = pts[i] * transform_matrix
+        fn.setPoints(pts, om.MSpace.kObject)
+    elif node_type == "nurbsCurve":
+        fn = om.MFnNurbsCurve(dag)
+        pts = fn.cvPositions(om.MSpace.kWorld)
+        for i in range(len(pts)):
+            pts[i] = pts[i] * transform_matrix
+        fn.setCVPositions(pts, om.MSpace.kObject)
+        fn.updateCurve()
+    else:  # nurbsSurface
+        fn = om.MFnNurbsSurface(dag)
+        pts = fn.cvPositions(om.MSpace.kWorld)
+        for i in range(len(pts)):
+            pts[i] = pts[i] * transform_matrix
+        fn.setCVPositions(pts, om.MSpace.kObject)
+        fn.updateSurface()
+
+
 class XformUtilsInternals:
     """Internal helper methods for XformUtils.
 
@@ -337,7 +378,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def store_transforms(objects, prefix="original", accumulate=True):
+    def store_transforms(objects, prefix="original", accumulate=True, traverse=False):
         """Store the current world-space transforms as custom attributes.
 
         Parameters:
@@ -345,8 +386,23 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             prefix (str): Attribute name prefix (default: "original").
             accumulate (bool): If True and attributes already exist, compose the
                 current local transforms with the stored matrix. If False, overwrite.
+            traverse (bool): If True, also store transforms on every descendant
+                transform of the given objects. Mirrors ``freeze_transforms
+                (freeze_children=True)`` so that a later ``restore_transforms``
+                on any node in the chain finds its pre-freeze matrix.
         """
-        for obj in cmds.ls(as_strings(objects), type="transform") or []:
+        targets = cmds.ls(as_strings(objects), type="transform", long=True) or []
+        if traverse:
+            seen = set(targets)
+            for obj in list(targets):
+                for child in (
+                    cmds.listRelatives(obj, ad=True, type="transform", fullPath=True)
+                    or []
+                ):
+                    if child not in seen:
+                        targets.append(child)
+                        seen.add(child)
+        for obj in targets:
             current_world_matrix = om.MMatrix(
                 cmds.xform(obj, query=True, matrix=True, worldSpace=True)
             )
@@ -758,11 +814,156 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def restore_transforms(objects, prefix="original", delete_attrs=False):
-        """Restore transforms from stored custom attributes.
+    def unfreeze_to_parent(
+        objects,
+        traverse: bool = False,
+        preserve_root: bool = True,
+    ) -> List[str]:
+        """Push a child transform's local matrix up into its parent and zero the child.
+
+        Inverse of ``freeze_transforms`` for the common rig pattern where the
+        parent is at identity and a locator child holds the world-space matrix
+        the parent "should" have. After the operation the parent absorbs the
+        child's local matrix and the child is reset to identity. Descendants
+        of the child stay in place visually; **siblings of the child shift**
+        because the parent's local matrix changes — only use where the parent
+        has a single meaningful child (e.g. restoring a GRP > LOC > GEO
+        locator rig after a recursive freeze).
+
+        Parameters:
+            objects (str/obj/list): Nodes to operate on. With ``traverse=False``
+                (default) each input is the *child* whose local matrix is
+                lifted into its parent. With ``traverse=True`` each input is a
+                container — the subtree is scanned for locators, and each
+                locator's local matrix is lifted into its immediate parent.
+            traverse (bool): When True, walk each input's subtree and lift
+                every locator descendant into its parent. Default False.
+            preserve_root (bool): When ``traverse=True``, never lift into one
+                of the input root nodes themselves — keeps the top-level
+                containers zero'd out. Default True. Ignored when
+                ``traverse=False`` (the input is the child, not the parent).
 
         Returns:
-            list: Objects that were successfully restored.
+            List of parent node short names whose local matrix was modified.
+        """
+        if om is None or cmds is None:
+            return []
+
+        nodes = cmds.ls(as_strings(objects), type="transform", long=True) or []
+        identity_matrix = om.MMatrix()
+        modified_parents: List[str] = []
+        root_set = set(nodes) if (traverse and preserve_root) else set()
+
+        pairs: List[Tuple[str, str]] = []  # (parent, child)
+        seen_children: Set[str] = set()
+
+        for node in nodes:
+            if not cmds.objExists(node):
+                continue
+
+            if traverse:
+                locator_shapes = (
+                    cmds.listRelatives(
+                        node, allDescendents=True, type="locator", fullPath=True
+                    )
+                    or []
+                )
+                for shape in locator_shapes:
+                    loc_xform_list = cmds.listRelatives(
+                        shape, parent=True, fullPath=True
+                    ) or []
+                    if not loc_xform_list:
+                        continue
+                    child = loc_xform_list[0]
+                    if child in seen_children:
+                        continue
+                    parent_list = (
+                        cmds.listRelatives(child, parent=True, fullPath=True) or []
+                    )
+                    if not parent_list:
+                        continue
+                    parent = parent_list[0]
+                    if parent in root_set:
+                        continue
+                    pairs.append((parent, child))
+                    seen_children.add(child)
+            else:
+                child = node
+                if child in seen_children:
+                    continue
+                parent_list = (
+                    cmds.listRelatives(child, parent=True, fullPath=True) or []
+                )
+                if not parent_list:
+                    cmds.warning(
+                        f"XformUtils.unfreeze_to_parent: '{short_name(child)}' "
+                        "has no parent. Skipping."
+                    )
+                    continue
+                pairs.append((parent_list[0], child))
+                seen_children.add(child)
+
+        for parent, child in pairs:
+            child_local = om.MMatrix(
+                cmds.xform(child, q=True, matrix=True, objectSpace=True)
+            )
+            parent_local = om.MMatrix(
+                cmds.xform(parent, q=True, matrix=True, objectSpace=True)
+            )
+
+            # Maya row-vector convention: descendant.world = ... * child_local *
+            # parent_local * grandparent_world. Absorbing child_local into
+            # parent_local gives parent_new = child_local * parent_local.
+            parent_new = child_local * parent_local
+
+            with Attributes.temporarily_unlock([parent, child]):
+                set_object_matrix(parent, parent_new, world=False)
+                set_object_matrix(child, identity_matrix, world=False)
+
+            modified_parents.append(short_name(parent))
+
+        if modified_parents:
+            print(
+                "XformUtils.unfreeze_to_parent: "
+                f"{len(modified_parents)} parent(s) updated."
+            )
+
+        return modified_parents
+
+    @staticmethod
+    @CoreUtils.undoable
+    def restore_transforms(objects, prefix="original", delete_attrs=True):
+        """Restore transforms from stored custom attributes.
+
+        Counterpart of ``store_transforms``: reads the saved world matrix +
+        rotate/scale pivots back onto each transform, shifts mesh/NURBS points
+        so their world position is preserved, and (by default) deletes the
+        stored custom attributes once restoration succeeds.
+
+        Robustness:
+            * Temporarily unlocks ``translate`` / ``rotate`` / ``scale``
+              channels on the object before writing the matrix — Maya
+              otherwise silently skips locked channels and leaves the
+              restoration partial.
+            * Skips referenced nodes with a warning (can't modify referenced
+              attributes).
+            * Skips nodes with no stored attrs (matrix attr missing) with a
+              warning.
+            * Vectorizes the per-vertex update via ``MFnMesh.setPoints`` /
+              ``MFnNurbsCurve.setCVPositions`` / ``MFnNurbsSurface.setCVs``,
+              avoiding O(n_verts) cmds calls.
+
+        Parameters:
+            objects (str/obj/list): Transforms to restore.
+            prefix (str): Custom-attr prefix used by ``store_transforms``.
+                Default ``"original"``.
+            delete_attrs (bool): Delete the ``{prefix}_worldMatrix``,
+                ``{prefix}_rotatePivot``, ``{prefix}_scalePivot`` attributes
+                after a successful restore. Default True — keeps the scene
+                clean. Set False to retain the stored values for re-restoration.
+
+        Returns:
+            list: Object names successfully restored.
         """
         restored = []
 
@@ -778,6 +979,16 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 )
                 continue
 
+            try:
+                if cmds.referenceQuery(obj, isNodeReferenced=True):
+                    cmds.warning(
+                        f"restore_transforms: '{obj}' is a referenced node "
+                        "(can't modify). Skipping."
+                    )
+                    continue
+            except Exception:
+                pass
+
             stored_matrix_flat = cmds.getAttr(f"{obj}.{matrix_attr}")
             if stored_matrix_flat and isinstance(
                 stored_matrix_flat[0], (list, tuple)
@@ -785,7 +996,8 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 stored_matrix_flat = [
                     v for row in stored_matrix_flat for v in row
                 ]
-            stored_matrix = om.MMatrix(list(stored_matrix_flat))
+            stored_matrix_flat = list(stored_matrix_flat)
+            stored_matrix = om.MMatrix(stored_matrix_flat)
 
             try:
                 inverse_stored = stored_matrix.inverse()
@@ -795,62 +1007,40 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 )
                 continue
 
-            shapes = cmds.listRelatives(obj, shapes=True, noIntermediate=True) or []
+            shapes = (
+                cmds.listRelatives(
+                    obj, shapes=True, noIntermediate=True, fullPath=True
+                )
+                or []
+            )
 
-            # Transform geometry by M.inverse() so vertex world positions are preserved.
+            # Transform geometry by M.inverse() so world point positions are
+            # preserved once we then set obj.world = stored.
             for shape in shapes:
-                node_type = cmds.nodeType(shape)
-                if node_type == "mesh":
-                    num_verts = cmds.polyEvaluate(shape, vertex=True) or 0
-                    for i in range(num_verts):
-                        vert = f"{shape}.vtx[{i}]"
-                        pos_arr = cmds.pointPosition(vert, world=True)
-                        pos = om.MPoint(pos_arr[0], pos_arr[1], pos_arr[2])
-                        new_local = pos * inverse_stored
-                        cmds.xform(
-                            vert,
-                            os=True,
-                            t=[new_local[0], new_local[1], new_local[2]],
-                        )
+                _shift_shape_points(shape, inverse_stored)
 
-                elif node_type == "nurbsCurve":
-                    cvs = cmds.ls(f"{shape}.cv[*]", flatten=True) or []
-                    for cv in cvs:
-                        pos_arr = cmds.xform(cv, q=True, ws=True, t=True)
-                        pos = om.MPoint(pos_arr[0], pos_arr[1], pos_arr[2])
-                        new_local = pos * inverse_stored
-                        cmds.xform(
-                            cv,
-                            os=True,
-                            t=[new_local[0], new_local[1], new_local[2]],
-                        )
+            # Unlock TRS so cmds.xform can write all components — otherwise
+            # locked channels are silently skipped and the restore is partial.
+            # ``temporarily_unlock`` always operates on the full TRS set; the
+            # ``attributes=`` parameter on it is currently unused.
+            with Attributes.temporarily_unlock([obj]):
+                cmds.xform(obj, matrix=stored_matrix_flat, worldSpace=True)
 
-                elif node_type == "nurbsSurface":
-                    cvs = cmds.ls(f"{shape}.cv[*][*]", flatten=True) or []
-                    for cv in cvs:
-                        pos_arr = cmds.xform(cv, q=True, ws=True, t=True)
-                        pos = om.MPoint(pos_arr[0], pos_arr[1], pos_arr[2])
-                        new_local = pos * inverse_stored
-                        cmds.xform(
-                            cv,
-                            os=True,
-                            t=[new_local[0], new_local[1], new_local[2]],
-                        )
+                if cmds.attributeQuery(rp_attr, node=obj, exists=True):
+                    rotate_pivot = cmds.getAttr(f"{obj}.{rp_attr}")[0]
+                    cmds.xform(obj, rotatePivot=rotate_pivot, worldSpace=True)
 
-            cmds.xform(obj, matrix=list(stored_matrix_flat), worldSpace=True)
-
-            if cmds.attributeQuery(rp_attr, node=obj, exists=True):
-                rotate_pivot = cmds.getAttr(f"{obj}.{rp_attr}")[0]
-                cmds.xform(obj, rotatePivot=rotate_pivot, worldSpace=True)
-
-            if cmds.attributeQuery(sp_attr, node=obj, exists=True):
-                scale_pivot = cmds.getAttr(f"{obj}.{sp_attr}")[0]
-                cmds.xform(obj, scalePivot=scale_pivot, worldSpace=True)
+                if cmds.attributeQuery(sp_attr, node=obj, exists=True):
+                    scale_pivot = cmds.getAttr(f"{obj}.{sp_attr}")[0]
+                    cmds.xform(obj, scalePivot=scale_pivot, worldSpace=True)
 
             if delete_attrs:
-                for attr in [matrix_attr, rp_attr, sp_attr]:
+                for attr in (matrix_attr, rp_attr, sp_attr):
                     if cmds.attributeQuery(attr, node=obj, exists=True):
-                        cmds.deleteAttr(f"{obj}.{attr}")
+                        plug = f"{obj}.{attr}"
+                        if cmds.getAttr(plug, lock=True):
+                            cmds.setAttr(plug, lock=False)
+                        cmds.deleteAttr(plug)
 
             restored.append(obj)
 
@@ -858,6 +1048,47 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             print(f"restore_transforms: Restored {len(restored)} object(s).")
 
         return restored
+
+    @staticmethod
+    @CoreUtils.undoable
+    def clear_stored_transforms(objects, prefix="original") -> List[str]:
+        """Delete the stored-transform custom attributes without restoring.
+
+        Use when you committed to the frozen state and just want to remove
+        the ``{prefix}_worldMatrix`` / ``rotatePivot`` / ``scalePivot``
+        attributes that ``store_transforms`` left behind. Safe to call on
+        objects that don't have stored attributes (silently skipped).
+
+        Parameters:
+            objects (str/obj/list): Transforms to clean up.
+            prefix (str): Custom-attr prefix used by ``store_transforms``.
+
+        Returns:
+            list: Object names from which stored attrs were deleted.
+        """
+        cleared: List[str] = []
+        attr_names = (
+            f"{prefix}_worldMatrix",
+            f"{prefix}_rotatePivot",
+            f"{prefix}_scalePivot",
+        )
+        for obj in cmds.ls(as_strings(objects), type="transform") or []:
+            removed_any = False
+            for attr in attr_names:
+                if cmds.attributeQuery(attr, node=obj, exists=True):
+                    plug = f"{obj}.{attr}"
+                    if cmds.getAttr(plug, lock=True):
+                        cmds.setAttr(plug, lock=False)
+                    cmds.deleteAttr(plug)
+                    removed_any = True
+            if removed_any:
+                cleared.append(obj)
+        if cleared:
+            print(
+                f"clear_stored_transforms: Cleared stored attrs on "
+                f"{len(cleared)} object(s)."
+            )
+        return cleared
 
     @staticmethod
     def has_stored_transforms(objects, prefix="original"):

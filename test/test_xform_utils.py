@@ -221,6 +221,237 @@ class TestXformUtils(MayaTkTestCase):
                 f"{attr} should not be in the channel box",
             )
 
+    def test_restore_transforms_handles_locked_translate(self):
+        """Locked translate channels must not silently swallow the restore.
+
+        Maya's cmds.xform skips locked channels silently. restore_transforms
+        must temporarily unlock TRS so the full world matrix gets written.
+        """
+        cmds.move(10, 5, 0, self.cube1)
+        XformUtils.store_transforms(self.cube1, prefix="test")
+        cmds.move(0, 0, 0, self.cube1, absolute=True)
+        for axis in "XYZ":
+            cmds.setAttr(f"{self.cube1}.translate{axis}", lock=True)
+
+        XformUtils.restore_transforms(self.cube1, prefix="test")
+
+        pos = cmds.xform(self.cube1, q=True, ws=True, t=True)
+        self.assertAlmostEqual(pos[0], 10.0, delta=1e-3)
+        self.assertAlmostEqual(pos[1], 5.0, delta=1e-3)
+        self.assertAlmostEqual(pos[2], 0.0, delta=1e-3)
+        self.assertTrue(
+            cmds.getAttr(f"{self.cube1}.translateX", lock=True),
+            "Lock state should be preserved through restore",
+        )
+
+    def test_restore_transforms_preserves_nurbs_curve_world_position(self):
+        """Verify the vectorized NURBS curve path through a freeze-restore cycle.
+
+        Exercises ``_shift_shape_points``' MFnNurbsCurve branch via the canonical
+        store -> freeze -> restore workflow that this function is designed for.
+        """
+        curve = cmds.circle(
+            name="testCircle", normal=(0, 1, 0), constructionHistory=False
+        )[0]
+        try:
+            cmds.move(10, 0, 5, curve)
+            shape = cmds.listRelatives(curve, shapes=True, fullPath=True)[0]
+            cv_world_before = cmds.xform(
+                f"{shape}.cv[0]", q=True, ws=True, t=True
+            )
+
+            XformUtils.store_transforms(curve, prefix="test")
+            XformUtils.freeze_transforms(curve)
+
+            XformUtils.restore_transforms(curve, prefix="test")
+
+            pos = cmds.xform(curve, q=True, ws=True, t=True)
+            self.assertAlmostEqual(pos[0], 10.0, delta=1e-3)
+            self.assertAlmostEqual(pos[2], 5.0, delta=1e-3)
+            cv_world_after = cmds.xform(
+                f"{shape}.cv[0]", q=True, ws=True, t=True
+            )
+            for b, a in zip(cv_world_before, cv_world_after):
+                self.assertAlmostEqual(b, a, delta=1e-3)
+        finally:
+            if cmds.objExists(curve):
+                cmds.delete(curve)
+
+    def test_restore_transforms_deletes_attrs_by_default(self):
+        """Default delete_attrs=True keeps the scene clean after restoration."""
+        cmds.move(10, 5, 0, self.cube1)
+        XformUtils.store_transforms(self.cube1, prefix="test")
+        cmds.move(0, 0, 0, self.cube1)
+
+        XformUtils.restore_transforms(self.cube1, prefix="test")
+
+        for attr in ("test_worldMatrix", "test_rotatePivot", "test_scalePivot"):
+            self.assertFalse(
+                cmds.attributeQuery(attr, node=str(self.cube1), exists=True),
+                f"{attr} should be deleted after default restore",
+            )
+
+    def test_restore_transforms_keeps_attrs_when_delete_attrs_false(self):
+        """Opt-out: delete_attrs=False preserves the stored attrs for re-restoration."""
+        cmds.move(10, 5, 0, self.cube1)
+        XformUtils.store_transforms(self.cube1, prefix="test")
+        cmds.move(0, 0, 0, self.cube1)
+
+        XformUtils.restore_transforms(self.cube1, prefix="test", delete_attrs=False)
+
+        for attr in ("test_worldMatrix", "test_rotatePivot", "test_scalePivot"):
+            self.assertTrue(
+                cmds.attributeQuery(attr, node=str(self.cube1), exists=True),
+                f"{attr} should be preserved with delete_attrs=False",
+            )
+
+    def test_clear_stored_transforms_removes_attrs(self):
+        """Explicit cleanup without restoration."""
+        XformUtils.store_transforms(self.cube1, prefix="test")
+        for attr in ("test_worldMatrix", "test_rotatePivot", "test_scalePivot"):
+            self.assertTrue(
+                cmds.attributeQuery(attr, node=str(self.cube1), exists=True)
+            )
+
+        cleared = XformUtils.clear_stored_transforms(self.cube1, prefix="test")
+
+        self.assertIn(str(self.cube1), cleared)
+        for attr in ("test_worldMatrix", "test_rotatePivot", "test_scalePivot"):
+            self.assertFalse(
+                cmds.attributeQuery(attr, node=str(self.cube1), exists=True),
+                f"{attr} should be gone after clear_stored_transforms",
+            )
+
+    def test_clear_stored_transforms_safe_on_objects_without_attrs(self):
+        """Calling clear on an object that has no stored attrs is a silent no-op."""
+        cleared = XformUtils.clear_stored_transforms(self.cube1, prefix="never_stored")
+        self.assertEqual(cleared, [])
+
+    def test_store_transforms_traverse_writes_to_descendants(self):
+        """traverse=True must write stored attrs on every descendant transform.
+
+        Without this, a freeze_children=True cascade leaves child LOC/GEO with no
+        original_worldMatrix attr and restore_transforms warns + skips.
+        """
+        # Build GRP > LOC > GEO chain.
+        grp = cmds.group(empty=True, name="rig_GRP")
+        loc = cmds.spaceLocator(name="rig_LOC")[0]
+        geo = cmds.polyCube(name="rig_GEO")[0]
+        cmds.parent(loc, grp)
+        cmds.parent(geo, loc)
+        cmds.move(7, 0, 0, grp, absolute=True)
+        cmds.move(0, 3, 0, loc, relative=True)
+        cmds.move(0, 0, 2, geo, relative=True)
+        try:
+            XformUtils.store_transforms(grp, prefix="test", traverse=True)
+
+            for node in (grp, loc, geo):
+                self.assertTrue(
+                    cmds.attributeQuery("test_worldMatrix", node=node, exists=True),
+                    f"{node} should have test_worldMatrix after traverse=True",
+                )
+                self.assertTrue(
+                    cmds.attributeQuery("test_rotatePivot", node=node, exists=True),
+                )
+                self.assertTrue(
+                    cmds.attributeQuery("test_scalePivot", node=node, exists=True),
+                )
+
+            # And the stored matrix on a descendant must actually be its
+            # world matrix (not its parent's, not identity).
+            stored_loc = cmds.getAttr(f"{loc}.test_worldMatrix")
+            self.assertAlmostEqual(stored_loc[12], 7.0, delta=1e-4)
+            self.assertAlmostEqual(stored_loc[13], 3.0, delta=1e-4)
+        finally:
+            for n in (grp, loc, geo):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+    def test_store_transforms_traverse_false_skips_descendants(self):
+        """traverse=False (default) must NOT touch descendants — guards the contract."""
+        grp = cmds.group(empty=True, name="rig_GRP")
+        loc = cmds.spaceLocator(name="rig_LOC")[0]
+        cmds.parent(loc, grp)
+        try:
+            XformUtils.store_transforms(grp, prefix="test")  # default traverse=False
+            self.assertTrue(
+                cmds.attributeQuery("test_worldMatrix", node=grp, exists=True),
+            )
+            self.assertFalse(
+                cmds.attributeQuery("test_worldMatrix", node=loc, exists=True),
+                "Descendants must be untouched when traverse=False",
+            )
+        finally:
+            for n in (grp, loc):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+    def test_store_then_freeze_then_restore_full_chain(self):
+        """End-to-end: store(traverse) → freeze(children) → restore on each node.
+
+        Reproduces the user-reported bug: after freezing a GRP > LOC > GEO chain
+        with freeze_children, calling restore_transforms on the LOC was warning
+        about a missing original_worldMatrix. With traverse=True at store time
+        every node has its attr and the warning never fires.
+        """
+        grp = cmds.group(empty=True, name="rig_GRP")
+        loc = cmds.spaceLocator(name="rig_LOC")[0]
+        geo = cmds.polyCube(name="rig_GEO")[0]
+        cmds.parent(loc, grp)
+        cmds.parent(geo, loc)
+        cmds.move(4, 0, 0, grp, absolute=True)
+        cmds.move(0, 2, 0, loc, relative=True)
+        cmds.move(0, 0, 1, geo, relative=True)
+
+        loc_world_before = cmds.xform(loc, q=True, ws=True, t=True)
+        geo_world_before = cmds.xform(geo, q=True, ws=True, t=True)
+
+        try:
+            XformUtils.store_transforms(grp, prefix="test", traverse=True)
+            XformUtils.freeze_transforms(grp, freeze_children=True)
+
+            # Both descendants must still have their stored attrs so restore works.
+            self.assertTrue(
+                cmds.attributeQuery("test_worldMatrix", node=loc, exists=True),
+            )
+            self.assertTrue(
+                cmds.attributeQuery("test_worldMatrix", node=geo, exists=True),
+            )
+
+            XformUtils.restore_transforms(loc, prefix="test")
+            XformUtils.restore_transforms(geo, prefix="test")
+
+            loc_world_after = cmds.xform(loc, q=True, ws=True, t=True)
+            geo_world_after = cmds.xform(geo, q=True, ws=True, t=True)
+            for a, b in zip(loc_world_before, loc_world_after):
+                self.assertAlmostEqual(a, b, delta=1e-3)
+            for a, b in zip(geo_world_before, geo_world_after):
+                self.assertAlmostEqual(a, b, delta=1e-3)
+        finally:
+            for n in (grp, loc, geo):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+    def test_store_transforms_traverse_no_duplicate_on_already_listed_descendant(self):
+        """Passing both parent and child should not error or double-process."""
+        grp = cmds.group(empty=True, name="rig_GRP")
+        loc = cmds.spaceLocator(name="rig_LOC")[0]
+        cmds.parent(loc, grp)
+        cmds.move(1, 2, 3, grp, absolute=True)
+        try:
+            # Both passed explicitly + traverse=True; should be a no-op merge.
+            XformUtils.store_transforms([grp, loc], prefix="test", traverse=True)
+            self.assertTrue(
+                cmds.attributeQuery("test_worldMatrix", node=grp, exists=True),
+            )
+            self.assertTrue(
+                cmds.attributeQuery("test_worldMatrix", node=loc, exists=True),
+            )
+        finally:
+            for n in (grp, loc):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
     def test_store_transforms_heals_legacy_keyable_attrs(self):
         """Re-storing on attrs created keyable (legacy scenes) should normalize them."""
         # Simulate legacy state: attrs added with keyable=True.
@@ -283,6 +514,114 @@ class TestXformUtils(MayaTkTestCase):
             0.0, 0.0, 0.0, 1.0,
         ]
         self.assertNotEqual(opm, identity)
+
+    def test_unfreeze_to_parent_restores_locator_rig(self):
+        """Lifting LOC's local matrix up to a frozen GRP restores the rig layout."""
+        # Build the post-freeze state of a GRP > LOC > GEO rig: GRP at identity,
+        # LOC holds the world-space transform, GEO sits under LOC.
+        grp = cmds.group(empty=True, name="rig_GRP")
+        loc = cmds.spaceLocator(name="rig_LOC")[0]
+        cmds.parent(loc, grp)
+        geo = cmds.polyCube(name="rig_GEO")[0]
+        cmds.parent(geo, loc)
+
+        cmds.setAttr(f"{loc}.translate", 7.0, 3.0, -2.0)
+        cmds.setAttr(f"{loc}.rotate", 0.0, 45.0, 0.0)
+        cmds.setAttr(f"{geo}.translate", 0.5, 0.0, 0.0)
+
+        geo_world_before = cmds.xform(geo, q=True, ws=True, t=True)
+
+        result = XformUtils.unfreeze_to_parent(loc)
+
+        self.assertIn("rig_GRP", result[0])
+        self.assertAlmostEqual(cmds.getAttr(f"{loc}.translateX"), 0.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{loc}.translateY"), 0.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{loc}.translateZ"), 0.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{loc}.rotateY"), 0.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{grp}.translateX"), 7.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{grp}.translateY"), 3.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{grp}.translateZ"), -2.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{grp}.rotateY"), 45.0, places=5)
+
+        geo_world_after = cmds.xform(geo, q=True, ws=True, t=True)
+        for before, after in zip(geo_world_before, geo_world_after):
+            self.assertAlmostEqual(before, after, places=4)
+
+        cmds.delete(grp)
+
+    def test_unfreeze_to_parent_traverse_preserves_root(self):
+        """traverse=True walks the subtree and leaves the input root at identity."""
+        root = cmds.group(empty=True, name="RIG_ROOT")
+        grp_a = cmds.group(empty=True, name="rigA_GRP", parent=root)
+        loc_a = cmds.spaceLocator(name="rigA_LOC")[0]
+        cmds.parent(loc_a, grp_a)
+        geo_a = cmds.polyCube(name="rigA_GEO")[0]
+        cmds.parent(geo_a, loc_a)
+        cmds.setAttr(f"{loc_a}.translate", -4.0, 1.5, 2.0)
+        cmds.setAttr(f"{geo_a}.translate", 0.25, 0.0, 0.0)
+
+        grp_b = cmds.group(empty=True, name="rigB_GRP", parent=root)
+        loc_b = cmds.spaceLocator(name="rigB_LOC")[0]
+        cmds.parent(loc_b, grp_b)
+        cmds.setAttr(f"{loc_b}.translate", 8.0, 0.0, -3.0)
+
+        geo_a_world_before = cmds.xform(geo_a, q=True, ws=True, t=True)
+        result = XformUtils.unfreeze_to_parent(root, traverse=True)
+
+        # Root container stays at identity.
+        self.assertAlmostEqual(cmds.getAttr(f"{root}.translateX"), 0.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{root}.translateY"), 0.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{root}.translateZ"), 0.0, places=5)
+
+        # Each GRP absorbed its LOC; each LOC is now zero.
+        self.assertAlmostEqual(cmds.getAttr(f"{grp_a}.translateX"), -4.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{grp_a}.translateY"), 1.5, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{loc_a}.translateX"), 0.0, places=5)
+
+        self.assertAlmostEqual(cmds.getAttr(f"{grp_b}.translateX"), 8.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{grp_b}.translateZ"), -3.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{loc_b}.translateX"), 0.0, places=5)
+
+        # Geo descendant world position preserved.
+        geo_a_world_after = cmds.xform(geo_a, q=True, ws=True, t=True)
+        for before, after in zip(geo_a_world_before, geo_a_world_after):
+            self.assertAlmostEqual(before, after, places=4)
+
+        self.assertEqual(len(result), 2)
+
+        cmds.delete(root)
+
+    def test_unfreeze_to_parent_preserve_root_skips_direct_loc_child(self):
+        """preserve_root=True silently skips a locator that is a direct child of an input root."""
+        root = cmds.group(empty=True, name="rigD_ROOT")
+        loc = cmds.spaceLocator(name="rigD_LOC")[0]
+        cmds.parent(loc, root)
+        cmds.setAttr(f"{loc}.translate", 3.0, 0.0, 0.0)
+
+        result = XformUtils.unfreeze_to_parent(root, traverse=True)
+
+        # Root and locator are unchanged — nothing eligible to lift.
+        self.assertEqual(result, [])
+        self.assertAlmostEqual(cmds.getAttr(f"{root}.translateX"), 0.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{loc}.translateX"), 3.0, places=5)
+
+        cmds.delete(root)
+
+    def test_unfreeze_to_parent_traverse_preserve_root_false(self):
+        """preserve_root=False lets the input root receive a direct child's matrix."""
+        grp = cmds.group(empty=True, name="rigC_GRP")
+        loc = cmds.spaceLocator(name="rigC_LOC")[0]
+        cmds.parent(loc, grp)
+        cmds.setAttr(f"{loc}.translate", -4.0, 1.5, 2.0)
+
+        XformUtils.unfreeze_to_parent(grp, traverse=True, preserve_root=False)
+
+        self.assertAlmostEqual(cmds.getAttr(f"{loc}.translateX"), 0.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{grp}.translateX"), -4.0, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{grp}.translateY"), 1.5, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{grp}.translateZ"), 2.0, places=5)
+
+        cmds.delete(grp)
 
     # -------------------------------------------------------------------------
     # Pivot Operations Tests

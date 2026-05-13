@@ -44,13 +44,14 @@ class _FileRef:
     def load(self):
         cmds.file(loadReference=self._ref_node)
 
-    def importContents(self, removeNamespace: bool = False):
-        file_path = self.path
-        cmds.file(file_path, importReference=True)
-        if removeNamespace:
-            ns = self.namespace
-            if ns and cmds.namespace(exists=ns):
-                cmds.namespace(removeNamespace=ns, mergeNamespaceWithRoot=True)
+    def importContents(self, removeNamespace: bool = True):
+        # Capture namespace BEFORE import — the reference node is removed by
+        # importReference, so querying after returns nothing and the namespace
+        # strip would silently no-op, leaving every node prefixed.
+        ns = self.namespace
+        cmds.file(referenceNode=self._ref_node, importReference=True)
+        if removeNamespace and ns and cmds.namespace(exists=ns):
+            cmds.namespace(removeNamespace=ns, mergeNamespaceWithRoot=True)
 
 
 def _list_file_refs():
@@ -388,7 +389,7 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
                 raise
             return False
 
-    def import_references(self, namespaces=None, remove_namespace=False):
+    def import_references(self, namespaces=None, remove_namespace=True):
         """Import referenced objects into the scene."""
         all_references = self.current_references
 
@@ -575,7 +576,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         self._last_dir_valid = None
         self._updating_directory = False  # Flag to prevent cascading UI events
         self._editing_item = None  # Track which item is being edited
-        self.last_unlink_time = 0  # Track last unlink time to prevent double-firing
+        self._context_menu_row = None  # Row index captured at right-click for row-scoped context actions
         self._warned_scene_placeholder_typo = False
         self._workspace_history_max = (
             50  # Max entries in per-directory workspace memory
@@ -925,6 +926,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 self.ui.tbl000.setRowCount(0)
                 # Still update the working dir even if invalid for consistency
                 self.current_working_dir = new_dir
+                self._update_workspace_footer()
             else:
                 self.logger.debug(
                     "update_current_dir: No revalidation needed (directory unchanged and was already valid)"
@@ -975,7 +977,17 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         # Refresh file list
         self.refresh_file_list(invalidate=invalidate)
+        self._update_workspace_footer()
         return True
+
+    def _update_workspace_footer(self):
+        """Display the active workspace name in the footer."""
+        footer = getattr(self.ui, "footer", None)
+        if footer is None:
+            return
+        workspace = self.current_working_dir or ""
+        name = os.path.basename(workspace.rstrip("/\\"))
+        footer.setStatusText(f"Workspace: {name}" if name else "")
 
     def _update_workspace_combo(self, root_dir=None):
         """Repopulate the workspace combo box and select the best match.
@@ -1057,6 +1069,8 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
     def refresh_file_list(self, invalidate=False):
         """Refresh the file list for the table widget."""
+        # Row indices change on refresh — invalidate any captured context-menu row
+        self._context_menu_row = None
         # Use internal method for the table operations that need signal blocking
         self._refresh_file_list_internal(invalidate)
 
@@ -1569,7 +1583,6 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         self.import_references(namespaces=namespaces, remove_namespace=True)
         self.refresh_file_list()
-        self.last_unlink_time = time.time()
         self.logger.info(f"Unlinked {count} references.")
 
     @block_table_selection_method
@@ -1695,24 +1708,16 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.sb.message_box(f"Failed to save scene: {e}")
 
     def rename_scene(self):
-        """Rename the selected scene file."""
+        """Rename the scene file at the right-clicked row."""
         t = self.ui.tbl000
-        selected_items = t.selectedItems()
-
-        # Fallback to current item if nothing is selected (context menu case)
-        if not selected_items:
-            current_item = t.currentItem()
-            if current_item:
-                selected_items = [current_item]
-            else:
-                self.sb.message_box("No scene selected.")
-                return
-
-        # Assuming single selection for rename
-        item = selected_items[0]
-        if item.column() != 0:
-            # Find the item in column 0 for this row
-            item = t.item(item.row(), 0)
+        row = self._context_menu_row
+        if row is None or not (0 <= row < t.rowCount()):
+            self.sb.message_box("No scene selected.")
+            return
+        item = t.item(row, 0)
+        if item is None:
+            self.sb.message_box("No scene selected.")
+            return
 
         old_path = item.data(self.sb.QtCore.Qt.UserRole)
         if not old_path or not os.path.exists(old_path):
@@ -1794,27 +1799,18 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.sb.message_box(f"Rename failed: {e}")
 
     def delete_scene(self):
-        """Delete the selected scene file."""
+        """Delete the scene file at the right-clicked row."""
         t = self.ui.tbl000
-        selected_items = t.selectedItems()
-
-        # Fallback to current item if nothing is selected (context menu case)
-        if not selected_items:
-            current_item = t.currentItem()
-            if current_item:
-                selected_items = [current_item]
-            else:
-                self.sb.message_box("No scene selected.")
-                return
-
-        # Get all selected files
-        rows = set(item.row() for item in selected_items)
-        files_to_delete = []
-        for row in rows:
-            item = t.item(row, 0)
-            path = item.data(self.sb.QtCore.Qt.UserRole)
-            if path and os.path.exists(path):
-                files_to_delete.append(path)
+        row = self._context_menu_row
+        if row is None or not (0 <= row < t.rowCount()):
+            self.sb.message_box("No scene selected.")
+            return
+        item = t.item(row, 0)
+        if item is None:
+            self.sb.message_box("No scene selected.")
+            return
+        path = item.data(self.sb.QtCore.Qt.UserRole)
+        files_to_delete = [path] if path and os.path.exists(path) else []
 
         if not files_to_delete:
             return
@@ -1910,6 +1906,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         mgr.connect_cleanup(self.ui, owner=self)
 
         self._setup_footer_actions()
+        self.controller._update_workspace_footer()
 
         # Initialization complete
         self._initializing = False
@@ -2148,40 +2145,44 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             # Then connect other signals
             widget.itemSelectionChanged.connect(self.controller.handle_item_selection)
 
+            # Capture which row was right-clicked so row context-menu actions
+            # operate only on that row (independent of multi-selection).
+            widget.customContextMenuRequested.connect(self._capture_context_row)
+
             # Add context menu
             widget.menu.add(
                 "QPushButton",
                 setText="Open",
                 setObjectName="btn_open_scene",
-                setToolTip="Open the selected scene file",
+                setToolTip="Open this scene file.",
             )
 
             widget.menu.add(
                 "QPushButton",
                 setText="Rename",
                 setObjectName="btn_rename_scene",
-                setToolTip="Rename the selected scene file.",
+                setToolTip="Rename this scene file.",
             )
 
             widget.menu.add(
                 "QPushButton",
                 setText="Delete",
                 setObjectName="btn_delete_scene",
-                setToolTip="Delete the selected scene file.",
+                setToolTip="Delete this scene file.",
             )
 
             widget.menu.add(
                 "QPushButton",
                 setText="Reference / Unreference",
                 setObjectName="btn_toggle_reference",
-                setToolTip="Toggle reference state for the selected scene(s).",
+                setToolTip="Toggle reference state for this scene.",
             )
 
             widget.menu.add(
                 "QPushButton",
                 setText="Unlink and Import",
                 setObjectName="btn_unlink_import",
-                setToolTip="Unlink and import the selected reference(s).",
+                setToolTip="Unlink and import this reference into the scene.",
             )
 
             widget.menu.add(
@@ -2191,20 +2192,15 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 setToolTip="Open the containing folder in the file explorer.",
             )
 
-            # Connect context menu actions
-            widget.register_menu_action("btn_open_scene", self.btn_open_scene)
+            # Switchboard auto-wires `clicked` for any QPushButton whose
+            # objectName matches a Slots method, so only register handlers
+            # for items mapping to non-slot callables — registering both
+            # causes the handler to fire twice.
             widget.register_menu_action(
                 "btn_rename_scene", self.controller.rename_scene
             )
             widget.register_menu_action(
                 "btn_delete_scene", self.controller.delete_scene
-            )
-            widget.register_menu_action(
-                "btn_toggle_reference", self.btn_toggle_reference
-            )
-            widget.register_menu_action("btn_unlink_import", self.btn_unlink_import)
-            widget.register_menu_action(
-                "btn_open_file_location", self.btn_open_file_location
             )
 
             # Connect item delegate signals for rename functionality
@@ -2331,35 +2327,39 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             # Restore the display name (either original or newly edited)
             self.controller.restore_item_display(current_item)
 
-    def _get_selected_reference_namespaces(self):
-        """Get namespaces of selected items that are current references."""
-        t = self.ui.tbl000
-        selected_items = [
-            t.item(idx.row(), 0)
-            for idx in t.selectedIndexes()
-            if idx.column() == 0 and t.item(idx.row(), 0)
-        ]
+    def _capture_context_row(self, pos):
+        """Store which row was right-clicked so context-menu actions are scoped to it."""
+        idx = self.ui.tbl000.indexAt(pos)
+        row = idx.row() if idx.isValid() else -1
+        self.controller._context_menu_row = row if row >= 0 else None
 
-        # Map paths to namespaces for current references
-        path_to_namespaces = {}
+    def _context_row(self):
+        """Return the row that was right-clicked, validated against current row count, or None."""
+        row = self.controller._context_menu_row
+        if row is None:
+            return None
+        if 0 <= row < self.ui.tbl000.rowCount():
+            return row
+        return None
+
+    def _get_row_reference_namespaces(self, row):
+        """Return namespaces of the file at the given row, if it's a current reference."""
+        t = self.ui.tbl000
+        item = t.item(row, 0)
+        if item is None:
+            return []
+        file_path = item.data(self.sb.QtCore.Qt.UserRole)
+        if not file_path:
+            return []
+        norm_path = os.path.normcase(os.path.normpath(file_path))
+        namespaces = []
         for ref in self.controller.current_references:
             try:
-                path = os.path.normpath(ref.path)
-                if path not in path_to_namespaces:
-                    path_to_namespaces[path] = []
-                path_to_namespaces[path].append(ref.namespace)
+                if os.path.normcase(os.path.normpath(ref.path)) == norm_path:
+                    namespaces.append(ref.namespace)
             except Exception:
                 continue
-
-        selected_namespaces = []
-        for item in selected_items:
-            file_path = item.data(self.sb.QtCore.Qt.UserRole)
-            if file_path:
-                norm_path = os.path.normpath(file_path)
-                if norm_path in path_to_namespaces:
-                    selected_namespaces.extend(path_to_namespaces[norm_path])
-
-        return selected_namespaces
+        return namespaces
 
     def _toggle_reference_at_row(self, row, col):
         """Toggle reference state for the scene at the given row."""
@@ -2472,66 +2472,13 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         if file_path:
             self.controller.open_scene(file_path)
 
-    def btn_open_scene(self):
-        """Open the selected scene file."""
-        t = self.ui.tbl000
-
-        # Get currently selected rows
-        selected_rows = set(idx.row() for idx in t.selectedIndexes())
-
-        # If no rows are selected, try to get the current item (right-click context)
-        if not selected_rows:
-            current_item = t.currentItem()
-            if current_item:
-                selected_rows = {current_item.row()}
-                self.logger.debug(
-                    f"b008: Using current item at row {current_item.row()}"
-                )
-            else:
-                self.logger.debug("b008: No rows selected and no current item")
-                self.sb.message_box("No scene file selected.")
-                return
-
-        if len(selected_rows) > 1:
-            self.logger.debug(f"b008: Multiple rows selected ({len(selected_rows)})")
-            self.sb.message_box("Please select only one scene file to open.")
-            return
-
-        # Get the item from the selected row
-        row = list(selected_rows)[0]
-        item = t.item(row, 0)  # Get item from Files column
-
-        if not item:
-            self.logger.warning(f"b008: No item found at row {row}")
-            self.sb.message_box("Could not retrieve scene file information.")
-            return
-
-        # Get the file path from the item
-        file_path = item.data(self.sb.QtCore.Qt.UserRole)
-
-        if not file_path:
-            self.logger.warning(f"b008: No file path data for item {item.text()}")
-            self.sb.message_box("Scene file path not found.")
-            return
-
-        self.logger.debug(f"b008: Opening scene file: {file_path}")
-        self.controller.open_scene(file_path)
-
     def btn_open_file_location(self):
-        """Open the containing folder of the selected scene file in the file explorer."""
+        """Open the containing folder of the right-clicked scene file in the file explorer."""
         t = self.ui.tbl000
-
-        # Get currently selected rows or fall back to right-click context item
-        selected_rows = set(idx.row() for idx in t.selectedIndexes())
-        if not selected_rows:
-            current_item = t.currentItem()
-            if current_item:
-                selected_rows = {current_item.row()}
-            else:
-                self.sb.message_box("No scene file selected.")
-                return
-
-        row = next(iter(selected_rows))
+        row = self._context_row()
+        if row is None:
+            self.sb.message_box("No scene file selected.")
+            return
         item = t.item(row, 0)
         if not item:
             return
@@ -2847,55 +2794,35 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.ui.txt000.setText(self.controller.current_workspace)
 
     def btn_open_scene(self):
-        """Open the selected scene file."""
+        """Open the scene file at the right-clicked row."""
         t = self.ui.tbl000
-
-        # Get currently selected rows
-        selected_rows = set(idx.row() for idx in t.selectedIndexes())
-
-        # If no rows are selected, try to get the current item (right-click context)
-        if not selected_rows:
-            current_item = t.currentItem()
-            if current_item:
-                selected_rows.add(current_item.row())
-
-        if not selected_rows:
+        row = self._context_row()
+        if row is None:
             self.sb.message_box("No scene selected.")
             return
-
-        # Open each selected file
-        for row in selected_rows:
-            item = t.item(row, 0)
-            file_path = item.data(self.sb.QtCore.Qt.UserRole)
-            if file_path:
-                self.controller.open_scene(file_path)
+        item = t.item(row, 0)
+        if not item:
+            return
+        file_path = item.data(self.sb.QtCore.Qt.UserRole)
+        if file_path:
+            self.controller.open_scene(file_path)
 
     def btn_toggle_reference(self):
-        """Toggle reference state for the selected scene(s) via context menu."""
-        t = self.ui.tbl000
-        selected_rows = set(idx.row() for idx in t.selectedIndexes())
-
-        if not selected_rows:
-            current_item = t.currentItem()
-            if current_item:
-                selected_rows = {current_item.row()}
-
-        if not selected_rows:
+        """Toggle reference state for the right-clicked row."""
+        row = self._context_row()
+        if row is None:
             return
-
-        for row in selected_rows:
-            self._toggle_reference_at_row(row, 1)
+        self._toggle_reference_at_row(row, 1)
 
     def btn_unlink_import(self):
-        """Unlink and import the selected reference(s)."""
-        # Check if we just performed an unlink operation (within 1 second)
-        # This prevents double-firing events from showing confusing messages
-        if time.time() - getattr(self.controller, "last_unlink_time", 0) < 1.0:
+        """Unlink and import the reference at the right-clicked row."""
+        row = self._context_row()
+        if row is None:
+            self.sb.message_box("No active reference selected.")
             return
-
-        namespaces = self._get_selected_reference_namespaces()
+        namespaces = self._get_row_reference_namespaces(row)
         if not namespaces:
-            self.sb.message_box("No active references selected.")
+            self.sb.message_box("No active reference selected.")
             return
         self.controller.unlink_references(namespaces)
 
