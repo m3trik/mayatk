@@ -86,8 +86,8 @@ class RizomBridgeSlots:
             widget = self._make_widget_for(spec)
             widget.setParent(row)
             widget.setObjectName(f"param_{key.lower()}")
-            widget.setMinimumHeight(20)
-            widget.setMaximumHeight(20)
+            widget.setMinimumHeight(19)
+            widget.setMaximumHeight(19)
             if spec.tooltip:
                 widget.setToolTip(spec.tooltip)
 
@@ -193,8 +193,8 @@ class RizomBridgeSlots:
 
         combo = WidgetComboBox(self.ui.grp_process)
         combo.setObjectName("cmb_user_presets")
-        combo.setMinimumHeight(20)
-        combo.setMaximumHeight(20)
+        combo.setMinimumHeight(19)
+        combo.setMaximumHeight(19)
         combo.setToolTip(
             "Saved user presets for the active script.\n"
             "Open the side menu to Save / Rename / Delete the current values."
@@ -203,8 +203,8 @@ class RizomBridgeSlots:
         reset_btn = PushButton(self.ui.grp_process)
         reset_btn.setObjectName("btn_reset_defaults")
         reset_btn.setText("Reset to Defaults")
-        reset_btn.setMinimumHeight(20)
-        reset_btn.setMaximumHeight(20)
+        reset_btn.setMinimumHeight(19)
+        reset_btn.setMaximumHeight(19)
         reset_btn.setToolTip("Restore every parameter widget to its registry default.")
         reset_btn.clicked.connect(self._reset_to_defaults)
 
