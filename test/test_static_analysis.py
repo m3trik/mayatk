@@ -27,6 +27,13 @@ UNDEFINED_RE = re.compile(
     r"^(?P<path>.+?):(?P<line>\d+):(?P<col>\d+):\s+undefined name '(?P<name>[^']+)'"
 )
 
+# Source trees that are NOT meant to import-resolve standalone. Files here
+# contain ``__PLACEHOLDER__`` tokens substituted at generation time before
+# they're handed to a host interpreter (e.g., Marmoset Toolbag's ``mset``).
+EXCLUDED_DIRS = (
+    "mat_utils/marmoset_bridge/templates",
+)
+
 
 def _is_inside_string_literal(source_line: str, col: int) -> bool:
     """Return True if 1-based column ``col`` in ``source_line`` is inside a
@@ -86,6 +93,8 @@ class TestStaticAnalysis(unittest.TestCase):
             if not norm.startswith(root_norm):
                 continue
             rel = norm[len(root_norm):].lstrip("/")
+            if any(rel.startswith(d + "/") for d in EXCLUDED_DIRS):
+                continue
             yield (rel, int(m.group("line")), int(m.group("col")), m.group("name"))
 
     @staticmethod
