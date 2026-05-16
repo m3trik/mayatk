@@ -111,7 +111,7 @@ class BridgeSlots:
             ),
         )
 
-    def perform_operation(self, objects):
+    def perform_operation(self, objects, contract):
         kwargs = {
             "curveType": self.ui.cmb000.currentIndex(),
             "divisions": self.ui.s000.value(),

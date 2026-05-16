@@ -6,6 +6,7 @@ from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.core_utils.preview import Preview
+from mayatk.xform_utils.pivot_watcher import PivotWatcher
 
 
 class CutOnAxis:
@@ -64,6 +65,19 @@ class CutOnAxisSlots:
         self.sb.connect_multi(self.ui, "s000-1", "valueChanged", self.preview.refresh)
         self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
 
+        # Refresh preview when the viewport pivot changes (selection, tool,
+        # or manipulator drag release). Gated to active preview only; the
+        # watcher dedups by selection+context so the deferred
+        # SelectionChanged fired by cmds.select inside perform_operation
+        # does not re-enter.
+        self._pivot_watcher = PivotWatcher(
+            self.preview.refresh,
+            gate=lambda: self.preview.is_enabled,
+            owner=self,
+        )
+        self._pivot_watcher.start()
+        self._pivot_watcher.attach_widget(self.ui)
+
     def header_init(self, widget):
         """Configure header menu with tool instructions."""
         widget.menu.add("Separator", setTitle="About")
@@ -80,7 +94,7 @@ class CutOnAxisSlots:
             ),
         )
 
-    def perform_operation(self, objects):
+    def perform_operation(self, objects, contract):
         axis = self.sb.get_axis_from_checkboxes("chk001-4", self.ui)
         pivot_index = self.ui.cmb000.currentIndex()
         cuts = self.ui.s000.value()

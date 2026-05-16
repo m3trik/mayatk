@@ -50,24 +50,30 @@ class ImageToPlane(ptk.LoggingMixin):
         axis: Optional[List[float]] = None,
         group: bool = False,
         group_name: str = "imagePlanes_GRP",
+        stingray_opacity_mode: str = "transparent",
+        mask_threshold: float = 0.5,
     ) -> Dict[str, object]:
         """Create textured planes for one or more images.
 
         Parameters:
             image_paths: Absolute paths to image files.
-            mat_type: ``"stingray"`` for StingrayPBS or ``"standard"``
-                for the preferred standard shader (standardSurface/lambert).
-            suffix: Appended to the image stem for material naming
-                (e.g. ``"_MAT"`` → ``myImage_MAT``).
-            prefix: Prepended to the image stem for material naming
-                (e.g. ``"MAT_"`` → ``MAT_myImage``).
+            mat_type: ``"stingray"`` for StingrayPBS, ``"standard"``
+                for the preferred standard shader (standardSurface/lambert),
+                or an explicit Maya shader type (``"lambert"``, ``"blinn"``...).
+            suffix: Appended to the image stem for material naming.
+            prefix: Prepended to the image stem for material naming.
             plane_height: Height of each plane in scene units.  Width is
                 derived from the image aspect ratio.
             axis: Plane normal axis as ``[x, y, z]``.  Defaults to
                 ``[0, 0, 1]`` (facing camera in front view).
-            group: If *True*, parent all created planes under a
-                single group node.
+            group: If *True*, parent all created planes under a single group.
             group_name: Name of the group node when *group* is True.
+            stingray_opacity_mode: For ``mat_type="stingray"`` when the image
+                has alpha. ``"transparent"`` (default) uses ``Standard_Transparent.sfx``
+                — alpha blend, soft edges, faint VP2.0 preview tint over the quad.
+                ``"masked"`` uses ``Standard_Masked.sfx`` — alpha test, no preview
+                tint, hard edges at ``mask_threshold``.
+            mask_threshold: Alpha cutoff for ``stingray_opacity_mode="masked"``.
 
         Returns:
             dict: ``{image_stem: plane_transform, ...}``
@@ -89,6 +95,8 @@ class ImageToPlane(ptk.LoggingMixin):
                     prefix=prefix,
                     plane_height=plane_height,
                     axis=axis,
+                    stingray_opacity_mode=stingray_opacity_mode,
+                    mask_threshold=mask_threshold,
                 )
                 stem = os.path.splitext(os.path.basename(path))[0]
                 results[stem] = plane
@@ -172,7 +180,17 @@ class ImageToPlane(ptk.LoggingMixin):
     # ------------------------------------------------------------------
 
     @classmethod
-    def _create_single(cls, image_path, mat_type, suffix, plane_height, axis, prefix=""):
+    def _create_single(
+        cls,
+        image_path,
+        mat_type,
+        suffix,
+        plane_height,
+        axis,
+        prefix="",
+        stingray_opacity_mode="transparent",
+        mask_threshold=0.5,
+    ):
         """Create one plane + material from a single image path."""
         stem = os.path.splitext(os.path.basename(image_path))[0]
 
@@ -191,15 +209,23 @@ class ImageToPlane(ptk.LoggingMixin):
             axis=axis,
         )
 
-        # --- Material ---
-        mat_name = f"{prefix}{stem}{suffix}"
-        shader = cls._create_shader(mat_name, mat_type)
-
         # --- File node (shared helper) ---
+        mat_name = f"{prefix}{stem}{suffix}"
         file_node, _ = MatUtils.create_file_node(image_path, name=mat_name)
+        has_alpha = cls._file_has_alpha(file_node)
+
+        # --- Material (transparent variant if image has alpha) ---
+        shader = cls._create_shader(
+            mat_name, mat_type, opacity=has_alpha,
+            stingray_opacity_mode=stingray_opacity_mode,
+        )
 
         # --- Connect texture → shader ---
-        cls._connect_texture(shader, file_node, mat_type)
+        cls._connect_texture(
+            shader, file_node, mat_type, opacity=has_alpha,
+            stingray_opacity_mode=stingray_opacity_mode,
+            mask_threshold=mask_threshold,
+        )
 
         # --- Shading group + assign (shared helper) ---
         MatUtils.create_shading_group(shader, name=f"{mat_name}_SG", assign_to=plane)
@@ -207,40 +233,102 @@ class ImageToPlane(ptk.LoggingMixin):
         return plane
 
     @classmethod
-    def _create_shader(cls, name, mat_type):
-        """Create either a StingrayPBS or standard shader."""
+    def _create_shader(cls, name, mat_type, opacity=False, stingray_opacity_mode="transparent"):
+        """Create a shader of the requested type.
+
+        ``mat_type`` accepts ``"stingray"``, ``"standard"`` (auto-pick
+        standardSurface or lambert), or any explicit Maya shader node
+        type (``"lambert"``, ``"blinn"``, ``"phong"``, ``"standardSurface"``).
+        Explicit types are useful for FBX export pipelines (lambert is
+        the most universally translated).
+        """
         if mat_type == "stingray":
-            return MatUtils.create_stingray_shader(name, opacity=False)
-        else:
-            shader_name = MatUtils._create_standard_shader(
-                name=name,
-                return_type="shader",
-            )
-            return shader_name
+            sr_mode = stingray_opacity_mode if opacity else "none"
+            return MatUtils.create_stingray_shader(name, opacity_mode=sr_mode)
+        if mat_type == "standard":
+            return MatUtils._create_standard_shader(name=name, return_type="shader")
+        # Explicit node type (lambert / blinn / phong / standardSurface / ...)
+        return cmds.shadingNode(mat_type, asShader=True, name=name)
 
     @staticmethod
-    def _connect_texture(shader, file_node, mat_type):
-        """Wire the file node colour output to the correct shader input."""
+    def _connect_texture(
+        shader, file_node, mat_type, opacity=False,
+        stingray_opacity_mode="transparent", mask_threshold=0.5,
+    ):
+        """Wire the file node colour output (and alpha if requested) to the shader."""
         if mat_type == "stingray":
-            # StingrayPBS uses TEX_color_map and requires use_color_map=1
-            try:
-                cmds.connectAttr(
-                    f"{file_node}.outColor", f"{shader}.TEX_color_map", force=True
-                )
-                cmds.setAttr(f"{shader}.use_color_map", 1)
-            except Exception:
-                try:
+            # Colour: every Stingray preset exposes TEX_color_map + use_color_map.
+            cmds.connectAttr(
+                f"{file_node}.outColor", f"{shader}.TEX_color_map", force=True
+            )
+            cmds.setAttr(f"{shader}.use_color_map", 1)
+            if opacity:
+                cmds.setAttr(f"{shader}.use_opacity_map", 1)
+                if stingray_opacity_mode == "masked":
+                    # Standard_Masked.sfx exposes TEX_mask_map as a color3.
+                    # Scalar outAlpha → fan out to R/G/B (matches the
+                    # opacityR/G/B pattern used in game_shader.py).
+                    for ch in ("X", "Y", "Z"):
+                        cmds.connectAttr(
+                            f"{file_node}.outAlpha",
+                            f"{shader}.TEX_mask_map{ch}",
+                            force=True,
+                        )
+                    if cmds.attributeQuery("mask_threshold", node=shader, exists=True):
+                        cmds.setAttr(f"{shader}.mask_threshold", mask_threshold)
+                else:
+                    # Standard_Transparent.sfx exposes scalar `opacity`.
                     cmds.connectAttr(
-                        f"{file_node}.outColor", f"{shader}.color", force=True
+                        f"{file_node}.outAlpha", f"{shader}.opacity", force=True
                     )
-                except Exception:
-                    pass
         else:
-            # standardSurface / lambert
+            # standardSurface / lambert / blinn
             color_attr = "baseColor" if cmds.attributeQuery("baseColor", node=shader, exists=True) else "color"
             cmds.connectAttr(
                 f"{file_node}.outColor", f"{shader}.{color_attr}", force=True
             )
+            if opacity:
+                # standardSurface uses opacityR/G/B (float3); lambert/blinn use transparency
+                if cmds.attributeQuery("opacityR", node=shader, exists=True):
+                    for channel in ("opacityR", "opacityG", "opacityB"):
+                        try:
+                            cmds.connectAttr(
+                                f"{file_node}.outAlpha",
+                                f"{shader}.{channel}",
+                                force=True,
+                            )
+                        except Exception:
+                            pass
+                elif cmds.attributeQuery("transparency", node=shader, exists=True):
+                    try:
+                        cmds.connectAttr(
+                            f"{file_node}.outTransparency",
+                            f"{shader}.transparency",
+                            force=True,
+                        )
+                    except Exception:
+                        pass
+
+    @staticmethod
+    def _file_has_alpha(file_node):
+        """Return True if the loaded image has a usable alpha channel.
+
+        Stingray's transparency graph is heavy; only enable it when the file
+        actually carries alpha. ``fileHasAlpha`` is populated by Maya the
+        moment the texture name is set.
+        """
+        try:
+            if not cmds.getAttr(f"{file_node}.fileHasAlpha"):
+                return False
+        except Exception:
+            return False
+        # alphaIsLuminance off => outAlpha reflects the file's alpha channel,
+        # which is what we want for PNG/TGA cutouts.
+        try:
+            cmds.setAttr(f"{file_node}.alphaIsLuminance", 0)
+        except Exception:
+            pass
+        return True
 
     @staticmethod
     def _get_image_dimensions(image_path):

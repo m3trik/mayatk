@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.11.43"
+__version__ = "0.11.47"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -96,7 +96,7 @@ DEFAULT_INCLUDE = {
     "mat_utils.mat_manifest": "MatManifest",
     "mat_utils.mat_snapshot": "MatSnapshot",
     # Marmoset Bridge
-    "mat_utils.marmoset.bridge": "MarmosetBridge",
+    "mat_utils.marmoset_bridge._marmoset_bridge": "MarmosetBridge",
     # UI utils
     "ui_utils.channel_box": "ChannelBox",
     "ui_utils.hotkey_collisions": ["maya_collision_checker", "parse_qt_sequence"],
@@ -105,6 +105,7 @@ DEFAULT_INCLUDE = {
     "ui_utils.node_icons": "NodeIcons",
     # Transform utils
     "xform_utils.matrices": "Matrices",
+    "xform_utils.pivot_watcher": "PivotWatcher",
     # NURBS utils
     "nurbs_utils.image_tracer": "ImageTracer",
     # Rig utils

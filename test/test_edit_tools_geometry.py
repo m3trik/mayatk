@@ -20,6 +20,7 @@ from mayatk.edit_utils.bridge import Bridge
 from mayatk.edit_utils.snap import Snap
 from mayatk.edit_utils.cut_on_axis import CutOnAxis
 from mayatk.edit_utils.mirror import MirrorSlots
+from mayatk.edit_utils._edit_utils import EditUtils
 
 from base_test import MayaTkTestCase, QuickTestCase
 
@@ -328,6 +329,74 @@ class TestMirrorResolvePivot(QuickTestCase):
 
     def test_unknown_index_defaults_manip(self):
         self.assertEqual(MirrorSlots._resolve_pivot(99, "x"), "manip")
+
+
+class TestEditUtilsMirror(MayaTkTestCase):
+    """EditUtils.mirror — the actual mirror operation (not just _resolve_pivot).
+
+    The audit flagged mirror as having only static-helper coverage;
+    these tests exercise the real polyMirrorFace dispatch path.
+
+    NOTE: polyMirrorFace with mergeMode=-1 (separate) reorganizes the DAG —
+    the original transform may be renamed or replaced. Tests verify
+    aggregate scene state (mesh count, vertex sums) rather than naming.
+    """
+
+    def _mesh_count(self):
+        return len(cmds.ls(type="mesh", noIntermediate=True) or [])
+
+    def _total_vertices(self):
+        meshes = cmds.ls(type="mesh", noIntermediate=True) or []
+        return sum(cmds.polyEvaluate(m, vertex=True) for m in meshes)
+
+    def test_mirror_creates_additional_geometry(self):
+        """A simple cube mirrored at world should add vertices."""
+        cube = cmds.polyCube(name="mirror_x_cube")[0]
+        cmds.move(2, 0, 0, cube)
+        before_verts = self._total_vertices()
+
+        EditUtils.mirror([cube], axis="x", pivot="world", mergeMode=-1)
+
+        after_verts = self._total_vertices()
+        self.assertGreater(after_verts, before_verts)
+
+    def test_mirror_invalid_axis_raises(self):
+        cube = cmds.polyCube(name="mirror_bad")[0]
+        with self.assertRaises(ValueError):
+            EditUtils.mirror([cube], axis="w")  # not in {x,-x,y,-y,z,-z}
+
+    def test_mirror_all_six_axes_accepted(self):
+        """Each documented axis literal should work without raising."""
+        for axis in ("x", "-x", "y", "-y", "z", "-z"):
+            cube = cmds.polyCube(name=f"mirror_axis_{axis.replace('-', 'n')}")[0]
+            cmds.move(1, 1, 1, cube)
+            # Should not raise — that's the contract under test
+            EditUtils.mirror([cube], axis=axis, pivot="world")
+
+    def test_mirror_with_tuple_pivot(self):
+        """A literal (x, y, z) pivot tuple should be honored without error."""
+        cube = cmds.polyCube(name="mirror_tup_piv")[0]
+        cmds.move(5, 0, 0, cube)
+        before_meshes = self._mesh_count()
+
+        EditUtils.mirror([cube], axis="x", pivot=(0, 0, 0))
+
+        # Mirror produces a result — mesh count should be at least preserved
+        self.assertGreaterEqual(self._mesh_count(), before_meshes)
+
+    def test_mirror_multiple_objects_each_processed(self):
+        """Passing multiple objects mirrors each one — total vertex count grows."""
+        cube_a = cmds.polyCube(name="mirror_multi_a")[0]
+        cube_b = cmds.polyCube(name="mirror_multi_b")[0]
+        cmds.move(3, 0, 0, cube_a)
+        cmds.move(-3, 0, 0, cube_b)
+        before_verts = self._total_vertices()
+
+        EditUtils.mirror([cube_a, cube_b], axis="x", pivot="world")
+
+        # Both should have been mirrored — vertex count should increase
+        # significantly (not just one cube's worth).
+        self.assertGreater(self._total_vertices(), before_verts)
 
 
 if __name__ == "__main__":

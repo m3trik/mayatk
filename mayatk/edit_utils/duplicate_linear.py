@@ -127,6 +127,14 @@ class DuplicateLinear:
 
 
 class DuplicateLinearSlots:
+    # Defensive: duplicate_linear itself does not delete the original, but
+    # the captured selection can be invalidated between refreshes (e.g. the
+    # user invoked another tool that deleted it, or a sibling preview op
+    # mutated the scene). MUTATES_SELECTION=True makes Preview duplicate+
+    # hide the captured originals so rollback can restore them by UUID,
+    # turning a hard "No object matches name" crash into a no-op refresh.
+    MUTATES_SELECTION = True
+
     def __init__(self, switchboard):
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.duplicate_linear
@@ -249,7 +257,7 @@ class DuplicateLinearSlots:
         """Reset to Defaults: Resets all UI widgets to their default values."""
         self.ui.state.reset_all()
 
-    def perform_operation(self, objects):
+    def perform_operation(self, objects, contract):
         """Perform the linear duplication operation."""
         num_copies = self.ui.s009.value() - 1  # Include the orig object in the count
         translate = (

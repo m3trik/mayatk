@@ -64,7 +64,7 @@
           <bold>true</bold>
          </font>
         </property>
-        <property name="text" stdset="0">
+        <property name="text">
          <string>HIERARCHY MGR</string>
         </property>
        </widget>

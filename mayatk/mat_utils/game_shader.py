@@ -145,6 +145,8 @@ class GameShader(ptk.LoggingMixin):
             group_by_set=(not bool(name)),
             max_workers=4,
             progress_callback=factory_progress,
+            prefix=prefix,
+            suffix=suffix,
             **cfg,
         )
 
@@ -225,11 +227,14 @@ class GameShader(ptk.LoggingMixin):
         )
 
         if not name:
-            name = ptk.MapFactory.get_base_texture_name(textures[0])
-        if prefix:
-            name = f"{prefix}{name}"
-        if suffix:
-            name = f"{name}{suffix}"
+            name = ptk.MapFactory.get_base_texture_name(
+                textures[0], prefix=prefix, suffix=suffix
+            )
+        # Idempotent affix application: strips any pre-existing occurrence of the
+        # configured prefix/suffix from `name` before re-applying, so a filename
+        # like "Mat_brick_Albedo.png" with prefix="Mat_" yields "Mat_brick", not
+        # "Mat_Mat_brick". Also collapses dangling underscores on either end.
+        name = ptk.StrUtils.apply_affix(name, prefix=prefix, suffix=suffix)
 
         self.logger.info(f"Shader: {name}")
 

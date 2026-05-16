@@ -903,8 +903,8 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 f"update_current_dir: new_dir='{new_dir}', current='{self.current_working_dir}', is_valid={is_valid}, changed={changed}, recursive={self.recursive_search}"
             )
 
-            self.ui.txt000.setToolTip(new_dir if is_valid else "Invalid directory")
-            self.ui.txt000.set_action_color("reset" if is_valid else "invalid")
+            # Visual feedback (tooltip/action color) is owned by the
+            # widget's set_validator("dir") wiring in txt000_init.
 
             revalidate = is_valid and (changed or self._last_dir_valid is False)
             self._last_dir_valid = is_valid
@@ -2548,10 +2548,13 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 setChecked=True,
                 setToolTip="Skip workspaces that contain no scene files.",
             )
-            widget.textChanged.connect(
-                lambda text: self.sb.defer_with_timer(
-                    lambda: self.controller.update_current_dir(text), ms=500
-                )
+            widget.set_validator(
+                "dir",
+                debounce_ms=500,
+                invalid_tooltip="Invalid directory",
+            )
+            widget.validated.connect(
+                lambda _ok, text: self.controller.update_current_dir(text)
             )
             self.logger.debug(
                 "txt000 text input initialized with pin values for directory history."

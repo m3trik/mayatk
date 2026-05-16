@@ -67,7 +67,7 @@
           <bold>true</bold>
          </font>
         </property>
-        <property name="text" stdset="0">
+        <property name="text">
          <string>RIZOM BRIDGE</string>
         </property>
        </widget>

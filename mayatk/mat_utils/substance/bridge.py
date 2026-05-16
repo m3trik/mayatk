@@ -101,7 +101,7 @@ class SubstanceBridge(ptk.LoggingMixin):
             else:
                 output_name = "untitled"
 
-        base = StrUtils.cleanup_filename(output_name)
+        base = StrUtils.sanitize(output_name, preserve_case=True)
         fbx_path = os.path.join(output_dir, f"{base}.fbx")
 
         # -- Export FBX -----------------------------------------------------

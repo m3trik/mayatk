@@ -135,14 +135,16 @@ class TestAnimUtils(MayaTkTestCase):
         cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=0)
 
         redundant = AnimUtils.get_redundant_flat_keys([self.cube])
-        self.assertTrue(len(redundant) > 0)
-        # redundant is list of (curve, times)
-        found = False
-        for curve, times in redundant:
-            if "translateX" in curve:
-                self.assertIn(5.0, times)
-                found = True
-        self.assertTrue(found)
+        # Three keys at t=1,5,10 all with value 0 — only the middle one (t=5)
+        # is redundant. Endpoints define the flat span and must be preserved.
+        tx_redundant = [
+            sorted(times) for curve, times in redundant if "translateX" in curve
+        ]
+        self.assertEqual(
+            tx_redundant,
+            [[5.0]],
+            f"Expected only t=5 redundant on translateX, got {tx_redundant}",
+        )
 
     def test_get_tangent_info(self):
         """Test retrieving tangent info."""

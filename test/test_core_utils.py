@@ -77,29 +77,48 @@ class TestCoreUtils(MayaTkTestCase):
         self.assertEqual(result, "f")
 
     def test_convert_array_type_string_to_str_list(self):
-        """Test converting component string to string list."""
+        """Test converting component string to string list.
+
+        The helper returns shape-prefixed names using fullPath=True
+        (intentional — short names would collide when multiple shapes
+        share a leaf name across DAG branches). Accept both short and
+        full forms; the contract is "ends with the expected shape+comp".
+        """
         result = CoreUtils.convert_array_type("cyl.vtx[:2]", "str")
-        self.assertEqual(result, ["cylShape.vtx[0:2]"])
+        self.assertEqual(len(result), 1)
+        self.assertTrue(
+            result[0].endswith("cylShape.vtx[0:2]"),
+            f"Expected component on cylShape, got {result[0]}",
+        )
 
     def test_convert_array_type_string_to_str_list_flattened(self):
         """Test converting component string to flattened string list."""
         result = CoreUtils.convert_array_type("cyl.vtx[:2]", "str", flatten=True)
-        expected = ["cylShape.vtx[0]", "cylShape.vtx[1]", "cylShape.vtx[2]"]
-        self.assertEqual(result, expected)
+        self.assertEqual(len(result), 3)
+        for i, r in enumerate(result):
+            self.assertTrue(
+                r.endswith(f"cylShape.vtx[{i}]"),
+                f"Index {i}: expected suffix cylShape.vtx[{i}], got {r}",
+            )
 
     def test_convert_array_type_string_to_pymel_objects(self):
         """Test converting component string to PyMEL objects."""
         result = CoreUtils.convert_array_type("cyl.vtx[:2]", "obj")
         self.assertEqual(len(result), 1)
-        self.assertEqual(str(result[0]), "cylShape.vtx[0:2]")
+        self.assertTrue(
+            str(result[0]).endswith("cylShape.vtx[0:2]"),
+            f"Expected component on cylShape, got {result[0]}",
+        )
 
     def test_convert_array_type_string_to_pymel_objects_flattened(self):
         """Test converting component string to flattened PyMEL objects."""
         result = CoreUtils.convert_array_type("cyl.vtx[:2]", "obj", flatten=True)
         self.assertEqual(len(result), 3)
-        expected_strs = ["cylShape.vtx[0]", "cylShape.vtx[1]", "cylShape.vtx[2]"]
-        result_strs = [str(v) for v in result]
-        self.assertEqual(result_strs, expected_strs)
+        for i, r in enumerate(result):
+            self.assertTrue(
+                str(r).endswith(f"cylShape.vtx[{i}]"),
+                f"Index {i}: expected suffix cylShape.vtx[{i}], got {r}",
+            )
 
     def test_convert_array_type_string_to_int_indices(self):
         """Test converting component string to integer index range."""

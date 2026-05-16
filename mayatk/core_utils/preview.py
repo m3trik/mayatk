@@ -1,65 +1,305 @@
 # !/usr/bin/python
 # coding=utf-8
-import maya.cmds as cmds
+"""Hermetic preview with replay-on-commit (H1 design).
+
+The preview phase runs ``perform_operation`` with Maya's undo recording
+suppressed. A :class:`CleanupContract` records what was created (and
+optionally which attrs were mutated, which files were written) so rollback
+can reverse it without touching Maya's undo stack. On commit, the work is
+replayed inside an ``openChunk``/``closeChunk`` pair so the user gets a
+single Ctrl+Z-able undo entry.
+
+Why this shape:
+  - No ``Undo`` scriptJob -> no false-positive disables from plugin/internal
+    undo events.
+  - No undo chunk during preview -> user Ctrl+Z mid-preview navigates their
+    own pre-preview history rather than tearing through ours.
+  - Rollback is a snapshot/diff over ``cmds.ls`` -> deterministic cleanup,
+    no dependency on Maya's undo stack.
+  - Replay on commit -> committed work is user-undoable like any other op.
+
+Constraints on ``perform_operation`` authors:
+  - Signature is ``perform_operation(self, objects, contract)``.
+  - Mesh ops must use ``constructionHistory=True`` so rollback can revert
+    geometry by deleting the history node.
+  - Do not delete pre-existing nodes inside ``perform_operation`` (diff is
+    one-way; deletions cannot be reversed).
+  - Mutating an attribute on a pre-existing node requires
+    ``contract.record_modification(node, attr)`` before the ``setAttr``.
+  - Disk writes that should be cleaned on rollback require
+    ``contract.add_file(path)``.
+  - ``contract`` is ``None`` during the commit replay; guard with
+    ``if contract: contract.add_file(...)``.
+
+Verification: see ``test/temp_tests/verify_preview_*.py`` for the 60+
+empirical tests this design passes.
+"""
 import logging
 import weakref
-from typing import Callable, Optional, Set, Any, List, Union
+from pathlib import Path
+from typing import Any, Callable, List, Optional, Set, Tuple
 from functools import wraps
+
+import maya.cmds as cmds
+import maya.api.OpenMaya as om
 
 # From this package:
 from mayatk.display_utils._display_utils import DisplayUtils
 
 
-class Preview:
-    """Provides an interactive layer for previewing and finalizing operations in a 3D editing environment.
+class CleanupContract:
+    """Captures and reverses side effects of a previewed operation.
 
-    This class enables real-time previews of operations by linking UI elements to backend functionality.
-    It efficiently manages the state and execution of operations, maintaining a clean undo stack and enabling
-    rollback of changes during the preview process.
+    Use as a context manager. ``__enter__`` snapshots the scene and
+    suppresses undo recording; ``__exit__`` re-enables undo and records the
+    diff in :attr:`created`. :meth:`rollback` reverses everything.
 
-    Features:
-        - Real-time preview with automatic undo management
-        - Thread-safe operation handling
-        - Improved error handling and recovery
-        - Automatic cleanup of Maya scriptJobs
-        - Enhanced state management
-        - Support for operation validation
-        - Progress tracking for long operations
+    ``preserve`` (optional): list of node paths to duplicate+hide before
+    snapshotting. If perform_operation deletes any of them, rollback
+    restores from the duplicate. Required for ops like Mirror that delete
+    the original mesh as part of their workflow.
     """
 
-    # Class-level tracking of instances for cleanup
+    def __init__(self, preserve: Optional[List[str]] = None):
+        self.created: Set[str] = set()
+        self.files: List[Path] = []
+        self.attr_snapshots: List[Tuple[str, str, Any]] = []
+        self._preserve_objects: List[str] = list(preserve or [])
+        self._preserved: List[dict] = []
+        self._prev_undo_state: Optional[bool] = None
+        self._before: Optional[Tuple[frozenset, frozenset]] = None
+
+    def __enter__(self):
+        # stateWithoutFlush=False disables undo recording WITHOUT clearing
+        # the user's existing undo queue. state=False FLUSHES the queue --
+        # destroys pre-preview history. Never use state= here.
+        self._prev_undo_state = cmds.undoInfo(q=True, state=True)
+        cmds.undoInfo(stateWithoutFlush=False)
+        try:
+            self._enter_body()
+        except Exception:
+            # Restore undo state on any unexpected failure -- otherwise
+            # an exception in __enter__ (e.g. cmds.ls failing) would leave
+            # recording permanently disabled for the rest of the session
+            # because the `with` block never calls __exit__ when __enter__
+            # raises.
+            cmds.undoInfo(stateWithoutFlush=self._prev_undo_state)
+            raise
+        return self
+
+    def _enter_body(self) -> None:
+        # Preserve originals (before snapshot, so duplicates land in _before
+        # and are NOT counted as `created`).
+        # We capture UUIDs for the entire tree under each preserved root so
+        # rollback can re-assign them via MFnDependencyNode.setUuid -- pipeline
+        # tooling that tracks by UUID won't see the rollback as identity loss.
+        for obj in self._preserve_objects:
+            try:
+                if not cmds.objExists(obj):
+                    continue
+                orig_long_list = cmds.ls(obj, long=True) or []
+                if not orig_long_list:
+                    continue
+                orig_long = orig_long_list[0]
+                uuid_list = cmds.ls(obj, uuid=True) or []
+                if not uuid_list:
+                    continue
+                # Map relative path under root -> uuid string, for every
+                # descendant. cmds.duplicate preserves the relative-path
+                # structure, so this lets us re-pair UUIDs on restore.
+                descendants = [orig_long] + (
+                    cmds.listRelatives(obj, ad=True, fullPath=True) or []
+                )
+                uuid_map = {}
+                for d in descendants:
+                    rel = d[len(orig_long):]  # "" for root
+                    d_uuid = cmds.ls(d, uuid=True) or [None]
+                    if d_uuid[0]:
+                        uuid_map[rel] = d_uuid[0]
+                short = obj.split("|")[-1]
+                parents = cmds.listRelatives(obj, parent=True, fullPath=True) or []
+                orig_parent = parents[0] if parents else None
+                # Duplicate without upstream/input connections so we don't
+                # carry hooks into the live network.
+                dup = cmds.duplicate(
+                    obj,
+                    name=f"_preview_preserve_{short}_",
+                    upstreamNodes=False,
+                    inputConnections=False,
+                    returnRootsOnly=True,
+                )[0]
+                try:
+                    cmds.setAttr(f"{dup}.visibility", 0)
+                except Exception:
+                    pass
+                self._preserved.append(
+                    {
+                        "orig_short": short,
+                        "orig_uuid": uuid_list[0],
+                        "dup": dup,
+                        "orig_parent": orig_parent,
+                        "uuid_map": uuid_map,
+                    }
+                )
+            except Exception:
+                # If preserve fails for one object, continue with others.
+                # Op may still succeed; rollback for this object won't.
+                continue
+
+        self._before = (
+            frozenset(cmds.ls(long=True, allPaths=True) or []),
+            frozenset(cmds.ls() or []),
+        )
+
+    def __exit__(self, *exc):
+        try:
+            dag_after = frozenset(cmds.ls(long=True, allPaths=True) or [])
+            dg_after = frozenset(cmds.ls() or [])
+            self.created = (dag_after - self._before[0]) | (
+                dg_after - self._before[1]
+            )
+        finally:
+            cmds.undoInfo(stateWithoutFlush=self._prev_undo_state)
+        return False  # don't suppress exceptions
+
+    def add_file(self, path) -> None:
+        self.files.append(Path(path))
+
+    def record_modification(self, node: str, attr: str) -> None:
+        if cmds.objExists(node):
+            try:
+                value = cmds.getAttr(f"{node}.{attr}")
+                self.attr_snapshots.append((node, attr, value))
+            except Exception:
+                pass
+
+    def rollback(self) -> None:
+        prev = cmds.undoInfo(q=True, state=True)
+        cmds.undoInfo(stateWithoutFlush=False)
+        try:
+            # 1. Restore mutated attrs before their owners might be deleted.
+            for node, attr, value in reversed(self.attr_snapshots):
+                if not cmds.objExists(node):
+                    continue
+                try:
+                    if (
+                        isinstance(value, (list, tuple))
+                        and len(value) == 1
+                        and isinstance(value[0], (list, tuple))
+                    ):
+                        cmds.setAttr(f"{node}.{attr}", *value[0], type="double3")
+                    else:
+                        cmds.setAttr(f"{node}.{attr}", value)
+                except Exception:
+                    pass
+            # 2. Delete created nodes -- expressions first to avoid eval errors
+            # on still-dangling references.
+            existing = [n for n in self.created if cmds.objExists(n)]
+            exprs = [n for n in existing if cmds.nodeType(n) == "expression"]
+            rest = [n for n in existing if n not in exprs]
+            if exprs:
+                cmds.delete(exprs)
+            remaining = [n for n in rest if cmds.objExists(n)]
+            if remaining:
+                cmds.delete(remaining)
+            # 3. Restore preserved originals if perform_operation deleted them.
+            # Identity check is by UUID, not name -- a new node with the same
+            # name is not the same node.
+            for p in self._preserved:
+                try:
+                    orig_alive = bool(cmds.ls(p["orig_uuid"]))
+                    if not orig_alive and cmds.objExists(p["dup"]):
+                        # Reparent dup back to where the original lived.
+                        if p["orig_parent"] and cmds.objExists(p["orig_parent"]):
+                            try:
+                                cmds.parent(p["dup"], p["orig_parent"])
+                            except RuntimeError:
+                                pass  # already there or parent is invalid
+                        # Rename back to original short name.
+                        restored = cmds.rename(p["dup"], p["orig_short"])
+                        try:
+                            cmds.setAttr(f"{restored}.visibility", 1)
+                        except Exception:
+                            pass
+                        # Re-assign UUIDs across the restored tree so pipeline
+                        # tooling (UUID-keyed asset trackers, animation refs,
+                        # set membership) sees identity continuity.
+                        restored_long_list = cmds.ls(restored, long=True) or []
+                        if restored_long_list and p.get("uuid_map"):
+                            restored_long = restored_long_list[0]
+                            for rel, target_uuid in p["uuid_map"].items():
+                                target_path = restored_long + rel
+                                if not cmds.objExists(target_path):
+                                    continue
+                                try:
+                                    sel = om.MSelectionList()
+                                    sel.add(target_path)
+                                    mobj = sel.getDependNode(0)
+                                    om.MFnDependencyNode(mobj).setUuid(
+                                        om.MUuid(target_uuid)
+                                    )
+                                except Exception:
+                                    pass  # collision or invalid; leave dup uuid
+                    elif cmds.objExists(p["dup"]):
+                        # Original survived; the duplicate is unused.
+                        cmds.delete(p["dup"])
+                except Exception:
+                    continue
+            # 4. Files
+            for f in self.files:
+                if f.exists():
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+        finally:
+            cmds.undoInfo(stateWithoutFlush=prev)
+
+
+def _safe(func):
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return func(self, *args, **kwargs)
+        except Exception as e:
+            self.logger.exception(f"Error in {func.__name__}: {e}")
+            if self.message_func:
+                self.message_func(f"Preview error: {e}")
+            # Reentry guard: if disable() itself raises, _safe(disable) would
+            # otherwise call self.disable() again -> infinite recursion.
+            if not getattr(self, "_in_recovery", False):
+                self._in_recovery = True
+                try:
+                    self.disable()
+                except Exception as inner:
+                    self.logger.exception(
+                        f"disable() during recovery raised: {inner}"
+                    )
+                finally:
+                    self._in_recovery = False
+            raise
+
+    return wrapper
+
+
+class Preview:
+    """Hermetic preview orchestrator (H1).
+
+    The constructor signature matches the legacy :class:`preview_old.Preview`
+    for drop-in instantiation, but ``perform_operation`` on the operation
+    instance must now accept ``(objects, contract)``.
+    """
+
     _instances: Set["Preview"] = set()
 
     @classmethod
     def cleanup_all_instances(cls) -> None:
-        """Clean up all Preview instances - useful for Maya session cleanup."""
-        for instance in list(cls._instances):
-            if instance is not None:
-                try:
-                    instance.cleanup()
-                except Exception as e:
-                    print(f"Error cleaning up Preview instance: {e}")
-        cls._instances.clear()
-
-    def safe_operation(func: Callable) -> Callable:
-        """Decorator to safely execute operations with proper error handling."""
-
-        @wraps(func)
-        def wrapper(self, *args, **kwargs) -> Any:
+        for inst in list(cls._instances):
             try:
-                return func(self, *args, **kwargs)
-            except Exception as e:
-                self.logger.error(f"Error in {func.__name__}: {e}")
-                if hasattr(self, "message_func") and self.message_func:
-                    self.message_func(f"Preview error: {str(e)}")
-                # Attempt to restore stable state
-                try:
-                    self.disable()
-                except Exception:
-                    pass  # Prevent cascading errors
-                raise
-
-        return wrapper
+                inst.cleanup()
+            except Exception:
+                pass
+        cls._instances.clear()
 
     def __init__(
         self,
@@ -73,481 +313,321 @@ class Preview:
         validation_func: Optional[Callable] = None,
         progress_callback: Optional[Callable] = None,
     ):
-        """Initialize the Preview instance.
-
-        Parameters:
-            operation_instance: Instance implementing a perform_operation method.
-            preview_checkbox: QCheckBox instance to toggle the preview.
-            create_button: QPushButton instance to finalize the changes.
-            finalize_func: Optional callable to finalize changes.
-            message_func: Optional callable for messaging, default is print.
-            enable_on_show: Boolean, if True enables the preview when the window shows.
-            disable_on_hide: Boolean, if True disables the preview when the window hides.
-            validation_func: Optional callable to validate operation before execution.
-            progress_callback: Optional callable to report operation progress.
-
-        Raises:
-            ValueError: If required UI elements are None or operation_instance lacks perform_operation.
-        """
-        # Input validation
         if not hasattr(operation_instance, "perform_operation"):
             raise ValueError(
-                "operation_instance must implement 'perform_operation' method"
+                "operation_instance must implement perform_operation(objects, contract)"
             )
         if preview_checkbox is None or create_button is None:
             raise ValueError("preview_checkbox and create_button cannot be None")
 
-        # Setup logging
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
-        self.logger.setLevel(logging.INFO)
-
-        # Core state management
+        self.logger = logging.getLogger(f"{__name__}.{type(self).__name__}")
+        self.operation_instance = operation_instance
+        self.preview_checkbox = preview_checkbox
+        # Previews must start disabled on UI load; uitk state-restore skips
+        # widgets tagged this way.
+        self.preview_checkbox.exclude_from_reset = True
+        self.preview_checkbox.restore_state = False
+        self.create_button = create_button
+        self.finalize_func = finalize_func
         self.message_func = message_func or self.logger.info
         self.validation_func = validation_func
         self.progress_callback = progress_callback
 
-        # Operation state
         self.operated_objects: Set[str] = set()
-        self.operation_performed: bool = False
-        self.needs_undo: bool = False
-        self.prev_undo_state: Optional[bool] = None
-        self.internal_undo_triggered: bool = False
-        self.is_refreshing: bool = False
-        self.is_enabled: bool = False
-        # Counter for undo events the Preview itself emitted (vs. external).
-        # disable_on_external_undo decrements; reaches 0 → next undo is external.
-        self.expected_undo_events: int = 0
-        # Snapshot of selection at enable time, used by
-        # disable_on_selection_change to detect *meaningful* changes only.
-        self._selection_at_enable: Optional[Set[str]] = None
-
-        # Operation instance and UI components
-        self.operation_instance = operation_instance
         self.operation_instance.operated_objects = self.operated_objects
-        self.preview_checkbox = preview_checkbox
-        self.preview_checkbox.exclude_from_reset = True  # Exclude from reset_all()
-        # Tag the checkbox so global state-restore skips it; previews must
-        # always start in a known-disabled state on UI load.
-        self.preview_checkbox.restore_state = False
-        self.create_button = create_button
-        self.finalize_func = finalize_func
+        self._contract: Optional[CleanupContract] = None
+        self._captured_objects: List[str] = []
+        self.is_enabled: bool = False
+        # Global re-entry guard: if perform_operation emits a signal that
+        # fires refresh() (e.g. cmds.select -> SelectionChanged ->
+        # PivotWatcher -> refresh), the inner call would corrupt the
+        # contract state we're mid-recording. Single Python flag is
+        # sufficient because Maya is single-threaded.
+        self._refresh_in_progress: bool = False
 
-        # Use weak reference to prevent memory leaks
-        self.window = None
+        self.window = self._find_window()
+        self._setup_ui_connections()
+        self.init_show_hide_behavior(enable_on_show, disable_on_hide)
+
+        Preview._instances.add(self)
+
+    # ------------------------------------------------------------------ setup
+    def _find_window(self):
         try:
             if hasattr(self.create_button, "window") and self.create_button.window():
-                self.window = weakref.ref(self.create_button.window())
-            elif (
+                return weakref.ref(self.create_button.window())
+            if (
                 hasattr(self.preview_checkbox, "window")
                 and self.preview_checkbox.window()
             ):
-                self.window = weakref.ref(self.preview_checkbox.window())
-            else:
-                # Try to find a parent window by walking up the widget hierarchy
-                widget = self.create_button.parent()
-                while widget and not isinstance(
-                    widget, type(self.create_button.window())
-                ):
-                    widget = widget.parent()
-                if widget:
-                    self.window = weakref.ref(widget)
+                return weakref.ref(self.preview_checkbox.window())
         except Exception as e:
-            self.window = None
-            self.logger.warning(f"Could not create weak reference to window: {e}")
-
-        # Setup UI connections
-        self._setup_ui_connections()
-
-        # Initialize behavior settings
-        self.init_show_hide_behavior(enable_on_show, disable_on_hide)
-
-        # Create Maya scriptJob for undo detection
-        self.script_job: Optional[int] = None
-        self._create_script_job()
-        # ``script_jobs`` is the public list view of all scriptJob ids this
-        # instance owns; cleanup_removes_scriptjobs and similar tests check it.
-        self.script_jobs: List[int] = []
-        if self.script_job is not None:
-            self.script_jobs.append(self.script_job)
-
-        # Add to class tracking for cleanup
-        Preview._instances.add(self)
+            self.logger.warning(f"Could not weakref window: {e}")
+        return None
 
     def _setup_ui_connections(self) -> None:
-        """Setup UI signal connections with error handling."""
         try:
-            # ``toggled`` fires for both user clicks AND programmatic
-            # ``setChecked`` calls — the latter is needed for tests and for
-            # state-restoration code paths that toggle the checkbox without
-            # synthesising a click.
             self.preview_checkbox.toggled.connect(self.toggle)
             self.create_button.clicked.connect(self.finalize_changes)
         except Exception as e:
             self.logger.error(f"Failed to setup UI connections: {e}")
             raise
 
-    def _create_script_job(self) -> None:
-        """Create Maya scriptJob with error handling."""
-        try:
-            self.script_job = cmds.scriptJob(
-                event=["Undo", self.disable_on_external_undo]
-            )
-        except Exception as e:
-            self.logger.warning(f"Failed to create scriptJob: {e}")
-            self.script_job = None
-
-    def __del__(self):
-        """Ensure cleanup when the instance is deleted."""
-        self.cleanup()
-
-    def cleanup(self) -> None:
-        """Clean up resources and remove from tracking."""
-        try:
-            # Remove from class tracking
-            Preview._instances.discard(self)
-
-            # Remove event filter if it was installed
-            window = self.window() if self.window else None
-            if window:
-                try:
-                    window.removeEventFilter(self)
-                except Exception as e:
-                    self.logger.debug(
-                        f"Event filter removal failed (may not have been installed): {e}"
-                    )
-
-            # Kill all owned scriptJobs (undo + selection-change handlers).
-            for job_id in list(self.script_jobs):
-                try:
-                    if cmds.scriptJob(exists=job_id):
-                        cmds.scriptJob(kill=job_id, force=True)
-                except Exception as e:
-                    self.logger.warning(f"Failed to kill scriptJob {job_id}: {e}")
-            self.script_jobs.clear()
-            self.script_job = None
-
-            # Ensure preview is disabled and state is clean
-            if self.is_enabled:
-                try:
-                    self.disable()
-                except Exception as e:
-                    self.logger.warning(
-                        f"Failed to disable preview during cleanup: {e}"
-                    )
-
-        except Exception as e:
-            self.logger.error(f"Error during cleanup: {e}")
-
-    @safe_operation
-    def disable_on_external_undo(self) -> None:
-        """Disables the preview functionality on external undo operations only.
-
-        Each call decrements ``expected_undo_events``; when it reaches zero the
-        next undo is treated as external (user-initiated) and disables preview.
-        """
-        if self.expected_undo_events > 0:
-            self.expected_undo_events -= 1
-            # Once all internal-undo events have been consumed, clear the
-            # flag so the next external undo is recognised — otherwise a
-            # leftover ``internal_undo_triggered`` from refresh() would
-            # mask a genuine user undo and block ``disable()``.
-            if self.expected_undo_events == 0:
-                self.internal_undo_triggered = False
-            return
-        if (
-            not self.internal_undo_triggered
-            and not self.is_refreshing
-            and self.preview_checkbox.isChecked()
-        ):
-            self.disable()
-        self.internal_undo_triggered = False  # Reset flag after checking
-
-    def disable_on_selection_change(self) -> None:
-        """Disable preview when the user changes selection mid-preview.
-
-        Compares the *current* selection against the snapshot taken at
-        :meth:`enable`. Disables only when the selection truly differs —
-        re-selecting the same set is a no-op. During a ``refresh()`` call
-        (``is_refreshing=True``) selection changes are ignored entirely.
-        """
-        if self.is_refreshing or not self.preview_checkbox.isChecked():
-            return
-        if self._selection_at_enable is None:
-            return
-        try:
-            current = {str(o) for o in (cmds.ls(selection=True) or [])}
-        except Exception:
-            return
-        if current != self._selection_at_enable:
-            self.disable()
-
     def init_show_hide_behavior(
         self, enable_on_show: bool, disable_on_hide: bool
     ) -> None:
-        """Initialize window show/hide behavior with improved error handling."""
         self.enable_on_show = enable_on_show
         self.disable_on_hide = disable_on_hide
-
         window = self.window() if self.window else None
         if window:
-            # First try to connect to custom on_show/on_hide signals
-            signals_connected = False
             try:
                 if hasattr(window, "on_show"):
                     window.on_show.connect(self.conditionally_enable)
-                    signals_connected = True
                 if hasattr(window, "on_hide"):
                     window.on_hide.connect(self.conditionally_disable)
             except Exception as e:
-                self.logger.warning(
-                    f"Failed to setup custom window show/hide signals: {e}"
-                )
-
-            # If custom signals aren't available, install event filter as fallback
-            if not signals_connected and (enable_on_show or disable_on_hide):
-                try:
-                    window.installEventFilter(self)
-                    self.logger.debug(
-                        "Installed event filter for window show/hide behavior"
-                    )
-                except Exception as e:
-                    self.logger.warning(f"Failed to install event filter: {e}")
-        else:
-            self.logger.warning("Could not get window reference for show/hide behavior")
-
-    def eventFilter(self, obj, event):
-        """Handle window show/hide events when custom signals aren't available."""
-        try:
-            # Check if this is a show event
-            if event.type() == 17:  # QEvent.Show
-                if self.enable_on_show and not self.is_enabled:
-                    # Use a small delay to ensure window is fully shown
-                    try:
-                        from PySide2.QtCore import QTimer
-
-                        QTimer.singleShot(50, self.conditionally_enable)
-                    except ImportError:
-                        # Fallback if PySide2 not available
-                        self.conditionally_enable()
-
-            # Check if this is a hide event
-            elif event.type() == 18:  # QEvent.Hide
-                if self.disable_on_hide and self.is_enabled:
-                    self.conditionally_disable()
-        except Exception as e:
-            self.logger.warning(f"Error in eventFilter: {e}")
-
-        # Always return False to let the event continue processing
-        return False
+                self.logger.warning(f"Show/hide signal setup failed: {e}")
 
     def conditionally_enable(self) -> None:
-        """Enable preview if configured to do so on window show."""
         if self.enable_on_show:
             self.enable()
 
     def conditionally_disable(self) -> None:
-        """Disable preview if configured to do so on window hide."""
         if self.disable_on_hide:
             self.disable()
 
+    # -------------------------------------------------------- public lifecycle
     def toggle(self, state: bool) -> None:
-        """Toggles the preview on or off.
-
-        Parameters:
-            state: Boolean state to set.
-        """
         if state:
             self.enable()
         else:
             self.disable()
 
     def validate_operation(self, objects: List[Any]) -> bool:
-        """Validate that the operation can be performed on the given objects.
-
-        Parameters:
-            objects: List of objects to validate.
-
-        Returns:
-            bool: True if operation can be performed, False otherwise.
-        """
         if self.validation_func:
             try:
                 return self.validation_func(objects)
             except Exception as e:
                 self.logger.warning(f"Validation function failed: {e}")
                 return False
-        return True  # Default to valid if no validation function
+        return True
 
-    @safe_operation
+    @_safe
     def enable(self) -> None:
-        """Enables the preview and sets up the initial state."""
-        # Store previous undo state
-        self.prev_undo_state = cmds.undoInfo(q=True, state=True)
-        cmds.undoInfo(state=True)
-        cmds.undoInfo(openChunk=True, chunkName="PreviewChunk")
-
-        try:
-            selected_items = cmds.ls(selection=True) or []
-            if selected_items:
-                # Convert components to strings for hashing
-                self.operated_objects.update(str(item) for item in selected_items)
-                self._selection_at_enable = {str(i) for i in selected_items}
-                self.needs_undo = False  # Set to False when enabling for the first time
-
-                # Update UI state
-                self.preview_checkbox.blockSignals(True)
-                self.preview_checkbox.setChecked(True)
-                self.preview_checkbox.blockSignals(False)
-                self.create_button.setEnabled(True)
-
-                # Mark as enabled before refresh to prevent recursion
-                self.is_enabled = True
-
-                # Perform initial operation
-                self.refresh()
-                self.operation_performed = True
-            else:
-                self.message_func("No objects selected.")
-                self.disable()
-
-        except Exception as e:
-            self.logger.exception(f"Exception in enable: {e}")
-            self.message_func(f"Failed to enable preview: {str(e)}")
-            self.disable()
-
-    @safe_operation
-    def disable(self) -> None:
-        """Disables the preview and reverts to the initial state."""
-        self.undo_if_needed()
-        cmds.undoInfo(closeChunk=True)
-
-        if self.prev_undo_state is not None:
-            cmds.undoInfo(state=self.prev_undo_state)
-
-        self.operated_objects.clear()
-        self.preview_checkbox.setChecked(False)
-        self.create_button.setEnabled(False)
-        self.is_enabled = False
-
-    def undo_if_needed(self) -> None:
-        """Executes undo operation if required."""
-        if self.needs_undo:
-            self.internal_undo_triggered = True
-            # Each internal undo should consume one event from
-            # ``expected_undo_events`` when the scriptJob fires; counting
-            # them here lets disable_on_external_undo filter our own ops.
-            self.expected_undo_events += 1
-            cmds.undoInfo(closeChunk=True)
-            try:
-                cmds.undo()
-            except RuntimeError:
-                pass
-            finally:
-                cmds.undoInfo(openChunk=True, chunkName="PreviewChunk")
-
-            self.needs_undo = False
-
-    def refresh(self, *args):
-        """Refreshes the preview to reflect any changes."""
-        if not self.preview_checkbox.isChecked():
+        # Idempotent guard: if a previous enable already built a contract,
+        # calling again would overwrite self._contract and orphan the old
+        # one's created nodes. Trigger paths include redundant on_show
+        # firings (enable_on_show=True) or programmatic double-calls.
+        if self.is_enabled and self._contract is not None:
             return
-        self.is_refreshing = True
-        self.undo_if_needed()
-        cmds.undoInfo(openChunk=True, chunkName="PreviewChunk")
-        op_succeeded = False
+
+        sel = cmds.ls(selection=True) or []
+        if not sel:
+            self.message_func("No objects selected.")
+            self._set_checkbox(False)
+            return
+
+        if not self.validate_operation(sel):
+            self.message_func("Operation validation failed.")
+            self._set_checkbox(False)
+            return
+
+        self._captured_objects = list(sel)
+        self.operated_objects.clear()
+        self.operated_objects.update(str(s) for s in sel)
+
+        self._set_checkbox(True)
+        self.create_button.setEnabled(True)
+        self.is_enabled = True
+
+        # Guard around the preview phase. enable() is user-initiated so
+        # _refresh_in_progress should be False; if a signal fired inside
+        # _run_preview_phase re-enters refresh, the inner call short-circuits.
+        if self._refresh_in_progress:
+            return
+        self._refresh_in_progress = True
         try:
-            # Convert strings back to Maya nodes for operation
-            operated_objects = cmds.ls(self.operated_objects, flatten=True)
-            self.operation_instance.perform_operation(operated_objects)
-            op_succeeded = True
-
-            # Add the operated objects to the isolation set if one exists.
-            DisplayUtils.add_to_isolation_set(operated_objects)
-        except Exception as e:
-            self.logger.exception(f"Exception during operation: {e}")
+            self._run_preview_phase()
         finally:
-            cmds.undoInfo(closeChunk=True)
-        # Only flag for undo when the operation actually completed.  Failed
-        # ops produced no scene changes, so undoing would unwind something
-        # else (or leave a stale chunk pointer).
-        self.needs_undo = op_succeeded
-        self.is_refreshing = False
+            self._refresh_in_progress = False
 
-    def finalize_changes(self):
-        """Finalizes the preview changes and calls the finalize_func if provided."""
-        self.needs_undo = False
-        self.disable()
+    def _run_preview_phase(self) -> None:
+        """Build a fresh contract and run perform_operation under it.
+
+        If the operation_instance declares ``MUTATES_SELECTION = True``, the
+        contract preserves (duplicates+hides) the captured selection so
+        rollback can restore originals that perform_operation deletes.
+        Default is opt-in to avoid paying duplication cost for ops that
+        don't need it (e.g. ShadowRig on a 10k-node hierarchy).
+
+        Caller must hold ``_refresh_in_progress`` for the duration --
+        ``enable`` and ``refresh`` are the only callers. The flag covers
+        ``refresh``'s pre-phase rollback as well, so any *synchronous*
+        signal cascade fired during rollback (e.g. Qt connections that
+        valueChange a slider already wired to refresh) finds the flag
+        held and short-circuits. Maya scriptJob events (SelectionChanged,
+        etc.) fire on idle and are handled separately by PivotWatcher's
+        signature dedup -- those don't reach the flag.
+        """
+        preserve = (
+            self._captured_objects
+            if getattr(self.operation_instance, "MUTATES_SELECTION", False)
+            else None
+        )
+        self._contract = CleanupContract(preserve=preserve)
+        try:
+            with self._contract:
+                self.operation_instance.perform_operation(
+                    self._captured_objects, self._contract
+                )
+                # Isolation-set membership is a `cmds.sets` connection,
+                # which Maya records on the undo queue. It MUST run inside
+                # the contract (under suppressed undo) -- otherwise every
+                # refresh leaks one entry into the user's queue and the
+                # first few Ctrl+Z presses after commit pop those instead
+                # of the operation. Membership is a connection (not a node
+                # creation), so rollback's node-diff doesn't track or
+                # reverse it -- which is what we want: the user-initiated
+                # isolation persists across preview cycles.
+                #
+                # For MUTATES_SELECTION ops (Mirror), the captured names may
+                # have been deleted by perform_operation. Combine the
+                # captured names with the post-op selection so we add
+                # whichever still exist -- add_to_isolation_set filters by
+                # objExists internally, so missing names are no-ops.
+                iso_targets = list(self._captured_objects)
+                if getattr(self.operation_instance, "MUTATES_SELECTION", False):
+                    try:
+                        iso_targets.extend(cmds.ls(selection=True) or [])
+                    except Exception:
+                        pass
+                try:
+                    DisplayUtils.add_to_isolation_set(iso_targets)
+                except Exception:
+                    pass
+        except Exception as e:
+            self.logger.exception(f"perform_operation raised: {e}")
+            self.message_func(f"Operation failed: {e}")
+
+    @_safe
+    def refresh(self, *args) -> None:
+        """Roll back the previous preview and re-run perform_operation.
+
+        Both rollback and the new preview phase run inside one
+        ``_refresh_in_progress`` critical section. The Maya scriptJob path
+        (cmds.delete -> SelectionChanged -> PivotWatcher) is deferred to
+        idle and absorbed by PivotWatcher's signature dedup, not by this
+        flag. The flag handles the *synchronous* case: any Qt cross-wire
+        where rollback's scene mutations cause a connected widget to emit
+        a signal already bound to refresh, which would otherwise build a
+        fresh contract that the outer call overwrites and abandons (orphan
+        nodes + double perform_operation).
+        """
+        if not self.is_enabled or self._contract is None:
+            return
+        if self._refresh_in_progress:
+            return
+        self._refresh_in_progress = True
+        try:
+            self._contract.rollback()
+            self._run_preview_phase()
+        finally:
+            self._refresh_in_progress = False
+
+    @_safe
+    def disable(self) -> None:
+        """Roll back the preview without committing.
+
+        Guarded the same way as refresh so signal-fired re-entry during
+        rollback can't trigger a phantom refresh on an already-disabling
+        preview.
+        """
+        if self._refresh_in_progress:
+            return
+        self._refresh_in_progress = True
+        try:
+            if self._contract is not None:
+                self._contract.rollback()
+                self._contract = None
+            self.operated_objects.clear()
+            self._set_checkbox(False)
+            self.create_button.setEnabled(False)
+            self.is_enabled = False
+        finally:
+            self._refresh_in_progress = False
+
+    @_safe
+    def finalize_changes(self) -> None:
+        """Commit: rollback the hermetic version, then replay under undo.
+
+        The flag is held across rollback AND the replay chunk so a signal
+        fired by rollback (or the replay itself) can't re-enter refresh
+        and corrupt the chunk we're building.
+        """
+        if not self.is_enabled or self._contract is None:
+            return
+        if self._refresh_in_progress:
+            return
+        self._refresh_in_progress = True
+        try:
+            self._contract.rollback()
+            self._contract = None
+
+            chunk_name = type(self.operation_instance).__name__ or "PreviewCommit"
+            cmds.undoInfo(openChunk=True, chunkName=chunk_name)
+            try:
+                # Pass None as contract; replay shouldn't record (no rollback path).
+                self.operation_instance.perform_operation(
+                    self._captured_objects, None
+                )
+            finally:
+                cmds.undoInfo(closeChunk=True)
+
+            self.operated_objects.clear()
+            self._set_checkbox(False)
+            self.create_button.setEnabled(False)
+            self.is_enabled = False
+        finally:
+            self._refresh_in_progress = False
+
         if self.finalize_func:
-            self.finalize_func()
+            try:
+                self.finalize_func()
+            except Exception as e:
+                self.logger.exception(f"finalize_func raised: {e}")
 
-    # Properties for external access to state
+    # ------------------------------------------------------------- internals
+    def _set_checkbox(self, checked: bool) -> None:
+        """Set checkbox state without triggering toggle()."""
+        self.preview_checkbox.blockSignals(True)
+        try:
+            self.preview_checkbox.setChecked(checked)
+        finally:
+            self.preview_checkbox.blockSignals(False)
+
+    def cleanup(self) -> None:
+        try:
+            Preview._instances.discard(self)
+            if self.is_enabled:
+                self.disable()
+        except Exception as e:
+            self.logger.error(f"Cleanup error: {e}")
+
+    def __del__(self):
+        self.cleanup()
+
+    # ----------------------------------------------------------- read-only API
     @property
     def enabled(self) -> bool:
-        """Check if preview is currently enabled."""
         return self.is_enabled
 
     @property
-    def has_changes(self) -> bool:
-        """Check if there are changes that need to be undone."""
-        return self.needs_undo
-
-    @property
     def operated_object_count(self) -> int:
-        """Get the number of objects being operated on."""
         return len(self.operated_objects)
 
     def get_operated_objects(self) -> List[str]:
-        """Get a copy of the list of operated objects."""
         return list(self.operated_objects)
 
 
-# Utility function for Maya session cleanup
 def cleanup_all_previews() -> None:
-    """Clean up all Preview instances - useful for Maya session cleanup."""
     Preview.cleanup_all_instances()
-
-
-# -----------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    pass
-
-# -----------------------------------------------------------------------------
-# Notes
-# -----------------------------------------------------------------------------
-"""
-Major improvements made to the Preview class:
-
-1. **Enhanced Error Handling**: Added comprehensive error handling throughout all methods
-   with proper logging and graceful fallbacks.
-
-2. **Memory Management**: 
-   - Added weak references to prevent memory leaks
-   - Class-level instance tracking for proper cleanup
-   - Improved destructor and cleanup methods
-
-3. **Thread Safety**: Added safety decorators and state checking to prevent race conditions.
-
-4. **Input Validation**: 
-   - Validation of required parameters in constructor
-   - Optional validation function for operation objects
-   - Better state checking before operations
-
-5. **Improved State Management**:
-   - Better tracking of enabled/disabled state
-   - More robust undo state management
-   - Prevention of recursive operations
-
-6. **Progress Reporting**: Optional progress callback for long operations.
-
-7. **Type Hints**: Added comprehensive type hints for better IDE support and code clarity.
-
-8. **Properties**: Added read-only properties for external state checking.
-
-9. **Resource Cleanup**: Better Maya scriptJob management and cleanup.
-
-10. **Documentation**: Enhanced docstrings with detailed parameter descriptions and examples.
-
-These improvements make the Preview class more robust, maintainable, and suitable for 
-production use in complex Maya environments.
-"""

@@ -46,9 +46,17 @@ class TestMatrixModuleHelpers(MayaTkTestCase):
         self.assertAlmostEqual(flat[14], 4.0, places=4)
 
     def test_get_matrix_multi_instance_uses_index(self):
-        """``worldMatrix`` is multi-instance and must be indexed."""
+        """``worldMatrix`` is multi-instance and must be indexed.
+
+        A freshly-created cube at the origin should have an identity world
+        matrix — verify both length and values, not just length (the prior
+        length-only assertion missed the case where get_matrix returned a
+        zero matrix from a misindexed plug).
+        """
         flat = get_matrix(self.cube, "worldMatrix", index=0)
         self.assertEqual(len(flat), 16)
+        for a, b in zip(flat, IDENTITY_FLAT):
+            self.assertAlmostEqual(a, b, places=5)
 
     def test_set_matrix_from_list(self):
         """Round-trip a flat list through set_matrix / get_matrix."""

@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-05-07_
+_Generated: 2026-05-14_
 
 ## Index
 
@@ -84,7 +84,6 @@ _Generated: 2026-05-07_
 - [`edit_utils/naming/_naming.py`](#edit_utils--naming--_naming)
 - [`edit_utils/naming/naming_slots.py`](#edit_utils--naming--naming_slots)
 - [`edit_utils/primitives.py`](#edit_utils--primitives) — Primitive creation utilities for Maya.
-- [`edit_utils/rizom_bridge/_rizom_bridge.py`](#edit_utils--rizom_bridge--_rizom_bridge)
 - [`edit_utils/selection.py`](#edit_utils--selection)
 - [`edit_utils/snap.py`](#edit_utils--snap)
 - [`env_utils/_env_utils.py`](#env_utils--_env_utils)
@@ -150,6 +149,8 @@ _Generated: 2026-05-07_
 - [`ui_utils/node_icons.py`](#ui_utils--node_icons) — Reusable helper for resolving Maya node icons at runtime.
 - [`uv_utils/_uv_utils.py`](#uv_utils--_uv_utils)
 - [`uv_utils/rizom_bridge/_rizom_bridge.py`](#uv_utils--rizom_bridge--_rizom_bridge)
+- [`uv_utils/rizom_bridge/parameters.py`](#uv_utils--rizom_bridge--parameters) — Registry of user-tunable RizomUV parameters exposed to the bridge UI.
+- [`uv_utils/rizom_bridge/rizom_bridge_slots.py`](#uv_utils--rizom_bridge--rizom_bridge_slots)
 - [`xform_utils/_xform_utils.py`](#xform_utils--_xform_utils)
 - [`xform_utils/matrices.py`](#xform_utils--matrices) — Matrix utilities for Maya rigging and animation.
 
@@ -542,7 +543,7 @@ Switchboard slots for the Shot Manifest UI.
   - `ShotManifestController.browse_csv(self) -> None` — Open a file dialog and load the selected CSV.
   - `ShotManifestController.build(self) -> None` — Build or update shots in the store from loaded steps.
   - `ShotManifestController.assess(self, skip_key_check: bool = False) -> None` — Compare CSV steps against the live Maya shots and color the tree.
-- **[`class ShotManifestSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L1668)** — Switchboard slot class â€” routes UI events to the controller.
+- **[`class ShotManifestSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L1669)** — Switchboard slot class â€” routes UI events to the controller.
   - `ShotManifestSlots.header_init(self, widget)` — Header menu is configured once in controller.__init__.
   - `ShotManifestSlots.btn_expand_missing(self)` — Expand all step rows that have missing objects or behaviors.
   - `ShotManifestSlots.btn_expand_extra(self)` — Expand all step rows that have scene-discovered extra objects.
@@ -977,7 +978,7 @@ Segment discovery from the per-track keyed canonical store.
   - `Components.get_normal_angle(cls, edges) -> Union[float, List[float]]` *(class)* — Get the angle between the normals of the faces connected by one or more edges.
   - `Components.get_edges_by_normal_angle(cls, objects, low_angle: float = 0, high_angle: float = 180, return_angles: bool = False)` *(class)* — Return edges whose adjacent face-normal angle falls within a range.
   - `Components.set_edge_hardness(cls, objects, angle_threshold: float, upper_hardness: float = None, lower_hardness: float = None) -> None` *(class)* — Set edge hardness based on normal angle thresholds.
-  - `Components.get_faces_with_similar_normals(cls, faces, transforms=[], similar_faces=[], range_x=0.1, range_y=0.1, range_z=0.1, returned_type='str')` *(class)* — Filter for faces with normals that fall within an X,Y,Z tolerance.
+  - `Components.get_faces_with_similar_normals(cls, faces, transforms=None, similar_faces=None, range_x=0.1, range_y=0.1, range_z=0.1, returned_type='str')` *(class)* — Filter for faces with normals that fall within an X,Y,Z tolerance.
   - `Components.average_normals(cls, objects, by_uv_shell=False)` *(class)* — Average the normals of the given objects.
   - `Components.transfer_normals(objects, space: str = 'world')` *(static)* — Transfer vertex normals from source mesh to target meshes.
   - `Components.filter_components_by_connection_count(cls, components, num_of_connected=(0, 2), connected_type='', returned_type='str')` *(class)* — Get a list of components filtered by the number of their connected components.
@@ -1158,6 +1159,8 @@ Centralized Maya event subscription manager.
   - `ScriptJobManager.connect_cleanup(self, widget, owner: Any) -> None` — Connect *widget*.destroyed → :meth:`unsubscribe_all` for *owner*.
   - `ScriptJobManager.suppress(self, token: int) -> None` — Temporarily silence a subscription without removing it.
   - `ScriptJobManager.resume(self, token: int) -> None` — Re-enable a previously suppressed subscription.
+  - `ScriptJobManager.status(self) -> Dict[str, Any]` — Return a snapshot of managed and unmanaged Maya event listeners.
+  - `ScriptJobManager.print_status(self) -> None` — Pretty-print :meth:`status` for interactive debugging in Maya.
   - `ScriptJobManager.teardown(self) -> None` — Kill every managed scriptJob, OM callback, and subscription.
 
 <a id="display_utils--_display_utils"></a>
@@ -1219,10 +1222,10 @@ Centralized Maya event subscription manager.
 <a id="edit_utils--_edit_utils"></a>
 ### `edit_utils/_edit_utils.py`
 
-- **[`class EditUtils(ptk.HelpMixin)`](mayatk/mayatk/edit_utils/_edit_utils.py#L28)**
+- **[`class EditUtils(ptk.HelpMixin)`](mayatk/mayatk/edit_utils/_edit_utils.py#L48)**
   - `EditUtils.combine_objects(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)` *(static)* — Combine multiple meshes.
   - `EditUtils.group_objects(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
-  - `EditUtils.separate_objects(objects=None, by_material: bool = False, center_pivots: bool = True, rename: bool = False) -> List` *(static)* — Separate meshes into individual objects.
+  - `EditUtils.separate_objects(objects=None, by_material: bool = False, group_by_material: bool = False, center_pivots: bool = True, rename: bool = False) -> List` *(static)* — Separate meshes into individual objects.
   - `EditUtils.merge_vertices(objects, tolerance=0.001, selected_only=False)` *(static)* — Merge Vertices on the given objects.
   - `EditUtils.merge_vertex_pairs(vertices)` *(static)* — Merge vertices in pairs by moving them to their center and merging.
   - `EditUtils.detach_components(components=None, duplicate: bool = True, separate: bool = True, offset: bool = False, keep_faces_together: bool = True) -> Optional[List]` *(static)* — Detach mesh components (vertices or faces) from their parent mesh.
@@ -1240,7 +1243,7 @@ Centralized Maya event subscription manager.
   - `EditUtils.get_similar_topo(obj, inc_orig=False, **kwargs)` *(static)* — Find similar geometry objects using the polyCompare command.
   - `EditUtils.invert_geometry(objects: Optional[List] = None, select: bool = False) -> List[str]` *(static)* — Invert selection to unselected mesh transforms.
   - `EditUtils.invert_components(objects: Optional[List] = None, select: bool = False) -> List[Union['pm.MeshVertex', 'pm.MeshEdge', 'pm.MeshFace']]` *(static)* — Invert selection of mesh components (verts, edges, or faces).
-  - `EditUtils.delete_selected()` *(static)* — Delete selected components or objects in Autodesk Maya based on user's selection mode.
+  - `EditUtils.delete_selected()` *(static)* — Delete selected components and/or objects in Autodesk Maya.
   - `EditUtils.create_curve_from_edges(edges: Optional[List[str]] = None, **kwargs)` *(static)* — Create a curve from selected polygon edges or a provided list of edges.
 
 <a id="edit_utils--bevel"></a>
@@ -1307,50 +1310,11 @@ Centralized Maya event subscription manager.
 <a id="edit_utils--dynamic_pipe"></a>
 ### `edit_utils/dynamic_pipe.py`
 
-- **[`class Curve`](mayatk/mayatk/edit_utils/dynamic_pipe.py#L15)**
-  - `Curve.length(self)` *(property)* — Get the length of the curve.
-  - `Curve.length(self, new_length)` — Set the curve to a new length, adjusting its scale proportionally.
-  - `Curve.add_point(self, position)` — Dynamically add a point to the curve.
-  - `Curve.update_point(self, index, new_position)` — Update the position of a point on the curve.
-  - `Curve.update_curve_cv(self, index, position)` — Update the position of a curve control vertex.
-  - `Curve.get_param_at_point(self, point)` — Get the curve parameter at a given point.
-  - `Curve.get_point_at_param(self, param)` — Get the point on the curve at a given parameter.
-  - `Curve.get_adjacent_points(self, u, delta)` — Return points adjacent to a parameter u on the curve, adjusted by delta.
-- **[`class BezierCurve(Curve)`](mayatk/mayatk/edit_utils/dynamic_pipe.py#L76)**
-  - `BezierCurve.add_control_point(self, position, handle1_offset=(1, 0, 0), handle2_offset=(-1, 0, 0))` — Adds a control point and its handles to the bezier curve.
-  - `BezierCurve.update_control_point(self, index, new_position)` — Updates the position of a control point and optionally adjusts its handles.
-  - `BezierCurve.adjust_handles(self, index, handle1_new_position=None, handle2_new_position=None)` — Adjust the positions of the handles for a specific control point.
-- **[`class CurveRig`](mayatk/mayatk/edit_utils/dynamic_pipe.py#L131)**
-  - `CurveRig.validate_locators(self, locators)`
-  - `CurveRig.create_inbetween_locators(self, locators, num_inbetween=2)`
-  - `CurveRig.create_curve_from_locators(self, locators)`
-  - `CurveRig.setup_clusters(self)`
-  - `CurveRig.orient_locators(self)`
-  - `CurveRig.orient_end_locators(self, index)`
-  - `CurveRig.orient_middle_locators(self, index)`
-  - `CurveRig.create_inbetween_locators(self, num_inbetween)`
-  - `CurveRig.create_nurbs_circles_at_locators(self)`
-  - `CurveRig.add_circles_between_points(self, start_parameter, end_parameter, num_circles)`
-  - `CurveRig.update_locator_position(self, index, new_position)`
-  - `CurveRig.update_curve_cv(self, index, position)`
-  - `CurveRig.add_locator(self, position)`
-  - `CurveRig.create_locator_at_position(self, position)`
-  - `CurveRig.remove_locator(self, locator_index)`
-  - `CurveRig.position_and_orient_object(self, obj, locator)`
-  - `CurveRig.align_and_orient_to_curve(self, obj, position)`
-  - `CurveRig.get_adjacent_curve_points(self, u)`
-  - `CurveRig.orient_object(self, obj, point1, point2)`
-  - `CurveRig.add_path_locators(self, locators_per_segment)`
-  - `CurveRig.place_locators_on_segment(self, segment_index, num_locators, start_param, end_param)`
-  - `CurveRig.get_segment_param_range(self, start_index, end_index)`
-- **[`class DynamicPipe`](mayatk/mayatk/edit_utils/dynamic_pipe.py#L346)**
-  - `DynamicPipe.create_nurbs_circles_at_locators(self, locators)`
-  - `DynamicPipe.add_circles_between_points(self, start_parameter, end_parameter, num_circles)`
-  - `DynamicPipe.create_pipe_geometry(self, segments_to_loft)`
-  - `DynamicPipe.loft_between_circles(self, circles)`
-- **[`class DynamicPipeSlots`](mayatk/mayatk/edit_utils/dynamic_pipe.py#L401)**
+- **[`class DynamicPipe`](mayatk/mayatk/edit_utils/dynamic_pipe.py#L9)** — Build a pipe-style mesh by lofting NURBS circles parented to a chain of locators.
+  - `DynamicPipe.create_pipe_geometry(self, segments_to_loft: Optional[Sequence[int]] = None) -> List[str]` — Loft consecutive circle pairs to produce pipe segments.
+- **[`class DynamicPipeSlots`](mayatk/mayatk/edit_utils/dynamic_pipe.py#L141)** — Switchboard slot wiring for the dynamic_pipe UI.
   - `DynamicPipeSlots.header_init(self, widget)` — Configure header menu with tool instructions.
-  - `DynamicPipeSlots.b000(self)` — Create Dynamic Pipe
+  - `DynamicPipeSlots.b000(self)` — Initialize Pipe — build pipe from the current ordered selection.
 
 <a id="edit_utils--macros"></a>
 ### `edit_utils/macros.py`
@@ -1429,7 +1393,7 @@ Centralized Maya event subscription manager.
   - `Naming.generate_unique_name(cls, base_name, suffix='_', padding=3)` *(class)* — Generate a unique name based on the base_name.
   - `Naming.strip_illegal_chars(input_data, replace_with='_')` *(static)* — Strips illegal characters from a string or a list of strings, replacing them with a specified chara…
   - `Naming.strip_chars(objects: Union[str, object, List[Union[str, object]]], num_chars: int = 1, trailing: bool = False) -> List[str]` *(static)* — Deletes leading or trailing characters from the names of the provided objects,
-  - `Naming.set_case(objects=[], case='caplitalize')` *(static)* — Rename objects following the given case.
+  - `Naming.set_case(objects=None, case='capitalize')` *(static)* — Rename objects following the given case.
   - `Naming.suffix_by_type(objects: Union[str, object, List[Union[str, object]]], group_suffix: str = '_GRP', locator_suffix: str = '_LOC', joint_suffix: str = '_JNT', mesh_suffix: str = '_GEO', nurbs_curve_suffix: str = '_CRV', camera_suffix: str = '_CAM', light_suffix: str = '_LGT', display_layer_suffix: str = '_LYR', custom_suffixes: Optional[Dict[str, str]] = None, strip: Union[str, List[str]] = None, strip_trailing_ints: bool = False, strip_trailing_underscores: bool = False, strip_trailing_padding: bool = True) -> List[str]` *(static)* — Appends a conventional suffix based on Maya object type, stripping any existing known suffix.
   - `Naming.append_location_based_suffix(objects, first_obj_as_ref=False, alphabetical=False, strip_trailing_ints=True, strip_defined_suffixes=True, valid_suffixes=None, reverse=False, independent_groups=False)` *(static)* — Rename objects with a suffix defined by its location from origin.
 
@@ -1460,18 +1424,6 @@ Primitive creation utilities for Maya.
 - **[`class Primitives`](mayatk/mayatk/edit_utils/primitives.py#L23)** — Utilities for creating primitive objects in Maya.
   - `Primitives.create_default_primitive(cls, baseType, subType, **kwargs)` *(class)* — Create a primitive object with flexible parameters.
   - `Primitives.create_circle(axis='y', numPoints=12, radius=5, center=[0, 0, 0], mode=0, name='pCircle', history=False)` *(static)* — Create a circular polygon plane.
-
-<a id="edit_utils--rizom_bridge--_rizom_bridge"></a>
-### `edit_utils/rizom_bridge/_rizom_bridge.py`
-
-- **[`class RizomUVBridge`](mayatk/mayatk/edit_utils/rizom_bridge/_rizom_bridge.py#L26)**
-  - `RizomUVBridge.rizom_path(self)` *(property)* — Resolve the RizomUV executable path.
-  - `RizomUVBridge.rizom_path(self, value)` — Set the path to the RizomUV executable (bypasses auto-discovery).
-  - `RizomUVBridge.export_path(self)` *(property)* — Lazy initialization of the export path.
-  - `RizomUVBridge.export_path(self, value)`
-  - `RizomUVBridge.script_path(self)` *(property)* — Get the path to the UV script file as a POSIX string.
-  - `RizomUVBridge.script_path(self, value)` — Set the UV script, loading from a file if a path is provided, or saving the content to a file.
-  - `RizomUVBridge.process_with_rizomuv(self, objects, uv_script=None, preset=None)` — Run the full export → RizomUV → re-import workflow.
 
 <a id="edit_utils--selection"></a>
 ### `edit_utils/selection.py`
@@ -1526,6 +1478,8 @@ Primitive creation utilities for Maya.
   - `EnvUtils.get_workspace_file_cache(cls, workspaces: list, recursive: bool = True) -> dict` *(class)* — Build a cache of workspace files for multiple workspaces.
   - `EnvUtils.matches_autosave_pattern(filename: str) -> bool` *(static)* — Check if a file matches the Maya autosave pattern.
   - `EnvUtils.save_scene_backup(backup_path: Optional[Union[str, bool]] = True, suffix: str = '_backup', file_type: str = 'mayaAscii', force: bool = True, preserve_scene_name: bool = True) -> Optional[str]` *(static)* — Save a backup copy of the current scene.
+  - `EnvUtils.find_original_for_autosave(cls, autosave_path: Optional[str] = None) -> Optional[str]` *(class)* — Resolve the original scene file an autosave was generated from.
+  - `EnvUtils.save_autosave_to_original(cls, original_path: Optional[str] = None, backup_existing: bool = True) -> Optional[str]` *(class)* — Save the currently open autosave scene back to its original path.
 
 <a id="env_utils--devtools"></a>
 ### `env_utils/devtools.py`
@@ -1647,21 +1601,24 @@ Primitive creation utilities for Maya.
 
 Hierarchy sidecar manifest management.
 
-- **[`class HierarchySidecar`](mayatk/mayatk/env_utils/hierarchy_manager/hierarchy_sidecar.py#L16)** — Manages hierarchy sidecar files stored alongside export files.
-  - `HierarchySidecar.manifest_path_for(export_path: str) -> str` *(static)* — Return the sidecar manifest path for an export file.
-  - `HierarchySidecar.diff_report_path_for(export_path: str) -> str` *(static)* — Return the sidecar diff report path for an export file.
+- **[`class HierarchySidecar`](mayatk/mayatk/env_utils/hierarchy_manager/hierarchy_sidecar.py#L17)** — Manages hierarchy sidecar files stored alongside export files.
+  - `HierarchySidecar.base_stem(cls, export_path: str) -> str` *(class)* — Return the export stem with any trailing ``_vNN`` suffix stripped.
+  - `HierarchySidecar.manifest_path_for(cls, export_path: str, *, base_stem: bool = False) -> str` *(class)* — Return the sidecar manifest path for an export file.
+  - `HierarchySidecar.diff_report_path_for(cls, export_path: str, *, base_stem: bool = False) -> str` *(class)* — Return the sidecar diff report path for an export file.
+  - `HierarchySidecar.find_legacy_manifest(cls, export_path: str) -> Optional[str]` *(class)* — Return the path of a legacy per-version sidecar to migrate from.
+  - `HierarchySidecar.ensure_base_name(cls, export_path: str) -> Optional[str]` *(class)* — Migrate a legacy per-version manifest to the base-stem name.
   - `HierarchySidecar.rename(cls, old_export_path: str, new_export_path: str) -> list` *(class)* — Rename sidecar files to match a renamed export file.
   - `HierarchySidecar.build_clean_path_set(objects) -> set` *(static)* — Build a set of namespace-stripped hierarchy paths from DAG long paths.
   - `HierarchySidecar.expand_to_descendants(objects) -> list` *(static)* — Return *objects* plus all their DAG descendants (full paths).
   - `HierarchySidecar.get_top_level(paths) -> list` *(static)* — Return only paths whose ancestor is *not* also in the set.
   - `HierarchySidecar.detect_reparenting(missing: list, extra: list) -> list` *(static)* — Detect nodes that were reparented rather than added/removed.
-  - `HierarchySidecar.write_manifest(cls, export_path: str, paths) -> Optional[str]` *(class)* — Write *paths* to the sidecar manifest for *export_path*.
-  - `HierarchySidecar.read_manifest(cls, export_path: str) -> Optional[Set[str]]` *(class)* — Read the manifest for *export_path*.
+  - `HierarchySidecar.write_manifest(cls, export_path: str, paths, *, base_stem: bool = False) -> Optional[str]` *(class)* — Write *paths* to the sidecar manifest for *export_path*.
+  - `HierarchySidecar.read_manifest(cls, export_path: str, *, base_stem: bool = False) -> Optional[Set[str]]` *(class)* — Read the manifest for *export_path*.
   - `HierarchySidecar.count_descendants(top_path: str, all_paths) -> int` *(static)* — Count *top_path* plus its descendants in *all_paths*.
-  - `HierarchySidecar.write_diff_report(cls, export_path: str, missing: list, extra: list, reparented: list = None) -> Optional[str]` *(class)* — Write a human-readable diff report to the sidecar text file.
-  - `HierarchySidecar.clean_stale_diff(cls, export_path: str) -> None` *(class)* — Remove a stale diff report left over from a previous failure.
+  - `HierarchySidecar.write_diff_report(cls, export_path: str, missing: list, extra: list, reparented: list = None, *, base_stem: bool = False) -> Optional[str]` *(class)* — Write a human-readable diff report to the sidecar text file.
+  - `HierarchySidecar.clean_stale_diff(cls, export_path: str, *, base_stem: bool = False) -> None` *(class)* — Remove a stale diff report left over from a previous failure.
   - `HierarchySidecar.build_full_path_set(cls, objects) -> set` *(class)* — Expand *objects* to descendants, then clean and deduplicate.
-  - `HierarchySidecar.compare(cls, export_path: str, current_paths: set) -> Tuple[bool, list, list]` *(class)* — Compare *current_paths* against the stored manifest.
+  - `HierarchySidecar.compare(cls, export_path: str, current_paths: set, *, base_stem: bool = False) -> Tuple[bool, list, list]` *(class)* — Compare *current_paths* against the stored manifest.
 
 <a id="env_utils--hierarchy_manager--tree_renderer"></a>
 ### `env_utils/hierarchy_manager/tree_renderer.py`
@@ -1703,15 +1660,17 @@ Tree widget utilities for hierarchy manager UI operations.
 
 Maya Connection Module
 
-- [`open_command_ports(**kwargs)`](mayatk/mayatk/env_utils/maya_connection.py#L1110) — Wrapper for MayaConnection.open_command_ports.
-- [`toggle_command_ports(mel_port=7001, python_port=7002)`](mayatk/mayatk/env_utils/maya_connection.py#L1115) — Wrapper for MayaConnection.toggle_command_ports.
+- [`open_command_ports(**kwargs)`](mayatk/mayatk/env_utils/maya_connection.py#L1197) — Wrapper for MayaConnection.open_command_ports.
+- [`toggle_command_ports(mel_port=7001, python_port=7002)`](mayatk/mayatk/env_utils/maya_connection.py#L1202) — Wrapper for MayaConnection.toggle_command_ports.
+- [`open_available_command_ports(mel_start=7001, python_start=7002, max_offset=50, tag_window=True)`](mayatk/mayatk/env_utils/maya_connection.py#L1207) — Wrapper for MayaConnection.open_available_command_ports.
 - **[`class MayaConnection`](mayatk/mayatk/env_utils/maya_connection.py#L27)** — Manages connection to Maya for testing purposes.
   - `MayaConnection.get_instance() -> 'MayaConnection'` *(static)* — Get the global Maya connection instance.
   - `MayaConnection.open_command_ports(**kwargs)` *(static)* — Open command ports for external script editor.
   - `MayaConnection.close_command_ports(ports=None)` *(static)* — Close the specified Maya command ports.
+  - `MayaConnection.open_available_command_ports(mel_start: int = 7001, python_start: int = 7002, max_offset: int = 50, tag_window: bool = True) -> dict` *(static)* — Open command ports auto-negotiating around port collisions.
   - `MayaConnection.toggle_command_ports(mel_port: int = 7001, python_port: int = 7002) -> tuple` *(static)* — Toggle Maya command ports on or off.
   - `MayaConnection.reload_modules(modules: Union[str, List[str]], include_submodules: bool = True, verbose: bool = True) -> List[str]` *(static)* — Reload specified modules and their submodules using pythontk.ModuleReloader.
-  - `MayaConnection.connect(self, mode: ConnectionMode = 'auto', port: int = 7002, host: str = 'localhost', launch: bool = True, app_path: Optional[str] = None, force_new_instance: bool = True, launch_args: Optional[List[str]] = None, confirm_existing: bool = True) -> bool` — Connect to Maya using the specified mode.
+  - `MayaConnection.connect(self, mode: ConnectionMode = 'auto', port: int = 7002, host: str = 'localhost', launch: bool = True, app_path: Optional[str] = None, force_new_instance: bool = True, launch_args: Optional[List[str]] = None, confirm_existing: bool = True, auto_cleanup: bool = False) -> bool` — Connect to Maya using the specified mode.
   - `MayaConnection.get_pid_from_port(port: int) -> Optional[int]` *(static)* — Find the process ID (PID) listening on the given TCP port.
   - `MayaConnection.close_instance(port: Optional[int] = None, pid: Optional[int] = None, force: bool = False) -> bool` *(static)* — Close a Maya instance identified by Port or PID.
   - `MayaConnection.get_available_port(start_port: int = 7002, max_check: int = 100) -> int` *(static)* — Find an available port starting from start_port.
@@ -1730,17 +1689,17 @@ Maya Connection Module
   - `FBXImporter.is_supported_file(self, file_path: Union[str, Path]) -> bool` — Check if the file is an FBX file.
   - `FBXImporter.import_with_namespace(self, source_file: Path, namespace: str, temp_namespace_prefix: str, force_complete_import: bool = False) -> Optional[Dict]` — Import FBX file with namespace - handles the complete import process.
   - `FBXImporter.import_for_analysis(self, source_file: Path, namespace: str) -> Optional[List[Any]]` — Import FBX file for analysis purposes.
-- **[`class MayaImporter`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1032)** — Handles Maya-specific import operations (.ma/.mb files).
+- **[`class MayaImporter`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1062)** — Handles Maya-specific import operations (.ma/.mb files).
   - `MayaImporter.is_supported_file(self, file_path: Union[str, Path]) -> bool` — Check if the file is a Maya file (.ma or .mb).
   - `MayaImporter.import_with_namespace(self, source_file: Path, namespace: str, temp_namespace_prefix: str, force_complete_import: bool = False) -> Optional[Dict]` — Import Maya file with namespace - original logic.
   - `MayaImporter.import_for_analysis(self, source_file: Path, namespace: str) -> Optional[List[Any]]` — Import Maya file for analysis purposes.
-- **[`class CameraTracker(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1211)** — Tracks cameras before and after import operations for proper cleanup.
+- **[`class CameraTracker(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1241)** — Tracks cameras before and after import operations for proper cleanup.
   - `CameraTracker.capture_pre_import_state(self)` — Capture camera state before import.
   - `CameraTracker.capture_post_import_state(self)` — Capture camera state after import.
   - `CameraTracker.get_imported_cameras(self, namespace_filter=None)` — Get cameras that were imported (optionally filtered by namespace).
   - `CameraTracker.cleanup_imported_cameras(self, namespace_filter=None, preserve_user_cameras=True)` — Clean up imported cameras with optional preservation of user cameras.
   - `CameraTracker.reset(self)` — Reset tracking state.
-- **[`class NamespaceSandbox(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1328)** — Handles temporary importing and namespace management for Maya scenes.
+- **[`class NamespaceSandbox(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1358)** — Handles temporary importing and namespace management for Maya scenes.
   - `NamespaceSandbox.import_with_namespace(self, source_file: Union[str, Path], namespace_prefix: str = None, force_complete_import: bool = False) -> Optional[Dict]` — Import file and return import information.
   - `NamespaceSandbox.import_for_analysis(self, source_file: Union[str, Path], namespace: str = None) -> Optional[List[Any]]` — Import file into temporary namespace for analysis (dry-run mode).
   - `NamespaceSandbox.get_supported_formats(self) -> List[str]` — Get list of supported file formats from all importers.
@@ -1761,22 +1720,22 @@ Maya Connection Module
 <a id="env_utils--reference_manager"></a>
 ### `env_utils/reference_manager.py`
 
-- **[`class AssemblyManager`](mayatk/mayatk/env_utils/reference_manager.py#L69)**
+- **[`class AssemblyManager`](mayatk/mayatk/env_utils/reference_manager.py#L70)**
   - `AssemblyManager.current_references(cls)` *(class)* — Get the current scene references.
   - `AssemblyManager.create_assembly_definition(cls, namespace: str, file_path: str) -> str` *(class)* — Create an assembly definition for the given file path.
   - `AssemblyManager.set_active_representation(cls, assembly_node: str, representation_name: str) -> bool` *(class)* — Set the active representation for an assembly.
   - `AssemblyManager.convert_references_to_assemblies(cls)` *(class)* — Convert all current references to assembly definitions and references.
-- **[`class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L156)** — Core Maya scene reference management functionality.
+- **[`class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L157)** — Core Maya scene reference management functionality.
   - `ReferenceManager.current_references(self)` *(property)* — Get the current scene references.
   - `ReferenceManager.sanitize_namespace(namespace: str) -> str` *(static)* — Sanitize the namespace by replacing or removing illegal characters.
   - `ReferenceManager.add_reference(self, namespace: str, file_path: str) -> bool`
-  - `ReferenceManager.import_references(self, namespaces=None, remove_namespace=False)` — Import referenced objects into the scene.
+  - `ReferenceManager.import_references(self, namespaces=None, remove_namespace=True)` — Import referenced objects into the scene.
   - `ReferenceManager.update_references(self)` — Update all references to reflect the latest changes from the original files.
   - `ReferenceManager.get_reference_top_transforms(self, ref)` — Return top-level (parent-less) transforms belonging to the given reference.
   - `ReferenceManager.get_reference_display_mode(self, ref) -> str` — Return the active display mode for the reference's top-level transforms.
   - `ReferenceManager.set_reference_display_mode(self, ref, mode: str) -> bool` — Set the display override mode on the reference's top-level transforms.
   - `ReferenceManager.remove_references(self, namespaces=None)` — Remove references based on their namespaces.
-- **[`class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L546)** — Controller that bridges Maya reference functionality with UI interactions.
+- **[`class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L547)** — Controller that bridges Maya reference functionality with UI interactions.
   - `ReferenceManagerController.current_working_dir(self)` *(property)*
   - `ReferenceManagerController.current_working_dir(self, value)`
   - `ReferenceManagerController.block_table_selection_method(method)`
@@ -1795,16 +1754,15 @@ Maya Connection Module
   - `ReferenceManagerController.unlink_references(self, namespaces)` — Unlink specific references.
   - `ReferenceManagerController.convert_to_assembly(self)`
   - `ReferenceManagerController.save_scene(self)` — Save the current scene to the workspace, prompting for a name.
-  - `ReferenceManagerController.rename_scene(self)` — Rename the selected scene file.
-  - `ReferenceManagerController.delete_scene(self)` — Delete the selected scene file.
-- **[`class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L1865)** — UI event handlers and widget initialization for the Reference Manager interface.
+  - `ReferenceManagerController.rename_scene(self)` — Rename the scene file at the right-clicked row.
+  - `ReferenceManagerController.delete_scene(self)` — Delete the scene file at the right-clicked row.
+- **[`class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L1861)** — UI event handlers and widget initialization for the Reference Manager interface.
   - `ReferenceManagerSlots.header_init(self, widget)` — Initialize the header for the reference manager.
   - `ReferenceManagerSlots.tbl000_init(self, widget)`
   - `ReferenceManagerSlots.tbl000_item_double_clicked(self, item)` — Handle double-click to prepare item for editing.
   - `ReferenceManagerSlots.tbl000_item_changed(self, item)` — Handle item changes when user renames a file via inline edit.
   - `ReferenceManagerSlots.tbl000_editor_closed(self, editor, hint)` — Handle when the rename editor is closed.
-  - `ReferenceManagerSlots.btn_open_scene(self)` — Open the selected scene file.
-  - `ReferenceManagerSlots.btn_open_file_location(self)` — Open the containing folder of the selected scene file in the file explorer.
+  - `ReferenceManagerSlots.btn_open_file_location(self)` — Open the containing folder of the right-clicked scene file in the file explorer.
   - `ReferenceManagerSlots.txt000_init(self, widget)` — Initialize the text input for the current working directory with pin values.
   - `ReferenceManagerSlots.txt001_init(self, widget)` — Initialize the filter text input with filtering options.
   - `ReferenceManagerSlots.txt001(self, text)` — Handle the filter text input.
@@ -1822,9 +1780,9 @@ Maya Connection Module
   - `ReferenceManagerSlots.b000(self)` — Browse for a root directory.
   - `ReferenceManagerSlots.b006(self)` — Open the current directory in the file explorer.
   - `ReferenceManagerSlots.b001(self)` — Set dir to current workspace.
-  - `ReferenceManagerSlots.btn_open_scene(self)` — Open the selected scene file.
-  - `ReferenceManagerSlots.btn_toggle_reference(self)` — Toggle reference state for the selected scene(s) via context menu.
-  - `ReferenceManagerSlots.btn_unlink_import(self)` — Unlink and import the selected reference(s).
+  - `ReferenceManagerSlots.btn_open_scene(self)` — Open the scene file at the right-clicked row.
+  - `ReferenceManagerSlots.btn_toggle_reference(self)` — Toggle reference state for the right-clicked row.
+  - `ReferenceManagerSlots.btn_unlink_import(self)` — Unlink and import the reference at the right-clicked row.
   - `ReferenceManagerSlots.btn_save_scene(self)` — Save the current scene to the workspace.
   - `ReferenceManagerSlots.btn_refresh(self)` — Refresh the file list.
   - `ReferenceManagerSlots.btn_convert_assembly(self)` — Convert all references to assemblies.
@@ -1834,16 +1792,16 @@ Maya Connection Module
 <a id="env_utils--scene_exporter--_scene_exporter"></a>
 ### `env_utils/scene_exporter/_scene_exporter.py`
 
-- **[`class SceneExporter(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L27)**
+- **[`class SceneExporter(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L28)**
   - `SceneExporter.perform_export(self, export_dir: str, objects: Optional[Union[List[str], Callable]] = None, preset_file: Optional[str] = None, output_name: Optional[str] = None, export_visible: bool = True, file_format: Optional[str] = 'FBX export', create_log_file: bool = False, timestamp: bool = False, name_regex: Optional[str] = None, log_level: str = 'WARNING', hide_log_file: Optional[bool] = None, log_handler: Optional[object] = None, tasks: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, bool]]` — Perform the export operation, including initialization and task management.
-  - `SceneExporter.generate_export_path(self) -> str` — Generate the full export file path.
+  - `SceneExporter.generate_export_path(self, version_format: str = '') -> str` — Generate the full export file path.
   - `SceneExporter.format_export_name(self, name: str) -> str` — Format the export name using a regex pattern and replacement (e.g.
   - `SceneExporter.generate_log_file_path(self, export_path: str) -> str` — Generate the log file path based on the export path.
   - `SceneExporter.setup_file_logging(self, log_file_path: str)` — Setup file logging to log actions during export.
   - `SceneExporter.close_file_handlers(self)` — Close and remove file handlers after logging is complete.
   - `SceneExporter.load_fbx_export_preset(self, preset_file: str = None, verify: bool = False) -> Optional[dict]` — Load an FBX export preset and optionally verify it.
   - `SceneExporter.verify_fbx_preset(self) -> dict` — Verify a set of predefined FBX export settings and log their values.
-- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L439)**
+- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L565)**
   - `SceneExporterSlots.workspace(self) -> Optional[str]` *(property)*
   - `SceneExporterSlots.presets(self) -> Dict[str, Optional[str]]` *(property)* — Return available presets, using cached values if the preset directory has not changed.
   - `SceneExporterSlots.header_init(self, widget)` — Initialize the header widget.
@@ -1872,7 +1830,7 @@ Maya Connection Module
 <a id="env_utils--scene_exporter--task_manager"></a>
 ### `env_utils/scene_exporter/task_manager.py`
 
-- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L1032)** — Contains all task-related UI definitions for the Scene Exporter.
+- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L1059)** — Contains all task-related UI definitions for the Scene Exporter.
   - `TaskManager.objects(self)` *(property)*
   - `TaskManager.objects(self, value)` — Invalidate the materials cache whenever objects change.
   - `TaskManager.task_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the task definitions for the UI.
@@ -1882,7 +1840,8 @@ Maya Connection Module
 <a id="env_utils--script_output"></a>
 ### `env_utils/script_output.py`
 
-- [`show(*args, **kwargs)`](mayatk/mayatk/env_utils/script_output.py#L338)
+- [`show(*args, **kwargs)`](mayatk/mayatk/env_utils/script_output.py#L408)
+- [`toggle(*args, **kwargs)`](mayatk/mayatk/env_utils/script_output.py#L412) — Toggle the Script Output panel.
 - **[`class ScriptHighlightRule`](mayatk/mayatk/env_utils/script_output.py#L13)**
 - **[`class ScriptHighlighter(QtGui.QSyntaxHighlighter)`](mayatk/mayatk/env_utils/script_output.py#L33)**
   - `ScriptHighlighter.highlightBlock(self, text: str) -> None`
@@ -1892,7 +1851,7 @@ Maya Connection Module
   - `ScriptOutput.eventFilter(self, obj, event: QtCore.QEvent)`
 - **[`class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog)`](mayatk/mayatk/env_utils/script_output.py#L185)** — Dockable window that live-mirrors Maya's Script Editor output,
   - `ScriptConsole.enterEvent(self, event)`
-  - `ScriptConsole.show_console(cls, dock=None, width: int = None, height: int = None, tab_position: str = None)` *(class)*
+  - `ScriptConsole.show_console(cls, dock=None, width: int = None, height: int = None, tab_position: str = None, restore: bool = False)` *(class)* — Show the Script Output console.
 
 <a id="env_utils--workspace_manager"></a>
 ### `env_utils/workspace_manager.py`
@@ -1948,12 +1907,13 @@ Maya Connection Module
 ### `light_utils/hdr_manager.py`
 
 - **[`class HdrManager`](mayatk/mayatk/light_utils/hdr_manager.py#L14)**
+  - `HdrManager.ensure_plugin_loaded() -> bool` *(static)* — Ensure the Arnold (mtoa) plugin is loaded.
   - `HdrManager.hdr_env(self) -> object` *(property)*
   - `HdrManager.hdr_env(self, tex) -> None`
   - `HdrManager.hdr_env_transform(self) -> object` *(property)*
   - `HdrManager.set_hdr_map_visibility(self, state)`
   - `HdrManager.create_network(self, hdrMap='', hdrMapVisibility=False)`
-- **[`class HdrManagerSlots(HdrManager)`](mayatk/mayatk/light_utils/hdr_manager.py#L77)**
+- **[`class HdrManagerSlots(HdrManager)`](mayatk/mayatk/light_utils/hdr_manager.py#L99)**
   - `HdrManagerSlots.header_init(self, widget)` — Configure header menu with tool instructions.
   - `HdrManagerSlots.hdr_map(self) -> str` *(property)* — Get the hdr map filepath from the comboBoxes current text.
   - `HdrManagerSlots.hdr_map_visibility(self) -> bool` *(property)* — Get the hdr map visibility state from the checkBoxes current state.
@@ -1965,9 +1925,9 @@ Maya Connection Module
 <a id="mat_utils--_mat_utils"></a>
 ### `mat_utils/_mat_utils.py`
 
-- **[`class MatUtilsInternals(ptk.HelpMixin)`](mayatk/mayatk/mat_utils/_mat_utils.py#L31)** — Internal helper utilities shared across MatUtils operations.
+- **[`class MatUtilsInternals(ptk.HelpMixin)`](mayatk/mayatk/mat_utils/_mat_utils.py#L42)** — Internal helper utilities shared across MatUtils operations.
   - `MatUtilsInternals.get_texture_file_node(material, attr_name, _depth=0)` *(static)* — Locate the file texture node feeding a material attribute.
-- **[`class MatUtils(MatUtilsInternals)`](mayatk/mayatk/mat_utils/_mat_utils.py#L277)**
+- **[`class MatUtils(MatUtilsInternals)`](mayatk/mayatk/mat_utils/_mat_utils.py#L288)**
   - `MatUtils.resolve_path(path: str) -> Union[str, None]` *(static)* — Resolves a texture path by expanding env vars, checking workspace, and handling UDIMs.
   - `MatUtils.get_mats(objs=None, as_strings=True, mat_type=None) -> List[str]` *(static)* — Returns the set of materials assigned to a given list of objects or components.
   - `MatUtils.group_objects_by_material(objects, cluster_by_distance=False, threshold=10000.0)` *(static)* — Groups objects based on their assigned material(s).
@@ -1992,7 +1952,7 @@ Maya Connection Module
   - `MatUtils.reassign_duplicate_materials(cls, materials: Optional[List[str]] = None, delete: bool = False, strict: bool = False) -> None` *(class)* — Find duplicate materials, remove duplicates, and reassign them to the original material.
   - `MatUtils.filter_materials_by_objects(objects: List[str], as_strings: bool = True) -> List[str]` *(static)* — Filter materials assigned to the given objects.
   - `MatUtils.reload_textures(materials=None, inc=None, exc=None, log=False, refresh_viewport=False, refresh_hypershade=False, texture_types: Optional[List[str]] = None)` *(static)* — Reloads textures connected to specified materials with inclusion/exclusion filters.
-  - `MatUtils.move_texture_files(cls, found_files: List[Union[str, Tuple[str, str]]], new_dir: str, delete_old: bool = False, create_dir: bool = True) -> None` *(class)* — Move or copy found texture files to a new directory.
+  - `MatUtils.move_texture_files(cls, found_files: List[Union[str, Tuple[str, str]]], new_dir: str, delete_old: bool = False, create_dir: bool = True, per_file_timeout: float = 120.0, max_workers: int = 8, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> List[Tuple[str, str]]` *(class)* — Move or copy found texture files to a new directory.
   - `MatUtils.find_texture_files(cls, objects: Optional[List[str]] = None, source_dir: str = '', recursive: bool = True, return_dir: bool = False, quiet: bool = False, file_nodes: Optional[List[str]] = None, materials: Optional[List[str]] = None) -> List[Union[str, Tuple[str, str]]]` *(class)* — Find texture files for given objects' materials inside source_dir.
   - `MatUtils.migrate_textures(cls, materials: Optional[List[str]] = None, old_dir: Optional[str] = None, new_dir: Optional[str] = None, silent: bool = False, delete_old: bool = False, objects: Optional[List[str]] = None, file_nodes: Optional[List[str]] = None) -> None` *(class)* — Copies texture files from an old directory to a new one.
   - `MatUtils.move_unused_textures(source_dir: str = None, output_dir: str = None) -> None` *(static)* — Move unused textures to a specified directory.
@@ -2005,7 +1965,7 @@ Maya Connection Module
 ### `mat_utils/game_shader.py`
 
 - **[`class GameShader(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/game_shader.py#L28)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
-  - `GameShader.create_network(self, textures: List[str], name: str = '', prefix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]` — Create a PBR shader network with textures.
+  - `GameShader.create_network(self, textures: List[str], name: str = '', prefix: str = '', suffix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]` — Create a PBR shader network with textures.
   - `GameShader.setup_stringray_node(self, name: str, opacity: bool) -> object` — Initializes and sets up a StingrayPBS shader node in Maya.
   - `GameShader.setup_arnold_nodes(self, name: str, shader_node: object) -> Tuple[object, object, object]` — Sets up a basic Arnold shader network for use with a Stingray PBS or Standard Surface shader.
   - `GameShader.setup_standard_surface_node(self, name: str, opacity: bool) -> object` — Creates and sets up a Maya Standard Surface shader node.
@@ -2018,20 +1978,20 @@ Maya Connection Module
   - `GameShader.filter_for_correct_metallic_map(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]` — Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…
   - `GameShader.filter_for_mask_map(self, textures: List[str], output_extension: str = 'png') -> List[str]` — Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
   - `GameShader.filter_for_correct_base_color_map(self, textures: List[str], use_albedo_transparency: bool) -> List[str]` — Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…
-- **[`class CallbackLogHandler(logging.Handler)`](mayatk/mayatk/mat_utils/game_shader.py#L1695)** — Log handler that calls a callback function with the formatted message.
-  - `CallbackLogHandler.emit(self, record)`
-- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1707)**
+- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1718)**
   - `GameShaderSlots.header_init(self, widget)` — Initialize the header widget.
   - `GameShaderSlots.lbl_graph_material(self)` — Graph the material in the Hypershade.
   - `GameShaderSlots.mat_name(self) -> str` *(property)* — Get the mat name from the user input text field.
-  - `GameShaderSlots.mat_prefix(self) -> str` *(property)* — Get the material prefix from the UI.
+  - `GameShaderSlots.affix_is_prefix(self) -> bool` *(property)* — Whether the affix field (txt002) acts as a prefix or a suffix.
+  - `GameShaderSlots.mat_prefix(self) -> str` *(property)* — Return the affix text when in prefix mode, else empty string.
+  - `GameShaderSlots.mat_suffix(self) -> str` *(property)* — Return the affix text when in suffix mode, else empty string.
   - `GameShaderSlots.normal_map_type(self) -> str` *(property)* — Get the normal map type from the comboBoxes current text.
   - `GameShaderSlots.output_extension(self) -> str` *(property)* — Get the output map extension from the comboBox current text.
   - `GameShaderSlots.shader_type(self) -> str` *(property)* — Get the shader type selection.
   - `GameShaderSlots.cmb002_init(self, widget)` — Initialize Presets
   - `GameShaderSlots.cmb003_init(self, widget)` — Initialize Output Extension
+  - `GameShaderSlots.txt002_init(self, widget)` — Add a prefix/suffix toggle to the affix field's option menu.
   - `GameShaderSlots.b000(self)` — Create network.
-  - `GameShaderSlots.callback(self, string, progress=None, clear=False)` — Callback function to output messages to the UI textEdit and update progress bar.
 
 <a id="mat_utils--image_to_plane--_image_to_plane"></a>
 ### `mat_utils/image_to_plane/_image_to_plane.py`
@@ -2039,7 +1999,7 @@ Maya Connection Module
 Map image files to textured polygon planes in Maya.
 
 - **[`class ImageToPlane(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/image_to_plane/_image_to_plane.py#L23)** — Create textured polygon planes from image files.
-  - `ImageToPlane.create(cls, image_paths: List[str], mat_type: str = 'stingray', suffix: str = '_MAT', plane_height: float = 10.0, axis: Optional[List[float]] = None, group: bool = False, group_name: str = 'imagePlanes_GRP') -> Dict[str, object]` *(class)* — Create textured planes for one or more images.
+  - `ImageToPlane.create(cls, image_paths: List[str], mat_type: str = 'stingray', suffix: str = '_MAT', prefix: str = '', plane_height: float = 10.0, axis: Optional[List[float]] = None, group: bool = False, group_name: str = 'imagePlanes_GRP') -> Dict[str, object]` *(class)* — Create textured planes for one or more images.
   - `ImageToPlane.remove(cls, objects=None) -> int` *(class)* — Remove planes and their materials created by this tool.
 
 <a id="mat_utils--image_to_plane--image_to_plane_slots"></a>
@@ -2049,6 +2009,7 @@ Switchboard slots for the Image to Plane UI.
 
 - **[`class ImageToPlaneSlots`](mayatk/mayatk/mat_utils/image_to_plane/image_to_plane_slots.py#L19)** — Switchboard slots for the Image to Plane UI.
   - `ImageToPlaneSlots.header_init(self, widget)` — Configure header menu.
+  - `ImageToPlaneSlots.txt_suffix_init(self, widget)` — Add a prefix/suffix toggle to the affix field's option menu.
 
 <a id="mat_utils--marmoset--bridge"></a>
 ### `mat_utils/marmoset/bridge.py`
@@ -2219,7 +2180,7 @@ Switchboard slots for the Render Opacity UI.
   - `TexturePathEditorSlots.row_resolve_by_stem(self, selection=None)`
   - `TexturePathEditorSlots.row_resolve_by_fuzzy(self, selection=None)`
   - `TexturePathEditorSlots.row_resolve_by_texture(self, selection=None)`
-  - `TexturePathEditorSlots.refresh_texture_table(self)` — Manual refresh trigger from the header menu.
+  - `TexturePathEditorSlots.refresh_texture_table(self)` — Manual refresh trigger from the header refresh button.
   - `TexturePathEditorSlots.tbl000_init(self, widget)`
   - `TexturePathEditorSlots.cleanup_scene_callbacks(self)` — Clean up scene-change subscriptions via ScriptJobManager.
   - `TexturePathEditorSlots.setup_formatting(self, widget)`
@@ -2456,6 +2417,7 @@ Per-object event trigger attributes for game-engine export.
   - `RigUtils.create_locator(*, scale: float = 1, parent: Optional[str] = None, **kwargs) -> str` *(static)* — Create a locator with the given scale.
   - `RigUtils.create_locator_at_object(cls, objects: Union[str, List[str]], parent: bool = True, freeze_object: bool = True, freeze_locator: bool = True, loc_scale: float = 1.0, lock_translate: bool = False, lock_rotation: bool = False, lock_scale: bool = False, grp_suffix: str = '_GRP', loc_suffix: str = '_LOC', obj_suffix: str = '_GEO', strip_digits: bool = False, strip_trailing_underscores: bool = True, strip_suffix: bool = True) -> None` *(class)* — Rig object under a zeroed locator aligned to its d manip pivot.
   - `RigUtils.remove_locator(cls, objects)` *(class)* — Remove a parented locator from the child object.
+  - `RigUtils.restore_rig_anchors(cls, objects, traverse: bool = True, skip_animated: bool = True, pivot_source: str = 'bbox') -> List[str]` *(class)* — Restore the world-space anchor on a GRP > LOC > GEO rig after a freeze.
   - `RigUtils.connect_switch_to_constraint(cls, constraint_node: str, constraint_targets: Optional[List[str]] = None, attr_name: str = 'parent_switch', overwrite_existing: bool = False, node: Optional[str] = None, weighted: bool = False, anchor: Optional[str] = None) -> dict` *(class)* — Create a space switch attribute to drive a constraint node.
   - `RigUtils.create_ik_handle(start_joint: str, end_joint: str, solver: str = 'ikRPsolver', name: str = 'ikHandle', parent: Optional[str] = None, **kwargs) -> str` *(static)* — Create an IK handle.
   - `RigUtils.create_pole_vector(ik_handle: str, mid_joint: str, distance: float = 5.0, name: str = 'poleVector_LOC', parent: Optional[str] = None) -> str` *(static)* — Create a pole vector locator based on the mid joint's position.
@@ -2683,7 +2645,7 @@ Reusable helper for resolving Maya node icons at runtime.
 <a id="uv_utils--_uv_utils"></a>
 ### `uv_utils/_uv_utils.py`
 
-- **[`class UvUtils(ptk.HelpMixin)`](mayatk/mayatk/uv_utils/_uv_utils.py#L18)**
+- **[`class UvUtils(ptk.HelpMixin)`](mayatk/mayatk/uv_utils/_uv_utils.py#L22)**
   - `UvUtils.calculate_uv_padding(map_size: int, normalize: bool = False, factor: int = 256) -> float` *(static)* — Calculate the UV padding for a given map size to ensure consistent texture padding across different…
   - `UvUtils.orient_shells(objects)` *(static)* — Rotate UV shells to run parallel with the most adjacent U or V axis of their bounding box.
   - `UvUtils.move_to_uv_space(objects, u, v, relative=True)` *(static)* — Move objects to the given u and v coordinates.
@@ -2693,6 +2655,9 @@ Reusable helper for resolving Maya node icons at runtime.
   - `UvUtils.get_uv_shell_border_edges(objects)` *(static)* — Get the edges that make up any UV islands of the given objects.
   - `UvUtils.get_texel_density(objects, map_size)` *(static)* — Calculate the texel density for the given objects' faces.
   - `UvUtils.set_texel_density(cls, objects=None, density=1.0, map_size=4096)` *(class)* — Set the texel density for the given objects.
+  - `UvUtils.snapshot_uv_sets(objects: Sequence[Union[str, object]], prefix: str = '_uv_snap') -> List[UvSnapshot]` *(static)* — Copy each object's active UV set into a uniquely-named backup set.
+  - `UvUtils.restore_uv_snapshot(snapshots: Sequence[UvSnapshot]) -> None` *(static)* — Restore UVs captured by ``snapshot_uv_sets``.
+  - `UvUtils.discard_uv_snapshot(snapshots: Sequence[UvSnapshot]) -> None` *(static)* — Delete the snapshot UV sets without restoring them.
   - `UvUtils.transfer_uvs(source: Union[str, object, List[Union[str, object]]], target: Union[str, object, List[Union[str, object]]], tolerance: float = 0.1) -> None` *(static)* — Transfers UVs from source meshes to target meshes based on geometric similarity.
   - `UvUtils.reorder_uv_sets(obj: str, new_order: list[str]) -> None` *(static)* — Reorder UV sets of the given object to match the specified new order.
   - `UvUtils.remove_empty_uv_sets(objects, quiet: bool = False) -> None` *(static)* — Remove empty UV sets from the given objects.
@@ -2700,14 +2665,34 @@ Reusable helper for resolving Maya node icons at runtime.
 <a id="uv_utils--rizom_bridge--_rizom_bridge"></a>
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 
-- **[`class RizomUVBridge`](mayatk/mayatk/uv_utils/rizom_bridge/_rizom_bridge.py#L27)**
+- **[`class RizomUVBridge`](mayatk/mayatk/uv_utils/rizom_bridge/_rizom_bridge.py#L29)**
   - `RizomUVBridge.rizom_path(self)` *(property)* — Resolve the RizomUV executable path.
   - `RizomUVBridge.rizom_path(self, value)` — Set the path to the RizomUV executable (bypasses auto-discovery).
   - `RizomUVBridge.export_path(self)` *(property)* — Lazy initialization of the export path.
   - `RizomUVBridge.export_path(self, value)`
   - `RizomUVBridge.script_path(self)` *(property)* — Get the path to the UV script file as a POSIX string.
   - `RizomUVBridge.script_path(self, value)` — Set the UV script, loading from a file if a path is provided, or saving the content to a file.
-  - `RizomUVBridge.process_with_rizomuv(self, objects, uv_script=None, preset=None)` — Run the full export → RizomUV → re-import workflow.
+  - `RizomUVBridge.process_with_rizomuv(self, objects, uv_script=None, preset=None, params=None)` — Run the full export -> RizomUV -> re-import workflow.
+
+<a id="uv_utils--rizom_bridge--parameters"></a>
+### `uv_utils/rizom_bridge/parameters.py`
+
+Registry of user-tunable RizomUV parameters exposed to the bridge UI.
+
+- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L193) — Return the set of registered placeholder keys present in *script_text*.
+- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L210) — Return ``{key: default}`` for every registered parameter.
+- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L215) — Format *values* for ``StrUtils.replace_delimited`` (string-valued context).
+- **[`class RizomParam`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L25)** — Describes one tunable RizomUV parameter and how to render its widget.
+  - `RizomParam.format_value(self, value: Any) -> str` — Render *value* for inlining into Lua source.
+
+<a id="uv_utils--rizom_bridge--rizom_bridge_slots"></a>
+### `uv_utils/rizom_bridge/rizom_bridge_slots.py`
+
+- **[`class RizomBridgeSlots`](mayatk/mayatk/uv_utils/rizom_bridge/rizom_bridge_slots.py#L30)** — UI slots for the RizomUV bridge.
+  - `RizomBridgeSlots.bridge(self) -> RizomUVBridge` *(property)* — Lazy-instantiated RizomUVBridge (defers RizomUV path lookup).
+  - `RizomBridgeSlots.header_init(self, widget)` — Configure header menu with tool instructions and utilities.
+  - `RizomBridgeSlots.cmb000_init(self, widget)` — Populate the preset combobox from scripts/*.lua (one-time setup).
+  - `RizomBridgeSlots.b000(self)` — Process selected transforms with the chosen preset.
 
 <a id="xform_utils--_xform_utils"></a>
 ### `xform_utils/_xform_utils.py`
@@ -2715,17 +2700,19 @@ Reusable helper for resolving Maya node icons at runtime.
 - [`get_translation(node, world: bool = False)`](mayatk/mayatk/xform_utils/_xform_utils.py#L28) — Translation as ``om.MVector``.
 - [`get_object_matrix(node, world: bool = False)`](mayatk/mayatk/xform_utils/_xform_utils.py#L39) — Local or world matrix as ``om.MMatrix``.
 - [`set_object_matrix(node, value, world: bool = False) -> None`](mayatk/mayatk/xform_utils/_xform_utils.py#L46) — Apply *value* to *node*'s local or world transformation matrix.
-- **[`class XformUtilsInternals`](mayatk/mayatk/xform_utils/_xform_utils.py#L77)** — Internal helper methods for XformUtils.
-- **[`class XformUtils(XformUtilsInternals, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L127)** — Transform utilities for Maya objects.
+- **[`class XformUtilsInternals`](mayatk/mayatk/xform_utils/_xform_utils.py#L118)** — Internal helper methods for XformUtils.
+- **[`class XformUtils(XformUtilsInternals, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L168)** — Transform utilities for Maya objects.
   - `XformUtils.convert_axis(value, invert=False, ortho=False, to_integer=False)` *(static)* — Converts between axis representations and optionally inverts the axis or returns an orthogonal axis.
   - `XformUtils.move_to(cls, source, target, group_move=False)` *(class)* — Move source object(s) to align with the target object(s).
   - `XformUtils.drop_to_grid(objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)` *(static)* — Align objects to Y origin on the grid using a helper plane.
   - `XformUtils.match_scale(cls, a, b, scale=True, average=False)` *(class)* — Scale each of the given objects in 'a' to the combined bounding box of the objects in 'b'.
   - `XformUtils.scale_connected_edges(objects, scale_factor=1.1) -> None` *(static)* — Scales each set of connected edges separately, either uniformly or non-uniformly.
-  - `XformUtils.store_transforms(objects, prefix='original', accumulate=True)` *(static)* — Store the current world-space transforms as custom attributes.
+  - `XformUtils.store_transforms(objects, prefix='original', accumulate=True, traverse=False)` *(static)* — Store the current world-space transforms as custom attributes.
   - `XformUtils.freeze_transforms(cls, objects, center_pivot=0, force=True, delete_history=False, freeze_children=False, unlock_children=True, connection_strategy='preserve', from_channel_box=False, **kwargs)` *(class)* — Freezes transformations on the given objects.
   - `XformUtils.freeze_to_opm(objects, reset_rotate_axis: bool = False, reset_joint_orient: bool = False) -> None` *(static)* — Freeze transforms into offsetParentMatrix while preserving pivot placement.
-  - `XformUtils.restore_transforms(objects, prefix='original', delete_attrs=False)` *(static)* — Restore transforms from stored custom attributes.
+  - `XformUtils.unfreeze_to_parent(objects, traverse: bool = False, preserve_root: bool = True) -> List[str]` *(static)* — Push a child transform's local matrix up into its parent and zero the child.
+  - `XformUtils.restore_transforms(objects, prefix='original', delete_attrs=True)` *(static)* — Restore transforms from stored custom attributes.
+  - `XformUtils.clear_stored_transforms(objects, prefix='original') -> List[str]` *(static)* — Delete the stored-transform custom attributes without restoring.
   - `XformUtils.has_stored_transforms(objects, prefix='original')` *(static)* — Check if objects have stored transform attributes.
   - `XformUtils.clear_stored_transforms(objects, prefix='original')` *(static)* — Remove stored transform attributes from objects.
   - `XformUtils.reset_translation(cls, objects)` *(class)* — Reset the translation transformations on the given object(s).

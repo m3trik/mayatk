@@ -393,32 +393,36 @@ class TestPlayblastExporter(MayaTkTestCase):
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             self.assertEqual(frame_count, end_frame - start_frame + 1)
 
+            # Batch mode (mayapy without GUI) produces all-black playblast
+            # frames — viewport rendering needs a display. Verifying behavior
+            # against black frames is meaningless; skip outright rather than
+            # silently disable assertions (the original code did the latter,
+            # which let real regressions through).
+            if cmds.about(batch=True):
+                self.skipTest("playblast pixel checks require a GUI session")
+
             prev_frame = None
             has_movement = False
             frames_checked = 0
+            non_black_frames = 0
 
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
 
-                # Check for Red content (Sphere should be visible)
                 b_channel, g_channel, r_channel = cv2.split(frame)
-
-                # In batch mode, we might get black frames.
-                # If we do, we skip the color assertion but log it.
                 is_black = np.mean(frame) < 1.0
 
                 if not is_black:
-                    # At least some pixels should be bright red (the sphere)
-                    # We check max value because the sphere might be small or moving
+                    non_black_frames += 1
+                    # At least some pixels should be bright red (the sphere).
                     self.assertGreater(
                         np.max(r_channel),
                         100,
                         f"Frame {frames_checked} missing red object",
                     )
 
-                # Check for movement (difference from previous frame)
                 if prev_frame is not None:
                     diff = cv2.absdiff(frame, prev_frame)
                     if np.sum(diff) > 0:
@@ -429,12 +433,15 @@ class TestPlayblastExporter(MayaTkTestCase):
 
             cap.release()
 
-            # If we are in batch mode and got all black frames, has_movement might be False.
-            # Otherwise, we expect movement.
-            if not (cmds.about(batch=True) and frames_checked > 0 and is_black):
-                self.assertTrue(
-                    has_movement, "Video contains no animation (frames are identical)"
-                )
+            self.assertGreater(
+                non_black_frames,
+                0,
+                "All playblast frames were black — viewport render failed",
+            )
+            self.assertTrue(
+                has_movement,
+                "Video contains no animation (frames are identical)",
+            )
 
         except RuntimeError as e:
             if cmds.about(batch=True):

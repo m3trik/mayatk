@@ -96,7 +96,7 @@ class BevelSlots:
             ),
         )
 
-    def perform_operation(self, objects):
+    def perform_operation(self, objects, contract):
         width = self.ui.s000.value()
         segments = self.ui.s001.value()
         Bevel.bevel(objects, width, segments)

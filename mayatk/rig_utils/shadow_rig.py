@@ -14,6 +14,8 @@ import pythontk as ptk
 
 # From this package:
 from mayatk import CoreUtils, NodeUtils
+from mayatk.mat_utils._mat_utils import MatUtils
+from mayatk.core_utils.preview import Preview
 
 
 class ShadowRig(ptk.LoggingMixin):
@@ -201,15 +203,47 @@ class ShadowRig(ptk.LoggingMixin):
 
         return self.shadow_plane
 
-    def create_silhouette_texture(self, size=512, axis="auto", recursive=True):
+    def create_silhouette_texture(
+        self,
+        size=512,
+        axis="auto",
+        recursive=True,
+        *,
+        uniform_alpha=False,
+        falloff_source=None,
+        falloff_power=0.8,
+        vertical_weight=0.3,
+        blur_amount=1.5,
+    ):
         """Create silhouette texture using Maya API triangle rasterization.
 
         Args:
-            size: Texture resolution
+            size: Texture resolution.
             axis: Projection axis - 'x', 'y', 'z', or 'auto' (default).
                   'auto' chooses the axis perpendicular to the widest dimension.
             recursive: If True, include descendant meshes (e.g. for groups/locators).
+            uniform_alpha: If True, the silhouette alpha is uniform across the
+                shape (no contact-point falloff). Useful for top-down shadows
+                or stylised cases where you want a flat shadow.
+            falloff_source: Override the auto-detected contact point — the
+                (u, v) origin from which alpha falls off — in *saved-PNG
+                image coords* (open the texture file: (0, 0) is top-left,
+                (1, 1) is bottom-right). For typical ground shadows the
+                contact appears at the **top** of the saved file (it's
+                flipped before save so Maya's V-up UV reads it correctly),
+                so the auto-default works out to ≈ ``(0.5, 0.0)``.
+                Ignored when ``uniform_alpha``.
+            falloff_power: Radial falloff exponent. ``1.0`` = linear,
+                ``<1`` = sharper drop near the source, ``>1`` = lingers.
+                Ignored when ``uniform_alpha``.
+            vertical_weight: Blend weight of the vertical-gradient term into
+                the falloff (``0.0`` = pure radial, ``1.0`` = pure vertical).
+                Ignored when ``uniform_alpha``.
+            blur_amount: Gaussian blur radius (in pixels) applied to the
+                silhouette mask. ``0`` = sharp edges; typical 1-4.
         """
+        import pythontk as ptk
+
         workspace = cmds.workspace(q=True, rd=True)
         output_dir = os.path.join(workspace, "sourceimages")
         os.makedirs(output_dir, exist_ok=True)
@@ -258,23 +292,30 @@ class ShadowRig(ptk.LoggingMixin):
             pv = int((1.0 - ((v - v_center) / extent + 0.5)) * size)
             return [np.clip(pu, 0, size - 1), np.clip(pv, 0, size - 1)]
 
-        # Gather all mesh shapes from all targets
+        # Gather all mesh-shape DAG paths from all targets.
+        # Walk transforms first so instanced shapes yield one path per parent
+        # (otherwise listRelatives dedupes by node and we miss instance copies).
         shapes = []
         for target in self.targets:
             if recursive:
-                target_shapes = (
+                transforms = [target] + (
                     cmds.listRelatives(
-                        target, shapes=True, ad=True, type="mesh", fullPath=True
+                        target, ad=True, type="transform", fullPath=True
                     )
                     or []
                 )
             else:
-                target_shapes = (
+                transforms = [target]
+
+            target_shapes = []
+            for tx in transforms:
+                tx_shapes = (
                     cmds.listRelatives(
-                        target, shapes=True, type="mesh", fullPath=True
+                        tx, shapes=True, type="mesh", fullPath=True
                     )
                     or []
                 )
+                target_shapes.extend(tx_shapes)
 
             if not target_shapes:
                 direct_shapes = NodeUtils.get_shapes(target, no_intermediate=True)
@@ -329,59 +370,65 @@ class ShadowRig(ptk.LoggingMixin):
                 print(f"Warning: Could not process shape {shape}: {e}")
                 continue
 
-        # Smooth the result slightly
-        mask = cv2.GaussianBlur(mask, (3, 3), 0)
-
-        # ---------------------------------------------------------
-        # ANCHORING STEP: DISABLED (Keep texture centered for non-rotating rig)
-        # ---------------------------------------------------------
-        # rows_with_content = np.where(mask.max(axis=1) > 0)[0]
-        # if len(rows_with_content) > 0:
-        #     current_bottom = rows_with_content[-1]
-        #     shift_down = (size - 1) - current_bottom
-        #
-        #     if shift_down > 0:
-        #         shifted_mask = np.zeros_like(mask)
-        #         source_slice = mask[0 : current_bottom + 1]
-        #         shifted_mask[shift_down:size] = source_slice
-        #         mask = shifted_mask
-        #
-        #         rows_with_content = np.where(mask.max(axis=1) > 0)[0]
-
-        # Recalculate content rows for gradient
-        rows_with_content = np.where(mask.max(axis=1) > 0)[0]
+        # Smooth the silhouette edges
+        if blur_amount and blur_amount > 0:
+            mask = ptk.ImgUtils.gaussian_blur(mask, radius=blur_amount)
 
         h, w = mask.shape
 
-        # Gradient logic
-        cols_with_content = np.where(mask.max(axis=0) > 0)[0]
-
-        if len(rows_with_content) > 0 and len(cols_with_content) > 0:
-            top_row = rows_with_content[0]
-            bottom_row = rows_with_content[-1]
-            center_col = (cols_with_content[0] + cols_with_content[-1]) // 2
-            contact_point = (center_col, bottom_row)
-
-            y, x = np.ogrid[:h, :w]
-            dist_from_contact = np.sqrt(
-                (x - contact_point[0]) ** 2 + (y - contact_point[1]) ** 2
-            )
-            max_dist = max(bottom_row - top_row, 1)
-            radial = 1.0 - np.clip(dist_from_contact / max_dist, 0, 1) ** 0.8
-
-            vertical = np.zeros((h, w), dtype=np.float32)
-            for row in range(h):
-                if row < top_row:
-                    vertical[row, :] = 0.0
-                elif row > bottom_row:
-                    vertical[row, :] = 1.0
-                else:
-                    t = (row - top_row) / max(bottom_row - top_row, 1)
-                    vertical[row, :] = t**0.6
-
-            combined = radial * 0.7 + vertical * 0.3
-        else:
+        if uniform_alpha:
             combined = np.ones((h, w), dtype=np.float32)
+        else:
+            rows_with_content = np.where(mask.max(axis=1) > 0)[0]
+            cols_with_content = np.where(mask.max(axis=0) > 0)[0]
+
+            if len(rows_with_content) and len(cols_with_content):
+                top_row = rows_with_content[0]
+                bottom_row = rows_with_content[-1]
+                center_col = (cols_with_content[0] + cols_with_content[-1]) // 2
+
+                # Resolve contact point. ``falloff_source`` is interpreted in
+                # *saved-PNG image coords* — (0, 0) top-left, (1, 1) bottom-
+                # right of the file the user opens on disk. The gradient is
+                # computed before the final ``np.flipud`` (which exists so
+                # the texture aligns with Maya's V-up UV convention), so the
+                # v coord is mirrored when passed to the gradient.
+                if falloff_source is not None:
+                    src_u = float(falloff_source[0])
+                    src_v_saved = float(falloff_source[1])
+                    src_uv_norm = (src_u, 1.0 - src_v_saved)
+                else:
+                    src_uv_norm = (
+                        center_col / max(w - 1, 1),
+                        bottom_row / max(h - 1, 1),
+                    )
+
+                # Radial falloff (1 at source → 0 at silhouette height away)
+                max_dist = max(bottom_row - top_row, 1)
+                radial_w = max(1.0 - vertical_weight, 0.0)
+                vertical_w = max(min(vertical_weight, 1.0), 0.0)
+
+                radial = ptk.ImgUtils.radial_gradient(
+                    (w, h),
+                    center=src_uv_norm,
+                    max_radius=max_dist,
+                    falloff_power=falloff_power,
+                )
+
+                # Vertical term — only contributes where mask has content
+                # vertically; outside that band it falls off in the same
+                # direction as the silhouette.
+                vertical = np.zeros((h, w), dtype=np.float32)
+                rows = np.arange(h)
+                span = max(bottom_row - top_row, 1)
+                t = np.clip((rows - top_row) / span, 0.0, 1.0) ** 0.6
+                vertical[:, :] = t[:, None]
+                vertical[rows < top_row, :] = 0.0
+                vertical[rows > bottom_row, :] = 1.0
+
+                combined = radial * radial_w + vertical * vertical_w
+            else:
+                combined = np.ones((h, w), dtype=np.float32)
 
         alpha = (mask.astype(np.float32) / 255.0 * combined * 255).astype(np.uint8)
         alpha = np.flipud(
@@ -481,70 +528,73 @@ class ShadowRig(ptk.LoggingMixin):
         cv2.imwrite(self.texture_path, img)
         return self.texture_path
 
-    def create_material(self):
+    def create_material(self, shader_type="stingray", stingray_opacity_mode="transparent"):
         """Create material with the silhouette texture.
 
-        Uses Stingray PBS shader for best Unity compatibility.
+        Parameters:
+            shader_type: ``"stingray"`` (Unity-friendly StingrayPBS) or
+                ``"standard"`` (standardSurface — cleanest VP2.0 preview but
+                less direct mapping to Unity materials).
+            stingray_opacity_mode: When ``shader_type="stingray"``:
+                ``"transparent"`` (alpha blend; soft edges; faint preview tint)
+                or ``"masked"`` (alpha test; hard edges; no preview tint).
+
         Material properties:
         - Base color: Black (shadow color)
         - Opacity: From texture alpha
-        - Metallic: 0
-        - Roughness: 1 (no reflections)
-        - Use Opacity Map: Enabled for transparency
+        - Metallic: 0, Roughness: 1 (no reflections)
         """
         if not self.texture_path:
             raise ValueError("Texture not created yet")
 
-        # Try Stingray PBS first (best Unity compatibility)
-        # Falls back to standardSurface if Stingray not available
-        try:
-            self.shader = cmds.shadingNode(
-                "StingrayPBS", asShader=True, name=f"{self.shadow_plane}_mat"
-            )
+        # Shared file/place2d setup
+        file_node = cmds.shadingNode(
+            "file", asTexture=True, name=f"{self.shadow_plane}_tex"
+        )
+        cmds.setAttr(f"{file_node}.fileTextureName", self.texture_path, type="string")
+        place2d = cmds.shadingNode(
+            "place2dTexture", asUtility=True, name=f"{self.shadow_plane}_place2d"
+        )
+        cmds.connectAttr(f"{place2d}.outUV", f"{file_node}.uv")
+        cmds.connectAttr(f"{place2d}.outUvFilterSize", f"{file_node}.uvFilterSize")
 
-            # Set up for transparent shadow
+        if shader_type == "stingray":
+            # Always load a graph — a bare StingrayPBS node exposes none of
+            # the attrs (base_color/use_opacity_map/etc.) the old code tried
+            # to set, which silently fell back to standardSurface.
+            self.shader = MatUtils.create_stingray_shader(
+                f"{self.shadow_plane}_mat",
+                opacity_mode=stingray_opacity_mode,
+            )
             cmds.setAttr(f"{self.shader}.base_color", 0, 0, 0, type="double3")
-            cmds.setAttr(f"{self.shader}.metallic", 0)
-            cmds.setAttr(f"{self.shader}.roughness", 1)
-
-            # Enable opacity
+            if cmds.attributeQuery("metallic", node=self.shader, exists=True):
+                cmds.setAttr(f"{self.shader}.metallic", 0)
+            if cmds.attributeQuery("roughness", node=self.shader, exists=True):
+                cmds.setAttr(f"{self.shader}.roughness", 1)
             cmds.setAttr(f"{self.shader}.use_opacity_map", True)
+            if stingray_opacity_mode == "masked":
+                # TEX_mask_map is color3 — fan the scalar alpha into all three.
+                for ch in ("X", "Y", "Z"):
+                    cmds.connectAttr(
+                        f"{file_node}.outAlpha",
+                        f"{self.shader}.TEX_mask_map{ch}",
+                        force=True,
+                    )
+            else:
+                cmds.connectAttr(
+                    f"{file_node}.outAlpha", f"{self.shader}.opacity", force=True
+                )
 
-            # Create file node for texture
-            file_node = cmds.shadingNode(
-                "file", asTexture=True, name=f"{self.shadow_plane}_tex"
-            )
-            cmds.setAttr(
-                f"{file_node}.fileTextureName", self.texture_path, type="string"
-            )
-
-            place2d = cmds.shadingNode(
-                "place2dTexture", asUtility=True, name=f"{self.shadow_plane}_place2d"
-            )
-            cmds.connectAttr(f"{place2d}.outUV", f"{file_node}.uv")
-            cmds.connectAttr(
-                f"{place2d}.outUvFilterSize", f"{file_node}.uvFilterSize"
-            )
-
-            # Connect alpha to opacity
-            cmds.connectAttr(f"{file_node}.outAlpha", f"{self.shader}.opacity_map")
-
-            # Create opacity multiplier for expression control
             self.opacity_mult = cmds.shadingNode(
                 "multiplyDivide",
                 asUtility=True,
                 name=f"{self.shadow_plane}_opacity_mult",
             )
-            cmds.connectAttr(
-                f"{file_node}.outAlpha", f"{self.opacity_mult}.input1X"
-            )
+            cmds.connectAttr(f"{file_node}.outAlpha", f"{self.opacity_mult}.input1X")
             cmds.setAttr(f"{self.opacity_mult}.input2X", 1.0)
-
-            print("Created Stingray PBS material (Unity-compatible)")
-
-        except Exception as e:
-            print(f"Stingray PBS not available ({e}), using standardSurface")
-
+            print(f"Created StingrayPBS material ({stingray_opacity_mode})")
+        else:
+            # standardSurface path (cleanest VP2.0 preview; Arnold's PBR).
             self.shader = cmds.shadingNode(
                 "standardSurface", asShader=True, name=f"{self.shadow_plane}_mat"
             )
@@ -553,39 +603,17 @@ class ShadowRig(ptk.LoggingMixin):
             cmds.setAttr(f"{self.shader}.metalness", 0)
             cmds.setAttr(f"{self.shader}.specularRoughness", 1)
 
-            file_node = cmds.shadingNode(
-                "file", asTexture=True, name=f"{self.shadow_plane}_tex"
-            )
-            cmds.setAttr(
-                f"{file_node}.fileTextureName", self.texture_path, type="string"
-            )
-
-            place2d = cmds.shadingNode(
-                "place2dTexture", asUtility=True, name=f"{self.shadow_plane}_place2d"
-            )
-            cmds.connectAttr(f"{place2d}.outUV", f"{file_node}.uv")
-            cmds.connectAttr(
-                f"{place2d}.outUvFilterSize", f"{file_node}.uvFilterSize"
-            )
-
-            # Create opacity multiplier controlled by expression
             self.opacity_mult = cmds.shadingNode(
                 "multiplyDivide",
                 asUtility=True,
                 name=f"{self.shadow_plane}_opacity_mult",
             )
-            cmds.connectAttr(
-                f"{file_node}.outAlpha", f"{self.opacity_mult}.input1X"
-            )
-            cmds.connectAttr(
-                f"{file_node}.outAlpha", f"{self.opacity_mult}.input1Y"
-            )
-            cmds.connectAttr(
-                f"{file_node}.outAlpha", f"{self.opacity_mult}.input1Z"
-            )
-
-            # Connect to shader opacity
+            for chan in ("X", "Y", "Z"):
+                cmds.connectAttr(
+                    f"{file_node}.outAlpha", f"{self.opacity_mult}.input1{chan}"
+                )
             cmds.connectAttr(f"{self.opacity_mult}.output", f"{self.shader}.opacity")
+            print("Created standardSurface material")
 
         sg = cmds.sets(
             renderable=True, noSurfaceShader=True, empty=True, name=f"{self.shader}_SG"
@@ -870,8 +898,20 @@ class ShadowRigSlots:
         # Bind to the UI that corresponds to this slots class (shadow_rig.ui)
         self.ui = self.sb.loaded_ui.shadow_rig
 
-        # Connect UI elements
-        self.ui.b000.clicked.connect(self.create_shadow)
+        # Preview wraps perform_operation in an undo chunk so toggling the
+        # checkbox builds the rig, tweaking any option refreshes it, and
+        # clicking b000 (Create Shadow) commits.
+        self.preview = Preview(
+            self, self.ui.chk_preview, self.ui.b000, message_func=self.sb.message_box
+        )
+
+        # Any option change should re-bake the previewed rig.
+        self.ui.cmb_mode.currentIndexChanged.connect(self.preview.refresh)
+        self.ui.chk_combine.toggled.connect(self.preview.refresh)
+        self.ui.txt_source.editingFinished.connect(self.preview.refresh)
+        self.ui.s000.currentIndexChanged.connect(self.preview.refresh)
+        self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
+
         self.ui.b001.clicked.connect(self.b001)
 
     def header_init(self, widget):
@@ -883,9 +923,9 @@ class ShadowRigSlots:
             setObjectName="btn_instructions",
             setToolTip=(
                 "Shadow Rig — Create a projected-shadow plane rig.\n\n"
-                "• Select target objects, then press Create.\n"
-                "• Configurable resolution, source name, and projection axis.\n"
-                "• Optionally combine multiple objects into one shadow.\n"
+                "• Select target objects, then enable Preview to build live.\n"
+                "• Tweak resolution, axis, mode, etc. — preview refreshes.\n"
+                "• Press Create Shadow to commit; toggle Preview off to discard.\n"
                 "• Exports cleanly for game engines like Unity."
             ),
         )
@@ -894,16 +934,16 @@ class ShadowRigSlots:
         """Reset to Defaults: Resets all UI widgets to their default values."""
         self.ui.state.reset_all()
 
-    @CoreUtils.undoable
-    def create_shadow(self):
-        """Create projected shadow for selected objects."""
-        sel = cmds.ls(selection=True) or []
-        if not sel:
-            self.sb.message_box("Please select target object(s).")
+    def perform_operation(self, objects, contract):
+        """Build the shadow rig for the given targets.
+
+        Called by Preview during the hermetic preview phase (contract is a
+        CleanupContract) and again during commit (contract is None).
+        """
+        targets = list(objects) if objects else []
+        if not targets:
             return
 
-        # Pass all selected objects for a combined shadow
-        targets = list(sel)
         # Resolution combobox: extract numeric value from text like "Resolution: 512"
         res_text = self.ui.s000.currentText()
         resolution = int(res_text.replace("Resolution: ", ""))
@@ -920,27 +960,16 @@ class ShadowRigSlots:
         mode_map = {0: "stretch", 1: "orbit"}
         mode = mode_map.get(mode_idx, "stretch")
 
-        try:
-            ShadowRig.create(
-                targets,
-                texture_res=resolution,
-                axis=axis,
-                source_name=source_name,
-                recursive=recursive,
-                mode=mode,
-            )
-            count = len(targets)
-            msg = (
-                f"Created shadow for {count} object(s)"
-                if count > 1
-                else f"Created shadow for {targets[0]}"
-            )
-            self.sb.message_box(msg)
-        except Exception as e:
-            self.sb.message_box(f"Error creating shadow: {e}")
-            import traceback
-
-            traceback.print_exc()
+        rig = ShadowRig.create(
+            targets,
+            texture_res=resolution,
+            axis=axis,
+            source_name=source_name,
+            recursive=recursive,
+            mode=mode,
+        )
+        if contract is not None and rig.texture_path:
+            contract.add_file(rig.texture_path)
 
 
 if __name__ == "__main__":
