@@ -1,150 +1,115 @@
 # mayatk — API Changes
 
-_Diff vs prior baseline. Generated 2026-05-14._
+_Diff vs prior baseline. Generated 2026-05-16._
 
-## Removed (45)
+## Removed (11)
 
-- `edit_utils/dynamic_pipe.py::BezierCurve` — was `(class)`
-- `edit_utils/dynamic_pipe.py::BezierCurve.add_control_point` — was `(self, position, handle1_offset=(1, 0, 0), handle2_offset=(-1, 0, 0))`
-- `edit_utils/dynamic_pipe.py::BezierCurve.adjust_handles` — was `(self, index, handle1_new_position=None, handle2_new_position=None)`
-- `edit_utils/dynamic_pipe.py::BezierCurve.update_control_point` — was `(self, index, new_position)`
-- `edit_utils/dynamic_pipe.py::Curve` — was `(class)`
-- `edit_utils/dynamic_pipe.py::Curve.add_point` — was `(self, position)`
-- `edit_utils/dynamic_pipe.py::Curve.get_adjacent_points` — was `(self, u, delta)`
-- `edit_utils/dynamic_pipe.py::Curve.get_param_at_point` — was `(self, point)`
-- `edit_utils/dynamic_pipe.py::Curve.get_point_at_param` — was `(self, param)`
-- `edit_utils/dynamic_pipe.py::Curve.length` — was `(self, new_length)`
-- `edit_utils/dynamic_pipe.py::Curve.update_curve_cv` — was `(self, index, position)`
-- `edit_utils/dynamic_pipe.py::Curve.update_point` — was `(self, index, new_position)`
-- `edit_utils/dynamic_pipe.py::CurveRig` — was `(class)`
-- `edit_utils/dynamic_pipe.py::CurveRig.add_circles_between_points` — was `(self, start_parameter, end_parameter, num_circles)`
-- `edit_utils/dynamic_pipe.py::CurveRig.add_locator` — was `(self, position)`
-- `edit_utils/dynamic_pipe.py::CurveRig.add_path_locators` — was `(self, locators_per_segment)`
-- `edit_utils/dynamic_pipe.py::CurveRig.align_and_orient_to_curve` — was `(self, obj, position)`
-- `edit_utils/dynamic_pipe.py::CurveRig.create_curve_from_locators` — was `(self, locators)`
-- `edit_utils/dynamic_pipe.py::CurveRig.create_inbetween_locators` — was `(self, num_inbetween)`
-- `edit_utils/dynamic_pipe.py::CurveRig.create_locator_at_position` — was `(self, position)`
-- `edit_utils/dynamic_pipe.py::CurveRig.create_nurbs_circles_at_locators` — was `(self)`
-- `edit_utils/dynamic_pipe.py::CurveRig.get_adjacent_curve_points` — was `(self, u)`
-- `edit_utils/dynamic_pipe.py::CurveRig.get_segment_param_range` — was `(self, start_index, end_index)`
-- `edit_utils/dynamic_pipe.py::CurveRig.orient_end_locators` — was `(self, index)`
-- `edit_utils/dynamic_pipe.py::CurveRig.orient_locators` — was `(self)`
-- `edit_utils/dynamic_pipe.py::CurveRig.orient_middle_locators` — was `(self, index)`
-- `edit_utils/dynamic_pipe.py::CurveRig.orient_object` — was `(self, obj, point1, point2)`
-- `edit_utils/dynamic_pipe.py::CurveRig.place_locators_on_segment` — was `(self, segment_index, num_locators, start_param, end_param)`
-- `edit_utils/dynamic_pipe.py::CurveRig.position_and_orient_object` — was `(self, obj, locator)`
-- `edit_utils/dynamic_pipe.py::CurveRig.remove_locator` — was `(self, locator_index)`
-- `edit_utils/dynamic_pipe.py::CurveRig.setup_clusters` — was `(self)`
-- `edit_utils/dynamic_pipe.py::CurveRig.update_curve_cv` — was `(self, index, position)`
-- `edit_utils/dynamic_pipe.py::CurveRig.update_locator_position` — was `(self, index, new_position)`
-- `edit_utils/dynamic_pipe.py::CurveRig.validate_locators` — was `(self, locators)`
-- `edit_utils/dynamic_pipe.py::DynamicPipe.add_circles_between_points` — was `(self, start_parameter, end_parameter, num_circles)`
-- `edit_utils/dynamic_pipe.py::DynamicPipe.create_nurbs_circles_at_locators` — was `(self, locators)`
-- `edit_utils/dynamic_pipe.py::DynamicPipe.loft_between_circles` — was `(self, circles)`
-- `edit_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge` — was `(class)`
-- `edit_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.export_path` — was `(self, value)`
-- `edit_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.process_with_rizomuv` — was `(self, objects, uv_script=None, preset=None)`
-- `edit_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.rizom_path` — was `(self, value)`
-- `edit_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.script_path` — was `(self, value)`
-- `mat_utils/game_shader.py::CallbackLogHandler` — was `(class)`
-- `mat_utils/game_shader.py::CallbackLogHandler.emit` — was `(self, record)`
-- `mat_utils/game_shader.py::GameShaderSlots.callback` — was `(self, string, progress=None, clear=False)`
+- `core_utils/preview.py::Preview.disable_on_external_undo` — was `(self) -> None`
+- `core_utils/preview.py::Preview.disable_on_selection_change` — was `(self) -> None`
+- `core_utils/preview.py::Preview.eventFilter` — was `(self, obj, event)`
+- `core_utils/preview.py::Preview.has_changes` — was `(self) -> bool`
+- `core_utils/preview.py::Preview.safe_operation` — was `(func: Callable) -> Callable`
+- `core_utils/preview.py::Preview.undo_if_needed` — was `(self) -> None`
+- `mat_utils/marmoset/bridge.py::MarmosetBridge` — was `(class)`
+- `mat_utils/marmoset/bridge.py::MarmosetBridge.send` — was `(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, toolbag_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, headless: bool = False, template: str = 'import') -> Optional[str]`
+- `mat_utils/marmoset/templates/bake.py::main` — was `()`
+- `mat_utils/marmoset/templates/import.py::main` — was `()`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.create_shadow` — was `(self)`
 
-## Added (30)
+## Added (53)
 
-- `core_utils/script_job_manager.py::ScriptJobManager.print_status(self) -> None`
-- `core_utils/script_job_manager.py::ScriptJobManager.status(self) -> Dict[str, Any]`
-- `env_utils/_env_utils.py::EnvUtils.find_original_for_autosave(cls, autosave_path: Optional[str] = None) -> Optional[str]`
-- `env_utils/_env_utils.py::EnvUtils.save_autosave_to_original(cls, original_path: Optional[str] = None, backup_existing: bool = True) -> Optional[str]`
-- `env_utils/hierarchy_manager/hierarchy_sidecar.py::HierarchySidecar.base_stem(cls, export_path: str) -> str`
-- `env_utils/hierarchy_manager/hierarchy_sidecar.py::HierarchySidecar.ensure_base_name(cls, export_path: str) -> Optional[str]`
-- `env_utils/hierarchy_manager/hierarchy_sidecar.py::HierarchySidecar.find_legacy_manifest(cls, export_path: str) -> Optional[str]`
-- `env_utils/maya_connection.py::MayaConnection.open_available_command_ports(mel_start: int = 7001, python_start: int = 7002, max_offset: int = 50, tag_window: bool = True) -> dict`
-- `env_utils/maya_connection.py::open_available_command_ports(mel_start=7001, python_start=7002, max_offset=50, tag_window=True)`
-- `env_utils/script_output.py::toggle(*args, **kwargs)`
-- `light_utils/hdr_manager.py::HdrManager.ensure_plugin_loaded() -> bool`
-- `mat_utils/game_shader.py::GameShaderSlots.affix_is_prefix(self) -> bool`
-- `mat_utils/game_shader.py::GameShaderSlots.mat_suffix(self) -> str`
-- `mat_utils/game_shader.py::GameShaderSlots.txt002_init(self, widget)`
-- `mat_utils/image_to_plane/image_to_plane_slots.py::ImageToPlaneSlots.txt_suffix_init(self, widget)`
-- `rig_utils/_rig_utils.py::RigUtils.restore_rig_anchors(cls, objects, traverse: bool = True, skip_animated: bool = True, pivot_source: str = 'bbox') -> List[str]`
-- `uv_utils/_uv_utils.py::UvUtils.discard_uv_snapshot(snapshots: Sequence[UvSnapshot]) -> None`
-- `uv_utils/_uv_utils.py::UvUtils.restore_uv_snapshot(snapshots: Sequence[UvSnapshot]) -> None`
-- `uv_utils/_uv_utils.py::UvUtils.snapshot_uv_sets(objects: Sequence[Union[str, object]], prefix: str = '_uv_snap') -> List[UvSnapshot]`
-- `uv_utils/rizom_bridge/parameters.py::RizomParam(class)`
-- `uv_utils/rizom_bridge/parameters.py::RizomParam.format_value(self, value: Any) -> str`
-- `uv_utils/rizom_bridge/parameters.py::defaults() -> 'dict[str, Any]'`
-- `uv_utils/rizom_bridge/parameters.py::referenced_keys(script_text: str) -> 'set[str]'`
-- `uv_utils/rizom_bridge/parameters.py::render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`
-- `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots(class)`
-- `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots.b000(self)`
-- `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots.bridge(self) -> RizomUVBridge`
-- `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots.cmb000_init(self, widget)`
-- `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots.header_init(self, widget)`
-- `xform_utils/_xform_utils.py::XformUtils.unfreeze_to_parent(objects, traverse: bool = False, preserve_root: bool = True) -> List[str]`
+- `core_utils/preview.py::CleanupContract(class)`
+- `core_utils/preview.py::CleanupContract.add_file(self, path) -> None`
+- `core_utils/preview.py::CleanupContract.record_modification(self, node: str, attr: str) -> None`
+- `core_utils/preview.py::CleanupContract.rollback(self) -> None`
+- `core_utils/preview_old.py::Preview(class)`
+- `core_utils/preview_old.py::Preview.cleanup(self) -> None`
+- `core_utils/preview_old.py::Preview.cleanup_all_instances(cls) -> None`
+- `core_utils/preview_old.py::Preview.conditionally_disable(self) -> None`
+- `core_utils/preview_old.py::Preview.conditionally_enable(self) -> None`
+- `core_utils/preview_old.py::Preview.disable(self) -> None`
+- `core_utils/preview_old.py::Preview.disable_on_external_undo(self) -> None`
+- `core_utils/preview_old.py::Preview.disable_on_selection_change(self) -> None`
+- `core_utils/preview_old.py::Preview.enable(self) -> None`
+- `core_utils/preview_old.py::Preview.enabled(self) -> bool`
+- `core_utils/preview_old.py::Preview.eventFilter(self, obj, event)`
+- `core_utils/preview_old.py::Preview.finalize_changes(self)`
+- `core_utils/preview_old.py::Preview.get_operated_objects(self) -> List[str]`
+- `core_utils/preview_old.py::Preview.has_changes(self) -> bool`
+- `core_utils/preview_old.py::Preview.init_show_hide_behavior(self, enable_on_show: bool, disable_on_hide: bool) -> None`
+- `core_utils/preview_old.py::Preview.operated_object_count(self) -> int`
+- `core_utils/preview_old.py::Preview.refresh(self, *args)`
+- `core_utils/preview_old.py::Preview.safe_operation(func: Callable) -> Callable`
+- `core_utils/preview_old.py::Preview.toggle(self, state: bool) -> None`
+- `core_utils/preview_old.py::Preview.undo_if_needed(self) -> None`
+- `core_utils/preview_old.py::Preview.validate_operation(self, objects: List[Any]) -> bool`
+- `core_utils/preview_old.py::cleanup_all_previews() -> None`
+- `mat_utils/marmoset_bridge/_marmoset_bridge.py::MarmosetBridge(class)`
+- `mat_utils/marmoset_bridge/_marmoset_bridge.py::MarmosetBridge.render_template(self, template: str, fbx_path: str, manifest_path: str, output_dir: str, mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None, headless: Optional[bool] = None) -> Optional[str]`
+- `mat_utils/marmoset_bridge/_marmoset_bridge.py::MarmosetBridge.send(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, toolbag_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]`
+- `mat_utils/marmoset_bridge/_marmoset_bridge.py::MarmosetBridge.toolbag_path(self, value: Optional[str]) -> None`
+- `mat_utils/marmoset_bridge/_marmoset_bridge.py::list_template_modes() -> 'list[tuple[str, str]]'`
+- `mat_utils/marmoset_bridge/_marmoset_bridge.py::list_templates() -> 'list[Path]'`
+- `mat_utils/marmoset_bridge/_marmoset_bridge.py::template_modes(template_path: Path) -> Tuple[str, ...]`
+- `mat_utils/marmoset_bridge/marmoset_bridge_slots.py::MarmosetBridgeSlots(class)`
+- `mat_utils/marmoset_bridge/marmoset_bridge_slots.py::MarmosetBridgeSlots.b000(self)`
+- `mat_utils/marmoset_bridge/marmoset_bridge_slots.py::MarmosetBridgeSlots.bridge(self) -> MarmosetBridge`
+- `mat_utils/marmoset_bridge/marmoset_bridge_slots.py::MarmosetBridgeSlots.cmb000_init(self, widget)`
+- `mat_utils/marmoset_bridge/marmoset_bridge_slots.py::MarmosetBridgeSlots.header_init(self, widget)`
+- `mat_utils/marmoset_bridge/parameters.py::MarmosetParam(class)`
+- `mat_utils/marmoset_bridge/parameters.py::MarmosetParam.format_value(self, value: Any) -> str`
+- `mat_utils/marmoset_bridge/parameters.py::defaults() -> 'dict[str, Any]'`
+- `mat_utils/marmoset_bridge/parameters.py::referenced_keys(script_text: str) -> 'set[str]'`
+- `mat_utils/marmoset_bridge/parameters.py::render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`
+- `mat_utils/marmoset_bridge/templates/bake.py::main()`
+- `mat_utils/marmoset_bridge/templates/import.py::main()`
+- `mat_utils/marmoset_bridge/templates/lookdev.py::main()`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.perform_operation(self, objects, contract)`
+- `xform_utils/pivot_watcher.py::PivotWatcher(class)`
+- `xform_utils/pivot_watcher.py::PivotWatcher.attach_widget(self, widget) -> None`
+- `xform_utils/pivot_watcher.py::PivotWatcher.owner(self) -> Any`
+- `xform_utils/pivot_watcher.py::PivotWatcher.start(self) -> None`
+- `xform_utils/pivot_watcher.py::PivotWatcher.started(self) -> bool`
+- `xform_utils/pivot_watcher.py::PivotWatcher.stop(self) -> None`
 
-## Signature changed (21)
+## Signature changed (13)
 
-- `core_utils/components.py::Components.get_faces_with_similar_normals`
-  - was: `(cls, faces, transforms=[], similar_faces=[], range_x=0.1, range_y=0.1, range_z=0.1, returned_type='str')`
-  - now: `(cls, faces, transforms=None, similar_faces=None, range_x=0.1, range_y=0.1, range_z=0.1, returned_type='str')`
-- `edit_utils/_edit_utils.py::EditUtils.separate_objects`
-  - was: `(objects=None, by_material: bool = False, center_pivots: bool = True, rename: bool = False) -> List`
-  - now: `(objects=None, by_material: bool = False, group_by_material: bool = False, center_pivots: bool = True, rename: bool = False) -> List`
-- `edit_utils/dynamic_pipe.py::DynamicPipe.create_pipe_geometry`
-  - was: `(self, segments_to_loft)`
-  - now: `(self, segments_to_loft: Optional[Sequence[int]] = None) -> List[str]`
-- `edit_utils/naming/_naming.py::Naming.set_case`
-  - was: `(objects=[], case='caplitalize')`
-  - now: `(objects=None, case='capitalize')`
-- `env_utils/hierarchy_manager/hierarchy_sidecar.py::HierarchySidecar.clean_stale_diff`
-  - was: `(cls, export_path: str) -> None`
-  - now: `(cls, export_path: str, *, base_stem: bool = False) -> None`
-- `env_utils/hierarchy_manager/hierarchy_sidecar.py::HierarchySidecar.compare`
-  - was: `(cls, export_path: str, current_paths: set) -> Tuple[bool, list, list]`
-  - now: `(cls, export_path: str, current_paths: set, *, base_stem: bool = False) -> Tuple[bool, list, list]`
-- `env_utils/hierarchy_manager/hierarchy_sidecar.py::HierarchySidecar.diff_report_path_for`
-  - was: `(export_path: str) -> str`
-  - now: `(cls, export_path: str, *, base_stem: bool = False) -> str`
-- `env_utils/hierarchy_manager/hierarchy_sidecar.py::HierarchySidecar.manifest_path_for`
-  - was: `(export_path: str) -> str`
-  - now: `(cls, export_path: str, *, base_stem: bool = False) -> str`
-- `env_utils/hierarchy_manager/hierarchy_sidecar.py::HierarchySidecar.read_manifest`
-  - was: `(cls, export_path: str) -> Optional[Set[str]]`
-  - now: `(cls, export_path: str, *, base_stem: bool = False) -> Optional[Set[str]]`
-- `env_utils/hierarchy_manager/hierarchy_sidecar.py::HierarchySidecar.write_diff_report`
-  - was: `(cls, export_path: str, missing: list, extra: list, reparented: list = None) -> Optional[str]`
-  - now: `(cls, export_path: str, missing: list, extra: list, reparented: list = None, *, base_stem: bool = False) -> Optional[str]`
-- `env_utils/hierarchy_manager/hierarchy_sidecar.py::HierarchySidecar.write_manifest`
-  - was: `(cls, export_path: str, paths) -> Optional[str]`
-  - now: `(cls, export_path: str, paths, *, base_stem: bool = False) -> Optional[str]`
-- `env_utils/maya_connection.py::MayaConnection.connect`
-  - was: `(self, mode: ConnectionMode = 'auto', port: int = 7002, host: str = 'localhost', launch: bool = True, app_path: Optional[str] = None, force_new_instance: bool = True, launch_args: Optional[List[str]] = None, confirm_existing: bool = True) -> bool`
-  - now: `(self, mode: ConnectionMode = 'auto', port: int = 7002, host: str = 'localhost', launch: bool = True, app_path: Optional[str] = None, force_new_instance: bool = True, launch_args: Optional[List[str]] = None, confirm_existing: bool = True, auto_cleanup: bool = False) -> bool`
-- `env_utils/reference_manager.py::ReferenceManager.import_references`
-  - was: `(self, namespaces=None, remove_namespace=False)`
-  - now: `(self, namespaces=None, remove_namespace=True)`
-- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.generate_export_path`
-  - was: `(self) -> str`
-  - now: `(self, version_format: str = '') -> str`
-- `env_utils/script_output.py::ScriptConsole.show_console`
-  - was: `(cls, dock=None, width: int = None, height: int = None, tab_position: str = None)`
-  - now: `(cls, dock=None, width: int = None, height: int = None, tab_position: str = None, restore: bool = False)`
-- `mat_utils/_mat_utils.py::MatUtils.move_texture_files`
-  - was: `(cls, found_files: List[Union[str, Tuple[str, str]]], new_dir: str, delete_old: bool = False, create_dir: bool = True) -> None`
-  - now: `(cls, found_files: List[Union[str, Tuple[str, str]]], new_dir: str, delete_old: bool = False, create_dir: bool = True, per_file_timeout: float = 120.0, max_workers: int = 8, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> List[Tuple[str, str]]`
-- `mat_utils/game_shader.py::GameShader.create_network`
-  - was: `(self, textures: List[str], name: str = '', prefix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]`
-  - now: `(self, textures: List[str], name: str = '', prefix: str = '', suffix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]`
+- `core_utils/preview.py::Preview.finalize_changes`
+  - was: `(self)`
+  - now: `(self) -> None`
+- `core_utils/preview.py::Preview.refresh`
+  - was: `(self, *args)`
+  - now: `(self, *args) -> None`
+- `edit_utils/bevel.py::BevelSlots.perform_operation`
+  - was: `(self, objects)`
+  - now: `(self, objects, contract)`
+- `edit_utils/bridge.py::BridgeSlots.perform_operation`
+  - was: `(self, objects)`
+  - now: `(self, objects, contract)`
+- `edit_utils/cut_on_axis.py::CutOnAxisSlots.perform_operation`
+  - was: `(self, objects)`
+  - now: `(self, objects, contract)`
+- `edit_utils/duplicate_grid.py::DuplicateGridSlots.perform_operation`
+  - was: `(self, objects)`
+  - now: `(self, objects, contract)`
+- `edit_utils/duplicate_linear.py::DuplicateLinearSlots.perform_operation`
+  - was: `(self, objects)`
+  - now: `(self, objects, contract)`
+- `edit_utils/duplicate_radial.py::DuplicateRadialSlots.perform_operation`
+  - was: `(self, objects)`
+  - now: `(self, objects, contract)`
+- `edit_utils/mirror.py::MirrorSlots.perform_operation`
+  - was: `(self, objects)`
+  - now: `(self, objects, contract)`
+- `mat_utils/_mat_utils.py::MatUtils.create_stingray_shader`
+  - was: `(name, opacity=False)`
+  - now: `(name, opacity=False, opacity_mode=None)`
 - `mat_utils/image_to_plane/_image_to_plane.py::ImageToPlane.create`
-  - was: `(cls, image_paths: List[str], mat_type: str = 'stingray', suffix: str = '_MAT', plane_height: float = 10.0, axis: Optional[List[float]] = None, group: bool = False, group_name: str = 'imagePlanes_GRP') -> Dict[str, object]`
-  - now: `(cls, image_paths: List[str], mat_type: str = 'stingray', suffix: str = '_MAT', prefix: str = '', plane_height: float = 10.0, axis: Optional[List[float]] = None, group: bool = False, group_name: str = 'imagePlanes_GRP') -> Dict[str, object]`
-- `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.process_with_rizomuv`
-  - was: `(self, objects, uv_script=None, preset=None)`
-  - now: `(self, objects, uv_script=None, preset=None, params=None)`
-- `xform_utils/_xform_utils.py::XformUtils.restore_transforms`
-  - was: `(objects, prefix='original', delete_attrs=False)`
-  - now: `(objects, prefix='original', delete_attrs=True)`
-- `xform_utils/_xform_utils.py::XformUtils.store_transforms`
-  - was: `(objects, prefix='original', accumulate=True)`
-  - now: `(objects, prefix='original', accumulate=True, traverse=False)`
+  - was: `(cls, image_paths: List[str], mat_type: str = 'stingray', suffix: str = '_MAT', prefix: str = '', plane_height: float = 10.0, axis: Optional[List[float]] = None, group: bool = False, group_name: str = 'imagePlanes_GRP') -> Dict[str, object]`
+  - now: `(cls, image_paths: List[str], mat_type: str = 'stingray', suffix: str = '_MAT', prefix: str = '', plane_height: float = 10.0, axis: Optional[List[float]] = None, group: bool = False, group_name: str = 'imagePlanes_GRP', stingray_opacity_mode: str = 'transparent', mask_threshold: float = 0.5) -> Dict[str, object]`
+- `rig_utils/shadow_rig.py::ShadowRig.create_material`
+  - was: `(self)`
+  - now: `(self, shader_type='stingray', stingray_opacity_mode='transparent')`
+- `rig_utils/shadow_rig.py::ShadowRig.create_silhouette_texture`
+  - was: `(self, size=512, axis='auto', recursive=True)`
+  - now: `(self, size=512, axis='auto', recursive=True, *, uniform_alpha=False, falloff_source=None, falloff_power=0.8, vertical_weight=0.3, blur_amount=1.5)`

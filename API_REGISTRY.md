@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-05-14_
+_Generated: 2026-05-16_
 
 ## Index
 
@@ -65,7 +65,8 @@ _Generated: 2026-05-14_
 - [`core_utils/instancing/geometry_matcher.py`](#core_utils--instancing--geometry_matcher) — Geometry analysis and matching logic for AutoInstancer.
 - [`core_utils/instancing/instancing_strategy.py`](#core_utils--instancing--instancing_strategy) — Instancing strategy logic for AutoInstancer.
 - [`core_utils/mash.py`](#core_utils--mash)
-- [`core_utils/preview.py`](#core_utils--preview)
+- [`core_utils/preview.py`](#core_utils--preview) — Hermetic preview with replay-on-commit (H1 design).
+- [`core_utils/preview_old.py`](#core_utils--preview_old)
 - [`core_utils/script_job_manager.py`](#core_utils--script_job_manager) — Centralized Maya event subscription manager.
 - [`display_utils/_display_utils.py`](#display_utils--_display_utils)
 - [`display_utils/color_manager.py`](#display_utils--color_manager)
@@ -109,9 +110,12 @@ _Generated: 2026-05-14_
 - [`mat_utils/game_shader.py`](#mat_utils--game_shader)
 - [`mat_utils/image_to_plane/_image_to_plane.py`](#mat_utils--image_to_plane--_image_to_plane) — Map image files to textured polygon planes in Maya.
 - [`mat_utils/image_to_plane/image_to_plane_slots.py`](#mat_utils--image_to_plane--image_to_plane_slots) — Switchboard slots for the Image to Plane UI.
-- [`mat_utils/marmoset/bridge.py`](#mat_utils--marmoset--bridge)
-- [`mat_utils/marmoset/templates/bake.py`](#mat_utils--marmoset--templates--bake)
-- [`mat_utils/marmoset/templates/import.py`](#mat_utils--marmoset--templates--import)
+- [`mat_utils/marmoset_bridge/_marmoset_bridge.py`](#mat_utils--marmoset_bridge--_marmoset_bridge)
+- [`mat_utils/marmoset_bridge/marmoset_bridge_slots.py`](#mat_utils--marmoset_bridge--marmoset_bridge_slots)
+- [`mat_utils/marmoset_bridge/parameters.py`](#mat_utils--marmoset_bridge--parameters) — Registry of user-tunable Marmoset Toolbag parameters exposed to the bridge UI.
+- [`mat_utils/marmoset_bridge/templates/bake.py`](#mat_utils--marmoset_bridge--templates--bake)
+- [`mat_utils/marmoset_bridge/templates/import.py`](#mat_utils--marmoset_bridge--templates--import)
+- [`mat_utils/marmoset_bridge/templates/lookdev.py`](#mat_utils--marmoset_bridge--templates--lookdev)
 - [`mat_utils/mat_manifest.py`](#mat_utils--mat_manifest)
 - [`mat_utils/mat_snapshot.py`](#mat_utils--mat_snapshot) — Lightweight material state snapshot and restore.
 - [`mat_utils/mat_transfer.py`](#mat_utils--mat_transfer)
@@ -153,6 +157,7 @@ _Generated: 2026-05-14_
 - [`uv_utils/rizom_bridge/rizom_bridge_slots.py`](#uv_utils--rizom_bridge--rizom_bridge_slots)
 - [`xform_utils/_xform_utils.py`](#xform_utils--_xform_utils)
 - [`xform_utils/matrices.py`](#xform_utils--matrices) — Matrix utilities for Maya rigging and animation.
+- [`xform_utils/pivot_watcher.py`](#xform_utils--pivot_watcher) — Real-time pivot-change notifier built on :class:`ScriptJobManager`.
 
 ---
 
@@ -1121,8 +1126,34 @@ Instancing strategy logic for AutoInstancer.
 <a id="core_utils--preview"></a>
 ### `core_utils/preview.py`
 
-- [`cleanup_all_previews() -> None`](mayatk/mayatk/core_utils/preview.py#L505) — Clean up all Preview instances - useful for Maya session cleanup.
-- **[`class Preview`](mayatk/mayatk/core_utils/preview.py#L13)** — Provides an interactive layer for previewing and finalizing operations in a 3D editing environment.
+Hermetic preview with replay-on-commit (H1 design).
+
+- [`cleanup_all_previews() -> None`](mayatk/mayatk/core_utils/preview.py#L632)
+- **[`class CleanupContract`](mayatk/mayatk/core_utils/preview.py#L50)** — Captures and reverses side effects of a previewed operation.
+  - `CleanupContract.add_file(self, path) -> None`
+  - `CleanupContract.record_modification(self, node: str, attr: str) -> None`
+  - `CleanupContract.rollback(self) -> None`
+- **[`class Preview`](mayatk/mayatk/core_utils/preview.py#L285)** — Hermetic preview orchestrator (H1).
+  - `Preview.cleanup_all_instances(cls) -> None` *(class)*
+  - `Preview.init_show_hide_behavior(self, enable_on_show: bool, disable_on_hide: bool) -> None`
+  - `Preview.conditionally_enable(self) -> None`
+  - `Preview.conditionally_disable(self) -> None`
+  - `Preview.toggle(self, state: bool) -> None`
+  - `Preview.validate_operation(self, objects: List[Any]) -> bool`
+  - `Preview.enable(self) -> None`
+  - `Preview.refresh(self, *args) -> None` — Roll back the previous preview and re-run perform_operation.
+  - `Preview.disable(self) -> None` — Roll back the preview without committing.
+  - `Preview.finalize_changes(self) -> None` — Commit: rollback the hermetic version, then replay under undo.
+  - `Preview.cleanup(self) -> None`
+  - `Preview.enabled(self) -> bool` *(property)*
+  - `Preview.operated_object_count(self) -> int` *(property)*
+  - `Preview.get_operated_objects(self) -> List[str]`
+
+<a id="core_utils--preview_old"></a>
+### `core_utils/preview_old.py`
+
+- [`cleanup_all_previews() -> None`](mayatk/mayatk/core_utils/preview_old.py#L505) — Clean up all Preview instances - useful for Maya session cleanup.
+- **[`class Preview`](mayatk/mayatk/core_utils/preview_old.py#L13)** — Provides an interactive layer for previewing and finalizing operations in a 3D editing environment.
   - `Preview.cleanup_all_instances(cls) -> None` *(class)* — Clean up all Preview instances - useful for Maya session cleanup.
   - `Preview.safe_operation(func: Callable) -> Callable` — Decorator to safely execute operations with proper error handling.
   - `Preview.cleanup(self) -> None` — Clean up resources and remove from tracking.
@@ -1253,7 +1284,7 @@ Centralized Maya event subscription manager.
   - `Bevel.bevel(edges, width=0.5, segments=1, autoFit=True, depth=1, mitering=0, miterAlong=0, chamfer=True, worldSpace=True, smoothingAngle=30, fillNgons=True, mergeVertices=True, mergeVertexTolerance=0.0001, miteringAngle=180, angleTolerance=180)` *(static)* — Bevels the given edges with highly customizable options for topology,
 - **[`class BevelSlots`](mayatk/mayatk/edit_utils/bevel.py#L74)**
   - `BevelSlots.header_init(self, widget)` — Configure header menu with tool instructions.
-  - `BevelSlots.perform_operation(self, objects)`
+  - `BevelSlots.perform_operation(self, objects, contract)`
 
 <a id="edit_utils--bridge"></a>
 ### `edit_utils/bridge.py`
@@ -1264,26 +1295,26 @@ Centralized Maya event subscription manager.
   - `Bridge.cleanup_bridge_curves_and_history(mesh_nodes)` *(static)* — Clean up child curves and deformer history from mesh nodes.
 - **[`class BridgeSlots`](mayatk/mayatk/edit_utils/bridge.py#L79)**
   - `BridgeSlots.header_init(self, widget)` — Configure header menu with tool instructions.
-  - `BridgeSlots.perform_operation(self, objects)`
+  - `BridgeSlots.perform_operation(self, objects, contract)`
 
 <a id="edit_utils--cut_on_axis"></a>
 ### `edit_utils/cut_on_axis.py`
 
-- **[`class CutOnAxis`](mayatk/mayatk/edit_utils/cut_on_axis.py#L11)**
+- **[`class CutOnAxis`](mayatk/mayatk/edit_utils/cut_on_axis.py#L12)**
   - `CutOnAxis.perform_cut_on_axis(objects, axis='-x', cuts=0, cut_offset=0, delete=False, mirror=False, pivot='manip', use_object_axes=True)` *(static)* — Iterates over provided objects and performs cut or delete operations based on the axis specified.
-- **[`class CutOnAxisSlots`](mayatk/mayatk/edit_utils/cut_on_axis.py#L53)**
+- **[`class CutOnAxisSlots`](mayatk/mayatk/edit_utils/cut_on_axis.py#L54)**
   - `CutOnAxisSlots.header_init(self, widget)` — Configure header menu with tool instructions.
-  - `CutOnAxisSlots.perform_operation(self, objects)`
+  - `CutOnAxisSlots.perform_operation(self, objects, contract)`
 
 <a id="edit_utils--duplicate_grid"></a>
 ### `edit_utils/duplicate_grid.py`
 
 - **[`class DuplicateGrid(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_grid.py#L16)**
   - `DuplicateGrid.duplicate_grid(cls, objects: List[str], dimensions: Tuple[int, int, int], spacing: float = 0, instance: bool = True, group: bool = True) -> Union[str, List[str]]` *(class)* — Duplicate objects in a grid pattern.
-- **[`class DuplicateGridSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_grid.py#L191)**
+- **[`class DuplicateGridSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_grid.py#L176)**
   - `DuplicateGridSlots.header_init(self, widget)` — Configure header menu with tool instructions.
   - `DuplicateGridSlots.b001(self)` — Reset to Defaults: Resets all UI widgets to their default values.
-  - `DuplicateGridSlots.perform_operation(self, objects)`
+  - `DuplicateGridSlots.perform_operation(self, objects, contract)`
 
 <a id="edit_utils--duplicate_linear"></a>
 ### `edit_utils/duplicate_linear.py`
@@ -1294,7 +1325,7 @@ Centralized Maya event subscription manager.
   - `DuplicateLinearSlots.header_init(self, widget)` — Configure header menu with tool instructions.
   - `DuplicateLinearSlots.toggle_weight_ui(self)` — Disable weight UI components if the current calculation mode doesn't use them.
   - `DuplicateLinearSlots.b001(self)` — Reset to Defaults: Resets all UI widgets to their default values.
-  - `DuplicateLinearSlots.perform_operation(self, objects)` — Perform the linear duplication operation.
+  - `DuplicateLinearSlots.perform_operation(self, objects, contract)` — Perform the linear duplication operation.
 
 <a id="edit_utils--duplicate_radial"></a>
 ### `edit_utils/duplicate_radial.py`
@@ -1304,7 +1335,7 @@ Centralized Maya event subscription manager.
 - **[`class DuplicateRadialSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_radial.py#L272)**
   - `DuplicateRadialSlots.header_init(self, widget)` — Configure header menu with tool instructions.
   - `DuplicateRadialSlots.b001(self)` — Reset to Defaults: Resets all UI widgets to their default values.
-  - `DuplicateRadialSlots.perform_operation(self, objects)` — Perform the radial duplication operation.
+  - `DuplicateRadialSlots.perform_operation(self, objects, contract)` — Perform the radial duplication operation.
   - `DuplicateRadialSlots.regroup_copies(self)` — Regroup the instances under their original parent group.
 
 <a id="edit_utils--dynamic_pipe"></a>
@@ -1381,9 +1412,9 @@ Centralized Maya event subscription manager.
 <a id="edit_utils--mirror"></a>
 ### `edit_utils/mirror.py`
 
-- **[`class MirrorSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/mirror.py#L10)**
+- **[`class MirrorSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/mirror.py#L11)**
   - `MirrorSlots.header_init(self, widget)` — Configure header menu with tool instructions.
-  - `MirrorSlots.perform_operation(self, objects)`
+  - `MirrorSlots.perform_operation(self, objects, contract)`
 
 <a id="edit_utils--naming--_naming"></a>
 ### `edit_utils/naming/_naming.py`
@@ -1942,7 +1973,7 @@ Maya Connection Module
   - `MatUtils.assign_mat(objects, mat_name)` *(static)* — Assigns a material to a list of objects or components.
   - `MatUtils.create_file_node(image_path, name=None, color_space=None)` *(static)* — Create a ``file`` texture node with a wired ``place2dTexture``.
   - `MatUtils.create_shading_group(shader, name=None, assign_to=None)` *(static)* — Create a shading group for *shader* and optionally assign objects.
-  - `MatUtils.create_stingray_shader(name, opacity=False)` *(static)* — Create a StingrayPBS shader with an optional transparency graph.
+  - `MatUtils.create_stingray_shader(name, opacity=False, opacity_mode=None)` *(static)* — Create a StingrayPBS shader by loading a ShaderFX preset graph.
   - `MatUtils.find_by_mat_id(cls, material: str, objects: Optional[List[str]] = None, shell: bool = False) -> List[str]` *(class)* — Find objects or faces by the material ID.
   - `MatUtils.collect_material_paths(materials: Optional[List[str]] = None, attributes: Optional[List[str]] = None, inc_mat_name: bool = False, inc_path_type: bool = False, resolve_full_path: bool = False) -> Union[List[str], List[Tuple[str, ...]]]` *(static)* — Collects specified attributes file paths for given materials.
   - `MatUtils.remap_file_nodes(file_paths: List[str], target_dir: str, silent: bool = False, limit_to_nodes: Optional[List[str]] = None, as_strings: bool = True) -> List[str]` *(static)* — Internal helper to remap file nodes to target_dir, preserving relative subfolders inside sourceimag…
@@ -1978,7 +2009,7 @@ Maya Connection Module
   - `GameShader.filter_for_correct_metallic_map(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]` — Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…
   - `GameShader.filter_for_mask_map(self, textures: List[str], output_extension: str = 'png') -> List[str]` — Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
   - `GameShader.filter_for_correct_base_color_map(self, textures: List[str], use_albedo_transparency: bool) -> List[str]` — Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…
-- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1718)**
+- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1723)**
   - `GameShaderSlots.header_init(self, widget)` — Initialize the header widget.
   - `GameShaderSlots.lbl_graph_material(self)` — Graph the material in the Hypershade.
   - `GameShaderSlots.mat_name(self) -> str` *(property)* — Get the mat name from the user input text field.
@@ -1999,7 +2030,7 @@ Maya Connection Module
 Map image files to textured polygon planes in Maya.
 
 - **[`class ImageToPlane(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/image_to_plane/_image_to_plane.py#L23)** — Create textured polygon planes from image files.
-  - `ImageToPlane.create(cls, image_paths: List[str], mat_type: str = 'stingray', suffix: str = '_MAT', prefix: str = '', plane_height: float = 10.0, axis: Optional[List[float]] = None, group: bool = False, group_name: str = 'imagePlanes_GRP') -> Dict[str, object]` *(class)* — Create textured planes for one or more images.
+  - `ImageToPlane.create(cls, image_paths: List[str], mat_type: str = 'stingray', suffix: str = '_MAT', prefix: str = '', plane_height: float = 10.0, axis: Optional[List[float]] = None, group: bool = False, group_name: str = 'imagePlanes_GRP', stingray_opacity_mode: str = 'transparent', mask_threshold: float = 0.5) -> Dict[str, object]` *(class)* — Create textured planes for one or more images.
   - `ImageToPlane.remove(cls, objects=None) -> int` *(class)* — Remove planes and their materials created by this tool.
 
 <a id="mat_utils--image_to_plane--image_to_plane_slots"></a>
@@ -2011,21 +2042,52 @@ Switchboard slots for the Image to Plane UI.
   - `ImageToPlaneSlots.header_init(self, widget)` — Configure header menu.
   - `ImageToPlaneSlots.txt_suffix_init(self, widget)` — Add a prefix/suffix toggle to the affix field's option menu.
 
-<a id="mat_utils--marmoset--bridge"></a>
-### `mat_utils/marmoset/bridge.py`
+<a id="mat_utils--marmoset_bridge--_marmoset_bridge"></a>
+### `mat_utils/marmoset_bridge/_marmoset_bridge.py`
 
-- **[`class MarmosetBridge(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/marmoset/bridge.py#L40)** — Export Maya selection to Marmoset Toolbag with automatic material setup.
-  - `MarmosetBridge.send(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, toolbag_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, headless: bool = False, template: str = 'import') -> Optional[str]` — Export objects and launch Toolbag.
+- [`list_templates() -> 'list[Path]'`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L55) — Return user-visible templates in ``templates/`` (skips underscore-prefixed).
+- [`template_modes(template_path: Path) -> Tuple[str, ...]`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L62) — Return the modes declared by *template_path*'s ``BRIDGE_MODES`` constant.
+- [`list_template_modes() -> 'list[tuple[str, str]]'`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L86) — Return ``[(stem, mode), ...]`` for every (template, mode) pairing.
+- **[`class MarmosetBridge(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L100)** — Export Maya selection to Marmoset Toolbag with templated automation.
+  - `MarmosetBridge.toolbag_path(self) -> Optional[str]` *(property)* — Resolve the Toolbag executable path.
+  - `MarmosetBridge.toolbag_path(self, value: Optional[str]) -> None`
+  - `MarmosetBridge.send(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, toolbag_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]` — Export objects, render *template* in *mode*, and hand off to Toolbag.
+  - `MarmosetBridge.render_template(self, template: str, fbx_path: str, manifest_path: str, output_dir: str, mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None, headless: Optional[bool] = None) -> Optional[str]` — Return the rendered Toolbag Python script body, or *None* on miss.
 
-<a id="mat_utils--marmoset--templates--bake"></a>
-### `mat_utils/marmoset/templates/bake.py`
+<a id="mat_utils--marmoset_bridge--marmoset_bridge_slots"></a>
+### `mat_utils/marmoset_bridge/marmoset_bridge_slots.py`
 
-- [`main()`](mayatk/mayatk/mat_utils/marmoset/templates/bake.py#L20)
+- **[`class MarmosetBridgeSlots`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_bridge_slots.py#L35)** — UI slots for the Marmoset Toolbag bridge.
+  - `MarmosetBridgeSlots.bridge(self) -> MarmosetBridge` *(property)* — Lazy-instantiated MarmosetBridge (defers Toolbag path lookup).
+  - `MarmosetBridgeSlots.header_init(self, widget)` — Configure header menu with utilities (no per-call options).
+  - `MarmosetBridgeSlots.cmb000_init(self, widget)` — Populate the template combobox with one entry per (template, mode).
+  - `MarmosetBridgeSlots.b000(self)` — Process selected transforms with the chosen template + mode.
 
-<a id="mat_utils--marmoset--templates--import"></a>
-### `mat_utils/marmoset/templates/import.py`
+<a id="mat_utils--marmoset_bridge--parameters"></a>
+### `mat_utils/marmoset_bridge/parameters.py`
 
-- [`main()`](mayatk/mayatk/mat_utils/marmoset/templates/import.py#L53)
+Registry of user-tunable Marmoset Toolbag parameters exposed to the bridge UI.
+
+- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L253) — Return registered placeholder keys present in *script_text*.
+- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L270) — Return ``{key: default}`` for every registered parameter.
+- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L275) — Format *values* for ``StrUtils.replace_delimited`` (string-valued context).
+- **[`class MarmosetParam`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L24)** — Describes one tunable Toolbag parameter and how to render its widget.
+  - `MarmosetParam.format_value(self, value: Any) -> str` — Render *value* for inlining into a Python template.
+
+<a id="mat_utils--marmoset_bridge--templates--bake"></a>
+### `mat_utils/marmoset_bridge/templates/bake.py`
+
+- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/bake.py#L99)
+
+<a id="mat_utils--marmoset_bridge--templates--import"></a>
+### `mat_utils/marmoset_bridge/templates/import.py`
+
+- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/import.py#L48)
+
+<a id="mat_utils--marmoset_bridge--templates--lookdev"></a>
+### `mat_utils/marmoset_bridge/templates/lookdev.py`
+
+- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/lookdev.py#L113)
 
 <a id="mat_utils--mat_manifest"></a>
 ### `mat_utils/mat_manifest.py`
@@ -2439,18 +2501,18 @@ Per-object event trigger attributes for game-engine export.
 <a id="rig_utils--shadow_rig"></a>
 ### `rig_utils/shadow_rig.py`
 
-- **[`class ShadowRig(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/shadow_rig.py#L19)** — Projected shadow for Unity export.
+- **[`class ShadowRig(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/shadow_rig.py#L21)** — Projected shadow for Unity export.
   - `ShadowRig.create_contact_locator(self)` — Create a locator at the lowest point of the combined objects to act as the shadow anchor.
   - `ShadowRig.get_or_create_shadow_source(self, position=(5, 10, 5), source_name='shadow_source')` — Get existing shadow source or create a new one.
   - `ShadowRig.create_shadow_plane(self)` — Create a simple quad for the shadow with pivot at near edge.
-  - `ShadowRig.create_silhouette_texture(self, size=512, axis='auto', recursive=True)` — Create silhouette texture using Maya API triangle rasterization.
-  - `ShadowRig.create_material(self)` — Create material with the silhouette texture.
+  - `ShadowRig.create_silhouette_texture(self, size=512, axis='auto', recursive=True, *, uniform_alpha=False, falloff_source=None, falloff_power=0.8, vertical_weight=0.3, blur_amount=1.5)` — Create silhouette texture using Maya API triangle rasterization.
+  - `ShadowRig.create_material(self, shader_type='stingray', stingray_opacity_mode='transparent')` — Create material with the silhouette texture.
   - `ShadowRig.setup_expression(self)` — Create expression to warp shadow based on light position.
   - `ShadowRig.create(cls, targets, light_pos=(5, 10, 5), texture_res=512, axis='auto', source_name='shadow_source', recursive=True, mode='stretch')` *(class)* — Create a projected shadow for Unity export.
-- **[`class ShadowRigSlots`](mayatk/mayatk/rig_utils/shadow_rig.py#L867)**
+- **[`class ShadowRigSlots`](mayatk/mayatk/rig_utils/shadow_rig.py#L895)**
   - `ShadowRigSlots.header_init(self, widget)` — Configure header menu with tool instructions.
   - `ShadowRigSlots.b001(self)` — Reset to Defaults: Resets all UI widgets to their default values.
-  - `ShadowRigSlots.create_shadow(self)` — Create projected shadow for selected objects.
+  - `ShadowRigSlots.perform_operation(self, objects, contract)` — Build the shadow rig for the given targets.
 
 <a id="rig_utils--telescope_rig"></a>
 ### `rig_utils/telescope_rig.py`
@@ -2754,3 +2816,15 @@ Matrix utilities for Maya rigging and animation.
 - [`set_matrix(node: str, attr: str, value, index: int = 0) -> None`](mayatk/mayatk/xform_utils/matrices.py#L83) — Set a matrix attribute on *node* from an MMatrix or 16-element iterable.
 - **[`class MatricesError(RuntimeError)`](mayatk/mayatk/xform_utils/matrices.py#L150)** — Base exception for matrix utility operations.
 - **[`class Matrices(_MatrixMath, _DagTransforms, _NodeBuilders, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/matrices.py#L832)** — Matrix utilities for Maya rigging and animation.
+
+<a id="xform_utils--pivot_watcher"></a>
+### `xform_utils/pivot_watcher.py`
+
+Real-time pivot-change notifier built on :class:`ScriptJobManager`.
+
+- **[`class PivotWatcher`](mayatk/mayatk/xform_utils/pivot_watcher.py#L100)** — Fire *callback* on intentional manipulator-pivot drags.
+  - `PivotWatcher.owner(self) -> Any` *(property)*
+  - `PivotWatcher.started(self) -> bool` *(property)*
+  - `PivotWatcher.start(self) -> None` — Subscribe to the watched events (idempotent).
+  - `PivotWatcher.stop(self) -> None` — Unsubscribe from all watched events (idempotent).
+  - `PivotWatcher.attach_widget(self, widget) -> None` — Auto-:meth:`stop` when *widget* emits ``destroyed``.
