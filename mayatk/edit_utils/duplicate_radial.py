@@ -270,6 +270,12 @@ class DuplicateRadial(ptk.LoggingMixin):
 
 
 class DuplicateRadialSlots(ptk.LoggingMixin):
+    # With keep_original=False, duplicate_radial deletes the original
+    # transform. MUTATES_SELECTION=True tells Preview to duplicate+hide the
+    # captured selection before perform_operation so rollback (and the next
+    # refresh, which re-targets the same names) can restore it.
+    MUTATES_SELECTION = True
+
     def __init__(self, switchboard, log_level="WARNING"):
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.duplicate_radial
@@ -318,7 +324,7 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
         """Reset to Defaults: Resets all UI widgets to their default values."""
         self.ui.state.reset_all()
 
-    def perform_operation(self, objects):
+    def perform_operation(self, objects, contract):
         """Perform the radial duplication operation."""
         kwargs = {
             "num_copies": self.ui.s009.value(),

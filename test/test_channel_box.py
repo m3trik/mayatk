@@ -61,9 +61,10 @@ class TestGetAllAttrs(MayaTkTestCase):
 
     def test_history_section(self):
         attrs = ChannelBox.get_all_attrs(self.cube, section="history")
-        # polyCube has history attrs like width/height
-        if attrs:
-            self.assertIn("width", attrs)
+        # polyCube always has a polyCube history node with width/height/depth.
+        # If the list is empty, the section query is broken — fail loudly.
+        self.assertTrue(attrs, "history section returned empty for polyCube")
+        self.assertIn("width", attrs)
 
     def test_no_selection_returns_empty(self):
         cmds.select(clear=True)

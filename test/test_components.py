@@ -447,6 +447,42 @@ class TestComponents(MayaTkTestCase):
             Components.transfer_normals([grp1, grp2])
 
     # -------------------------------------------------------------------------
+    # Crease
+    # -------------------------------------------------------------------------
+
+    def test_transfer_creased_edges_copies_values(self):
+        """Crease values on source edges replicate at matching edge ids on the target."""
+        src = cmds.polyCube(name="crease_src")[0]
+        tgt = cmds.polyCube(name="crease_tgt")[0]
+        try:
+            cmds.polyCrease([f"{src}.e[0]", f"{src}.e[3]"], value=5.0)
+            cmds.polyCrease(f"{src}.e[7]", value=2.5)
+
+            Components.transfer_creased_edges(src, tgt)
+
+            tgt_values = cmds.polyCrease(f"{tgt}.e[*]", query=True, value=True)
+            self.assertEqual(tgt_values[0], 5.0)
+            self.assertEqual(tgt_values[3], 5.0)
+            self.assertEqual(tgt_values[7], 2.5)
+            # Untouched edges remain at the default (-1.0).
+            self.assertEqual(tgt_values[1], -1.0)
+        finally:
+            for n in (src, tgt):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+    def test_transfer_creased_edges_handles_uncreased_source(self):
+        """A source with no polyCrease history is a no-op, not an error."""
+        src = cmds.polyCube(name="crease_clean_src")[0]
+        tgt = cmds.polyCube(name="crease_clean_tgt")[0]
+        try:
+            Components.transfer_creased_edges(src, tgt)
+        finally:
+            for n in (src, tgt):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+    # -------------------------------------------------------------------------
     # Topology
     # -------------------------------------------------------------------------
 

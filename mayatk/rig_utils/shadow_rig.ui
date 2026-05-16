@@ -259,6 +259,16 @@
         </widget>
        </item>
        <item>
+        <widget class="QCheckBox" name="chk_preview">
+         <property name="toolTip">
+          <string>Preview the shadow rig live before committing. Tweak options to refresh; Create Shadow finalizes.</string>
+         </property>
+         <property name="text">
+          <string>Preview</string>
+         </property>
+        </widget>
+       </item>
+       <item>
         <widget class="QPushButton" name="b000">
          <property name="minimumSize">
           <size>

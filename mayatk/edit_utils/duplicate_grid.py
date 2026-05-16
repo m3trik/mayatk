@@ -42,6 +42,11 @@ class DuplicateGrid(ptk.LoggingMixin):
         if not objects:
             return []
 
+        # A zero dimension produces an empty volume_group, and cmds.ungroup
+        # rejects leaf-level transforms — bail before any scene mutation.
+        if not (x_count and y_count and z_count):
+            return []
+
         # Create a temporary group for the originals to calculate bounding box and duplicate easily
         original_group = cmds.group(em=True, name="temp_original_group")
         for obj in objects:
@@ -116,58 +121,38 @@ class DuplicateGrid(ptk.LoggingMixin):
 
             # 4. Flatten / Ungroup
             # current hierarchy: volume_group -> [planes] -> [rows] -> [cells] -> [objects]
+            # cmds.ungroup returns None, so we capture children first and
+            # reparent them to world — cmds.parent returns the new full paths.
 
-            planes = cmds.ungroup(volume_group) or []
-            if not isinstance(planes, list):
-                planes = [planes]
+            def _flatten(grp):
+                """Move grp's children to world and delete grp. Return new paths."""
+                children = cmds.listRelatives(grp, children=True, fullPath=True) or []
+                if not children:
+                    if cmds.objExists(grp):
+                        cmds.delete(grp)
+                    return []
+                new_paths = cmds.parent(children, world=True) or []
+                if not isinstance(new_paths, list):
+                    new_paths = [new_paths]
+                # cmds.parent returns short names — re-resolve to full paths.
+                new_paths = [cmds.ls(n, long=True)[0] for n in new_paths if cmds.objExists(n)]
+                if cmds.objExists(grp):
+                    cmds.delete(grp)
+                return new_paths
 
-            # Ungroup Planes -> List of Rows
-            if planes:
-                rows_raw = []
-                for p in planes:
-                    if cmds.listRelatives(p, children=True):
-                        res = cmds.ungroup(p) or []
-                        if isinstance(res, list):
-                            rows_raw.extend(res)
-                        else:
-                            rows_raw.append(res)
-                    else:
-                        cmds.delete(p)
-                rows = rows_raw
-            else:
-                rows = []
+            planes = _flatten(volume_group)
 
-            # Ungroup Rows -> List of Cells
-            if rows:
-                cells_raw = []
-                for r in rows:
-                    if cmds.listRelatives(r, children=True):
-                        res = cmds.ungroup(r) or []
-                        if isinstance(res, list):
-                            cells_raw.extend(res)
-                        else:
-                            cells_raw.append(res)
-                    else:
-                        cmds.delete(r)
-                cells = cells_raw
-            else:
-                cells = []
+            rows = []
+            for p in planes:
+                rows.extend(_flatten(p))
 
-            # Ungroup Cells -> List of Objects
-            if cells:
-                final_objects_raw = []
-                for c in cells:
-                    if cmds.listRelatives(c, children=True):
-                        res = cmds.ungroup(c) or []
-                        if isinstance(res, list):
-                            final_objects_raw.extend(res)
-                        else:
-                            final_objects_raw.append(res)
-                    else:
-                        cmds.delete(c)
-                final_objects = final_objects_raw
-            else:
-                final_objects = []
+            cells = []
+            for r in rows:
+                cells.extend(_flatten(r))
+
+            final_objects = []
+            for c in cells:
+                final_objects.extend(_flatten(c))
 
             # 5. Finalize
             if group:
@@ -238,7 +223,7 @@ class DuplicateGridSlots(ptk.LoggingMixin):
         """Reset to Defaults: Resets all UI widgets to their default values."""
         self.ui.state.reset_all()
 
-    def perform_operation(self, objects):
+    def perform_operation(self, objects, contract):
         dimensions = (
             self.ui.s000.value(),
             self.ui.s001.value(),

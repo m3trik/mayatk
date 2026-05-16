@@ -910,16 +910,51 @@ class MatUtils(MatUtilsInternals):
 
         return sg
 
+    STINGRAY_GRAPHS = {
+        "none": "Standard.sfx",          # opaque
+        "masked": "Standard_Masked.sfx",  # alpha test / cutout (clean VP2.0 preview, hard edges)
+        "transparent": "Standard_Transparent.sfx",  # alpha blend (soft edges)
+    }
+
     @staticmethod
-    def create_stingray_shader(name, opacity=False):
-        """Create a StingrayPBS shader with an optional transparency graph."""
+    def create_stingray_shader(name, opacity=False, opacity_mode=None):
+        """Create a StingrayPBS shader by loading a ShaderFX preset graph.
+
+        StingrayPBS node attrs are graph-dependent — a bare ``StingrayPBS``
+        node has none of ``base_color`` / ``TEX_color_map`` / ``opacity`` etc.,
+        so a graph must be loaded.
+
+        Parameters:
+            name: Shader node name.
+            opacity: Deprecated bool. ``True`` → ``opacity_mode="transparent"``.
+                Kept for backward compatibility.
+            opacity_mode: One of:
+                * ``None`` / ``"none"``: opaque, ``Standard.sfx``.
+                * ``"masked"``: alpha cutout, ``Standard_Masked.sfx``.
+                  Caller wires alpha to ``TEX_mask_map`` and tunes
+                  ``mask_threshold``; clean VP2.0 preview, hard edges.
+                * ``"transparent"``: alpha blend, ``Standard_Transparent.sfx``.
+                  Caller wires alpha to scalar ``opacity``; soft edges,
+                  but VP2.0 preview shows a faint tint over the quad.
+        """
+        if opacity_mode is None:
+            opacity_mode = "transparent" if opacity else "none"
+        # Back-compat with the old experimental "lightweight" / "transparent_graph" names
+        opacity_mode = {
+            "transparent_graph": "transparent",
+            "lightweight": "transparent",
+        }.get(opacity_mode, opacity_mode)
+
+        graph_name = MatUtils.STINGRAY_GRAPHS.get(
+            opacity_mode, MatUtils.STINGRAY_GRAPHS["none"]
+        )
+
         EnvUtils.load_plugin("shaderFXPlugin")
         shader = NodeUtils.create_render_node(
             "StingrayPBS", name=name, create_shading_group=False
         )
 
         maya_install = EnvUtils.get_env_info("install_path")
-        graph_name = "Standard_Transparent.sfx" if opacity else "Standard.sfx"
         graph = os.path.join(
             maya_install, "presets", "ShaderFX", "Scenes", "StingrayPBS", graph_name
         )

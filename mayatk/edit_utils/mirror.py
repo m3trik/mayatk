@@ -5,9 +5,15 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils.preview import Preview
 from mayatk.edit_utils._edit_utils import EditUtils
+from mayatk.xform_utils.pivot_watcher import PivotWatcher
 
 
 class MirrorSlots(ptk.LoggingMixin):
+    # polySeparate inside EditUtils.mirror deletes the original transform.
+    # MUTATES_SELECTION=True tells Preview to duplicate+hide the selection
+    # before perform_operation so rollback can restore it.
+    MUTATES_SELECTION = True
+
     def __init__(self, switchboard, log_level="INFO"):
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.mirror
@@ -25,6 +31,19 @@ class MirrorSlots(ptk.LoggingMixin):
         )
         self.sb.connect_multi(self.ui, "chk001-6", "clicked", self.preview.refresh)
 
+        # Refresh preview when the viewport pivot changes (selection, tool,
+        # or manipulator drag release). EditUtils.mirror deletes and
+        # re-selects the transform, which fires SelectionChanged on the
+        # next idle — the watcher's signature dedup absorbs that self-fire
+        # to break what would otherwise be an infinite refresh loop.
+        self._pivot_watcher = PivotWatcher(
+            self.preview.refresh,
+            gate=lambda: self.preview.is_enabled,
+            owner=self,
+        )
+        self._pivot_watcher.start()
+        self._pivot_watcher.attach_widget(self.ui)
+
     def header_init(self, widget):
         """Configure header menu with tool instructions."""
         widget.menu.add("Separator", setTitle="About")
@@ -40,7 +59,7 @@ class MirrorSlots(ptk.LoggingMixin):
             ),
         )
 
-    def perform_operation(self, objects):
+    def perform_operation(self, objects, contract):
         # Read values from UI
         axis = self.sb.get_axis_from_checkboxes(
             "chk001-4", self.ui

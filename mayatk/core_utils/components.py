@@ -1220,10 +1220,16 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         if not (source and targets):
             raise ValueError("Both source and target objects must exist.")
 
-        creased_edges = cmds.polyCrease(source[0], query=True, value=True) or []
+        src = source[0]
+        try:
+            crease_values = (
+                cmds.polyCrease(f"{src}.e[*]", query=True, value=True) or []
+            )
+        except RuntimeError:
+            crease_values = []
 
         for target in targets:
-            for edge_id, crease_value in enumerate(creased_edges):
+            for edge_id, crease_value in enumerate(crease_values):
                 if crease_value > 0:
                     cmds.polyCrease(f"{target}.e[{edge_id}]", value=crease_value)
 

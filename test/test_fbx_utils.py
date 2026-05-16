@@ -105,6 +105,69 @@ class TestFbxUtilsSetOptions(MayaTkTestCase):
             }
         )
 
+    def test_set_int_option_does_not_raise(self):
+        """Int values use the ``-v <int>`` MEL form — verify dispatch works."""
+        FbxUtils.load_plugin()
+        # FBXExportFileVersion takes an int form
+        FbxUtils.set_fbx_options({"FBXExportUpAxis": "y"})
+
+    def test_set_string_option_dispatches_as_bare_arg(self):
+        """String values append directly (no ``-v`` flag).
+
+        Audit gap: only bool path was previously exercised. The string
+        branch (line 47 of fbx_utils.py) was untested.
+        """
+        FbxUtils.load_plugin()
+        # FBXExportUpAxis takes a literal axis string
+        FbxUtils.set_fbx_options({"FBXExportUpAxis": "y"})
+
+
+class TestFbxUtilsExportWithOptions(MayaTkTestCase):
+    """Combined preset/options/objects export path."""
+
+    def setUp(self):
+        super().setUp()
+        FbxUtils.load_plugin()
+        self.tempdir = tempfile.mkdtemp(prefix="fbx_opts_test_")
+
+    def tearDown(self):
+        for f in os.listdir(self.tempdir):
+            try:
+                os.remove(os.path.join(self.tempdir, f))
+            except Exception:
+                pass
+        try:
+            os.rmdir(self.tempdir)
+        except Exception:
+            pass
+        super().tearDown()
+
+    def test_export_with_options_applied(self):
+        """export() should accept inline options without preset."""
+        cube = cmds.polyCube(name="fbx_opts_cube")[0]
+        cmds.select(cube)
+        out = os.path.join(self.tempdir, "with_options.fbx")
+        result = FbxUtils.export(
+            out,
+            objects=[cube],
+            options={"FBXExportSmoothingGroups": True, "FBXExportInAscii": True},
+            selection_only=True,
+        )
+        self.assertTrue(os.path.isfile(result))
+
+    def test_export_with_nonexistent_preset_raises(self):
+        """preset_file pointing to a missing path should raise FileNotFoundError."""
+        cube = cmds.polyCube(name="fbx_bad_preset_cube")[0]
+        cmds.select(cube)
+        out = os.path.join(self.tempdir, "with_bad_preset.fbx")
+        with self.assertRaises(FileNotFoundError):
+            FbxUtils.export(
+                out,
+                objects=[cube],
+                preset_file=r"C:/__nonexistent__/bad.fbxexportpreset",
+                selection_only=True,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

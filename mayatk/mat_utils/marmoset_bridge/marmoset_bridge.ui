@@ -2,15 +2,12 @@
 <ui version="4.0">
  <class>QtUi</class>
  <widget class="QMainWindow" name="QtUi">
-  <property name="enabled">
-   <bool>true</bool>
-  </property>
   <property name="geometry">
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>723</width>
-    <height>350</height>
+    <width>320</width>
+    <height>280</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -25,8 +22,8 @@
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>
-     <width>400</width>
-     <height>350</height>
+     <width>320</width>
+     <height>0</height>
     </size>
    </property>
    <layout class="QVBoxLayout" name="verticalLayout_2">
@@ -51,10 +48,16 @@
        <number>0</number>
       </property>
       <item>
-       <widget class="Header" name="header">
+       <widget class="Header" name="header" native="true">
         <property name="minimumSize">
          <size>
           <width>0</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
           <height>19</height>
          </size>
         </property>
@@ -65,12 +68,12 @@
          </font>
         </property>
         <property name="text">
-         <string>REFERENCE MGR</string>
+         <string>MARMOSET BRIDGE</string>
         </property>
        </widget>
       </item>
       <item>
-       <widget class="QGroupBox" name="File">
+       <widget class="QGroupBox" name="grp_process">
         <property name="title">
          <string/>
         </property>
@@ -91,28 +94,6 @@
           <number>0</number>
          </property>
          <item>
-          <widget class="LineEdit" name="txt000">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify the workspace dir.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-           </property>
-           <property name="placeholderText">
-            <string>Root Directory:</string>
-           </property>
-          </widget>
-         </item>
-         <item>
           <widget class="ComboBox" name="cmb000">
            <property name="minimumSize">
             <size>
@@ -126,55 +107,65 @@
              <height>19</height>
             </size>
            </property>
+           <property name="toolTip">
+            <string>Select a Toolbag template bundled with mayatk's Marmoset bridge.</string>
+           </property>
            <property name="maxVisibleItems">
-            <number>30</number>
+            <number>40</number>
+           </property>
+           <property name="maxCount">
+            <number>500</number>
            </property>
            <property name="sizeAdjustPolicy">
-            <enum>QComboBox::AdjustToContentsOnFirstShow</enum>
+            <enum>QComboBox::AdjustToContents</enum>
            </property>
            <property name="frame">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
-           <item>
-            <property name="text">
-             <string>Workspaces:</string>
-            </property>
-           </item>
           </widget>
          </item>
          <item>
-          <widget class="LineEdit" name="txt001">
+          <widget class="PushButton" name="b000">
            <property name="minimumSize">
             <size>
              <width>0</width>
-             <height>19</height>
+             <height>38</height>
             </size>
            </property>
            <property name="maximumSize">
             <size>
              <width>16777215</width>
-             <height>19</height>
+             <height>38</height>
             </size>
            </property>
            <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Enter text to filter the file list.&lt;/p&gt;&lt;p&gt;'text*' matches files starting with 'text', &lt;/p&gt;&lt;p&gt;'*text*' matches files containing 'text', &lt;/p&gt;&lt;p&gt;'*text' matches files ending with 'text', &lt;/p&gt;&lt;p&gt;?text' matches any file with a character followed by 'text'.&lt;br/&gt;&lt;br/&gt;Multiple filters can be specified when split by a delimeter.  ie. '*text,text*' or '*text;text*'&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>Send the selected transform(s) to Marmoset Toolbag using the chosen template.</string>
            </property>
-           <property name="placeholderText">
-            <string>Filter:</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="TableWidget" name="tbl000">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>300</height>
-            </size>
+           <property name="text">
+            <string>Send to Marmoset</string>
            </property>
           </widget>
          </item>
         </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QTextBrowser" name="txt000">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>100</height>
+         </size>
+        </property>
+        <property name="toolTip">
+         <string>Bridge log. Click linked paths to open them in the file explorer.</string>
+        </property>
+        <property name="openLinks">
+         <bool>false</bool>
+        </property>
+        <property name="openExternalLinks">
+         <bool>false</bool>
+        </property>
        </widget>
       </item>
       <item>
@@ -200,48 +191,26 @@
  </widget>
  <customwidgets>
   <customwidget>
-   <class>Header</class>
-   <extends>QLabel</extends>
-   <header>uitk.widgets.header</header>
-  </customwidget>
-  <customwidget>
    <class>Footer</class>
    <extends>QWidget</extends>
    <header>uitk.widgets.footer</header>
   </customwidget>
   <customwidget>
-   <class>LineEdit</class>
-   <extends>QLineEdit</extends>
-   <header>uitk.widgets.lineEdit</header>
-  </customwidget>
-  <customwidget>
-   <class>TableWidget</class>
-   <extends>QTableWidget</extends>
-   <header>uitk.widgets.table_widget</header>
+   <class>Header</class>
+   <extends>QWidget</extends>
+   <header>uitk.widgets.header</header>
   </customwidget>
   <customwidget>
    <class>ComboBox</class>
    <extends>QComboBox</extends>
    <header>uitk.widgets.comboBox.ComboBox.h</header>
   </customwidget>
+  <customwidget>
+   <class>PushButton</class>
+   <extends>QPushButton</extends>
+   <header>widgets.pushbutton.h</header>
+  </customwidget>
  </customwidgets>
  <resources/>
  <connections/>
- <designerdata>
-  <property name="gridDeltaX">
-   <number>5</number>
-  </property>
-  <property name="gridDeltaY">
-   <number>5</number>
-  </property>
-  <property name="gridSnapX">
-   <bool>true</bool>
-  </property>
-  <property name="gridSnapY">
-   <bool>true</bool>
-  </property>
-  <property name="gridVisible">
-   <bool>true</bool>
-  </property>
- </designerdata>
 </ui>
