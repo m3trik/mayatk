@@ -5194,7 +5194,7 @@
               "name": "set_edge_hardness",
               "qualname": "Components.set_edge_hardness",
               "kind": "classmethod",
-              "signature": "(cls, objects, angle_threshold: float, upper_hardness: float = None, lower_hardness: float = None) -> None",
+              "signature": "(cls, objects, angle_threshold: float, upper_hardness: float = None, lower_hardness: float = None, unlock_normals: bool = False) -> None",
               "summary": "Set edge hardness based on normal angle thresholds.",
               "line": 945,
               "deprecated": false
@@ -5205,7 +5205,7 @@
               "kind": "classmethod",
               "signature": "(cls, faces, transforms=None, similar_faces=None, range_x=0.1, range_y=0.1, range_z=0.1, returned_type='str')",
               "summary": "Filter for faces with normals that fall within an X,Y,Z tolerance.",
-              "line": 980,
+              "line": 1015,
               "deprecated": false
             },
             {
@@ -5214,7 +5214,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, by_uv_shell=False)",
               "summary": "Average the normals of the given objects.",
-              "line": 1050,
+              "line": 1085,
               "deprecated": false
             },
             {
@@ -5223,7 +5223,7 @@
               "kind": "staticmethod",
               "signature": "(objects, space: str = 'world')",
               "summary": "Transfer vertex normals from source mesh to target meshes.",
-              "line": 1069,
+              "line": 1104,
               "deprecated": false
             },
             {
@@ -5232,7 +5232,7 @@
               "kind": "classmethod",
               "signature": "(cls, components, num_of_connected=(0, 2), connected_type='', returned_type='str')",
               "summary": "Get a list of components filtered by the number of their connected components.",
-              "line": 1116,
+              "line": 1151,
               "deprecated": false
             },
             {
@@ -5241,7 +5241,7 @@
               "kind": "classmethod",
               "signature": "(cls, vertex, angle_weighted=False)",
               "summary": "Return the normal at the given vertex.",
-              "line": 1145,
+              "line": 1180,
               "deprecated": false
             },
             {
@@ -5250,7 +5250,7 @@
               "kind": "staticmethod",
               "signature": "(components)",
               "summary": "Get a vector representing the averaged and normalized vertex-face normals.",
-              "line": 1166,
+              "line": 1201,
               "deprecated": false
             },
             {
@@ -5259,7 +5259,7 @@
               "kind": "staticmethod",
               "signature": "(edges=None, amount=None, angle=None)",
               "summary": "Adjust properties of the given edges with optional crease and edge softening/hardening.",
-              "line": 1181,
+              "line": 1216,
               "deprecated": false
             },
             {
@@ -5268,7 +5268,7 @@
               "kind": "staticmethod",
               "signature": "(edges)",
               "summary": "Return any creased edges from a list of edges.",
-              "line": 1202,
+              "line": 1237,
               "deprecated": false
             },
             {
@@ -5277,7 +5277,7 @@
               "kind": "staticmethod",
               "signature": "(frm, to)",
               "summary": "Transfer creased edges from the 'frm' object to the 'to' objects.",
-              "line": 1215,
+              "line": 1250,
               "deprecated": false
             }
           ]
@@ -10109,7 +10109,7 @@
           "kind": "function",
           "signature": "(**kwargs)",
           "summary": "Wrapper for MayaConnection.open_command_ports.",
-          "line": 1197,
+          "line": 1213,
           "deprecated": false
         },
         {
@@ -10118,7 +10118,7 @@
           "kind": "function",
           "signature": "(mel_port=7001, python_port=7002)",
           "summary": "Wrapper for MayaConnection.toggle_command_ports.",
-          "line": 1202,
+          "line": 1218,
           "deprecated": false
         },
         {
@@ -10127,7 +10127,7 @@
           "kind": "function",
           "signature": "(mel_start=7001, python_start=7002, max_offset=50, tag_window=True)",
           "summary": "Wrapper for MayaConnection.open_available_command_ports.",
-          "line": 1207,
+          "line": 1223,
           "deprecated": false
         }
       ],
@@ -10162,7 +10162,7 @@
               "kind": "staticmethod",
               "signature": "(ports=None)",
               "summary": "Close the specified Maya command ports.",
-              "line": 95,
+              "line": 97,
               "deprecated": false
             },
             {
@@ -10171,7 +10171,7 @@
               "kind": "staticmethod",
               "signature": "(mel_start: int = 7001, python_start: int = 7002, max_offset: int = 50, tag_window: bool = True) -> dict",
               "summary": "Open command ports auto-negotiating around port collisions.",
-              "line": 211,
+              "line": 213,
               "deprecated": false
             },
             {
@@ -10180,7 +10180,7 @@
               "kind": "staticmethod",
               "signature": "(mel_port: int = 7001, python_port: int = 7002) -> tuple",
               "summary": "Toggle Maya command ports on or off.",
-              "line": 260,
+              "line": 276,
               "deprecated": false
             },
             {
@@ -10189,7 +10189,7 @@
               "kind": "staticmethod",
               "signature": "(modules: Union[str, List[str]], include_submodules: bool = True, verbose: bool = True) -> List[str]",
               "summary": "Reload specified modules and their submodules using pythontk.ModuleReloader.",
-              "line": 290,
+              "line": 306,
               "deprecated": false
             },
             {
@@ -10198,7 +10198,7 @@
               "kind": "method",
               "signature": "(self, mode: ConnectionMode = 'auto', port: int = 7002, host: str = 'localhost', launch: bool = True, app_path: Optional[str] = None, force_new_instance: bool = True, launch_args: Optional[List[str]] = None, confirm_existing: bool = True, auto_cleanup: bool = False) -> bool",
               "summary": "Connect to Maya using the specified mode.",
-              "line": 368,
+              "line": 384,
               "deprecated": false
             },
             {
@@ -10207,7 +10207,7 @@
               "kind": "staticmethod",
               "signature": "(port: int) -> Optional[int]",
               "summary": "Find the process ID (PID) listening on the given TCP port.",
-              "line": 575,
+              "line": 591,
               "deprecated": false
             },
             {
@@ -10216,7 +10216,7 @@
               "kind": "staticmethod",
               "signature": "(port: Optional[int] = None, pid: Optional[int] = None, force: bool = False) -> bool",
               "summary": "Close a Maya instance identified by Port or PID.",
-              "line": 606,
+              "line": 622,
               "deprecated": false
             },
             {
@@ -10225,7 +10225,7 @@
               "kind": "staticmethod",
               "signature": "(start_port: int = 7002, max_check: int = 100) -> int",
               "summary": "Find an available port starting from start_port.",
-              "line": 642,
+              "line": 658,
               "deprecated": false
             },
             {
@@ -10234,7 +10234,7 @@
               "kind": "method",
               "signature": "(self, launch: bool = True, app_path: Optional[str] = None, launch_args: Optional[List[str]] = None) -> bool",
               "summary": "Verify the port is reachable;",
-              "line": 741,
+              "line": 757,
               "deprecated": false
             },
             {
@@ -10243,7 +10243,7 @@
               "kind": "method",
               "signature": "(self, code: str, timeout: int = 30, capture_output: bool = False, wait_for_response: bool = False, output_callback: Optional[Callable[[str], None]] = None) -> Optional[str]",
               "summary": "Execute Python code in Maya.",
-              "line": 836,
+              "line": 852,
               "deprecated": false
             },
             {
@@ -10252,7 +10252,7 @@
               "kind": "method",
               "signature": "(self, last_n_chars: Optional[int] = None) -> Optional[str]",
               "summary": "Get the full content of the Maya Script Editor history.",
-              "line": 915,
+              "line": 931,
               "deprecated": false
             },
             {
@@ -10261,7 +10261,7 @@
               "kind": "method",
               "signature": "(self, code: str, timeout: int = 30, mirror_to_script_output: bool = False) -> tuple[Optional[str], Optional[str]]",
               "summary": "Execute code and capture the Script Editor output generated by the execution.",
-              "line": 947,
+              "line": 963,
               "deprecated": false
             },
             {
@@ -10270,7 +10270,7 @@
               "kind": "method",
               "signature": "(self) -> bool",
               "summary": "Clear the Maya Script Editor history.",
-              "line": 1011,
+              "line": 1027,
               "deprecated": false
             },
             {
@@ -10279,7 +10279,7 @@
               "kind": "method",
               "signature": "(self, force: bool = False) -> None",
               "summary": "Shut down the connected Maya session and reset state.",
-              "line": 1140,
+              "line": 1156,
               "deprecated": false
             },
             {
@@ -10288,7 +10288,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Disconnect from Maya.",
-              "line": 1175,
+              "line": 1191,
               "deprecated": false
             }
           ]
@@ -11001,7 +11001,7 @@
               "kind": "method",
               "signature": "(self, text)",
               "summary": "Handle the filter text input.",
-              "line": 2605,
+              "line": 2610,
               "deprecated": false
             },
             {
@@ -11010,7 +11010,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "",
-              "line": 2611,
+              "line": 2616,
               "deprecated": false
             },
             {
@@ -11019,7 +11019,7 @@
               "kind": "method",
               "signature": "(self, index, widget)",
               "summary": "Handle workspace selection changes.",
-              "line": 2615,
+              "line": 2620,
               "deprecated": false
             },
             {
@@ -11028,7 +11028,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the recursive search toggle.",
-              "line": 2638,
+              "line": 2643,
               "deprecated": false
             },
             {
@@ -11037,7 +11037,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the ignore empty workspaces toggle.",
-              "line": 2677,
+              "line": 2682,
               "deprecated": false
             },
             {
@@ -11046,7 +11046,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the ignore case checkbox.",
-              "line": 2726,
+              "line": 2731,
               "deprecated": false
             },
             {
@@ -11055,7 +11055,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide binary checkbox.",
-              "line": 2731,
+              "line": 2736,
               "deprecated": false
             },
             {
@@ -11064,7 +11064,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the filter by suffix checkbox.",
-              "line": 2736,
+              "line": 2741,
               "deprecated": false
             },
             {
@@ -11073,7 +11073,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide suffix checkbox.",
-              "line": 2741,
+              "line": 2746,
               "deprecated": false
             },
             {
@@ -11082,7 +11082,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide extension checkbox.",
-              "line": 2746,
+              "line": 2751,
               "deprecated": false
             },
             {
@@ -11091,7 +11091,7 @@
               "kind": "method",
               "signature": "(self, text)",
               "summary": "Handle suffix text changes.",
-              "line": 2751,
+              "line": 2756,
               "deprecated": false
             },
             {
@@ -11100,7 +11100,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the filter by folder structure checkbox.",
-              "line": 2767,
+              "line": 2772,
               "deprecated": false
             },
             {
@@ -11109,7 +11109,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Browse for a root directory.",
-              "line": 2772,
+              "line": 2777,
               "deprecated": false
             },
             {
@@ -11118,7 +11118,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the current directory in the file explorer.",
-              "line": 2789,
+              "line": 2794,
               "deprecated": false
             },
             {
@@ -11127,7 +11127,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Set dir to current workspace.",
-              "line": 2794,
+              "line": 2799,
               "deprecated": false
             },
             {
@@ -11136,7 +11136,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the scene file at the right-clicked row.",
-              "line": 2799,
+              "line": 2804,
               "deprecated": false
             },
             {
@@ -11145,7 +11145,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Toggle reference state for the right-clicked row.",
-              "line": 2813,
+              "line": 2818,
               "deprecated": false
             },
             {
@@ -11154,7 +11154,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unlink and import the reference at the right-clicked row.",
-              "line": 2820,
+              "line": 2825,
               "deprecated": false
             },
             {
@@ -11163,7 +11163,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Save the current scene to the workspace.",
-              "line": 2832,
+              "line": 2837,
               "deprecated": false
             },
             {
@@ -11172,7 +11172,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Refresh the file list.",
-              "line": 2836,
+              "line": 2841,
               "deprecated": false
             },
             {
@@ -11181,7 +11181,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Convert all references to assemblies.",
-              "line": 2840,
+              "line": 2845,
               "deprecated": false
             },
             {
@@ -11190,7 +11190,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unlink and import all references.",
-              "line": 2844,
+              "line": 2849,
               "deprecated": false
             },
             {
@@ -11199,7 +11199,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Remove all references from the scene.",
-              "line": 2848,
+              "line": 2853,
               "deprecated": false
             }
           ]
