@@ -1,18 +1,13 @@
-# MAYATK (Maya Toolkit)
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/Version-0.11.21-blue.svg)](https://pypi.org/project/mayatk/)
+[![Version](https://img.shields.io/badge/Version-0.11.51-blue.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-15%20passed-brightgreen.svg)](test/)
+
+# mayatk
 
 <!-- short_description_start -->
-*mayatk is a collection of utility functions and helper classes for Autodesk Maya, providing convenience wrappers and common workflow patterns for Maya scripting.*
+*A collection of utility classes and helper functions for Autodesk Maya — modeling, rigging, animation, materials, scene management, and UI tooling. Built on `maya.cmds` + `maya.api.OpenMaya` (no PyMEL).*
 <!-- short_description_end -->
-
-## Overview
-
-mayatk provides a comprehensive set of production-ready utilities for Maya automation, organized into specialized modules for different aspects of 3D workflow development.
 
 ## Installation
 
@@ -20,39 +15,52 @@ mayatk provides a comprehensive set of production-ready utilities for Maya autom
 pip install mayatk
 ```
 
-**Requirements:**
-- Python 3.11+
-- Autodesk Maya 2025+
+**Requirements:** Maya 2025+ (Python 3.11+).
 
-mayatk ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-package-manager.bat) — an interactive Windows menu for installing, updating, and backing up packages in Maya's bundled Python interpreter.
+mayatk also ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-package-manager.bat) — an interactive Windows menu for installing/updating/backing up packages in Maya's bundled Python interpreter.
 
-## Package Structure
+---
 
-### Core Modules
+## Packages
 
-| Module | Description |
-|--------|-------------|
-| **core_utils** | Core Maya operations, decorators, scene management |
-| **edit_utils** | Mesh editing, modeling, geometry operations |
-| **node_utils** | Node operations, dependency graph, connections |
-| **xform_utils** | Transform utilities, positioning, coordinates |
-| **env_utils** | Environment management, scene hierarchy |
+| Package | What it covers |
+|---|---|
+| `anim_utils` | Animation curves, shots, blendshape animation, playblast, smart bake |
+| `audio_utils` | Audio clips, ffmpeg-backed conversion, timeline-keyed events |
+| `cam_utils` | Camera utilities and default-camera handling |
+| `core_utils` | `CoreUtils`, `Components`, `AutoInstancer`, MASH bridge, diagnostics, preview |
+| `display_utils` | Display layers, color management, exploded view |
+| `edit_utils` | `Selection`, naming, primitives, snap, bevel, bridge, mirror, duplicate (linear/radial/grid), mesh graph |
+| `env_utils` | `MayaConnection`, workspace, namespace sandbox, references, hierarchy manager, FBX, scene exporter |
+| `light_utils` | Lighting helpers |
+| `mat_utils` | `GameShader`, `RenderOpacity`, `ImageToPlane`, `MatUpdater`, shader templates, Marmoset bridge |
+| `node_utils` | `NodeUtils`, `Attributes`, event triggers, data nodes |
+| `nurbs_utils` | NURBS surfaces, `ImageTracer` |
+| `rig_utils` | `Controls`, `ShadowRig` |
+| `ui_utils` | `MayaUiHandler`, channel box, native menus, hotkey collision check, node icons |
+| `uv_utils` | UV utilities, Rizom bridge |
+| `xform_utils` | Transforms, matrices, pivot watcher |
 
-### Specialized Modules
+Classes and module-level functions are exposed at the package root via the lazy-loading resolver. Both bare and class-qualified forms work:
 
-| Module | Description |
-|--------|-------------|
-| **uv_utils** | UV mapping and texture coordinate tools |
-| **rig_utils** | Rigging, constraints, character setup |
-| **anim_utils** | Animation, keyframe management |
-| **mat_utils** | Materials, shaders, texture management |
-| **cam_utils** | Camera utilities and viewport management |
-| **display_utils** | Display layers, visibility, viewport settings |
-| **light_utils** | Lighting utilities and rendering tools |
-| **nurbs_utils** | NURBS surfaces and curve operations |
-| **ui_utils** | User interface components and utilities |
+```python
+import mayatk as mtk
 
+@mtk.undoable                           # bare form — wildcard-exposed
+def operation():
+    mtk.freeze_transforms("pCube1")
 
+# Class-qualified form — explicit, no risk of collision
+mtk.NodeUtils.is_group("group1")
+mtk.XformUtils.freeze_transforms("pCube1")
+mtk.EnvUtils.SCENE_UNIT_VALUES
+
+sel = mtk.Selection()
+```
+
+For the full public surface (auto-generated, refreshed bi-weekly) see [`API_REGISTRY.md`](../API_REGISTRY.md).
+
+---
 
 ## Bundled UITK Editors
 
@@ -66,31 +74,31 @@ MayaUiHandler.instance().editors.show("browser")
 ```
 
 | Editor key | Description |
-|------------|-------------|
-| `browser`  | Searchable launcher for every UI registered with the switchboard — supports tagging, filtering by name/tag, hide lists, launch options, and JSON-portable presets. |
-| `style`    | Theme + QSS variable editor for live restyling of the dark/light themes. |
-| `hotkey`   | Keyboard-shortcut editor for slots registered with the switchboard. |
+|---|---|
+| `browser` | Searchable launcher for every UI registered with the switchboard — tags, filtering, hide lists, launch options, JSON-portable presets. |
+| `style` | Theme + QSS variable editor for live restyling of the dark/light themes. |
+| `hotkey` | Keyboard-shortcut editor for slots registered with the switchboard. |
 
-`MayaUiHandler.instance()` is reentrant:
+`MayaUiHandler.instance()` is reentrant: if `tentacle` (or any other tool)
+already created the handler, the call returns the existing singleton; otherwise
+it bootstraps one with a fresh `Switchboard`. The editor window is cached per-handler — clicking the shelf button twice focuses the existing window rather than spawning a duplicate.
 
-- If `tentacle` (or any other tool) already created the handler, the
-  call returns the existing singleton — opening the editor on top of
-  the same switchboard the rest of the application is using.
-- If nothing has set up a handler yet, the call bootstraps one with a
-  fresh `Switchboard`, so the shelf button is the only line of code
-  needed.
+---
 
-The editor is cached per-handler — clicking the shelf button twice
-focuses the existing window rather than spawning a duplicate; closing
-it via the OS close button + reopening rebuilds transparently.
+## Session safety
 
-## License
+`MayaConnection.connect()` defaults to `launch=True, force_new_instance=True` — every call launches a fresh Maya on an unused port. The user's open session is never touched. The test runner (`test/run_tests.py`) defaults the same way; only `--reuse` overrides, and you should not pass it. See [CLAUDE.md](../CLAUDE.md) for the full rule.
 
-MIT License - See [LICENSE](../LICENSE) file for details
+---
 
 ## Links
 
+- **Full API:** [`API_REGISTRY.md`](../API_REGISTRY.md) · [`API_CHANGES.md`](../API_CHANGES.md)
+- **Changelog:** [`CHANGELOG.md`](../CHANGELOG.md)
+- **Contributor / AI-agent guide:** [`CLAUDE.md`](../CLAUDE.md)
 - **PyPI:** https://pypi.org/project/mayatk/
-- **Documentation:** [Full Documentation](index.md)
 - **Issues:** https://github.com/m3trik/mayatk/issues
 
+## License
+
+MIT — see [LICENSE](../LICENSE).

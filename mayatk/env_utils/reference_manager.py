@@ -2565,21 +2565,26 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def txt001_init(self, widget):
         """Initialize the filter text input with filtering options."""
         if not widget.is_initialized:
-            widget.option_box.set_action(
-                states=[
-                    {
-                        "icon": "filter",
-                        "tooltip": "Filter enabled. Click to disable.",
-                        "callback": lambda: self._toggle_filter(False),
-                    },
-                    {
-                        "icon": "filter",
-                        "color": "#555555",
-                        "tooltip": "Filter disabled. Click to enable.",
-                        "callback": lambda: self._toggle_filter(True),
-                    },
-                ],
+            # Toggle owns its on/off persistence under ``settings_key`` so the
+            # state survives Maya sessions. ``initial`` only applies on first
+            # launch; the persisted value takes precedence on subsequent runs.
+            widget.option_box.set_toggle(
+                icon="filter",
+                tooltip_on="Filter enabled. Click to disable.",
+                tooltip_off="Filter disabled. Click to enable.",
+                initial=self.controller._filter_enabled,
+                on_toggled=self._toggle_filter,
+                settings_key="reference_manager_filter",
             )
+            # Sync the controller flag from the restored toggle state. Must run
+            # before the first ``refresh_file_list`` so the predicate (which
+            # reads ``controller._filter_enabled``) and the icon agree at
+            # startup. Safe by ordering: all ``*_init`` slots run before any
+            # ready-handler triggers a list refresh.
+            from uitk.widgets.optionBox.options.toggle import ToggleOption
+
+            toggle = widget.option_box.find_option(ToggleOption)
+            self.controller._filter_enabled = toggle.is_on
             widget.option_box.menu.add(
                 "QCheckBox",
                 setText="Ignore Case",

@@ -78,14 +78,16 @@ class MayaConnection:
             MayaConnection.open_command_ports(mel=':7001', python=':7002')
         """
         import maya.cmds as cmds
+        import maya.mel as mel
 
         for source_type, port in kwargs.items():
-            try:  # close existing open port.
+            # cmds.commandPort has no Python-friendly "is this name open" query
+            # (passing name= with query=True asks Maya to query the name flag
+            # itself, which expects a bool). Use the MEL idiom instead.
+            if mel.eval(f'commandPort -q -name "{port}"'):
                 cmds.commandPort(name=port, close=True)
-            except RuntimeError:
-                pass
 
-            try:  # open new port.
+            try:
                 cmds.commandPort(name=port, sourceType=source_type)
                 MayaConnection._open_command_ports[port] = source_type
             except RuntimeError as e:
@@ -231,6 +233,20 @@ class MayaConnection:
             were actually opened (e.g. ``{':7003': 'mel', ':7004': 'python'}``).
         """
         import maya.cmds as cmds
+
+        # Maya auto-opens a port named "commandportDefault" on startup when this
+        # optionVar is on. With multiple Maya instances that collides and emits
+        # "Could not open command port ... because that name is in use." Since
+        # we manage our own ports below, disable the built-in default. Persists
+        # to userPrefs.mel; takes effect from the next launch onward.
+        if cmds.optionVar(exists="commandportOpenByDefault") and cmds.optionVar(
+            query="commandportOpenByDefault"
+        ):
+            cmds.optionVar(intValue=("commandportOpenByDefault", 0))
+            print(
+                "[commandPort] Disabled built-in 'commandportOpenByDefault' pref "
+                "to prevent name collisions on next launch."
+            )
 
         mel_p, py_p = MayaConnection._find_port_pair(mel_start, python_start, max_offset)
         MayaConnection.open_command_ports(mel=mel_p, python=py_p)
