@@ -395,6 +395,121 @@ class TestComponents(MayaTkTestCase):
         Components.set_edge_hardness(self.cube, 45, lower_hardness=180)
         self.assertTrue(cmds.objExists(self.cube))
 
+    def test_set_edge_hardness_unlocks_normals_when_requested(self):
+        """Locked vertex normals block polySoftEdge from updating shading.
+
+        Repro: FIRE_ASSETS_module.ma — meshes round-tripped through Marmoset
+        had 100% of vertex normals locked, so set_edge_hardness flipped the
+        edge hard/soft flag but the visible smoothing did not change.
+        Fix: opt-in `unlock_normals=True` unlocks before applying hardness.
+        """
+        # Lock all vertex normals to simulate an imported asset
+        cmds.polyNormalPerVertex(self.cube + ".vtx[*]", freezeNormal=True)
+        locked_before = cmds.polyNormalPerVertex(
+            self.cube + ".vtx[*]", q=True, freezeNormal=True
+        )
+        self.assertTrue(all(locked_before), "setup: normals should be locked")
+
+        Components.set_edge_hardness(
+            self.cube, 45, upper_hardness=0, lower_hardness=180, unlock_normals=True
+        )
+
+        locked_after = cmds.polyNormalPerVertex(
+            self.cube + ".vtx[*]", q=True, freezeNormal=True
+        )
+        self.assertFalse(
+            any(locked_after),
+            "unlock_normals=True should leave all vertex normals unlocked",
+        )
+
+    def test_set_edge_hardness_preserves_lock_when_not_requested(self):
+        """Default behavior must leave existing locked normals locked."""
+        cmds.polyNormalPerVertex(self.cube + ".vtx[*]", freezeNormal=True)
+
+        Components.set_edge_hardness(
+            self.cube, 45, upper_hardness=0, lower_hardness=180, unlock_normals=False
+        )
+
+        locked_after = cmds.polyNormalPerVertex(
+            self.cube + ".vtx[*]", q=True, freezeNormal=True
+        )
+        self.assertTrue(
+            all(locked_after),
+            "unlock_normals=False must preserve the user's locked normals",
+        )
+
+    def test_set_edge_hardness_restores_selection(self):
+        """polySoftEdge selects the affected edges as a side-effect — the
+        helper must restore the caller's selection so HUD/component-count
+        consumers don't see thousands of accidentally-selected edges.
+        """
+        cmds.select(self.cube, replace=True)
+        original = cmds.ls(sl=True, long=True)
+
+        Components.set_edge_hardness(
+            self.cube, 45, upper_hardness=0, lower_hardness=180, unlock_normals=True
+        )
+
+        restored = cmds.ls(sl=True, long=True) or []
+        self.assertEqual(
+            restored, original, "selection must be restored to the caller's state"
+        )
+
+    def test_set_edge_hardness_resets_locked_normal_values(self):
+        """unlock_normals=True must also reset normal *values* — not just the
+        lock flag — so polySoftEdge can drive visible shading.
+
+        Repro: Marmoset-exported meshes have per-face-aligned normals BAKED
+        and LOCKED. Unlocking alone keeps the baked values (Maya treats them
+        as user-set), so polySoftEdge flips the soft flag but shading still
+        looks set-to-face.
+        """
+        # Force per-face-aligned baked normals (simulates FBX-import state)
+        cmds.polySetToFaceNormal(self.cube)
+        cmds.polyNormalPerVertex(self.cube + ".vtx[*]", freezeNormal=True)
+
+        Components.set_edge_hardness(
+            self.cube, 45, upper_hardness=0, lower_hardness=180, unlock_normals=True
+        )
+
+        # All cube edges are 90° (>= threshold 45) → hardened → adjacent
+        # verts SHOULD stay face-aligned, so this cube is the wrong fixture
+        # for "smoothing happened." Instead, run a soften-everything pass:
+        Components.set_edge_hardness(
+            self.cube, 180, upper_hardness=180, lower_hardness=180, unlock_normals=True
+        )
+
+        # After full soften, the cube's 8 corners should each have a single
+        # averaged normal (NOT face-aligned). Check vert 0:
+        import maya.api.OpenMaya as om
+
+        sel = om.MSelectionList()
+        sel.add(self.cube)
+        dag = sel.getDagPath(0)
+        mesh = om.MFnMesh(dag)
+        # Vertex 0 sits at a cube corner; with all edges soft, its normal
+        # should be the average of three face normals — pointing roughly
+        # toward (±1,±1,±1)/sqrt(3). Definitely not axis-aligned.
+        face_normals = []
+        for f in range(mesh.numPolygons):
+            face_normals.append(mesh.getPolygonNormal(f, om.MSpace.kObject))
+        vert_iter = om.MItMeshVertex(dag)
+        while not vert_iter.isDone():
+            if vert_iter.index() == 0:
+                vn = vert_iter.getNormal(om.MSpace.kObject)
+                axis_aligned = (
+                    (abs(vn.x) > 0.99 and abs(vn.y) < 0.01 and abs(vn.z) < 0.01)
+                    or (abs(vn.y) > 0.99 and abs(vn.x) < 0.01 and abs(vn.z) < 0.01)
+                    or (abs(vn.z) > 0.99 and abs(vn.x) < 0.01 and abs(vn.y) < 0.01)
+                )
+                self.assertFalse(
+                    axis_aligned,
+                    f"vertex 0 normal {vn} is still axis-aligned — values "
+                    f"were not recomputed despite unlock_normals=True",
+                )
+                break
+            vert_iter.next()
+
     def test_average_normals(self):
         """Test averaging normals."""
         Components.average_normals(self.cube)

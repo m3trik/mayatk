@@ -948,8 +948,21 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         angle_threshold: float,
         upper_hardness: float = None,
         lower_hardness: float = None,
+        unlock_normals: bool = False,
     ) -> None:
-        """Set edge hardness based on normal angle thresholds."""
+        """Set edge hardness based on normal angle thresholds.
+
+        When ``unlock_normals`` is True, each affected mesh is reset to a
+        clean shading baseline before re-applying hardness:
+
+        1. ``polyNormalPerVertex -unFreezeNormal`` releases the lock on
+           imported (FBX/Marmoset) vertex normals.
+        2. ``polySetToFaceNormal`` resets per-vertex normals to face-aligned
+           values so Maya treats them as recomputable; without this, Maya
+           keeps the previously-baked values as "user-tweaked" and
+           polySoftEdge only flips the edge flag without changing shading.
+        3. ``polySoftEdge`` then drives the final shading.
+        """
         if upper_hardness is None and lower_hardness is None:
             return
 
@@ -959,7 +972,21 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
 
         object_to_edges = cls.map_components_to_objects(all_edges)
 
+        saved_selection = cmds.ls(sl=True, long=True) or []
+
         for obj, edges in object_to_edges.items():
+            # Resolve the unambiguous DAG path from one of the edges — the
+            # `obj` key in object_to_edges is a leaf name that can collide
+            # with other nodes; edge strings are path-qualified.
+            edge_node = edges[0].split(".")[0] if edges else obj
+            transforms = cmds.ls(edge_node, long=True, objectsOnly=True) or []
+            obj_path = transforms[0] if transforms else obj
+
+            if unlock_normals:
+                cmds.polyNormalPerVertex(f"{obj_path}.vtx[*]", unFreezeNormal=True)
+                # polySetToFaceNormal acts on the active selection.
+                cmds.select(obj_path, replace=True)
+                cmds.polySetToFaceNormal()
             upper_edges = (
                 [e for e in edges if edge_angles[str(e)] >= angle_threshold]
                 if upper_hardness is not None
@@ -975,6 +1002,14 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
                 cmds.polySoftEdge(upper_edges, angle=upper_hardness, ch=True)
             if lower_edges:
                 cmds.polySoftEdge(lower_edges, angle=lower_hardness, ch=True)
+
+        # polySoftEdge / polySetToFaceNormal mutate the active selection.
+        # Restore the caller's selection so downstream UI (HUD counts, etc.)
+        # don't see thousands of accidentally-selected edges.
+        if saved_selection:
+            cmds.select(saved_selection, replace=True)
+        else:
+            cmds.select(clear=True)
 
     @classmethod
     def get_faces_with_similar_normals(
