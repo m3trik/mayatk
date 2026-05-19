@@ -107,13 +107,14 @@ PARAMS: "dict[str, MarmosetParam]" = {
         widget_type="choice",
         default=8,
         choices=[
-            ("8-bit (TGA)", 8),
-            ("16-bit (TIF)", 16),
+            ("8-bit", 8),
+            ("16-bit", 16),
         ],
         tooltip=(
-            "Output bit depth. Toolbag picks the file format automatically:\n"
-            "8-bit -> .tga, 16-bit -> .tif. Use 16-bit for normal maps that\n"
-            "need precision (avoids banding on near-axis-aligned faces)."
+            "Per-map output bit depth. Maps are written as PSDs in the\n"
+            "output directory (one PSD per enabled map). Use 16-bit for\n"
+            "normal maps that need precision -- avoids banding on near-\n"
+            "axis-aligned faces."
         ),
     ),
     "BAKE_OUTPUT_DIR": MarmosetParam(
@@ -185,7 +186,14 @@ PARAMS: "dict[str, MarmosetParam]" = {
             ("_HP", "_HP"),
             ("(none)", ""),
         ],
-        tooltip="Suffix on transform names that identifies high-poly source meshes.",
+        tooltip=(
+            "Suffix that marks high-poly source meshes.\n"
+            "Applied to a mesh's OWN name, or any ancestor group's name --\n"
+            "tag a parent group ('engine_high') once instead of every mesh.\n"
+            "Own suffix wins if both a mesh and its ancestor are tagged.\n"
+            "If Low Suffix is '(none)', every unsuffixed mesh is treated as low.\n"
+            "If both are '(none)', no auto-pairing is attempted."
+        ),
     ),
     "LOW_SUFFIX": MarmosetParam(
         key="LOW_SUFFIX",
@@ -198,7 +206,13 @@ PARAMS: "dict[str, MarmosetParam]" = {
             ("_LP", "_LP"),
             ("(none)", ""),
         ],
-        tooltip="Suffix on transform names that identifies low-poly target meshes.",
+        tooltip=(
+            "Suffix that marks low-poly target meshes.\n"
+            "Applied to a mesh's OWN name, or any ancestor group's name --\n"
+            "tag a parent group ('engine_low') once instead of every mesh.\n"
+            "Leave as '(none)' if only the high-poly meshes are suffixed --\n"
+            "every unsuffixed mesh will then be treated as low."
+        ),
     ),
     "CAGE_OFFSET": MarmosetParam(
         key="CAGE_OFFSET",

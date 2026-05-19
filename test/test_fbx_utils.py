@@ -92,11 +92,10 @@ class TestFbxUtilsExport(MayaTkTestCase):
 
 
 class TestFbxUtilsSetOptions(MayaTkTestCase):
-    """set_fbx_options should accept bool/int/str types and not raise on real options."""
+    """set_fbx_options should accept bool/int/float/str types via the ``-v`` flag."""
 
-    def test_set_real_option_does_not_raise(self):
+    def test_set_bool_options_do_not_raise(self):
         FbxUtils.load_plugin()
-        # FBXExportSmoothingGroups is a known FBX MEL option
         FbxUtils.set_fbx_options(
             {
                 "FBXExportSmoothingGroups": True,
@@ -105,21 +104,22 @@ class TestFbxUtilsSetOptions(MayaTkTestCase):
             }
         )
 
+    def test_set_string_option_does_not_raise(self):
+        FbxUtils.load_plugin()
+        FbxUtils.set_fbx_options({"FBXExportUpAxis": "y"})
+
+    def test_set_quaternion_string_does_not_raise(self):
+        # FBXExportQuaternion strictly requires the ``-v`` flag.
+        FbxUtils.load_plugin()
+        FbxUtils.set_fbx_options({"FBXExportQuaternion": "euler"})
+
     def test_set_int_option_does_not_raise(self):
-        """Int values use the ``-v <int>`` MEL form — verify dispatch works."""
         FbxUtils.load_plugin()
-        # FBXExportFileVersion takes an int form
-        FbxUtils.set_fbx_options({"FBXExportUpAxis": "y"})
+        FbxUtils.set_fbx_options({"FBXExportBakeComplexStart": 1})
 
-    def test_set_string_option_dispatches_as_bare_arg(self):
-        """String values append directly (no ``-v`` flag).
-
-        Audit gap: only bool path was previously exercised. The string
-        branch (line 47 of fbx_utils.py) was untested.
-        """
+    def test_set_float_option_does_not_raise(self):
         FbxUtils.load_plugin()
-        # FBXExportUpAxis takes a literal axis string
-        FbxUtils.set_fbx_options({"FBXExportUpAxis": "y"})
+        FbxUtils.set_fbx_options({"FBXExportScaleFactor": 1.0})
 
 
 class TestFbxUtilsExportWithOptions(MayaTkTestCase):

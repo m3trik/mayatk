@@ -97,6 +97,10 @@ DEFAULT_INCLUDE = {
     "mat_utils.mat_snapshot": "MatSnapshot",
     # Marmoset Bridge
     "mat_utils.marmoset_bridge._marmoset_bridge": "MarmosetBridge",
+    # Substance Bridge
+    "mat_utils.substance_bridge._substance_bridge": "SubstanceBridge",
+    # Light utils
+    "light_utils.bake_lighting": "BakeLighting",
     # UI utils
     "ui_utils.channel_box": "ChannelBox",
     "ui_utils.hotkey_collisions": ["maya_collision_checker", "parse_qt_sequence"],

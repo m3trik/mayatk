@@ -34,17 +34,32 @@ class FbxUtils(ptk.HelpMixin):
     def set_fbx_options(options: Dict[str, Any]):
         """Apply FBX export options via MEL commands.
 
+        Maya's FBX setters use inconsistent syntax. Most accept a bare value
+        (``FBXExportUpAxis y``); some require ``-v`` (``FBXExportQuaternion
+        -v euler``); and a few reject the quoted form entirely — e.g.
+        ``FBXExportQuaternion -v "euler"`` errors, only ``-v euler`` works.
+        For non-bool values we try bare, then unquoted ``-v``, then quoted
+        ``-v`` to cover all observed variants.
+
         Parameters:
             options: Mapping of FBX MEL command names to values.
-                     Booleans/ints use the ``-v`` flag; strings are appended directly.
         """
         for option, value in options.items():
             if isinstance(value, bool):
                 mel.eval(f"{option} -v {'true' if value else 'false'}")
-            elif isinstance(value, int):
-                mel.eval(f"{option} -v {value}")
+            elif isinstance(value, (int, float)):
+                try:
+                    mel.eval(f"{option} {value}")
+                except RuntimeError:
+                    mel.eval(f"{option} -v {value}")
             else:
-                mel.eval(f'{option} "{value}"')
+                try:
+                    mel.eval(f'{option} "{value}"')
+                except RuntimeError:
+                    try:
+                        mel.eval(f"{option} -v {value}")
+                    except RuntimeError:
+                        mel.eval(f'{option} -v "{value}"')
 
     @staticmethod
     def load_preset(preset_path: str):

@@ -6,7 +6,9 @@
 #   roundtrip = bake headless and let Maya re-import the resulting maps.
 BRIDGE_MODES = ("send_to", "roundtrip")
 
+import json
 import os
+import sys
 
 try:
     import mset
@@ -14,9 +16,14 @@ except ImportError:
     mset = None
 
 FBX_FILE = r"__FBX_PATH__"
+PAIRS_FILE = r"__PAIRS_PATH__"
 OUTPUT_DIR = r"__OUTPUT_DIR__"
 SAVE_PATH = r"__SAVE_PATH__"
 SHOULD_QUIT = __SHOULD_QUIT__
+
+# Pick up shared Toolbag-side helpers from the marmoset_bridge package dir.
+sys.path.insert(0, r"__TOOLBAG_HELPERS_DIR__")
+from _toolbag_helpers import split_high_low, collect_mesh_objects
 
 # Bake output (parameters.py).
 BAKE_WIDTH = __BAKE_WIDTH__
@@ -41,9 +48,13 @@ CAGE_OFFSET = __CAGE_OFFSET__
 IGNORE_BACKFACES = __IGNORE_BACKFACES__
 
 
-# Toolbag's getBakeMap() takes the user-facing display name.
+# Toolbag 5: ``baker.getMap(name)`` looks up a BakerMap by user-facing
+# display name. (Older API was ``getBakeMap`` and is gone.)
+# The name is the GUI label; Toolbag is strict about exact match -- e.g.
+# the tangent-space normal map is "Normals" (plural), not "Normal", and
+# AO is "Ambient Occlusion" not "AO".
 _MAP_DISPLAY_NAMES = {
-    "MAP_NORMAL": "Normal",
+    "MAP_NORMAL": "Normals",
     "MAP_AO": "Ambient Occlusion",
     "MAP_CURVATURE": "Curvature",
     "MAP_THICKNESS": "Thickness",
@@ -58,11 +69,12 @@ def _output_dir():
 
 
 def _output_path():
-    """Base output path; Toolbag appends ``_<MapName>`` and the extension."""
-    # Extension chosen so Toolbag's autoselect honors BAKE_BITS:
-    # 8-bit -> .tga, 16-bit -> .tif.
-    ext = ".tif" if BAKE_BITS >= 16 else ".tga"
-    return os.path.join(_output_dir(), "bake" + ext)
+    """Base output path. Toolbag uses this as the bake-project filename
+    (multi-layered PSD) and derives per-map output filenames from the
+    same stem + each map's ``suffix`` attribute. ``.psd`` is Toolbag's
+    documented default; other extensions cause "check output path" bake
+    failures even when everything else is valid."""
+    return os.path.join(_output_dir(), "bake.psd")
 
 
 def _toggle_map(baker, key, enabled):
@@ -71,29 +83,36 @@ def _toggle_map(baker, key, enabled):
     if not name:
         return
     try:
-        m = baker.getBakeMap(name)
+        m = baker.getMap(name)
     except Exception as e:
-        print(f"  [bake] no map '{name}': {e}")
+        print(f"  [bake] no map {name!r}: {e}")
         return
     if m is not None:
-        m.enabled = bool(enabled)
+        try:
+            m.enabled = bool(enabled)
+        except Exception as e:
+            print(f"  [bake] failed to set {name!r} enabled: {e}")
 
 
-def _split_high_low(objects):
-    """Group imported objects into (high, low, ungrouped) by suffix."""
-    highs, lows, others = [], [], []
-    for o in objects:
-        name = getattr(o, "name", "") or ""
-        # FBX importers occasionally suffix duplicates with ``.001`` -- strip
-        # so the high/low suffix check is still valid.
-        stem = name.rsplit(".", 1)[0] if "." in name else name
-        if HIGH_SUFFIX and stem.endswith(HIGH_SUFFIX):
-            highs.append(o)
-        elif LOW_SUFFIX and stem.endswith(LOW_SUFFIX):
-            lows.append(o)
-        else:
-            others.append(o)
-    return highs, lows, others
+def _bake_group_targets(group):
+    """Return the (high_parent, low_parent) child nodes inside a bake group.
+
+    ``baker.addGroup(name)`` returns a ``mset.TransformObject`` whose two
+    children are the "High" and "Low" containers. Pairing in Toolbag 5
+    is done by reparenting meshes into those, not via ``addHigh/addLow``
+    (which don't exist on the group object).
+    """
+    high = low = None
+    try:
+        for child in group.getChildren() or []:
+            cname = getattr(child, "name", "")
+            if cname == "High":
+                high = child
+            elif cname == "Low":
+                low = child
+    except Exception as e:
+        print(f"  [bake] couldn't enumerate group children: {e}")
+    return high, low
 
 
 def main():
@@ -101,19 +120,56 @@ def main():
         print("ERROR: FBX file not found.")
         return
 
-    imported = mset.importModel(FBX_FILE) or []
-    print(f"[bake] Imported {len(imported)} object(s).")
+    imported = mset.importModel(FBX_FILE)
+    if imported is None:
+        print("ERROR: importModel returned None.")
+        return
+
+    meshes = collect_mesh_objects(imported)
+    print(f"[bake] Imported {len(meshes)} mesh transform(s).")
+
+    # Diagnostic: show the parent chain of the first mesh so a mismatch
+    # between Maya-side group naming and what Toolbag sees is visible in
+    # the log instead of silently flowing to ``others``.
+    if meshes:
+        chain = []
+        cur = meshes[0]
+        for _ in range(8):
+            if cur is None:
+                break
+            chain.append(f"{type(cur).__name__}({getattr(cur, 'name', '?')!r})")
+            cur = getattr(cur, "parent", None)
+        print(f"[bake] chain sample: {' -> '.join(chain)}")
 
     baker = mset.BakerObject()
-    baker.outputWidth = BAKE_WIDTH
-    baker.outputHeight = BAKE_HEIGHT
-    baker.outputSamples = BAKE_SAMPLES
-    baker.edgePadding = BAKE_PADDING
-    baker.outputBits = BAKE_BITS
-    baker.outputPath = _output_path()
-    baker.ignoreBackfaces = IGNORE_BACKFACES
 
-    # Newer Toolbag versions name this differently; not all expose it.
+    # Toolbag 5 BakerObject attribute types (verified via introspection):
+    #   outputWidth/Height/Samples      : int
+    #   outputBits                      : int  (8 or 16)
+    #   edgePaddingSize                 : float  (pixel count)
+    #   edgePadding                     : str  ('None' / 'Moderate' / 'Extreme')
+    #   outputPath                      : str
+    #   ignoreBackfaces, useHiddenMeshes: bool
+    # We wrap each setter so one stale attribute name in a future Toolbag
+    # version doesn't take the whole bake down -- the message tells us
+    # exactly which attribute drifted.
+    def _set(attr, value):
+        try:
+            setattr(baker, attr, value)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [bake] {attr}={value!r} failed: {type(exc).__name__}: {exc}")
+
+    _set("outputWidth", BAKE_WIDTH)
+    _set("outputHeight", BAKE_HEIGHT)
+    _set("outputSamples", BAKE_SAMPLES)
+    _set("edgePaddingSize", float(BAKE_PADDING))
+    _set("outputBits", BAKE_BITS)
+    _set("outputPath", _output_path())
+    _set("ignoreBackfaces", IGNORE_BACKFACES)
+
+    # Older Toolbag versions exposed a cage offset directly; Toolbag 5 doesn't.
+    # Try both legacy names; silently skip if neither is present so the bake
+    # continues with Toolbag's defaults.
     for attr in ("maxOffset", "maxOffsetDistance"):
         if hasattr(baker, attr):
             try:
@@ -132,20 +188,53 @@ def main():
     ):
         _toggle_map(baker, key, enabled)
 
-    highs, lows, others = _split_high_low(imported)
+    # Load the Maya-side bake-pairs sidecar (if the bridge wrote one).
+    # Toolbag flattens parent transforms on FBX import, so a "tag the
+    # parent group" workflow can't survive a chain walk here -- the
+    # sidecar carries the Maya-side classification across the wall.
+    pre_classified = {}
+    if PAIRS_FILE and os.path.isfile(PAIRS_FILE):
+        try:
+            with open(PAIRS_FILE, "r", encoding="utf-8") as fh:
+                pre_classified = json.load(fh) or {}
+            if pre_classified:
+                print(
+                    f"[bake] Pre-classified {len(pre_classified)} mesh(es) "
+                    f"from sidecar: {PAIRS_FILE}"
+                )
+        except Exception as exc:
+            print(f"[bake] Failed to read pairs sidecar: {exc}")
+
+    highs, lows, others = split_high_low(
+        meshes, HIGH_SUFFIX, LOW_SUFFIX, pre_classified=pre_classified
+    )
     print(f"[bake] high={len(highs)} low={len(lows)} other={len(others)}")
 
-    # BakerGroupObject pairs high-poly source meshes with low-poly targets so
-    # the baker can ray-cast from low->high. Only assign if we found at least
-    # one matching pair via the suffix convention.
+    # Bake-group pairing (Toolbag 5):
+    # ``addGroup`` returns a TransformObject containing two children named
+    # "High" and "Low". Reparent meshes into those to wire them up; the
+    # legacy ``addHigh/addLow`` methods don't exist on the group object.
     if highs or lows:
         try:
             group = baker.addGroup("MayaBridge")
-            for o in lows:
-                group.addLow(o)
-            for o in highs:
-                group.addHigh(o)
-            print(f"[bake] Paired {len(highs)} high / {len(lows)} low into group.")
+            high_parent, low_parent = _bake_group_targets(group)
+            if low_parent is None or high_parent is None:
+                print(
+                    f"  [bake] group children unexpected -- got: "
+                    f"{[getattr(c, 'name', '?') for c in (group.getChildren() or [])]}"
+                )
+            else:
+                for o in lows:
+                    try:
+                        o.parent = low_parent
+                    except Exception as e:
+                        print(f"  [bake] could not parent low {o.name!r}: {e}")
+                for o in highs:
+                    try:
+                        o.parent = high_parent
+                    except Exception as e:
+                        print(f"  [bake] could not parent high {o.name!r}: {e}")
+                print(f"[bake] Paired {len(highs)} high / {len(lows)} low into group.")
         except Exception as e:
             print(f"[bake] Could not auto-pair high/low (drag manually): {e}")
 
