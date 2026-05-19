@@ -4,8 +4,8 @@
 # Bridge metadata -- consumed by MarmosetBridge before substitution.
 BRIDGE_MODES = ("send_to",)
 
-import json
 import os
+import sys
 
 try:
     import mset
@@ -17,86 +17,24 @@ MANIFEST_FILE = r"__MANIFEST_PATH__"
 SAVE_PATH = r"__SAVE_PATH__"
 SHOULD_QUIT = __SHOULD_QUIT__
 
-
-# Maya shader slot -> (Toolbag material sub-routine, field name).
-SLOT_MAP = {
-    "baseColor": ("albedo", "Albedo Map"),
-    "normal": ("surface", "Normal Map"),
-    "roughness": ("microsurface", "Microsurface Map"),
-    "metallic": ("reflectivity", "Metalness Map"),
-    "ambientOcclusion": ("occlusion", "Occlusion Map"),
-    "emission": ("emissive", "Emissive Map"),
-    "opacity": ("transparency", "Transparency Map"),
-}
-
-
-def _find_material(name, scene_mats):
-    """Return the Toolbag material whose name matches *name*.
-
-    FBX importers sometimes append suffixes (``_ncl1_1``, ``(Instance)``,
-    etc.), so we try an exact match first, then fall back to substring.
-    """
-    for m in scene_mats:
-        if m.name == name:
-            return m
-    for m in scene_mats:
-        if m.name.startswith(name) or name in m.name:
-            return m
-    return None
+# Pick up shared Toolbag-side helpers from the marmoset_bridge package dir.
+sys.path.insert(0, r"__TOOLBAG_HELPERS_DIR__")
+from _toolbag_helpers import wire_materials_from_manifest, begin_log, log
 
 
 def main():
-    print(f"[Maya->Toolbag] FBX:      {FBX_FILE}")
-    print(f"[Maya->Toolbag] Manifest: {MANIFEST_FILE}")
+    log_path = begin_log(MANIFEST_FILE)
+    log(f"[Maya->Toolbag] FBX:      {FBX_FILE}")
+    log(f"[Maya->Toolbag] Manifest: {MANIFEST_FILE}")
+    if log_path:
+        log(f"[Maya->Toolbag] Log:      {log_path}")
 
     if not os.path.isfile(FBX_FILE):
-        print("ERROR: FBX file not found.")
-        return
-    if not os.path.isfile(MANIFEST_FILE):
-        print("ERROR: Manifest file not found.")
+        log("ERROR: FBX file not found.")
         return
 
     mset.importModel(FBX_FILE)
-
-    with open(MANIFEST_FILE, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-    mat_map = data.get("materials", {})
-
-    if not mat_map:
-        print("Manifest contains no materials -- nothing to wire.")
-    else:
-        scene_mats = [
-            o for o in mset.getAllObjects() if isinstance(o, mset.MaterialObject)
-        ]
-        print(f"Scene contains {len(scene_mats)} material(s).")
-
-        wired = 0
-        for mat_name, slots in mat_map.items():
-            tb_mat = _find_material(mat_name, scene_mats)
-            if tb_mat is None:
-                print(f"  SKIP  '{mat_name}' -- no matching Toolbag material.")
-                continue
-
-            print(f"  Wiring '{mat_name}' -> '{tb_mat.name}'")
-            for slot_key, tex_path in slots.items():
-                mapping = SLOT_MAP.get(slot_key)
-                if not mapping:
-                    print(f"    ? No Toolbag mapping for slot '{slot_key}', skipping.")
-                    continue
-
-                module_attr, field_name = mapping
-                try:
-                    sub = getattr(tb_mat, module_attr, None)
-                    if sub is None:
-                        print(f"    ? Material has no '{module_attr}' module.")
-                        continue
-                    sub.getField(field_name).set(tex_path)
-                    wired += 1
-                    print(f"    + {slot_key} -> {os.path.basename(tex_path)}")
-                except Exception as exc:
-                    print(f"    ! {slot_key}: {exc}")
-
-        print(f"[Maya->Toolbag] Done -- wired {wired} texture slot(s).")
+    wire_materials_from_manifest(MANIFEST_FILE, verbose=True)
 
     if SAVE_PATH:
         print(f"Saving scene: {SAVE_PATH}")

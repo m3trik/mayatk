@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -52,6 +53,208 @@ _BRIDGE_MODES_RE = re.compile(
 )
 
 
+# Match ``Toolbag <N>`` -- the version-bearing dir name in both layouts
+# Marmoset ships: ``Marmoset\Toolbag 5\toolbag.exe`` (Program Files install,
+# with a backslash separator) and ``Marmoset Toolbag 5\log.txt`` (LOCALAPPDATA
+# user data, single dir name with a space). The 'Marmoset ' prefix is
+# hardcoded by the construction site, so the regex only needs the version.
+_TOOLBAG_VERSION_RE = re.compile(r"Toolbag\s+(\d+)", re.IGNORECASE)
+
+
+def resolve_toolbag_log_path(toolbag_exe: Optional[str]) -> Optional[str]:
+    """Return the path to Toolbag's application log, robust to version bumps.
+
+    Tier 1: parse the major version out of *toolbag_exe* and return
+            ``%LOCALAPPDATA%/Marmoset Toolbag <N>/log.txt`` unconditionally.
+            The file may not exist yet on a fresh Toolbag install -- but
+            the directory naming convention is deterministic, and Toolbag
+            will create it as soon as it writes anything.
+    Tier 2: no version parseable from the exe path (custom install,
+            sandbox, dev build). Scan ``%LOCALAPPDATA%`` for
+            ``Marmoset Toolbag *`` directories with an existing
+            ``log.txt`` and pick the most recently modified.
+    Tier 3: return *None* -- callers should fall back to the per-run log
+            written by the helper's ``begin_log``.
+
+    The naming convention has held across Toolbag 3, 4, and 5; this code
+    survives the next major as long as Marmoset keeps the pattern.
+    """
+    local_app = os.environ.get("LOCALAPPDATA")
+    if not local_app:
+        return None
+    local_app_path = Path(local_app)
+
+    # Tolerate non-string input (test code patches AppLauncher and the
+    # cached toolbag_path can be a MagicMock); only the str branch is
+    # parseable, anything else falls through to the LOCALAPPDATA scan.
+    if isinstance(toolbag_exe, str) and toolbag_exe:
+        m = _TOOLBAG_VERSION_RE.search(toolbag_exe)
+        if m:
+            # Trust the convention. Don't require log.txt to exist yet --
+            # if Toolbag was just installed, the consumer (tail thread,
+            # clickable link) will see it appear shortly.
+            return str(local_app_path / f"Marmoset Toolbag {m.group(1)}" / "log.txt")
+
+    # Tier 2: any 'Marmoset Toolbag *' dir under LOCALAPPDATA, newest log wins.
+    newest: Optional[Path] = None
+    newest_mtime = -1.0
+    if local_app_path.is_dir():
+        for sub in local_app_path.glob("Marmoset Toolbag *"):
+            log = sub / "log.txt"
+            if log.is_file():
+                mt = log.stat().st_mtime
+                if mt > newest_mtime:
+                    newest_mtime = mt
+                    newest = log
+    return str(newest) if newest else None
+
+
+# Per-run log path derivation lives in _toolbag_helpers so the helper
+# (which writes the file) and this module (which surfaces it as a link)
+# share one source of truth and can't drift.
+from mayatk.mat_utils.marmoset_bridge._toolbag_helpers import (  # noqa: E402
+    derive_per_run_log_path,
+)
+
+
+# Lines starting with these prefixes are Toolbag's startup chatter (shader
+# preloads, image preloads) and are too noisy to forward to the bridge
+# log panel. They're harmless and arrive in bursts hundreds of lines deep.
+_NOISE_PREFIXES = ("opening code ", "opening image ", "opening shader ")
+
+
+def classify_log_line(line: str) -> "Optional[Tuple[str, str]]":
+    """Map a Toolbag log line to ``(level, line)`` for routing into the bridge logger.
+
+    *level* is one of ``"info"``, ``"warning"``, ``"error"``. Returns
+    *None* for lines that should be suppressed (Toolbag's preload spam).
+
+    The rules favour false-positive "warning"/"error" over silence -- a
+    misclassified info line shown in yellow is less harmful than a real
+    failure shown in white.
+    """
+    s = line.strip()
+    if not s:
+        return None
+    low = s.lower()
+
+    if s.startswith(_NOISE_PREFIXES):
+        return None
+
+    # Hard errors -- helper's ``! slot: ...`` lines and Toolbag's own
+    # failure messages.
+    if (
+        s.startswith("!")
+        or s.startswith("ERROR:")
+        or s.startswith("Traceback")
+        or "matfield not found" in low
+        or "cannot open image" in low
+        or "attributeerror" in low
+        or low.startswith("error ")
+    ):
+        return ("error", line)
+
+    # Warnings -- helper skips, Toolbag's "failed"/"could not", and
+    # helper meta-messages that signal "the wire pass did nothing"
+    # (empty manifest, no matching materials, etc.). These would
+    # otherwise be silent infos and the user wouldn't notice that
+    # nothing actually wired.
+    if (
+        s.startswith("SKIP")
+        or s.startswith("?")
+        or "failed" in low
+        or "could not" in low
+        or low.startswith("warning")
+        or "nothing to wire" in low
+        or "manifest empty or missing" in low
+        or "no skyboxobject in scene" in low
+    ):
+        return ("warning", line)
+
+    return ("info", line)
+
+
+def dispatch_log_lines(lines, logger) -> None:
+    """Forward each classified line to *logger* at its routed level.
+
+    Used by both the send_to tail thread (lines arrive over time) and the
+    roundtrip post-processor (lines arrive as a single captured string).
+    """
+    for raw in lines:
+        classified = classify_log_line(raw)
+        if classified is None:
+            continue
+        level, msg = classified
+        getattr(logger, level)(msg)
+
+
+def _start_toolbag_log_tail(
+    log_path: str,
+    start_offset: int,
+    process,
+    logger,
+    poll_interval: float = 0.4,
+    file_wait_timeout: float = 60.0,
+) -> "threading.Thread":
+    """Tail *log_path* from *start_offset* in a daemon thread.
+
+    Reads new content as Toolbag writes it, classifies each line, and
+    emits to *logger* at the routed level so errors land in the bridge
+    panel in red without the user having to open the log file. Stops
+    when *process* exits.
+
+    On a fresh Toolbag install, ``log.txt`` may not exist yet at launch
+    time -- Toolbag creates it on its first write. The thread polls for
+    the file's appearance up to *file_wait_timeout* seconds before
+    giving up.
+
+    Defensive: any I/O error inside the thread is swallowed so a
+    diagnostic feature can't crash Maya.
+    """
+    import threading
+    import time
+
+    def run() -> None:
+        try:
+            # Wait for Toolbag to create the log file. Bail if the
+            # process dies before that ever happens.
+            wait_start = time.time()
+            while not os.path.isfile(log_path):
+                if process.poll() is not None:
+                    return
+                if time.time() - wait_start > file_wait_timeout:
+                    return
+                time.sleep(poll_interval)
+
+            with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+                fh.seek(start_offset)
+                buffered = ""
+                while process.poll() is None:
+                    chunk = fh.read()
+                    if not chunk:
+                        time.sleep(poll_interval)
+                        continue
+                    buffered += chunk
+                    lines = buffered.split("\n")
+                    # Last fragment may be a partial line; hold it.
+                    buffered = lines.pop()
+                    dispatch_log_lines(lines, logger)
+                # Final flush after process exit (anything Toolbag wrote
+                # between our last read and shutdown).
+                tail = fh.read()
+                if tail:
+                    buffered += tail
+                if buffered:
+                    dispatch_log_lines(buffered.split("\n"), logger)
+        except Exception:
+            # Daemon thread; never propagate.
+            pass
+
+    t = threading.Thread(target=run, daemon=True, name="MarmosetLogTail")
+    t.start()
+    return t
+
+
 def list_templates() -> "list[Path]":
     """Return user-visible templates in ``templates/`` (skips underscore-prefixed)."""
     return sorted(
@@ -81,6 +284,81 @@ def template_modes(template_path: Path) -> Tuple[str, ...]:
     )
     valid = tuple(mode for mode in modes if mode in _MODES)
     return valid or (SEND_TO,)
+
+
+def _classify_maya_chain(
+    dag_path: str, high_suffix: str, low_suffix: str
+) -> Optional[str]:
+    """Walk *dag_path* leaf-to-root in Maya, return ``'high'``/``'low'``/None.
+
+    Mirrors the Toolbag-side ``_classify_by_chain`` in
+    :mod:`._toolbag_helpers`, but operates on Maya DAG paths via
+    ``cmds.listRelatives`` -- so we can run it BEFORE the FBX export
+    flattens the hierarchy.
+    """
+    cur = dag_path
+    visited = 0
+    while cur and visited < 64:
+        leaf = cur.rsplit("|", 1)[-1].rsplit(":", 1)[-1]
+        stem = leaf.rsplit(".", 1)[0] if "." in leaf else leaf
+        if high_suffix and stem.endswith(high_suffix):
+            return "high"
+        if low_suffix and stem.endswith(low_suffix):
+            return "low"
+        parents = cmds.listRelatives(cur, parent=True, fullPath=True) or []
+        cur = parents[0] if parents else None
+        visited += 1
+    return None
+
+
+def build_bake_pairs_manifest(
+    objects: Sequence[str], high_suffix: str, low_suffix: str
+) -> Dict[str, str]:
+    """Build the ``{mesh_short_name: 'high'|'low'}`` sidecar for the bake.
+
+    Toolbag's FBX importer flattens parent transforms on the way in, so
+    a ``bake_high`` group that the user named in Maya doesn't survive
+    long enough for the Toolbag-side chain classifier to see it. We
+    compute the classification HERE -- while we still have the full
+    Maya parent chain -- and ship the result as a JSON sidecar that the
+    rendered bake template reads after import.
+
+    For each selected object, finds every mesh-transform descendant
+    (and the object itself if it has a mesh shape), walks each one's
+    Maya parent chain, and records a classification if any ancestor (or
+    the mesh itself) carries *high_suffix* or *low_suffix*. Meshes with
+    no matching ancestor are simply omitted -- ``split_high_low`` will
+    fall through to its own chain walk / "rest is X" rules for them.
+    """
+    if not (high_suffix or low_suffix):
+        return {}
+
+    visited = set()
+    mesh_xforms: List[str] = []
+    for obj in objects:
+        try:
+            descendants = cmds.listRelatives(
+                obj, allDescendents=True, type="transform", fullPath=True
+            ) or []
+        except Exception:
+            descendants = []
+        for x in [obj] + descendants:
+            if x in visited:
+                continue
+            visited.add(x)
+            shapes = cmds.listRelatives(
+                x, shapes=True, type="mesh", fullPath=True
+            ) or []
+            if shapes:
+                mesh_xforms.append(x)
+
+    out: Dict[str, str] = {}
+    for mesh_path in mesh_xforms:
+        cls = _classify_maya_chain(mesh_path, high_suffix, low_suffix)
+        if cls:
+            leaf = mesh_path.rsplit("|", 1)[-1].rsplit(":", 1)[-1]
+            out[leaf] = cls
+    return out
 
 
 def list_template_modes() -> "list[tuple[str, str]]":
@@ -166,6 +444,24 @@ class MarmosetBridge(ptk.LoggingMixin):
                 if candidate.is_file():
                     yield str(candidate)
 
+    @property
+    def toolbag_log_path(self) -> Optional[str]:
+        """Resolve Toolbag's application log file (where script prints + tracebacks land).
+
+        Three-tier fallback so the bridge survives major version bumps
+        without hardcoding "Marmoset Toolbag 5":
+
+        1. Parse ``Marmoset Toolbag <N>`` out of :attr:`toolbag_path` and
+           try ``%LOCALAPPDATA%/Marmoset Toolbag <N>/log.txt``.
+        2. Scan ``%LOCALAPPDATA%`` for any ``Marmoset Toolbag *`` folder
+           containing ``log.txt`` and pick the most-recently-modified one.
+        3. Return *None* if nothing is found; callers fall back to the
+           per-run ``<base>.toolbag.log`` written by the helper's ``begin_log``.
+
+        Marmoset has kept this naming convention across Toolbag 3, 4, and 5.
+        """
+        return resolve_toolbag_log_path(self.toolbag_path)
+
     # -- Public API --------------------------------------------------------
 
     def send(
@@ -223,6 +519,7 @@ class MarmosetBridge(ptk.LoggingMixin):
         base = output_name or self._scene_base_name()
         fbx_path = os.path.join(output_dir, f"{base}.fbx")
         manifest_path = os.path.join(output_dir, f"{base}.materials.json")
+        pairs_path = os.path.join(output_dir, f"{base}.bake_pairs.json")
         script_path = os.path.join(output_dir, f"{base}_{template}_{mode}.py")
 
         merged_options = dict(_DEFAULT_FBX_OPTIONS)
@@ -253,11 +550,35 @@ class MarmosetBridge(ptk.LoggingMixin):
             json.dump(manifest, fh, indent=2)
         self.logger.info(f"Manifest written: {manifest_path}")
 
+        # Bake-pairs sidecar: Maya-side parent-chain classification, written
+        # while we still have the full DAG (Toolbag's FBX importer flattens
+        # empty parent transforms). The bake template reads this back to
+        # classify meshes regardless of what survived the round trip.
+        # Skipped entirely when there's nothing to record -- the template's
+        # ``os.path.isfile`` check then falls through to its own chain walk
+        # on the un-flattened (if any) own-name suffixes.
+        from mayatk.mat_utils.marmoset_bridge import parameters as _params
+        _merged_params = _params.defaults()
+        _merged_params.update(params or {})
+        _high_suffix = _merged_params.get("HIGH_SUFFIX", "_high") or ""
+        _low_suffix = _merged_params.get("LOW_SUFFIX", "_low") or ""
+        bake_pairs = build_bake_pairs_manifest(
+            objects, _high_suffix, _low_suffix
+        )
+        if bake_pairs:
+            with open(pairs_path, "w", encoding="utf-8") as fh:
+                json.dump(bake_pairs, fh, indent=2)
+            self.logger.info(
+                f"Bake-pairs sidecar written ({len(bake_pairs)} mesh(es) "
+                f"pre-classified): {pairs_path}"
+            )
+
         script = self.render_template(
             template=template,
             mode=mode,
             fbx_path=fbx_path,
             manifest_path=manifest_path,
+            pairs_path=pairs_path,
             output_dir=output_dir,
             params=params,
         )
@@ -282,6 +603,19 @@ class MarmosetBridge(ptk.LoggingMixin):
             result["outputs"] = outputs
             self._announce_outputs(template, outputs, output_dir)
         else:
+            # send_to mode is fire-and-forget on Toolbag's side -- once
+            # launched, the only diagnostic channel is its log.txt. Snapshot
+            # the current end-of-file BEFORE launch so the tail thread reads
+            # only this session's content (log.txt is append-only across
+            # sessions).
+            tb_log = self.toolbag_log_path
+            tb_log_offset = 0
+            if tb_log and os.path.isfile(tb_log):
+                try:
+                    tb_log_offset = os.path.getsize(tb_log)
+                except OSError:
+                    tb_log_offset = 0
+
             self.logger.info("Launching Marmoset Toolbag ...")
             proc = self._launch_toolbag(script_path, toolbag_exe)
             if proc is None:
@@ -293,6 +627,29 @@ class MarmosetBridge(ptk.LoggingMixin):
             self.logger.info(
                 f'Toolbag launched. Output folder: <a href="action://open?path={output_dir}">'
                 f'{output_dir}</a>'
+            )
+
+            # Stream Toolbag's log into the bridge panel as it gets written.
+            # Errors come through red (e.g. "cannot open image", "MatField
+            # not found", helper's "! slot: ...") and skips come through
+            # yellow -- the user sees what went wrong without having to
+            # open a separate log file.
+            if tb_log:
+                _start_toolbag_log_tail(
+                    tb_log, tb_log_offset, proc, self.logger
+                )
+                self.logger.info(
+                    f'Streaming Toolbag log: '
+                    f'<a href="action://open?path={tb_log}">{tb_log}</a>'
+                )
+
+            # The per-run <base>.toolbag.log captures only the helper's own
+            # prints (deterministic). Surface it as a fallback link in case
+            # the tail thread misses anything (e.g. encoding hiccups).
+            per_run = derive_per_run_log_path(manifest_path)
+            self.logger.info(
+                f'Per-run log: '
+                f'<a href="action://open?path={per_run}">{per_run}</a>'
             )
 
         return result
@@ -308,6 +665,7 @@ class MarmosetBridge(ptk.LoggingMixin):
         mode: str = SEND_TO,
         params: Optional[Dict[str, Any]] = None,
         headless: Optional[bool] = None,
+        pairs_path: Optional[str] = None,
     ) -> Optional[str]:
         """Return the rendered Toolbag Python script body, or *None* on miss.
 
@@ -341,15 +699,25 @@ class MarmosetBridge(ptk.LoggingMixin):
         context = {
             "FBX_PATH": fbx_path.replace("\\", "/"),
             "MANIFEST_PATH": manifest_path.replace("\\", "/"),
+            "PAIRS_PATH": (pairs_path or "").replace("\\", "/"),
             "OUTPUT_DIR": output_dir.replace("\\", "/"),
             "SAVE_PATH": save_path.replace("\\", "/"),
             "SHOULD_QUIT": "True" if headless else "False",
+            # Path to the package directory; rendered scripts sys.path.insert
+            # this so they can ``from _toolbag_helpers import ...``.
+            "TOOLBAG_HELPERS_DIR": str(_PKG_DIR).replace("\\", "/"),
         }
         context.update(param_ctx)
 
         return StrUtils.replace_delimited(body, context)
 
     # -- Roundtrip --------------------------------------------------------
+
+    # Padding subtracted from ``time.time()`` before launching Toolbag so
+    # files written within the first moments of the run survive the mtime
+    # filter even on filesystems that round mtime (FAT32: 2s, some SMB
+    # shares: 1s). Two seconds covers the worst case we've seen.
+    _MTIME_FILTER_PAD_SECONDS = 2.0
 
     def _run_roundtrip(
         self,
@@ -358,14 +726,16 @@ class MarmosetBridge(ptk.LoggingMixin):
         exe: Optional[str] = None,
     ) -> Optional[List[str]]:
         """Run Toolbag blocking, then return the list of generated map paths."""
-        # Snapshot the output dir contents so we can subtract pre-existing
-        # files from the "newly generated" list.
-        pre_existing = self._snapshot_outputs(output_dir)
-
         toolbag = exe or self.toolbag_path
         if not toolbag:
             self.logger.error("Marmoset Toolbag not found; cannot roundtrip.")
             return None
+
+        # mtime floor for "new this session". A path-based pre/post diff
+        # missed overwrites entirely -- Toolbag replaces ``bake_*.psd`` in
+        # place on re-bakes, so the set diff was empty even though every
+        # file got fresh content.
+        mtime_floor = time.time() - self._MTIME_FILTER_PAD_SECONDS
 
         try:
             result = AppLauncher.run(
@@ -377,23 +747,53 @@ class MarmosetBridge(ptk.LoggingMixin):
             self.logger.error(f"Toolbag roundtrip failed: {e}")
             return None
 
+        # Replay Toolbag's stdout through the same classifier the send_to
+        # tail uses, so roundtrip diagnostics show up colour-coded in the
+        # bridge panel instead of being dropped on the floor.
+        stdout = getattr(result, "stdout", "") or ""
+        if stdout:
+            dispatch_log_lines(stdout.splitlines(), self.logger)
+
         if getattr(result, "returncode", 0) != 0:
             self.logger.error(
-                f"Toolbag exited with code {result.returncode}. See stdout/stderr above."
+                f"Toolbag exited with code {result.returncode}. See stdout above."
             )
 
-        post = self._snapshot_outputs(output_dir)
-        return sorted(post - pre_existing)
+        return sorted(self._snapshot_outputs(output_dir, since=mtime_floor))
 
     @staticmethod
-    def _snapshot_outputs(output_dir: str) -> "set[str]":
-        """Return the set of map-like files currently under *output_dir*."""
-        exts = (".tga", ".tif", ".tiff", ".png", ".exr", ".jpg")
+    def _snapshot_outputs(
+        output_dir: str, since: Optional[float] = None
+    ) -> "set[str]":
+        """Return the set of map-like files under *output_dir*.
+
+        When *since* is given, restrict to files whose mtime is at or
+        after that Unix-epoch cutoff. ``None`` (default) returns every
+        map-like file regardless of mtime -- used by callers that just
+        want to enumerate. Roundtrip passes the launch time so files
+        Toolbag wrote / overwrote this session come back while
+        pre-existing untouched files don't.
+
+        ``.psd`` is included because Toolbag's BakerObject writes each
+        enabled map as a layered PSD (one file per map) using its own
+        ``<basename>_<MapSuffix>.psd`` naming convention. Without .psd
+        in this list the post-bake diff is empty and the bridge wrongly
+        reports "no new map files" even after a successful bake.
+        """
+        exts = (".tga", ".tif", ".tiff", ".png", ".exr", ".jpg", ".psd")
         snap: List[str] = []
         for root, _, files in os.walk(output_dir):
             for f in files:
-                if f.lower().endswith(exts):
-                    snap.append(os.path.join(root, f))
+                if not f.lower().endswith(exts):
+                    continue
+                full = os.path.join(root, f)
+                if since is not None:
+                    try:
+                        if os.path.getmtime(full) < since:
+                            continue
+                    except OSError:
+                        continue
+                snap.append(full)
         return set(snap)
 
     def _announce_outputs(

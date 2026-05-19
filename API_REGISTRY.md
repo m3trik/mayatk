@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-05-18_
+_Generated: 2026-05-19_
 
 ## Index
 
@@ -982,7 +982,7 @@ Segment discovery from the per-track keyed canonical store.
   - `Components.get_normal_vector(x)` *(static)* — Get the normal vectors of the given polygon object(s) or its components.
   - `Components.get_normal_angle(cls, edges) -> Union[float, List[float]]` *(class)* — Get the angle between the normals of the faces connected by one or more edges.
   - `Components.get_edges_by_normal_angle(cls, objects, low_angle: float = 0, high_angle: float = 180, return_angles: bool = False)` *(class)* — Return edges whose adjacent face-normal angle falls within a range.
-  - `Components.set_edge_hardness(cls, objects, angle_threshold: float, upper_hardness: float = None, lower_hardness: float = None) -> None` *(class)* — Set edge hardness based on normal angle thresholds.
+  - `Components.set_edge_hardness(cls, objects, angle_threshold: float, upper_hardness: float = None, lower_hardness: float = None, unlock_normals: bool = False) -> None` *(class)* — Set edge hardness based on normal angle thresholds.
   - `Components.get_faces_with_similar_normals(cls, faces, transforms=None, similar_faces=None, range_x=0.1, range_y=0.1, range_z=0.1, returned_type='str')` *(class)* — Filter for faces with normals that fall within an X,Y,Z tolerance.
   - `Components.average_normals(cls, objects, by_uv_shell=False)` *(class)* — Average the normals of the given objects.
   - `Components.transfer_normals(objects, space: str = 'world')` *(static)* — Transfer vertex normals from source mesh to target meshes.
@@ -1691,9 +1691,9 @@ Tree widget utilities for hierarchy manager UI operations.
 
 Maya Connection Module
 
-- [`open_command_ports(**kwargs)`](mayatk/mayatk/env_utils/maya_connection.py#L1197) — Wrapper for MayaConnection.open_command_ports.
-- [`toggle_command_ports(mel_port=7001, python_port=7002)`](mayatk/mayatk/env_utils/maya_connection.py#L1202) — Wrapper for MayaConnection.toggle_command_ports.
-- [`open_available_command_ports(mel_start=7001, python_start=7002, max_offset=50, tag_window=True)`](mayatk/mayatk/env_utils/maya_connection.py#L1207) — Wrapper for MayaConnection.open_available_command_ports.
+- [`open_command_ports(**kwargs)`](mayatk/mayatk/env_utils/maya_connection.py#L1213) — Wrapper for MayaConnection.open_command_ports.
+- [`toggle_command_ports(mel_port=7001, python_port=7002)`](mayatk/mayatk/env_utils/maya_connection.py#L1218) — Wrapper for MayaConnection.toggle_command_ports.
+- [`open_available_command_ports(mel_start=7001, python_start=7002, max_offset=50, tag_window=True)`](mayatk/mayatk/env_utils/maya_connection.py#L1223) — Wrapper for MayaConnection.open_available_command_ports.
 - **[`class MayaConnection`](mayatk/mayatk/env_utils/maya_connection.py#L27)** — Manages connection to Maya for testing purposes.
   - `MayaConnection.get_instance() -> 'MayaConnection'` *(static)* — Get the global Maya connection instance.
   - `MayaConnection.open_command_ports(**kwargs)` *(static)* — Open command ports for external script editor.
