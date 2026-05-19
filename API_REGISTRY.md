@@ -105,13 +105,23 @@ _Generated: 2026-05-19_
 - [`env_utils/workspace_manager.py`](#env_utils--workspace_manager)
 - [`env_utils/workspace_map.py`](#env_utils--workspace_map)
 - [`light_utils/_light_utils.py`](#light_utils--_light_utils)
-- [`light_utils/hdr_manager.py`](#light_utils--hdr_manager)
+- [`light_utils/bake_lighting.py`](#light_utils--bake_lighting) — Bake Maya scene lighting into per-object texture files.
+- [`light_utils/hdr_manager.py`](#light_utils--hdr_manager) — Arnold HDR environment manager.
 - [`mat_utils/_mat_utils.py`](#mat_utils--_mat_utils)
 - [`mat_utils/game_shader.py`](#mat_utils--game_shader)
 - [`mat_utils/image_to_plane/_image_to_plane.py`](#mat_utils--image_to_plane--_image_to_plane) — Map image files to textured polygon planes in Maya.
 - [`mat_utils/image_to_plane/image_to_plane_slots.py`](#mat_utils--image_to_plane--image_to_plane_slots) — Switchboard slots for the Image to Plane UI.
 - [`mat_utils/marmoset_bridge/_marmoset_bridge.py`](#mat_utils--marmoset_bridge--_marmoset_bridge)
+- [`mat_utils/marmoset_bridge/_toolbag_helpers.py`](#mat_utils--marmoset_bridge--_toolbag_helpers) — Shared helpers for Marmoset Toolbag template scripts.
 - [`mat_utils/marmoset_bridge/marmoset_bridge_slots.py`](#mat_utils--marmoset_bridge--marmoset_bridge_slots)
+- [`mat_utils/marmoset_bridge/marmoset_rpc/connection.py`](#mat_utils--marmoset_bridge--marmoset_rpc--connection) — Maya-side JSON-RPC client for the marmoset_rpc Toolbag plugin.
+- [`mat_utils/marmoset_bridge/marmoset_rpc/installer.py`](#mat_utils--marmoset_bridge--marmoset_rpc--installer) — Install the marmoset_rpc plugin into Toolbag's user plugin folder.
+- [`mat_utils/marmoset_bridge/marmoset_rpc/job.py`](#mat_utils--marmoset_bridge--marmoset_rpc--job) — One-shot batch pipeline for the marmoset_rpc bridge.
+- [`mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/main_thread.py`](#mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--main_thread) — Main-thread marshalling for ops that touch Toolbag's API.
+- [`mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/scene_ops.py`](#mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--ops--scene_ops) — Scene-inspection ops.
+- [`mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/system_ops.py`](#mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--ops--system_ops) — System-level ops: heartbeat, introspection, Toolbag version.
+- [`mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/registry.py`](#mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--registry) — Op registry for the marmoset_rpc plugin.
+- [`mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py`](#mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--server) — HTTP JSON-RPC server for the marmoset_rpc plugin.
 - [`mat_utils/marmoset_bridge/parameters.py`](#mat_utils--marmoset_bridge--parameters) — Registry of user-tunable Marmoset Toolbag parameters exposed to the bridge UI.
 - [`mat_utils/marmoset_bridge/templates/bake.py`](#mat_utils--marmoset_bridge--templates--bake)
 - [`mat_utils/marmoset_bridge/templates/import.py`](#mat_utils--marmoset_bridge--templates--import)
@@ -127,7 +137,11 @@ _Generated: 2026-05-19_
 - [`mat_utils/shader_attribute_map.py`](#mat_utils--shader_attribute_map)
 - [`mat_utils/shader_remapper.py`](#mat_utils--shader_remapper)
 - [`mat_utils/shader_templates/_shader_templates.py`](#mat_utils--shader_templates--_shader_templates)
-- [`mat_utils/substance/bridge.py`](#mat_utils--substance--bridge)
+- [`mat_utils/substance_bridge/_substance_bridge.py`](#mat_utils--substance_bridge--_substance_bridge) — Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
+- [`mat_utils/substance_bridge/connection.py`](#mat_utils--substance_bridge--connection) — Substance 3D Painter connection module.
+- [`mat_utils/substance_bridge/parameters.py`](#mat_utils--substance_bridge--parameters) — Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
+- [`mat_utils/substance_bridge/substance_bridge_slots.py`](#mat_utils--substance_bridge--substance_bridge_slots) — UI slots for the Substance Painter bridge.
+- [`mat_utils/substance_bridge/substance_rpc/client.py`](#mat_utils--substance_bridge--substance_rpc--client) — JSON-RPC 2.0 client for a Painter-side Python plugin.
 - [`mat_utils/texture_path_editor.py`](#mat_utils--texture_path_editor)
 - [`node_utils/_node_utils.py`](#node_utils--_node_utils)
 - [`node_utils/attributes/_attributes.py`](#node_utils--attributes--_attributes) — Consolidated attribute utilities for Maya.
@@ -1934,24 +1948,60 @@ Maya Connection Module
 
 - **[`class LightUtils(ptk.HelpMixin)`](mayatk/mayatk/light_utils/_light_utils.py#L12)**
 
+<a id="light_utils--bake_lighting"></a>
+### `light_utils/bake_lighting.py`
+
+Bake Maya scene lighting into per-object texture files.
+
+- **[`class BakeLighting(ptk.LoggingMixin)`](mayatk/mayatk/light_utils/bake_lighting.py#L51)** — Bakes scene lighting per object to PNG textures.
+  - `BakeLighting.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin is loaded AND its bake cmd is registered.
+  - `BakeLighting.bake(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'bake_', backend: str = 'auto') -> Dict[str, str]` — Bake lighting per object to PNG files.
+  - `BakeLighting.assign_to_diffuse(self, mapping: Dict[str, str]) -> None` — Wire each baked PNG into the object's material color slot.
+  - `BakeLighting.restore_diffuse_connections(self) -> None` — Undo :meth:`assign_to_diffuse` -- reconnects previous drivers.
+
 <a id="light_utils--hdr_manager"></a>
 ### `light_utils/hdr_manager.py`
 
-- **[`class HdrManager`](mayatk/mayatk/light_utils/hdr_manager.py#L14)**
-  - `HdrManager.ensure_plugin_loaded() -> bool` *(static)* — Ensure the Arnold (mtoa) plugin is loaded.
-  - `HdrManager.hdr_env(self) -> object` *(property)*
-  - `HdrManager.hdr_env(self, tex) -> None`
-  - `HdrManager.hdr_env_transform(self) -> object` *(property)*
-  - `HdrManager.set_hdr_map_visibility(self, state)`
-  - `HdrManager.create_network(self, hdrMap='', hdrMapVisibility=False)`
-- **[`class HdrManagerSlots(HdrManager)`](mayatk/mayatk/light_utils/hdr_manager.py#L99)**
-  - `HdrManagerSlots.header_init(self, widget)` — Configure header menu with tool instructions.
-  - `HdrManagerSlots.hdr_map(self) -> str` *(property)* — Get the hdr map filepath from the comboBoxes current text.
-  - `HdrManagerSlots.hdr_map_visibility(self) -> bool` *(property)* — Get the hdr map visibility state from the checkBoxes current state.
-  - `HdrManagerSlots.cmb000(self, index, widget)` — HDR map selection.
-  - `HdrManagerSlots.chk000(self, state, widget)`
-  - `HdrManagerSlots.slider000(self, value, widget)` — Rotate the HDR map.
-  - `HdrManagerSlots.b000(self)` — Create network.
+Arnold HDR environment manager.
+
+- **[`class HdrManager(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L44)** — Manage a single ``aiSkyDomeLight`` + connected ``file`` texture.
+  - `HdrManager.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin can be loaded right now.
+  - `HdrManager.ensure_plugin_loaded(cls) -> bool` *(class)* — Backward-compat alias for :meth:`arnold_available`.
+  - `HdrManager.hdr_env(self) -> Optional[str]` *(property)* — The skydome shape node, or ``None`` if not present.
+  - `HdrManager.hdr_env(self, tex: Optional[str]) -> None` — Set (and lazily create) the skydome's HDR file texture.
+  - `HdrManager.hdr_env_transform(self) -> Optional[str]` *(property)* — Transform parent of the skydome shape, or ``None``.
+  - `HdrManager.hdr_file_node(self) -> Optional[str]` *(property)* — The ``file`` node currently driving ``color`` on the skydome.
+  - `HdrManager.hdr_file_path(self) -> Optional[str]` *(property)* — Current HDR file path on disk, or ``None``.
+  - `HdrManager.visibility(self) -> bool` *(property)* — Primary-ray visibility of the HDR (skydome as backdrop).
+  - `HdrManager.visibility(self, state: bool) -> None`
+  - `HdrManager.set_hdr_map_visibility(self, state: bool) -> None` — Backward-compat shim for :attr:`visibility`.
+  - `HdrManager.rotation(self) -> float` *(property)* — Y rotation (degrees) of the skydome transform;
+  - `HdrManager.rotation(self, degrees: float) -> None`
+  - `HdrManager.intensity(self) -> float` *(property)* — Linear light-output multiplier on the skydome;
+  - `HdrManager.intensity(self, value: float) -> None`
+  - `HdrManager.exposure(self) -> float` *(property)* — Photographic stops (log2) on the skydome's ``aiExposure``.
+  - `HdrManager.exposure(self, stops: float) -> None`
+  - `HdrManager.create_network(self, hdrMap: str = '', hdrMapVisibility: bool = False, intensity: Optional[float] = None, exposure: Optional[float] = None, rotation: Optional[float] = None) -> Optional[str]` — Apply settings to the (lazily-created) skydome network.
+  - `HdrManager.clear(self) -> None` — Remove the skydome and its connected file/place2d nodes.
+- **[`class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L316)** — Switchboard slots for the HDR Manager UI.
+  - `HdrManagerSlots.header_init(self, widget) -> None` — Configure header menu and refresh button.
+  - `HdrManagerSlots.b001_init(self, widget) -> None` — Attach the Add-HDR mode selector to the button's option box.
+  - `HdrManagerSlots.cmb000_init(self, widget) -> None` — Wire right-click context menu + auto-refresh on dropdown.
+  - `HdrManagerSlots.hdr_map(self) -> Optional[str]` *(property)* — Selected HDR file path from the combobox.
+  - `HdrManagerSlots.hdr_map_visibility(self) -> bool` *(property)*
+  - `HdrManagerSlots.cmb000(self, index, widget) -> None` — HDR map selection — apply immediately.
+  - `HdrManagerSlots.chk000(self, state, widget) -> None` — Toggle skydome primary-ray visibility.
+  - `HdrManagerSlots.slider000(self, value, widget) -> None` — Rotate the HDR around Y.
+  - `HdrManagerSlots.spn_intensity(self, value) -> None`
+  - `HdrManagerSlots.spn_exposure(self, value) -> None`
+  - `HdrManagerSlots.b000(self) -> None` — Create / refresh the skydome network from current UI state.
+  - `HdrManagerSlots.b001(self) -> None` — Add an HDR using the mode selected in the option box.
+  - `HdrManagerSlots.open_sourceimages(self) -> None` — Open the workspace's sourceimages folder in Explorer.
+  - `HdrManagerSlots.clear_network(self) -> None` — Delete the skydome network and reset the UI to defaults.
+  - `HdrManagerSlots.ctx_select_skydome(self) -> None`
+  - `HdrManagerSlots.ctx_select_transform(self) -> None`
+  - `HdrManagerSlots.ctx_select_file_node(self) -> None`
+  - `HdrManagerSlots.ctx_reveal_in_explorer(self) -> None`
 
 <a id="mat_utils--_mat_utils"></a>
 ### `mat_utils/_mat_utils.py`
@@ -2045,14 +2095,35 @@ Switchboard slots for the Image to Plane UI.
 <a id="mat_utils--marmoset_bridge--_marmoset_bridge"></a>
 ### `mat_utils/marmoset_bridge/_marmoset_bridge.py`
 
-- [`list_templates() -> 'list[Path]'`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L55) — Return user-visible templates in ``templates/`` (skips underscore-prefixed).
-- [`template_modes(template_path: Path) -> Tuple[str, ...]`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L62) — Return the modes declared by *template_path*'s ``BRIDGE_MODES`` constant.
-- [`list_template_modes() -> 'list[tuple[str, str]]'`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L86) — Return ``[(stem, mode), ...]`` for every (template, mode) pairing.
-- **[`class MarmosetBridge(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L100)** — Export Maya selection to Marmoset Toolbag with templated automation.
+- [`resolve_toolbag_log_path(toolbag_exe: Optional[str]) -> Optional[str]`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L64) — Return the path to Toolbag's application log, robust to version bumps.
+- [`classify_log_line(line: str) -> 'Optional[Tuple[str, str]]'`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L126) — Map a Toolbag log line to ``(level, line)`` for routing into the bridge logger.
+- [`dispatch_log_lines(lines, logger) -> None`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L177) — Forward each classified line to *logger* at its routed level.
+- [`list_templates() -> 'list[Path]'`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L258) — Return user-visible templates in ``templates/`` (skips underscore-prefixed).
+- [`template_modes(template_path: Path) -> Tuple[str, ...]`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L265) — Return the modes declared by *template_path*'s ``BRIDGE_MODES`` constant.
+- [`build_bake_pairs_manifest(objects: Sequence[str], high_suffix: str, low_suffix: str) -> Dict[str, str]`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L314) — Build the ``{mesh_short_name: 'high'|'low'}`` sidecar for the bake.
+- [`list_template_modes() -> 'list[tuple[str, str]]'`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L364) — Return ``[(stem, mode), ...]`` for every (template, mode) pairing.
+- **[`class MarmosetBridge(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L378)** — Export Maya selection to Marmoset Toolbag with templated automation.
   - `MarmosetBridge.toolbag_path(self) -> Optional[str]` *(property)* — Resolve the Toolbag executable path.
   - `MarmosetBridge.toolbag_path(self, value: Optional[str]) -> None`
+  - `MarmosetBridge.toolbag_log_path(self) -> Optional[str]` *(property)* — Resolve Toolbag's application log file (where script prints + tracebacks land).
   - `MarmosetBridge.send(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, toolbag_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]` — Export objects, render *template* in *mode*, and hand off to Toolbag.
-  - `MarmosetBridge.render_template(self, template: str, fbx_path: str, manifest_path: str, output_dir: str, mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None, headless: Optional[bool] = None) -> Optional[str]` — Return the rendered Toolbag Python script body, or *None* on miss.
+  - `MarmosetBridge.render_template(self, template: str, fbx_path: str, manifest_path: str, output_dir: str, mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None, headless: Optional[bool] = None, pairs_path: Optional[str] = None) -> Optional[str]` — Return the rendered Toolbag Python script body, or *None* on miss.
+
+<a id="mat_utils--marmoset_bridge--_toolbag_helpers"></a>
+### `mat_utils/marmoset_bridge/_toolbag_helpers.py`
+
+Shared helpers for Marmoset Toolbag template scripts.
+
+- [`derive_per_run_log_path(manifest_path)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L41) — Return the ``<base>.toolbag.log`` path next to *manifest_path*.
+- [`begin_log(reference_path)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L55) — Start a fresh log file alongside *reference_path*.
+- [`log(msg)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L75) — Print *msg* and (best-effort) append it to the active log file.
+- [`find_material(name, scene_mats)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L127) — Return the Toolbag material whose name matches *name*.
+- [`load_manifest(manifest_path)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L142) — Return the ``materials`` dict from a MatManifest JSON sidecar.
+- [`wire_materials_from_manifest(manifest_path, verbose=True)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L159) — Wire every texture slot in *manifest_path* onto matching Toolbag mats.
+- [`split_high_low(objects, high_suffix, low_suffix, pre_classified=None)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L282) — Group *objects* into ``(highs, lows, others)`` by name suffix.
+- [`collect_mesh_objects(root)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L364) — Recursively gather ``mset.MeshObject`` descendants of *root*.
+- [`apply_sky_preset(preset_path)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L404) — Load a ``.tbsky`` preset onto the scene's existing SkyObject.
+- [`frame_in_viewport()`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L428) — Frame the imported scene in the viewport (best-effort).
 
 <a id="mat_utils--marmoset_bridge--marmoset_bridge_slots"></a>
 ### `mat_utils/marmoset_bridge/marmoset_bridge_slots.py`
@@ -2063,31 +2134,101 @@ Switchboard slots for the Image to Plane UI.
   - `MarmosetBridgeSlots.cmb000_init(self, widget)` — Populate the template combobox with one entry per (template, mode).
   - `MarmosetBridgeSlots.b000(self)` — Process selected transforms with the chosen template + mode.
 
+<a id="mat_utils--marmoset_bridge--marmoset_rpc--connection"></a>
+### `mat_utils/marmoset_bridge/marmoset_rpc/connection.py`
+
+Maya-side JSON-RPC client for the marmoset_rpc Toolbag plugin.
+
+- **[`class MarmosetConnection(RpcClient)`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/connection.py#L46)** — JSON-RPC client bound to Toolbag's default port + finder.
+
+<a id="mat_utils--marmoset_bridge--marmoset_rpc--installer"></a>
+### `mat_utils/marmoset_bridge/marmoset_rpc/installer.py`
+
+Install the marmoset_rpc plugin into Toolbag's user plugin folder.
+
+- [`user_plugin_dir(toolbag_exe: Optional[str] = None) -> Optional[Path]`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/installer.py#L38) — Resolve ``%LOCALAPPDATA%\Marmoset Toolbag <N>\plugins``.
+- [`is_installed(toolbag_exe: Optional[str] = None) -> bool`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/installer.py#L71) — True if the plugin is present at the resolved user plugin dir.
+- [`install(toolbag_exe: Optional[str] = None, force: bool = False) -> Optional[Path]`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/installer.py#L79) — Install the plugin into Toolbag's user plugin folder.
+- [`uninstall(toolbag_exe: Optional[str] = None) -> bool`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/installer.py#L98) — Remove the plugin from the user plugin folder.
+
+<a id="mat_utils--marmoset_bridge--marmoset_rpc--job"></a>
+### `mat_utils/marmoset_bridge/marmoset_rpc/job.py`
+
+One-shot batch pipeline for the marmoset_rpc bridge.
+
+- [`run_batch(calls: List[Call], host: str = '127.0.0.1', port: int = 8765, stop_on_error: bool = False) -> List[Result]`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/job.py#L30) — Connect to a running Toolbag's marmoset_rpc plugin and fire calls.
+
+<a id="mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--main_thread"></a>
+### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/main_thread.py`
+
+Main-thread marshalling for ops that touch Toolbag's API.
+
+- [`run_on_main_thread(fn, *args, timeout=_DEFAULT_TIMEOUT, **kwargs)`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/main_thread.py#L50) — Run *fn* on the Qt main thread;
+- [`is_main_thread_marshalling_active()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/main_thread.py#L113) — True if :func:`run_on_main_thread` will actually marshal a call.
+
+<a id="mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--ops--scene_ops"></a>
+### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/scene_ops.py`
+
+Scene-inspection ops.
+
+- [`summary()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/scene_ops.py#L14) — High-level snapshot of the current Toolbag scene.
+- [`list_materials()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/scene_ops.py#L39) — Material names in the current scene.
+
+<a id="mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--ops--system_ops"></a>
+### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/system_ops.py`
+
+System-level ops: heartbeat, introspection, Toolbag version.
+
+- [`ping()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/system_ops.py#L8) — Heartbeat -- proves the plugin is alive.
+- [`list_ops()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/system_ops.py#L14) — Sorted list of every registered op name.
+- [`describe_op(op='')`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/system_ops.py#L20) — Return the JSON-friendly description of *op* or all ops if empty.
+- [`version()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/system_ops.py#L31) — Toolbag build number (e.g.
+
+<a id="mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--registry"></a>
+### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/registry.py`
+
+Op registry for the marmoset_rpc plugin.
+
+- [`register(name)`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/registry.py#L21) — Decorator: register *fn* under *name*.
+- [`get(name)`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/registry.py#L36) — Return the op function for *name*, or None.
+- [`all_ops()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/registry.py#L41) — Sorted list of every registered op name.
+- [`describe(name=None)`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/registry.py#L46) — Return a JSON-friendly description of one op or all ops.
+- [`clear()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/registry.py#L82) — Reset the registry (test-only).
+
+<a id="mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--server"></a>
+### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py`
+
+HTTP JSON-RPC server for the marmoset_rpc plugin.
+
+- [`start_server(port=None, host='127.0.0.1')`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py#L96) — Start the HTTP server in a daemon thread.
+- [`stop_server()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py#L116) — Shut down the server (mostly useful for tests / hot-reload).
+- [`is_running()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py#L129)
+
 <a id="mat_utils--marmoset_bridge--parameters"></a>
 ### `mat_utils/marmoset_bridge/parameters.py`
 
 Registry of user-tunable Marmoset Toolbag parameters exposed to the bridge UI.
 
-- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L253) — Return registered placeholder keys present in *script_text*.
-- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L270) — Return ``{key: default}`` for every registered parameter.
-- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L275) — Format *values* for ``StrUtils.replace_delimited`` (string-valued context).
+- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L267) — Return registered placeholder keys present in *script_text*.
+- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L284) — Return ``{key: default}`` for every registered parameter.
+- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L289) — Format *values* for ``StrUtils.replace_delimited`` (string-valued context).
 - **[`class MarmosetParam`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L24)** — Describes one tunable Toolbag parameter and how to render its widget.
   - `MarmosetParam.format_value(self, value: Any) -> str` — Render *value* for inlining into a Python template.
 
 <a id="mat_utils--marmoset_bridge--templates--bake"></a>
 ### `mat_utils/marmoset_bridge/templates/bake.py`
 
-- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/bake.py#L99)
+- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/bake.py#L118)
 
 <a id="mat_utils--marmoset_bridge--templates--import"></a>
 ### `mat_utils/marmoset_bridge/templates/import.py`
 
-- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/import.py#L48)
+- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/import.py#L25)
 
 <a id="mat_utils--marmoset_bridge--templates--lookdev"></a>
 ### `mat_utils/marmoset_bridge/templates/lookdev.py`
 
-- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/lookdev.py#L113)
+- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/lookdev.py#L34)
 
 <a id="mat_utils--mat_manifest"></a>
 ### `mat_utils/mat_manifest.py`
@@ -2220,11 +2361,79 @@ Switchboard slots for the Render Opacity UI.
   - `ShaderTemplatesSlots.b001(self)` — Load texture maps and update GUI.
   - `ShaderTemplatesSlots.b002(self)` — Save current graph as a new shader template.
 
-<a id="mat_utils--substance--bridge"></a>
-### `mat_utils/substance/bridge.py`
+<a id="mat_utils--substance_bridge--_substance_bridge"></a>
+### `mat_utils/substance_bridge/_substance_bridge.py`
 
-- **[`class SubstanceBridge(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/substance/bridge.py#L59)** — Bridge for sending assets from Maya to Adobe Substance 3D Painter.
-  - `SubstanceBridge.send(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, painter_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, headless: bool = False, enable_remote: bool = True) -> Optional[str]` — Export objects and launch Substance Painter.
+Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
+
+- [`list_templates() -> List[Path]`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L126) — Return user-visible templates in ``templates/`` (skips underscore-prefixed).
+- [`parse_template(template_path: Path) -> Dict[str, Any]`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L144) — Read a template's metadata constants without executing the file.
+- [`list_template_modes() -> List[Tuple[str, str]]`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L206) — Return ``[(stem, mode), ...]`` for every (template, mode) pairing.
+- [`resolve_painter_log_path(painter_exe: Optional[str] = None) -> Optional[str]`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L218) — Return the path to Painter's application log.
+- **[`class SubstanceBridge(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L235)** — Export Maya selection to Substance Painter via a chosen template.
+  - `SubstanceBridge.painter_path(self) -> Optional[str]` *(property)* — Resolve the Painter executable path via :func:`find_painter_exe`.
+  - `SubstanceBridge.painter_path(self, value: Optional[str]) -> None`
+  - `SubstanceBridge.painter_log_path(self) -> Optional[str]` *(property)* — Path to Painter's application ``log.txt``, or *None* if absent.
+  - `SubstanceBridge.instances(self) -> List[SubstanceConnection]` *(property)* — Live snapshot of managed connections (oldest -> newest, dead pruned).
+  - `SubstanceBridge.find_live_managed(self) -> Optional[SubstanceConnection]` — Return the most-recently-launched managed instance whose RPC pings.
+  - `SubstanceBridge.send(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, painter_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, target: Union[str, int] = TARGET_AUTO, params: Optional[Dict[str, Any]] = None, **legacy_kwargs: Any) -> Optional[Dict[str, Any]]` — Export *objects*, render *template* in *mode*, hand off to Painter.
+
+<a id="mat_utils--substance_bridge--connection"></a>
+### `mat_utils/substance_bridge/connection.py`
+
+Substance 3D Painter connection module.
+
+- [`find_painter_exe() -> Optional[str]`](mayatk/mayatk/mat_utils/substance_bridge/connection.py#L59) — Single source of truth for Painter executable discovery.
+- [`default_log_path() -> Optional[str]`](mayatk/mayatk/mat_utils/substance_bridge/connection.py#L73) — Return the standard Substance Painter log path, or None if absent.
+- **[`class OutputStream`](mayatk/mayatk/mat_utils/substance_bridge/connection.py#L89)** — Thread-safe, multi-consumer text stream with bounded history.
+  - `OutputStream.push(self, line: str, source: str = '') -> None` — Append a line.
+  - `OutputStream.subscribe(self, callback: Callable[[str, str], None], replay_history: bool = False) -> Callable[[], None]` — Register ``callback(source, line)``.
+  - `OutputStream.history(self) -> List[Tuple[str, str]]` — Snapshot the current history buffer.
+  - `OutputStream.clear_history(self) -> None` — Drop buffered lines.
+  - `OutputStream.wait_for(self, pattern: Union[str, Pattern], timeout: Optional[float] = None, source: Optional[str] = None, include_history: bool = True) -> Optional[Tuple[str, str]]` — Block until a line matches *pattern*, or *timeout* expires.
+  - `OutputStream.close(self) -> None` — Mark the stream closed.
+  - `OutputStream.closed(self) -> bool` *(property)*
+- **[`class SubstanceConnection(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/substance_bridge/connection.py#L342)** — Launch Painter and expose its stdio, log, and RPC under one object.
+  - `SubstanceConnection.open(self) -> 'SubstanceConnection'` — Launch Painter and start readers, tailer, and RPC client.
+  - `SubstanceConnection.close(self, terminate: bool = False, timeout: float = 5.0) -> None` — Stop readers and tailer;
+  - `SubstanceConnection.is_alive(self) -> bool` — True if Painter is reachable through this connection.
+  - `SubstanceConnection.attach(cls, port: int, host: str = '127.0.0.1', log_path: Optional[str] = None, tail_log_from_start: bool = False, verify_alive: bool = True, verify_timeout: float = 2.0) -> 'SubstanceConnection'` *(class)* — Bind to a running Painter on *port* without launching anything.
+
+<a id="mat_utils--substance_bridge--parameters"></a>
+### `mat_utils/substance_bridge/parameters.py`
+
+Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
+
+- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L242) — Return registered placeholder keys present in *script_text*.
+- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L253) — Return ``{key: default}`` for every registered parameter.
+- [`render_cli_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L258) — Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting.
+- [`render_js_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L267) — Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping.
+- **[`class SubstanceParam`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L48)** — Describes one tunable Painter parameter and how to render its widget.
+  - `SubstanceParam.format_cli(self, value: Any) -> str` — Render *value* as a raw CLI argument value.
+  - `SubstanceParam.format_js(self, value: Any) -> str` — Render *value* as a JS literal for inlining into RPC_SCRIPT.
+
+<a id="mat_utils--substance_bridge--substance_bridge_slots"></a>
+### `mat_utils/substance_bridge/substance_bridge_slots.py`
+
+UI slots for the Substance Painter bridge.
+
+- **[`class SubstanceBridgeSlots`](mayatk/mayatk/mat_utils/substance_bridge/substance_bridge_slots.py#L46)** — Slots class wired to ``substance_bridge.ui``.
+  - `SubstanceBridgeSlots.bridge(self) -> SubstanceBridge` *(property)* — Lazy-instantiated :class:`SubstanceBridge` (defers Painter lookup).
+  - `SubstanceBridgeSlots.header_init(self, widget)` — Configure the header menu with template / log utilities.
+  - `SubstanceBridgeSlots.cmb000_init(self, widget)` — Populate the template combobox with one entry per (template, mode).
+  - `SubstanceBridgeSlots.b000(self)` — Process the selected transforms with the chosen template + mode.
+
+<a id="mat_utils--substance_bridge--substance_rpc--client"></a>
+### `mat_utils/substance_bridge/substance_rpc/client.py`
+
+JSON-RPC 2.0 client for a Painter-side Python plugin.
+
+- **[`class PainterRpcClient`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/client.py#L24)** — JSON-RPC 2.0 client for a Painter-side JSON server.
+  - `PainterRpcClient.url(self) -> str` *(property)*
+  - `PainterRpcClient.ping(self, timeout: float = 1.0) -> bool` — Return True if a TCP connection succeeds.
+  - `PainterRpcClient.wait_until_ready(self, timeout: float = 60.0, poll_interval: float = 0.5) -> bool` — Poll the port until it accepts connections, or *timeout* expires.
+  - `PainterRpcClient.call(self, method: str, params: Optional[dict] = None) -> dict` — Send a JSON-RPC method call.
+  - `PainterRpcClient.eval_js(self, script: str) -> dict` — Convenience: execute a JavaScript snippet via ``eval``.
 
 <a id="mat_utils--texture_path_editor"></a>
 ### `mat_utils/texture_path_editor.py`
