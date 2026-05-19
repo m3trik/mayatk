@@ -6,26 +6,26 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>293</width>
-    <height>320</height>
+    <width>244</width>
+    <height>316</height>
    </rect>
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">
-     <number>1</number>
+     <number>2</number>
     </property>
     <property name="leftMargin">
-     <number>1</number>
+     <number>2</number>
     </property>
     <property name="topMargin">
-     <number>1</number>
+     <number>2</number>
     </property>
     <property name="rightMargin">
-     <number>1</number>
+     <number>2</number>
     </property>
     <property name="bottomMargin">
-     <number>1</number>
+     <number>2</number>
     </property>
     <item>
      <widget class="Header" name="header" native="true">
@@ -47,7 +47,7 @@
         <bold>true</bold>
        </font>
       </property>
-      <property name="text">
+      <property name="text" stdset="0">
        <string>IMAGE TO PLANE</string>
       </property>
      </widget>
@@ -62,16 +62,16 @@
         <number>1</number>
        </property>
        <property name="leftMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <property name="topMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <property name="rightMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <property name="bottomMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <item>
         <layout class="QHBoxLayout" name="browseLayout">
@@ -156,19 +156,19 @@
       </property>
       <layout class="QGridLayout" name="gridLayout">
        <property name="leftMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <property name="topMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <property name="rightMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <property name="bottomMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <property name="spacing">
-        <number>1</number>
+        <number>0</number>
        </property>
        <item row="0" column="0">
         <widget class="QComboBox" name="cmb_mat_type">
@@ -205,13 +205,13 @@
         <widget class="LineEdit" name="txt_suffix">
          <property name="minimumSize">
           <size>
-           <width>0</width>
+           <width>65</width>
            <height>19</height>
           </size>
          </property>
          <property name="maximumSize">
           <size>
-           <width>40</width>
+           <width>65</width>
            <height>19</height>
           </size>
          </property>
@@ -275,16 +275,16 @@ Width is calculated from the image aspect ratio.</string>
         <number>1</number>
        </property>
        <property name="leftMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <property name="topMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <property name="rightMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <property name="bottomMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <item>
         <widget class="QPushButton" name="b001">
@@ -321,16 +321,16 @@ Width is calculated from the image aspect ratio.</string>
         <number>1</number>
        </property>
        <property name="leftMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <property name="topMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <property name="rightMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <property name="bottomMargin">
-        <number>1</number>
+        <number>0</number>
        </property>
        <item>
         <widget class="QPushButton" name="b002">
