@@ -40,7 +40,7 @@ from mayatk.mat_utils.substance_bridge._substance_bridge import (
 from mayatk.mat_utils.substance_bridge import parameters as _params
 
 
-_PRESETS_ROOT = Path("~/.mayatk/presets/substance_bridge").expanduser()
+_PRESETS_ROOT = Path("mayatk/substance_bridge")
 
 
 class SubstanceBridgeSlots:

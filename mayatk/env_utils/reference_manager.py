@@ -1936,7 +1936,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         widget.config_buttons("refresh", "menu", "collapse", "hide")
         widget.refresh_requested.connect(self.btn_refresh)
         widget.menu.add_presets = True
-        widget.menu.presets.preset_dir = "~/.mayatk/presets/reference_manager"
+        widget.menu.presets.preset_dir = "mayatk/reference_manager"
         widget.menu.add("Separator", setTitle="Naming:")
         widget.menu.add(
             "QPushButton",

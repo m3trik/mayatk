@@ -29,7 +29,7 @@ from mayatk.mat_utils.marmoset_bridge._marmoset_bridge import (
 from mayatk.mat_utils.marmoset_bridge import parameters as _params
 
 
-_PRESETS_ROOT = Path("~/.mayatk/presets/marmoset_bridge").expanduser()
+_PRESETS_ROOT = Path("mayatk/marmoset_bridge")
 
 
 class MarmosetBridgeSlots:
