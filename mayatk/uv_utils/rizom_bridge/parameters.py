@@ -17,45 +17,21 @@ bridge, the 3ds Max bridge), not every flag in the Lua API.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, List, Optional, Tuple
+from typing import Any
+
+from uitk.bridge import (
+    AttributeSpec,
+    lua_literal,
+    referenced_keys as _refkeys,
+    defaults as _defaults,
+    render_context as _render_context,
+)
 
 
-@dataclass(frozen=True)
-class RizomParam:
-    """Describes one tunable RizomUV parameter and how to render its widget."""
-
-    key: str
-    """Placeholder token (without the ``__`` delimiters)."""
-
-    label: str
-    """UI label shown next to the widget."""
-
-    widget_type: str
-    """One of ``"int"``, ``"float"``, ``"choice"``."""
-
-    default: Any
-    """Default value (numeric, or one of the choice values)."""
-
-    minimum: Optional[float] = None
-    maximum: Optional[float] = None
-    step: Optional[float] = None
-    decimals: int = 0
-
-    choices: Optional[List[Tuple[str, int]]] = None
-    """For ``"choice"`` widgets only: ``[(display_label, value), ...]``."""
-
-    tooltip: str = ""
-
-    def format_value(self, value: Any) -> str:
-        """Render *value* for inlining into Lua source."""
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if isinstance(value, float):
-            if self.decimals:
-                return f"{value:.{self.decimals}f}".rstrip("0").rstrip(".") or "0"
-            return repr(value)
-        return str(value)
+# Targets Lua scripts -- ``lua_literal`` produces lowercase ``true`` /
+# ``false`` and bare numeric / string literals suitable for inlining
+# into ``scripts/*.lua`` preset bodies.
+_FORMATTER = lua_literal
 
 
 # Display order is iteration order over this dict.
@@ -65,14 +41,14 @@ class RizomParam:
 # set, even to its documented default. SideFX Labs and the C4D bridge omit
 # them too. Re-add as registry entries once we move to a release where this
 # is fixed.
-PARAMS: "dict[str, RizomParam]" = {
+PARAMS: "dict[str, AttributeSpec]" = {
     # ------------------------------------------------------------------
     # Pack-time parameters (ZomPack)
     # ------------------------------------------------------------------
-    "RECURSION_DEPTH": RizomParam(
+    "RECURSION_DEPTH": AttributeSpec(
         key="RECURSION_DEPTH",
         label="Recursion Depth",
-        widget_type="int",
+        kind="int",
         default=2,
         minimum=1,
         maximum=5,
@@ -82,10 +58,10 @@ PARAMS: "dict[str, RizomParam]" = {
             "Higher = tighter packing, much slower."
         ),
     ),
-    "SCALING_MODE": RizomParam(
+    "SCALING_MODE": AttributeSpec(
         key="SCALING_MODE",
         label="Pre-scale",
-        widget_type="choice",
+        kind="choice",
         default=2,
         choices=[
             ("0  None", 0),
@@ -94,10 +70,10 @@ PARAMS: "dict[str, RizomParam]" = {
         ],
         tooltip="How shells are pre-scaled before packing.",
     ),
-    "LAYOUT_SCALING_MODE": RizomParam(
+    "LAYOUT_SCALING_MODE": AttributeSpec(
         key="LAYOUT_SCALING_MODE",
         label="Layout Scale",
-        widget_type="choice",
+        kind="choice",
         default=2,
         choices=[
             ("0  None", 0),
@@ -106,10 +82,10 @@ PARAMS: "dict[str, RizomParam]" = {
         ],
         tooltip="How the final packed layout is scaled to fit 0-1.",
     ),
-    "ROTATE_STEP": RizomParam(
+    "ROTATE_STEP": AttributeSpec(
         key="ROTATE_STEP",
         label="Orientation",
-        widget_type="int",
+        kind="int",
         default=90,
         minimum=1,
         maximum=360,
@@ -122,10 +98,10 @@ PARAMS: "dict[str, RizomParam]" = {
     # ------------------------------------------------------------------
     # Unfold / Optimize solver parameters (ZomUnfold, ZomOptimize)
     # ------------------------------------------------------------------
-    "ITERATIONS": RizomParam(
+    "ITERATIONS": AttributeSpec(
         key="ITERATIONS",
         label="Accuracy",
-        widget_type="int",
+        kind="int",
         default=10,
         minimum=1,
         maximum=100,
@@ -135,20 +111,20 @@ PARAMS: "dict[str, RizomParam]" = {
             "Higher = more accurate, slower convergence."
         ),
     ),
-    "PRE_ITERATIONS": RizomParam(
+    "PRE_ITERATIONS": AttributeSpec(
         key="PRE_ITERATIONS",
         label="Pre-iterations",
-        widget_type="int",
+        kind="int",
         default=10,
         minimum=0,
         maximum=50,
         step=1,
         tooltip="Pre-pass iterations before the main unfold.",
     ),
-    "MIX": RizomParam(
+    "MIX": AttributeSpec(
         key="MIX",
         label="Mutations",
-        widget_type="float",
+        kind="float",
         default=1.0,
         minimum=0.0,
         maximum=1.0,
@@ -159,10 +135,10 @@ PARAMS: "dict[str, RizomParam]" = {
             "0 = preserve incoming layout; 1 = full re-solve."
         ),
     ),
-    "ROOM_SPACE": RizomParam(
+    "ROOM_SPACE": AttributeSpec(
         key="ROOM_SPACE",
         label="Spacing",
-        widget_type="float",
+        kind="float",
         default=0.001,
         minimum=0.0,
         maximum=0.1,
@@ -173,10 +149,10 @@ PARAMS: "dict[str, RizomParam]" = {
             "Distinct from pack Margin -- this controls the solver, not the packer."
         ),
     ),
-    "MIN_ANGLE": RizomParam(
+    "MIN_ANGLE": AttributeSpec(
         key="MIN_ANGLE",
         label="Min Angle",
-        widget_type="float",
+        kind="float",
         default=1e-5,
         minimum=1e-7,
         maximum=1.0,
@@ -187,40 +163,16 @@ PARAMS: "dict[str, RizomParam]" = {
 }
 
 
-_PLACEHOLDER_RE = None
-
-
 def referenced_keys(script_text: str) -> "set[str]":
-    """Return the set of registered placeholder keys present in *script_text*.
-
-    Any ``__KEY__`` token in the script that doesn't match a registry entry
-    is silently ignored -- the bridge's substitution leaves it intact and
-    RizomUV will surface the error if it actually mattered.
-    """
-    import re
-
-    global _PLACEHOLDER_RE
-    if _PLACEHOLDER_RE is None:
-        _PLACEHOLDER_RE = re.compile(r"__([A-Z][A-Z0-9_]*)__")
-
-    found = set(_PLACEHOLDER_RE.findall(script_text))
-    return found & PARAMS.keys()
+    """Registered keys present in *script_text* (delegates to uitk.bridge)."""
+    return _refkeys(script_text, PARAMS)
 
 
 def defaults() -> "dict[str, Any]":
     """Return ``{key: default}`` for every registered parameter."""
-    return {key: spec.default for key, spec in PARAMS.items()}
+    return _defaults(PARAMS)
 
 
 def render_context(values: "dict[str, Any]") -> "dict[str, str]":
-    """Format *values* for ``StrUtils.replace_delimited`` (string-valued context).
-
-    Unknown keys are passed through ``str()``; registered keys go through
-    :meth:`RizomParam.format_value` so floats keep their precision and
-    booleans become ``true``/``false``.
-    """
-    out = {}
-    for key, val in values.items():
-        spec = PARAMS.get(key)
-        out[key] = spec.format_value(val) if spec else str(val)
-    return out
+    """Format *values* for ``StrUtils.replace_delimited`` using Lua literals."""
+    return _render_context(values, PARAMS, formatter=_FORMATTER)

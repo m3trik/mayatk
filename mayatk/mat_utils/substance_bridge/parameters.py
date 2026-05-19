@@ -38,82 +38,40 @@ Known limitations
 """
 from __future__ import annotations
 
-import os
-import re
-from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import Any
+
+from uitk.bridge import (
+    AttributeSpec,
+    cli_raw,
+    js_literal,
+    referenced_keys as _refkeys,
+    defaults as _defaults,
+    render_context as _render_context,
+)
 
 
-@dataclass(frozen=True)
-class SubstanceParam:
-    """Describes one tunable Painter parameter and how to render its widget.
-
-    widget_type values:
-      ``"int"`` / ``"float"`` -- spin boxes.
-      ``"choice"`` -- combo box; ``choices`` carries ``(label, value)`` pairs.
-      ``"bool"`` -- check box.
-      ``"path"`` -- single-file picker (default filter is .spt project templates).
-      ``"file_list"`` -- multi-file picker that produces a ``List[str]``.
-          Skipped during CLI/JS substitution; the bridge stages the listed
-          files alongside the FBX export and records them in the manifest.
-    """
-
-    key: str
-    label: str
-    widget_type: str  # "int" | "float" | "choice" | "bool" | "path" | "file_list"
-    default: Any
-
-    minimum: Optional[float] = None
-    maximum: Optional[float] = None
-    step: Optional[float] = None
-    decimals: int = 0
-
-    choices: Optional[List[Tuple[str, Any]]] = None
-    tooltip: str = ""
-
-    def format_cli(self, value: Any) -> str:
-        """Render *value* as a raw CLI argument value.
-
-        Strings pass through verbatim; ``subprocess.Popen(..., shell=False)``
-        treats each argv entry as a single token, so no quoting is needed.
-        Lists (``file_list``) are joined with the OS path separator -- but
-        templates should not generally substitute file_list params into
-        LAUNCH_ARGS; the bridge handles file_list staging out-of-band.
-        """
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if isinstance(value, (list, tuple)):
-            return os.pathsep.join(str(v) for v in value)
-        if isinstance(value, float):
-            if self.decimals:
-                return f"{value:.{self.decimals}f}".rstrip("0").rstrip(".") or "0"
-            return repr(value)
-        return str(value)
-
-    def format_js(self, value: Any) -> str:
-        """Render *value* as a JS literal for inlining into RPC_SCRIPT."""
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if isinstance(value, str):
-            # JS string literal -- double-quoted; escape backslashes and quotes.
-            escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-            return f'"{escaped}"'
-        if isinstance(value, float):
-            if self.decimals:
-                return f"{value:.{self.decimals}f}".rstrip("0").rstrip(".") or "0"
-            return repr(value)
-        return str(value)
+# Painter has two substitution contexts:
+#
+# * ``LAUNCH_ARGS`` -- raw argv tokens (``subprocess.Popen(..., shell=False)``
+#   passes each entry as a single token, so no quoting). Use :func:`cli_raw`.
+# * ``RPC_SCRIPT`` -- JavaScript literals embedded in the RPC body. Use
+#   :func:`js_literal` (double-quoted, escapes backslashes + quotes).
+#
+# The kind ``"file_list"`` is registered in :mod:`uitk.bridge.spec`; it
+# produces a ``list[str]`` widget value that the bridge stages
+# out-of-band alongside the FBX export rather than substituting into
+# argv directly.
 
 
 # Display order is iteration order over this dict.
-PARAMS: "dict[str, SubstanceParam]" = {
+PARAMS: "dict[str, AttributeSpec]" = {
     # ------------------------------------------------------------------
     # Project setup (Painter CLI flags applied at --mesh launch time)
     # ------------------------------------------------------------------
-    "PAINTER_RESOLUTION": SubstanceParam(
+    "PAINTER_RESOLUTION": AttributeSpec(
         key="PAINTER_RESOLUTION",
         label="Resolution",
-        widget_type="choice",
+        kind="choice",
         default=2048,
         choices=[
             ("512", 512),
@@ -127,10 +85,10 @@ PARAMS: "dict[str, SubstanceParam]" = {
             "documents at. Passed to Painter as ``--resolution <N>``."
         ),
     ),
-    "PAINTER_NORMAL_FORMAT": SubstanceParam(
+    "PAINTER_NORMAL_FORMAT": AttributeSpec(
         key="PAINTER_NORMAL_FORMAT",
         label="Normal Format",
-        widget_type="choice",
+        kind="choice",
         default="OpenGL",
         choices=[
             ("OpenGL (Maya, Unity)", "OpenGL"),
@@ -142,10 +100,10 @@ PARAMS: "dict[str, SubstanceParam]" = {
             "Mismatched normals look 'inverted' on lit surfaces."
         ),
     ),
-    "PAINTER_UV_TILE_MODE": SubstanceParam(
+    "PAINTER_UV_TILE_MODE": AttributeSpec(
         key="PAINTER_UV_TILE_MODE",
         label="UV Mode",
-        widget_type="choice",
+        kind="choice",
         default="UV",
         choices=[
             ("Single UV (one texture set)", "UV"),
@@ -157,10 +115,15 @@ PARAMS: "dict[str, SubstanceParam]" = {
             "mesh actually has UVs laid out across multiple tiles."
         ),
     ),
-    "PAINTER_PROJECT_TEMPLATE": SubstanceParam(
+    "PAINTER_PROJECT_TEMPLATE": AttributeSpec(
         key="PAINTER_PROJECT_TEMPLATE",
         label="Project Template",
-        widget_type="path",
+        # ``painter_template_file`` is a substance-specific kind registered
+        # at import time by :mod:`mayatk.mat_utils.substance_bridge.substance_bridge_slots`
+        # -- a single-file picker filtered on ``.spt`` / ``.spp``. The
+        # standard ``path`` kind is a directory picker, which would
+        # produce a folder path Painter's ``--template`` flag rejects.
+        kind="painter_template_file",
         default="",
         tooltip=(
             "Optional Painter project template (.spt) to seed the new\n"
@@ -171,30 +134,30 @@ PARAMS: "dict[str, SubstanceParam]" = {
     # ------------------------------------------------------------------
     # Iray render (render.py template -- BLOCKED on Painter plugin)
     # ------------------------------------------------------------------
-    "PAINTER_RENDER_WIDTH": SubstanceParam(
+    "PAINTER_RENDER_WIDTH": AttributeSpec(
         key="PAINTER_RENDER_WIDTH",
         label="Render Width",
-        widget_type="int",
+        kind="int",
         default=1920,
         minimum=128,
         maximum=8192,
         step=64,
         tooltip="Iray output image width in pixels.",
     ),
-    "PAINTER_RENDER_HEIGHT": SubstanceParam(
+    "PAINTER_RENDER_HEIGHT": AttributeSpec(
         key="PAINTER_RENDER_HEIGHT",
         label="Render Height",
-        widget_type="int",
+        kind="int",
         default=1080,
         minimum=128,
         maximum=8192,
         step=64,
         tooltip="Iray output image height in pixels.",
     ),
-    "PAINTER_RENDER_SAMPLES": SubstanceParam(
+    "PAINTER_RENDER_SAMPLES": AttributeSpec(
         key="PAINTER_RENDER_SAMPLES",
         label="Iray Samples",
-        widget_type="choice",
+        kind="choice",
         default=128,
         choices=[
             ("Draft (32)", 32),
@@ -207,20 +170,20 @@ PARAMS: "dict[str, SubstanceParam]" = {
             "Draft for blocking; Hero for marketing-quality stills."
         ),
     ),
-    "PAINTER_RENDER_OUTPUT_PATH": SubstanceParam(
+    "PAINTER_RENDER_OUTPUT_PATH": AttributeSpec(
         key="PAINTER_RENDER_OUTPUT_PATH",
         label="Render Output",
-        widget_type="path",
+        kind="path",
         default="",
         tooltip=(
             "Where Painter saves the rendered image (.png / .exr).\n"
             "Leave empty to default to ``<scene_dir>/painter_render.png``."
         ),
     ),
-    "PAINTER_BAKED_MAPS": SubstanceParam(
+    "PAINTER_BAKED_MAPS": AttributeSpec(
         key="PAINTER_BAKED_MAPS",
         label="Import Baked Maps",
-        widget_type="file_list",
+        kind="file_list",
         default=[],
         tooltip=(
             "Pre-baked mesh maps to ship to Painter alongside the FBX\n"
@@ -236,38 +199,21 @@ PARAMS: "dict[str, SubstanceParam]" = {
 }
 
 
-_PLACEHOLDER_RE = re.compile(r"__([A-Z][A-Z0-9_]*)__")
-
-
 def referenced_keys(script_text: str) -> "set[str]":
-    """Return registered placeholder keys present in *script_text*.
-
-    Any ``__KEY__`` token that doesn't match a registry entry is silently
-    ignored -- substitution leaves it intact, and Painter will surface the
-    error if it actually mattered.
-    """
-    found = set(_PLACEHOLDER_RE.findall(script_text))
-    return found & PARAMS.keys()
+    """Registered keys present in *script_text* (delegates to uitk.bridge)."""
+    return _refkeys(script_text, PARAMS)
 
 
 def defaults() -> "dict[str, Any]":
     """Return ``{key: default}`` for every registered parameter."""
-    return {key: spec.default for key, spec in PARAMS.items()}
+    return _defaults(PARAMS)
 
 
 def render_cli_context(values: "dict[str, Any]") -> "dict[str, str]":
     """Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting."""
-    out: "dict[str, str]" = {}
-    for key, val in values.items():
-        spec = PARAMS.get(key)
-        out[key] = spec.format_cli(val) if spec else str(val)
-    return out
+    return _render_context(values, PARAMS, formatter=cli_raw)
 
 
 def render_js_context(values: "dict[str, Any]") -> "dict[str, str]":
     """Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping."""
-    out: "dict[str, str]" = {}
-    for key, val in values.items():
-        spec = PARAMS.get(key)
-        out[key] = spec.format_js(val) if spec else str(val)
-    return out
+    return _render_context(values, PARAMS, formatter=js_literal)

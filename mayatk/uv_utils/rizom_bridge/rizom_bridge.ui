@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>220</width>
-    <height>108</height>
+    <height>240</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -150,17 +150,23 @@
        </widget>
       </item>
       <item>
-       <spacer name="verticalSpacer">
-        <property name="orientation">
-         <enum>Qt::Vertical</enum>
-        </property>
-        <property name="sizeHint" stdset="0">
+       <widget class="QTextBrowser" name="txt000">
+        <property name="minimumSize">
          <size>
           <width>0</width>
-          <height>10</height>
+          <height>100</height>
          </size>
         </property>
-       </spacer>
+        <property name="toolTip">
+         <string>Bridge log. Click linked paths to open them in the file explorer.</string>
+        </property>
+        <property name="openLinks">
+         <bool>false</bool>
+        </property>
+        <property name="openExternalLinks">
+         <bool>false</bool>
+        </property>
+       </widget>
       </item>
       <item>
        <widget class="Footer" name="footer" native="true">

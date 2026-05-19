@@ -241,9 +241,9 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             manifest_path="/tmp/a.materials.json",
             output_dir="/tmp/out",
             headless=False,
-            params={"BAKE_WIDTH": 4096, "BAKE_BITS": 16, "MAP_NORMAL": False},
+            params={"BAKE_SIZE": 4096, "BAKE_BITS": 16, "MAP_NORMAL": False},
         )
-        self.assertIn("BAKE_WIDTH = 4096", rendered)
+        self.assertIn("BAKE_SIZE = 4096", rendered)
         self.assertIn("BAKE_BITS = 16", rendered)
         self.assertIn("MAP_NORMAL = False", rendered)
 
@@ -444,8 +444,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         used = _params.referenced_keys(bake)
         # bake.py exposes the bake-* and MAP_* + high/low knobs.
         for must_be_present in (
-            "BAKE_WIDTH",
-            "BAKE_HEIGHT",
+            "BAKE_SIZE",
             "BAKE_BITS",
             "MAP_NORMAL",
             "HIGH_SUFFIX",

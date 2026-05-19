@@ -43,7 +43,8 @@ FBX_OPTIONS = {}
 #
 # Quoting convention:
 #  * User PARAMS (``__PAINTER_RENDER_OUTPUT_PATH__``) go through
-#    ``format_js`` and arrive as JS literals -- already quoted.
+#    :func:`uitk.bridge.js_literal` and arrive as JS literals --
+#    already quoted.
 #  * Internal tokens (``__OUTPUT_DIR__``) substitute as raw strings, so
 #    the template body wraps them in manual double quotes to land a
 #    valid JS string literal.

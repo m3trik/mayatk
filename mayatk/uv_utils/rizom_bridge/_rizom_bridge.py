@@ -1,6 +1,5 @@
 import os
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
@@ -9,6 +8,8 @@ try:
     import maya.mel as mel
 except ModuleNotFoundError as error:
     print(__file__, error)
+
+import pythontk as ptk
 
 # From this package:
 from mayatk import NodeUtils, UvUtils
@@ -26,7 +27,7 @@ _SCRIPT_DIR = _PKG_DIR / "scripts"
 _RIZOM_APP_NAMES = ["Rizomuv_VS", "rizomuv", "RizomUV"]
 
 
-class RizomUVBridge:
+class RizomUVBridge(ptk.LoggingMixin):
     def __init__(self, rizom_path=None):
         """Initialize the RizomUV bridge.
 
@@ -35,6 +36,7 @@ class RizomUVBridge:
                 If *None*, ``AppLauncher`` searches PATH / registry
                 using the candidates in ``_RIZOM_APP_NAMES``.
         """
+        super().__init__()
         self._rizom_path = rizom_path
         self._export_path = None  # Default to None, to be set during processing
         self._script_path = None  # Stores the path to the UV script file
@@ -175,9 +177,11 @@ class RizomUVBridge:
             original_transforms = NodeUtils.get_transform_node(objects)
             self._transfer_uvs_and_cleanup(imported_transforms, original_transforms)
 
+        self._announce_handoff(preset or "script", len(original_transforms))
+
     def _import_objects(self):
         """Updated to ensure transform nodes are returned."""
-        print(f"Debug: Importing objects from: {self.export_path}")
+        self.logger.debug(f"Importing objects from: {self.export_path}")
 
         # Determine file type
         file_ext = Path(self.export_path).suffix.lower()
@@ -187,35 +191,35 @@ class RizomUVBridge:
 
         # Remove the namespace if it already exists to ensure clean import
         if cmds.namespace(exists=import_namespace):
-            print(f"Debug: Removing existing namespace: {import_namespace}")
+            self.logger.debug(f"Removing existing namespace: {import_namespace}")
             cmds.namespace(removeNamespace=import_namespace, mergeNamespaceWithRoot=True)
 
         # Create a fresh namespace
         cmds.namespace(addNamespace=import_namespace)
-        print(f"Debug: Created namespace: {import_namespace}")
+        self.logger.debug(f"Created namespace: {import_namespace}")
 
         try:
             if file_ext == ".fbx":
                 # Ensure FBX plugin is loaded first
                 if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
-                    print("Debug: Loading FBX plugin...")
+                    self.logger.debug("Loading FBX plugin...")
                     cmds.loadPlugin("fbxmaya")
 
-                print("Debug: Importing FBX using Maya file command...")
+                self.logger.debug("Importing FBX using Maya file command...")
 
                 # Use Maya's file command for reliable namespace import
                 import_cmd = f'file -import -type "FBX" -ignoreVersion -mergeNamespacesOnClash false -namespace "{import_namespace}" -options "fbx" -pr "{self.export_path}";'
-                print(f"Debug: Executing command: {import_cmd}")
+                self.logger.debug(f"Executing command: {import_cmd}")
                 mel.eval(import_cmd)
 
                 # Get all objects in the namespace - try different approaches
                 imported_objs = cmds.ls(f"{import_namespace}:*", type="transform") or []
-                print(f"Debug: Transform objects in namespace: {imported_objs}")
+                self.logger.debug(f"Transform objects in namespace: {imported_objs}")
 
                 # If no transforms found, check for any nodes in the namespace
                 if not imported_objs:
                     all_namespace_nodes = cmds.ls(f"{import_namespace}:*") or []
-                    print(f"Debug: All nodes in namespace: {all_namespace_nodes}")
+                    self.logger.debug(f"All nodes in namespace: {all_namespace_nodes}")
 
                     # Try to find shapes and get their transforms
                     shape_nodes = cmds.ls(f"{import_namespace}:*", type="mesh") or []
@@ -227,12 +231,12 @@ class RizomUVBridge:
                             ) or []
                             if transforms:
                                 imported_objs.extend(transforms)
-                        print(f"Debug: Transforms found from shapes: {imported_objs}")
+                        self.logger.debug(f"Transforms found from shapes: {imported_objs}")
 
                 # If still no objects found in namespace, look for suffix objects anywhere
                 if not imported_objs:
-                    print(
-                        f"Debug: No objects found in namespace, searching for suffix '{self._temp_suffix}' anywhere..."
+                    self.logger.debug(
+                        f"No objects found in namespace, searching for suffix '{self._temp_suffix}' anywhere..."
                     )
                     all_transforms = cmds.ls(type="transform") or []
                     suffix_objects = [
@@ -240,8 +244,8 @@ class RizomUVBridge:
                         for t in all_transforms
                         if leaf_name(t).endswith(self._temp_suffix)
                     ]
-                    print(
-                        f"Debug: Found {len(suffix_objects)} objects with suffix: {suffix_objects}"
+                    self.logger.debug(
+                        f"Found {len(suffix_objects)} objects with suffix: {suffix_objects}"
                     )
                     imported_objs = suffix_objects
 
@@ -253,13 +257,13 @@ class RizomUVBridge:
                     returnNewNodes=True,
                     type="OBJ",
                 ) or []
-                print(f"Debug: OBJ import returned: {imported_objs}")
+                self.logger.debug(f"OBJ import returned: {imported_objs}")
 
         except Exception as e:
-            print(f"Debug: Import failed: {e}")
+            self.logger.warning(f"Import failed: {e}")
             # Final fallback: try without namespace
             try:
-                print("Debug: Trying import without namespace as final fallback...")
+                self.logger.debug("Trying import without namespace as final fallback...")
                 existing_transforms = set(cmds.ls(type="transform") or [])
 
                 if file_ext == ".fbx":
@@ -276,13 +280,13 @@ class RizomUVBridge:
                 suffix_objects = [
                     t for t in imported_objs if leaf_name(t).endswith(self._temp_suffix)
                 ]
-                print(
-                    f"Debug: Fallback without namespace found {len(suffix_objects)} suffix objects: {suffix_objects}"
+                self.logger.debug(
+                    f"Fallback without namespace found {len(suffix_objects)} suffix objects: {suffix_objects}"
                 )
                 imported_objs = suffix_objects
 
             except Exception as e2:
-                print(f"Debug: Final fallback also failed: {e2}")
+                self.logger.error(f"Final fallback also failed: {e2}")
                 imported_objs = []
 
         # Filter to get only transform nodes (already filtered for suffix above)
@@ -290,8 +294,8 @@ class RizomUVBridge:
             NodeUtils.get_transform_node(imported_objs) if imported_objs else []
         )
 
-        print(
-            f"Debug: Final transform nodes (with suffix '{self._temp_suffix}'): {imported_transforms}"
+        self.logger.debug(
+            f"Final transform nodes (with suffix '{self._temp_suffix}'): {imported_transforms}"
         )
 
         return imported_transforms
@@ -327,9 +331,9 @@ class RizomUVBridge:
                 # Store mapping using short (namespace-free) name
                 self._export_name_map[short_name(new_name)] = orig
             except Exception as dup_err:
-                print(f"Debug: Failed to duplicate {orig}: {dup_err}")
-        print(
-            f"Debug: Created {len(duplicates)} duplicates for export with suffix '{self._temp_suffix}'"
+                self.logger.warning(f"Failed to duplicate {orig}: {dup_err}")
+        self.logger.debug(
+            f"Created {len(duplicates)} duplicates for export with suffix '{self._temp_suffix}'"
         )
 
         if not duplicates:
@@ -340,8 +344,9 @@ class RizomUVBridge:
         export_dir.mkdir(parents=True, exist_ok=True)
 
         cmds.select(duplicates, replace=True)
-        print(
-            f"Debug: Exporting {len(duplicates)} duplicated objects to: {self.export_path}"
+        self.logger.info(
+            f"Exporting {len(duplicates)} object(s) to "
+            f'<a href="action://open?path={self.export_path}">{self.export_path}</a>'
         )
 
         # Live Maya sessions don't always have fbxmaya on by default;
@@ -355,7 +360,7 @@ class RizomUVBridge:
                 type="FBX export",
                 force=True,
             )
-            print("Debug: FBX export completed successfully")
+            self.logger.debug("FBX export completed successfully")
         except Exception as e:
             raise RuntimeError(
                 f"FBX export failed for {len(duplicates)} object(s) -> {self.export_path}: {e}"
@@ -364,9 +369,9 @@ class RizomUVBridge:
             # Remove the temporary duplicates from the scene before re-import
             try:
                 cmds.delete(duplicates)
-                print("Debug: Deleted temporary duplicated export nodes.")
+                self.logger.debug("Deleted temporary duplicated export nodes.")
             except Exception as cleanup_err:
-                print(f"Debug: Failed to delete duplicates: {cleanup_err}")
+                self.logger.warning(f"Failed to delete duplicates: {cleanup_err}")
 
     def _execute_uv_script(self):
         """Run the RizomUV script using the prepared script file path."""
@@ -386,18 +391,21 @@ class RizomUVBridge:
         # Prepare the full script file
         self._script_path = self._prepare_script_file(full_script_content)
 
-        print(f"Debug: About to execute RizomUV with script: {self._script_path}")
-        print(f"Debug: Script content:\n{full_script_content}")
-        print(f"Debug: Export file path: {self.export_path}")
+        self.logger.info(
+            f"Running RizomUV with script "
+            f'<a href="action://open?path={self._script_path}">{self._script_path}</a>'
+        )
+        self.logger.debug(f"Script content:\n{full_script_content}")
+        self.logger.debug(f"Export file path: {self.export_path}")
 
         # Check if export file exists before RizomUV processing
         export_file = Path(self.export_path)
         if export_file.exists():
-            print(
-                f"Debug: Export file exists before RizomUV: {export_file.stat().st_size} bytes"
+            self.logger.debug(
+                f"Export file exists before RizomUV: {export_file.stat().st_size} bytes"
             )
         else:
-            print("Debug: Warning - Export file does not exist before RizomUV!")
+            self.logger.warning("Export file does not exist before RizomUV!")
 
         # Execute RizomUV via AppLauncher.
         exe = self.rizom_path
@@ -415,7 +423,7 @@ class RizomUVBridge:
         pre_mtime = export_file.stat().st_mtime if export_file.exists() else 0
         pre_size = export_file.stat().st_size if export_file.exists() else 0
 
-        print(f"Debug: Executing command: {exe} -cfi {self._script_path}")
+        self.logger.debug(f"Executing command: {exe} -cfi {self._script_path}")
         try:
             result = AppLauncher.run(
                 exe,
@@ -429,17 +437,16 @@ class RizomUVBridge:
         except FileNotFoundError as e:
             raise RuntimeError(f"RizomUV executable not runnable: {e}") from e
 
-        print(f"Debug: RizomUV return code: {result.returncode}")
+        self.logger.debug(f"RizomUV return code: {result.returncode}")
         if result.stdout:
-            print(f"Debug: RizomUV stdout:\n{result.stdout}")
+            self.logger.debug(f"RizomUV stdout:\n{result.stdout}")
         if result.stderr:
-            print(f"Debug: RizomUV stderr:\n{result.stderr}")
+            self.logger.debug(f"RizomUV stderr:\n{result.stderr}")
 
         if result.returncode != 0:
             raise RuntimeError(
                 f"RizomUV exited with code {result.returncode}. "
-                f"See 'Debug: RizomUV stdout/stderr' above for the Lua "
-                f"error or crash report."
+                f"See Script Editor for the Lua error or crash report."
             )
 
         if not export_file.exists():
@@ -449,31 +456,31 @@ class RizomUVBridge:
 
         post_mtime = export_file.stat().st_mtime
         post_size = export_file.stat().st_size
-        print(
-            f"Debug: Export file after RizomUV: {post_size} bytes "
+        self.logger.debug(
+            f"Export file after RizomUV: {post_size} bytes "
             f"(mtime_changed={post_mtime != pre_mtime})"
         )
         if post_mtime == pre_mtime and post_size == pre_size:
             raise RuntimeError(
                 "RizomUV exited cleanly but did not modify the FBX. The "
                 "Lua script likely errored before reaching ZomSave -- "
-                "check the stdout above for a Lua traceback."
+                "enable debug logging to see the Lua traceback."
             )
 
     def _transfer_uvs_and_cleanup(self, imported_objects, original_objects):
         """Transfer UVs from imported objects back to the original objects and clean up."""
-        print(f"Debug: Starting UV transfer...")
-        print(f"Debug: Imported objects: {imported_objects}")
-        print(f"Debug: Original objects: {original_objects}")
-        print(
-            f"Debug: Number of imported: {len(imported_objects) if imported_objects else 0}"
+        self.logger.debug("Starting UV transfer...")
+        self.logger.debug(f"Imported objects: {imported_objects}")
+        self.logger.debug(f"Original objects: {original_objects}")
+        self.logger.debug(
+            f"Number of imported: {len(imported_objects) if imported_objects else 0}"
         )
-        print(
-            f"Debug: Number of original: {len(original_objects) if original_objects else 0}"
+        self.logger.debug(
+            f"Number of original: {len(original_objects) if original_objects else 0}"
         )
 
         if not imported_objects or not original_objects:
-            print("Debug: No objects to transfer UVs between!")
+            self.logger.warning("No objects to transfer UVs between!")
             return
 
         # Build ordered source/destination lists using the export mapping
@@ -486,53 +493,53 @@ class RizomUVBridge:
                 src_list.append(imp)
                 dst_list.append(dst)
             else:
-                print(
-                    f"Debug: Imported object {imp} not found in export map; skipping."
+                self.logger.debug(
+                    f"Imported object {imp} not found in export map; skipping."
                 )
 
-        print(
-            f"Debug: Prepared {len(src_list)} source objects and {len(dst_list)} destination objects for UV transfer."
+        self.logger.info(
+            f"Transferring UVs to {len(dst_list)} object(s)."
         )
 
         if not src_list or not dst_list:
-            print("Debug: No valid mapped object pairs for UV transfer.")
+            self.logger.warning("No valid mapped object pairs for UV transfer.")
         else:
             # Attempt a batch transfer if lengths match
             if len(src_list) == len(dst_list):
                 try:
-                    print("Debug: Attempting batch UV transfer...")
+                    self.logger.debug("Attempting batch UV transfer...")
                     UvUtils.transfer_uvs(src_list, dst_list)
-                    print("Debug: Batch UV transfer completed successfully!")
+                    self.logger.debug("Batch UV transfer completed successfully!")
                 except Exception as batch_err:
-                    print(
-                        f"Debug: Batch UV transfer failed ({batch_err}); attempting pairwise transfers..."
+                    self.logger.warning(
+                        f"Batch UV transfer failed ({batch_err}); attempting pairwise transfers..."
                     )
                     for s, d in zip(src_list, dst_list):
                         try:
                             UvUtils.transfer_uvs([s], [d])
-                            print(f"Debug: Pairwise UV transfer success: {s} -> {d}")
+                            self.logger.debug(f"Pairwise UV transfer success: {s} -> {d}")
                         except Exception as pair_err:
-                            print(
-                                f"Debug: Pairwise UV transfer failed for {s} -> {d}: {pair_err}"
+                            self.logger.error(
+                                f"Pairwise UV transfer failed for {s} -> {d}: {pair_err}"
                             )
             else:
-                print(
-                    "Debug: Source/Destination list length mismatch; skipping batch transfer."
+                self.logger.warning(
+                    "Source/Destination list length mismatch; skipping batch transfer."
                 )
                 for s, d in zip(src_list, dst_list):
                     try:
                         UvUtils.transfer_uvs([s], [d])
-                        print(f"Debug: Pairwise UV transfer success: {s} -> {d}")
+                        self.logger.debug(f"Pairwise UV transfer success: {s} -> {d}")
                     except Exception as pair_err:
-                        print(
-                            f"Debug: Pairwise UV transfer failed for {s} -> {d}: {pair_err}"
+                        self.logger.error(
+                            f"Pairwise UV transfer failed for {s} -> {d}: {pair_err}"
                         )
 
-        print("Debug: Cleaning up imported objects...")
+        self.logger.debug("Cleaning up imported objects...")
         cmds.delete(imported_objects)
         cmds.namespace(removeNamespace="RizomUVImport", mergeNamespaceWithRoot=True)
         cmds.select(original_objects)
-        print("Debug: Cleanup completed.")
+        self.logger.debug("Cleanup completed.")
 
     # -- Script resolution helpers -----------------------------------------
 
@@ -572,7 +579,7 @@ class RizomUVBridge:
         """
         # If the script already handles its own load/save, pass it through
         if "ZomLoad" in user_script and "ZomSave" in user_script:
-            print(f"Debug: User script contains ZomLoad/ZomSave; using as-is.")
+            self.logger.debug("User script contains ZomLoad/ZomSave; using as-is.")
             return user_script
 
         from mayatk.uv_utils.rizom_bridge import parameters as _params
@@ -597,14 +604,7 @@ class RizomUVBridge:
             "USER_SCRIPT": user_script,
         })
 
-        try:
-            print(f"Debug: Constructed full script:\n{full_script}")
-        except UnicodeEncodeError:
-            enc = sys.stdout.encoding or "ascii"
-            print(
-                "Debug: Constructed full script:\n"
-                + full_script.encode(enc, errors="replace").decode(enc, errors="replace")
-            )
+        self.logger.debug(f"Constructed full script:\n{full_script}")
         return full_script
 
     def _prepare_script_file(self, script_contents):
@@ -615,6 +615,18 @@ class RizomUVBridge:
         # Convert to a Path object and then get a POSIX-style string
         self._script_path = script_filename
         return script_filename
+
+    def _announce_handoff(self, preset: str, transform_count: int) -> None:
+        """Log the final success summary at the end of :meth:`process_with_rizomuv`.
+
+        Mirrors :meth:`mayatk.mat_utils.substance_bridge.SubstanceBridge._announce_handoff`
+        in spirit but kept terse: ``_export_objects`` and ``_execute_uv_script``
+        already log the FBX + script paths as clickable links during the run.
+        Re-linking them here would clutter the panel for a one-shot tool.
+        """
+        self.logger.info(
+            f"RizomUV '{preset}' applied to {transform_count} object(s)."
+        )
 
 
 # -----------------------------------------------------------------------------
