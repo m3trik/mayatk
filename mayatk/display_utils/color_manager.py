@@ -333,7 +333,7 @@ class ColorManager(ColorUtils):
 
 
 class ColorManagerSlots(ColorManager):
-    _PRESET_DIR = "~/.mayatk/presets/color_manager"
+    _PRESET_DIR = "mayatk/color_manager"
     _DEFAULT_PRESET = "default"
 
     def __init__(self, switchboard):

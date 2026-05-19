@@ -661,7 +661,7 @@ class SceneExporterSlots(SceneExporter):
         """Initialize the header widget."""
         # Enable whole-window presets on the header menu
         widget.menu.add_presets = True
-        widget.menu.presets.preset_dir = "~/.mayatk/presets/scene_exporter"
+        widget.menu.presets.preset_dir = "mayatk/scene_exporter"
         widget.menu.presets.metadata_provider = self._fbx_preset_metadata_provider
         widget.menu.presets.on_metadata_loaded = self._on_fbx_preset_metadata_loaded
 

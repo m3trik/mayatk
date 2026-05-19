@@ -24,7 +24,7 @@ from mayatk.uv_utils.rizom_bridge._rizom_bridge import (
 from mayatk.uv_utils.rizom_bridge import parameters as _params
 
 
-_PRESETS_ROOT = Path("~/.mayatk/presets/rizom_bridge").expanduser()
+_PRESETS_ROOT = Path("mayatk/rizom_bridge")
 
 
 class RizomBridgeSlots:
