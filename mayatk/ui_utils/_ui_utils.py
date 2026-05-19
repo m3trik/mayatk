@@ -156,6 +156,10 @@ class UiUtils:
         """Handle ``action://`` links emitted by ``log_link()`` in a QTextBrowser.
 
         Supported actions:
+            ``open``   — open *path* (file or directory) in the OS shell.
+                         Accepts ``?path=`` (canonical) or ``?filepath=``
+                         (legacy) -- the marmoset/substance/rizom bridges
+                         all emit ``?path=``.
             ``select`` — select *node* in the Maya viewport.
             ``reveal`` — select *node* and reveal it in the Outliner.
 
@@ -168,7 +172,6 @@ class UiUtils:
         """
         import os
         from urllib.parse import parse_qs
-        from maya import cmds
 
         if url.scheme() != "action":
             return False
@@ -178,7 +181,13 @@ class UiUtils:
 
         # Non-node actions -------------------------------------------------
         if action == "open":
-            filepath = params.get("filepath", [""])[0]
+            # Accept ``path`` (canonical -- what every bridge emits) and
+            # ``filepath`` as a back-compat fallback for any external
+            # caller still using the older key.
+            filepath = (
+                params.get("path", [""])[0]
+                or params.get("filepath", [""])[0]
+            )
             if not filepath:
                 return False
             try:
@@ -188,6 +197,10 @@ class UiUtils:
                     logger.warning(f"Could not open file: {e}")
                 return False
             return True
+
+        # Node-based actions need cmds; defer the import so the ``open``
+        # branch above stays usable in non-Maya contexts.
+        from maya import cmds
 
         # Node-based actions -----------------------------------------------
         node = params.get("node", [""])[0]

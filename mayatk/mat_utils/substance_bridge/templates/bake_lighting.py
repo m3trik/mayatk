@@ -64,7 +64,7 @@ LAUNCH_ARGS = [
 
 # Multi-step JS body delivered to Painter after the project is open and
 # RPC is reachable. Quoting follows the convention:
-#  * User PARAMS arrive JS-quoted via ``format_js``.
+#  * User PARAMS arrive JS-quoted via :func:`uitk.bridge.js_literal`.
 #  * Internal tokens (``__OUTPUT_DIR__``) substitute raw, so the template
 #    body wraps them in manual double quotes.
 RPC_SCRIPT = """

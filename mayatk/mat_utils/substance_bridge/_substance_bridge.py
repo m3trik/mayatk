@@ -447,7 +447,7 @@ class SubstanceBridge(ptk.LoggingMixin):
                 - ``int`` -- attach to that explicit RPC port.
                 The template's ``TARGET_INSTANCE`` constant constrains
                 which values are valid; conflicts surface as errors.
-            params: Placeholder overrides, e.g. ``{"BAKE_WIDTH": 4096}``.
+            params: Placeholder overrides, e.g. ``{"PAINTER_RESOLUTION": 4096}``.
             **legacy_kwargs: Swallowed (``headless``, ``enable_remote``) for
                 backward compatibility with the pre-restructure API.
 
@@ -518,7 +518,9 @@ class SubstanceBridge(ptk.LoggingMixin):
             except Exception as e:
                 self.logger.error(f"FBX export failed: {e}")
                 return None
-            self.logger.info(f"FBX written: {fbx_path}")
+            self.logger.info(
+                f'FBX written: <a href="action://open?path={fbx_path}">{fbx_path}</a>'
+            )
         else:
             self.logger.info(
                 "Template declares EXPORT_FBX=False; skipping Maya FBX export."
@@ -545,7 +547,10 @@ class SubstanceBridge(ptk.LoggingMixin):
                 manifest["bridge_file_lists"] = staged_file_lists
             with open(manifest_path, "w", encoding="utf-8") as fh:
                 json.dump(manifest, fh, indent=2)
-            self.logger.info(f"Manifest written: {manifest_path}")
+            self.logger.info(
+                f'Manifest written: '
+                f'<a href="action://open?path={manifest_path}">{manifest_path}</a>'
+            )
 
         # -- Render placeholders ------------------------------------------
         cli_ctx, js_ctx = self._build_contexts(
@@ -701,7 +706,7 @@ class SubstanceBridge(ptk.LoggingMixin):
 
         staged: Dict[str, List[str]] = {}
         for key, spec in _params.PARAMS.items():
-            if spec.widget_type != "file_list":
+            if spec.kind != "file_list":
                 continue
             if referenced_keys is not None and key not in referenced_keys:
                 continue

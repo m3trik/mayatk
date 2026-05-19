@@ -118,6 +118,27 @@ class EnvUtils(ptk.HelpMixin):
 
         return value
 
+    @classmethod
+    def default_artifact_dir(cls) -> str:
+        """Return a sensible default directory for exported/baked artifacts.
+
+        Resolution order: current scene's directory (if saved), else the
+        active workspace root. Returns empty string when neither is set
+        (untitled scene, no workspace). Used by DCC-bridge slot panels
+        as the fallback when the user leaves their Output Dir field
+        empty. Catches a broad Exception per probe so this never
+        crashes the slot init when called outside a live Maya session
+        (mock test contexts, headless tooling).
+        """
+        for key in ("scene_path", "workspace"):
+            try:
+                path = cls.get_env_info(key)
+            except Exception:  # noqa: BLE001
+                continue
+            if path and os.path.isdir(path):
+                return path
+        return ""
+
     @staticmethod
     def append_maya_paths(maya_version=None):
         """Appends various Maya-related paths to the system's Python environment and sys.path.

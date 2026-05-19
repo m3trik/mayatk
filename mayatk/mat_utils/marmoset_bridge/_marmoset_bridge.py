@@ -491,7 +491,7 @@ class MarmosetBridge(ptk.LoggingMixin):
             mode: ``"send_to"`` (interactive, fire-and-forget) or
                 ``"roundtrip"`` (headless, block + post-process). Must match
                 one of the template's declared :data:`BRIDGE_MODES`.
-            params: Placeholder overrides, e.g. ``{"BAKE_WIDTH": 4096}``.
+            params: Placeholder overrides, e.g. ``{"BAKE_SIZE": 4096}``.
 
         Returns:
             A result dict with ``script``, ``mode``, and -- for roundtrip --
@@ -542,13 +542,18 @@ class MarmosetBridge(ptk.LoggingMixin):
         except Exception as e:
             self.logger.error(f"FBX export failed: {e}")
             return None
-        self.logger.info(f"FBX written: {fbx_path}")
+        self.logger.info(
+            f'FBX written: <a href="action://open?path={fbx_path}">{fbx_path}</a>'
+        )
 
         self.logger.info("Building material manifest ...")
         manifest = MatManifest.build(objects)
         with open(manifest_path, "w", encoding="utf-8") as fh:
             json.dump(manifest, fh, indent=2)
-        self.logger.info(f"Manifest written: {manifest_path}")
+        self.logger.info(
+            f'Manifest written: '
+            f'<a href="action://open?path={manifest_path}">{manifest_path}</a>'
+        )
 
         # Bake-pairs sidecar: Maya-side parent-chain classification, written
         # while we still have the full DAG (Toolbag's FBX importer flattens
@@ -570,7 +575,8 @@ class MarmosetBridge(ptk.LoggingMixin):
                 json.dump(bake_pairs, fh, indent=2)
             self.logger.info(
                 f"Bake-pairs sidecar written ({len(bake_pairs)} mesh(es) "
-                f"pre-classified): {pairs_path}"
+                f'pre-classified): '
+                f'<a href="action://open?path={pairs_path}">{pairs_path}</a>'
             )
 
         script = self.render_template(
@@ -587,7 +593,10 @@ class MarmosetBridge(ptk.LoggingMixin):
 
         with open(script_path, "w", encoding="utf-8") as fh:
             fh.write(script)
-        self.logger.info(f"Toolbag script written: {script_path}")
+        self.logger.info(
+            f'Toolbag script written: '
+            f'<a href="action://open?path={script_path}">{script_path}</a>'
+        )
 
         result: Dict[str, Any] = {
             "script": script_path,

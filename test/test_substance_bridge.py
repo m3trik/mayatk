@@ -290,57 +290,57 @@ class TestBundledTemplates(unittest.TestCase):
 
 
 class TestParameterRendering(unittest.TestCase):
-    """parameters.render_cli_context vs render_js_context: the bug we fixed."""
+    """parameters.render_cli_context vs render_js_context: the bug we fixed.
+
+    The substance bridge no longer carries its own ``SubstanceParam``
+    subclass -- formatting moved to strategy callables in
+    :mod:`uitk.bridge.formatters` (``cli_raw`` / ``js_literal``). These
+    tests exercise those callables directly with a synthetic spec.
+    """
+
+    def _spec(self, kind, default=None):
+        from uitk.bridge import AttributeSpec
+        return AttributeSpec(key="X", label="X", kind=kind, default=default)
 
     def test_format_cli_string_is_raw(self):
         """CLI rendering must NOT auto-quote strings -- subprocess would
         otherwise embed literal quotes inside argv values."""
-        from mayatk.mat_utils.substance_bridge.parameters import (
-            SubstanceParam, render_cli_context,
-        )
-        spec = SubstanceParam(
-            key="P", label="P", widget_type="path", default="",
-        )
-        # Inject a one-off spec into a synthetic context dict; the function
-        # consults PARAMS at lookup time, so use an unregistered key via the
-        # str() fallback to exercise the raw path independently.
+        from uitk.bridge import cli_raw
+        from mayatk.mat_utils.substance_bridge.parameters import render_cli_context
+        # Unknown keys fall through to str() (the formatter is only
+        # consulted for keys present in PARAMS).
         out = render_cli_context({"UNKNOWN_KEY": "C:/some/path"})
         self.assertEqual(out["UNKNOWN_KEY"], "C:/some/path")
         # Direct spec test:
-        self.assertEqual(spec.format_cli("C:/Painter/template.spp"),
-                         "C:/Painter/template.spp")
+        spec = self._spec("path", default="")
+        self.assertEqual(
+            cli_raw(spec, "C:/Painter/template.spp"),
+            "C:/Painter/template.spp",
+        )
 
     def test_format_js_string_is_quoted_and_escaped(self):
-        from mayatk.mat_utils.substance_bridge.parameters import SubstanceParam
-        spec = SubstanceParam(
-            key="P", label="P", widget_type="path", default="",
-        )
+        from uitk.bridge import js_literal
+        spec = self._spec("path", default="")
         # Backslashes doubled, quotes escaped, wrapped in double quotes.
-        self.assertEqual(spec.format_js("C:\\foo\\bar"), '"C:\\\\foo\\\\bar"')
-        self.assertEqual(spec.format_js('say "hi"'), '"say \\"hi\\""')
+        self.assertEqual(js_literal(spec, "C:\\foo\\bar"), '"C:\\\\foo\\\\bar"')
+        self.assertEqual(js_literal(spec, 'say "hi"'), '"say \\"hi\\""')
 
     def test_format_cli_bool_lowercased(self):
-        from mayatk.mat_utils.substance_bridge.parameters import SubstanceParam
-        spec = SubstanceParam(
-            key="B", label="B", widget_type="bool", default=False,
-        )
-        self.assertEqual(spec.format_cli(True), "true")
-        self.assertEqual(spec.format_cli(False), "false")
+        from uitk.bridge import cli_raw
+        spec = self._spec("bool", default=False)
+        self.assertEqual(cli_raw(spec, True), "true")
+        self.assertEqual(cli_raw(spec, False), "false")
 
     def test_format_cli_int_plain(self):
-        from mayatk.mat_utils.substance_bridge.parameters import SubstanceParam
-        spec = SubstanceParam(
-            key="N", label="N", widget_type="int", default=0,
-        )
-        self.assertEqual(spec.format_cli(2048), "2048")
+        from uitk.bridge import cli_raw
+        spec = self._spec("int", default=0)
+        self.assertEqual(cli_raw(spec, 2048), "2048")
 
     def test_format_cli_file_list_joins_with_pathsep(self):
         import os as _os
-        from mayatk.mat_utils.substance_bridge.parameters import SubstanceParam
-        spec = SubstanceParam(
-            key="L", label="L", widget_type="file_list", default=[],
-        )
-        joined = spec.format_cli(["a.png", "b.png"])
+        from uitk.bridge import cli_raw
+        spec = self._spec("file_list", default=[])
+        joined = cli_raw(spec, ["a.png", "b.png"])
         self.assertEqual(joined, _os.pathsep.join(["a.png", "b.png"]))
 
 
