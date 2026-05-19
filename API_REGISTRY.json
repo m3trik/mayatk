@@ -8570,12 +8570,21 @@
               "deprecated": false
             },
             {
+              "name": "default_artifact_dir",
+              "qualname": "EnvUtils.default_artifact_dir",
+              "kind": "classmethod",
+              "signature": "(cls) -> str",
+              "summary": "Return a sensible default directory for exported/baked artifacts.",
+              "line": 122,
+              "deprecated": false
+            },
+            {
               "name": "append_maya_paths",
               "qualname": "EnvUtils.append_maya_paths",
               "kind": "staticmethod",
               "signature": "(maya_version=None)",
               "summary": "Appends various Maya-related paths to the system's Python environment and sys.path.",
-              "line": 122,
+              "line": 143,
               "deprecated": false
             },
             {
@@ -8584,7 +8593,7 @@
               "kind": "staticmethod",
               "signature": "(plugin_name)",
               "summary": "Loads a specified plugin.",
-              "line": 182,
+              "line": 203,
               "deprecated": false
             },
             {
@@ -8593,7 +8602,7 @@
               "kind": "staticmethod",
               "signature": "(load=False, unload=False, query=False)",
               "summary": "Load/Unload/Query the Maya Vray Plugin.",
-              "line": 202,
+              "line": 223,
               "deprecated": false
             },
             {
@@ -8602,7 +8611,7 @@
               "kind": "staticmethod",
               "signature": "(index=None)",
               "summary": "Get a list of recent files sorted by modification time.",
-              "line": 231,
+              "line": 252,
               "deprecated": false
             },
             {
@@ -8611,7 +8620,7 @@
               "kind": "staticmethod",
               "signature": "(index=None, format='standard')",
               "summary": "Get a list of recently set projects.",
-              "line": 277,
+              "line": 298,
               "deprecated": false
             },
             {
@@ -8620,7 +8629,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Search for and compile a list of existing autosave directories based on",
-              "line": 325,
+              "line": 346,
               "deprecated": false
             },
             {
@@ -8629,7 +8638,7 @@
               "kind": "classmethod",
               "signature": "(cls, filter_time=None, timestamp_format='%Y-%m-%d %H:%M:%S')",
               "summary": "Retrieves a list of recent autosave files from Maya autosave directories, optionally filtered by ag…",
-              "line": 355,
+              "line": 376,
               "deprecated": false
             },
             {
@@ -8638,7 +8647,7 @@
               "kind": "staticmethod",
               "signature": "(root_dir: str, return_type: str = 'dir', ignore_empty: bool = True, recursive: bool = True) -> list",
               "summary": "Recursively find Maya workspaces under a root directory.",
-              "line": 411,
+              "line": 432,
               "deprecated": false
             },
             {
@@ -8647,7 +8656,7 @@
               "kind": "staticmethod",
               "signature": "(root_dir: Optional[str] = None, full_path: bool = True, recursive: bool = False, omit_autosave: bool = True, file_types=['*.ma', '*.mb']) -> list[str]",
               "summary": "Return a list of Maya scene files (.ma/.mb) from the given or current workspace directory.",
-              "line": 477,
+              "line": 498,
               "deprecated": false
             },
             {
@@ -8656,7 +8665,7 @@
               "kind": "classmethod",
               "signature": "(cls, scene_path: Optional[str] = None) -> Optional[str]",
               "summary": "Determine the workspace directory for a given scene by moving up directory levels until a workspace…",
-              "line": 514,
+              "line": 535,
               "deprecated": false
             },
             {
@@ -8665,7 +8674,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Reference a Maya scene.",
-              "line": 544,
+              "line": 565,
               "deprecated": false
             },
             {
@@ -8674,7 +8683,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Remove a reference to a Maya scene.",
-              "line": 556,
+              "line": 577,
               "deprecated": false
             },
             {
@@ -8683,7 +8692,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Check if a Maya scene is referenced.",
-              "line": 570,
+              "line": 591,
               "deprecated": false
             },
             {
@@ -8692,7 +8701,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Get the nodes from a referenced Maya scene.",
-              "line": 585,
+              "line": 606,
               "deprecated": false
             },
             {
@@ -8701,7 +8710,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "List all references in the current Maya scene.",
-              "line": 603,
+              "line": 624,
               "deprecated": false
             },
             {
@@ -8710,7 +8719,7 @@
               "kind": "staticmethod",
               "signature": "(file_path: str = None, **fbx_options: Any) -> None",
               "summary": "Export the entire Maya scene as an FBX file with flexible MEL command options.",
-              "line": 620,
+              "line": 641,
               "deprecated": false
             },
             {
@@ -8719,7 +8728,7 @@
               "kind": "staticmethod",
               "signature": "(namespace: str) -> str",
               "summary": "Sanitize the namespace by replacing or removing illegal characters.",
-              "line": 689,
+              "line": 710,
               "deprecated": false
             },
             {
@@ -8728,7 +8737,7 @@
               "kind": "staticmethod",
               "signature": "(selected_file: str, workspace_files: dict) -> Optional[str]",
               "summary": "Resolve a file name to its full path by searching in workspace files.",
-              "line": 703,
+              "line": 724,
               "deprecated": false
             },
             {
@@ -8737,7 +8746,7 @@
               "kind": "classmethod",
               "signature": "(cls, workspaces: list, recursive: bool = True) -> dict",
               "summary": "Build a cache of workspace files for multiple workspaces.",
-              "line": 726,
+              "line": 747,
               "deprecated": false
             },
             {
@@ -8746,7 +8755,7 @@
               "kind": "staticmethod",
               "signature": "(filename: str) -> bool",
               "summary": "Check if a file matches the Maya autosave pattern.",
-              "line": 751,
+              "line": 772,
               "deprecated": false
             },
             {
@@ -8755,7 +8764,7 @@
               "kind": "staticmethod",
               "signature": "(backup_path: Optional[Union[str, bool]] = True, suffix: str = '_backup', file_type: str = 'mayaAscii', force: bool = True, preserve_scene_name: bool = True) -> Optional[str]",
               "summary": "Save a backup copy of the current scene.",
-              "line": 766,
+              "line": 787,
               "deprecated": false
             },
             {
@@ -8764,7 +8773,7 @@
               "kind": "classmethod",
               "signature": "(cls, autosave_path: Optional[str] = None) -> Optional[str]",
               "summary": "Resolve the original scene file an autosave was generated from.",
-              "line": 861,
+              "line": 882,
               "deprecated": false
             },
             {
@@ -8773,7 +8782,7 @@
               "kind": "classmethod",
               "signature": "(cls, original_path: Optional[str] = None, backup_existing: bool = True) -> Optional[str]",
               "summary": "Save the currently open autosave scene back to its original path.",
-              "line": 957,
+              "line": 978,
               "deprecated": false
             }
           ]
@@ -13222,7 +13231,7 @@
               "kind": "method",
               "signature": "(self, template: str, fbx_path: str, manifest_path: str, output_dir: str, mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None, headless: Optional[bool] = None, pairs_path: Optional[str] = None) -> Optional[str]",
               "summary": "Return the rendered Toolbag Python script body, or *None* on miss.",
-              "line": 659,
+              "line": 668,
               "deprecated": false
             }
           ]
@@ -13328,22 +13337,60 @@
     },
     {
       "relpath": "mat_utils/marmoset_bridge/marmoset_bridge_slots.py",
-      "summary": "",
+      "summary": "Slots for the Marmoset Toolbag bridge panel.",
       "functions": [],
       "classes": [
         {
           "name": "MarmosetBridgeSlots",
-          "summary": "UI slots for the Marmoset Toolbag bridge.",
-          "line": 35,
-          "bases": [],
+          "summary": "Slots wired to ``marmoset_bridge.ui`` via :class:`MayaBridgeSlotsBase`.",
+          "line": 39,
+          "bases": [
+            "MayaBridgeSlotsBase"
+          ],
           "members": [
             {
-              "name": "bridge",
-              "qualname": "MarmosetBridgeSlots.bridge",
+              "name": "params_module",
+              "qualname": "MarmosetBridgeSlots.params_module",
               "kind": "property",
+              "signature": "(self)",
+              "summary": "",
+              "line": 56,
+              "deprecated": false
+            },
+            {
+              "name": "template_dir",
+              "qualname": "MarmosetBridgeSlots.template_dir",
+              "kind": "property",
+              "signature": "(self) -> Path",
+              "summary": "",
+              "line": 60,
+              "deprecated": false
+            },
+            {
+              "name": "make_bridge",
+              "qualname": "MarmosetBridgeSlots.make_bridge",
+              "kind": "method",
               "signature": "(self) -> MarmosetBridge",
-              "summary": "Lazy-instantiated MarmosetBridge (defers Toolbag path lookup).",
-              "line": 68,
+              "summary": "",
+              "line": 63,
+              "deprecated": false
+            },
+            {
+              "name": "list_template_modes",
+              "qualname": "MarmosetBridgeSlots.list_template_modes",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "",
+              "line": 66,
+              "deprecated": false
+            },
+            {
+              "name": "select_initial_template_index",
+              "qualname": "MarmosetBridgeSlots.select_initial_template_index",
+              "kind": "method",
+              "signature": "(self, pairs)",
+              "summary": "Prefer 'bake (roundtrip)' then 'bake (send_to)', else first entry.",
+              "line": 69,
               "deprecated": false
             },
             {
@@ -13352,16 +13399,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header menu with utilities (no per-call options).",
-              "line": 360,
-              "deprecated": false
-            },
-            {
-              "name": "cmb000_init",
-              "qualname": "MarmosetBridgeSlots.cmb000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Populate the template combobox with one entry per (template, mode).",
-              "line": 424,
+              "line": 80,
               "deprecated": false
             },
             {
@@ -13370,7 +13408,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Process selected transforms with the chosen template + mode.",
-              "line": 486,
+              "line": 141,
               "deprecated": false
             }
           ]
@@ -13640,8 +13678,8 @@
           "qualname": "referenced_keys",
           "kind": "function",
           "signature": "(script_text: str) -> 'set[str]'",
-          "summary": "Return registered placeholder keys present in *script_text*.",
-          "line": 267,
+          "summary": "Registered keys present in *script_text* (delegates to uitk.bridge).",
+          "line": 235,
           "deprecated": false
         },
         {
@@ -13650,7 +13688,7 @@
           "kind": "function",
           "signature": "() -> 'dict[str, Any]'",
           "summary": "Return ``{key: default}`` for every registered parameter.",
-          "line": 284,
+          "line": 240,
           "deprecated": false
         },
         {
@@ -13658,34 +13696,16 @@
           "qualname": "render_context",
           "kind": "function",
           "signature": "(values: 'dict[str, Any]') -> 'dict[str, str]'",
-          "summary": "Format *values* for ``StrUtils.replace_delimited`` (string-valued context).",
-          "line": 289,
+          "summary": "Format *values* for ``StrUtils.replace_delimited`` using Python literals.",
+          "line": 245,
           "deprecated": false
         }
       ],
-      "classes": [
-        {
-          "name": "MarmosetParam",
-          "summary": "Describes one tunable Toolbag parameter and how to render its widget.",
-          "line": 24,
-          "bases": [],
-          "members": [
-            {
-              "name": "format_value",
-              "qualname": "MarmosetParam.format_value",
-              "kind": "method",
-              "signature": "(self, value: Any) -> str",
-              "summary": "Render *value* for inlining into a Python template.",
-              "line": 40,
-              "deprecated": false
-            }
-          ]
-        }
-      ]
+      "classes": []
     },
     {
       "relpath": "mat_utils/marmoset_bridge/templates/bake.py",
-      "summary": "",
+      "summary": "Bake high-poly detail into a low-poly target via Marmoset Toolbag.",
       "functions": [
         {
           "name": "main",
@@ -13693,7 +13713,7 @@
           "kind": "function",
           "signature": "()",
           "summary": "",
-          "line": 118,
+          "line": 123,
           "deprecated": false
         }
       ],
@@ -13701,7 +13721,7 @@
     },
     {
       "relpath": "mat_utils/marmoset_bridge/templates/import.py",
-      "summary": "",
+      "summary": "Open the FBX in Toolbag and wire materials from the Maya manifest.",
       "functions": [
         {
           "name": "main",
@@ -13709,7 +13729,7 @@
           "kind": "function",
           "signature": "()",
           "summary": "",
-          "line": 25,
+          "line": 31,
           "deprecated": false
         }
       ],
@@ -13717,7 +13737,7 @@
     },
     {
       "relpath": "mat_utils/marmoset_bridge/templates/lookdev.py",
-      "summary": "",
+      "summary": "Open the FBX in Toolbag, apply a Sky preset, and frame the model.",
       "functions": [
         {
           "name": "main",
@@ -13725,7 +13745,7 @@
           "kind": "function",
           "signature": "()",
           "summary": "",
-          "line": 34,
+          "line": 41,
           "deprecated": false
         }
       ],
@@ -14819,8 +14839,8 @@
           "qualname": "referenced_keys",
           "kind": "function",
           "signature": "(script_text: str) -> 'set[str]'",
-          "summary": "Return registered placeholder keys present in *script_text*.",
-          "line": 242,
+          "summary": "Registered keys present in *script_text* (delegates to uitk.bridge).",
+          "line": 202,
           "deprecated": false
         },
         {
@@ -14829,7 +14849,7 @@
           "kind": "function",
           "signature": "() -> 'dict[str, Any]'",
           "summary": "Return ``{key: default}`` for every registered parameter.",
-          "line": 253,
+          "line": 207,
           "deprecated": false
         },
         {
@@ -14838,7 +14858,7 @@
           "kind": "function",
           "signature": "(values: 'dict[str, Any]') -> 'dict[str, str]'",
           "summary": "Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting.",
-          "line": 258,
+          "line": 212,
           "deprecated": false
         },
         {
@@ -14847,57 +14867,68 @@
           "kind": "function",
           "signature": "(values: 'dict[str, Any]') -> 'dict[str, str]'",
           "summary": "Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping.",
-          "line": 267,
+          "line": 217,
           "deprecated": false
         }
       ],
-      "classes": [
-        {
-          "name": "SubstanceParam",
-          "summary": "Describes one tunable Painter parameter and how to render its widget.",
-          "line": 48,
-          "bases": [],
-          "members": [
-            {
-              "name": "format_cli",
-              "qualname": "SubstanceParam.format_cli",
-              "kind": "method",
-              "signature": "(self, value: Any) -> str",
-              "summary": "Render *value* as a raw CLI argument value.",
-              "line": 74,
-              "deprecated": false
-            },
-            {
-              "name": "format_js",
-              "qualname": "SubstanceParam.format_js",
-              "kind": "method",
-              "signature": "(self, value: Any) -> str",
-              "summary": "Render *value* as a JS literal for inlining into RPC_SCRIPT.",
-              "line": 93,
-              "deprecated": false
-            }
-          ]
-        }
-      ]
+      "classes": []
     },
     {
       "relpath": "mat_utils/substance_bridge/substance_bridge_slots.py",
-      "summary": "UI slots for the Substance Painter bridge.",
+      "summary": "Slots for the Substance Painter bridge panel.",
       "functions": [],
       "classes": [
         {
           "name": "SubstanceBridgeSlots",
-          "summary": "Slots class wired to ``substance_bridge.ui``.",
-          "line": 46,
-          "bases": [],
+          "summary": "Slots wired to ``substance_bridge.ui`` via :class:`MayaBridgeSlotsBase`.",
+          "line": 114,
+          "bases": [
+            "MayaBridgeSlotsBase"
+          ],
           "members": [
             {
-              "name": "bridge",
-              "qualname": "SubstanceBridgeSlots.bridge",
+              "name": "params_module",
+              "qualname": "SubstanceBridgeSlots.params_module",
               "kind": "property",
+              "signature": "(self)",
+              "summary": "",
+              "line": 136,
+              "deprecated": false
+            },
+            {
+              "name": "template_dir",
+              "qualname": "SubstanceBridgeSlots.template_dir",
+              "kind": "property",
+              "signature": "(self) -> Path",
+              "summary": "",
+              "line": 140,
+              "deprecated": false
+            },
+            {
+              "name": "make_bridge",
+              "qualname": "SubstanceBridgeSlots.make_bridge",
+              "kind": "method",
               "signature": "(self) -> SubstanceBridge",
-              "summary": "Lazy-instantiated :class:`SubstanceBridge` (defers Painter lookup).",
-              "line": 78,
+              "summary": "",
+              "line": 143,
+              "deprecated": false
+            },
+            {
+              "name": "list_template_modes",
+              "qualname": "SubstanceBridgeSlots.list_template_modes",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "",
+              "line": 146,
+              "deprecated": false
+            },
+            {
+              "name": "select_initial_template_index",
+              "qualname": "SubstanceBridgeSlots.select_initial_template_index",
+              "kind": "method",
+              "signature": "(self, pairs)",
+              "summary": "Prefer 'with_textures (send_to)' then 'import (send_to)'.",
+              "line": 149,
               "deprecated": false
             },
             {
@@ -14906,16 +14937,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure the header menu with template / log utilities.",
-              "line": 418,
-              "deprecated": false
-            },
-            {
-              "name": "cmb000_init",
-              "qualname": "SubstanceBridgeSlots.cmb000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Populate the template combobox with one entry per (template, mode).",
-              "line": 478,
+              "line": 160,
               "deprecated": false
             },
             {
@@ -14924,7 +14946,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Process the selected transforms with the chosen template + mode.",
-              "line": 543,
+              "line": 216,
               "deprecated": false
             }
           ]
@@ -18260,6 +18282,32 @@
       "classes": []
     },
     {
+      "relpath": "ui_utils/maya_bridge_slots.py",
+      "summary": "Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "MayaBridgeSlotsBase",
+          "summary": "Adds a Maya-flavored ``default_output_dir`` to :class:`BridgeSlotsBase`.",
+          "line": 22,
+          "bases": [
+            "BridgeSlotsBase"
+          ],
+          "members": [
+            {
+              "name": "default_output_dir",
+              "qualname": "MayaBridgeSlotsBase.default_output_dir",
+              "kind": "method",
+              "signature": "(self) -> str",
+              "summary": "Scene-dir then workspace fallback for an empty Output Dir field.",
+              "line": 25,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
       "relpath": "ui_utils/maya_native_menus.py",
       "summary": "",
       "functions": [],
@@ -18641,8 +18689,10 @@
         {
           "name": "RizomUVBridge",
           "summary": "",
-          "line": 29,
-          "bases": [],
+          "line": 30,
+          "bases": [
+            "ptk.LoggingMixin"
+          ],
           "members": [
             {
               "name": "rizom_path",
@@ -18650,7 +18700,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "Resolve the RizomUV executable path.",
-              "line": 49,
+              "line": 51,
               "deprecated": false
             },
             {
@@ -18659,7 +18709,7 @@
               "kind": "method",
               "signature": "(self, value)",
               "summary": "Set the path to the RizomUV executable (bypasses auto-discovery).",
-              "line": 97,
+              "line": 99,
               "deprecated": false
             },
             {
@@ -18668,7 +18718,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "Lazy initialization of the export path.",
-              "line": 102,
+              "line": 104,
               "deprecated": false
             },
             {
@@ -18677,7 +18727,7 @@
               "kind": "method",
               "signature": "(self, value)",
               "summary": "",
-              "line": 115,
+              "line": 117,
               "deprecated": false
             },
             {
@@ -18686,7 +18736,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "Get the path to the UV script file as a POSIX string.",
-              "line": 123,
+              "line": 125,
               "deprecated": false
             },
             {
@@ -18695,7 +18745,7 @@
               "kind": "method",
               "signature": "(self, value)",
               "summary": "Set the UV script, loading from a file if a path is provided, or saving the content to a file.",
-              "line": 130,
+              "line": 132,
               "deprecated": false
             },
             {
@@ -18704,7 +18754,7 @@
               "kind": "method",
               "signature": "(self, objects, uv_script=None, preset=None, params=None)",
               "summary": "Run the full export -> RizomUV -> re-import workflow.",
-              "line": 137,
+              "line": 139,
               "deprecated": false
             }
           ]
@@ -18720,8 +18770,8 @@
           "qualname": "referenced_keys",
           "kind": "function",
           "signature": "(script_text: str) -> 'set[str]'",
-          "summary": "Return the set of registered placeholder keys present in *script_text*.",
-          "line": 193,
+          "summary": "Registered keys present in *script_text* (delegates to uitk.bridge).",
+          "line": 166,
           "deprecated": false
         },
         {
@@ -18730,7 +18780,7 @@
           "kind": "function",
           "signature": "() -> 'dict[str, Any]'",
           "summary": "Return ``{key: default}`` for every registered parameter.",
-          "line": 210,
+          "line": 171,
           "deprecated": false
         },
         {
@@ -18738,49 +18788,60 @@
           "qualname": "render_context",
           "kind": "function",
           "signature": "(values: 'dict[str, Any]') -> 'dict[str, str]'",
-          "summary": "Format *values* for ``StrUtils.replace_delimited`` (string-valued context).",
-          "line": 215,
+          "summary": "Format *values* for ``StrUtils.replace_delimited`` using Lua literals.",
+          "line": 176,
           "deprecated": false
         }
       ],
-      "classes": [
-        {
-          "name": "RizomParam",
-          "summary": "Describes one tunable RizomUV parameter and how to render its widget.",
-          "line": 25,
-          "bases": [],
-          "members": [
-            {
-              "name": "format_value",
-              "qualname": "RizomParam.format_value",
-              "kind": "method",
-              "signature": "(self, value: Any) -> str",
-              "summary": "Render *value* for inlining into Lua source.",
-              "line": 50,
-              "deprecated": false
-            }
-          ]
-        }
-      ]
+      "classes": []
     },
     {
       "relpath": "uv_utils/rizom_bridge/rizom_bridge_slots.py",
-      "summary": "",
+      "summary": "Slots for the RizomUV bridge panel.",
       "functions": [],
       "classes": [
         {
           "name": "RizomBridgeSlots",
-          "summary": "UI slots for the RizomUV bridge.",
-          "line": 30,
-          "bases": [],
+          "summary": "Slots wired to ``rizom_bridge.ui`` via :class:`MayaBridgeSlotsBase`.",
+          "line": 50,
+          "bases": [
+            "MayaBridgeSlotsBase"
+          ],
           "members": [
             {
-              "name": "bridge",
-              "qualname": "RizomBridgeSlots.bridge",
+              "name": "params_module",
+              "qualname": "RizomBridgeSlots.params_module",
               "kind": "property",
+              "signature": "(self)",
+              "summary": "",
+              "line": 85,
+              "deprecated": false
+            },
+            {
+              "name": "template_dir",
+              "qualname": "RizomBridgeSlots.template_dir",
+              "kind": "property",
+              "signature": "(self) -> Path",
+              "summary": "",
+              "line": 89,
+              "deprecated": false
+            },
+            {
+              "name": "make_bridge",
+              "qualname": "RizomBridgeSlots.make_bridge",
+              "kind": "method",
               "signature": "(self) -> RizomUVBridge",
-              "summary": "Lazy-instantiated RizomUVBridge (defers RizomUV path lookup).",
-              "line": 50,
+              "summary": "",
+              "line": 92,
+              "deprecated": false
+            },
+            {
+              "name": "list_template_modes",
+              "qualname": "RizomBridgeSlots.list_template_modes",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Return ``[(stem, \"\"), ...]`` for every bundled ``.lua`` script.",
+              "line": 95,
               "deprecated": false
             },
             {
@@ -18788,17 +18849,8 @@
               "qualname": "RizomBridgeSlots.header_init",
               "kind": "method",
               "signature": "(self, widget)",
-              "summary": "Configure header menu with tool instructions and utilities.",
-              "line": 287,
-              "deprecated": false
-            },
-            {
-              "name": "cmb000_init",
-              "qualname": "RizomBridgeSlots.cmb000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Populate the preset combobox from scripts/*.lua (one-time setup).",
-              "line": 335,
+              "summary": "Configure header menu with Rizom-specific utilities.",
+              "line": 112,
               "deprecated": false
             },
             {
@@ -18807,7 +18859,16 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Process selected transforms with the chosen preset.",
-              "line": 383,
+              "line": 172,
+              "deprecated": false
+            },
+            {
+              "name": "open_uv_editor",
+              "qualname": "RizomBridgeSlots.open_uv_editor",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Open Maya's UV Editor (TextureViewWindow).",
+              "line": 225,
               "deprecated": false
             }
           ]
