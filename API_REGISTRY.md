@@ -1519,7 +1519,7 @@ Primitive creation utilities for Maya.
   - `EnvUtils.is_referenced(file_path)` *(static)* — Check if a Maya scene is referenced.
   - `EnvUtils.get_reference_nodes(file_path)` *(static)* — Get the nodes from a referenced Maya scene.
   - `EnvUtils.list_references()` *(static)* — List all references in the current Maya scene.
-  - `EnvUtils.export_scene_as_fbx(file_path: str = None, **fbx_options: Any) -> None` *(static)* — Export the entire Maya scene as an FBX file with flexible MEL command options.
+  - `EnvUtils.export_scene_as_fbx(file_path: str = None, *, selection_only: bool = False, **fbx_options: Any) -> None` *(static)* — Export the Maya scene as an FBX file with flexible MEL command options.
   - `EnvUtils.sanitize_namespace(namespace: str) -> str` *(static)* — Sanitize the namespace by replacing or removing illegal characters.
   - `EnvUtils.resolve_file_path_in_workspaces(selected_file: str, workspace_files: dict) -> Optional[str]` *(static)* — Resolve a file name to its full path by searching in workspace files.
   - `EnvUtils.get_workspace_file_cache(cls, workspaces: list, recursive: bool = True) -> dict` *(class)* — Build a cache of workspace files for multiple workspaces.
