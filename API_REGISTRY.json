@@ -8726,8 +8726,8 @@
               "name": "export_scene_as_fbx",
               "qualname": "EnvUtils.export_scene_as_fbx",
               "kind": "staticmethod",
-              "signature": "(file_path: str = None, **fbx_options: Any) -> None",
-              "summary": "Export the entire Maya scene as an FBX file with flexible MEL command options.",
+              "signature": "(file_path: str = None, *, selection_only: bool = False, **fbx_options: Any) -> None",
+              "summary": "Export the Maya scene as an FBX file with flexible MEL command options.",
               "line": 641,
               "deprecated": false
             },
@@ -8737,7 +8737,7 @@
               "kind": "staticmethod",
               "signature": "(namespace: str) -> str",
               "summary": "Sanitize the namespace by replacing or removing illegal characters.",
-              "line": 710,
+              "line": 714,
               "deprecated": false
             },
             {
@@ -8746,7 +8746,7 @@
               "kind": "staticmethod",
               "signature": "(selected_file: str, workspace_files: dict) -> Optional[str]",
               "summary": "Resolve a file name to its full path by searching in workspace files.",
-              "line": 724,
+              "line": 728,
               "deprecated": false
             },
             {
@@ -8755,7 +8755,7 @@
               "kind": "classmethod",
               "signature": "(cls, workspaces: list, recursive: bool = True) -> dict",
               "summary": "Build a cache of workspace files for multiple workspaces.",
-              "line": 747,
+              "line": 751,
               "deprecated": false
             },
             {
@@ -8764,7 +8764,7 @@
               "kind": "staticmethod",
               "signature": "(filename: str) -> bool",
               "summary": "Check if a file matches the Maya autosave pattern.",
-              "line": 772,
+              "line": 776,
               "deprecated": false
             },
             {
@@ -8773,7 +8773,7 @@
               "kind": "staticmethod",
               "signature": "(backup_path: Optional[Union[str, bool]] = True, suffix: str = '_backup', file_type: str = 'mayaAscii', force: bool = True, preserve_scene_name: bool = True) -> Optional[str]",
               "summary": "Save a backup copy of the current scene.",
-              "line": 787,
+              "line": 791,
               "deprecated": false
             },
             {
@@ -8782,7 +8782,7 @@
               "kind": "classmethod",
               "signature": "(cls, autosave_path: Optional[str] = None) -> Optional[str]",
               "summary": "Resolve the original scene file an autosave was generated from.",
-              "line": 882,
+              "line": 886,
               "deprecated": false
             },
             {
@@ -8791,7 +8791,7 @@
               "kind": "classmethod",
               "signature": "(cls, original_path: Optional[str] = None, backup_existing: bool = True) -> Optional[str]",
               "summary": "Save the currently open autosave scene back to its original path.",
-              "line": 978,
+              "line": 982,
               "deprecated": false
             }
           ]
