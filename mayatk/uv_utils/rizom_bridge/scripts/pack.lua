@@ -16,8 +16,13 @@ ZomPack({
     ProcessTileSelection=false,
     RecursionDepth=__RECURSION_DEPTH__,
     RootGroup="RootGroup",
-    Scaling={Mode=__SCALING_MODE__},
-    Rotate={Step=__ROTATE_STEP__},
-    Translate=true,
+    Scaling={Mode=__SCALING_MODE__, Mix=__SCALING_MIX__},
+    Rotate={
+        Step=__ROTATE_STEP__,
+        Enable=__PACK_ROTATE_ENABLE__,
+    },
+    Translate=__PACK_TRANSLATE__,
     LayoutScalingMode=__LAYOUT_SCALING_MODE__,
+    MaxMutations=__PACK_MAX_MUTATIONS__,
+    Resolution=__PACK_RESOLUTION__,
 })

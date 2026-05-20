@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.11.81"
+__version__ = "0.11.87"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -41,7 +41,6 @@ DEFAULT_INCLUDE = {
     "anim_utils.blendshape_animator._blendshape_animator": "BlendshapeAnimator",
     # Attribute utils
     "node_utils.attributes._attributes": ["Attributes"],
-    "node_utils.attributes.event_triggers": "EventTriggers",
     "audio_utils.audio_clips._audio_clips": "AudioClips",
     # Audio utils
     "audio_utils._audio_utils": "AudioUtils",

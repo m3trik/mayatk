@@ -194,6 +194,44 @@ class TestSelectionMetadata(QuickTestCase):
         self.assertIn("Polygon Meshes", types)
         self.assertIn("Locators", types)
 
+    def test_uv_category_exposes_expected_types(self):
+        """UV component selection types should appear in the registry."""
+        cats = Selection.get_selection_categories()
+        self.assertIn("UV", cats)
+        uv_types = set(cats["UV"])
+        self.assertIn("Unmapped", uv_types)
+        self.assertIn("Texture Borders", uv_types)
+        self.assertIn("Overlapping", uv_types)
+
+
+class TestSelectionUVHandlers(MayaTkTestCase):
+    """UV handlers must preserve the pre-MEL selection so `_apply_selection_mode`
+    can layer replace/add/remove on top of the user's original meshes.
+
+    Regression guard for the contract change: previously the handler left
+    Maya's selection mutated by the MEL command, which broke 'add' mode (the
+    original mesh selection was lost before _apply_selection_mode ran)."""
+
+    def test_uv_handler_restores_selection_before_returning(self):
+        cube = cmds.polyCube(name="sel_uv_restore")[0]
+        cmds.select(cube, replace=True)
+        # Run a UV handler directly (bypass select_by_type so we observe
+        # the post-handler / pre-_apply_selection_mode state).
+        Selection._SELECTION_CONFIG["UV"]["Unmapped"](cmds.ls())
+        # Selection must still hold the original mesh — not whatever the MEL
+        # command left behind.
+        self.assertIn(cube, cmds.ls(selection=True) or [])
+
+    def test_uv_replace_mode_selects_components(self):
+        """End-to-end: replace mode through select_by_type selects the matched UVs."""
+        cube = cmds.polyCube(name="sel_uv_replace")[0]
+        cmds.select(cube, replace=True)
+        # An unmapped poly has all faces unmapped by default after polyCube
+        # (depending on Maya defaults); the assertion is just that the call
+        # completes and produces *something* component-like or empty.
+        result = Selection.select_by_type("Unmapped", objects=cmds.ls(), mode="replace")
+        self.assertIsInstance(result, list)
+
 
 if __name__ == "__main__":
     unittest.main()

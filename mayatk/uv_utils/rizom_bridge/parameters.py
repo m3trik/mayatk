@@ -95,6 +95,69 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "90 = axis-aligned, 1 = free rotation (slowest)."
         ),
     ),
+    "PACK_ROTATE_ENABLE": AttributeSpec(
+        key="PACK_ROTATE_ENABLE",
+        label="Rotate",
+        kind="bool",
+        default=True,
+        tooltip=(
+            "Allow the packer to rotate islands. When off, every island\n"
+            "keeps its incoming UV-space angle (the rotation step still\n"
+            "applies during the initial pre-orientation pass)."
+        ),
+    ),
+    "PACK_TRANSLATE": AttributeSpec(
+        key="PACK_TRANSLATE",
+        label="Translate",
+        kind="bool",
+        default=True,
+        tooltip=(
+            "Allow the packer to translate islands. When off, islands\n"
+            "stay in place (useful when repacking against a pinned layout)."
+        ),
+    ),
+    "PACK_RESOLUTION": AttributeSpec(
+        key="PACK_RESOLUTION",
+        label="Resolution",
+        kind="choice",
+        default=1024,
+        choices=[
+            ("256", 256),
+            ("512", 512),
+            ("1024", 1024),
+            ("2048", 2048),
+            ("4096", 4096),
+            ("8192", 8192),
+        ],
+        tooltip=(
+            "Pack-time resolution baseline. Anchors texel density for\n"
+            "spacing and margin calculations; doesn't resample the layout."
+        ),
+    ),
+    "PACK_MAX_MUTATIONS": AttributeSpec(
+        key="PACK_MAX_MUTATIONS",
+        label="Mutations",
+        kind="int",
+        default=1000,
+        minimum=1,
+        maximum=10000,
+        step=1,
+        tooltip=(
+            "Packer solver iterations.\n"
+            "Higher = tighter packing, slower convergence."
+        ),
+    ),
+    "SCALING_MIX": AttributeSpec(
+        key="SCALING_MIX",
+        label="Mix Scale",
+        kind="bool",
+        default=False,
+        tooltip=(
+            "Mix incoming UV scale with the packer's computed scale.\n"
+            "Useful when repacking an existing layout you want to mostly\n"
+            "preserve; off = fully recompute scale from scratch."
+        ),
+    ),
     # ------------------------------------------------------------------
     # Unfold / Optimize solver parameters (ZomUnfold, ZomOptimize)
     # ------------------------------------------------------------------
@@ -160,6 +223,24 @@ PARAMS: "dict[str, AttributeSpec]" = {
         decimals=7,
         tooltip="Solver minimum angle threshold for triangle stability.",
     ),
+    # ------------------------------------------------------------------
+    # Auto-seam detection (ZomSelect Auto={SharpEdges={AngleMin=...}})
+    # ------------------------------------------------------------------
+    "SHARP_ANGLE": AttributeSpec(
+        key="SHARP_ANGLE",
+        label="Sharp Angle",
+        kind="float",
+        default=39.0,
+        minimum=1.0,
+        maximum=180.0,
+        step=1.0,
+        decimals=1,
+        tooltip=(
+            "Dihedral angle (degrees) above which an edge is treated as a seam.\n"
+            "Lower = more cuts (hard-surface, ~39).\n"
+            "Higher = fewer cuts on smooth surfaces (organic, ~80)."
+        ),
+    ),
 }
 
 
@@ -176,3 +257,69 @@ def defaults() -> "dict[str, Any]":
 def render_context(values: "dict[str, Any]") -> "dict[str, str]":
     """Format *values* for ``StrUtils.replace_delimited`` using Lua literals."""
     return _render_context(values, PARAMS, formatter=_FORMATTER)
+
+
+# ---------------------------------------------------------------------------
+# Version gating
+# ---------------------------------------------------------------------------
+# Minimum RizomUV version required for each placeholder. Params absent from
+# this map are considered universally compatible. Versions are (major, minor)
+# tuples for natural comparison.
+#
+# Why this exists: Rizom 2020.1 crashes (access violation) the moment it
+# encounters certain ZomPack fields that were added in later releases --
+# the same family of crashes that already keeps ``Margin`` / ``Quality`` out
+# of the registry entirely. Rather than dropping the newer knobs for users
+# on a current Rizom, the bridge parses the version from the install dir
+# and strips lines referencing unsupported placeholders before sending the
+# script to Rizom. The panel does the same strip before scanning for
+# placeholders, so the rows auto-hide for users on older Rizom.
+#
+# The gate is 2022.0 -- a conservative midpoint between Titus's 2020.1-era
+# reference (no MaxMutations / Resolution / Rotate.Enable) and the adevra
+# 2024 Maya bridge (uses all three). Adjust downward if a 2021.x release is
+# confirmed to support these.
+#
+# IMPORTANT (for future contributors): each gated placeholder must live on
+# its OWN line in the source .lua -- ``strip_unsupported`` drops whole
+# lines, so a sibling 2020.1-compatible key on the same line would be
+# dropped too. See the ``Rotate={Step=..., Enable=...}`` multi-line layout
+# in scripts/*.lua for the pattern.
+MIN_VERSIONS: "dict[str, tuple[int, ...]]" = {
+    "PACK_MAX_MUTATIONS": (2022, 0),
+    "PACK_RESOLUTION": (2022, 0),
+    "PACK_ROTATE_ENABLE": (2022, 0),
+}
+
+# Minimum Rizom version that accepts the nested ``FBX={UseUVSetNames=true}``
+# load/save flag. Below this, the bridge emits an empty FBX block (Rizom
+# auto-detects format from the file extension). Kept here (rather than
+# inline in ``_construct_full_script``) so the gate threshold lives next
+# to its peers and stays in sync if ``MIN_VERSIONS`` shifts.
+FBX_USE_UV_SET_NAMES_MIN_VERSION: "tuple[int, ...]" = (2022, 0)
+
+
+def strip_unsupported(script_text: str, version: "tuple[int, ...]") -> str:
+    """Drop every line that references a placeholder requiring a newer Rizom.
+
+    The substitution is line-level: each ``__KEY__`` token in :data:`MIN_VERSIONS`
+    whose required version exceeds *version* causes the entire containing
+    line to disappear. Lua's trailing-comma tolerance in tables means
+    removing the last entry before ``})`` stays parse-valid.
+
+    Pre-existing constraint: every gated placeholder must live on its own
+    line in the source ``.lua`` -- otherwise dropping the line also drops
+    sibling 2020.1-compatible keys on the same line.
+    """
+    if not version:
+        return script_text
+    out_lines = []
+    for line in script_text.splitlines(keepends=True):
+        keep = True
+        for key, min_ver in MIN_VERSIONS.items():
+            if f"__{key}__" in line and version < min_ver:
+                keep = False
+                break
+        if keep:
+            out_lines.append(line)
+    return "".join(out_lines)

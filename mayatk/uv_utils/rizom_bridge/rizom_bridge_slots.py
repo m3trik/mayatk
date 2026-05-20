@@ -47,6 +47,34 @@ from mayatk.uv_utils.rizom_bridge import parameters as _params
 _PRESETS_ROOT = Path("mayatk/rizom_bridge")
 
 
+class _VersionedParamsProxy:
+    """Wraps the ``parameters`` module so ``referenced_keys`` is Rizom-version-aware.
+
+    The base :meth:`BridgeSlotsBase._refresh_param_visibility` shows rows
+    whose placeholder appears in the active template. For Rizom we need
+    the panel to ALSO hide widgets gated above the installed Rizom version
+    -- otherwise the user can dial knobs that get silently stripped from
+    the script before send. Strips the lua first, then delegates.
+
+    Everything except ``referenced_keys`` falls through to the underlying
+    module via ``__getattr__`` (``PARAMS``, ``defaults``, ``render_context``,
+    ``strip_unsupported``).
+    """
+
+    def __init__(self, slot: "RizomBridgeSlots", module):
+        self._slot = slot
+        self._mod = module
+
+    def referenced_keys(self, script_text: str):
+        version = self._slot.bridge.rizom_version
+        return self._mod.referenced_keys(
+            self._mod.strip_unsupported(script_text, version)
+        )
+
+    def __getattr__(self, name):
+        return getattr(self._mod, name)
+
+
 class RizomBridgeSlots(MayaBridgeSlotsBase):
     """Slots wired to ``rizom_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
 
@@ -59,7 +87,7 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
     PRESETS_ROOT = _PRESETS_ROOT
     LOG_TAG = "rizom_bridge"
 
-    # Rizom's bundled scripts (one per recipe: pack, unwrap, ...) live under
+    # Rizom's bundled scripts (one per recipe: pack, unwrap_hard, ...) live under
     # ``scripts/*.lua``. The base class defaults the extension to ``.py``
     # for marmoset/substance templates; this override is what lets
     # :meth:`_refresh_param_visibility` find the ``__KEY__`` placeholders
@@ -83,7 +111,7 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
 
     @property
     def params_module(self):
-        return _params
+        return _VersionedParamsProxy(self, _params)
 
     @property
     def template_dir(self) -> Path:
@@ -152,7 +180,7 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
             setToolTip=(
                 "RizomUV Bridge -- Round-trip selected meshes through RizomUV.\n\n"
                 "1. Select one or more polygon transforms.\n"
-                "2. Pick a Lua preset (pack, unwrap, optimize, ...).\n"
+                "2. Pick a Lua preset (pack, unwrap_hard, unwrap_organic, optimize).\n"
                 "3. Adjust the parameters that the preset exposes.\n"
                 "4. Click 'Process Selected'.\n\n"
                 "Maya exports duplicates with a __RZTMP suffix as FBX,\n"

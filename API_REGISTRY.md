@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-05-19_
+_Generated: 2026-05-20_
 
 ## Index
 
@@ -113,7 +113,7 @@ _Generated: 2026-05-19_
 - [`mat_utils/image_to_plane/image_to_plane_slots.py`](#mat_utils--image_to_plane--image_to_plane_slots) — Switchboard slots for the Image to Plane UI.
 - [`mat_utils/marmoset_bridge/_marmoset_bridge.py`](#mat_utils--marmoset_bridge--_marmoset_bridge)
 - [`mat_utils/marmoset_bridge/_toolbag_helpers.py`](#mat_utils--marmoset_bridge--_toolbag_helpers) — Shared helpers for Marmoset Toolbag template scripts.
-- [`mat_utils/marmoset_bridge/marmoset_bridge_slots.py`](#mat_utils--marmoset_bridge--marmoset_bridge_slots)
+- [`mat_utils/marmoset_bridge/marmoset_bridge_slots.py`](#mat_utils--marmoset_bridge--marmoset_bridge_slots) — Slots for the Marmoset Toolbag bridge panel.
 - [`mat_utils/marmoset_bridge/marmoset_rpc/connection.py`](#mat_utils--marmoset_bridge--marmoset_rpc--connection) — Maya-side JSON-RPC client for the marmoset_rpc Toolbag plugin.
 - [`mat_utils/marmoset_bridge/marmoset_rpc/installer.py`](#mat_utils--marmoset_bridge--marmoset_rpc--installer) — Install the marmoset_rpc plugin into Toolbag's user plugin folder.
 - [`mat_utils/marmoset_bridge/marmoset_rpc/job.py`](#mat_utils--marmoset_bridge--marmoset_rpc--job) — One-shot batch pipeline for the marmoset_rpc bridge.
@@ -123,9 +123,9 @@ _Generated: 2026-05-19_
 - [`mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/registry.py`](#mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--registry) — Op registry for the marmoset_rpc plugin.
 - [`mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py`](#mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--server) — HTTP JSON-RPC server for the marmoset_rpc plugin.
 - [`mat_utils/marmoset_bridge/parameters.py`](#mat_utils--marmoset_bridge--parameters) — Registry of user-tunable Marmoset Toolbag parameters exposed to the bridge UI.
-- [`mat_utils/marmoset_bridge/templates/bake.py`](#mat_utils--marmoset_bridge--templates--bake)
-- [`mat_utils/marmoset_bridge/templates/import.py`](#mat_utils--marmoset_bridge--templates--import)
-- [`mat_utils/marmoset_bridge/templates/lookdev.py`](#mat_utils--marmoset_bridge--templates--lookdev)
+- [`mat_utils/marmoset_bridge/templates/bake.py`](#mat_utils--marmoset_bridge--templates--bake) — Bake high-poly detail into a low-poly target via Marmoset Toolbag.
+- [`mat_utils/marmoset_bridge/templates/import.py`](#mat_utils--marmoset_bridge--templates--import) — Open the FBX in Toolbag and wire materials from the Maya manifest.
+- [`mat_utils/marmoset_bridge/templates/lookdev.py`](#mat_utils--marmoset_bridge--templates--lookdev) — Open the FBX in Toolbag, apply a Sky preset, and frame the model.
 - [`mat_utils/mat_manifest.py`](#mat_utils--mat_manifest)
 - [`mat_utils/mat_snapshot.py`](#mat_utils--mat_snapshot) — Lightweight material state snapshot and restore.
 - [`mat_utils/mat_transfer.py`](#mat_utils--mat_transfer)
@@ -140,7 +140,7 @@ _Generated: 2026-05-19_
 - [`mat_utils/substance_bridge/_substance_bridge.py`](#mat_utils--substance_bridge--_substance_bridge) — Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
 - [`mat_utils/substance_bridge/connection.py`](#mat_utils--substance_bridge--connection) — Substance 3D Painter connection module.
 - [`mat_utils/substance_bridge/parameters.py`](#mat_utils--substance_bridge--parameters) — Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
-- [`mat_utils/substance_bridge/substance_bridge_slots.py`](#mat_utils--substance_bridge--substance_bridge_slots) — UI slots for the Substance Painter bridge.
+- [`mat_utils/substance_bridge/substance_bridge_slots.py`](#mat_utils--substance_bridge--substance_bridge_slots) — Slots for the Substance Painter bridge panel.
 - [`mat_utils/substance_bridge/substance_rpc/client.py`](#mat_utils--substance_bridge--substance_rpc--client) — JSON-RPC 2.0 client for a Painter-side Python plugin.
 - [`mat_utils/texture_path_editor.py`](#mat_utils--texture_path_editor)
 - [`node_utils/_node_utils.py`](#node_utils--_node_utils)
@@ -162,13 +162,14 @@ _Generated: 2026-05-19_
 - [`ui_utils/calculator.py`](#ui_utils--calculator)
 - [`ui_utils/channel_box.py`](#ui_utils--channel_box) — Programmatic access to Maya's Channel Box.
 - [`ui_utils/hotkey_collisions.py`](#ui_utils--hotkey_collisions) — Maya hotkey collision checker for the uitk HotkeyEditor.
+- [`ui_utils/maya_bridge_slots.py`](#ui_utils--maya_bridge_slots) — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 - [`ui_utils/maya_native_menus.py`](#ui_utils--maya_native_menus)
 - [`ui_utils/maya_ui_handler.py`](#ui_utils--maya_ui_handler)
 - [`ui_utils/node_icons.py`](#ui_utils--node_icons) — Reusable helper for resolving Maya node icons at runtime.
 - [`uv_utils/_uv_utils.py`](#uv_utils--_uv_utils)
 - [`uv_utils/rizom_bridge/_rizom_bridge.py`](#uv_utils--rizom_bridge--_rizom_bridge)
 - [`uv_utils/rizom_bridge/parameters.py`](#uv_utils--rizom_bridge--parameters) — Registry of user-tunable RizomUV parameters exposed to the bridge UI.
-- [`uv_utils/rizom_bridge/rizom_bridge_slots.py`](#uv_utils--rizom_bridge--rizom_bridge_slots)
+- [`uv_utils/rizom_bridge/rizom_bridge_slots.py`](#uv_utils--rizom_bridge--rizom_bridge_slots) — Slots for the RizomUV bridge panel.
 - [`xform_utils/_xform_utils.py`](#xform_utils--_xform_utils)
 - [`xform_utils/matrices.py`](#xform_utils--matrices) — Matrix utilities for Maya rigging and animation.
 - [`xform_utils/pivot_watcher.py`](#xform_utils--pivot_watcher) — Real-time pivot-change notifier built on :class:`ScriptJobManager`.
@@ -1502,6 +1503,7 @@ Primitive creation utilities for Maya.
 
 - **[`class EnvUtils(ptk.HelpMixin)`](mayatk/mayatk/env_utils/_env_utils.py#L16)**
   - `EnvUtils.get_env_info(key)` *(static)* — Fetch specific information about the current Maya environment based on the provided key.
+  - `EnvUtils.default_artifact_dir(cls) -> str` *(class)* — Return a sensible default directory for exported/baked artifacts.
   - `EnvUtils.append_maya_paths(maya_version=None)` *(static)* — Appends various Maya-related paths to the system's Python environment and sys.path.
   - `EnvUtils.load_plugin(plugin_name)` *(static)* — Loads a specified plugin.
   - `EnvUtils.vray_plugin(load=False, unload=False, query=False)` *(static)* — Load/Unload/Query the Maya Vray Plugin.
@@ -2128,10 +2130,15 @@ Shared helpers for Marmoset Toolbag template scripts.
 <a id="mat_utils--marmoset_bridge--marmoset_bridge_slots"></a>
 ### `mat_utils/marmoset_bridge/marmoset_bridge_slots.py`
 
-- **[`class MarmosetBridgeSlots`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_bridge_slots.py#L35)** — UI slots for the Marmoset Toolbag bridge.
-  - `MarmosetBridgeSlots.bridge(self) -> MarmosetBridge` *(property)* — Lazy-instantiated MarmosetBridge (defers Toolbag path lookup).
+Slots for the Marmoset Toolbag bridge panel.
+
+- **[`class MarmosetBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_bridge_slots.py#L39)** — Slots wired to ``marmoset_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
+  - `MarmosetBridgeSlots.params_module(self)` *(property)*
+  - `MarmosetBridgeSlots.template_dir(self) -> Path` *(property)*
+  - `MarmosetBridgeSlots.make_bridge(self) -> MarmosetBridge`
+  - `MarmosetBridgeSlots.list_template_modes(self)`
+  - `MarmosetBridgeSlots.select_initial_template_index(self, pairs)` — Prefer 'bake (roundtrip)' then 'bake (send_to)', else first entry.
   - `MarmosetBridgeSlots.header_init(self, widget)` — Configure header menu with utilities (no per-call options).
-  - `MarmosetBridgeSlots.cmb000_init(self, widget)` — Populate the template combobox with one entry per (template, mode).
   - `MarmosetBridgeSlots.b000(self)` — Process selected transforms with the chosen template + mode.
 
 <a id="mat_utils--marmoset_bridge--marmoset_rpc--connection"></a>
@@ -2209,26 +2216,30 @@ HTTP JSON-RPC server for the marmoset_rpc plugin.
 
 Registry of user-tunable Marmoset Toolbag parameters exposed to the bridge UI.
 
-- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L267) — Return registered placeholder keys present in *script_text*.
-- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L284) — Return ``{key: default}`` for every registered parameter.
-- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L289) — Format *values* for ``StrUtils.replace_delimited`` (string-valued context).
-- **[`class MarmosetParam`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L24)** — Describes one tunable Toolbag parameter and how to render its widget.
-  - `MarmosetParam.format_value(self, value: Any) -> str` — Render *value* for inlining into a Python template.
+- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L235) — Registered keys present in *script_text* (delegates to uitk.bridge).
+- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L240) — Return ``{key: default}`` for every registered parameter.
+- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L245) — Format *values* for ``StrUtils.replace_delimited`` using Python literals.
 
 <a id="mat_utils--marmoset_bridge--templates--bake"></a>
 ### `mat_utils/marmoset_bridge/templates/bake.py`
 
-- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/bake.py#L118)
+Bake high-poly detail into a low-poly target via Marmoset Toolbag.
+
+- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/bake.py#L123)
 
 <a id="mat_utils--marmoset_bridge--templates--import"></a>
 ### `mat_utils/marmoset_bridge/templates/import.py`
 
-- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/import.py#L25)
+Open the FBX in Toolbag and wire materials from the Maya manifest.
+
+- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/import.py#L31)
 
 <a id="mat_utils--marmoset_bridge--templates--lookdev"></a>
 ### `mat_utils/marmoset_bridge/templates/lookdev.py`
 
-- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/lookdev.py#L34)
+Open the FBX in Toolbag, apply a Sky preset, and frame the model.
+
+- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/lookdev.py#L41)
 
 <a id="mat_utils--mat_manifest"></a>
 ### `mat_utils/mat_manifest.py`
@@ -2404,23 +2415,23 @@ Substance 3D Painter connection module.
 
 Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
 
-- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L242) — Return registered placeholder keys present in *script_text*.
-- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L253) — Return ``{key: default}`` for every registered parameter.
-- [`render_cli_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L258) — Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting.
-- [`render_js_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L267) — Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping.
-- **[`class SubstanceParam`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L48)** — Describes one tunable Painter parameter and how to render its widget.
-  - `SubstanceParam.format_cli(self, value: Any) -> str` — Render *value* as a raw CLI argument value.
-  - `SubstanceParam.format_js(self, value: Any) -> str` — Render *value* as a JS literal for inlining into RPC_SCRIPT.
+- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L202) — Registered keys present in *script_text* (delegates to uitk.bridge).
+- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L207) — Return ``{key: default}`` for every registered parameter.
+- [`render_cli_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L212) — Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting.
+- [`render_js_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L217) — Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping.
 
 <a id="mat_utils--substance_bridge--substance_bridge_slots"></a>
 ### `mat_utils/substance_bridge/substance_bridge_slots.py`
 
-UI slots for the Substance Painter bridge.
+Slots for the Substance Painter bridge panel.
 
-- **[`class SubstanceBridgeSlots`](mayatk/mayatk/mat_utils/substance_bridge/substance_bridge_slots.py#L46)** — Slots class wired to ``substance_bridge.ui``.
-  - `SubstanceBridgeSlots.bridge(self) -> SubstanceBridge` *(property)* — Lazy-instantiated :class:`SubstanceBridge` (defers Painter lookup).
+- **[`class SubstanceBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/mat_utils/substance_bridge/substance_bridge_slots.py#L114)** — Slots wired to ``substance_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
+  - `SubstanceBridgeSlots.params_module(self)` *(property)*
+  - `SubstanceBridgeSlots.template_dir(self) -> Path` *(property)*
+  - `SubstanceBridgeSlots.make_bridge(self) -> SubstanceBridge`
+  - `SubstanceBridgeSlots.list_template_modes(self)`
+  - `SubstanceBridgeSlots.select_initial_template_index(self, pairs)` — Prefer 'with_textures (send_to)' then 'import (send_to)'.
   - `SubstanceBridgeSlots.header_init(self, widget)` — Configure the header menu with template / log utilities.
-  - `SubstanceBridgeSlots.cmb000_init(self, widget)` — Populate the template combobox with one entry per (template, mode).
   - `SubstanceBridgeSlots.b000(self)` — Process the selected transforms with the chosen template + mode.
 
 <a id="mat_utils--substance_bridge--substance_rpc--client"></a>
@@ -2877,6 +2888,14 @@ Maya hotkey collision checker for the uitk HotkeyEditor.
 - [`parse_qt_sequence(sequence: str) -> Optional[dict]`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L41) — Convert a Qt key sequence string to ``cmds.hotkey`` query kwargs.
 - [`maya_collision_checker(sequence, scope, ui_name, method_name)`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L170) — Check a proposed binding against Maya's active hotkey set.
 
+<a id="ui_utils--maya_bridge_slots"></a>
+### `ui_utils/maya_bridge_slots.py`
+
+Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
+
+- **[`class MayaBridgeSlotsBase(BridgeSlotsBase)`](mayatk/mayatk/ui_utils/maya_bridge_slots.py#L22)** — Adds a Maya-flavored ``default_output_dir`` to :class:`BridgeSlotsBase`.
+  - `MayaBridgeSlotsBase.default_output_dir(self) -> str` — Scene-dir then workspace fallback for an empty Output Dir field.
+
 <a id="ui_utils--maya_native_menus"></a>
 ### `ui_utils/maya_native_menus.py`
 
@@ -2936,7 +2955,7 @@ Reusable helper for resolving Maya node icons at runtime.
 <a id="uv_utils--rizom_bridge--_rizom_bridge"></a>
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 
-- **[`class RizomUVBridge`](mayatk/mayatk/uv_utils/rizom_bridge/_rizom_bridge.py#L29)**
+- **[`class RizomUVBridge(ptk.LoggingMixin)`](mayatk/mayatk/uv_utils/rizom_bridge/_rizom_bridge.py#L30)**
   - `RizomUVBridge.rizom_path(self)` *(property)* — Resolve the RizomUV executable path.
   - `RizomUVBridge.rizom_path(self, value)` — Set the path to the RizomUV executable (bypasses auto-discovery).
   - `RizomUVBridge.export_path(self)` *(property)* — Lazy initialization of the export path.
@@ -2950,20 +2969,23 @@ Reusable helper for resolving Maya node icons at runtime.
 
 Registry of user-tunable RizomUV parameters exposed to the bridge UI.
 
-- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L193) — Return the set of registered placeholder keys present in *script_text*.
-- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L210) — Return ``{key: default}`` for every registered parameter.
-- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L215) — Format *values* for ``StrUtils.replace_delimited`` (string-valued context).
-- **[`class RizomParam`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L25)** — Describes one tunable RizomUV parameter and how to render its widget.
-  - `RizomParam.format_value(self, value: Any) -> str` — Render *value* for inlining into Lua source.
+- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L166) — Registered keys present in *script_text* (delegates to uitk.bridge).
+- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L171) — Return ``{key: default}`` for every registered parameter.
+- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L176) — Format *values* for ``StrUtils.replace_delimited`` using Lua literals.
 
 <a id="uv_utils--rizom_bridge--rizom_bridge_slots"></a>
 ### `uv_utils/rizom_bridge/rizom_bridge_slots.py`
 
-- **[`class RizomBridgeSlots`](mayatk/mayatk/uv_utils/rizom_bridge/rizom_bridge_slots.py#L30)** — UI slots for the RizomUV bridge.
-  - `RizomBridgeSlots.bridge(self) -> RizomUVBridge` *(property)* — Lazy-instantiated RizomUVBridge (defers RizomUV path lookup).
-  - `RizomBridgeSlots.header_init(self, widget)` — Configure header menu with tool instructions and utilities.
-  - `RizomBridgeSlots.cmb000_init(self, widget)` — Populate the preset combobox from scripts/*.lua (one-time setup).
+Slots for the RizomUV bridge panel.
+
+- **[`class RizomBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/uv_utils/rizom_bridge/rizom_bridge_slots.py#L50)** — Slots wired to ``rizom_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
+  - `RizomBridgeSlots.params_module(self)` *(property)*
+  - `RizomBridgeSlots.template_dir(self) -> Path` *(property)*
+  - `RizomBridgeSlots.make_bridge(self) -> RizomUVBridge`
+  - `RizomBridgeSlots.list_template_modes(self)` — Return ``[(stem, ""), ...]`` for every bundled ``.lua`` script.
+  - `RizomBridgeSlots.header_init(self, widget)` — Configure header menu with Rizom-specific utilities.
   - `RizomBridgeSlots.b000(self)` — Process selected transforms with the chosen preset.
+  - `RizomBridgeSlots.open_uv_editor(self)` — Open Maya's UV Editor (TextureViewWindow).
 
 <a id="xform_utils--_xform_utils"></a>
 ### `xform_utils/_xform_utils.py`

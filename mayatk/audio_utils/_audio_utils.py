@@ -673,11 +673,24 @@ class AudioUtils(ptk.HelpMixin):
         cls,
         carrier: Optional[str] = None,
         display_map: Optional[dict] = None,
+        frame_offset: float = 0.0,
     ) -> str:
         """Return a space-separated ``"<frame>:<label>"`` manifest string.
 
         Iterates all start keys across all tracks in time order.
         Used for game-export wire format.
+
+        Parameters:
+            carrier: Carrier node to read tracks from.  Defaults to the
+                canonical :data:`CARRIER_NODE`.
+            display_map: Optional ``{track_id: label}`` overrides.
+            frame_offset: Subtracted from every Maya keyframe before
+                writing.  Use this to convert Maya frame numbers into
+                values relative to a chosen origin (e.g. the FBX bake
+                start), so downstream consumers — which typically start
+                their clock at zero — receive frame numbers that align
+                with the imported animation.  Defaults to ``0`` (no
+                shift, frames are raw Maya frame numbers).
         """
         if cmds is None:
             return ""
@@ -688,7 +701,7 @@ class AudioUtils(ptk.HelpMixin):
             label = display_map.get(tid, tid)
             for frame, val in cls.read_keys(tid, carrier):
                 if int(round(val)) >= 1:
-                    entries.append((frame, label))
+                    entries.append((frame - frame_offset, label))
         entries.sort(key=lambda e: e[0])
         return " ".join(f"{int(round(f))}:{lbl}" for f, lbl in entries)
 
