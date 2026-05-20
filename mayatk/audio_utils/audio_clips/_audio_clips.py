@@ -62,6 +62,9 @@ class AudioClips(ptk.LoggingMixin):
     COMPOSITE_FILENAME: str = "_composite.wav"
     """Default filename for the composite WAV in the cache directory."""
 
+    MANIFEST_ATTR: str = "audio_manifest"
+    """Wire-format string attr baked onto the carrier for FBX → game-engine consumption."""
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -213,6 +216,73 @@ class AudioClips(ptk.LoggingMixin):
         if registered:
             cls.logger.info(f"Registered {len(registered)} track(s).")
         return registered
+
+    @classmethod
+    @CoreUtils.undoable
+    def prepare_for_export(cls) -> str:
+        """Bake the scene-wide audio manifest for FBX export.
+
+        Mirror of :meth:`mayatk.mat_utils.render_opacity.RenderOpacity.prepare_for_export`.
+        Reads every keyed track via :meth:`AudioUtils.bake_manifest` and stamps
+        the resulting ``"<frame>:<label>"`` wire string onto the FBX export
+        surface so it survives as a user property.
+
+        Uses the two-node carrier pattern (``data_internal`` source of truth,
+        ``data_export`` locked transform that FBX actually serialises):
+        :meth:`mayatk.node_utils.data_nodes.DataNodes.mirror_attr` creates
+        ``audio_manifest`` on ``data_internal`` with a proxy alias on
+        ``data_export``.  Writing to the source updates the export proxy
+        automatically; the value rides out as a string user-prop on the
+        ``data_export`` GameObject in the imported FBX.  Downstream importers
+        (e.g. unitytk ``AudioEventImporter``) attach a single scene-wide
+        audio-event component to that GameObject.
+
+        Idempotent — overwrites any prior value on the attr.  Called once
+        before FBX export, typically from a scene-exporter pre-export hook.
+
+        Returns:
+            The baked manifest string.  Empty when the carrier is missing
+            or no tracks have keys.
+        """
+        if cmds is None:
+            return ""
+
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        carrier = _audio_utils.CARRIER_NODE
+        if not cmds.objExists(carrier):
+            cls.logger.debug(
+                f"prepare_for_export: no carrier {carrier!r} — nothing to export."
+            )
+            return ""
+
+        # Unity (and most game engines) start their clip clock at 0 — Maya
+        # frame ``playbackOptions.min`` becomes Unity time 0 after FBX
+        # import.  Shift the baked frame numbers by ``-min`` so consumers
+        # computing ``time = frame / framerate`` land on the right
+        # animation moment instead of one bake-start offset late.
+        try:
+            playback_min = float(cmds.playbackOptions(q=True, min=True))
+        except Exception:
+            playback_min = 0.0
+
+        manifest = _audio_utils.bake_manifest(
+            carrier=carrier, frame_offset=playback_min
+        )
+
+        DataNodes.mirror_attr(cls.MANIFEST_ATTR, dataType="string")
+        cmds.setAttr(
+            f"{DataNodes.INTERNAL}.{cls.MANIFEST_ATTR}", manifest, type="string"
+        )
+        n_entries = len(manifest.split()) if manifest else 0
+        cls.logger.info(
+            "prepare_for_export: stamped %s.%s with %d entr%s.",
+            DataNodes.INTERNAL,
+            cls.MANIFEST_ATTR,
+            n_entries,
+            "y" if n_entries == 1 else "ies",
+        )
+        return manifest
 
     @classmethod
     def list_nodes(cls) -> List[str]:

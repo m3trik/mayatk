@@ -213,9 +213,14 @@ class ExplodedView:
     @CoreUtils.undoable
     def un_explode_all(self):
         """Un-explode all"""
-        all_objects_with_original_position = cmds.ls("*.original_position")
-        for obj_attr in all_objects_with_original_position:
-            obj = obj_attr.split(".")[0]
+        # cmds.ls("*.original_position") doesn't cross namespace separators,
+        # so iterate transforms and filter by attribute presence.
+        exploded_nodes = [
+            n
+            for n in (cmds.ls(type="transform", long=True) or [])
+            if cmds.attributeQuery("original_position", node=n, exists=True)
+        ]
+        for obj in exploded_nodes:
             x, y, z = cmds.getAttr(f"{obj}.original_position")[0]
             cmds.move(x, y, z, obj, absolute=True)
             cmds.deleteAttr(obj, attribute="original_position")

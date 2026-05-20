@@ -6,6 +6,7 @@ from typing import List, Union, Set
 
 try:
     import maya.cmds as cmds
+    import maya.mel as mel
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
@@ -76,6 +77,32 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
             "Locators": lambda objs: Selection._select_locators(objs),
             "Keyed Locators": lambda objs: Selection._select_keyed_locators(objs),
             "Transforms": lambda objs: cmds.ls(objs, type="transform") or [],
+        },
+        # UV handlers wrap MEL UV-component selection commands. The MEL itself
+        # reads Maya's live selection (the user's selected meshes/components);
+        # `objs` is unused. `_select_uv_components` restores the pre-MEL
+        # selection before returning so `_apply_selection_mode` can apply
+        # replace/add/remove cleanly — matching the pure-handler contract used
+        # by the rest of `_SELECTION_CONFIG`.
+        "UV": {
+            "Back-Facing": lambda objs: Selection._select_uv_components(
+                'selectUVFaceOrientationComponents {} 0 2 1'
+            ),
+            "Front-Facing": lambda objs: Selection._select_uv_components(
+                'selectUVFaceOrientationComponents {} 0 1 1'
+            ),
+            "Overlapping": lambda objs: Selection._select_uv_components(
+                'selectUVOverlappingComponents 1 0'
+            ),
+            "Non-Overlapping": lambda objs: Selection._select_uv_components(
+                'selectUVOverlappingComponents 0 0'
+            ),
+            "Texture Borders": lambda objs: Selection._select_uv_components(
+                'selectUVBorderComponents {} "" 1'
+            ),
+            "Unmapped": lambda objs: Selection._select_uv_components(
+                "selectUnmappedFaces"
+            ),
         },
     }
 
@@ -263,6 +290,27 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         """Select geometry that has single instances."""
         geometry = cmds.ls(objects, geometry=True) or []
         return NodeUtils.filter_duplicate_instances(geometry)
+
+    @staticmethod
+    def _select_uv_components(mel_command: str) -> List[object]:
+        """Run a MEL UV-component selection command and return the resulting components.
+
+        UV-component selection commands (e.g. ``selectUVOverlappingComponents``)
+        read Maya's live selection (the user's selected meshes) and replace it
+        with the matched components. We restore the pre-MEL selection before
+        returning so ``select_by_type``'s mode handling can apply
+        replace/add/remove cleanly on top of the user's original selection —
+        matching the pure-handler contract of other ``_SELECTION_CONFIG``
+        entries.
+        """
+        original = cmds.ls(selection=True) or []
+        mel.eval(mel_command)
+        result = cmds.ls(selection=True) or []
+        if original:
+            cmds.select(original, replace=True)
+        else:
+            cmds.select(clear=True)
+        return result
 
     @staticmethod
     def _select_animated_objects(objects: List[Union[str, object]]) -> Set[object]:

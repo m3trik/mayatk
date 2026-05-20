@@ -210,3 +210,4 @@ test/temp_tests/
 
 # Test runner output (regenerated each run)
 test/logs/
+test/debug_audio_clips.fbx

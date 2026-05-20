@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -101,6 +102,44 @@ class RizomUVBridge(ptk.LoggingMixin):
         self._rizom_path = value
 
     @property
+    def rizom_version(self) -> "tuple[int, ...]":
+        """Parse the Rizom version from the install directory name.
+
+        Returns a ``(major, minor, patch, ...)`` tuple suitable for direct
+        comparison with the gates in
+        :data:`mayatk.uv_utils.rizom_bridge.parameters.MIN_VERSIONS`. The
+        parsed tuple is padded to at least length 2 (``(2025, 0)`` rather
+        than bare ``(2025,)``) so a single-segment install name still
+        compares correctly against the registered ``(year, minor)`` gates
+        -- Python's lexicographic tuple compare otherwise treats
+        ``(2025,)`` as *less than* ``(2022, 0)``.
+
+        Returns ``(0, 0)`` when no version can be extracted -- conservative
+        choice that gates *every* version-flagged param off, matching what
+        a fresh / unknown Rizom install would need anyway. A debug log is
+        emitted so the user can tell why the panel might be missing knobs.
+        """
+        path = self.rizom_path
+        if not path:
+            self.logger.debug(
+                "rizom_version: no executable resolved yet -> (0, 0)."
+            )
+            return (0, 0)
+        for parent in Path(path).resolve().parents:
+            m = re.search(
+                r"RizomUV[\s_-]*(\d+(?:\.\d+)*)", parent.name, flags=re.IGNORECASE
+            )
+            if m:
+                parsed = tuple(int(p) for p in m.group(1).split("."))
+                # Pad to at least length 2 so '(2025,)' >= '(2022, 0)' works.
+                return parsed if len(parsed) >= 2 else parsed + (0,) * (2 - len(parsed))
+        self.logger.debug(
+            f"rizom_version: could not parse version from {path!r}; "
+            f"gating all version-flagged params off -> (0, 0)."
+        )
+        return (0, 0)
+
+    @property
     def export_path(self):
         """Lazy initialization of the export path."""
         if self._export_path is None:
@@ -148,10 +187,10 @@ class RizomUVBridge(ptk.LoggingMixin):
             objects: Maya transform nodes to process.
             uv_script: Raw Lua string **or** path to a ``.lua`` file.
                        Mutually exclusive with *preset*.
-            preset: Name of a built-in preset (``"pack"``, ``"unwrap"``,
-                    ``"optimize"``).  The corresponding file is loaded
-                    from ``scripts/<preset>.lua``. Mutually exclusive
-                    with *uv_script*.
+            preset: Name of a built-in preset (``"pack"``, ``"unwrap_hard"``,
+                    ``"unwrap_organic"``, ``"optimize"``). The corresponding
+                    file is loaded from ``scripts/<preset>.lua``. Mutually
+                    exclusive with *uv_script*.
             params: Optional dict of placeholder overrides
                     (e.g. ``{"MARGIN": 0.005, "ITERATIONS": 25}``).
                     Keys map to ``__KEY__`` tokens in the script.
@@ -444,10 +483,31 @@ class RizomUVBridge(ptk.LoggingMixin):
             self.logger.debug(f"RizomUV stderr:\n{result.stderr}")
 
         if result.returncode != 0:
-            raise RuntimeError(
-                f"RizomUV exited with code {result.returncode}. "
-                f"See Script Editor for the Lua error or crash report."
-            )
+            # Surface Rizom's actual error in the panel -- the bare exit code
+            # is meaningless without it (e.g. 0xC00000FF = access violation
+            # could be any of dozens of incompatible field names). Tail the
+            # last 2 KB of each stream so a panicking Rizom that dumps MB of
+            # crash text doesn't blow up the log.
+            tail = lambda s, n=2048: (s or "")[-n:].rstrip()
+            stdout_tail = tail(result.stdout)
+            stderr_tail = tail(result.stderr)
+            ver = self.rizom_version
+            msg = [
+                f"RizomUV exited with code {result.returncode} "
+                f"(version detected: {ver}, script: {self._script_path})."
+            ]
+            if stdout_tail:
+                msg.append(f"--- stdout (tail) ---\n{stdout_tail}")
+            if stderr_tail:
+                msg.append(f"--- stderr (tail) ---\n{stderr_tail}")
+            if not stdout_tail and not stderr_tail:
+                msg.append(
+                    "(RizomUV produced no captured output -- the process "
+                    "likely crashed before flushing. Try running the script "
+                    "manually in RizomUV's Script Editor to see the failing "
+                    "line.)"
+                )
+            raise RuntimeError("\n".join(msg))
 
         if not export_file.exists():
             raise RuntimeError(
@@ -586,6 +646,13 @@ class RizomUVBridge(ptk.LoggingMixin):
 
         export_path_normalized = str(self.export_path).replace("\\", "/")
         is_fbx = Path(self.export_path).suffix.lower() == ".fbx"
+        version = self.rizom_version
+
+        # Strip lines referencing placeholders that the installed Rizom
+        # doesn't support -- otherwise the unsupported field hits Rizom and
+        # crashes the process (access violation on 2020.1, see MIN_VERSIONS
+        # in parameters.py for the gate list).
+        user_script = _params.strip_unsupported(user_script, version)
 
         # Resolve param values: registered defaults, then user overrides.
         merged = _params.defaults()
@@ -597,10 +664,22 @@ class RizomUVBridge(ptk.LoggingMixin):
         # user_script as a single block.
         user_script = StrUtils.replace_delimited(user_script, param_context)
 
+        # FBX={UseUVSetNames=true} (nested table) preserves Maya's UV-set
+        # name across the round-trip; the bare ``FBX=true`` form is silently
+        # dropped, leaving the round-trip on a generic set name that the
+        # UV-transfer step can't find. Both forms only exist on newer Rizom
+        # (see FBX_USE_UV_SET_NAMES_MIN_VERSION); pre-2022 just relies on
+        # file-extension auto-detect and works fine with an empty flag.
+        fbx_flag = (
+            ", FBX={UseUVSetNames=true}"
+            if is_fbx and version >= _params.FBX_USE_UV_SET_NAMES_MIN_VERSION
+            else ""
+        )
+
         wrapper = (_TEMPLATE_DIR / "wrapper.lua").read_text(encoding="utf-8")
         full_script = StrUtils.replace_delimited(wrapper, {
             "EXPORT_PATH": export_path_normalized,
-            "FBX_FLAG": ", FBX=true" if is_fbx else "",
+            "FBX_FLAG": fbx_flag,
             "USER_SCRIPT": user_script,
         })
 
@@ -639,7 +718,8 @@ if __name__ == "__main__":
 
     # Usage examples:
     #   bridge.process_with_rizomuv(objects, preset="pack")
-    #   bridge.process_with_rizomuv(objects, preset="unwrap")
-    #   bridge.process_with_rizomuv(objects, preset="minimal")
+    #   bridge.process_with_rizomuv(objects, preset="unwrap_hard")
+    #   bridge.process_with_rizomuv(objects, preset="unwrap_organic")
+    #   bridge.process_with_rizomuv(objects, preset="optimize")
     #   bridge.process_with_rizomuv(objects, uv_script="ZomSelect(...)")
     bridge.process_with_rizomuv(objects, preset="pack")

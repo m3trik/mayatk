@@ -210,8 +210,15 @@ class DisplayMacros:
     @staticmethod
     def m_normals_display():
         """Toggle face normals, vertex normals, tangents, and off."""
-        # Query the current state
-        current_tangent = cmds.polyOptions(q=True, displayTangent=True)[0]
+        # polyOptions returns None when no polygon mesh is in the selection.
+        tangent_state = cmds.polyOptions(q=True, displayTangent=True)
+        if not tangent_state:
+            cmds.inViewMessage(
+                amg="Select a polygon mesh.", pos="topCenter", fade=True
+            )
+            return
+
+        current_tangent = tangent_state[0]
         current_normal = cmds.polyOptions(q=True, displayNormal=True)[0]
         is_facet = cmds.polyOptions(q=True, facet=True)[0]
         is_vertex = cmds.polyOptions(q=True, point=True)[0]

@@ -168,7 +168,7 @@ class CallbacksMixin:
             )
 
     def _offer_legacy_migration(self):
-        """Prompt to migrate legacy ``EventTriggers`` data if detected."""
+        """Prompt to migrate legacy ``audio_trigger`` data if detected."""
         try:
             legacy = _audio_utils.detect_legacy()
         except Exception:
