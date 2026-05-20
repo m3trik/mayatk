@@ -4198,7 +4198,7 @@
               "name": "bake_manifest",
               "qualname": "AudioUtils.bake_manifest",
               "kind": "classmethod",
-              "signature": "(cls, carrier: Optional[str] = None, display_map: Optional[dict] = None) -> str",
+              "signature": "(cls, carrier: Optional[str] = None, display_map: Optional[dict] = None, frame_offset: float = 0.0) -> str",
               "summary": "Return a space-separated ``\"<frame>:<label>\"`` manifest string.",
               "line": 672,
               "deprecated": false
@@ -4209,7 +4209,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: str, carrier: Optional[str] = None) -> bool",
               "summary": "Remove the per-track attr and its keys.",
-              "line": 700,
+              "line": 713,
               "deprecated": false
             },
             {
@@ -4218,7 +4218,7 @@
               "kind": "classmethod",
               "signature": "(cls, old_id: str, new_id: str, carrier: Optional[str] = None) -> bool",
               "summary": "Rename a track's attr + enum labels + file_map key.",
-              "line": 717,
+              "line": 730,
               "deprecated": false
             },
             {
@@ -4227,7 +4227,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: Optional[str] = None, carrier: Optional[str] = None) -> List[str]",
               "summary": "Un-hide track attrs in the Channel Box.",
-              "line": 760,
+              "line": 773,
               "deprecated": false
             },
             {
@@ -4236,7 +4236,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: Optional[str] = None, carrier: Optional[str] = None) -> List[str]",
               "summary": "Hide track attrs from the Channel Box.",
-              "line": 767,
+              "line": 780,
               "deprecated": false
             },
             {
@@ -4245,7 +4245,7 @@
               "kind": "staticmethod",
               "signature": "(tracks=None, carrier=None)",
               "summary": "Reconcile managed DG audio nodes with keyed track state.",
-              "line": 797,
+              "line": 810,
               "deprecated": false
             },
             {
@@ -4254,7 +4254,7 @@
               "kind": "staticmethod",
               "signature": "(track_id)",
               "summary": "Return the managed DG audio node for *track_id*, or ``None``.",
-              "line": 807,
+              "line": 820,
               "deprecated": false
             },
             {
@@ -4263,7 +4263,7 @@
               "kind": "staticmethod",
               "signature": "(node)",
               "summary": "True if *node* has the ``audio_node_source`` marker attr.",
-              "line": 814,
+              "line": 827,
               "deprecated": false
             },
             {
@@ -4272,7 +4272,7 @@
               "kind": "staticmethod",
               "signature": "(auto_sync=True, undo=True)",
               "summary": "Context manager grouping audio edits into one undo + one sync.",
-              "line": 821,
+              "line": 834,
               "deprecated": false
             },
             {
@@ -4281,7 +4281,7 @@
               "kind": "staticmethod",
               "signature": "(obj='data_internal', category='audio')",
               "summary": "Return True if *obj* has legacy ``<category>_trigger`` attr.",
-              "line": 831,
+              "line": 844,
               "deprecated": false
             },
             {
@@ -4290,7 +4290,7 @@
               "kind": "staticmethod",
               "signature": "(obj, category='audio', keep_old_attrs=False)",
               "summary": "Migrate legacy trigger keys to per-track attrs.",
-              "line": 841,
+              "line": 854,
               "deprecated": false
             }
           ]
@@ -4316,7 +4316,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_ids: Optional[List[str]] = None, composite: bool = True, activate: bool = True) -> Dict[str, list]",
               "summary": "Reconcile DG nodes and rebuild the composite WAV.",
-              "line": 71,
+              "line": 74,
               "deprecated": false
             },
             {
@@ -4325,7 +4325,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[str]",
               "summary": "Rebuild the scene-wide composite WAV from keyed start events.",
-              "line": 103,
+              "line": 106,
               "deprecated": false
             },
             {
@@ -4334,7 +4334,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> int",
               "summary": "Delete every managed DG node, the composite, and all tracks.",
-              "line": 144,
+              "line": 147,
               "deprecated": false
             },
             {
@@ -4343,7 +4343,16 @@
               "kind": "classmethod",
               "signature": "(cls, audio_files: List[str]) -> List[str]",
               "summary": "Register audio files as tracks (no keys authored).",
-              "line": 175,
+              "line": 178,
+              "deprecated": false
+            },
+            {
+              "name": "prepare_for_export",
+              "qualname": "AudioClips.prepare_for_export",
+              "kind": "classmethod",
+              "signature": "(cls) -> str",
+              "summary": "Bake the scene-wide audio manifest for FBX export.",
+              "line": 222,
               "deprecated": false
             },
             {
@@ -4352,7 +4361,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Return names of every managed DG audio node plus the composite.",
-              "line": 218,
+              "line": 288,
               "deprecated": false
             },
             {
@@ -4361,7 +4370,7 @@
               "kind": "classmethod",
               "signature": "(cls, node_name: str, time_slider: bool = True) -> None",
               "summary": "Set an audio node as the active Time Slider sound.",
-              "line": 233,
+              "line": 303,
               "deprecated": false
             }
           ]
@@ -6877,7 +6886,7 @@
         {
           "name": "ExplodedViewSlots",
           "summary": "Exploded View Slots",
-          "line": 224,
+          "line": 229,
           "bases": [
             "ExplodedView"
           ],
@@ -6888,7 +6897,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header menu with tool instructions.",
-              "line": 233,
+              "line": 238,
               "deprecated": false
             },
             {
@@ -6897,7 +6906,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Explode button",
-              "line": 249,
+              "line": 254,
               "deprecated": false
             },
             {
@@ -6906,7 +6915,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Un-explode selected button",
-              "line": 253,
+              "line": 258,
               "deprecated": false
             },
             {
@@ -6915,7 +6924,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Un-explode all button",
-              "line": 257,
+              "line": 262,
               "deprecated": false
             },
             {
@@ -6924,7 +6933,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Toggle Exlode",
-              "line": 261,
+              "line": 266,
               "deprecated": false
             }
           ]
@@ -7639,7 +7648,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle Soft Edge Display.",
-              "line": 266,
+              "line": 273,
               "deprecated": false
             },
             {
@@ -7648,7 +7657,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle Visibility",
-              "line": 285,
+              "line": 292,
               "deprecated": false
             },
             {
@@ -7657,7 +7666,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle the display of UV border edges for the given objects.",
-              "line": 291,
+              "line": 298,
               "deprecated": false
             },
             {
@@ -7666,7 +7675,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Toggle Back-Face Culling on selected objects, or on all objects if none are selected.",
-              "line": 321,
+              "line": 328,
               "deprecated": false
             },
             {
@@ -7675,7 +7684,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Isolate the current selection.",
-              "line": 346,
+              "line": 353,
               "deprecated": false
             },
             {
@@ -7684,7 +7693,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Cycle the display state of all selected objects based on the first object's state.",
-              "line": 359,
+              "line": 366,
               "deprecated": false
             },
             {
@@ -7693,7 +7702,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Toggle Wireframe Display on selected objects, or on all objects if none are selected.",
-              "line": 413,
+              "line": 420,
               "deprecated": false
             },
             {
@@ -7702,7 +7711,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggle grid and image plane visibility.",
-              "line": 434,
+              "line": 441,
               "deprecated": false
             },
             {
@@ -7711,7 +7720,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Frame selected by a set amount with three toggle states.",
-              "line": 457,
+              "line": 464,
               "deprecated": false
             },
             {
@@ -7720,7 +7729,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects) -> None",
               "summary": "Toggle smooth mesh preview.",
-              "line": 510,
+              "line": 517,
               "deprecated": false
             },
             {
@@ -7729,7 +7738,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles the wireframe display state.",
-              "line": 550,
+              "line": 557,
               "deprecated": false
             },
             {
@@ -7738,7 +7747,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle Material Override",
-              "line": 585,
+              "line": 592,
               "deprecated": false
             },
             {
@@ -7747,7 +7756,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Toggles viewport display mode between wireframe, smooth shaded with textures off,",
-              "line": 612,
+              "line": 619,
               "deprecated": false
             },
             {
@@ -7756,7 +7765,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Toggles viewport lighting between different states: default, all lights, active lights,",
-              "line": 659,
+              "line": 666,
               "deprecated": false
             }
           ]
@@ -7764,7 +7773,7 @@
         {
           "name": "EditMacros",
           "summary": "",
-          "line": 697,
+          "line": 704,
           "bases": [],
           "members": [
             {
@@ -7773,7 +7782,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None)",
               "summary": "Group the given objects (or selection), center the pivot, and rename the group.",
-              "line": 702,
+              "line": 709,
               "deprecated": false
             },
             {
@@ -7782,7 +7791,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)",
               "summary": "Combine multiple meshes.",
-              "line": 713,
+              "line": 720,
               "deprecated": false
             },
             {
@@ -7791,7 +7800,7 @@
               "kind": "staticmethod",
               "signature": "(objects, repair_mesh=True, keep_boolean=True, **kwargs)",
               "summary": "Perform a boolean operation on two meshes using cmds, managing shorthand and full parameter names d…",
-              "line": 741,
+              "line": 748,
               "deprecated": false
             },
             {
@@ -7800,7 +7809,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle lock/unlock vertex normals.",
-              "line": 785,
+              "line": 792,
               "deprecated": false
             },
             {
@@ -7809,7 +7818,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Paste and rename by removing 'pasted__' prefix and reference file names,",
-              "line": 825,
+              "line": 832,
               "deprecated": false
             },
             {
@@ -7818,7 +7827,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Multi-Component Selection.",
-              "line": 892,
+              "line": 899,
               "deprecated": false
             },
             {
@@ -7827,7 +7836,7 @@
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.001) -> None",
               "summary": "Merge Vertices.",
-              "line": 903,
+              "line": 910,
               "deprecated": false
             }
           ]
@@ -7835,7 +7844,7 @@
         {
           "name": "SelectionMacros",
           "summary": "",
-          "line": 944,
+          "line": 951,
           "bases": [],
           "members": [
             {
@@ -7844,7 +7853,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set object selection mask.",
-              "line": 948,
+              "line": 955,
               "deprecated": false
             },
             {
@@ -7853,7 +7862,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set vertex selection mask.",
-              "line": 956,
+              "line": 963,
               "deprecated": false
             },
             {
@@ -7862,7 +7871,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set edge selection mask.",
-              "line": 962,
+              "line": 969,
               "deprecated": false
             },
             {
@@ -7871,7 +7880,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set face selection mask.",
-              "line": 968,
+              "line": 975,
               "deprecated": false
             },
             {
@@ -7880,7 +7889,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the current selection of geometry or components.",
-              "line": 974,
+              "line": 981,
               "deprecated": false
             },
             {
@@ -7889,7 +7898,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle selectability of the given objects.",
-              "line": 992,
+              "line": 999,
               "deprecated": false
             },
             {
@@ -7898,7 +7907,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles between UV shell and UV component selection.",
-              "line": 1051,
+              "line": 1058,
               "deprecated": false
             },
             {
@@ -7907,7 +7916,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the component selection on the currently selected objects.",
-              "line": 1075,
+              "line": 1082,
               "deprecated": false
             }
           ]
@@ -7915,7 +7924,7 @@
         {
           "name": "UiMacros",
           "summary": "",
-          "line": 1105,
+          "line": 1112,
           "bases": [],
           "members": [
             {
@@ -7924,7 +7933,7 @@
               "kind": "staticmethod",
               "signature": "(toggle_menu: bool = True, toggle_panels: bool = True) -> None",
               "summary": "Toggle UI toolbars and menu bar in sync.",
-              "line": 1109,
+              "line": 1116,
               "deprecated": false
             }
           ]
@@ -7932,7 +7941,7 @@
         {
           "name": "AnimationMacros",
           "summary": "",
-          "line": 1141,
+          "line": 1148,
           "bases": [],
           "members": [
             {
@@ -7941,7 +7950,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 1146,
+              "line": 1153,
               "deprecated": false
             },
             {
@@ -7950,7 +7959,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Un-set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 1156,
+              "line": 1163,
               "deprecated": false
             }
           ]
@@ -7958,7 +7967,7 @@
         {
           "name": "Macros",
           "summary": "",
-          "line": 1168,
+          "line": 1175,
           "bases": [
             "MacroManager",
             "DisplayMacros",
@@ -8368,7 +8377,7 @@
         {
           "name": "Selection",
           "summary": "Utilities for advanced Maya selection operations.",
-          "line": 18,
+          "line": 19,
           "bases": [
             "ptk.LoggingMixin",
             "ptk.HelpMixin"
@@ -8380,7 +8389,7 @@
               "kind": "staticmethod",
               "signature": "(selection_type: str, objects: List[Union[str, object]] = None, mode: str = 'replace') -> List[object]",
               "summary": "Select objects by type with comprehensive type support.",
-              "line": 83,
+              "line": 110,
               "deprecated": false
             },
             {
@@ -8389,7 +8398,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[Union[str, object]]) -> Set[object]",
               "summary": "Select the immediate children of the given objects.",
-              "line": 136,
+              "line": 163,
               "deprecated": false
             },
             {
@@ -8398,7 +8407,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[Union[str, object]]) -> Set[object]",
               "summary": "Select all parent objects in the hierarchy above the given objects.",
-              "line": 156,
+              "line": 183,
               "deprecated": false
             },
             {
@@ -8407,7 +8416,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[Union[str, object]]) -> Set[object]",
               "summary": "Select all child objects in the hierarchy below the given objects.",
-              "line": 179,
+              "line": 206,
               "deprecated": false
             },
             {
@@ -8416,7 +8425,7 @@
               "kind": "staticmethod",
               "signature": "() -> List[str]",
               "summary": "Get a list of all available selection types.",
-              "line": 300,
+              "line": 348,
               "deprecated": false
             },
             {
@@ -8425,7 +8434,7 @@
               "kind": "staticmethod",
               "signature": "() -> dict",
               "summary": "Get a dictionary of selection types organized by category.",
-              "line": 310,
+              "line": 358,
               "deprecated": false
             }
           ]
@@ -16430,122 +16439,6 @@
       ]
     },
     {
-      "relpath": "node_utils/attributes/event_triggers.py",
-      "summary": "Per-object event trigger attributes for game-engine export.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "EventTriggers",
-          "summary": "Manages per-object event triggers for game-engine export.",
-          "line": 48,
-          "bases": [
-            "ptk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "attr_names",
-              "qualname": "EventTriggers.attr_names",
-              "kind": "classmethod",
-              "signature": "(cls, category: Optional[str] = None) -> Tuple[str, str]",
-              "summary": "Return the ``(trigger_attr, manifest_attr)`` pair for a category.",
-              "line": 92,
-              "deprecated": false
-            },
-            {
-              "name": "create",
-              "qualname": "EventTriggers.create",
-              "kind": "classmethod",
-              "signature": "(cls, objects: Optional[List] = None, events: Optional[List[str]] = None, category: Optional[str] = None) -> Dict[str, Dict]",
-              "summary": "Create event trigger attributes on objects.",
-              "line": 110,
-              "deprecated": false
-            },
-            {
-              "name": "ensure",
-              "qualname": "EventTriggers.ensure",
-              "kind": "classmethod",
-              "signature": "(cls, objects: Optional[List] = None, events: Optional[List[str]] = None, category: Optional[str] = None) -> Dict[str, Dict]",
-              "summary": "Create or update event triggers — the **recommended** entry-point.",
-              "line": 188,
-              "deprecated": false
-            },
-            {
-              "name": "add_events",
-              "qualname": "EventTriggers.add_events",
-              "kind": "classmethod",
-              "signature": "(cls, objects: Optional[List] = None, events: Optional[List[str]] = None, category: Optional[str] = None) -> None",
-              "summary": "Append new event names to existing enum fields.",
-              "line": 237,
-              "deprecated": false
-            },
-            {
-              "name": "get_events",
-              "qualname": "EventTriggers.get_events",
-              "kind": "classmethod",
-              "signature": "(cls, obj, category: Optional[str] = None) -> List[str]",
-              "summary": "Return the event name list from the enum fields.",
-              "line": 281,
-              "deprecated": false
-            },
-            {
-              "name": "event_index",
-              "qualname": "EventTriggers.event_index",
-              "kind": "classmethod",
-              "signature": "(cls, obj, event_name: str, category: Optional[str] = None) -> int",
-              "summary": "Return the integer index for an event name, or -1 if not found.",
-              "line": 305,
-              "deprecated": false
-            },
-            {
-              "name": "set_key",
-              "qualname": "EventTriggers.set_key",
-              "kind": "classmethod",
-              "signature": "(cls, obj, event: str, time: Optional[float] = None, auto_clear: bool = True, category: Optional[str] = None) -> bool",
-              "summary": "Set a stepped keyframe for an event trigger.",
-              "line": 320,
-              "deprecated": false
-            },
-            {
-              "name": "clear_key",
-              "qualname": "EventTriggers.clear_key",
-              "kind": "classmethod",
-              "signature": "(cls, obj, time: Optional[float] = None, category: Optional[str] = None) -> None",
-              "summary": "Remove the trigger keyframe at a specific time.",
-              "line": 375,
-              "deprecated": false
-            },
-            {
-              "name": "iter_keyed_events",
-              "qualname": "EventTriggers.iter_keyed_events",
-              "kind": "classmethod",
-              "signature": "(cls, obj, category: Optional[str] = None) -> List[Tuple[float, str]]",
-              "summary": "Return ``(frame, label)`` for every non-None keyed event.",
-              "line": 400,
-              "deprecated": false
-            },
-            {
-              "name": "bake_manifest",
-              "qualname": "EventTriggers.bake_manifest",
-              "kind": "classmethod",
-              "signature": "(cls, objects: Optional[List] = None, category: Optional[str] = None) -> Dict[str, str]",
-              "summary": "Bake enum keyframes into a portable manifest string.",
-              "line": 457,
-              "deprecated": false
-            },
-            {
-              "name": "remove",
-              "qualname": "EventTriggers.remove",
-              "kind": "classmethod",
-              "signature": "(cls, objects: Optional[List] = None, category: Optional[str] = None, clean_audio: bool = True) -> None",
-              "summary": "Remove event trigger attributes and animation curves.",
-              "line": 524,
-              "deprecated": false
-            }
-          ]
-        }
-      ]
-    },
-    {
       "relpath": "node_utils/data_nodes.py",
       "summary": "",
       "functions": [],
@@ -18689,7 +18582,7 @@
         {
           "name": "RizomUVBridge",
           "summary": "",
-          "line": 30,
+          "line": 31,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -18700,7 +18593,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "Resolve the RizomUV executable path.",
-              "line": 51,
+              "line": 52,
               "deprecated": false
             },
             {
@@ -18709,7 +18602,16 @@
               "kind": "method",
               "signature": "(self, value)",
               "summary": "Set the path to the RizomUV executable (bypasses auto-discovery).",
-              "line": 99,
+              "line": 100,
+              "deprecated": false
+            },
+            {
+              "name": "rizom_version",
+              "qualname": "RizomUVBridge.rizom_version",
+              "kind": "property",
+              "signature": "(self) -> 'tuple[int, ...]'",
+              "summary": "Parse the Rizom version from the install directory name.",
+              "line": 105,
               "deprecated": false
             },
             {
@@ -18718,7 +18620,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "Lazy initialization of the export path.",
-              "line": 104,
+              "line": 143,
               "deprecated": false
             },
             {
@@ -18727,7 +18629,7 @@
               "kind": "method",
               "signature": "(self, value)",
               "summary": "",
-              "line": 117,
+              "line": 156,
               "deprecated": false
             },
             {
@@ -18736,7 +18638,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "Get the path to the UV script file as a POSIX string.",
-              "line": 125,
+              "line": 164,
               "deprecated": false
             },
             {
@@ -18745,7 +18647,7 @@
               "kind": "method",
               "signature": "(self, value)",
               "summary": "Set the UV script, loading from a file if a path is provided, or saving the content to a file.",
-              "line": 132,
+              "line": 171,
               "deprecated": false
             },
             {
@@ -18754,7 +18656,7 @@
               "kind": "method",
               "signature": "(self, objects, uv_script=None, preset=None, params=None)",
               "summary": "Run the full export -> RizomUV -> re-import workflow.",
-              "line": 139,
+              "line": 178,
               "deprecated": false
             }
           ]
@@ -18771,7 +18673,7 @@
           "kind": "function",
           "signature": "(script_text: str) -> 'set[str]'",
           "summary": "Registered keys present in *script_text* (delegates to uitk.bridge).",
-          "line": 166,
+          "line": 247,
           "deprecated": false
         },
         {
@@ -18780,7 +18682,7 @@
           "kind": "function",
           "signature": "() -> 'dict[str, Any]'",
           "summary": "Return ``{key: default}`` for every registered parameter.",
-          "line": 171,
+          "line": 252,
           "deprecated": false
         },
         {
@@ -18789,7 +18691,16 @@
           "kind": "function",
           "signature": "(values: 'dict[str, Any]') -> 'dict[str, str]'",
           "summary": "Format *values* for ``StrUtils.replace_delimited`` using Lua literals.",
-          "line": 176,
+          "line": 257,
+          "deprecated": false
+        },
+        {
+          "name": "strip_unsupported",
+          "qualname": "strip_unsupported",
+          "kind": "function",
+          "signature": "(script_text: str, version: 'tuple[int, ...]') -> str",
+          "summary": "Drop every line that references a placeholder requiring a newer Rizom.",
+          "line": 302,
           "deprecated": false
         }
       ],
@@ -18803,7 +18714,7 @@
         {
           "name": "RizomBridgeSlots",
           "summary": "Slots wired to ``rizom_bridge.ui`` via :class:`MayaBridgeSlotsBase`.",
-          "line": 50,
+          "line": 78,
           "bases": [
             "MayaBridgeSlotsBase"
           ],
@@ -18814,7 +18725,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 85,
+              "line": 113,
               "deprecated": false
             },
             {
@@ -18823,7 +18734,7 @@
               "kind": "property",
               "signature": "(self) -> Path",
               "summary": "",
-              "line": 89,
+              "line": 117,
               "deprecated": false
             },
             {
@@ -18832,7 +18743,7 @@
               "kind": "method",
               "signature": "(self) -> RizomUVBridge",
               "summary": "",
-              "line": 92,
+              "line": 120,
               "deprecated": false
             },
             {
@@ -18841,7 +18752,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Return ``[(stem, \"\"), ...]`` for every bundled ``.lua`` script.",
-              "line": 95,
+              "line": 123,
               "deprecated": false
             },
             {
@@ -18850,7 +18761,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header menu with Rizom-specific utilities.",
-              "line": 112,
+              "line": 140,
               "deprecated": false
             },
             {
@@ -18859,7 +18770,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Process selected transforms with the chosen preset.",
-              "line": 172,
+              "line": 200,
               "deprecated": false
             },
             {
@@ -18868,7 +18779,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open Maya's UV Editor (TextureViewWindow).",
-              "line": 225,
+              "line": 253,
               "deprecated": false
             }
           ]
