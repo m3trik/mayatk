@@ -638,11 +638,18 @@ class EnvUtils(ptk.HelpMixin):
         return result
 
     @staticmethod
-    def export_scene_as_fbx(file_path: str = None, **fbx_options: Any) -> None:
-        """Export the entire Maya scene as an FBX file with flexible MEL command options.
+    def export_scene_as_fbx(
+        file_path: str = None,
+        *,
+        selection_only: bool = False,
+        **fbx_options: Any,
+    ) -> None:
+        """Export the Maya scene as an FBX file with flexible MEL command options.
 
         Parameters:
             file_path (str): The path where the FBX file will be saved. If None, uses the current scene name.
+            selection_only (bool): If True, only the current selection is exported
+                (``FBXExport -s``). Defaults to False (entire scene).
             **fbx_options: Additional FBX export options as MEL commands (e.g., FBXExportIncludeChildren=True).
         """
         # Set comprehensive default FBX export options
@@ -699,12 +706,9 @@ class EnvUtils(ptk.HelpMixin):
                 )
             file_path = scene_name.replace(".mb", ".fbx").replace(".ma", ".fbx")
 
-        try:
-            # Export the entire scene using FBXExportAll
-            mel.eval(f'FBXExport -f "{file_path}"')
-            print(f"Scene successfully exported as FBX to {file_path}")
-        except Exception as e:
-            print(f"Failed to export scene as FBX: {str(e)}")
+        flag_s = " -s" if selection_only else ""
+        mel.eval(f'FBXExport -f "{file_path}"{flag_s}')
+        print(f"Scene successfully exported as FBX to {file_path}")
 
     @staticmethod
     def sanitize_namespace(namespace: str) -> str:
