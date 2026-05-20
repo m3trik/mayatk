@@ -148,7 +148,6 @@ _Generated: 2026-05-20_
 - [`node_utils/attributes/channels/__init__.py`](#node_utils--attributes--channels--__init__) — Channels — Switchboard UI for inspecting and editing Maya attributes.
 - [`node_utils/attributes/channels/_channels.py`](#node_utils--attributes--channels--_channels) — Channels — Maya attribute query / mutation logic.
 - [`node_utils/attributes/channels/channels_slots.py`](#node_utils--attributes--channels--channels_slots) — UI slots for the Channels UI.
-- [`node_utils/attributes/event_triggers.py`](#node_utils--attributes--event_triggers) — Per-object event trigger attributes for game-engine export.
 - [`node_utils/data_nodes.py`](#node_utils--data_nodes)
 - [`nurbs_utils/_nurbs_utils.py`](#nurbs_utils--_nurbs_utils)
 - [`nurbs_utils/image_tracer.py`](#nurbs_utils--image_tracer)
@@ -830,7 +829,7 @@ Unified audio system for Maya scenes.
   - `AudioUtils.clear_keys(cls, track_id: str, carrier: Optional[str] = None) -> bool` *(class)* — Remove every key on *track_id*'s attr.
   - `AudioUtils.shift_keys_in_range(cls, old_start: float, old_end: float, delta: float, track_ids: Optional[List[str]] = None, carrier: Optional[str] = None) -> List[str]` *(class)* — Shift audio keys in ``[old_start, old_end]`` by *delta*.
   - `AudioUtils.tracks_on_at_frame(cls, frame: float, carrier: Optional[str] = None, track_ids: Optional[List[str]] = None) -> List[str]` *(class)* — Return track_ids currently "on" (value=1) at *frame*.
-  - `AudioUtils.bake_manifest(cls, carrier: Optional[str] = None, display_map: Optional[dict] = None) -> str` *(class)* — Return a space-separated ``"<frame>:<label>"`` manifest string.
+  - `AudioUtils.bake_manifest(cls, carrier: Optional[str] = None, display_map: Optional[dict] = None, frame_offset: float = 0.0) -> str` *(class)* — Return a space-separated ``"<frame>:<label>"`` manifest string.
   - `AudioUtils.delete_track(cls, track_id: str, carrier: Optional[str] = None) -> bool` *(class)* — Remove the per-track attr and its keys.
   - `AudioUtils.rename_track(cls, old_id: str, new_id: str, carrier: Optional[str] = None) -> bool` *(class)* — Rename a track's attr + enum labels + file_map key.
   - `AudioUtils.show_track_attrs(cls, track_id: Optional[str] = None, carrier: Optional[str] = None) -> List[str]` *(class)* — Un-hide track attrs in the Channel Box.
@@ -852,6 +851,7 @@ Scene-wide audio event manager — thin facade over ``audio_utils``.
   - `AudioClips.rebuild_composite(cls) -> Optional[str]` *(class)* — Rebuild the scene-wide composite WAV from keyed start events.
   - `AudioClips.remove(cls) -> int` *(class)* — Delete every managed DG node, the composite, and all tracks.
   - `AudioClips.load_tracks(cls, audio_files: List[str]) -> List[str]` *(class)* — Register audio files as tracks (no keys authored).
+  - `AudioClips.prepare_for_export(cls) -> str` *(class)* — Bake the scene-wide audio manifest for FBX export.
   - `AudioClips.list_nodes(cls) -> List[str]` *(class)* — Return names of every managed DG audio node plus the composite.
   - `AudioClips.set_active(cls, node_name: str, time_slider: bool = True) -> None` *(class)* — Set an audio node as the active Time Slider sound.
 
@@ -1258,7 +1258,7 @@ Centralized Maya event subscription manager.
   - `ExplodedView.un_explode(self)` — Un-explode the objects.
   - `ExplodedView.toggle_explode(self)` — Toggle explode state of the objects.
   - `ExplodedView.un_explode_all(self)` — Un-explode all
-- **[`class ExplodedViewSlots(ExplodedView)`](mayatk/mayatk/display_utils/exploded_view.py#L224)** — Exploded View Slots
+- **[`class ExplodedViewSlots(ExplodedView)`](mayatk/mayatk/display_utils/exploded_view.py#L229)** — Exploded View Slots
   - `ExplodedViewSlots.header_init(self, widget)` — Configure header menu with tool instructions.
   - `ExplodedViewSlots.b000(self)` — Explode button
   - `ExplodedViewSlots.b001(self)` — Un-explode selected button
@@ -1386,7 +1386,7 @@ Centralized Maya event subscription manager.
   - `DisplayMacros.m_material_override()` *(static)* — Toggle Material Override
   - `DisplayMacros.m_shading(cls) -> None` *(class)* — Toggles viewport display mode between wireframe, smooth shaded with textures off,
   - `DisplayMacros.m_lighting(cls) -> None` *(class)* — Toggles viewport lighting between different states: default, all lights, active lights,
-- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L697)**
+- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L704)**
   - `EditMacros.m_group(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditMacros.m_combine(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)` *(static)* — Combine multiple meshes.
   - `EditMacros.m_boolean(objects, repair_mesh=True, keep_boolean=True, **kwargs)` *(static)* — Perform a boolean operation on two meshes using cmds, managing shorthand and full parameter names d…
@@ -1394,7 +1394,7 @@ Centralized Maya event subscription manager.
   - `EditMacros.m_paste_and_rename() -> None` *(static)* — Paste and rename by removing 'pasted__' prefix and reference file names,
   - `EditMacros.m_multi_component() -> None` *(static)* — Multi-Component Selection.
   - `EditMacros.m_merge_vertices(objects, tolerance=0.001) -> None` *(static)* — Merge Vertices.
-- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L944)**
+- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L951)**
   - `SelectionMacros.m_object_selection() -> None` *(static)* — Set object selection mask.
   - `SelectionMacros.m_vertex_selection() -> None` *(static)* — Set vertex selection mask.
   - `SelectionMacros.m_edge_selection() -> None` *(static)* — Set edge selection mask.
@@ -1403,12 +1403,12 @@ Centralized Maya event subscription manager.
   - `SelectionMacros.m_toggle_selectability(objects)` *(static)* — Toggle selectability of the given objects.
   - `SelectionMacros.m_toggle_UV_select_type() -> None` *(static)* — Toggles between UV shell and UV component selection.
   - `SelectionMacros.m_invert_component_selection() -> None` *(static)* — Invert the component selection on the currently selected objects.
-- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1105)**
+- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1112)**
   - `UiMacros.m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None` *(static)* — Toggle UI toolbars and menu bar in sync.
-- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L1141)**
+- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L1148)**
   - `AnimationMacros.m_set_selected_keys(objects) -> None` *(static)* — Set keys for any attributes (channels) that are selected in the channel box.
   - `AnimationMacros.m_unset_selected_keys(objects) -> None` *(static)* — Un-set keys for any attributes (channels) that are selected in the channel box.
-- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L1168)**
+- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L1175)**
 
 <a id="edit_utils--mesh_graph"></a>
 ### `edit_utils/mesh_graph.py`
@@ -1474,7 +1474,7 @@ Primitive creation utilities for Maya.
 <a id="edit_utils--selection"></a>
 ### `edit_utils/selection.py`
 
-- **[`class Selection(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/edit_utils/selection.py#L18)** — Utilities for advanced Maya selection operations.
+- **[`class Selection(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/edit_utils/selection.py#L19)** — Utilities for advanced Maya selection operations.
   - `Selection.select_by_type(selection_type: str, objects: List[Union[str, object]] = None, mode: str = 'replace') -> List[object]` *(static)* — Select objects by type with comprehensive type support.
   - `Selection.select_children(objects: List[Union[str, object]]) -> Set[object]` *(static)* — Select the immediate children of the given objects.
   - `Selection.select_hierarchy_above(objects: List[Union[str, object]]) -> Set[object]` *(static)* — Select all parent objects in the hierarchy above the given objects.
@@ -2631,24 +2631,6 @@ UI slots for the Channels UI.
   - `ChannelsSlots.tbl000_init(self, widget)` — One-time table setup: action columns, context menu, scriptJobs.
   - `ChannelsSlots.cleanup_scene_callbacks(self)` — Tear down every event subscription owned by this slots instance.
 
-<a id="node_utils--attributes--event_triggers"></a>
-### `node_utils/attributes/event_triggers.py`
-
-Per-object event trigger attributes for game-engine export.
-
-- **[`class EventTriggers(ptk.LoggingMixin)`](mayatk/mayatk/node_utils/attributes/event_triggers.py#L48)** — Manages per-object event triggers for game-engine export.
-  - `EventTriggers.attr_names(cls, category: Optional[str] = None) -> Tuple[str, str]` *(class)* — Return the ``(trigger_attr, manifest_attr)`` pair for a category.
-  - `EventTriggers.create(cls, objects: Optional[List] = None, events: Optional[List[str]] = None, category: Optional[str] = None) -> Dict[str, Dict]` *(class)* — Create event trigger attributes on objects.
-  - `EventTriggers.ensure(cls, objects: Optional[List] = None, events: Optional[List[str]] = None, category: Optional[str] = None) -> Dict[str, Dict]` *(class)* — Create or update event triggers — the **recommended** entry-point.
-  - `EventTriggers.add_events(cls, objects: Optional[List] = None, events: Optional[List[str]] = None, category: Optional[str] = None) -> None` *(class)* — Append new event names to existing enum fields.
-  - `EventTriggers.get_events(cls, obj, category: Optional[str] = None) -> List[str]` *(class)* — Return the event name list from the enum fields.
-  - `EventTriggers.event_index(cls, obj, event_name: str, category: Optional[str] = None) -> int` *(class)* — Return the integer index for an event name, or -1 if not found.
-  - `EventTriggers.set_key(cls, obj, event: str, time: Optional[float] = None, auto_clear: bool = True, category: Optional[str] = None) -> bool` *(class)* — Set a stepped keyframe for an event trigger.
-  - `EventTriggers.clear_key(cls, obj, time: Optional[float] = None, category: Optional[str] = None) -> None` *(class)* — Remove the trigger keyframe at a specific time.
-  - `EventTriggers.iter_keyed_events(cls, obj, category: Optional[str] = None) -> List[Tuple[float, str]]` *(class)* — Return ``(frame, label)`` for every non-None keyed event.
-  - `EventTriggers.bake_manifest(cls, objects: Optional[List] = None, category: Optional[str] = None) -> Dict[str, str]` *(class)* — Bake enum keyframes into a portable manifest string.
-  - `EventTriggers.remove(cls, objects: Optional[List] = None, category: Optional[str] = None, clean_audio: bool = True) -> None` *(class)* — Remove event trigger attributes and animation curves.
-
 <a id="node_utils--data_nodes"></a>
 ### `node_utils/data_nodes.py`
 
@@ -2955,9 +2937,10 @@ Reusable helper for resolving Maya node icons at runtime.
 <a id="uv_utils--rizom_bridge--_rizom_bridge"></a>
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 
-- **[`class RizomUVBridge(ptk.LoggingMixin)`](mayatk/mayatk/uv_utils/rizom_bridge/_rizom_bridge.py#L30)**
+- **[`class RizomUVBridge(ptk.LoggingMixin)`](mayatk/mayatk/uv_utils/rizom_bridge/_rizom_bridge.py#L31)**
   - `RizomUVBridge.rizom_path(self)` *(property)* — Resolve the RizomUV executable path.
   - `RizomUVBridge.rizom_path(self, value)` — Set the path to the RizomUV executable (bypasses auto-discovery).
+  - `RizomUVBridge.rizom_version(self) -> 'tuple[int, ...]'` *(property)* — Parse the Rizom version from the install directory name.
   - `RizomUVBridge.export_path(self)` *(property)* — Lazy initialization of the export path.
   - `RizomUVBridge.export_path(self, value)`
   - `RizomUVBridge.script_path(self)` *(property)* — Get the path to the UV script file as a POSIX string.
@@ -2969,16 +2952,17 @@ Reusable helper for resolving Maya node icons at runtime.
 
 Registry of user-tunable RizomUV parameters exposed to the bridge UI.
 
-- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L166) — Registered keys present in *script_text* (delegates to uitk.bridge).
-- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L171) — Return ``{key: default}`` for every registered parameter.
-- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L176) — Format *values* for ``StrUtils.replace_delimited`` using Lua literals.
+- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L247) — Registered keys present in *script_text* (delegates to uitk.bridge).
+- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L252) — Return ``{key: default}`` for every registered parameter.
+- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L257) — Format *values* for ``StrUtils.replace_delimited`` using Lua literals.
+- [`strip_unsupported(script_text: str, version: 'tuple[int, ...]') -> str`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L302) — Drop every line that references a placeholder requiring a newer Rizom.
 
 <a id="uv_utils--rizom_bridge--rizom_bridge_slots"></a>
 ### `uv_utils/rizom_bridge/rizom_bridge_slots.py`
 
 Slots for the RizomUV bridge panel.
 
-- **[`class RizomBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/uv_utils/rizom_bridge/rizom_bridge_slots.py#L50)** — Slots wired to ``rizom_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
+- **[`class RizomBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/uv_utils/rizom_bridge/rizom_bridge_slots.py#L78)** — Slots wired to ``rizom_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
   - `RizomBridgeSlots.params_module(self)` *(property)*
   - `RizomBridgeSlots.template_dir(self) -> Path` *(property)*
   - `RizomBridgeSlots.make_bridge(self) -> RizomUVBridge`
