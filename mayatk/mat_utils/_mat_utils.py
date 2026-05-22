@@ -600,6 +600,10 @@ class MatUtils(MatUtilsInternals):
         objects: Optional[List[Any]] = None,
         optimize_check: bool = False,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        exclude_defaults: bool = False,
+        exclude_unassigned: bool = False,
+        include_textures: bool = True,
+        include_image_metadata: bool = True,
         **optimize_kwargs,
     ) -> List[Dict[str, Any]]:
         """Aggregate per-material info: name, type, textures + image metadata.
@@ -617,6 +621,15 @@ class MatUtils(MatUtilsInternals):
             optimize_check: If True, run optimization analysis per texture.
                 Opens each texture once and reuses the loaded PIL image for
                 both the metadata and the assessment.
+            exclude_defaults: Drop Maya's built-in default materials
+                (``lambert1``, ``standardSurface1``, etc.) from the result.
+            exclude_unassigned: Drop materials whose shading engines have
+                no DAG members (see :meth:`is_mat_assigned`).
+            include_textures: If False, omit the per-file-node texture work
+                entirely and emit each material with ``textures: []``.
+            include_image_metadata: If False, omit width/height/mode/format/
+                bit_depth from texture records. PIL is only opened when this
+                or ``optimize_check`` requires it.
             **optimize_kwargs: Forwarded to
                 ``ptk.TextureOptimizer.assess`` (``max_size``, ``force_pot``,
                 ``optimize_bit_depth``, ``map_type``, ``allow_palette``).
@@ -665,6 +678,19 @@ class MatUtils(MatUtilsInternals):
                 cls.get_scene_mats(sort=True, exclude_defaults=False) or []
             )
 
+        if exclude_defaults and resolved_materials:
+            default_nodes = cls._default_material_names()
+            resolved_materials = [
+                m for m in resolved_materials if _short_name(m) not in default_nodes
+            ]
+
+        if exclude_unassigned and resolved_materials:
+            resolved_materials = [
+                m for m in resolved_materials if cls.is_mat_assigned(m)
+            ]
+
+        need_image = include_image_metadata or optimize_check
+
         results: List[Dict[str, Any]] = []
         total = len(resolved_materials)
         for i, mat in enumerate(resolved_materials):
@@ -676,60 +702,61 @@ class MatUtils(MatUtilsInternals):
             except Exception:
                 mat_type = "unknown"
 
-            # Restrict file nodes to those connected to this specific material
-            # so shared-file-node cases don't produce duplicate entries.
-            file_nodes = cls.get_file_nodes(materials=[mat_str]) or []
             tex_entries: List[Dict[str, Any]] = []
-            for fn in file_nodes:
-                paths = cls._paths_from_file_nodes([fn], absolute=True)
-                if not paths:
-                    continue
-                path = paths[0]
+            if include_textures:
+                # Restrict file nodes to those connected to this specific
+                # material so shared-file-node cases don't double-count.
+                file_nodes = cls.get_file_nodes(materials=[mat_str]) or []
+                for fn in file_nodes:
+                    paths = cls._paths_from_file_nodes([fn], absolute=True)
+                    if not paths:
+                        continue
+                    path = paths[0]
+                    size_bytes = (
+                        os.path.getsize(path) if os.path.exists(path) else None
+                    )
 
-                # Open the image once. assess_texture_optimization accepts a
-                # pre-loaded PIL image; if optimize_check is False we still
-                # need the same metadata, so the open is unavoidable either
-                # way — just don't duplicate it.
-                size_bytes = (
-                    os.path.getsize(path) if os.path.exists(path) else None
-                )
-                pil_image = None
-                width = height = None
-                mode = img_format = None
-                try:
-                    with ptk.ImgUtils.allow_large_images():
-                        pil_image = ptk.ImgUtils.ensure_image(path)
-                    width, height = pil_image.size
-                    mode = pil_image.mode
-                    img_format = pil_image.format
-                except Exception as e:
-                    tex_entries.append({
+                    pil_image = None
+                    width = height = None
+                    mode = img_format = None
+                    if need_image:
+                        try:
+                            with ptk.ImgUtils.allow_large_images():
+                                pil_image = ptk.ImgUtils.ensure_image(path)
+                            width, height = pil_image.size
+                            mode = pil_image.mode
+                            img_format = pil_image.format
+                        except Exception as e:
+                            tex_entries.append({
+                                "file_node": fn,
+                                "path": path,
+                                "name": os.path.basename(path),
+                                "size": size_bytes,
+                                "error": f"Failed to read image: {e}",
+                            })
+                            continue
+
+                    info: Dict[str, Any] = {
                         "file_node": fn,
                         "path": path,
                         "name": os.path.basename(path),
                         "size": size_bytes,
-                        "error": f"Failed to read image: {e}",
-                    })
-                    continue
-
-                info: Dict[str, Any] = {
-                    "file_node": fn,
-                    "path": path,
-                    "name": os.path.basename(path),
-                    "size": size_bytes,
-                    "width": width,
-                    "height": height,
-                    "mode": mode,
-                    "format": img_format,
-                    "bit_depth": ptk.ImgUtils.format_bit_depth(mode),
-                }
-                if optimize_check:
-                    info["optimization"] = (
-                        ptk.TextureOptimizer.assess(
-                            path, image=pil_image, **optimize_kwargs
+                    }
+                    if include_image_metadata:
+                        info.update({
+                            "width": width,
+                            "height": height,
+                            "mode": mode,
+                            "format": img_format,
+                            "bit_depth": ptk.ImgUtils.format_bit_depth(mode),
+                        })
+                    if optimize_check:
+                        info["optimization"] = (
+                            ptk.TextureOptimizer.assess(
+                                path, image=pil_image, **optimize_kwargs
+                            )
                         )
-                    )
-                tex_entries.append(info)
+                    tex_entries.append(info)
 
             results.append({
                 "material": mat_str,
@@ -826,11 +853,12 @@ class MatUtils(MatUtilsInternals):
                 if "error" in t:
                     lines.append(f"      Error:     {t['error']}")
                     continue
-                lines.append(
-                    f"      Res:       {t.get('width')}x{t.get('height')}  "
-                    f"Mode: {t.get('mode')}  BitDepth: {t.get('bit_depth')}  "
-                    f"Format: {t.get('format')}"
-                )
+                if "width" in t or "mode" in t or "format" in t:
+                    lines.append(
+                        f"      Res:       {t.get('width')}x{t.get('height')}  "
+                        f"Mode: {t.get('mode')}  BitDepth: {t.get('bit_depth')}  "
+                        f"Format: {t.get('format')}"
+                    )
                 lines.append(f"      File size: {cls._fmt_size_auto(t.get('size'))}")
                 opt = t.get("optimization")
                 if opt is None:
@@ -917,12 +945,13 @@ class MatUtils(MatUtilsInternals):
                         f"    <span style='color:#e58;'>Error:     {esc(str(t['error']))}</span>"
                     )
                     continue
-                body_lines.append(
-                    f"    Res:       {t.get('width')}x{t.get('height')}  "
-                    f"Mode: {esc(str(t.get('mode', '')))}  "
-                    f"BitDepth: {esc(str(t.get('bit_depth', '')))}  "
-                    f"Format: {esc(str(t.get('format', '')))}"
-                )
+                if "width" in t or "mode" in t or "format" in t:
+                    body_lines.append(
+                        f"    Res:       {t.get('width')}x{t.get('height')}  "
+                        f"Mode: {esc(str(t.get('mode', '')))}  "
+                        f"BitDepth: {esc(str(t.get('bit_depth', '')))}  "
+                        f"Format: {esc(str(t.get('format', '')))}"
+                    )
                 body_lines.append(f"    File size: {cls._fmt_size_auto(t.get('size'))}")
                 opt = t.get("optimization")
                 if opt is None:
@@ -971,10 +1000,7 @@ class MatUtils(MatUtilsInternals):
         mat_list = cmds.ls(materials=True, flatten=True) or []
 
         if exclude_defaults and mat_list:
-            default_nodes = set(cmds.ls(defaultNodes=True) or [])
-            default_nodes.update(
-                {"lambert1", "particleCloud1", "shaderGlow1", "standardSurface1"}
-            )
+            default_nodes = MatUtils._default_material_names()
             mat_list = [m for m in mat_list if _short_name(m) not in default_nodes]
 
         d = {_short_name(m): m for m in mat_list}
@@ -1127,6 +1153,52 @@ class MatUtils(MatUtilsInternals):
         del _fav
 
         return materials
+
+    @staticmethod
+    def _default_material_names() -> set:
+        """Names of materials treated as Maya built-in defaults.
+
+        Combines ``cmds.ls(defaultNodes=True)`` with the four hard-coded
+        defaults that aren't always tagged by Maya's default-nodes API
+        (``lambert1``, ``particleCloud1``, ``shaderGlow1``,
+        ``standardSurface1``). Single source of truth for the
+        ``exclude_defaults`` filter shared by :meth:`get_scene_mats` and
+        :meth:`get_mat_info`.
+        """
+        defaults = set(cmds.ls(defaultNodes=True) or [])
+        defaults.update(
+            {"lambert1", "particleCloud1", "shaderGlow1", "standardSurface1"}
+        )
+        return defaults
+
+    @staticmethod
+    def is_mat_assigned(mat: object) -> bool:
+        """True iff *mat*'s shading engines contain at least one DAG member.
+
+        A material is considered "assigned" when geometry is bound to one of
+        its shading engines (the same condition Maya's *Delete Unused
+        Materials* targets). Orphan shading engines and unconnected shaders
+        both return False.
+
+        Works for surface, displacement, and volume shaders alike — follows
+        all connections instead of probing a specific output attribute,
+        which only exists on surface shaders.
+        """
+        mat_str = str(mat)
+        try:
+            shading_engines = (
+                cmds.listConnections(mat_str, type="shadingEngine") or []
+            )
+        except Exception:
+            return False
+        for sg in set(shading_engines):
+            try:
+                members = cmds.sets(sg, query=True) or []
+            except Exception:
+                continue
+            if members:
+                return True
+        return False
 
     @staticmethod
     def is_connected(mat: object, delete: bool = False) -> bool:

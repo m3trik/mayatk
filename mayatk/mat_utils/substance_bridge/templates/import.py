@@ -1,37 +1,32 @@
 # Substance Painter "new project" template.
 #
-# Mirrors the New Project dialog in Painter: hand off the FBX with all
-# Maya-referenced textures embedded, plus user-tunable Document Resolution
-# / Normal Map Format / UV Tile Mode / Project Template / Tangent Mode /
-# Import Cameras / Auto-Unwrap / Import Baked Maps.
+# Hands off the FBX (with Maya-referenced textures embedded) so Painter
+# opens it as a new project. Document Resolution / Normal Map Format /
+# Project Template / Tangent Mode used to be CLI-tunable here, but current
+# Painter rejects every one of those flags on launch -- the user picks
+# them in Painter's New Project dialog instead.
 #
 # The bridge surfaces each ``__KEY__`` token below as a UI widget in the
 # Maya panel; see ``parameters.py`` for the full spec of each PARAM.
-# Painter ignores CLI flags it doesn't recognize, so additions here are
-# safe to experiment with even on older Painter versions.
 
 """Send the FBX to Painter as a new project."""
 
 BRIDGE_MODES = ("send_to",)
 
 # Painter command-line args. Internal tokens (__FBX_PATH__) and user
-# PARAMS are substituted by the bridge before launch.
+# PARAMS are substituted by the bridge before launch. Keep this list to
+# flags the *currently shipping* Painter accepts -- a single unknown flag
+# makes Painter print a help popup and exit without opening.
 #
-# Empty optional values are skipped: an entry like ``--template`` followed
-# by an empty rendered value gets dropped entirely by the bridge, so the
-# user can leave PAINTER_PROJECT_TEMPLATE blank without producing a broken
-# ``--template ""`` argv pair.
-#
-# ``__PAINTER_BAKED_MAPS__`` is referenced here purely so the slot panel
-# surfaces the multi-file picker widget -- file_list values are NOT
-# substituted into LAUNCH_ARGS. The bridge stages the selected files into
-# the FBX output folder out-of-band and records them in the manifest.
+# ``__PAINTER_INCLUDE_TEXTURES__``, ``__PAINTER_TEXTURE_PREFIX__`` and
+# ``__PAINTER_SPLIT_BY_UDIM__`` are referenced here purely so the slot
+# panel surfaces the matching widgets -- their values do not land in
+# this static list. The bridge expands them into argv after rendering:
+# ``--mesh-map <path>`` per staged texture (when INCLUDE_TEXTURES is on,
+# with each filename optionally prefixed by TEXTURE_PREFIX) and a bare
+# ``--split-by-udim`` presence flag (when SPLIT_BY_UDIM is on).
 LAUNCH_ARGS = [
     "--mesh", "__FBX_PATH__",
-    "--resolution", "__PAINTER_RESOLUTION__",
-    "--normal-map-format", "__PAINTER_NORMAL_FORMAT__",
-    "--uvtile-mode", "__PAINTER_UV_TILE_MODE__",
-    "--template", "__PAINTER_PROJECT_TEMPLATE__",
 ]
 
 # No RPC dispatch; the new project is created via Painter's startup wizard.
