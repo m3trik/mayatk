@@ -241,6 +241,55 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "Higher = fewer cuts on smooth surfaces (organic, ~80)."
         ),
     ),
+    # ------------------------------------------------------------------
+    # One-way send load options (ZomLoad File={...} fields)
+    # ------------------------------------------------------------------
+    # These only show in the panel when the ``send`` preset is active --
+    # the ``send.lua`` body references each placeholder so the existing
+    # ``_refresh_param_visibility`` scanner picks them up. The bridge's
+    # ``send_to_rizomuv`` flow substitutes the boolean values into
+    # ``templates/send_wrapper.lua``; the round-trip flow ignores them.
+    "LOAD_UVS": AttributeSpec(
+        key="LOAD_UVS",
+        label="Load UVs",
+        kind="bool",
+        default=True,
+        tooltip=(
+            "Load existing UVs along with positions (XYZUVW=true).\n"
+            "Off = load positions only; Rizom starts from a clean slate."
+        ),
+    ),
+    "LOAD_UVW_PROPS": AttributeSpec(
+        key="LOAD_UVW_PROPS",
+        label="Load UVW Props",
+        kind="bool",
+        default=True,
+        tooltip=(
+            "Preserve UV-side metadata: seam/cut edges, pinned vertices,\n"
+            "groups, and selection state. Off = mesh only, no metadata."
+        ),
+    ),
+    "IMPORT_GROUPS": AttributeSpec(
+        key="IMPORT_GROUPS",
+        label="Import Groups",
+        kind="bool",
+        default=True,
+        tooltip=(
+            "Map source groups (Maya transforms / FBX hierarchies) into\n"
+            "Rizom island groups. Off = every mesh imports as a flat list."
+        ),
+    ),
+    "LOAD_TEXTURES": AttributeSpec(
+        key="LOAD_TEXTURES",
+        label="Load Textures",
+        kind="bool",
+        default=True,
+        tooltip=(
+            "Auto-collect file textures from the selection's shading networks\n"
+            "and bind them in Rizom (ZomLoadTexture) so they show on the\n"
+            "model in the 3D view. Off = open with no textures."
+        ),
+    ),
 }
 
 

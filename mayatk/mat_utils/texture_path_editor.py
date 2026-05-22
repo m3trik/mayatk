@@ -192,18 +192,18 @@ class TexturePathEditorSlots:
         if not source_dir:
             return
 
-        # Phase 1 — find. The walk has no progress signal, so use the
-        # indeterminate (busy) mode: pulsing bar + status text. Holding
-        # Escape cancels (handled by the ProgressBar event filter), but
-        # find_texture_files itself isn't interruptible — the bar just
-        # tells the user something is happening.
-        with self.sb.progress(
-            self.ui,
-            total=None,
-            text=f"Searching {source_dir}…",
-        ):
+        # Phase 1 — find. ``find_texture_files`` ticks per directory
+        # so the marquee advances during the walk; holding Esc cancels
+        # via the ProgressBar event filter even though the underlying
+        # walk itself isn't interruptible mid-directory. Total count
+        # is unknown upfront — ``find_texture_files`` passes
+        # ``total=0`` per tick so the bar stays indeterminate.
+        with self.sb.progress(self.ui, text=f"Searching {source_dir}…") as update:
             found_textures = MatUtils.find_texture_files(
-                file_nodes=node_names, source_dir=source_dir, recursive=True
+                file_nodes=node_names,
+                source_dir=source_dir,
+                recursive=True,
+                progress_callback=self.sb.progress_adapter(update),
             )
 
         if not found_textures:
@@ -240,27 +240,17 @@ class TexturePathEditorSlots:
                 f"deduped to {len(deduped)} unique basenames (newest wins)."
             )
 
-        # Phase 2 — copy. Use the footer's progress bar via the switchboard
-        # helper. ProgressBar.update_progress pumps QApplication events
-        # internally so the bar advances while the main thread is parked
-        # in ThreadPoolExecutor.as_completed between files. Falsy return
-        # from update() means the user cancelled.
-        with self.sb.progress(
-            self.ui,
-            total=len(deduped),
-            text=f"Copying 0/{len(deduped)}",
-        ) as update:
-
-            def _progress(done, total, last_name):
-                return update(
-                    done, f"Copying {done}/{total}: {last_name}"
-                )
-
+        # Phase 2 — copy. ProgressBar.update_progress pumps QApplication
+        # events internally so the bar advances while the main thread is
+        # parked in ThreadPoolExecutor.as_completed between files. Falsy
+        # return from the adapter propagates back to ``move_texture_files``
+        # to short-circuit on cancel.
+        with self.sb.progress(self.ui, text="Copying textures…") as update:
             copied = MatUtils.move_texture_files(
                 found_files=deduped,
                 new_dir=dest_dir,
                 delete_old=False,
-                progress_callback=_progress,
+                progress_callback=self.sb.progress_adapter(update),
             )
 
         if not copied:

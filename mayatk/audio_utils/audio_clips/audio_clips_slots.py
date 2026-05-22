@@ -407,7 +407,8 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             self.ui.footer.setText("No tracks — browse for audio files first.")
             return
 
-        result = AudioClips.sync()
+        with self.sb.progress(text="Working: Sync Audio to Timeline"):
+            result = AudioClips.sync()
         total = (
             len(result.get("created", []))
             + len(result.get("updated", []))

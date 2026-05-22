@@ -707,6 +707,255 @@ class RizomUVBridge(ptk.LoggingMixin):
             f"RizomUV '{preset}' applied to {transform_count} object(s)."
         )
 
+    # ------------------------------------------------------------------
+    # One-way send (open in RizomUV without re-importing UVs)
+    # ------------------------------------------------------------------
+
+    def send_to_rizomuv(self, objects, params=None):
+        """Export *objects* and open them in a fresh RizomUV session.
+
+        One-way: RizomUV launches detached with the file loaded (and any
+        collected textures bound via ``ZomLoadTexture``); Maya returns
+        control immediately. The user saves manually inside RizomUV when
+        they're done. No UV transfer back into the Maya scene.
+
+        Distinct from :meth:`process_with_rizomuv` in four ways:
+
+        * Uses ``templates/send_wrapper.lua`` (no ``ZomSave``/``ZomQuit``)
+          so RizomUV stays open after the load script runs.
+        * Skips the duplicate/suffix dance that the round-trip needs --
+          we never re-import, so the FBX can carry the original names.
+        * Launches RizomUV detached so Maya isn't blocked while the
+          artist works in RizomUV.
+        * Writes to **per-send unique** FBX + Lua paths. Rizom 2020.1's
+          ``-cfi`` mode watches the script's mtime and re-executes on
+          change; a fixed path would let a second send clobber a still-
+          open earlier session. Each send gets its own files so prior
+          sessions stay untouched.
+
+        Parameters:
+            objects: Maya transform nodes to export.
+            params: Optional dict of overrides; recognized keys are
+                ``LOAD_UVS``, ``LOAD_UVW_PROPS``, ``IMPORT_GROUPS``
+                (substituted into the load wrapper as Lua booleans) and
+                ``LOAD_TEXTURES`` (Python-side toggle controlling whether
+                we scan the selection's shading networks and inject
+                ``ZomLoadTexture`` calls into the load script).
+        """
+        if not objects:
+            raise ValueError("No objects specified for sending.")
+
+        original_transforms = NodeUtils.get_transform_node(objects)
+        if not original_transforms:
+            raise ValueError("No valid transform nodes supplied for sending.")
+
+        self._params = params or {}
+
+        # Per-send unique paths so prior Rizom sessions (which the -cfi
+        # flag keeps watching via mtime) are not disturbed by a subsequent
+        # send. Local variables -- intentionally not stored on self -- so
+        # the round-trip flow's export_path / script_path state is also
+        # untouched.
+        send_tag = self._make_send_tag()
+        send_fbx_path = self._make_send_fbx_path(send_tag)
+        send_script_path = self._make_send_script_path(send_tag)
+
+        self._export_for_send(original_transforms, send_fbx_path)
+
+        send_script = self._construct_send_script(
+            original_transforms, send_fbx_path
+        )
+        Path(send_script_path).write_text(send_script, encoding="utf-8")
+
+        self.logger.info(
+            f"Sending to RizomUV with script "
+            f'<a href="action://open?path={send_script_path}">{send_script_path}</a>'
+        )
+        self.logger.debug(f"Send script content:\n{send_script}")
+
+        exe = self.rizom_path
+        if not exe:
+            raise RuntimeError(
+                "RizomUV executable not found. Pass rizom_path= or add "
+                "RizomUV to PATH."
+            )
+
+        # Detached launch: Rizom stays open for the artist; Maya returns
+        # control immediately. With ``-cfi`` Rizom runs the script on
+        # startup and stays in the GUI (no ZomQuit means the session
+        # doesn't terminate when the script finishes).
+        proc = AppLauncher.launch(
+            exe,
+            args=["-cfi", send_script_path],
+            detached=True,
+        )
+        if proc is None:
+            raise RuntimeError(f"Failed to launch RizomUV: {exe}")
+
+        self._announce_send(len(original_transforms))
+
+    @staticmethod
+    def _make_send_tag() -> str:
+        """Compact unique suffix for per-send file paths.
+
+        Nanosecond resolution -- two sends triggered back-to-back from
+        the same Python interpreter are guaranteed distinct, and across
+        Maya instances the collision window is effectively zero.
+        """
+        import time
+
+        return f"{time.time_ns():x}"
+
+    def _make_send_fbx_path(self, send_tag: str) -> str:
+        """Return a unique-per-send FBX path under the export dir."""
+        base = Path(self.export_path)
+        return (base.parent / f"{base.stem}_send_{send_tag}{base.suffix}").as_posix()
+
+    @staticmethod
+    def _make_send_script_path(send_tag: str) -> str:
+        """Return a unique-per-send Lua path under the system temp dir."""
+        return Path(tempfile.gettempdir(), f"riz_send_{send_tag}.lua").as_posix()
+
+    def _export_for_send(self, original_transforms, export_path):
+        """Export *original_transforms* directly to FBX at *export_path*.
+
+        The round-trip's :meth:`_export_objects` duplicates and suffixes
+        each transform so the FBX re-import can't clobber the originals.
+        One-way send never re-imports, so we skip the rename and write the
+        FBX with the user's original node names -- nicer for the artist
+        when they save out of RizomUV.
+        """
+        Path(export_path).parent.mkdir(parents=True, exist_ok=True)
+
+        cmds.select(original_transforms, replace=True)
+        self.logger.info(
+            f"Exporting {len(original_transforms)} object(s) to "
+            f'<a href="action://open?path={export_path}">{export_path}</a>'
+        )
+
+        # Live Maya sessions don't always have fbxmaya loaded by default.
+        FbxUtils.load_plugin()
+
+        try:
+            cmds.file(
+                export_path,
+                exportSelected=True,
+                type="FBX export",
+                force=True,
+            )
+            self.logger.debug("FBX export completed successfully")
+        except Exception as e:
+            raise RuntimeError(
+                f"FBX export failed for {len(original_transforms)} object(s) -> {export_path}: {e}"
+            ) from e
+
+    def _construct_send_script(self, original_transforms, export_path):
+        """Render ``send_wrapper.lua`` with load options + texture loads.
+
+        *export_path* is inlined into ``ZomLoad`` -- supplied explicitly
+        (not pulled off ``self.export_path``) so each send rendering is
+        bound to the per-send FBX it just wrote.
+        """
+        from mayatk.uv_utils.rizom_bridge import parameters as _params
+
+        export_path_normalized = str(export_path).replace("\\", "/")
+        is_fbx = Path(export_path).suffix.lower() == ".fbx"
+        version = self.rizom_version
+
+        # Resolve param values: registered defaults, then user overrides.
+        merged = _params.defaults()
+        merged.update(self._params or {})
+        param_context = _params.render_context(merged)
+
+        # ``LOAD_TEXTURES`` is a Python-side toggle (controls whether we
+        # build the ZomLoadTexture block) -- the rendered Lua literal
+        # would only ever land in the script's leading comment, so pop
+        # it from the substitution context to avoid polluting it.
+        load_textures = bool(merged.get("LOAD_TEXTURES", True))
+        param_context.pop("LOAD_TEXTURES", None)
+
+        texture_loads = ""
+        if load_textures:
+            texture_loads = self._collect_texture_loads(original_transforms)
+
+        # Mirrors the round-trip wrapper's gating: the nested
+        # FBX={UseUVSetNames=true} field only exists on newer Rizom; below
+        # the gate, we emit an empty flag and let Rizom auto-detect the
+        # format from the file extension.
+        fbx_flag = (
+            ", FBX={UseUVSetNames=true}"
+            if is_fbx and version >= _params.FBX_USE_UV_SET_NAMES_MIN_VERSION
+            else ""
+        )
+
+        wrapper = (_TEMPLATE_DIR / "send_wrapper.lua").read_text(encoding="utf-8")
+        substitutions = {
+            "EXPORT_PATH": export_path_normalized,
+            "FBX_FLAG": fbx_flag,
+            "TEXTURE_LOADS": texture_loads,
+            **param_context,
+        }
+        full_script = StrUtils.replace_delimited(wrapper, substitutions)
+        self.logger.debug(f"Constructed send script:\n{full_script}")
+        return full_script
+
+    def _collect_texture_loads(self, original_transforms):
+        """Return Lua ``ZomLoadTexture`` calls for textures on *original_transforms*.
+
+        Walks each transform's shading network via
+        :meth:`mayatk.mat_utils.MatUtils.get_texture_paths`, drops paths
+        that don't exist on disk (so a stale ``fileTextureName`` doesn't
+        silently fail inside the ``pcall`` wrapper), and emits one
+        ``ZomLoadTexture`` per remaining unique path. Each call is wrapped
+        in ``pcall`` so an older Rizom that doesn't recognize the command
+        fails soft -- the FBX still loads, just without textures.
+        Returns the empty string when no textures resolve (degrades to a
+        blank ``__TEXTURE_LOADS__`` substitution).
+        """
+        # Deferred so a missing/circular mat_utils import never blocks
+        # the round-trip flow that doesn't need textures.
+        try:
+            from mayatk.mat_utils._mat_utils import MatUtils
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(
+                f"Texture collection skipped (could not import MatUtils): {e}"
+            )
+            return ""
+
+        try:
+            paths = MatUtils.get_texture_paths(
+                objects=original_transforms,
+                absolute=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"Texture collection failed: {e}")
+            return ""
+
+        existing = [p for p in paths if p and os.path.isfile(p)]
+        missing_count = len(paths) - len(existing)
+        if missing_count:
+            self.logger.warning(
+                f"Skipping {missing_count} texture(s) whose source files don't exist."
+            )
+        if not existing:
+            self.logger.debug("No textures resolved for send-to-Rizom.")
+            return ""
+
+        self.logger.info(f"Binding {len(existing)} texture(s) in RizomUV.")
+        lines = []
+        for path in existing:
+            normalized = str(path).replace("\\", "/")
+            lines.append(
+                f'pcall(function() ZomLoadTexture({{File={{Path="{normalized}"}}}}) end)'
+            )
+        return "\n".join(lines)
+
+    def _announce_send(self, transform_count: int) -> None:
+        """Log the one-way send summary (parallel to :meth:`_announce_handoff`)."""
+        self.logger.info(
+            f"Sent {transform_count} object(s) to RizomUV (interactive session)."
+        )
+
 
 # -----------------------------------------------------------------------------
 
@@ -722,4 +971,5 @@ if __name__ == "__main__":
     #   bridge.process_with_rizomuv(objects, preset="unwrap_organic")
     #   bridge.process_with_rizomuv(objects, preset="optimize")
     #   bridge.process_with_rizomuv(objects, uv_script="ZomSelect(...)")
+    #   bridge.send_to_rizomuv(objects)  # one-way: open in Rizom, no roundtrip
     bridge.process_with_rizomuv(objects, preset="pack")

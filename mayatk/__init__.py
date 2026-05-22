@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.11.93"
+__version__ = "0.11.97"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -55,6 +55,27 @@ DEFAULT_INCLUDE = {
     "core_utils.diagnostics->Diagnostics": "*",
     "core_utils.diagnostics.scene_diag": [
         "SceneAnalyzer",
+        "SceneInfoSection",
+        "SceneReport",
+        "AnalysisManifest",
+        "SummaryStats",
+        "BudgetStats",
+        "TextureStats",
+        "PipelineStats",
+        "OffenderLists",
+        "AssetRecord",
+        "MeshRecord",
+        "MaterialRecord",
+        "Finding",
+        "FixAction",
+        "BudgetDelta",
+        "ParetoEntry",
+        "TextureFile",
+        "MissingTexture",
+        "SharedTexture",
+        "MaterialSplit",
+        "SlotStats",
+        "InstanceStats",
         "AuditProfile",
         "SceneDiagnostics",
     ],

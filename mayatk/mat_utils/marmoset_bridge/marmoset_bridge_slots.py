@@ -184,13 +184,16 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
         )
 
         try:
-            result = self.bridge.send(
-                objects=selection,
-                template=template,
-                mode=mode,
-                output_dir=output_dir,
-                params=self.collect_param_values(),
-            )
+            with self.sb.progress(
+                text=f"Working: Marmoset {template} ({mode})"
+            ):
+                result = self.bridge.send(
+                    objects=selection,
+                    template=template,
+                    mode=mode,
+                    output_dir=output_dir,
+                    params=self.collect_param_values(),
+                )
         except Exception:
             # Surface the whole traceback in the log panel so the user
             # doesn't have to flip to the Script Editor to diagnose.

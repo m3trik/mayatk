@@ -1,6 +1,7 @@
 # coding=utf-8
+import html as _html
 import logging
-from typing import List, Dict, Optional, Union, Any, Tuple
+from typing import List, Dict, Optional, Union, Any, Tuple, Callable
 
 try:
     import maya.cmds as cmds
@@ -48,7 +49,7 @@ class SegmentKeysInfo:
         return ranges
 
     @classmethod
-    def print_time_ranges(
+    def _format_time_ranges_lines(
         cls,
         source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]],
         header: Optional[str] = None,
@@ -57,22 +58,12 @@ class SegmentKeysInfo:
         segment_fmt: Optional[str] = None,
         by_time: bool = False,
         csv_output: bool = False,
-    ):
-        """Print formatted time ranges.
-
-        Args:
-            source: List of segments (dicts) or ranges (tuples).
-            header: Optional header text.
-            per_segment: If True, prints every item. If False, aggregates by object.
-            object_fmt: Optional format string for object lines.
-                Available keys: obj, start, end, duration, count, suffix
-            segment_fmt: Optional format string for segment lines.
-                Available keys: i, start, end, duration
-            by_time: If True, prints a flat list of all segments sorted by start time.
-            csv_output: If True, prints in CSV format.
+    ) -> List[str]:
+        """Build the formatted-line list used by both the print and the
+        text/HTML formatters. Returns ``[]`` when the source is empty.
         """
         if not source:
-            return
+            return []
 
         # Resolve ranges
         ranges = []
@@ -82,22 +73,29 @@ class SegmentKeysInfo:
         elif isinstance(first, tuple):
             ranges = source
         else:
-            return
+            return []
 
         if not ranges:
-            return
+            return []
+
+        lines: List[str] = []
 
         if csv_output:
             if header is None:
                 if by_time:
-                    print("Object,Start,End,Duration,Segment Index,Total Segments")
+                    lines.append(
+                        "Object,Start,End,Duration,Segment Index,Total Segments"
+                    )
                 else:
-                    print("Object,Start,End,Duration,Segments")
+                    lines.append("Object,Start,End,Duration,Segments")
             elif header:
-                print(header)
+                lines.append(header)
         else:
             if header is None:
-                scene_path = cmds.file(query=True, sceneName=True)
+                try:
+                    scene_path = cmds.file(query=True, sceneName=True)
+                except Exception:
+                    scene_path = ""
                 scene_name = (
                     scene_path.replace("\\", "/").rsplit("/", 1)[-1]
                     if scene_path
@@ -105,26 +103,19 @@ class SegmentKeysInfo:
                 )
                 header = f"Animation Info - {scene_name}"
 
-            print(f"\\n{header}")
-            print("-" * 60)
+            lines.append("")  # leading blank to match the prior "\n{header}"
+            lines.append(header)
+            lines.append("-" * 60)
 
         from collections import defaultdict
 
         if by_time:
-            # Flat list sorted by time
-            # First, assign segment indices
             obj_counters = defaultdict(int)
             obj_totals = defaultdict(int)
-
-            # Calculate totals first
             for obj, _, _ in ranges:
                 obj_totals[obj] += 1
 
             annotated = []
-            # We need to process in the order they appear in 'ranges' to assign indices correctly?
-            # 'ranges' comes from 'collect_segments' which iterates objects.
-            # So for each object, segments are chronological.
-
             for obj, start, end in ranges:
                 obj_counters[obj] += 1
                 annotated.append(
@@ -137,52 +128,44 @@ class SegmentKeysInfo:
                     }
                 )
 
-            # Sort by start time
             annotated.sort(key=lambda x: x["start"])
 
             for item in annotated:
                 duration = item["end"] - item["start"]
 
                 if csv_output:
-                    # CSV Format: Object,Start,End,Duration,SegmentIndex,TotalSegments
-                    print(
+                    lines.append(
                         f"{item['obj']},{item['start']},{item['end']},{duration},{item['index']},{item['total']}"
                     )
                 else:
-                    suffix = f" [{item['total']} segments]" if item["total"] > 1 else ""
-
-                    # Format: Object (Seg i/N) : Start - End (Dur: D) [Total]
+                    suffix = (
+                        f" [{item['total']} segments]" if item["total"] > 1 else ""
+                    )
                     if item["total"] > 1:
                         label = f"{item['obj']} (Seg {item['index']}/{item['total']})"
                     else:
                         label = f"{item['obj']} (Seg {item['index']})"
-
-                    print(
+                    lines.append(
                         f"{label:<30} : {item['start']:8.2f} - {item['end']:8.2f} (Dur: {duration:6.2f}){suffix}"
                     )
 
         else:
-            # Group by object
             obj_segments = defaultdict(list)
             for obj, start, end in ranges:
                 obj_segments[obj].append((start, end))
 
             for obj, segments in obj_segments.items():
-                # Calculate aggregate
                 min_start = min(s[0] for s in segments)
                 max_end = max(s[1] for s in segments)
                 total_dur = max_end - min_start
                 count = len(segments)
 
                 if csv_output:
-                    # CSV Format: Object,Start,End,Duration,SegmentCount
-                    print(f"{obj},{min_start},{max_end},{total_dur},{count}")
+                    lines.append(f"{obj},{min_start},{max_end},{total_dur},{count}")
                 else:
                     suffix = f" [{count} segments]" if count > 1 else ""
-
-                    # Print object line
                     if object_fmt:
-                        print(
+                        lines.append(
                             object_fmt.format(
                                 obj=obj,
                                 start=min_start,
@@ -193,29 +176,94 @@ class SegmentKeysInfo:
                             )
                         )
                     else:
-                        print(
+                        lines.append(
                             f"{obj:<30} : {min_start:8.2f} - {max_end:8.2f} (Dur: {total_dur:6.2f}){suffix}"
                         )
 
-                # Print segments if requested
                 if per_segment:
                     for i, (start, end) in enumerate(segments, 1):
                         duration = end - start
                         if csv_output:
-                            print(f"{obj} (Seg {i}),{start},{end},{duration},")
+                            lines.append(f"{obj} (Seg {i}),{start},{end},{duration},")
                         elif segment_fmt:
-                            print(
+                            lines.append(
                                 segment_fmt.format(
                                     i=i, start=start, end=end, duration=duration
                                 )
                             )
                         else:
-                            print(
+                            lines.append(
                                 f"    Seg {i:<2}                         : {start:8.2f} - {end:8.2f} (Dur: {duration:6.2f})"
                             )
 
         if not csv_output:
-            print("-" * 60)
+            lines.append("-" * 60)
+
+        return lines
+
+    @classmethod
+    def print_time_ranges(
+        cls,
+        source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]],
+        header: Optional[str] = None,
+        per_segment: bool = False,
+        object_fmt: Optional[str] = None,
+        segment_fmt: Optional[str] = None,
+        by_time: bool = False,
+        csv_output: bool = False,
+    ):
+        """Print formatted time ranges to stdout. See
+        :meth:`format_time_ranges_text` for the same output as a string,
+        and :meth:`format_time_ranges_html` for HTML.
+        """
+        for line in cls._format_time_ranges_lines(
+            source,
+            header=header,
+            per_segment=per_segment,
+            object_fmt=object_fmt,
+            segment_fmt=segment_fmt,
+            by_time=by_time,
+            csv_output=csv_output,
+        ):
+            print(line)
+
+    @classmethod
+    def format_time_ranges_text(
+        cls,
+        source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]],
+        **kwargs,
+    ) -> str:
+        """Return the same output as :meth:`print_time_ranges` as a
+        single newline-joined string. Kwargs are forwarded.
+        """
+        return "\n".join(cls._format_time_ranges_lines(source, **kwargs))
+
+    @classmethod
+    def format_time_ranges_html(
+        cls,
+        source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]],
+        title: Optional[str] = None,
+        **kwargs,
+    ) -> str:
+        """Wrap :meth:`format_time_ranges_text` in styled HTML suitable
+        for ``sb.text_view_dialog``. ``title`` adds an ``<h2>`` above
+        the monospaced body; pass ``None`` to omit.
+
+        Both the title and body are HTML-escaped — Maya node names can
+        contain ``& < >`` and would otherwise break the rendering.
+        """
+        body = _html.escape(cls.format_time_ranges_text(source, **kwargs))
+        head = (
+            f"<h2 style='color:#9cf; margin:0 0 6px 0;'>{_html.escape(title)}</h2>"
+            if title
+            else ""
+        )
+        return (
+            head
+            + "<pre style='font-family:monospace; color:#ddd;'>"
+            + body
+            + "</pre>"
+        )
 
 
 class SegmentKeys(SegmentKeysInfo):
@@ -269,6 +317,7 @@ class SegmentKeys(SegmentKeysInfo):
         exclude_next_start: bool = True,
         motion_only: bool = False,
         motion_rate: float = 1e-3,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> List[Dict[str, Any]]:
         """Collect animation segments from objects.
 
@@ -310,8 +359,11 @@ class SegmentKeys(SegmentKeysInfo):
 
         import maya.cmds as cmds
 
-        for obj in objects:
+        total_objs = len(objects)
+        for i, obj in enumerate(objects):
             obj_str = str(obj)
+            if progress_callback:
+                progress_callback(i, total_objs, f"Scanning: {obj_str}")
             # Get curves based on selection state
             if selected_keys_only:
                 selected_curves = cmds.keyframe(
@@ -498,7 +550,151 @@ class SegmentKeys(SegmentKeysInfo):
                     }
                 )
 
+        if progress_callback and total_objs:
+            progress_callback(total_objs, total_objs, "Done")
         return segments
+
+    @classmethod
+    def get_scene_info(
+        cls,
+        objects: Optional[List[str]] = None,
+        detailed: bool = True,
+        ignore_holds: bool = True,
+        traversal: Optional[str] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Collect animation segments for the scene info report.
+
+        Data-only counterpart to :meth:`print_scene_info` — returns the
+        segments list rather than formatting it. Feed the result to
+        :meth:`format_scene_info_text` / :meth:`format_scene_info_html`
+        or to :meth:`format_time_ranges_*` directly.
+
+        Args:
+            objects: List of objects to analyze. ``None`` falls back to
+                the active selection, then to every scene transform.
+            detailed: If True, segments are split at static gaps and
+                visibility holds are reported as active.
+            ignore_holds: If True, trailing holds are excluded.
+            traversal: Optional dependency-graph expansion of *objects*:
+                ``"upstream"`` includes nodes feeding into them,
+                ``"downstream"`` includes nodes they drive, ``"both"``
+                includes both directions. ``None`` (default) leaves the
+                input set untouched. Ignored when *objects* is empty.
+
+        Returns:
+            List of segment dictionaries (see :meth:`collect_segments`),
+            or an empty list when nothing animates in the resolved set.
+        """
+        if not objects:
+            objects = cmds.ls(selection=True, type="transform") or []
+        if not objects:
+            objects = cmds.ls(type="transform") or []
+
+        if not objects:
+            return []
+
+        if traversal in ("upstream", "downstream", "both"):
+            expanded: List[str] = list(objects)
+            seen = set(expanded)
+            for obj in list(objects):
+                # ``pdo=False`` (default) keeps DAG nodes in the result so
+                # the transform filter below has something to find;
+                # ``pdo=True`` would prune them and the traversal would
+                # silently no-op.
+                if traversal == "upstream":
+                    extra = cmds.listHistory(obj) or []
+                elif traversal == "downstream":
+                    extra = cmds.listHistory(obj, future=True) or []
+                else:  # both
+                    extra = (cmds.listHistory(obj) or []) + (
+                        cmds.listHistory(obj, future=True) or []
+                    )
+                # Restrict to transforms — only those carry animatable
+                # keyframes the report expects.
+                for n in extra:
+                    if n in seen:
+                        continue
+                    try:
+                        if cmds.objectType(n, isAType="transform"):
+                            seen.add(n)
+                            expanded.append(n)
+                    except Exception:
+                        continue
+            objects = expanded
+
+        return cls.collect_segments(
+            objects,
+            split_static=True,
+            ignore_visibility_holds=detailed,
+            ignore_holds=ignore_holds,
+            progress_callback=progress_callback,
+        )
+
+    @classmethod
+    def format_scene_info_text(
+        cls,
+        objects: Optional[List[str]] = None,
+        detailed: bool = True,
+        csv_output: bool = False,
+        by_time: bool = False,
+        ignore_holds: bool = True,
+        traversal: Optional[str] = None,
+    ) -> str:
+        """Plain-text scene-info report. Empty string when nothing animates."""
+        segments = cls.get_scene_info(
+            objects=objects,
+            detailed=detailed,
+            ignore_holds=ignore_holds,
+            traversal=traversal,
+        )
+        if not segments:
+            return ""
+        return cls.format_time_ranges_text(
+            segments,
+            per_segment=detailed,
+            csv_output=csv_output,
+            by_time=by_time,
+        )
+
+    @classmethod
+    def format_scene_info_html(
+        cls,
+        objects: Optional[List[str]] = None,
+        detailed: bool = True,
+        csv_output: bool = False,
+        by_time: bool = False,
+        ignore_holds: bool = True,
+        traversal: Optional[str] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> str:
+        """HTML scene-info report for ``sb.text_view_dialog``.
+
+        Returns a self-contained HTML fragment. Empty string when
+        nothing animates.
+        """
+        segments = cls.get_scene_info(
+            objects=objects,
+            detailed=detailed,
+            ignore_holds=ignore_holds,
+            traversal=traversal,
+            progress_callback=progress_callback,
+        )
+        if not segments:
+            return ""
+        scene_path = cmds.file(query=True, sceneName=True)
+        scene_name = (
+            scene_path.replace("\\", "/").rsplit("/", 1)[-1]
+            if scene_path
+            else "Untitled"
+        )
+        return cls.format_time_ranges_html(
+            segments,
+            title=f"Animation Info — {scene_name}",
+            per_segment=detailed,
+            csv_output=csv_output,
+            by_time=by_time,
+        )
 
     @classmethod
     def print_scene_info(
@@ -509,33 +705,15 @@ class SegmentKeys(SegmentKeysInfo):
         by_time: bool = False,
         ignore_holds: bool = True,
     ):
-        """Print animation info for the scene or provided objects.
-
-        Args:
-            objects: List of objects to analyze. If None, uses selection or all objects.
-            detailed: If True, prints individual segments. If False, aggregates per object.
-            csv_output: If True, prints in CSV format.
-            by_time: If True, sorts output by start time.
-            ignore_holds: If True, reports only active animation (excludes static holds).
+        """Print animation info to stdout. Thin wrapper over
+        :meth:`get_scene_info` + :meth:`print_time_ranges` kept for
+        backward compatibility; new callers should prefer
+        :meth:`format_scene_info_text` / :meth:`format_scene_info_html`
+        and route the result to their target widget or log.
         """
-        if not objects:
-            objects = cmds.ls(selection=True, type="transform") or []
-        if not objects:
-            objects = cmds.ls(type="transform") or []
-
-        if not objects:
-            cmds.warning("No objects found to analyze.")
-            return
-
-        # Collect segments with split_static=True to get full detail
-        # Pass ignore_visibility_holds=True to see visual segments even if visibility bridges them
-        segments = cls.collect_segments(
-            objects,
-            split_static=True,
-            ignore_visibility_holds=detailed,
-            ignore_holds=ignore_holds,
+        segments = cls.get_scene_info(
+            objects=objects, detailed=detailed, ignore_holds=ignore_holds
         )
-
         if not segments:
             cmds.warning("No animation found on the specified objects.")
             return

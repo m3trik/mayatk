@@ -996,9 +996,21 @@ class AuditProfile:
     min_tris: int = 500  # Floor for adaptive budget
 
 
+# --------------------------------------------------------------- #
+# Structured records returned by SceneAnalyzer.
+# --------------------------------------------------------------- #
+# Severity / kind strings are plain literals (no enum) so the
+# dataclasses serialize cleanly via ``dataclasses.asdict`` for the
+# machine-readable ``SceneReport.to_dict`` path. Callers can compare
+# against the constants below for stable matching.
+SEVERITY_LOW = "low"
+SEVERITY_MEDIUM = "medium"
+SEVERITY_HIGH = "high"
+
+
 @dataclass
 class MeshRecord:
-    """Compact record for mesh statistics."""
+    """Per-mesh statistics for a single shape node."""
 
     shape_name: str
     tris: int
@@ -1012,12 +1024,11 @@ class MeshRecord:
     non_manifold_edges: int = 0
     lamina_faces: int = 0
     vertex_bytes: int = 0
-    vertex_byte_breakdown: str = ""
 
 
 @dataclass
 class MaterialRecord:
-    """Compact record for material usage."""
+    """Per-shape material usage summary (aggregated across slots)."""
 
     slot_count: int
     uses_transparency: bool
@@ -1029,14 +1040,69 @@ class MaterialRecord:
     unpacked_pbr: bool = False
     missing_textures: int = 0
     max_samplers: int = 0
-    unique_paths_scene: int = 0
     unique_paths_local: int = 0
     max_res_is_unique: bool = False
 
 
 @dataclass
+class Finding:
+    """An observation about an asset (negative or risk-flagged)."""
+
+    severity: str  # SEVERITY_LOW / SEVERITY_MEDIUM / SEVERITY_HIGH
+    kind: str      # e.g. "high_poly", "vert_bloat", "ngons", "non_manifold", "extra_uv_sets"
+    message: str   # human-readable summary; data lives in ``detail``
+    detail: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class FixAction:
+    """A recommended remediation step."""
+
+    severity: str  # SEVERITY_LOW / SEVERITY_MEDIUM / SEVERITY_HIGH
+    kind: str      # e.g. "decimate", "reduce_slots", "remove_uv_sets", "relink_textures"
+    message: str
+    target: Optional[str] = None  # transform path, material name, or texture path
+    detail: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class BudgetDelta:
+    """How far an asset exceeds the profile budget along each axis."""
+
+    tris_over: int = 0
+    slots_over: int = 0
+    uvs_over: int = 0
+    max_tex_res_over: int = 0
+
+    def is_over_budget(self) -> bool:
+        return any(
+            (
+                self.tris_over > 0,
+                self.slots_over > 0,
+                self.uvs_over > 0,
+                self.max_tex_res_over > 0,
+            )
+        )
+
+    def summary(self) -> str:
+        """Pre-rendered ``"tris +N | slots +M | …"`` string used by the
+        text renderer. Data layer keeps the raw numbers so callers can
+        sort / threshold / serialize without re-parsing."""
+        parts: List[str] = []
+        if self.tris_over:
+            parts.append(f"tris +{self.tris_over}")
+        if self.slots_over:
+            parts.append(f"slots +{self.slots_over}")
+        if self.uvs_over:
+            parts.append(f"uv +{self.uvs_over}")
+        if self.max_tex_res_over:
+            parts.append(f"maxTex +{self.max_tex_res_over}")
+        return " | ".join(parts)
+
+
+@dataclass
 class AssetRecord:
-    """Combined record for an analyzed asset."""
+    """Combined per-asset record produced by analyze()."""
 
     transform: str
     mesh: MeshRecord
@@ -1044,117 +1110,351 @@ class AssetRecord:
     score: float = 0.0
     perf_score: float = 0.0
     risk_score: float = 0.0
-    findings: List[str] = field(default_factory=list)
+    findings: List[Finding] = field(default_factory=list)
     score_breakdown: Dict[str, float] = field(default_factory=dict)
     instance_count: int = 0
     tri_percent: float = 0.0
-    delta_summary: str = ""
-    fix_plan: List[str] = field(default_factory=list)
+    delta: BudgetDelta = field(default_factory=BudgetDelta)
+    fix_plan: List[FixAction] = field(default_factory=list)
     target_tris: int = 0
 
 
 @dataclass
-class SceneOverview:
-    """High-level overview of the scene analysis."""
+class ParetoEntry:
+    """One row of a Pareto ranking (top contributor + cumulative %)."""
 
-    total_meshes: int
-    total_tris: int
-    total_verts: int
+    target: str
+    value: int          # raw count for the metric this list ranks (tris or slots)
+    cum_percent: float  # cumulative percentage at this row
+
+
+@dataclass
+class TextureFile:
+    """A texture file referenced by the scene, with usage stats."""
+
+    path: str
+    size_mb: float
+    width: int
+    height: int
+    material_count: int
+    materials: List[str]
+    mesh_count: int
+    instance_count: int
+
+
+@dataclass
+class MissingTexture:
+    """A texture referenced by a material but not present on disk."""
+
+    path: str
+    material_count: int
+    materials: List[str]
+
+
+@dataclass
+class SharedTexture:
+    """A texture used by more than one mesh."""
+
+    path: str
+    mesh_count: int
+
+
+@dataclass
+class MaterialSplit:
+    """A material correlated with high-slot meshes (draw-call splits)."""
+
+    material: str
+    unique_mesh_count: int
+    over_budget_count: int
     avg_slots: float
-    max_slots: int
-    multi_slot_meshes: int
-    transparent_meshes: int
-    total_texture_mb: float
-    est_gpu_mb: float
-    est_gpu_mb_compressed: float
-    max_texture_res: int
-    large_texture_count: int
-    unique_texture_paths: int
-    top_offenders: List[AssetRecord]
-    top_by_tris: List[AssetRecord]
-    top_by_slots: List[AssetRecord]
-    top_by_max_res: List[AssetRecord]
-    top_by_risk: List[AssetRecord]
-    top_by_transparency: List[AssetRecord]
-    top_multi_slot_density: List[AssetRecord]
-    fix_plan: List[str]
-    fix_first_items: List[str] = field(default_factory=list)
-    texture_dim_histogram: Dict[str, int] = field(default_factory=dict)
-    pipeline_integrity: List[str] = field(default_factory=list)
-    scope: str = "Selection"
-    profile: AuditProfile = field(default_factory=AuditProfile)
-    total_slots: int = 0
-    meshes_over_slot_threshold: int = 0
-    meshes_over_tri_threshold: int = 0
-    total_target_tris: int = 0
-    total_slots_over_budget: int = 0
+
+
+@dataclass
+class SlotStats:
+    """Distribution stats for material slots-per-mesh."""
+
+    avg: float
+    avg_unique: float
+    median: int
+    p90: int
+    max: int
+
+
+@dataclass
+class InstanceStats:
+    """Mesh / instance counts."""
+
+    unique_meshes: int
+    instanced_shapes: int
+    total_instances: int
+
+
+@dataclass
+class BudgetBuckets:
+    """Histogram of overage severity per dimension."""
+
+    # Bucket label strings are stable: "0-10%" / "10-50%" / "50%+" for
+    # tris, "1-2" / "3-5" / "6+" for slots. Kept as Dict here because
+    # the labels also drive UI rendering — promoting to a dataclass
+    # would just duplicate them.
+    tris: Dict[str, int] = field(default_factory=dict)
+    slots: Dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class ComplianceStats:
+    """Percentage of scene over budget per dimension."""
+
+    tris_pct: float = 0.0
+    slots_pct: float = 0.0
+
+
+@dataclass
+class MissingTextureImpact:
+    """Downstream effect of missing textures on the asset list."""
+
+    affected_meshes: List[str] = field(default_factory=list)
+    affected_materials: List[str] = field(default_factory=list)
+    top_offenders: List[str] = field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return not self.affected_meshes
+
+
+@dataclass
+class SummaryStats:
+    """High-level scene counters surfaced by the Executive Summary."""
+
+    total_meshes: int = 0
+    total_tris: int = 0
+    total_verts: int = 0
+    raw_total_tris: int = 0
+    instance_stats: InstanceStats = field(
+        default_factory=lambda: InstanceStats(0, 0, 0)
+    )
+    scene_health_flags: List[str] = field(default_factory=list)
+    multi_slot_meshes: int = 0
+    transparent_meshes: int = 0
     non_manifold_count: int = 0
     lamina_count: int = 0
     ngon_count: int = 0
     high_poly_count: int = 0
-    top_repeated_offenders: List[AssetRecord] = field(default_factory=list)
-    top_by_effective_score: List[AssetRecord] = field(default_factory=list)
-    top_materials: List[Tuple[str, int]] = field(default_factory=list)
-    top_savings_draw_calls: List[AssetRecord] = field(default_factory=list)
-    top_savings_tris: List[AssetRecord] = field(default_factory=list)
-    missing_textures: List[Tuple[str, int, List[str]]] = field(
-        default_factory=list
-    )  # (path, count, [materials])
-    missing_textures_project: List[Tuple[str, int, List[str]]] = field(
-        default_factory=list
-    )
-    missing_textures_presets: List[Tuple[str, int, List[str]]] = field(
-        default_factory=list
-    )
-    heaviest_textures: List[
-        Tuple[str, float, Tuple[int, int], int, List[str], int, int]
-    ] = field(
-        default_factory=list
-    )  # (path, size_mb, res, mat_count, [materials], mesh_count, instance_count)
-    texture_type_breakdown: Dict[str, float] = field(
-        default_factory=dict
-    )  # type -> size_mb
+    meshes_with_transparency: int = 0
+    meshes_with_extra_uvs: int = 0
+    meshes_with_high_slots: int = 0
+
+
+@dataclass
+class BudgetStats:
+    """Budget / compliance / savings figures."""
+
+    total_target_tris: int = 0
+    total_slots: int = 0
+    meshes_over_tri_threshold: int = 0
+    meshes_over_slot_threshold: int = 0
+    total_slots_over_budget: int = 0
     savings_draw_calls_total: int = 0
     savings_tris_total: int = 0
     savings_draw_calls_budget: int = 0
     savings_tris_budget: int = 0
-    instance_stats: Dict[str, int] = field(default_factory=dict)
-    budget_compliance_dist: Dict[str, Dict[str, int]] = field(default_factory=dict)
-    scene_compliance: Dict[str, float] = field(default_factory=dict)  # % over budget
+    slot_stats: Optional[SlotStats] = None
+    compliance: ComplianceStats = field(default_factory=ComplianceStats)
+    buckets: BudgetBuckets = field(default_factory=BudgetBuckets)
 
-    # New fields for improved reporting
-    effective_total_tris: int = 0
-    effective_total_slots: int = 0
-    raw_total_tris: int = 0
-    raw_total_verts: int = 0
-    raw_total_slots: int = 0
-    pareto_tris: List[str] = field(default_factory=list)
-    pareto_slots: List[str] = field(default_factory=list)
-    top_wins_by_type: Dict[str, List[str]] = field(default_factory=dict)
-    scene_health_flags: List[str] = field(default_factory=list)
-    meshes_with_transparency: int = 0
-    meshes_with_extra_uvs: int = 0
-    meshes_with_high_slots: int = 0
-    materials_causing_splits: List[Tuple[str, int, int, float]] = field(
-        default_factory=list
-    )  # (mat_name, unique_count, over_budget_count, avg_slots)
 
-    # ROI Improvements
-    slot_stats: Dict[str, float] = field(default_factory=dict)  # avg, median, p90, max
-    slot_budget_delta: Dict[str, int] = field(
-        default_factory=dict
-    )  # excess, opportunity
-    pareto_texture_mb: List[str] = field(default_factory=list)
-    shared_4k_textures: List[Tuple[str, int]] = field(
-        default_factory=list
-    )  # path, count
+@dataclass
+class TextureStats:
+    """Texture-side aggregates."""
+
+    total_size_mb: float = 0.0
+    est_gpu_mb: float = 0.0
+    est_gpu_mb_compressed: float = 0.0
+    max_resolution: int = 0
+    large_texture_count: int = 0
+    unique_paths: int = 0
+    dim_histogram: Dict[str, int] = field(default_factory=dict)
+    type_breakdown: Dict[str, float] = field(default_factory=dict)
+    class_estimates: Dict[str, float] = field(default_factory=dict)
+    shared_4k: List[SharedTexture] = field(default_factory=list)
     single_use_4k_count: int = 0
     shared_4k_count: int = 0
-    missing_texture_impact: Dict[str, Any] = field(default_factory=dict)
-    selection_coverage: Dict[str, int] = field(default_factory=dict)
-    texture_class_estimates: Dict[str, float] = field(
-        default_factory=dict
-    )  # Class -> MB
+    heaviest: List[TextureFile] = field(default_factory=list)
+
+
+@dataclass
+class PipelineStats:
+    """Pipeline integrity findings (missing textures + impact)."""
+
+    integrity_warnings: List[str] = field(default_factory=list)
+    missing_project: List[MissingTexture] = field(default_factory=list)
+    missing_presets: List[MissingTexture] = field(default_factory=list)
+    impact: MissingTextureImpact = field(default_factory=MissingTextureImpact)
+
+
+@dataclass
+class OffenderLists:
+    """Top-N rankings across various dimensions.
+
+    All lists are slices of the same underlying ``assets`` collection
+    re-sorted and truncated. ``by_effective_score`` replaces the
+    former ``top_repeated_offenders`` / ``top_by_effective_score``
+    alias pair — they were the same list under two names.
+    """
+
+    by_score: List[AssetRecord] = field(default_factory=list)
+    by_tris: List[AssetRecord] = field(default_factory=list)
+    by_slots: List[AssetRecord] = field(default_factory=list)
+    by_max_res: List[AssetRecord] = field(default_factory=list)
+    by_risk: List[AssetRecord] = field(default_factory=list)
+    by_transparency: List[AssetRecord] = field(default_factory=list)
+    by_effective_score: List[AssetRecord] = field(default_factory=list)
+    top_materials: List[Tuple[str, int]] = field(default_factory=list)
+    savings_draw_calls: List[AssetRecord] = field(default_factory=list)
+    savings_tris: List[AssetRecord] = field(default_factory=list)
+    pareto_tris: List[ParetoEntry] = field(default_factory=list)
+    pareto_slots: List[ParetoEntry] = field(default_factory=list)
+    materials_causing_splits: List[MaterialSplit] = field(default_factory=list)
+
+
+@dataclass
+class AnalysisManifest:
+    """What was analyzed, how, and how long it took.
+
+    Surfaces ``analyze()``-time observability: the requested section
+    set, the scope, which collectors actually ran, and timings /
+    counts so callers can correlate a SceneReport with the run that
+    produced it.
+    """
+
+    scope: str  # "selection" | "all" | "custom"
+    sections_requested: List[str] = field(default_factory=list)
+    materials_collected: bool = True
+    textures_collected: bool = True
+    profile: AuditProfile = field(default_factory=AuditProfile)
+    started_at: float = 0.0  # unix timestamp
+    duration_ms: int = 0
+    shape_count: int = 0
+    shading_engine_count: int = 0
+    file_node_count: int = 0
+
+
+@dataclass
+class SceneReport:
+    """Top-level result of ``SceneAnalyzer.generate_report``.
+
+    Replaces the legacy ``SceneOverview`` mega-dataclass. Groups
+    related metrics into typed sub-records and exposes a
+    machine-readable export via :meth:`to_dict`.
+    """
+
+    manifest: AnalysisManifest
+    summary: SummaryStats = field(default_factory=SummaryStats)
+    budget: BudgetStats = field(default_factory=BudgetStats)
+    textures: TextureStats = field(default_factory=TextureStats)
+    pipeline: PipelineStats = field(default_factory=PipelineStats)
+    offenders: OffenderLists = field(default_factory=OffenderLists)
+    fix_actions: List[FixAction] = field(default_factory=list)
+    assets: List[AssetRecord] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize the report to a nested plain-dict tree.
+
+        Suitable for JSON / pickle / dashboard ingestion. Nested
+        dataclasses (including AssetRecord and its mesh/material
+        children) are converted recursively via
+        :func:`dataclasses.asdict`. ``profile`` flattens to its own
+        dict; sets become lists when present (``MissingTextureImpact``
+        keeps lists internally, so no conversion required).
+        """
+        from dataclasses import asdict
+
+        return asdict(self)
+
+
+class SceneInfoSection:
+    """Report-section identifiers used to gate analyze() work and report output.
+
+    ``ALL`` is the canonical render order. The dependency sets drive
+    ``SceneAnalyzer.analyze`` so that unchecked sections skip the
+    corresponding collection phase (material caches, texture file IO).
+    """
+
+    SUMMARY = "summary"
+    FIX_FIRST = "fix_first"
+    PARETO = "pareto"
+    OFFENDERS = "offenders"
+    CATEGORIES = "categories"
+    TEXTURES = "textures"
+    PIPELINE = "pipeline"
+    ASSUMPTIONS = "assumptions"
+
+    ALL: Tuple[str, ...] = (
+        SUMMARY,
+        FIX_FIRST,
+        PARETO,
+        OFFENDERS,
+        CATEGORIES,
+        TEXTURES,
+        PIPELINE,
+        ASSUMPTIONS,
+    )
+
+    LABELS: Dict[str, str] = {
+        SUMMARY: "Executive Summary",
+        FIX_FIRST: "Fix First (High Impact)",
+        PARETO: "Pareto View",
+        OFFENDERS: "Top Issues by Asset",
+        CATEGORIES: "Top Offenders by Category",
+        TEXTURES: "Textures",
+        PIPELINE: "Pipeline Integrity",
+        ASSUMPTIONS: "Data Assumptions",
+    }
+
+    # Material-cache phase is needed for anything that touches slots,
+    # transparency, draw-call estimates or texture aggregates.
+    _NEEDS_MATERIALS: Set[str] = {
+        SUMMARY,
+        FIX_FIRST,
+        PARETO,
+        OFFENDERS,
+        CATEGORIES,
+        TEXTURES,
+        PIPELINE,
+    }
+
+    # Texture file IO (os.path.getsize + cmds.getAttr outSize per file
+    # node) is the heaviest single cost; only walk it if the sections
+    # the caller asked for actually surface that data.
+    _NEEDS_TEXTURES: Set[str] = {
+        SUMMARY,
+        FIX_FIRST,
+        TEXTURES,
+        PIPELINE,
+    }
+
+    @classmethod
+    def normalize(cls, sections: Optional[List[str]]) -> List[str]:
+        """Coerce a caller-supplied sections argument to a stable,
+        de-duped list of valid keys.
+
+        ``None`` expands to all sections in :attr:`ALL` order. Unknown
+        keys are dropped silently — that matches "best effort"
+        semantics and means a downstream UI can pass through whatever
+        the user picked without pre-filtering.
+
+        Caller order is preserved so an option-box exposing section
+        reordering would Just Work without touching this code.
+        """
+        if sections is None:
+            return list(cls.ALL)
+        valid = set(cls.ALL)
+        seen: Set[str] = set()
+        out: List[str] = []
+        for key in sections:
+            if key in valid and key not in seen:
+                out.append(key)
+                seen.add(key)
+        return out
 
 
 class SceneAnalyzer(ptk.LoggingMixin):
@@ -1174,8 +1474,19 @@ class SceneAnalyzer(ptk.LoggingMixin):
         self._global_texture_usage: Dict[str, Dict[str, Any]] = (
             {}
         )  # path -> {count, meshes, instances}
-        self.scope = "Selection"
-        self.profile = "Generic"
+        self.scope = "selection"
+        self.profile: Any = AuditProfile()
+        # Populated by ``analyze`` so renderers can hide sections /
+        # lines whose underlying data was deliberately skipped.
+        self.collected_sections: Set[str] = set(SceneInfoSection.ALL)
+        self.materials_collected: bool = True
+        self.textures_collected: bool = True
+        # Observability — populated by ``analyze``. Surfaced via
+        # :class:`AnalysisManifest` on the SceneReport.
+        self._analysis_started_at: float = 0.0
+        self._analysis_duration_ms: int = 0
+        self._shading_engine_count: int = 0
+        self._file_node_count: int = 0
 
     @classmethod
     def run_audit(cls, adaptive: bool = False, verbose: bool = True) -> None:
@@ -1197,12 +1508,245 @@ class SceneAnalyzer(ptk.LoggingMixin):
         if verbose:
             analyzer.print_report(report)
 
+
+    @classmethod
+    def _build_report(
+        cls,
+        adaptive: bool,
+        objects: Optional[List[Any]] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        sections: Optional[List[str]] = None,
+    ) -> Tuple["SceneAnalyzer", SceneReport]:
+        """Run the analyze + generate_report pipeline once for the
+        given audit settings, returning the (analyzer, report) pair.
+
+        Shared by ``format_audit_text`` / ``format_audit_html`` so
+        the heavy work only happens once per user-facing call
+        regardless of which output shape they ask for. ``sections``
+        is forwarded to ``analyze`` so the right collection phases
+        are skipped.
+        """
+        profile = AuditProfile(adaptive_tris=adaptive)
+        if adaptive:
+            profile.name = "Adaptive (Game Ready)"
+
+        analyzer = cls()
+        records = analyzer.analyze(
+            profile=profile,
+            objects=objects,
+            progress_callback=progress_callback,
+            sections=sections,
+        )
+        report = analyzer.generate_report(records)
+        return analyzer, report
+
+    def _build_manifest(self, shape_count: int = 0) -> AnalysisManifest:
+        """Snapshot of the most recent ``analyze`` run for the
+        SceneReport. Pulls timing / counts from analyzer state and
+        falls back to defaults when ``analyze`` was never called."""
+        return AnalysisManifest(
+            scope=self.scope,
+            sections_requested=sorted(self.collected_sections),
+            materials_collected=self.materials_collected,
+            textures_collected=self.textures_collected,
+            profile=self.profile if isinstance(self.profile, AuditProfile) else AuditProfile(),
+            started_at=self._analysis_started_at,
+            duration_ms=self._analysis_duration_ms,
+            shape_count=shape_count,
+            shading_engine_count=self._shading_engine_count,
+            file_node_count=self._file_node_count,
+        )
+
+    @staticmethod
+    def _capture_via_logger(
+        analyzer: "SceneAnalyzer",
+        formatter,
+        render: Callable[[], None],
+    ) -> str:
+        """Run ``render()`` with the analyzer's logger redirected to
+        an in-memory buffer using ``formatter``, then restore.
+
+        Isolation: existing handlers are stashed, replaced by a
+        single ``StreamHandler`` bound to a ``StringIO``, and
+        propagation is disabled — otherwise the report would also
+        appear in the script editor and any other handlers attached
+        to this logger (e.g. tentacle's footer status log). Restored
+        in ``finally`` so a raising renderer doesn't leave the logger
+        in a broken state.
+        """
+        import io
+        import logging as _logging
+
+        buf = io.StringIO()
+        handler = _logging.StreamHandler(buf)
+        handler.setLevel(_logging.NOTSET)
+        handler.setFormatter(formatter)
+
+        existing_handlers = analyzer.logger.handlers[:]
+        existing_propagate = analyzer.logger.propagate
+        analyzer.logger.handlers = [handler]
+        analyzer.logger.propagate = False
+        try:
+            render()
+        finally:
+            analyzer.logger.handlers = existing_handlers
+            analyzer.logger.propagate = existing_propagate
+
+        return buf.getvalue()
+
+    @classmethod
+    def format_audit_text(
+        cls,
+        adaptive: bool = False,
+        objects: Optional[List[Any]] = None,
+        sections: Optional[List[str]] = None,
+    ) -> Dict[str, str]:
+        """Run the audit and return the formatted report as a
+        section-keyed dict of plain text.
+
+        Sibling to :meth:`run_audit` — same analysis, captured into
+        per-section strings instead of routed through the logger.
+        Used by callers that want to display (or partially display)
+        the report somewhere other than the script editor.
+
+        Parameters:
+            adaptive: Apply the Adaptive (Game Ready) profile.
+            objects: Forwarded to :meth:`analyze`. ``None`` uses the
+                current selection; pass an explicit list for
+                whole-scene or custom-scope audits.
+            sections: Iterable of ``SceneInfoSection`` keys. ``None``
+                means "all sections" (prior default behavior).
+
+        Returns:
+            ``dict[str, str]`` keyed by section name (insertion order
+            matches the requested ``sections``). A special
+            ``"_header"`` entry contains the report title + profile
+            block. Empty sections (e.g. the analyzer had nothing to
+            say for "fix_first") are still present but map to an
+            empty string, so callers can iterate the dict and trust
+            it to mirror their request.
+
+        HTML markup that the logger's level wrappers inject (color
+        spans on NOTICE / WARNING / ERROR) is stripped via
+        ``LevelAwareFormatter(strip_html=True)`` so the output is
+        clean plain text.
+        """
+        from pythontk.core_utils.logging_mixin import LevelAwareFormatter
+
+        selected = SceneInfoSection.normalize(sections)
+        analyzer, report = cls._build_report(
+            adaptive=adaptive,
+            objects=objects,
+            sections=selected,
+        )
+        formatter = LevelAwareFormatter(logger=analyzer.logger, strip_html=True)
+
+        result: Dict[str, str] = {}
+        result["_header"] = cls._capture_via_logger(
+            analyzer, formatter, lambda: analyzer._render_header_section(report)
+        )
+        renderers = analyzer._section_renderers()
+        for section in selected:
+            renderer = renderers.get(section)
+            if renderer is None:
+                continue
+            result[section] = cls._capture_via_logger(
+                analyzer, formatter, lambda r=renderer: r(report)
+            )
+        return result
+
+    @classmethod
+    def format_audit_html(
+        cls,
+        adaptive: bool = False,
+        objects: Optional[List[Any]] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        sections: Optional[List[str]] = None,
+    ) -> Dict[str, str]:
+        """Run the audit and return a section-keyed dict of HTML
+        chunks suitable for concatenation into a viewer dialog.
+
+        Preserves the logger's inline color spans (NOTICE lavender,
+        WARNING pastel yellow, ERROR pastel pink, etc.) by capturing
+        with a plain ``Formatter("%(message)s")`` — the level
+        wrappers stay in the output — and embedding each section's
+        captured text inside its own ``<pre>`` block. Per-section
+        ``<pre>`` blocks render identically to one large block in a
+        QTextDocument since the explicit ``margin:0`` collapses the
+        block spacing.
+
+        Parameters:
+            adaptive: Apply the Adaptive (Game Ready) profile.
+            objects: Forwarded to :meth:`analyze`.
+            progress_callback: Forwarded to :meth:`analyze`.
+            sections: Iterable of ``SceneInfoSection`` keys. ``None``
+                means "all sections" (prior default behavior).
+
+        Returns:
+            ``dict[str, str]`` keyed by section name (insertion order
+            matches the requested ``sections``). A special
+            ``"_header"`` entry contains the ``<h2>`` title; the
+            tentacle viewer joins values in iteration order.
+
+        The body is **not** HTML-escaped because doing so would turn
+        the wrapping spans into literal markup. Maya names containing
+        a literal ``<`` could corrupt the rendering; same trade-off
+        the existing TextEditLogHandler accepts when streaming logger
+        output into a QTextEdit.
+        """
+        import logging as _logging
+
+        selected = SceneInfoSection.normalize(sections)
+        analyzer, report = cls._build_report(
+            adaptive=adaptive,
+            objects=objects,
+            progress_callback=progress_callback,
+            sections=selected,
+        )
+        formatter = _logging.Formatter("%(message)s")
+
+        # Explicit ``font-family`` on the ``<pre>`` overrides any font
+        # inherited from the outer ``format_rich_text`` wrapper (``<font>``
+        # + ``<div align=...>``). ``margin:0`` keeps per-section <pre>
+        # blocks visually stitched together — identical line spacing
+        # to the previous single-block layout.
+        pre_open = (
+            "<pre style=\"font-family:'Consolas','Courier New',Monaco,monospace;"
+            " color:#ddd; margin:0;\">"
+        )
+        pre_close = "</pre>"
+
+        title = "Scene Audit Report — Adaptive" if adaptive else "Scene Audit Report"
+        result: Dict[str, str] = {}
+        result["_header"] = (
+            f"<h2 style='color:#9cf; margin:0 0 6px 0;'>{title}</h2>"
+        )
+
+        renderers = analyzer._section_renderers()
+        for section in selected:
+            renderer = renderers.get(section)
+            if renderer is None:
+                continue
+            captured = cls._capture_via_logger(
+                analyzer, formatter, lambda r=renderer: r(report)
+            )
+            if not captured:
+                # Section returned no content (e.g. fix_first when
+                # nothing is over-budget). Keep the key for callers
+                # that key off section identity, but skip the <pre>
+                # so the dialog doesn't render an empty box.
+                result[section] = ""
+                continue
+            result[section] = pre_open + captured + pre_close
+        return result
+
     def analyze(
         self,
         objects: List[Any] = None,
         fast_mode: bool = True,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         profile: AuditProfile = None,
+        sections: Optional[List[str]] = None,
     ) -> List[AssetRecord]:
         """
         Main entry point for analysis.
@@ -1212,42 +1756,118 @@ class SceneAnalyzer(ptk.LoggingMixin):
             fast_mode: If True, skips deep checks (not implemented yet, but reserved for future).
             progress_callback: Optional callback(current, total, message) for progress updates.
             profile: Target profile settings.
+            sections: Iterable of ``SceneInfoSection`` keys controlling
+                which report sections will be rendered. The analyzer
+                uses the set to skip work the unselected sections don't
+                need — most notably texture file IO and (when no
+                section needs them) the material caches. ``None``
+                means "all sections" — equivalent to the prior
+                behavior.
 
         Returns:
             List of AssetRecord objects sorted by score (descending).
         """
+        import time
+
         if profile is None:
             profile = AuditProfile()
         self.profile = profile
-        self.scope = "Selection" if objects is None else "Custom"
+        self.scope = "selection" if objects is None else "custom"
 
-        # Phase A: Resolve targets
+        # Normalize via the canonical helper so a typo'd or
+        # alternately-ordered list from a direct caller gets the same
+        # filtering as the format_audit_* paths.
+        selected_sections = set(SceneInfoSection.normalize(sections))
+        needs_materials = bool(selected_sections & SceneInfoSection._NEEDS_MATERIALS)
+        needs_textures = bool(selected_sections & SceneInfoSection._NEEDS_TEXTURES)
+        # Recorded on the analyzer so generate_report / renderers can
+        # hide texture/material lines that have no underlying data.
+        self.collected_sections = selected_sections
+        self.materials_collected = needs_materials
+        self.textures_collected = needs_textures
+
+        # Observability — reset per-run counters; the AnalysisManifest
+        # on the eventual SceneReport reads these.
+        self._analysis_started_at = time.time()
+        self._shading_engine_count = 0
+        self._file_node_count = 0
+        _start_perf = time.perf_counter()
+
+        # Phase A: Resolve targets — always fast (just node-name
+        # normalization), so it gets a small fixed slice of the bar.
+        # The Phase B/C split is computed AFTER Phase A so it can use
+        # the true shape count instead of an estimate.
+        PHASE_A_END = 5
         if progress_callback:
             progress_callback(0, 100, "Resolving targets...")
 
         # shape -> list of transform names
-        shape_map = self._resolve_targets(objects)
+        shape_map = self._resolve_targets(
+            objects,
+            progress_callback=progress_callback,
+            pct_start=0,
+            pct_end=PHASE_A_END,
+        )
         if not shape_map:
+            self._analysis_duration_ms = int(
+                (time.perf_counter() - _start_perf) * 1000
+            )
             return []
 
         shapes = list(shape_map.keys())
+        total_shapes = len(shapes)
 
-        # Phase B: Bulk collect material data
-        if progress_callback:
-            progress_callback(10, 100, "Collecting material data...")
-        self._build_material_caches(shape_map)
+        # Weight the Phase B/C split by item counts so the bar tracks
+        # wall-clock progress instead of the old 10/10/80 layout. Phase
+        # B walks ALL scene shading engines (not just the selection's)
+        # and does one ``_analyze_material_node`` per SE — each
+        # potentially calling ``os.path.getsize`` per file node — so
+        # for selection-scope audits Phase B is usually the bottleneck.
+        # Item-count weighting fixes the "bar at ~15% when the work is
+        # at ~90%" symptom of the fixed split.
+        phase_b_count = (
+            len(cmds.ls(type="shadingEngine") or []) if needs_materials else 0
+        )
+        phase_b_end = self._phase_b_end(PHASE_A_END, phase_b_count, total_shapes)
+
+        # Phase B: Bulk collect material data (skip entirely when no
+        # selected section needs slot / transparency / texture data).
+        if needs_materials:
+            if progress_callback:
+                progress_callback(
+                    PHASE_A_END, 100, "Collecting material data..."
+                )
+            self._build_material_caches(
+                shape_map,
+                progress_callback=progress_callback,
+                pct_start=PHASE_A_END,
+                pct_end=phase_b_end,
+                collect_textures=needs_textures,
+            )
+        else:
+            # Make sure stale caches from a prior run don't leak into
+            # this analyze pass.
+            self._shading_map.clear()
+            self._material_map.clear()
+            self._material_flags.clear()
+            self._global_texture_usage.clear()
+            # No Phase B work happened — give its bar range back to C.
+            phase_b_end = PHASE_A_END
 
         # Phase C: Analyze and Score
         records = []
-        total_shapes = len(shapes)
+        phase_c_span = max(1, 100 - phase_b_end)
         for i, shape in enumerate(shapes):
             if progress_callback:
-                # Map 20-100% to shape analysis
-                pct = 20 + int((i / total_shapes) * 80)
+                pct = phase_b_end + int((i / total_shapes) * phase_c_span)
                 progress_callback(pct, 100, f"Analyzing {shape}")
 
             mesh_rec = self._analyze_mesh(shape)
-            mat_rec = self._analyze_material(shape)
+            mat_rec = (
+                self._analyze_material(shape)
+                if needs_materials
+                else MaterialRecord(slot_count=0, uses_transparency=False, materials=[])
+            )
 
             # Calculate score and findings
             (
@@ -1256,7 +1876,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
                 risk_score,
                 findings,
                 breakdown,
-                delta_summary,
+                delta,
                 fix_plan,
                 target_tris,
             ) = self._calculate_score(mesh_rec, mat_rec)
@@ -1278,7 +1898,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
                     findings=findings,
                     score_breakdown=breakdown,
                     instance_count=instance_count,
-                    delta_summary=delta_summary,
+                    delta=delta,
                     fix_plan=fix_plan,
                     target_tris=target_tris,
                 )
@@ -1292,36 +1912,27 @@ class SceneAnalyzer(ptk.LoggingMixin):
 
         # Sort by score descending
         records.sort(key=lambda x: x.score, reverse=True)
+
+        # Final tick — the per-shape loop ends at ~99% (i = N-1).
+        # Without this the bar visually stalls just shy of full before
+        # the context manager hides it.
+        if progress_callback:
+            progress_callback(100, 100, "Done")
+
+        self._analysis_duration_ms = int((time.perf_counter() - _start_perf) * 1000)
         return records
 
-    def generate_report(self, records: List[AssetRecord]) -> SceneOverview:
-        """Generates a high-level overview from analysis records."""
+    def generate_report(self, records: List[AssetRecord]) -> SceneReport:
+        """Build a :class:`SceneReport` from per-asset records.
+
+        The intermediate computation phases (texture aggregates,
+        Pareto rankings, missing-texture impact, fix actions) are the
+        same as before; the difference is in the *shape* of the
+        return — typed sub-records instead of a 70-field bag.
+        """
+        manifest = self._build_manifest()
         if not records:
-            return SceneOverview(
-                total_meshes=0,
-                total_tris=0,
-                total_verts=0,
-                avg_slots=0.0,
-                max_slots=0,
-                multi_slot_meshes=0,
-                transparent_meshes=0,
-                total_texture_mb=0.0,
-                est_gpu_mb=0.0,
-                est_gpu_mb_compressed=0.0,
-                max_texture_res=0,
-                large_texture_count=0,
-                unique_texture_paths=0,
-                top_offenders=[],
-                top_by_tris=[],
-                top_by_slots=[],
-                top_by_max_res=[],
-                top_by_risk=[],
-                top_by_transparency=[],
-                top_multi_slot_density=[],
-                fix_plan=[],
-                total_target_tris=0,
-                instance_stats={"total_instances": 0, "instanced_shapes": 0},
-            )
+            return SceneReport(manifest=manifest)
 
         total_meshes = len(records)
         # Note: records are per unique shape. We must multiply by instance_count for scene totals.
@@ -1535,21 +2146,17 @@ class SceneAnalyzer(ptk.LoggingMixin):
         # Sort by size descending
         heaviest_textures_list.sort(key=lambda x: x[1], reverse=True)
 
-        top_multi_slot_density = []  # Placeholder
-
         # Transparency
         transparent_recs = [r for r in records if r.material.uses_transparency]
         top_by_transparency = sorted(
             transparent_recs, key=lambda x: x.score, reverse=True
         )[:10]
 
-        # Top Repeated Offenders (Effective Cost = instances * score)
-        top_repeated_offenders = sorted(
+        # Top by Effective Score (was the duplicate
+        # ``top_repeated_offenders`` / ``top_by_effective_score`` pair).
+        top_by_effective_score = sorted(
             records, key=lambda x: x.score * max(1, x.instance_count), reverse=True
         )[:10]
-
-        # Top Effective Score (Same as repeated offenders but explicitly named for dual ranking)
-        top_by_effective_score = top_repeated_offenders
 
         # Top Materials
         mat_usage = {}
@@ -1674,41 +2281,11 @@ class SceneAnalyzer(ptk.LoggingMixin):
             ),
         }
 
-        # Generate Fix Plan
-        fix_plan = []
-        if non_manifold_count > 0:
-            offender = max(records, key=lambda r: r.mesh.non_manifold_edges)
-            fix_plan.append(
-                f"Fix non-manifold geometry: {offender.transform} ({offender.mesh.non_manifold_edges} edges), ... (total {non_manifold_count} meshes)"
-            )
-        if lamina_count > 0:
-            fix_plan.append(
-                f"Remove lamina faces (Mesh Cleanup) on {lamina_count} meshes."
-            )
-        if missing_textures_list:
-            fix_plan.append(
-                f"Relink {len(missing_textures_list)} missing textures (File Path Editor)."
-            )
-        if any(r.material.slot_count > 1 for r in records):
-            offender = max(records, key=lambda r: r.material.slot_count)
-            saved = (offender.material.slot_count - 1) * max(1, offender.instance_count)
-            fix_plan.append(
-                f"Reduce slots: {offender.transform} ({offender.material.slot_count} slots x {max(1, offender.instance_count)} instances) -> target 1 slot (est -{saved} slots effective)"
-            )
-        if any(r.material.max_res > self.profile.max_tex_res for r in records):
-            offender = max(records, key=lambda r: r.material.max_res)
-            fix_plan.append(
-                f"Downscale textures: {offender.transform} uses {offender.material.max_res}px textures."
-            )
-        if high_poly_count > 0:
-            fix_plan.append(
-                f"Decimate or retopologize {high_poly_count} high-poly meshes (>{self.profile.max_tris} tris)."
-            )
-        if any(r.material.unpacked_pbr for r in records):
-            fix_plan.append("Pack PBR textures (ORM/ARM) to reduce sampler count.")
-
-        # Fix First Items (Top 3-7 actionable items)
-        fix_first_items = []
+        # Scene-level fix actions (high-priority "do these next"
+        # items). Was ``fix_first_items: List[str]`` plus a dead
+        # scene-level ``fix_plan: List[str]``; renderer only used the
+        # former. Now consolidated to a single structured list.
+        scene_fix_actions: List[FixAction] = []
 
         # 1. Top Offenders by Effective Score
         effective_offenders = sorted(
@@ -1716,36 +2293,73 @@ class SceneAnalyzer(ptk.LoggingMixin):
         )
         for r in effective_offenders[:3]:
             if r.score > 10:
-                reason = r.findings[0] if r.findings else "General Issues"
-                # Simplify reason for summary
-                if "High Poly" in reason:
-                    reason = "High Poly"
-                elif "Draw Call" in reason:
-                    reason = "High Slots"
-                elif "Texture" in reason:
-                    reason = "Heavy Textures"
+                reason_kind = "general"
+                reason = "General Issues"
+                if r.findings:
+                    first = r.findings[0]
+                    reason_kind = first.kind
+                    if first.kind == "high_poly":
+                        reason = "High Poly"
+                    elif first.kind == "draw_call_split":
+                        reason = "High Slots"
+                    elif first.kind in {
+                        "max_tex_dim",
+                        "oversized_texture",
+                        "heavy_textures",
+                    }:
+                        reason = "Heavy Textures"
+                    else:
+                        reason = first.message
 
-                fix_first_items.append(
-                    f"Fix {r.transform}: {reason} (Score {r.score:.0f} x {r.instance_count} instances)"
+                scene_fix_actions.append(
+                    FixAction(
+                        severity=SEVERITY_HIGH,
+                        kind="fix_offender",
+                        message=(
+                            f"Fix {r.transform}: {reason} "
+                            f"(Score {r.score:.0f} x {r.instance_count} instances)"
+                        ),
+                        target=r.transform,
+                        detail={
+                            "score": r.score,
+                            "instances": r.instance_count,
+                            "primary_finding": reason_kind,
+                        },
+                    )
                 )
 
         # 2. Missing Textures
         if missing_textures_project:
-            fix_first_items.append(
-                f"Relink {len(missing_textures_project)} missing project textures"
+            scene_fix_actions.append(
+                FixAction(
+                    severity=SEVERITY_HIGH,
+                    kind="relink_textures",
+                    message=f"Relink {len(missing_textures_project)} missing project textures",
+                    detail={"count": len(missing_textures_project)},
+                )
             )
 
         # 3. Slot Reduction
         if savings_draw_calls_budget > 0:
-            fix_first_items.append(
-                f"Reduce material slots by {savings_draw_calls_budget} to reach budget"
+            scene_fix_actions.append(
+                FixAction(
+                    severity=SEVERITY_HIGH,
+                    kind="reduce_slots_scene",
+                    message=f"Reduce material slots by {savings_draw_calls_budget} to reach budget",
+                    detail={"slots_to_reduce": savings_draw_calls_budget},
+                )
             )
 
         # 4. High Poly
         high_poly_overage = sum(max(0, r.mesh.tris - r.target_tris) for r in records)
         if high_poly_overage > 100000:
-            fix_first_items.append(
-                f"Decimate meshes to save {high_poly_overage:,} triangles total"
+            scene_fix_actions.append(
+                FixAction(
+                    severity=SEVERITY_HIGH,
+                    kind="decimate_scene",
+                    message=f"Decimate meshes to save {high_poly_overage:,} triangles total",
+                    detail={"tris_to_save": high_poly_overage},
+                )
             )
 
         # Pipeline Integrity
@@ -1789,28 +2403,20 @@ class SceneAnalyzer(ptk.LoggingMixin):
             "max": max_slots,
         }
 
-        # Slot Budget Delta
-        # Excess: Slots above budget (Compliance)
-        # Opportunity: Slots above 1 (Consolidation)
-        opportunity_slots = sum(
-            (r.material.slot_count - 1) * r.instance_count for r in records
-        )
-        slot_budget_delta = {
-            "excess": total_slots_over_budget,
-            "opportunity": opportunity_slots,
-        }
-
-        # Pareto View (Tris)
+        # Pareto View (Tris) — structured ParetoEntry rows; the
+        # renderer formats the display string from these.
         sorted_by_eff_tris = sorted(
             records, key=lambda r: r.mesh.tris * r.instance_count, reverse=True
         )
-        pareto_tris = []
+        pareto_tris: List[ParetoEntry] = []
         running_tris = 0
-        for i, r in enumerate(sorted_by_eff_tris[:10]):
+        for r in sorted_by_eff_tris[:10]:
             eff_tris = r.mesh.tris * r.instance_count
             running_tris += eff_tris
-            pct = (running_tris / total_tris * 100.0) if total_tris > 0 else 0
-            pareto_tris.append(f"{i+1}. {r.transform}: {eff_tris:,} ({pct:.1f}% cum)")
+            pct = (running_tris / total_tris * 100.0) if total_tris > 0 else 0.0
+            pareto_tris.append(
+                ParetoEntry(target=r.transform, value=eff_tris, cum_percent=pct)
+            )
 
         # Pareto View (Slots)
         sorted_by_eff_slots = sorted(
@@ -1818,90 +2424,20 @@ class SceneAnalyzer(ptk.LoggingMixin):
             key=lambda r: r.material.slot_count * r.instance_count,
             reverse=True,
         )
-        pareto_slots = []
+        pareto_slots: List[ParetoEntry] = []
         running_slots = 0
-        for i, r in enumerate(sorted_by_eff_slots[:10]):
+        for r in sorted_by_eff_slots[:10]:
             eff_slots = r.material.slot_count * r.instance_count
             running_slots += eff_slots
-            pct = (running_slots / total_slots * 100.0) if total_slots > 0 else 0
-            pareto_slots.append(f"{i+1}. {r.transform}: {eff_slots} ({pct:.1f}% cum)")
-
-        # Pareto View (Texture MB - Compressed Estimate)
-        # We need to attribute texture size to meshes.
-        # This is hard because textures are shared.
-        # But we can list the heaviest textures directly as requested.
-        # "texture MB (compressed estimate) (optional since you already list heavy textures)"
-        # Let's skip per-mesh texture pareto and just rely on the "Heaviest Textures" list but formatted better.
-        # Or we can list the top textures by size * usage?
-        # User said: "slots, texture MB (compressed estimate)".
-        # Let's list the top textures by compressed size.
-        # We have `heaviest_textures_list` which is sorted by disk size.
-        # Let's create a list of top compressed textures.
-        # We need to re-calculate compressed size for the list.
-        pareto_texture_mb = []
-        # We can reuse processed_paths logic if we stored it.
-        # We didn't store the compressed size per texture in a list.
-        # Let's just use heaviest_textures_list (disk size) as a proxy or re-sort it?
-        # User specifically asked for "compressed estimate".
-        # Let's try to do it right.
-
-        tex_compressed_list = []
-        for path in processed_paths:
-            # Find t again... inefficient but safe
-            for mat_name in used_materials:
-                flags = self._material_flags.get(mat_name, {})
-                textures = flags.get("textures", [])
-                found = False
-                for t in textures:
-                    if t["path"] == path:
-                        w, h = t["res"]
-                        tex_type = t.get("type", "Other")
-                        has_alpha = t.get("has_alpha", False)
-                        bpp = 1.0
-                        if tex_type == "BaseColor":
-                            bpp = 1.0 if has_alpha else 0.5
-                        elif tex_type == "Normal":
-                            bpp = 1.0
-                        elif tex_type == "Masks":
-                            bpp = 0.5
-                        elif tex_type == "Emissive":
-                            bpp = 0.5
-
-                        comp_size = (w * h * bpp * 1.33) / (1024 * 1024)
-                        tex_compressed_list.append((path, comp_size, tex_type))
-                        found = True
-                        break
-                if found:
-                    break
-
-        tex_compressed_list.sort(key=lambda x: x[1], reverse=True)
-        total_comp_mb = est_gpu_mb_compressed
-        running_comp = 0
-        for i, (path, size, t_type) in enumerate(tex_compressed_list[:10]):
-            running_comp += size
-            pct = (running_comp / total_comp_mb * 100.0) if total_comp_mb > 0 else 0
-            name = os.path.basename(path)
-            pareto_texture_mb.append(
-                f"{i+1}. {name} ({t_type}): {size:.1f} MB ({pct:.1f}% cum)"
+            pct = (running_slots / total_slots * 100.0) if total_slots > 0 else 0.0
+            pareto_slots.append(
+                ParetoEntry(target=r.transform, value=eff_slots, cum_percent=pct)
             )
 
-        # Top Wins
-        top_wins_by_type = {}
-        if savings_draw_calls_total > 0:
-            top_wins_by_type["Reduce Slots"] = [
-                f"Save {savings_draw_calls_total} draw calls by combining slots on {len(savings_draw_calls_candidates)} meshes."
-            ]
-        if savings_tris_total > 0:
-            top_wins_by_type["Decimate Meshes"] = [
-                f"Save {savings_tris_total:,} tris by optimizing {len(savings_tris_candidates)} high-poly meshes."
-            ]
-        oversized_tex_count = sum(
-            1 for r in records if r.material.max_res > self.profile.max_tex_res
-        )
-        if oversized_tex_count > 0:
-            top_wins_by_type["Resize Textures"] = [
-                f"Downscale textures on {oversized_tex_count} meshes to save memory."
-            ]
+        # ``pareto_texture_mb`` and ``top_wins_by_type`` removed —
+        # both were computed but never rendered, and the structured
+        # data they would have surfaced (heaviest textures, scene
+        # savings) is already on TextureStats / BudgetStats.
 
         # Scene Health Flags
         scene_health_flags = []
@@ -1923,43 +2459,51 @@ class SceneAnalyzer(ptk.LoggingMixin):
                 if r.material.slot_count > self.profile.max_slots:
                     mat_mesh_counts[m]["over_budget"] += 1
 
-        materials_causing_splits = []
+        materials_causing_splits: List[MaterialSplit] = []
         for m, data in mat_mesh_counts.items():
-            avg_slots = sum(data["slots"]) / len(data["slots"])
+            avg_slots_for_mat = sum(data["slots"]) / len(data["slots"])
             # Filter: avg_slots >= 4 or significant over-budget meshes
-            if avg_slots >= 4 or data["over_budget"] > 5:
+            if avg_slots_for_mat >= 4 or data["over_budget"] > 5:
                 materials_causing_splits.append(
-                    (m, data["unique"], data["over_budget"], avg_slots)
+                    MaterialSplit(
+                        material=m,
+                        unique_mesh_count=data["unique"],
+                        over_budget_count=data["over_budget"],
+                        avg_slots=avg_slots_for_mat,
+                    )
                 )
 
-        materials_causing_splits.sort(key=lambda x: x[1], reverse=True)
+        materials_causing_splits.sort(
+            key=lambda s: s.unique_mesh_count, reverse=True
+        )
         materials_causing_splits = materials_causing_splits[:5]
 
-        # Missing Texture Impact
-        missing_texture_impact = {
-            "materials": set(),
-            "meshes": set(),
-            "top_offenders": [],
-        }
+        # Missing Texture Impact — structured record (was a
+        # ``Dict[str, Any]`` with set values that bled out of the
+        # dataclass type system).
+        impact_materials: Set[str] = set()
+        impact_meshes: Set[str] = set()
+        impact_offenders: List[str] = []
         if missing_textures_list:
-            missing_paths_set = set(p[0] for p in missing_textures_list)
-            affected_meshes = []
+            missing_paths_set = {p[0] for p in missing_textures_list}
             for r in records:
-                # Check if this record uses any missing texture
-                # We need to check its materials
                 rec_missing = False
                 for m in r.material.materials:
                     flags = self._material_flags.get(m, {})
                     m_missing = flags.get("missing_paths", [])
                     if any(p in missing_paths_set for p in m_missing):
                         rec_missing = True
-                        missing_texture_impact["materials"].add(m)
+                        impact_materials.add(m)
 
                 if rec_missing:
-                    missing_texture_impact["meshes"].add(r.transform)
-                    affected_meshes.append(r.transform)
+                    impact_meshes.add(r.transform)
+                    impact_offenders.append(r.transform)
 
-            missing_texture_impact["top_offenders"] = affected_meshes[:5]
+        missing_texture_impact = MissingTextureImpact(
+            affected_meshes=sorted(impact_meshes),
+            affected_materials=sorted(impact_materials),
+            top_offenders=impact_offenders[:5],
+        )
 
         meshes_with_transparency = sum(
             1 for r in records if r.material.uses_transparency
@@ -1967,92 +2511,185 @@ class SceneAnalyzer(ptk.LoggingMixin):
         meshes_with_extra_uvs = sum(1 for r in records if r.mesh.uv_sets > 1)
         meshes_with_high_slots = sum(1 for r in records if r.material.slot_count > 1)
 
-        selection_coverage = {
-            "transforms": sum(r.instance_count for r in records),
-            "shapes": len(records),
-        }
+        # ``selection_coverage`` removed — duplicated values already
+        # present on InstanceStats (``total_instances`` /
+        # ``unique_meshes``).
 
-        return SceneOverview(
+        # --- Pack the legacy positional tuples into typed records ---
+
+        def _to_missing(entries: List[Tuple[str, int, List[str]]]) -> List[MissingTexture]:
+            return [
+                MissingTexture(path=p, material_count=c, materials=list(mats))
+                for (p, c, mats) in entries
+            ]
+
+        missing_project_records = _to_missing(missing_textures_project)
+        missing_presets_records = _to_missing(missing_textures_presets)
+
+        shared_4k_records = [
+            SharedTexture(path=p, mesh_count=c) for (p, c) in shared_4k_textures
+        ]
+
+        heaviest_records: List[TextureFile] = []
+        for (
+            path,
+            size_mb,
+            res,
+            mat_count,
+            mats,
+            mesh_count,
+            inst_count,
+        ) in heaviest_textures_list:
+            width, height = res if isinstance(res, tuple) else (0, 0)
+            heaviest_records.append(
+                TextureFile(
+                    path=path,
+                    size_mb=float(size_mb),
+                    width=int(width),
+                    height=int(height),
+                    material_count=int(mat_count),
+                    materials=list(mats),
+                    mesh_count=int(mesh_count),
+                    instance_count=int(inst_count),
+                )
+            )
+
+        slot_stats_record: Optional[SlotStats]
+        if slot_counts:
+            slot_stats_record = SlotStats(
+                avg=avg_slots,
+                avg_unique=sum(slot_counts) / len(slot_counts),
+                median=int(median_slots),
+                p90=int(p90_slots),
+                max=int(max_slots),
+            )
+        else:
+            slot_stats_record = None
+
+        # --- Compose typed sub-records ---
+
+        manifest = self._build_manifest(shape_count=total_meshes)
+
+        summary = SummaryStats(
             total_meshes=total_meshes,
             total_tris=total_tris,
             total_verts=total_verts,
-            avg_slots=avg_slots,
-            max_slots=max_slots,
+            raw_total_tris=raw_total_tris,
+            instance_stats=InstanceStats(**instance_stats),
+            scene_health_flags=scene_health_flags,
             multi_slot_meshes=multi_slot_meshes,
             transparent_meshes=transparent_meshes,
-            total_texture_mb=total_texture_mb,
-            est_gpu_mb=est_gpu_mb,
-            est_gpu_mb_compressed=est_gpu_mb_compressed,
-            max_texture_res=max_texture_res,
-            large_texture_count=large_texture_count,
-            unique_texture_paths=unique_texture_paths,
-            top_offenders=top_offenders,
-            top_by_tris=top_by_tris,
-            top_by_slots=top_by_slots,
-            top_by_max_res=top_by_max_res,
-            top_by_risk=top_by_risk,
-            top_by_transparency=top_by_transparency,
-            top_multi_slot_density=top_multi_slot_density,
-            fix_plan=fix_plan,
-            fix_first_items=fix_first_items,
-            texture_dim_histogram=texture_dim_histogram,
-            pipeline_integrity=pipeline_integrity,
-            scope="Selection",
-            profile=self.profile,
-            total_slots=total_slots,
-            meshes_over_slot_threshold=meshes_over_slot_threshold,
-            meshes_over_tri_threshold=meshes_over_tri_threshold,
-            total_target_tris=total_target_tris,
-            total_slots_over_budget=total_slots_over_budget,
             non_manifold_count=non_manifold_count,
             lamina_count=lamina_count,
             ngon_count=ngon_count,
             high_poly_count=high_poly_count,
-            top_repeated_offenders=top_repeated_offenders,
-            top_by_effective_score=top_by_effective_score,
-            top_materials=top_materials,
-            top_savings_draw_calls=top_savings_draw_calls,
-            top_savings_tris=top_savings_tris,
-            missing_textures=missing_textures_list,
-            missing_textures_project=missing_textures_project,
-            missing_textures_presets=missing_textures_presets,
-            heaviest_textures=heaviest_textures_list,
-            texture_type_breakdown=texture_type_breakdown,
+            meshes_with_transparency=meshes_with_transparency,
+            meshes_with_extra_uvs=meshes_with_extra_uvs,
+            meshes_with_high_slots=meshes_with_high_slots,
+        )
+
+        budget = BudgetStats(
+            total_target_tris=total_target_tris,
+            total_slots=total_slots,
+            meshes_over_tri_threshold=meshes_over_tri_threshold,
+            meshes_over_slot_threshold=meshes_over_slot_threshold,
+            total_slots_over_budget=total_slots_over_budget,
             savings_draw_calls_total=savings_draw_calls_total,
             savings_tris_total=savings_tris_total,
             savings_draw_calls_budget=savings_draw_calls_budget,
             savings_tris_budget=savings_tris_budget,
-            instance_stats=instance_stats,
-            budget_compliance_dist=budget_compliance_dist,
-            scene_compliance=scene_compliance,
-            effective_total_tris=total_tris,
-            effective_total_slots=total_slots,
-            raw_total_tris=raw_total_tris,
-            raw_total_verts=raw_total_verts,
-            raw_total_slots=raw_total_slots,
-            pareto_tris=pareto_tris,
-            top_wins_by_type=top_wins_by_type,
-            scene_health_flags=scene_health_flags,
-            materials_causing_splits=materials_causing_splits,
-            meshes_with_transparency=meshes_with_transparency,
-            meshes_with_extra_uvs=meshes_with_extra_uvs,
-            meshes_with_high_slots=meshes_with_high_slots,
-            slot_stats=slot_stats,
-            slot_budget_delta=slot_budget_delta,
-            pareto_slots=pareto_slots,
-            pareto_texture_mb=pareto_texture_mb,
-            shared_4k_textures=shared_4k_textures,
-            single_use_4k_count=single_use_4k_count,
-            shared_4k_count=shared_4k_count,
-            missing_texture_impact=missing_texture_impact,
-            selection_coverage=selection_coverage,
-            texture_class_estimates=texture_class_estimates,
+            slot_stats=slot_stats_record,
+            compliance=ComplianceStats(
+                tris_pct=scene_compliance["tris"],
+                slots_pct=scene_compliance["slots"],
+            ),
+            buckets=BudgetBuckets(
+                tris=budget_compliance_dist["tris"],
+                slots=budget_compliance_dist["slots"],
+            ),
         )
 
+        textures = TextureStats(
+            total_size_mb=total_texture_mb,
+            est_gpu_mb=est_gpu_mb,
+            est_gpu_mb_compressed=est_gpu_mb_compressed,
+            max_resolution=max_texture_res,
+            large_texture_count=large_texture_count,
+            unique_paths=unique_texture_paths,
+            dim_histogram=texture_dim_histogram,
+            type_breakdown=texture_type_breakdown,
+            class_estimates=texture_class_estimates,
+            shared_4k=shared_4k_records,
+            single_use_4k_count=single_use_4k_count,
+            shared_4k_count=shared_4k_count,
+            heaviest=heaviest_records,
+        )
+
+        pipeline = PipelineStats(
+            integrity_warnings=pipeline_integrity,
+            missing_project=missing_project_records,
+            missing_presets=missing_presets_records,
+            impact=missing_texture_impact,
+        )
+
+        offenders = OffenderLists(
+            by_score=top_offenders,
+            by_tris=top_by_tris,
+            by_slots=top_by_slots,
+            by_max_res=top_by_max_res,
+            by_risk=top_by_risk,
+            by_transparency=top_by_transparency,
+            by_effective_score=top_by_effective_score,
+            top_materials=top_materials,
+            savings_draw_calls=top_savings_draw_calls,
+            savings_tris=top_savings_tris,
+            pareto_tris=pareto_tris,
+            pareto_slots=pareto_slots,
+            materials_causing_splits=materials_causing_splits,
+        )
+
+        return SceneReport(
+            manifest=manifest,
+            summary=summary,
+            budget=budget,
+            textures=textures,
+            pipeline=pipeline,
+            offenders=offenders,
+            fix_actions=scene_fix_actions,
+            assets=records,
+        )
+
+    @staticmethod
+    def _phase_b_end(
+        phase_a_end: int,
+        phase_b_count: int,
+        phase_c_count: int,
+    ) -> int:
+        """Split the post–Phase-A bar range between B and C by item
+        ratio. Returns the cumulative bar position where Phase B ends
+        and Phase C begins (i.e. ``pct_end`` for the
+        :meth:`_build_material_caches` slice).
+        """
+        remaining = 100 - phase_a_end
+        total_bc = phase_b_count + phase_c_count
+        if total_bc <= 0:
+            return phase_a_end
+        phase_b_weight = int(remaining * phase_b_count / total_bc)
+        return phase_a_end + phase_b_weight
+
     def _resolve_targets(
-        self, objects: Optional[List[Any]]
+        self,
+        objects: Optional[List[Any]],
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        pct_start: int = 0,
+        pct_end: int = 10,
     ) -> Dict[str, List[str]]:
-        """Resolves inputs to a map of {mesh_shape_path: [transform_paths]}."""
+        """Resolves inputs to a map of {mesh_shape_path: [transform_paths]}.
+
+        ``progress_callback`` (when supplied) ticks across the
+        [``pct_start``, ``pct_end``) range during the normalized-input
+        walk — heavy for whole-scene scopes with thousands of nodes.
+        """
         if objects is None:
             objects = cmds.ls(selection=True, long=True) or []
             if not objects:
@@ -2095,7 +2732,14 @@ class SceneAnalyzer(ptk.LoggingMixin):
             else:
                 normalized.append(name)
 
-        for obj in normalized:
+        total_norm = len(normalized)
+        span = max(1, pct_end - pct_start)
+        for obj_idx, obj in enumerate(normalized):
+            if progress_callback and total_norm:
+                pct = pct_start + int((obj_idx / total_norm) * span)
+                progress_callback(
+                    pct, 100, f"Resolving targets ({obj_idx + 1}/{total_norm})"
+                )
             try:
                 node_type = cmds.nodeType(obj)
             except Exception:
@@ -2144,10 +2788,25 @@ class SceneAnalyzer(ptk.LoggingMixin):
 
         return shape_map
 
-    def _build_material_caches(self, shape_map: Dict[str, List[str]]):
+    def _build_material_caches(
+        self,
+        shape_map: Dict[str, List[str]],
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        pct_start: int = 10,
+        pct_end: int = 20,
+        collect_textures: bool = True,
+    ):
         """
         Builds shared caches for material lookups to avoid per-object graph walks.
         Inverts the relationship: Iterates Shading Engines -> Members.
+
+        ``progress_callback`` (when supplied) ticks per shading-engine
+        across the [``pct_start``, ``pct_end``) range so the footer bar
+        advances during this otherwise-static phase.
+
+        ``collect_textures`` is forwarded to ``_analyze_material_node``
+        so a sections-filtered run can skip file-IO when none of the
+        requested sections depend on texture data.
         """
         self._shading_map.clear()
         self._material_map.clear()
@@ -2155,12 +2814,21 @@ class SceneAnalyzer(ptk.LoggingMixin):
         self._global_texture_usage.clear()
 
         shading_engines = cmds.ls(type="shadingEngine") or []
+        # Observability — count SEs walked for the AnalysisManifest.
+        self._shading_engine_count = len(shading_engines)
 
         # target_shapes uses full DAG paths; build a leaf-name lookup for matching SE members
         target_shapes = set(shape_map.keys())
         target_leaf_to_full = {s.split("|")[-1]: s for s in target_shapes}
 
-        for se in shading_engines:
+        total_ses = len(shading_engines)
+        span = max(1, pct_end - pct_start)
+        for se_idx, se in enumerate(shading_engines):
+            if progress_callback and total_ses:
+                pct = pct_start + int((se_idx / total_ses) * span)
+                progress_callback(
+                    pct, 100, f"Collecting material data ({se_idx + 1}/{total_ses})"
+                )
             members = cmds.sets(se, q=True) or []
             if not members:
                 continue
@@ -2180,7 +2848,8 @@ class SceneAnalyzer(ptk.LoggingMixin):
             # Cache material flags if not done
             if mat_name not in self._material_flags:
                 self._material_flags[mat_name] = self._analyze_material_node(
-                    surface_shader[0] if surface_shader else None
+                    surface_shader[0] if surface_shader else None,
+                    collect_textures=collect_textures,
                 )
 
             mat_textures = self._material_flags[mat_name].get("textures", [])
@@ -2258,8 +2927,19 @@ class SceneAnalyzer(ptk.LoggingMixin):
                 self._global_texture_usage[path]["meshes"].update(se_objects)
                 self._global_texture_usage[path]["instances"] += se_instance_count
 
-    def _analyze_material_node(self, mat_node: Optional[str]) -> Dict[str, Any]:
-        """Analyzes a single material node for flags (transparency, etc)."""
+    def _analyze_material_node(
+        self,
+        mat_node: Optional[str],
+        collect_textures: bool = True,
+    ) -> Dict[str, Any]:
+        """Analyzes a single material node for flags (transparency, etc).
+
+        ``collect_textures`` gates the file-node walk that does the
+        heavy ``os.path.getsize`` + ``cmds.getAttr outSize`` per
+        texture. Skip it when the requested report sections don't
+        surface texture data — the slot/transparency/PBR flags above
+        are still computed because they're effectively free.
+        """
         flags = {"transparent": False, "type": "Unknown"}
         if not mat_node:
             return flags
@@ -2379,10 +3059,12 @@ class SceneAnalyzer(ptk.LoggingMixin):
         textures = []
         missing_count = 0
         missing_paths = []
-        if mat_node:
+        if mat_node and collect_textures:
             try:
                 history = cmds.listHistory(mat_node) or []
                 file_nodes = cmds.ls(history, type="file") or []
+                # Observability — count file nodes stat'd for the manifest.
+                self._file_node_count += len(file_nodes)
                 for fn in file_nodes:
                     path = (
                         cmds.getAttr(f"{fn}.fileTextureName")
@@ -2644,16 +3326,6 @@ class SceneAnalyzer(ptk.LoggingMixin):
         if has_skin:
             v_bytes += 8  # 4 weights + 4 indices (approx)
 
-        breakdown_parts = ["Pos+Norm+Tan: 20B"]
-        if uv_count > 0:
-            breakdown_parts.append(f"UVs ({uv_count}): +{uv_count * 8}B")
-        if has_colors:
-            breakdown_parts.append("Color: +4B")
-        if has_skin:
-            breakdown_parts.append("Skin: +8B")
-
-        v_breakdown = ", ".join(breakdown_parts)
-
         return MeshRecord(
             shape_name=shape,
             tris=tris,
@@ -2667,7 +3339,6 @@ class SceneAnalyzer(ptk.LoggingMixin):
             non_manifold_edges=non_manifold_edges,
             lamina_faces=lamina_faces,
             vertex_bytes=v_bytes,
-            vertex_byte_breakdown=v_breakdown,
         )
 
     def _analyze_material(self, shape: str) -> MaterialRecord:
@@ -2808,20 +3479,38 @@ class SceneAnalyzer(ptk.LoggingMixin):
             unpacked_pbr=unpacked_pbr,
             missing_textures=missing_textures,
             max_samplers=max_samplers,
-            unique_paths_scene=texture_count,
             unique_paths_local=unique_paths_local,
             max_res_is_unique=max_res_is_unique,
         )
 
     def _calculate_score(
         self, mesh: MeshRecord, mat: MaterialRecord
-    ) -> Tuple[float, float, float, List[str], Dict[str, float], str, List[str], int]:
-        """Calculates 'badness' scores (Perf/Risk) and generates findings."""
+    ) -> Tuple[
+        float,
+        float,
+        float,
+        List[Finding],
+        Dict[str, float],
+        BudgetDelta,
+        List[FixAction],
+        int,
+    ]:
+        """Calculate 'badness' scores (perf / risk) and emit structured
+        findings, fix actions, and a budget delta.
+
+        Returns:
+            ``(total_score, perf_score, risk_score, findings, breakdown,
+            delta, fix_plan, target_tris)`` — all richly-typed. ``delta``
+            is a :class:`BudgetDelta` (was the ``delta_summary`` string);
+            ``findings`` is ``List[Finding]`` (was ``List[str]`` with
+            severity baked into trailing ``[H]/[M]/[L]`` tags); ``fix_plan``
+            is ``List[FixAction]`` (was ``List[str]`` of prose).
+        """
         perf_score = 0.0
         risk_score = 0.0
-        findings = []
-        breakdown = {}
-        fix_plan = []
+        findings: List[Finding] = []
+        breakdown: Dict[str, float] = {}
+        fix_plan: List[FixAction] = []
 
         # Determine Target Tris (Adaptive)
         target_tris = self.profile.max_tris
@@ -2832,32 +3521,36 @@ class SceneAnalyzer(ptk.LoggingMixin):
             calculated = int(self.profile.max_tris * ratio)
             target_tris = max(self.profile.min_tris, calculated)
 
-        # Delta Summary Construction
-        deltas = []
-        if mesh.tris > target_tris:
-            deltas.append(f"tris +{mesh.tris - target_tris}")
-        if mat.slot_count > self.profile.max_slots:
-            deltas.append(f"slots +{mat.slot_count - self.profile.max_slots}")
-        if mesh.uv_sets > self.profile.max_uvs:
-            deltas.append(f"uv +{mesh.uv_sets - self.profile.max_uvs}")
-        if mat.max_res > self.profile.max_tex_res:
-            deltas.append(f"maxTex +{mat.max_res - self.profile.max_tex_res}")
-
-        delta_summary = " | ".join(deltas)
+        delta = BudgetDelta(
+            tris_over=max(0, mesh.tris - target_tris),
+            slots_over=max(0, mat.slot_count - self.profile.max_slots),
+            uvs_over=max(0, mesh.uv_sets - self.profile.max_uvs),
+            max_tex_res_over=max(0, mat.max_res - self.profile.max_tex_res),
+        )
 
         # --- Mesh Scoring ---
 
         # Tris
         if mesh.tris > target_tris:
-            delta = mesh.tris - target_tris
-            penalty = delta / 1000.0  # 1 point per 1k over
+            over = mesh.tris - target_tris
+            penalty = over / 1000.0  # 1 point per 1k over
             perf_score += penalty
             findings.append(
-                f"High Poly: {mesh.tris} tris (budget {target_tris}, +{delta})"
+                Finding(
+                    severity=SEVERITY_HIGH,
+                    kind="high_poly",
+                    message=f"High Poly: {mesh.tris} tris (budget {target_tris}, +{over})",
+                    detail={"tris": mesh.tris, "budget": target_tris, "over": over},
+                )
             )
             breakdown["High Poly"] = penalty
             fix_plan.append(
-                f"Reduce tris {mesh.tris:,} -> {target_tris:,} (Decimate/Retopo)"
+                FixAction(
+                    severity=SEVERITY_HIGH,
+                    kind="decimate",
+                    message=f"Reduce tris {mesh.tris:,} -> {target_tris:,} (Decimate/Retopo)",
+                    detail={"from_tris": mesh.tris, "to_tris": target_tris},
+                )
             )
 
         # Verts per tri (Bloat check)
@@ -2866,153 +3559,326 @@ class SceneAnalyzer(ptk.LoggingMixin):
             if ratio > 3.0:
                 penalty = 10.0
                 perf_score += penalty
-                findings.append(f"Vert Bloat: {ratio:.1f} verts/tri")
+                findings.append(
+                    Finding(
+                        severity=SEVERITY_HIGH,
+                        kind="vert_bloat",
+                        message=f"Vert Bloat: {ratio:.1f} verts/tri",
+                        detail={"verts_per_tri": ratio},
+                    )
+                )
                 breakdown["Vert Bloat"] = penalty
                 fix_plan.append(
-                    "Merge vertices / Fix hard edges to reduce vertex count"
+                    FixAction(
+                        severity=SEVERITY_MEDIUM,
+                        kind="merge_vertices",
+                        message="Merge vertices / Fix hard edges to reduce vertex count",
+                    )
                 )
 
         # UV Sets
         if mesh.uv_sets > self.profile.max_uvs:
-            delta = mesh.uv_sets - self.profile.max_uvs
-            penalty = delta * 5.0
+            over = mesh.uv_sets - self.profile.max_uvs
+            penalty = over * 5.0
             perf_score += penalty
             uv_names_str = ", ".join(mesh.uv_set_names)
             findings.append(
-                f"Extra Vertex Streams: {mesh.uv_sets} UV sets ({uv_names_str}) (budget {self.profile.max_uvs}, +{delta})"
+                Finding(
+                    severity=SEVERITY_MEDIUM,
+                    kind="extra_uv_sets",
+                    message=(
+                        f"Extra Vertex Streams: {mesh.uv_sets} UV sets "
+                        f"({uv_names_str}) (budget {self.profile.max_uvs}, +{over})"
+                    ),
+                    detail={
+                        "uv_sets": mesh.uv_sets,
+                        "uv_names": list(mesh.uv_set_names),
+                        "budget": self.profile.max_uvs,
+                        "over": over,
+                    },
+                )
             )
             breakdown["Extra UV Sets"] = penalty
-            fix_plan.append(f"Remove {delta} unused UV sets")
-
-        # Vertex Bytes
-        target_bytes = 40  # Arbitrary target based on user request
-        if mesh.vertex_bytes > target_bytes:
-            findings.append(
-                f"Vertex Payload: {mesh.vertex_bytes}B (target {target_bytes}B)"
+            fix_plan.append(
+                FixAction(
+                    severity=SEVERITY_LOW,
+                    kind="remove_uv_sets",
+                    message=(
+                        f"Remove {over} extra UV sets "
+                        "(if not required by export/profile)"
+                    ),
+                    detail={"remove_count": over},
+                )
             )
+
+        # Vertex Bytes finding deliberately dropped — the prior code
+        # appended a "Vertex Payload" finding then filtered it out in
+        # the renderer. Bytes are still available on
+        # ``MeshRecord.vertex_bytes`` for callers that want them.
 
         # Ngons (Risk, not Perf)
         if mesh.ngons > 0:
-            # User requested: "Ngons are risk, not perf"
-            # Severity: Warning only if exporting triangulated inconsistently
-            # Treat as [M] by default, [H] if extreme or over tri budget
             penalty = mesh.ngons * 0.1
             risk_score += penalty
 
-            severity = "[M]"
+            severity = SEVERITY_MEDIUM
             if mesh.ngons > 100 or mesh.tris > target_tris:
-                severity = "[H]"
+                severity = SEVERITY_HIGH
 
-            # Report per 10k tris if possible, otherwise raw
             if mesh.tris > 0:
                 ngons_per_10k = (mesh.ngons / mesh.tris) * 10000
-                findings.append(
-                    f"N-gons: {mesh.ngons} ({ngons_per_10k:.1f} per 10k tris) {severity}"
-                )
+                msg = f"N-gons: {mesh.ngons} ({ngons_per_10k:.1f} per 10k tris)"
             else:
-                findings.append(f"N-gons: {mesh.ngons} {severity}")
+                msg = f"N-gons: {mesh.ngons}"
 
+            findings.append(
+                Finding(
+                    severity=severity,
+                    kind="ngons",
+                    message=msg,
+                    detail={"ngons": mesh.ngons, "tris": mesh.tris},
+                )
+            )
             breakdown["N-gons"] = penalty
-            fix_plan.append("Triangulate or Quadrangulate N-gons")
+            fix_plan.append(
+                FixAction(
+                    severity=SEVERITY_LOW,
+                    kind="triangulate_ngons",
+                    message="Triangulate or Quadrangulate N-gons",
+                )
+            )
 
         # Non-manifold edges (Risk)
         if mesh.non_manifold_edges > 0:
             penalty = mesh.non_manifold_edges * 2.0
             risk_score += penalty
-            findings.append(f"Non-Manifold: {mesh.non_manifold_edges} edges [H]")
+            findings.append(
+                Finding(
+                    severity=SEVERITY_HIGH,
+                    kind="non_manifold",
+                    message=f"Non-Manifold: {mesh.non_manifold_edges} edges",
+                    detail={"non_manifold_edges": mesh.non_manifold_edges},
+                )
+            )
             breakdown["Non-Manifold"] = penalty
-            fix_plan.append("Cleanup non-manifold geometry")
+            fix_plan.append(
+                FixAction(
+                    severity=SEVERITY_HIGH,
+                    kind="fix_non_manifold",
+                    message="Cleanup non-manifold geometry",
+                )
+            )
 
         # Lamina faces (Risk)
         if mesh.lamina_faces > 0:
             penalty = mesh.lamina_faces * 2.0
             risk_score += penalty
-            findings.append(f"Lamina Faces: {mesh.lamina_faces} [H]")
+            findings.append(
+                Finding(
+                    severity=SEVERITY_HIGH,
+                    kind="lamina_faces",
+                    message=f"Lamina Faces: {mesh.lamina_faces}",
+                    detail={"lamina_faces": mesh.lamina_faces},
+                )
+            )
             breakdown["Lamina Faces"] = penalty
-            fix_plan.append("Remove lamina faces")
+            fix_plan.append(
+                FixAction(
+                    severity=SEVERITY_HIGH,
+                    kind="remove_lamina",
+                    message="Remove lamina faces",
+                )
+            )
 
         # --- Material Scoring ---
 
         # Slots (Draw calls)
         unique_mat_count = len(mat.materials)
         if mat.slot_count > self.profile.max_slots:
-            delta = mat.slot_count - self.profile.max_slots
-            penalty = delta * 10.0
+            over = mat.slot_count - self.profile.max_slots
+            penalty = over * 10.0
             perf_score += penalty
 
-            # Check for redundant slots (same material used multiple times)
             redundancy_note = ""
             if mat.slot_count > unique_mat_count:
                 redundancy_note = f" ({unique_mat_count} unique materials)"
 
             findings.append(
-                f"Draw Call Split: {mat.slot_count} slots{redundancy_note} (budget {self.profile.max_slots}, +{delta})"
+                Finding(
+                    severity=SEVERITY_HIGH,
+                    kind="draw_call_split",
+                    message=(
+                        f"Draw Call Split: {mat.slot_count} slots"
+                        f"{redundancy_note} "
+                        f"(budget {self.profile.max_slots}, +{over})"
+                    ),
+                    detail={
+                        "slot_count": mat.slot_count,
+                        "unique_materials": unique_mat_count,
+                        "budget": self.profile.max_slots,
+                        "over": over,
+                    },
+                )
             )
             breakdown["Draw Call Split"] = penalty
 
-            # Specific fix strategy
             if mat.slot_count > unique_mat_count:
                 fix_plan.append(
-                    f"Consolidate {mat.slot_count - unique_mat_count} redundant slots (Assign same material to all faces)"
+                    FixAction(
+                        severity=SEVERITY_HIGH,
+                        kind="consolidate_slots",
+                        message=(
+                            f"Consolidate {mat.slot_count - unique_mat_count} "
+                            "redundant slots (Assign same material to all faces)"
+                        ),
+                        detail={"redundant_slots": mat.slot_count - unique_mat_count},
+                    )
                 )
             else:
                 fix_plan.append(
-                    f"Reduce slots {mat.slot_count} -> {self.profile.max_slots} (Merge materials: Combine textures or use Vertex Colors)"
+                    FixAction(
+                        severity=SEVERITY_HIGH,
+                        kind="reduce_slots",
+                        message=(
+                            f"Reduce slots {mat.slot_count} -> "
+                            f"{self.profile.max_slots} (Merge materials: "
+                            "Combine textures or use Vertex Colors)"
+                        ),
+                        detail={
+                            "from_slots": mat.slot_count,
+                            "to_slots": self.profile.max_slots,
+                        },
+                    )
                 )
 
         # Transparency
         if mat.uses_transparency:
             penalty = 5.0
             perf_score += penalty
-            findings.append("Transparent")
+            findings.append(
+                Finding(
+                    severity=SEVERITY_MEDIUM,
+                    kind="transparency",
+                    message="Transparent",
+                )
+            )
             breakdown["Transparency"] = penalty
 
         # Textures
         ideal_res = (mesh.bounds_diag / 100.0) * 512
 
         if mat.max_res > self.profile.max_tex_res:
-            delta = mat.max_res - self.profile.max_tex_res
+            over = mat.max_res - self.profile.max_tex_res
             if mat.max_res_is_unique and mat.max_res > ideal_res * 2.0:
                 penalty = 10.0
                 perf_score += penalty
                 findings.append(
-                    f"Oversized Texture: {mat.max_res}px (vs ideal {int(ideal_res)}px)"
+                    Finding(
+                        severity=SEVERITY_MEDIUM,
+                        kind="oversized_texture",
+                        message=(
+                            f"Oversized Texture: {mat.max_res}px "
+                            f"(vs ideal {int(ideal_res)}px)"
+                        ),
+                        detail={
+                            "res": mat.max_res,
+                            "ideal_res": int(ideal_res),
+                        },
+                    )
                 )
                 breakdown["Oversized Texture"] = penalty
-                fix_plan.append(f"Downscale textures to {int(ideal_res)}px")
-            else:
-                # Deterministic line
-                findings.append(
-                    f"Max texture dimension: {mat.max_res} (budget {self.profile.max_tex_res}, +{delta}) [H]"
+                fix_plan.append(
+                    FixAction(
+                        severity=SEVERITY_MEDIUM,
+                        kind="downscale_textures",
+                        message=f"Downscale textures to {int(ideal_res)}px",
+                        detail={"target_res": int(ideal_res)},
+                    )
                 )
-                fix_plan.append(f"Downscale textures to {self.profile.max_tex_res}px")
+            else:
+                findings.append(
+                    Finding(
+                        severity=SEVERITY_HIGH,
+                        kind="max_tex_dim",
+                        message=(
+                            f"Max texture dimension: {mat.max_res} "
+                            f"(budget {self.profile.max_tex_res}, +{over})"
+                        ),
+                        detail={
+                            "res": mat.max_res,
+                            "budget": self.profile.max_tex_res,
+                            "over": over,
+                        },
+                    )
+                )
+                fix_plan.append(
+                    FixAction(
+                        severity=SEVERITY_HIGH,
+                        kind="downscale_textures",
+                        message=f"Downscale textures to {self.profile.max_tex_res}px",
+                        detail={"target_res": self.profile.max_tex_res},
+                    )
+                )
 
         if mat.total_tex_size_mb > 50.0:  # 50MB soft limit per mesh
             penalty = (mat.total_tex_size_mb - 50.0) * 0.5
             perf_score += penalty
-            findings.append(f"Heavy Textures: {mat.total_tex_size_mb:.1f} MB")
+            findings.append(
+                Finding(
+                    severity=SEVERITY_LOW,
+                    kind="heavy_textures",
+                    message=f"Heavy Textures: {mat.total_tex_size_mb:.1f} MB",
+                    detail={"size_mb": mat.total_tex_size_mb},
+                )
+            )
             breakdown["Heavy Textures"] = penalty
 
         # Sampler Count / Packing
         if mat.unpacked_pbr:
             penalty = 15.0
             perf_score += penalty
-            findings.append("Unpacked PBR Maps (Inefficient)")
+            findings.append(
+                Finding(
+                    severity=SEVERITY_MEDIUM,
+                    kind="unpacked_pbr",
+                    message="Unpacked PBR Maps (Inefficient)",
+                )
+            )
             breakdown["Unpacked PBR"] = penalty
-            fix_plan.append("Pack PBR maps (ORM/ARM)")
+            fix_plan.append(
+                FixAction(
+                    severity=SEVERITY_MEDIUM,
+                    kind="pack_pbr",
+                    message="Pack PBR maps (ORM/ARM)",
+                )
+            )
 
         # Max Samplers (Per-material limit, usually 16)
         if mat.max_samplers > 8:
             penalty = (mat.max_samplers - 8) * 2.0
             perf_score += penalty
-            findings.append(f"Texture Samplers: {mat.max_samplers} samplers")
+            findings.append(
+                Finding(
+                    severity=SEVERITY_LOW,
+                    kind="texture_samplers",
+                    message=f"Texture Samplers: {mat.max_samplers} samplers",
+                    detail={"samplers": mat.max_samplers},
+                )
+            )
             breakdown["Texture Samplers"] = penalty
 
         # Unique Files (Local Impact)
         if mat.unique_paths_local > 0:
             penalty = mat.unique_paths_local * 2.0
             perf_score += penalty
-            findings.append(f"Unique Textures: {mat.unique_paths_local} (Local only)")
+            findings.append(
+                Finding(
+                    severity=SEVERITY_LOW,
+                    kind="unique_textures_local",
+                    message=f"Unique Textures: {mat.unique_paths_local} (Local only)",
+                    detail={"count": mat.unique_paths_local},
+                )
+            )
             breakdown["Unique Textures"] = penalty
 
         # Shader Complexity (Total textures)
@@ -3024,14 +3890,36 @@ class SceneAnalyzer(ptk.LoggingMixin):
         if mat.missing_textures > 0:
             penalty = mat.missing_textures * 2.0
             risk_score += penalty
-            findings.append(f"Missing Textures: {mat.missing_textures} files [H]")
+            findings.append(
+                Finding(
+                    severity=SEVERITY_HIGH,
+                    kind="missing_textures",
+                    message=f"Missing Textures: {mat.missing_textures} files",
+                    detail={"count": mat.missing_textures},
+                )
+            )
             breakdown["Missing Textures"] = penalty
-            fix_plan.append("Relink missing textures")
+            fix_plan.append(
+                FixAction(
+                    severity=SEVERITY_HIGH,
+                    kind="relink_textures",
+                    message="Relink missing textures",
+                )
+            )
 
         total_score = perf_score + risk_score
 
-        # Deduplicate fix plan
-        fix_plan = list(dict.fromkeys(fix_plan))
+        # Deduplicate fix plan by (kind, message) — the structured
+        # form means we don't accidentally collapse two distinct
+        # actions that happen to share a prefix.
+        seen: Set[Tuple[str, str]] = set()
+        deduped: List[FixAction] = []
+        for action in fix_plan:
+            key = (action.kind, action.message)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(action)
 
         return (
             total_score,
@@ -3039,8 +3927,8 @@ class SceneAnalyzer(ptk.LoggingMixin):
             risk_score,
             findings,
             breakdown,
-            delta_summary,
-            fix_plan,
+            delta,
+            deduped,
             target_tris,
         )
 
@@ -3069,177 +3957,223 @@ class SceneAnalyzer(ptk.LoggingMixin):
         )
         return sorted_groups
 
-    def print_report(self, overview: SceneOverview):
-        """Prints a formatted report to the logger."""
-        import datetime
+    # ------------------------------------------------------------ #
+    # Section renderers — all consume :class:`SceneReport`.
+    # ------------------------------------------------------------ #
 
-        # 1. Context Header
+    # Severity-to-confidence-tag map used by per-asset findings.
+    _CONF_TAG = {
+        SEVERITY_HIGH: "[H]",
+        SEVERITY_MEDIUM: "[M]",
+        SEVERITY_LOW: "[L]",
+    }
+
+    def print_report(
+        self,
+        report: SceneReport,
+        sections: Optional[List[str]] = None,
+    ):
+        """Print the formatted scene-audit report to the logger.
+
+        ``sections`` chooses which sections to render and in what
+        order. ``None`` means "all sections" — equivalent to the
+        prior behavior. The context header (title + profile lines)
+        is always emitted first.
+        """
+        self._render_header_section(report)
+        selected = (
+            list(SceneInfoSection.ALL) if sections is None else list(sections)
+        )
+        for section in selected:
+            renderer = self._section_renderers().get(section)
+            if renderer is not None:
+                renderer(report)
+
+    def _section_renderers(self) -> Dict[str, Callable[[SceneReport], None]]:
+        """Map a ``SceneInfoSection`` key to its renderer. Centralized
+        so ``print_report`` and the per-section HTML capture path
+        share a single registry."""
+        return {
+            SceneInfoSection.SUMMARY: self._render_summary_section,
+            SceneInfoSection.FIX_FIRST: self._render_fix_first_section,
+            SceneInfoSection.PARETO: self._render_pareto_section,
+            SceneInfoSection.OFFENDERS: self._render_offenders_section,
+            SceneInfoSection.CATEGORIES: self._render_categories_section,
+            SceneInfoSection.TEXTURES: self._render_textures_section,
+            SceneInfoSection.PIPELINE: self._render_pipeline_section,
+            SceneInfoSection.ASSUMPTIONS: self._render_assumptions_section,
+        }
+
+    def _render_header_section(self, report: SceneReport) -> None:
+        """Title + profile block. Always emitted at the top."""
+        profile = report.manifest.profile
         header_lines = [
-            f"Profile: {overview.profile.name}",
-            f"  - Max Tris: {overview.profile.max_tris:,} {'(Adaptive)' if overview.profile.adaptive_tris else ''}",
-            f"  - Max Slots: {overview.profile.max_slots}",
-            f"  - Max Tex Res: {overview.profile.max_tex_res}px",
-            f"  - Max UV Sets: {overview.profile.max_uvs}",
+            f"Profile: {profile.name}",
+            f"  - Max Tris: {profile.max_tris:,} {'(Adaptive)' if profile.adaptive_tris else ''}",
+            f"  - Max Slots: {profile.max_slots}",
+            f"  - Max Tex Res: {profile.max_tex_res}px",
+            f"  - Max UV Sets: {profile.max_uvs}",
         ]
-
         self.logger.log_box("Scene Audit Report", header_lines)
 
+    def _render_summary_section(self, report: SceneReport) -> None:
+        """Executive Summary — high-level scene metrics."""
         col_width = 30
+        summary = report.summary
+        budget = report.budget
+        textures = report.textures
+        manifest = report.manifest
 
-        # 2. Executive Summary (Metrics)
         self.logger.info("")
         self.logger.notice("Executive Summary")
         self.logger.log_divider()
 
-        # Scene Health Flags
-        if overview.scene_health_flags:
-            for flag in overview.scene_health_flags:
+        if summary.scene_health_flags:
+            for flag in summary.scene_health_flags:
                 self.logger.warning(f"  [!] {flag}")
             self.logger.log_raw("")
 
         self.logger.log_raw(
-            f"{'Mesh Shapes':<{col_width}}: {overview.total_meshes} unique"
+            f"{'Mesh Shapes':<{col_width}}: {summary.total_meshes} unique"
         )
         self.logger.log_raw(
-            f"{'Instances':<{col_width}}: {overview.instance_stats['total_instances']} total ({overview.instance_stats['instanced_shapes']} instanced shapes)"
+            f"{'Instances':<{col_width}}: {summary.instance_stats.total_instances} total "
+            f"({summary.instance_stats.instanced_shapes} instanced shapes)"
         )
 
         self.logger.log_raw(
-            f"{'Triangles':<{col_width}}: {overview.effective_total_tris:,} Effective (Raw: {overview.raw_total_tris:,})"
-        )
-        # Vertices removed as requested
-
-        # Material Slots Block
-        if overview.slot_stats:
-            s = overview.slot_stats
-            self.logger.log_raw(
-                f"{'Slots per mesh':<{col_width}}: avg {s['avg_unique']:.1f} | median {s['median']} | p90 {s['p90']} | max {s['max']}"
-            )
-        self.logger.log_raw(
-            f"{'Effective draw calls':<{col_width}}: {overview.effective_total_slots} (slot proxy)"
+            f"{'Triangles':<{col_width}}: {summary.total_tris:,} Effective "
+            f"(Raw: {summary.raw_total_tris:,})"
         )
 
-        # Compressed Breakdown
-        comp_total = overview.est_gpu_mb_compressed
-        self.logger.log_raw(
-            f"{'Est. GPU Compressed':<{col_width}}: {comp_total:.1f} MB (assumed formats by map type)"
-        )
-
-        # Missing Files
-        missing_count = len(overview.missing_textures_project)
-        if missing_count > 0:
-            affected_meshes = 0
-            if (
-                overview.missing_texture_impact
-                and overview.missing_texture_impact["meshes"]
-            ):
-                affected_meshes = len(overview.missing_texture_impact["meshes"])
-            self.logger.log_raw(
-                f"{'Missing Files':<{col_width}}: {missing_count} project textures (affecting {affected_meshes} meshes)"
-            )
-
-        # 3. Fix First (High Impact)
-        if (
-            overview.fix_first_items
-            or overview.total_tris > overview.total_target_tris
-            or overview.total_slots_over_budget > 0
-        ):
-            self.logger.info("")
-            self.logger.notice("Fix First (High Impact)")
-            self.logger.log_divider()
-
-            # Add Delta Summary
-            deltas = []
-            if overview.total_tris > overview.total_target_tris:
-                deltas.append(
-                    f"+{overview.total_tris - overview.total_target_tris:,} tris ({overview.meshes_over_tri_threshold} meshes)"
+        # Material Slots Block — only if material data was collected.
+        if manifest.materials_collected:
+            if budget.slot_stats is not None:
+                s = budget.slot_stats
+                self.logger.log_raw(
+                    f"{'Slots per mesh':<{col_width}}: avg {s.avg_unique:.1f} | "
+                    f"median {s.median} | p90 {s.p90} | max {s.max}"
                 )
-            if overview.total_slots_over_budget > 0:
-                deltas.append(f"+{overview.total_slots_over_budget} slots")
+            self.logger.log_raw(
+                f"{'Effective draw calls':<{col_width}}: {budget.total_slots} (slot proxy)"
+            )
 
-            if deltas:
-                self.logger.log_raw(f"Over budget deltas: {' | '.join(deltas)}")
-                self.logger.log_raw("")
+        # Compressed Breakdown — only if textures were collected.
+        if manifest.textures_collected:
+            self.logger.log_raw(
+                f"{'Est. GPU Compressed':<{col_width}}: {textures.est_gpu_mb_compressed:.1f} MB "
+                "(assumed formats by map type)"
+            )
 
-            # Filter redundant items
-            for item in overview.fix_first_items:
-                # If we printed deltas, skip generic "Reduce material slots" or "Decimate meshes" summary lines
-                if deltas:
-                    if "Reduce material slots by" in item and "to reach budget" in item:
-                        continue
-                    if "Decimate meshes to save" in item:
-                        continue
-                self.logger.log_raw(f"  - {item}")
+            missing_count = len(report.pipeline.missing_project)
+            if missing_count > 0:
+                affected = len(report.pipeline.impact.affected_meshes)
+                self.logger.log_raw(
+                    f"{'Missing Files':<{col_width}}: {missing_count} project textures "
+                    f"(affecting {affected} meshes)"
+                )
 
-        # Pareto View
-        if overview.pareto_tris or overview.pareto_slots:
-            self.logger.info("")
-            self.logger.notice("Pareto View (Top 10)")
-            self.logger.log_divider()
+    def _render_fix_first_section(self, report: SceneReport) -> None:
+        """Fix First — prioritized high-impact remediation items."""
+        summary = report.summary
+        budget = report.budget
+        scene_actions = report.fix_actions
 
-            if overview.pareto_tris:
-                # Calculate top 10 %
-                last_item = overview.pareto_tris[-1]
-                match = re.search(r"\(([\d\.]+)% cum\)", last_item)
-                if match:
-                    top_10_pct = match.group(1)
-                    self.logger.log_raw(
-                        f"Triangles (Top 10 account for {top_10_pct}%):"
-                    )
-                else:
-                    self.logger.log_raw("Triangles (Effective):")
+        if not (
+            scene_actions
+            or summary.total_tris > budget.total_target_tris
+            or budget.total_slots_over_budget > 0
+        ):
+            return
 
-                for item in overview.pareto_tris:
-                    # Strip cum % and ordinal number: "1. Name: 123 (10.0% cum)" -> "Name: 123"
-                    clean_item = re.sub(r"\s*\([\d\.]+% cum\)", "", item)
-                    clean_item = re.sub(r"^\d+\.\s*", "", clean_item)
-                    self.logger.log_raw(f"  {clean_item}")
-                self.logger.log_raw("")
+        self.logger.info("")
+        self.logger.notice("Fix First (High Impact)")
+        self.logger.log_divider()
 
-            if overview.pareto_slots:
-                last_item = overview.pareto_slots[-1]
-                match = re.search(r"\(([\d\.]+)% cum\)", last_item)
-                if match:
-                    top_10_pct = match.group(1)
-                    self.logger.log_raw(f"Slots (Top 10 account for {top_10_pct}%):")
-                else:
-                    self.logger.log_raw("Slots (Effective Draw Calls):")
+        deltas = []
+        if summary.total_tris > budget.total_target_tris:
+            deltas.append(
+                f"+{summary.total_tris - budget.total_target_tris:,} tris "
+                f"({budget.meshes_over_tri_threshold} meshes)"
+            )
+        if budget.total_slots_over_budget > 0:
+            deltas.append(f"+{budget.total_slots_over_budget} slots")
 
-                for item in overview.pareto_slots:
-                    clean_item = re.sub(r"\s*\([\d\.]+% cum\)", "", item)
-                    clean_item = re.sub(r"^\d+\.\s*", "", clean_item)
-                    self.logger.log_raw(f"  {clean_item}")
-                self.logger.log_raw("")
+        if deltas:
+            self.logger.log_raw(f"Over budget deltas: {' | '.join(deltas)}")
+            self.logger.log_raw("")
 
-        # 5. Top Offenders (Grouped)
-        if overview.top_offenders:
-            offenders = [r for r in overview.top_offenders if r.score > 0]
-            if offenders:
-                self.logger.info("")
-                self.logger.notice("Top Issues by Asset (Base Score)")
-                self.logger.log_divider()
+        for action in scene_actions:
+            # The scene-level Reduce / Decimate actions duplicate the
+            # delta line above when deltas are printed — skip them by
+            # structured kind rather than substring matching.
+            if deltas and action.kind in {"reduce_slots_scene", "decimate_scene"}:
+                continue
+            self.logger.log_raw(f"  - {action.message}")
 
-                for i, rec in enumerate(offenders[:5], 1):
-                    self._print_asset_record(rec, i)
+    def _render_pareto_section(self, report: SceneReport) -> None:
+        """Pareto View — top contributors to tris / slots."""
+        pareto_tris = report.offenders.pareto_tris
+        pareto_slots = report.offenders.pareto_slots
+        if not (pareto_tris or pareto_slots):
+            return
 
-        # 7. Category Breakdowns
+        self.logger.info("")
+        self.logger.notice("Pareto View (Top 10)")
+        self.logger.log_divider()
+
+        if pareto_tris:
+            cum_total = pareto_tris[-1].cum_percent
+            self.logger.log_raw(
+                f"Triangles (Top 10 account for {cum_total:.1f}%):"
+            )
+            for entry in pareto_tris:
+                self.logger.log_raw(f"  {entry.target}: {entry.value:,}")
+            self.logger.log_raw("")
+
+        if pareto_slots:
+            cum_total = pareto_slots[-1].cum_percent
+            self.logger.log_raw(
+                f"Slots (Top 10 account for {cum_total:.1f}%):"
+            )
+            for entry in pareto_slots:
+                self.logger.log_raw(f"  {entry.target}: {entry.value}")
+            self.logger.log_raw("")
+
+    def _render_offenders_section(self, report: SceneReport) -> None:
+        """Top Issues by Asset (Base Score)."""
+        by_score = report.offenders.by_score
+        if not by_score:
+            return
+        offenders = [r for r in by_score if r.score > 0]
+        if not offenders:
+            return
+
+        self.logger.info("")
+        self.logger.notice("Top Issues by Asset (Base Score)")
+        self.logger.log_divider()
+
+        for i, rec in enumerate(offenders[:5], 1):
+            self._print_asset_record(rec, i)
+
+    def _render_categories_section(self, report: SceneReport) -> None:
+        """Top Offenders by Category — materials correlated with slot bloat."""
         self.logger.info("")
         self.logger.notice("Top Offenders by Category")
         self.logger.log_divider()
 
-        if overview.materials_causing_splits:
+        splits = report.offenders.materials_causing_splits
+        if splits:
             headers = ["Material", "Unique Meshes", "Avg Slots", "Over-Slot"]
-            data = []
-            # Sort by Over-Slot (index 2) then Avg Slots (index 3)
-            # materials_causing_splits is list of tuples: (m, unique, over_budget, avg_slots)
             sorted_mats = sorted(
-                overview.materials_causing_splits,
-                key=lambda x: (x[2], x[3]),
+                splits,
+                key=lambda s: (s.over_budget_count, s.avg_slots),
                 reverse=True,
             )
-
-            for m, unique, over_budget, avg_slots in sorted_mats[:5]:
-                data.append([m, unique, f"{avg_slots:.1f}", over_budget])
+            data = [
+                [s.material, s.unique_mesh_count, f"{s.avg_slots:.1f}", s.over_budget_count]
+                for s in sorted_mats[:5]
+            ]
             self.log_table(
                 data,
                 headers,
@@ -3247,96 +4181,99 @@ class SceneAnalyzer(ptk.LoggingMixin):
             )
             self.logger.log_raw("")
 
-        # 8. Textures
+    def _render_textures_section(self, report: SceneReport) -> None:
+        """Textures — histogram, 4K analysis, heaviest files."""
+        if not report.manifest.textures_collected:
+            return
+
+        textures = report.textures
+
         self.logger.info("")
         self.logger.notice("Textures")
         self.logger.log_divider()
 
-        # Histogram
-        if overview.texture_dim_histogram:
+        if textures.dim_histogram:
             self.logger.log_raw("Dimension Histogram:")
-            hist = overview.texture_dim_histogram
+            hist = textures.dim_histogram
             self.logger.log_raw(
-                f"  4k+: {hist['4k+']} | 2k: {hist['2k']} | 1k: {hist['1k']} | 512: {hist['512']} | <512: {hist['<512']}"
+                f"  4k+: {hist['4k+']} | 2k: {hist['2k']} | 1k: {hist['1k']} | "
+                f"512: {hist['512']} | <512: {hist['<512']}"
             )
 
-            # 4K Analysis
             if hist["4k+"] > 0:
                 self.logger.log_raw(
-                    f"  4K Analysis: {hist['4k+']} textures (Shared: {overview.shared_4k_count} | Single-use: {overview.single_use_4k_count})"
+                    f"  4K Analysis: {hist['4k+']} textures "
+                    f"(Shared: {textures.shared_4k_count} | "
+                    f"Single-use: {textures.single_use_4k_count})"
                 )
-                if overview.shared_4k_textures:
+                if textures.shared_4k:
                     headers = ["Texture Name", "Mesh Count"]
-                    data = []
-                    for path, count in overview.shared_4k_textures:
-                        name = os.path.basename(path)
-                        data.append([name, count])
+                    data = [
+                        [os.path.basename(s.path), s.mesh_count]
+                        for s in textures.shared_4k
+                    ]
                     self.log_table(data, headers, title="Top Shared 4K Textures")
             self.logger.log_raw("")
 
-        # Heaviest Textures (Files)
-        # Print only if single-use 4K count is high (>25) OR if shared 4K list is empty/small?
-        # User said: "Print Heaviest only when single-use 4K is high (e.g., >25)"
-        if overview.heaviest_textures and overview.single_use_4k_count > 25:
+        # Heaviest Textures: only print when the single-use 4K count
+        # is high — see prior reviewer note ("Print Heaviest only
+        # when single-use 4K is high (e.g., >25)").
+        if textures.heaviest and textures.single_use_4k_count > 25:
             headers = ["Path", "Size (MB)", "Res", "Mats", "Meshes", "Inst"]
             data = []
-            for (
-                path,
-                size_mb,
-                res,
-                mat_count,
-                mats,
-                mesh_count,
-                inst_count,
-            ) in overview.heaviest_textures[:10]:
-                display_path = path
+            for t in textures.heaviest[:10]:
+                display_path = t.path
                 if len(display_path) > 50:
                     display_path = "..." + display_path[-47:]
-
                 data.append(
                     [
                         display_path,
-                        f"{size_mb:.1f}",
-                        f"{res[0]}x{res[1]}",
-                        mat_count,
-                        mesh_count,
-                        inst_count,
+                        f"{t.size_mb:.1f}",
+                        f"{t.width}x{t.height}",
+                        t.material_count,
+                        t.mesh_count,
+                        t.instance_count,
                     ]
                 )
             self.log_table(data, headers, title="Heaviest Textures (Files)")
 
-        # 9. Pipeline Integrity
-        if overview.pipeline_integrity:
-            self.logger.info("")
-            self.logger.notice("Pipeline Integrity")
-            self.logger.log_divider()
+    def _render_pipeline_section(self, report: SceneReport) -> None:
+        """Pipeline Integrity — missing project textures + impact."""
+        if not report.manifest.textures_collected:
+            return
+        pipeline = report.pipeline
+        if not pipeline.integrity_warnings:
+            return
 
-            # Collapsed preamble
-            if overview.missing_textures_project:
-                self.logger.log_raw(
-                    f"Missing project files: {len(overview.missing_textures_project)}"
+        self.logger.info("")
+        self.logger.notice("Pipeline Integrity")
+        self.logger.log_divider()
+
+        if pipeline.missing_project:
+            self.logger.log_raw(
+                f"Missing project files: {len(pipeline.missing_project)}"
+            )
+
+        impact = pipeline.impact
+        if not impact.is_empty() and impact.top_offenders:
+            self.logger.log_raw(
+                f"Affected top offenders: {', '.join(impact.top_offenders)}"
+            )
+
+        if pipeline.missing_project:
+            headers = ["Missing File Path", "Mats"]
+            data = []
+            for missing in pipeline.missing_project[:5]:
+                display_path = (
+                    missing.path
+                    if len(missing.path) <= 60
+                    else "..." + missing.path[-57:]
                 )
+                data.append([display_path, missing.material_count])
+            self.log_table(data, headers, title="Missing Project Files")
 
-            # Impact Analysis
-            if (
-                overview.missing_texture_impact
-                and overview.missing_texture_impact["meshes"]
-            ):
-                imp = overview.missing_texture_impact
-                if imp["top_offenders"]:
-                    self.logger.log_raw(
-                        f"Affected top offenders: {', '.join(imp['top_offenders'])}"
-                    )
-
-            if overview.missing_textures_project:
-                headers = ["Missing File Path", "Mats"]
-                data = []
-                for path, count, mats in overview.missing_textures_project[:5]:
-                    display_path = path if len(path) <= 60 else "..." + path[-57:]
-                    data.append([display_path, count])
-                self.log_table(data, headers, title="Missing Project Files")
-
-        # 10. Data Assumptions
+    def _render_assumptions_section(self, report: SceneReport) -> None:
+        """Data Assumptions — methodology notes."""
         self.logger.info("")
         self.logger.notice("Data Assumptions")
         self.logger.log_divider()
@@ -3353,77 +4290,47 @@ class SceneAnalyzer(ptk.LoggingMixin):
             "- Effective Score: Base Score * Instance Count. Prioritize high effective scores."
         )
 
-    def _print_asset_record(self, rec: AssetRecord, rank: int, effective: bool = False):
-        """Helper to print a single asset record."""
+    def _print_asset_record(
+        self, rec: AssetRecord, rank: int, effective: bool = False
+    ):
+        """Render a single asset record. Uses the structured
+        ``rec.findings`` / ``rec.fix_plan`` / ``rec.delta`` — no
+        substring sniffing or regex stripping needed."""
         effective_score = rec.score * max(1, rec.instance_count)
 
-        # Header
-        severity_label = "Fail" if rec.score > 50 else "Warn"
         score_display = f"Score: {rec.score:.0f}"
         if effective:
             score_display = f"Effective: {effective_score:.0f} (Base: {rec.score:.0f})"
 
         self.logger.warning(
-            f"{rec.transform:<40} {rec.instance_count} instances | {score_display} | Rank: #{rank}"
+            f"{rec.transform:<40} {rec.instance_count} instances | "
+            f"{score_display} | Rank: #{rank}"
         )
 
-        # Delta Summary
-        if rec.delta_summary:
-            self.logger.log_raw(f"  Deltas: {rec.delta_summary}")
+        if rec.delta.is_over_budget():
+            self.logger.log_raw(f"  Deltas: {rec.delta.summary()}")
 
-        # Vertex Payload removed as requested
-
-        # Evidence Chain
-        # Slots
+        # Slots evidence
         if rec.material.slot_count > 1:
-            # Limit to top 3 + ...
             mats = rec.material.materials
-            # Keep only first 2-3 names, don't wrap
             limit = 3
             mat_str = ", ".join(mats[:limit])
             if len(mats) > limit:
                 mat_str += "..."
-            self.logger.log_raw(f"  Slots ({rec.material.slot_count}): {mat_str}")
+            self.logger.log_raw(
+                f"  Slots ({rec.material.slot_count}): {mat_str}"
+            )
 
-        # Findings with Confidence
+        # Findings — severity comes from the Finding itself.
         for finding in rec.findings:
-            # Add confidence labels based on finding text
-            conf = "[L]"
-            if any(
-                x in finding
-                for x in [
-                    "High Poly",
-                    "Vert Bloat",
-                    "Draw Call",
-                    "Non-Manifold",
-                    "Lamina",
-                    "Missing",
-                ]
-            ):
-                conf = "[H]"
-            elif any(x in finding for x in ["UV sets", "Transparent", "Oversized"]):
-                conf = "[M]"
+            conf = self._CONF_TAG.get(finding.severity, "[L]")
+            self.logger.log_raw(f"  - {finding.message} {conf}")
 
-            # Filter out Vertex Payload findings if they exist in the list
-            if "Vertex Payload" in finding:
-                continue
-
-            # Remove dual tags if present in finding text already
-            # e.g. "N-gons: 5 [M]" -> "N-gons: 5"
-            clean_finding = re.sub(r"\s*\[[HML]\]", "", finding)
-
-            self.logger.log_raw(f"  - {clean_finding} {conf}")
-
-        # Fix Plan
+        # Fix Plan — top 3 by emission order (already deduped in
+        # _calculate_score).
         if rec.fix_plan:
             self.logger.log_raw("  Fix Plan:")
-            for step in rec.fix_plan[:3]:  # Limit to 3 steps
-                # Update UV sets text
-                if "Remove" in step and "unused UV sets" in step:
-                    step = step.replace(
-                        "unused UV sets",
-                        "extra UV sets (if not required by export/profile)",
-                    )
-                self.logger.log_raw(f"    > {step}")
+            for action in rec.fix_plan[:3]:
+                self.logger.log_raw(f"    > {action.message}")
 
         self.logger.log_raw("")  # Spacer
