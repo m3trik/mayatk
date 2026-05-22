@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-05-20_
+_Generated: 2026-05-22_
 
 ## Index
 
@@ -107,6 +107,7 @@ _Generated: 2026-05-20_
 - [`light_utils/_light_utils.py`](#light_utils--_light_utils)
 - [`light_utils/bake_lighting.py`](#light_utils--bake_lighting) — Bake Maya scene lighting into per-object texture files.
 - [`light_utils/hdr_manager.py`](#light_utils--hdr_manager) — Arnold HDR environment manager.
+- [`mat_utils/_affix_mode.py`](#mat_utils--_affix_mode) — Shared affix-mode option-box helper for mat_utils slot files.
 - [`mat_utils/_mat_utils.py`](#mat_utils--_mat_utils)
 - [`mat_utils/game_shader.py`](#mat_utils--game_shader)
 - [`mat_utils/image_to_plane/_image_to_plane.py`](#mat_utils--image_to_plane--_image_to_plane) — Map image files to textured polygon planes in Maya.
@@ -187,7 +188,7 @@ _Generated: 2026-05-20_
   - `AnimUtils.get_redundant_flat_keys(cls, objects: List[str], value_tolerance: float = 1e-05, remove: bool = False, recursive: bool = False, as_strings: bool = False) -> List[Tuple[Any, List[float]]]` *(class)* — Detects redundant flat keys in curves and optionally deletes them.
   - `AnimUtils.simplify_curve(cls, objects: List[str], value_tolerance: float = 0.001, time_tolerance: float = 0.001, recursive: bool = False, as_strings: bool = False) -> Union[List[str], List[str]]` *(class)* — Simplify curves by removing keys that don't contribute to shape.
   - `AnimUtils.repair_corrupted_curves(cls, objects: Optional[Union[str, str, List[Union[str, str]]]] = None, recursive: bool = True, delete_corrupted: bool = False, fix_infinite: bool = True, fix_invalid_times: bool = True, time_range_threshold: float = 1000000.0, value_threshold: float = 1000000.0, quiet: bool = False) -> Dict[str, Any]` *(class)* — Legacy wrapper maintained for backwards compatibility.
-  - `AnimUtils.optimize_keys(cls, objects: Union[str, str, List[Union[str, str]]], value_tolerance: float = 0.001, time_tolerance: float = 0.001, remove_flat_keys: bool = True, remove_static_curves: bool = True, simplify_keys: bool = False, recursive: bool = True, quiet: bool = False, stats: Optional[dict] = None) -> List[str]` *(class)* — Optimize animation keys for the given objects by removing static curves,
+  - `AnimUtils.optimize_keys(cls, objects: Union[str, str, List[Union[str, str]]], value_tolerance: float = 0.001, time_tolerance: float = 0.001, remove_flat_keys: bool = True, remove_static_curves: bool = True, simplify_keys: bool = False, recursive: bool = True, quiet: bool = False, stats: Optional[dict] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[str]` *(class)* — Optimize animation keys for the given objects by removing static curves,
   - `AnimUtils.get_keyframe_times(sources: Union[str, List[str]], mode: str = 'all', from_curves: Optional[bool] = None, as_range: bool = False, time_range: Optional[Tuple[float, float]] = None) -> Union[List[float], Tuple[float, float], None]` *(static)* — Get keyframe times from objects or curves with flexible filtering options.
   - `AnimUtils.get_driver_animation_range(node: str, driver_type: str = 'auto') -> List[float]` *(static)* — Get keyframe times from a driver node's animation or its targets.
   - `AnimUtils.get_tangent_info(attr_name: str, time: float) -> Dict[str, Any]` *(static)* — Get tangent information (types, angles, and weights) for a given attribute at a specific time.
@@ -354,7 +355,7 @@ Utilities for creating playblasts and alternative preview renders in Maya.
   - `PlayblastExporter.scene_name(self) -> str` *(property)*
   - `PlayblastExporter.create_playblast(self, filepath: Optional[str] = None, start_frame: Optional[int] = None, end_frame: Optional[int] = None, camera_name: Optional[str] = None, **kwargs: Any) -> str` — Create a playblast using Maya's viewport capture.
   - `PlayblastExporter.render_with_arnold(self, output_dir: str, start_frame: Optional[int] = None, end_frame: Optional[int] = None, camera_name: Optional[str] = None, prefix: Optional[str] = None, frame_padding: int = 4, render_layer: Optional[str] = None, **kwargs: Any) -> List[str]` — Render a frame range using Arnold.
-  - `PlayblastExporter.export_variations(self, output_path: str, base_kwargs: Optional[Dict[str, Any]] = None, scene_name: Optional[str] = None, variations: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]` — Produce multiple playblast outputs (formats, sequences, Arnold).
+  - `PlayblastExporter.export_variations(self, output_path: str, base_kwargs: Optional[Dict[str, Any]] = None, scene_name: Optional[str] = None, variations: Optional[List[Dict[str, Any]]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Dict[str, Any]]` — Produce multiple playblast outputs (formats, sequences, Arnold).
 
 <a id="anim_utils--scale_keys"></a>
 ### `anim_utils/scale_keys.py`
@@ -368,12 +369,17 @@ Dedicated scale-keys module to keep AnimUtils lean and testable.
 <a id="anim_utils--segment_keys"></a>
 ### `anim_utils/segment_keys.py`
 
-- **[`class SegmentKeysInfo`](mayatk/mayatk/anim_utils/segment_keys.py#L26)** — Mixin for reporting animation segment information.
+- **[`class SegmentKeysInfo`](mayatk/mayatk/anim_utils/segment_keys.py#L27)** — Mixin for reporting animation segment information.
   - `SegmentKeysInfo.get_time_ranges(segments: List[Dict[str, Any]]) -> List[Tuple[str, float, float]]` *(static)* — Extract time ranges from segment data.
-  - `SegmentKeysInfo.print_time_ranges(cls, source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]], header: Optional[str] = None, per_segment: bool = False, object_fmt: Optional[str] = None, segment_fmt: Optional[str] = None, by_time: bool = False, csv_output: bool = False)` *(class)* — Print formatted time ranges.
-- **[`class SegmentKeys(SegmentKeysInfo)`](mayatk/mayatk/anim_utils/segment_keys.py#L221)** — Shared helper for collecting and grouping animation segments.
-  - `SegmentKeys.collect_segments(cls, objects: List[Any], ignore: Optional[Union[str, List[str]]] = None, split_static: bool = False, selected_keys_only: bool = False, channel_box_attrs: Optional[List[str]] = None, static_tolerance: float = 0.0001, time_range: Optional[Tuple[Optional[float], Optional[float]]] = None, ignore_visibility_holds: bool = False, ignore_holds: bool = False, exclude_next_start: bool = True, motion_only: bool = False, motion_rate: float = 0.001) -> List[Dict[str, Any]]` *(class)* — Collect animation segments from objects.
-  - `SegmentKeys.print_scene_info(cls, objects: Optional[List[str]] = None, detailed: bool = True, csv_output: bool = False, by_time: bool = False, ignore_holds: bool = True)` *(class)* — Print animation info for the scene or provided objects.
+  - `SegmentKeysInfo.print_time_ranges(cls, source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]], header: Optional[str] = None, per_segment: bool = False, object_fmt: Optional[str] = None, segment_fmt: Optional[str] = None, by_time: bool = False, csv_output: bool = False)` *(class)* — Print formatted time ranges to stdout.
+  - `SegmentKeysInfo.format_time_ranges_text(cls, source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]], **kwargs) -> str` *(class)* — Return the same output as :meth:`print_time_ranges` as a
+  - `SegmentKeysInfo.format_time_ranges_html(cls, source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]], title: Optional[str] = None, **kwargs) -> str` *(class)* — Wrap :meth:`format_time_ranges_text` in styled HTML suitable
+- **[`class SegmentKeys(SegmentKeysInfo)`](mayatk/mayatk/anim_utils/segment_keys.py#L269)** — Shared helper for collecting and grouping animation segments.
+  - `SegmentKeys.collect_segments(cls, objects: List[Any], ignore: Optional[Union[str, List[str]]] = None, split_static: bool = False, selected_keys_only: bool = False, channel_box_attrs: Optional[List[str]] = None, static_tolerance: float = 0.0001, time_range: Optional[Tuple[Optional[float], Optional[float]]] = None, ignore_visibility_holds: bool = False, ignore_holds: bool = False, exclude_next_start: bool = True, motion_only: bool = False, motion_rate: float = 0.001, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Dict[str, Any]]` *(class)* — Collect animation segments from objects.
+  - `SegmentKeys.get_scene_info(cls, objects: Optional[List[str]] = None, detailed: bool = True, ignore_holds: bool = True, traversal: Optional[str] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Dict[str, Any]]` *(class)* — Collect animation segments for the scene info report.
+  - `SegmentKeys.format_scene_info_text(cls, objects: Optional[List[str]] = None, detailed: bool = True, csv_output: bool = False, by_time: bool = False, ignore_holds: bool = True, traversal: Optional[str] = None) -> str` *(class)* — Plain-text scene-info report.
+  - `SegmentKeys.format_scene_info_html(cls, objects: Optional[List[str]] = None, detailed: bool = True, csv_output: bool = False, by_time: bool = False, ignore_holds: bool = True, traversal: Optional[str] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> str` *(class)* — HTML scene-info report for ``sb.text_view_dialog``.
+  - `SegmentKeys.print_scene_info(cls, objects: Optional[List[str]] = None, detailed: bool = True, csv_output: bool = False, by_time: bool = False, ignore_holds: bool = True)` *(class)* — Print animation info to stdout.
   - `SegmentKeys.group_segments(cls, segments: List[Dict[str, Any]], mode: str = 'per_segment', **kwargs) -> List[Dict[str, Any]]` *(class)* — Group segments based on the specified mode.
   - `SegmentKeys.merge_groups_sharing_curves(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]` *(static)* — Merge groups that share any animation curves.
   - `SegmentKeys.shift_curves(curves: List[Any], offset: float, time_range: Optional[Tuple[float, float]] = None, remove_flat_at_dest: bool = False)` *(static)* — Shift keys on curves by offset using a two-pass move to avoid
@@ -392,7 +398,7 @@ Shot-region detection — Maya animation-graph analysis.
 
 Commit resolved :class:`MovePlan`\ s to the Maya scene.
 
-- [`apply(store: ShotStore, plan: MovePlan) -> None`](mayatk/mayatk/anim_utils/shots/_shot_apply.py#L114) — Execute ``plan`` against the scene and ``store``.
+- [`apply(store: ShotStore, plan: MovePlan, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> None`](mayatk/mayatk/anim_utils/shots/_shot_apply.py#L114) — Execute ``plan`` against the scene and ``store``.
 
 <a id="anim_utils--shots--_shot_plan"></a>
 ### `anim_utils/shots/_shot_plan.py`
@@ -1038,15 +1044,42 @@ Scene diagnostics and repair helpers.
   - `SceneDiagnostics.remove_xgen_expressions(quiet: bool = False) -> int` *(static)* — Remove legacy XGen expressions that cause 'Cannot find procedure xgmPreview' errors.
   - `SceneDiagnostics.cleanup_scene(cls, quiet: bool = False) -> None` *(class)* — Run all scene cleanup operations:
 - **[`class AuditProfile`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L985)** — Thresholds for scene analysis.
-- **[`class MeshRecord`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1000)** — Compact record for mesh statistics.
-- **[`class MaterialRecord`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1019)** — Compact record for material usage.
-- **[`class AssetRecord`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1038)** — Combined record for an analyzed asset.
-- **[`class SceneOverview`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1057)** — High-level overview of the scene analysis.
-- **[`class SceneAnalyzer(ptk.LoggingMixin)`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1160)** — Analyzes scene objects for performance expectations in game engines.
+- **[`class MeshRecord`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1012)** — Per-mesh statistics for a single shape node.
+- **[`class MaterialRecord`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1030)** — Per-shape material usage summary (aggregated across slots).
+- **[`class Finding`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1048)** — An observation about an asset (negative or risk-flagged).
+- **[`class FixAction`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1058)** — A recommended remediation step.
+- **[`class BudgetDelta`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1069)** — How far an asset exceeds the profile budget along each axis.
+  - `BudgetDelta.is_over_budget(self) -> bool`
+  - `BudgetDelta.summary(self) -> str` — Pre-rendered ``"tris +N | slots +M | …"`` string used by the
+- **[`class AssetRecord`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1104)** — Combined per-asset record produced by analyze().
+- **[`class ParetoEntry`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1123)** — One row of a Pareto ranking (top contributor + cumulative %).
+- **[`class TextureFile`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1132)** — A texture file referenced by the scene, with usage stats.
+- **[`class MissingTexture`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1146)** — A texture referenced by a material but not present on disk.
+- **[`class SharedTexture`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1155)** — A texture used by more than one mesh.
+- **[`class MaterialSplit`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1163)** — A material correlated with high-slot meshes (draw-call splits).
+- **[`class SlotStats`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1173)** — Distribution stats for material slots-per-mesh.
+- **[`class InstanceStats`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1184)** — Mesh / instance counts.
+- **[`class BudgetBuckets`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1193)** — Histogram of overage severity per dimension.
+- **[`class ComplianceStats`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1205)** — Percentage of scene over budget per dimension.
+- **[`class MissingTextureImpact`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1213)** — Downstream effect of missing textures on the asset list.
+  - `MissingTextureImpact.is_empty(self) -> bool`
+- **[`class SummaryStats`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1225)** — High-level scene counters surfaced by the Executive Summary.
+- **[`class BudgetStats`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1248)** — Budget / compliance / savings figures.
+- **[`class TextureStats`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1266)** — Texture-side aggregates.
+- **[`class PipelineStats`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1285)** — Pipeline integrity findings (missing textures + impact).
+- **[`class OffenderLists`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1295)** — Top-N rankings across various dimensions.
+- **[`class AnalysisManifest`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1320)** — What was analyzed, how, and how long it took.
+- **[`class SceneReport`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1342)** — Top-level result of ``SceneAnalyzer.generate_report``.
+  - `SceneReport.to_dict(self) -> Dict[str, Any]` — Serialize the report to a nested plain-dict tree.
+- **[`class SceneInfoSection`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1374)** — Report-section identifiers used to gate analyze() work and report output.
+  - `SceneInfoSection.normalize(cls, sections: Optional[List[str]]) -> List[str]` *(class)* — Coerce a caller-supplied sections argument to a stable,
+- **[`class SceneAnalyzer(ptk.LoggingMixin)`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L1460)** — Analyzes scene objects for performance expectations in game engines.
   - `SceneAnalyzer.run_audit(cls, adaptive: bool = False, verbose: bool = True) -> None` *(class)* — Run a full scene audit and print the report.
-  - `SceneAnalyzer.analyze(self, objects: List[Any] = None, fast_mode: bool = True, progress_callback: Optional[Callable[[int, int, str], None]] = None, profile: AuditProfile = None) -> List[AssetRecord]` — Main entry point for analysis.
-  - `SceneAnalyzer.generate_report(self, records: List[AssetRecord]) -> SceneOverview` — Generates a high-level overview from analysis records.
-  - `SceneAnalyzer.print_report(self, overview: SceneOverview)` — Prints a formatted report to the logger.
+  - `SceneAnalyzer.format_audit_text(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, sections: Optional[List[str]] = None) -> Dict[str, str]` *(class)* — Run the audit and return the formatted report as a
+  - `SceneAnalyzer.format_audit_html(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, sections: Optional[List[str]] = None) -> Dict[str, str]` *(class)* — Run the audit and return a section-keyed dict of HTML
+  - `SceneAnalyzer.analyze(self, objects: List[Any] = None, fast_mode: bool = True, progress_callback: Optional[Callable[[int, int, str], None]] = None, profile: AuditProfile = None, sections: Optional[List[str]] = None) -> List[AssetRecord]` — Main entry point for analysis.
+  - `SceneAnalyzer.generate_report(self, records: List[AssetRecord]) -> SceneReport` — Build a :class:`SceneReport` from per-asset records.
+  - `SceneAnalyzer.print_report(self, report: SceneReport, sections: Optional[List[str]] = None)` — Print the formatted scene-audit report to the logger.
 
 <a id="core_utils--diagnostics--transform_diag"></a>
 ### `core_utils/diagnostics/transform_diag.py`
@@ -2005,18 +2038,32 @@ Arnold HDR environment manager.
   - `HdrManagerSlots.ctx_select_file_node(self) -> None`
   - `HdrManagerSlots.ctx_reveal_in_explorer(self) -> None`
 
+<a id="mat_utils--_affix_mode"></a>
+### `mat_utils/_affix_mode.py`
+
+Shared affix-mode option-box helper for mat_utils slot files.
+
+- [`add_affix_mode_menu(widget, default_mode: str = 'auto', on_change=None)`](mayatk/mayatk/mat_utils/_affix_mode.py#L26) — Wire a 3-option affix-mode combobox onto ``widget.option_box.menu``.
+- [`current_affix_mode(widget) -> str`](mayatk/mayatk/mat_utils/_affix_mode.py#L56) — Return the currently selected affix mode ('auto'/'suffix'/'prefix').
+- [`resolve_affix(widget, default: str = 'prefix') -> Tuple[str, str]`](mayatk/mayatk/mat_utils/_affix_mode.py#L65) — Read widget text + mode and return ``(prefix, suffix)`` per the picker.
+
 <a id="mat_utils--_mat_utils"></a>
 ### `mat_utils/_mat_utils.py`
 
-- **[`class MatUtilsInternals(ptk.HelpMixin)`](mayatk/mayatk/mat_utils/_mat_utils.py#L42)** — Internal helper utilities shared across MatUtils operations.
+- **[`class MatUtilsInternals(ptk.HelpMixin)`](mayatk/mayatk/mat_utils/_mat_utils.py#L44)** — Internal helper utilities shared across MatUtils operations.
   - `MatUtilsInternals.get_texture_file_node(material, attr_name, _depth=0)` *(static)* — Locate the file texture node feeding a material attribute.
-- **[`class MatUtils(MatUtilsInternals)`](mayatk/mayatk/mat_utils/_mat_utils.py#L288)**
+- **[`class MatUtils(MatUtilsInternals)`](mayatk/mayatk/mat_utils/_mat_utils.py#L290)**
   - `MatUtils.resolve_path(path: str) -> Union[str, None]` *(static)* — Resolves a texture path by expanding env vars, checking workspace, and handling UDIMs.
   - `MatUtils.get_mats(objs=None, as_strings=True, mat_type=None) -> List[str]` *(static)* — Returns the set of materials assigned to a given list of objects or components.
   - `MatUtils.group_objects_by_material(objects, cluster_by_distance=False, threshold=10000.0)` *(static)* — Groups objects based on their assigned material(s).
   - `MatUtils.get_texture_paths(cls, objects: Optional[List[Any]] = None, materials: Optional[List[Any]] = None, file_nodes: Optional[List[Any]] = None, texture_names: Optional[List[str]] = None, absolute: bool = True) -> List[str]` *(class)* — Resolve unique texture file paths for the given scope.
   - `MatUtils.get_texture_info(cls, objects=None, materials=None, file_nodes=None, texture_names=None)` *(class)* — Get image metadata (size, mode, format) for texture files in scope.
-  - `MatUtils.get_scene_mats(inc=None, exc=None, node_type=None, sort: bool = False, as_dict: bool = False, **filter_kwargs)` *(static)* — Retrieves all materials from the current scene, with flexible name/type filtering.
+  - `MatUtils.get_mat_info(cls, materials: Optional[List[Any]] = None, objects: Optional[List[Any]] = None, optimize_check: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, **optimize_kwargs) -> List[Dict[str, Any]]` *(class)* — Aggregate per-material info: name, type, textures + image metadata.
+  - `MatUtils.format_texture_info_text(cls, info_list: List[Dict[str, Any]]) -> str` *(class)* — Render :meth:`get_texture_info` output as a plain-text report.
+  - `MatUtils.format_texture_info_html(cls, info_list: List[Dict[str, Any]]) -> str` *(class)* — Render :meth:`get_texture_info` output as styled HTML.
+  - `MatUtils.format_mat_info_text(cls, records: List[Dict[str, Any]]) -> str` *(class)* — Render :meth:`get_mat_info` output as a plain-text report.
+  - `MatUtils.format_mat_info_html(cls, records: List[Dict[str, Any]]) -> str` *(class)* — Render :meth:`get_mat_info` output as styled HTML.
+  - `MatUtils.get_scene_mats(inc=None, exc=None, node_type=None, sort: bool = False, as_dict: bool = False, exclude_defaults: bool = True, **filter_kwargs)` *(static)* — Retrieves all materials from the current scene, with flexible name/type filtering.
   - `MatUtils.get_connected_shaders(file_nodes) -> List[str]` *(static)* — Return surface shaders connected to one or more file nodes, ignoring intermediates.
   - `MatUtils.get_file_nodes(cls, materials: Optional[List[str]] = None, raw: bool = False, return_type: str = 'fileNode') -> list` *(class)* — Returns file node info in any column order based on return_type.
   - `MatUtils.get_fav_mats()` *(static)* — Retrieves the list of favorite materials in Maya.
@@ -2036,8 +2083,8 @@ Arnold HDR environment manager.
   - `MatUtils.filter_materials_by_objects(objects: List[str], as_strings: bool = True) -> List[str]` *(static)* — Filter materials assigned to the given objects.
   - `MatUtils.reload_textures(materials=None, inc=None, exc=None, log=False, refresh_viewport=False, refresh_hypershade=False, texture_types: Optional[List[str]] = None)` *(static)* — Reloads textures connected to specified materials with inclusion/exclusion filters.
   - `MatUtils.move_texture_files(cls, found_files: List[Union[str, Tuple[str, str]]], new_dir: str, delete_old: bool = False, create_dir: bool = True, per_file_timeout: float = 120.0, max_workers: int = 8, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> List[Tuple[str, str]]` *(class)* — Move or copy found texture files to a new directory.
-  - `MatUtils.find_texture_files(cls, objects: Optional[List[str]] = None, source_dir: str = '', recursive: bool = True, return_dir: bool = False, quiet: bool = False, file_nodes: Optional[List[str]] = None, materials: Optional[List[str]] = None) -> List[Union[str, Tuple[str, str]]]` *(class)* — Find texture files for given objects' materials inside source_dir.
-  - `MatUtils.migrate_textures(cls, materials: Optional[List[str]] = None, old_dir: Optional[str] = None, new_dir: Optional[str] = None, silent: bool = False, delete_old: bool = False, objects: Optional[List[str]] = None, file_nodes: Optional[List[str]] = None) -> None` *(class)* — Copies texture files from an old directory to a new one.
+  - `MatUtils.find_texture_files(cls, objects: Optional[List[str]] = None, source_dir: str = '', recursive: bool = True, return_dir: bool = False, quiet: bool = False, file_nodes: Optional[List[str]] = None, materials: Optional[List[str]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Union[str, Tuple[str, str]]]` *(class)* — Find texture files for given objects' materials inside source_dir.
+  - `MatUtils.migrate_textures(cls, materials: Optional[List[str]] = None, old_dir: Optional[str] = None, new_dir: Optional[str] = None, silent: bool = False, delete_old: bool = False, objects: Optional[List[str]] = None, file_nodes: Optional[List[str]] = None, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> None` *(class)* — Copies texture files from an old directory to a new one.
   - `MatUtils.move_unused_textures(source_dir: str = None, output_dir: str = None) -> None` *(static)* — Move unused textures to a specified directory.
   - `MatUtils.get_mat_swatch_icon(mat: Union[str, object], size: List[int] = [20, 20], fallback_to_blank: bool = True) -> object` *(static)* — Get an icon with a color fill matching the given material's RGB value.
   - `MatUtils.convert_bump_to_normal(bump_file_node, output_path: Optional[str] = None, intensity: float = 1.0, format_type: str = 'opengl', filter_type: str = '3x3', wrap_mode: str = 'black', create_file_node: bool = True, node_name: Optional[str] = None) -> Optional[str]` *(static)* — Convert a bump/height map to a normal map using Maya's bump2d node.
@@ -2047,7 +2094,7 @@ Arnold HDR environment manager.
 <a id="mat_utils--game_shader"></a>
 ### `mat_utils/game_shader.py`
 
-- **[`class GameShader(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/game_shader.py#L28)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
+- **[`class GameShader(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/game_shader.py#L33)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
   - `GameShader.create_network(self, textures: List[str], name: str = '', prefix: str = '', suffix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]` — Create a PBR shader network with textures.
   - `GameShader.setup_stringray_node(self, name: str, opacity: bool) -> object` — Initializes and sets up a StingrayPBS shader node in Maya.
   - `GameShader.setup_arnold_nodes(self, name: str, shader_node: object) -> Tuple[object, object, object]` — Sets up a basic Arnold shader network for use with a Stingray PBS or Standard Surface shader.
@@ -2061,19 +2108,18 @@ Arnold HDR environment manager.
   - `GameShader.filter_for_correct_metallic_map(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]` — Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…
   - `GameShader.filter_for_mask_map(self, textures: List[str], output_extension: str = 'png') -> List[str]` — Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
   - `GameShader.filter_for_correct_base_color_map(self, textures: List[str], use_albedo_transparency: bool) -> List[str]` — Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…
-- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1723)**
+- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1728)**
   - `GameShaderSlots.header_init(self, widget)` — Initialize the header widget.
   - `GameShaderSlots.lbl_graph_material(self)` — Graph the material in the Hypershade.
   - `GameShaderSlots.mat_name(self) -> str` *(property)* — Get the mat name from the user input text field.
-  - `GameShaderSlots.affix_is_prefix(self) -> bool` *(property)* — Whether the affix field (txt002) acts as a prefix or a suffix.
-  - `GameShaderSlots.mat_prefix(self) -> str` *(property)* — Return the affix text when in prefix mode, else empty string.
-  - `GameShaderSlots.mat_suffix(self) -> str` *(property)* — Return the affix text when in suffix mode, else empty string.
+  - `GameShaderSlots.mat_prefix(self) -> str` *(property)* — Return the affix text when it resolves as a prefix, else empty string.
+  - `GameShaderSlots.mat_suffix(self) -> str` *(property)* — Return the affix text when it resolves as a suffix, else empty string.
   - `GameShaderSlots.normal_map_type(self) -> str` *(property)* — Get the normal map type from the comboBoxes current text.
   - `GameShaderSlots.output_extension(self) -> str` *(property)* — Get the output map extension from the comboBox current text.
   - `GameShaderSlots.shader_type(self) -> str` *(property)* — Get the shader type selection.
   - `GameShaderSlots.cmb002_init(self, widget)` — Initialize Presets
   - `GameShaderSlots.cmb003_init(self, widget)` — Initialize Output Extension
-  - `GameShaderSlots.txt002_init(self, widget)` — Add a prefix/suffix toggle to the affix field's option menu.
+  - `GameShaderSlots.txt002_init(self, widget)` — Add a prefix/suffix/auto-mode combobox to the affix field's option menu.
   - `GameShaderSlots.b000(self)` — Create network.
 
 <a id="mat_utils--image_to_plane--_image_to_plane"></a>
@@ -2090,9 +2136,9 @@ Map image files to textured polygon planes in Maya.
 
 Switchboard slots for the Image to Plane UI.
 
-- **[`class ImageToPlaneSlots`](mayatk/mayatk/mat_utils/image_to_plane/image_to_plane_slots.py#L19)** — Switchboard slots for the Image to Plane UI.
+- **[`class ImageToPlaneSlots`](mayatk/mayatk/mat_utils/image_to_plane/image_to_plane_slots.py#L25)** — Switchboard slots for the Image to Plane UI.
   - `ImageToPlaneSlots.header_init(self, widget)` — Configure header menu.
-  - `ImageToPlaneSlots.txt_suffix_init(self, widget)` — Add a prefix/suffix toggle to the affix field's option menu.
+  - `ImageToPlaneSlots.txt_suffix_init(self, widget)` — Add a prefix/suffix/auto-mode combobox to the affix field's option menu.
 
 <a id="mat_utils--marmoset_bridge--_marmoset_bridge"></a>
 ### `mat_utils/marmoset_bridge/_marmoset_bridge.py`
@@ -2269,11 +2315,11 @@ Lightweight material state snapshot and restore.
 <a id="mat_utils--mat_updater"></a>
 ### `mat_utils/mat_updater.py`
 
-- **[`class MatUpdater(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/mat_updater.py#L22)** — Updates existing materials with processed textures.
-  - `MatUpdater.update_materials(cls, materials: List[Any] = None, config: Union[str, Dict[str, Any]] = None, verbose: bool = False) -> Dict[str, Any]` *(class)* — Update materials with processed textures.
+- **[`class MatUpdater(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/mat_updater.py#L23)** — Updates existing materials with processed textures.
+  - `MatUpdater.update_materials(cls, materials: List[Any] = None, config: Union[str, Dict[str, Any]] = None, verbose: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, Any]` *(class)* — Update materials with processed textures.
   - `MatUpdater.disconnect_associated_attributes(cls, material, file_paths, config=None)` *(class)* — Disconnects PBR attributes if they are driven by the specified files.
   - `MatUpdater.update_network(cls, material, texture_paths, config) -> Dict[str, str]` *(class)* — Connect processed textures to the material.
-- **[`class MatUpdaterSlots(MatUpdater)`](mayatk/mayatk/mat_utils/mat_updater.py#L601)**
+- **[`class MatUpdaterSlots(MatUpdater)`](mayatk/mayatk/mat_utils/mat_updater.py#L612)**
   - `MatUpdaterSlots.header_init(self, widget)` — Format global options in the header menu.
   - `MatUpdaterSlots.selection_mode(self)` *(property)*
   - `MatUpdaterSlots.move_to_folder(self)` *(property)*
@@ -2946,16 +2992,17 @@ Reusable helper for resolving Maya node icons at runtime.
   - `RizomUVBridge.script_path(self)` *(property)* — Get the path to the UV script file as a POSIX string.
   - `RizomUVBridge.script_path(self, value)` — Set the UV script, loading from a file if a path is provided, or saving the content to a file.
   - `RizomUVBridge.process_with_rizomuv(self, objects, uv_script=None, preset=None, params=None)` — Run the full export -> RizomUV -> re-import workflow.
+  - `RizomUVBridge.send_to_rizomuv(self, objects, params=None)` — Export *objects* and open them in a fresh RizomUV session.
 
 <a id="uv_utils--rizom_bridge--parameters"></a>
 ### `uv_utils/rizom_bridge/parameters.py`
 
 Registry of user-tunable RizomUV parameters exposed to the bridge UI.
 
-- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L247) — Registered keys present in *script_text* (delegates to uitk.bridge).
-- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L252) — Return ``{key: default}`` for every registered parameter.
-- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L257) — Format *values* for ``StrUtils.replace_delimited`` using Lua literals.
-- [`strip_unsupported(script_text: str, version: 'tuple[int, ...]') -> str`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L302) — Drop every line that references a placeholder requiring a newer Rizom.
+- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L296) — Registered keys present in *script_text* (delegates to uitk.bridge).
+- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L301) — Return ``{key: default}`` for every registered parameter.
+- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L306) — Format *values* for ``StrUtils.replace_delimited`` using Lua literals.
+- [`strip_unsupported(script_text: str, version: 'tuple[int, ...]') -> str`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L351) — Drop every line that references a placeholder requiring a newer Rizom.
 
 <a id="uv_utils--rizom_bridge--rizom_bridge_slots"></a>
 ### `uv_utils/rizom_bridge/rizom_bridge_slots.py`
@@ -2968,7 +3015,7 @@ Slots for the RizomUV bridge panel.
   - `RizomBridgeSlots.make_bridge(self) -> RizomUVBridge`
   - `RizomBridgeSlots.list_template_modes(self)` — Return ``[(stem, ""), ...]`` for every bundled ``.lua`` script.
   - `RizomBridgeSlots.header_init(self, widget)` — Configure header menu with Rizom-specific utilities.
-  - `RizomBridgeSlots.b000(self)` — Process selected transforms with the chosen preset.
+  - `RizomBridgeSlots.b000(self)` — Run the chosen preset: round-trip, or one-way send when ``send`` is picked.
   - `RizomBridgeSlots.open_uv_editor(self)` — Open Maya's UV Editor (TextureViewWindow).
 
 <a id="xform_utils--_xform_utils"></a>

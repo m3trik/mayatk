@@ -1,7 +1,7 @@
 {
   "name": "mayatk",
   "source_root": "mayatk/mayatk",
-  "generated_at": "2026-05-20",
+  "generated_at": "2026-05-22",
   "modules": [
     {
       "relpath": "anim_utils/_anim_utils.py",
@@ -93,7 +93,7 @@
               "name": "optimize_keys",
               "qualname": "AnimUtils.optimize_keys",
               "kind": "classmethod",
-              "signature": "(cls, objects: Union[str, str, List[Union[str, str]]], value_tolerance: float = 0.001, time_tolerance: float = 0.001, remove_flat_keys: bool = True, remove_static_curves: bool = True, simplify_keys: bool = False, recursive: bool = True, quiet: bool = False, stats: Optional[dict] = None) -> List[str]",
+              "signature": "(cls, objects: Union[str, str, List[Union[str, str]]], value_tolerance: float = 0.001, time_tolerance: float = 0.001, remove_flat_keys: bool = True, remove_static_curves: bool = True, simplify_keys: bool = False, recursive: bool = True, quiet: bool = False, stats: Optional[dict] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[str]",
               "summary": "Optimize animation keys for the given objects by removing static curves,",
               "line": 1360,
               "deprecated": false
@@ -104,7 +104,7 @@
               "kind": "staticmethod",
               "signature": "(sources: Union[str, List[str]], mode: str = 'all', from_curves: Optional[bool] = None, as_range: bool = False, time_range: Optional[Tuple[float, float]] = None) -> Union[List[float], Tuple[float, float], None]",
               "summary": "Get keyframe times from objects or curves with flexible filtering options.",
-              "line": 1638,
+              "line": 1653,
               "deprecated": false
             },
             {
@@ -113,7 +113,7 @@
               "kind": "staticmethod",
               "signature": "(node: str, driver_type: str = 'auto') -> List[float]",
               "summary": "Get keyframe times from a driver node's animation or its targets.",
-              "line": 1771,
+              "line": 1786,
               "deprecated": false
             },
             {
@@ -122,7 +122,7 @@
               "kind": "staticmethod",
               "signature": "(attr_name: str, time: float) -> Dict[str, Any]",
               "summary": "Get tangent information (types, angles, and weights) for a given attribute at a specific time.",
-              "line": 1924,
+              "line": 1939,
               "deprecated": false
             },
             {
@@ -131,7 +131,7 @@
               "kind": "staticmethod",
               "signature": "(attr_name: str, time: float, tangent_info: Dict[str, Any]) -> None",
               "summary": "Restore tangent information on a keyframe.",
-              "line": 1956,
+              "line": 1971,
               "deprecated": false
             },
             {
@@ -140,7 +140,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, keys=None, tangent: str = 'out', resolution_order: Optional[Tuple[str, ...]] = None) -> dict",
               "summary": "Set stepped tangents on animation keys.",
-              "line": 2216,
+              "line": 2231,
               "deprecated": false
             },
             {
@@ -149,7 +149,7 @@
               "kind": "staticmethod",
               "signature": "(time: Optional[float] = None, update: bool = True, relative: bool = False, snap_mode: Optional[str] = None, invert_snap: bool = False) -> float",
               "summary": "Set the current frame on the timeslider with optional snapping.",
-              "line": 2470,
+              "line": 2485,
               "deprecated": false
             },
             {
@@ -158,7 +158,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, frame=None, time_range=None, selected_keys_only=False, retain_spacing=False, channel_box_attrs_only=False, align: str = 'auto')",
               "summary": "Move keyframes to the given frame with comprehensive control options.",
-              "line": 2523,
+              "line": 2538,
               "deprecated": false
             },
             {
@@ -167,7 +167,7 @@
               "kind": "staticmethod",
               "signature": "(objects, target_times=None, refresh_channel_box=False, **kwargs)",
               "summary": "Sets keyframes for the specified attributes on given objects at given times.",
-              "line": 2805,
+              "line": 2820,
               "deprecated": false
             },
             {
@@ -176,7 +176,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[Union[str, List[str]]] = None, keys: Optional[List[str]] = None) -> List[object]",
               "summary": "Filter the given objects for those with specific keys set.",
-              "line": 2897,
+              "line": 2912,
               "deprecated": false
             },
             {
@@ -185,7 +185,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[str]] = None, spacing: int = 1, time: Optional[int] = 0, relative: bool = True, preserve_keys: bool = False, selected_keys_only: bool = False, exact_gap: bool = False, prevent_collisions: bool = True)",
               "summary": "Adjusts the spacing between keyframes for specified objects at a given time,",
-              "line": 2930,
+              "line": 2945,
               "deprecated": false
             },
             {
@@ -194,7 +194,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, str, List[Union[str, str]]], time_range: Optional[Union[int, Tuple[int, int]]] = None, percent: Optional[float] = None, include_flat: bool = False, ignore: Union[str, List[str], None] = None) -> None",
               "summary": "Keys selected or animated attributes on given object(s) within a time range.",
-              "line": 3108,
+              "line": 3123,
               "deprecated": false
             },
             {
@@ -203,7 +203,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, str, List[Union[str, str]]], time_range: Optional[Union[int, Tuple[int, int]]] = None, ignore: Union[str, List[str], None] = None) -> int",
               "summary": "Removes all intermediate keyframes, keeping only the first and last key on each attribute.",
-              "line": 3236,
+              "line": 3251,
               "deprecated": false
             },
             {
@@ -212,7 +212,7 @@
               "kind": "staticmethod",
               "signature": "(time=None, relative=True, delete_original=False, mode='horizontal', value_pivot=0.0)",
               "summary": "Invert keyframes around the last key, preferring selected keys but falling back to all keys.",
-              "line": 3410,
+              "line": 3425,
               "deprecated": false
             },
             {
@@ -221,7 +221,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[Union[str, str]]] = None, target_frame: Optional[float] = None, use_earliest: bool = True) -> bool",
               "summary": "Aligns the starting keyframes of selected keyframes in the graph editor across multiple objects.",
-              "line": 3892,
+              "line": 3907,
               "deprecated": false
             },
             {
@@ -230,7 +230,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[Union[str, str]]] = None, visible: bool = True, when: str = 'start', offset: int = 0, group_overlapping: bool = False) -> int",
               "summary": "Sets visibility keyframes for objects with options for timing and grouping.",
-              "line": 4011,
+              "line": 4026,
               "deprecated": false
             },
             {
@@ -239,7 +239,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[Union[str, str]]] = None, method: str = 'nearest', selected_only: bool = False, time_range: Optional[Tuple[float, float]] = None) -> int",
               "summary": "Snaps keyframes with decimal time values to whole frame numbers.",
-              "line": 4138,
+              "line": 4153,
               "deprecated": false
             },
             {
@@ -248,7 +248,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: List[Union[str, object]], relative: bool = False, transfer_tangents: bool = False, optimize: bool = False)",
               "summary": "Transfer keyframes from the first selected object to the subsequent objects.",
-              "line": 4288,
+              "line": 4303,
               "deprecated": false
             },
             {
@@ -257,7 +257,7 @@
               "kind": "staticmethod",
               "signature": "(time: Union[None, int, str, Tuple, List], recursive_callback: Optional[callable] = None) -> Union[Tuple[float, float], None, List]",
               "summary": "Parse time specification into a time range tuple for keyframe operations.",
-              "line": 4405,
+              "line": 4420,
               "deprecated": false
             },
             {
@@ -266,7 +266,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, *attributes, time=None, channel_box_only=False)",
               "summary": "Deletes keyframes for specified attributes on given objects, optionally within a time range.",
-              "line": 4489,
+              "line": 4504,
               "deprecated": false
             },
             {
@@ -275,7 +275,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[Union[str, str]]] = None, *attributes: str, time: Union[None, int, str, Tuple, List] = None, channel_box_only: bool = False, add_to_selection: bool = False) -> int",
               "summary": "Selects keyframes for specified attributes on given objects, optionally within a time range.",
-              "line": 4581,
+              "line": 4596,
               "deprecated": false
             },
             {
@@ -284,7 +284,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str], precision: Optional[int] = None, gap: Optional[int] = None) -> Dict[str, List[Tuple[int, int]]]",
               "summary": "Calculate frame ranges for a list of objects based on their keyframes.",
-              "line": 4722,
+              "line": 4737,
               "deprecated": false
             },
             {
@@ -293,7 +293,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, tolerance: float = 1e-05) -> Dict[str, Dict[str, List[float]]]",
               "summary": "Detects tied (bookend) keyframes for given objects.",
-              "line": 4783,
+              "line": 4798,
               "deprecated": false
             },
             {
@@ -302,7 +302,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str] = None, absolute: bool = False, padding: int = 0, custom_range: Optional[Tuple[float, float]] = None)",
               "summary": "Ties the keyframes of all given objects (or all keyed objects in the scene if none are provided)",
-              "line": 4916,
+              "line": 4931,
               "deprecated": false
             },
             {
@@ -311,7 +311,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str] = None, absolute: bool = False)",
               "summary": "Removes bookend keyframes added by tie_keyframes, but preserves genuine animation keys.",
-              "line": 5165,
+              "line": 5180,
               "deprecated": false
             },
             {
@@ -320,7 +320,7 @@
               "kind": "staticmethod",
               "signature": "(name: str = 'AnimLayer', override: bool = True, additive: bool = False, attributes: Optional[List[str]] = None, objects: Optional[List[str]] = None, weight: float = 1.0, mute: bool = False, solo: bool = False, lock: bool = False, preferred: bool = True, parent: Optional[str] = None, unique_name: bool = True, timestamp_suffix: bool = False, color: Optional[Tuple[float, float, float]] = None) -> str",
               "summary": "Create an animation layer with flexible configuration options.",
-              "line": 5211,
+              "line": 5226,
               "deprecated": false
             },
             {
@@ -329,7 +329,7 @@
               "kind": "staticmethod",
               "signature": "(include_base: bool = False, muted_only: bool = False, active_only: bool = False) -> List[str]",
               "summary": "Get all animation layers in the scene.",
-              "line": 5360,
+              "line": 5375,
               "deprecated": false
             },
             {
@@ -338,7 +338,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, mode: str = 'auto', resolution_order: Optional[Tuple[str, ...]] = None, tangent_detail: bool = False) -> Dict[str, Dict[str, Any]]",
               "summary": "Copy attribute values from objects for later pasting as keys.",
-              "line": 5390,
+              "line": 5405,
               "deprecated": false
             },
             {
@@ -347,7 +347,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, copied_data: Optional[Dict[str, Dict[str, Any]]] = None, target_time=None, match_source: bool = True, refresh_channel_box: bool = True, **kwargs) -> int",
               "summary": "Paste previously copied attribute values as keyframes.",
-              "line": 5585,
+              "line": 5600,
               "deprecated": false
             },
             {
@@ -356,7 +356,7 @@
               "kind": "staticmethod",
               "signature": "(layer: str, merge_to_base: bool = False) -> bool",
               "summary": "Delete an animation layer.",
-              "line": 5784,
+              "line": 5799,
               "deprecated": false
             },
             {
@@ -365,7 +365,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, padding: float = 0) -> bool",
               "summary": "Set the playback range to encompass keyframes on all (or given) scene objects.",
-              "line": 5816,
+              "line": 5831,
               "deprecated": false
             }
           ]
@@ -1084,7 +1084,7 @@
               "name": "export_variations",
               "qualname": "PlayblastExporter.export_variations",
               "kind": "method",
-              "signature": "(self, output_path: str, base_kwargs: Optional[Dict[str, Any]] = None, scene_name: Optional[str] = None, variations: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]",
+              "signature": "(self, output_path: str, base_kwargs: Optional[Dict[str, Any]] = None, scene_name: Optional[str] = None, variations: Optional[List[Dict[str, Any]]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Dict[str, Any]]",
               "summary": "Produce multiple playblast outputs (formats, sequences, Arnold).",
               "line": 277,
               "deprecated": false
@@ -1134,7 +1134,7 @@
         {
           "name": "SegmentKeysInfo",
           "summary": "Mixin for reporting animation segment information.",
-          "line": 26,
+          "line": 27,
           "bases": [],
           "members": [
             {
@@ -1143,7 +1143,7 @@
               "kind": "staticmethod",
               "signature": "(segments: List[Dict[str, Any]]) -> List[Tuple[str, float, float]]",
               "summary": "Extract time ranges from segment data.",
-              "line": 30,
+              "line": 31,
               "deprecated": false
             },
             {
@@ -1151,8 +1151,26 @@
               "qualname": "SegmentKeysInfo.print_time_ranges",
               "kind": "classmethod",
               "signature": "(cls, source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]], header: Optional[str] = None, per_segment: bool = False, object_fmt: Optional[str] = None, segment_fmt: Optional[str] = None, by_time: bool = False, csv_output: bool = False)",
-              "summary": "Print formatted time ranges.",
-              "line": 51,
+              "summary": "Print formatted time ranges to stdout.",
+              "line": 205,
+              "deprecated": false
+            },
+            {
+              "name": "format_time_ranges_text",
+              "qualname": "SegmentKeysInfo.format_time_ranges_text",
+              "kind": "classmethod",
+              "signature": "(cls, source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]], **kwargs) -> str",
+              "summary": "Return the same output as :meth:`print_time_ranges` as a",
+              "line": 231,
+              "deprecated": false
+            },
+            {
+              "name": "format_time_ranges_html",
+              "qualname": "SegmentKeysInfo.format_time_ranges_html",
+              "kind": "classmethod",
+              "signature": "(cls, source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]], title: Optional[str] = None, **kwargs) -> str",
+              "summary": "Wrap :meth:`format_time_ranges_text` in styled HTML suitable",
+              "line": 242,
               "deprecated": false
             }
           ]
@@ -1160,7 +1178,7 @@
         {
           "name": "SegmentKeys",
           "summary": "Shared helper for collecting and grouping animation segments.",
-          "line": 221,
+          "line": 269,
           "bases": [
             "SegmentKeysInfo"
           ],
@@ -1169,9 +1187,36 @@
               "name": "collect_segments",
               "qualname": "SegmentKeys.collect_segments",
               "kind": "classmethod",
-              "signature": "(cls, objects: List[Any], ignore: Optional[Union[str, List[str]]] = None, split_static: bool = False, selected_keys_only: bool = False, channel_box_attrs: Optional[List[str]] = None, static_tolerance: float = 0.0001, time_range: Optional[Tuple[Optional[float], Optional[float]]] = None, ignore_visibility_holds: bool = False, ignore_holds: bool = False, exclude_next_start: bool = True, motion_only: bool = False, motion_rate: float = 0.001) -> List[Dict[str, Any]]",
+              "signature": "(cls, objects: List[Any], ignore: Optional[Union[str, List[str]]] = None, split_static: bool = False, selected_keys_only: bool = False, channel_box_attrs: Optional[List[str]] = None, static_tolerance: float = 0.0001, time_range: Optional[Tuple[Optional[float], Optional[float]]] = None, ignore_visibility_holds: bool = False, ignore_holds: bool = False, exclude_next_start: bool = True, motion_only: bool = False, motion_rate: float = 0.001, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Dict[str, Any]]",
               "summary": "Collect animation segments from objects.",
-              "line": 258,
+              "line": 306,
+              "deprecated": false
+            },
+            {
+              "name": "get_scene_info",
+              "qualname": "SegmentKeys.get_scene_info",
+              "kind": "classmethod",
+              "signature": "(cls, objects: Optional[List[str]] = None, detailed: bool = True, ignore_holds: bool = True, traversal: Optional[str] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Dict[str, Any]]",
+              "summary": "Collect animation segments for the scene info report.",
+              "line": 558,
+              "deprecated": false
+            },
+            {
+              "name": "format_scene_info_text",
+              "qualname": "SegmentKeys.format_scene_info_text",
+              "kind": "classmethod",
+              "signature": "(cls, objects: Optional[List[str]] = None, detailed: bool = True, csv_output: bool = False, by_time: bool = False, ignore_holds: bool = True, traversal: Optional[str] = None) -> str",
+              "summary": "Plain-text scene-info report.",
+              "line": 635,
+              "deprecated": false
+            },
+            {
+              "name": "format_scene_info_html",
+              "qualname": "SegmentKeys.format_scene_info_html",
+              "kind": "classmethod",
+              "signature": "(cls, objects: Optional[List[str]] = None, detailed: bool = True, csv_output: bool = False, by_time: bool = False, ignore_holds: bool = True, traversal: Optional[str] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> str",
+              "summary": "HTML scene-info report for ``sb.text_view_dialog``.",
+              "line": 661,
               "deprecated": false
             },
             {
@@ -1179,8 +1224,8 @@
               "qualname": "SegmentKeys.print_scene_info",
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[str]] = None, detailed: bool = True, csv_output: bool = False, by_time: bool = False, ignore_holds: bool = True)",
-              "summary": "Print animation info for the scene or provided objects.",
-              "line": 504,
+              "summary": "Print animation info to stdout.",
+              "line": 700,
               "deprecated": false
             },
             {
@@ -1189,7 +1234,7 @@
               "kind": "classmethod",
               "signature": "(cls, segments: List[Dict[str, Any]], mode: str = 'per_segment', **kwargs) -> List[Dict[str, Any]]",
               "summary": "Group segments based on the specified mode.",
-              "line": 548,
+              "line": 726,
               "deprecated": false
             },
             {
@@ -1198,7 +1243,7 @@
               "kind": "staticmethod",
               "signature": "(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]",
               "summary": "Merge groups that share any animation curves.",
-              "line": 746,
+              "line": 924,
               "deprecated": false
             },
             {
@@ -1207,7 +1252,7 @@
               "kind": "staticmethod",
               "signature": "(curves: List[Any], offset: float, time_range: Optional[Tuple[float, float]] = None, remove_flat_at_dest: bool = False)",
               "summary": "Shift keys on curves by offset using a two-pass move to avoid",
-              "line": 1170,
+              "line": 1348,
               "deprecated": false
             },
             {
@@ -1216,7 +1261,7 @@
               "kind": "classmethod",
               "signature": "(cls, groups_data: List[dict], start_frame: float, spacing: Union[int, float] = 0, use_intervals: bool = False, avoid_overlap: bool = False, preserve_gaps: bool = False)",
               "summary": "Calculate and execute staggering on groups of segments.",
-              "line": 1292,
+              "line": 1470,
               "deprecated": false
             }
           ]
@@ -1256,7 +1301,7 @@
           "name": "apply",
           "qualname": "apply",
           "kind": "function",
-          "signature": "(store: ShotStore, plan: MovePlan) -> None",
+          "signature": "(store: ShotStore, plan: MovePlan, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> None",
           "summary": "Execute ``plan`` against the scene and ``store``.",
           "line": 114,
           "deprecated": false
@@ -4433,7 +4478,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Init Key Audio Event option-box menu.",
-              "line": 426,
+              "line": 427,
               "deprecated": false
             },
             {
@@ -4442,7 +4487,7 @@
               "kind": "method",
               "signature": "(self, widget=None)",
               "summary": "Key Audio Event — write ON (1) at current frame, optionally OFF at end.",
-              "line": 521,
+              "line": 522,
               "deprecated": false
             },
             {
@@ -4451,7 +4496,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Remove Audio — nuke every track, DG node, and the composite.",
-              "line": 663,
+              "line": 664,
               "deprecated": false
             },
             {
@@ -4460,7 +4505,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Cleanup Unused — delete unkeyed tracks and their DG nodes.",
-              "line": 671,
+              "line": 672,
               "deprecated": false
             },
             {
@@ -4469,7 +4514,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Replace Selected Track — swap the selected track's audio file.",
-              "line": 676,
+              "line": 677,
               "deprecated": false
             },
             {
@@ -4478,7 +4523,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Rename Track — rename the currently selected track's id.",
-              "line": 720,
+              "line": 721,
               "deprecated": false
             }
           ]
@@ -5426,36 +5471,225 @@
         },
         {
           "name": "MeshRecord",
-          "summary": "Compact record for mesh statistics.",
-          "line": 1000,
+          "summary": "Per-mesh statistics for a single shape node.",
+          "line": 1012,
           "bases": [],
           "members": []
         },
         {
           "name": "MaterialRecord",
-          "summary": "Compact record for material usage.",
-          "line": 1019,
+          "summary": "Per-shape material usage summary (aggregated across slots).",
+          "line": 1030,
           "bases": [],
           "members": []
+        },
+        {
+          "name": "Finding",
+          "summary": "An observation about an asset (negative or risk-flagged).",
+          "line": 1048,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "FixAction",
+          "summary": "A recommended remediation step.",
+          "line": 1058,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "BudgetDelta",
+          "summary": "How far an asset exceeds the profile budget along each axis.",
+          "line": 1069,
+          "bases": [],
+          "members": [
+            {
+              "name": "is_over_budget",
+              "qualname": "BudgetDelta.is_over_budget",
+              "kind": "method",
+              "signature": "(self) -> bool",
+              "summary": "",
+              "line": 1077,
+              "deprecated": false
+            },
+            {
+              "name": "summary",
+              "qualname": "BudgetDelta.summary",
+              "kind": "method",
+              "signature": "(self) -> str",
+              "summary": "Pre-rendered ``\"tris +N | slots +M | …\"`` string used by the",
+              "line": 1087,
+              "deprecated": false
+            }
+          ]
         },
         {
           "name": "AssetRecord",
-          "summary": "Combined record for an analyzed asset.",
-          "line": 1038,
+          "summary": "Combined per-asset record produced by analyze().",
+          "line": 1104,
           "bases": [],
           "members": []
         },
         {
-          "name": "SceneOverview",
-          "summary": "High-level overview of the scene analysis.",
-          "line": 1057,
+          "name": "ParetoEntry",
+          "summary": "One row of a Pareto ranking (top contributor + cumulative %).",
+          "line": 1123,
           "bases": [],
           "members": []
+        },
+        {
+          "name": "TextureFile",
+          "summary": "A texture file referenced by the scene, with usage stats.",
+          "line": 1132,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "MissingTexture",
+          "summary": "A texture referenced by a material but not present on disk.",
+          "line": 1146,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "SharedTexture",
+          "summary": "A texture used by more than one mesh.",
+          "line": 1155,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "MaterialSplit",
+          "summary": "A material correlated with high-slot meshes (draw-call splits).",
+          "line": 1163,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "SlotStats",
+          "summary": "Distribution stats for material slots-per-mesh.",
+          "line": 1173,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "InstanceStats",
+          "summary": "Mesh / instance counts.",
+          "line": 1184,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "BudgetBuckets",
+          "summary": "Histogram of overage severity per dimension.",
+          "line": 1193,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "ComplianceStats",
+          "summary": "Percentage of scene over budget per dimension.",
+          "line": 1205,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "MissingTextureImpact",
+          "summary": "Downstream effect of missing textures on the asset list.",
+          "line": 1213,
+          "bases": [],
+          "members": [
+            {
+              "name": "is_empty",
+              "qualname": "MissingTextureImpact.is_empty",
+              "kind": "method",
+              "signature": "(self) -> bool",
+              "summary": "",
+              "line": 1220,
+              "deprecated": false
+            }
+          ]
+        },
+        {
+          "name": "SummaryStats",
+          "summary": "High-level scene counters surfaced by the Executive Summary.",
+          "line": 1225,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "BudgetStats",
+          "summary": "Budget / compliance / savings figures.",
+          "line": 1248,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "TextureStats",
+          "summary": "Texture-side aggregates.",
+          "line": 1266,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "PipelineStats",
+          "summary": "Pipeline integrity findings (missing textures + impact).",
+          "line": 1285,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "OffenderLists",
+          "summary": "Top-N rankings across various dimensions.",
+          "line": 1295,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "AnalysisManifest",
+          "summary": "What was analyzed, how, and how long it took.",
+          "line": 1320,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "SceneReport",
+          "summary": "Top-level result of ``SceneAnalyzer.generate_report``.",
+          "line": 1342,
+          "bases": [],
+          "members": [
+            {
+              "name": "to_dict",
+              "qualname": "SceneReport.to_dict",
+              "kind": "method",
+              "signature": "(self) -> Dict[str, Any]",
+              "summary": "Serialize the report to a nested plain-dict tree.",
+              "line": 1359,
+              "deprecated": false
+            }
+          ]
+        },
+        {
+          "name": "SceneInfoSection",
+          "summary": "Report-section identifiers used to gate analyze() work and report output.",
+          "line": 1374,
+          "bases": [],
+          "members": [
+            {
+              "name": "normalize",
+              "qualname": "SceneInfoSection.normalize",
+              "kind": "classmethod",
+              "signature": "(cls, sections: Optional[List[str]]) -> List[str]",
+              "summary": "Coerce a caller-supplied sections argument to a stable,",
+              "line": 1436,
+              "deprecated": false
+            }
+          ]
         },
         {
           "name": "SceneAnalyzer",
           "summary": "Analyzes scene objects for performance expectations in game engines.",
-          "line": 1160,
+          "line": 1460,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -5466,34 +5700,52 @@
               "kind": "classmethod",
               "signature": "(cls, adaptive: bool = False, verbose: bool = True) -> None",
               "summary": "Run a full scene audit and print the report.",
-              "line": 1181,
+              "line": 1492,
+              "deprecated": false
+            },
+            {
+              "name": "format_audit_text",
+              "qualname": "SceneAnalyzer.format_audit_text",
+              "kind": "classmethod",
+              "signature": "(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, sections: Optional[List[str]] = None) -> Dict[str, str]",
+              "summary": "Run the audit and return the formatted report as a",
+              "line": 1598,
+              "deprecated": false
+            },
+            {
+              "name": "format_audit_html",
+              "qualname": "SceneAnalyzer.format_audit_html",
+              "kind": "classmethod",
+              "signature": "(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, sections: Optional[List[str]] = None) -> Dict[str, str]",
+              "summary": "Run the audit and return a section-keyed dict of HTML",
+              "line": 1659,
               "deprecated": false
             },
             {
               "name": "analyze",
               "qualname": "SceneAnalyzer.analyze",
               "kind": "method",
-              "signature": "(self, objects: List[Any] = None, fast_mode: bool = True, progress_callback: Optional[Callable[[int, int, str], None]] = None, profile: AuditProfile = None) -> List[AssetRecord]",
+              "signature": "(self, objects: List[Any] = None, fast_mode: bool = True, progress_callback: Optional[Callable[[int, int, str], None]] = None, profile: AuditProfile = None, sections: Optional[List[str]] = None) -> List[AssetRecord]",
               "summary": "Main entry point for analysis.",
-              "line": 1200,
+              "line": 1743,
               "deprecated": false
             },
             {
               "name": "generate_report",
               "qualname": "SceneAnalyzer.generate_report",
               "kind": "method",
-              "signature": "(self, records: List[AssetRecord]) -> SceneOverview",
-              "summary": "Generates a high-level overview from analysis records.",
-              "line": 1297,
+              "signature": "(self, records: List[AssetRecord]) -> SceneReport",
+              "summary": "Build a :class:`SceneReport` from per-asset records.",
+              "line": 1925,
               "deprecated": false
             },
             {
               "name": "print_report",
               "qualname": "SceneAnalyzer.print_report",
               "kind": "method",
-              "signature": "(self, overview: SceneOverview)",
-              "summary": "Prints a formatted report to the logger.",
-              "line": 3072,
+              "signature": "(self, report: SceneReport, sections: Optional[List[str]] = None)",
+              "summary": "Print the formatted scene-audit report to the logger.",
+              "line": 3971,
               "deprecated": false
             }
           ]
@@ -12469,6 +12721,40 @@
       ]
     },
     {
+      "relpath": "mat_utils/_affix_mode.py",
+      "summary": "Shared affix-mode option-box helper for mat_utils slot files.",
+      "functions": [
+        {
+          "name": "add_affix_mode_menu",
+          "qualname": "add_affix_mode_menu",
+          "kind": "function",
+          "signature": "(widget, default_mode: str = 'auto', on_change=None)",
+          "summary": "Wire a 3-option affix-mode combobox onto ``widget.option_box.menu``.",
+          "line": 26,
+          "deprecated": false
+        },
+        {
+          "name": "current_affix_mode",
+          "qualname": "current_affix_mode",
+          "kind": "function",
+          "signature": "(widget) -> str",
+          "summary": "Return the currently selected affix mode ('auto'/'suffix'/'prefix').",
+          "line": 56,
+          "deprecated": false
+        },
+        {
+          "name": "resolve_affix",
+          "qualname": "resolve_affix",
+          "kind": "function",
+          "signature": "(widget, default: str = 'prefix') -> Tuple[str, str]",
+          "summary": "Read widget text + mode and return ``(prefix, suffix)`` per the picker.",
+          "line": 65,
+          "deprecated": false
+        }
+      ],
+      "classes": []
+    },
+    {
       "relpath": "mat_utils/_mat_utils.py",
       "summary": "",
       "functions": [],
@@ -12476,7 +12762,7 @@
         {
           "name": "MatUtilsInternals",
           "summary": "Internal helper utilities shared across MatUtils operations.",
-          "line": 42,
+          "line": 44,
           "bases": [
             "ptk.HelpMixin"
           ],
@@ -12487,7 +12773,7 @@
               "kind": "staticmethod",
               "signature": "(material, attr_name, _depth=0)",
               "summary": "Locate the file texture node feeding a material attribute.",
-              "line": 189,
+              "line": 191,
               "deprecated": false
             }
           ]
@@ -12495,7 +12781,7 @@
         {
           "name": "MatUtils",
           "summary": "",
-          "line": 288,
+          "line": 290,
           "bases": [
             "MatUtilsInternals"
           ],
@@ -12506,7 +12792,7 @@
               "kind": "staticmethod",
               "signature": "(path: str) -> Union[str, None]",
               "summary": "Resolves a texture path by expanding env vars, checking workspace, and handling UDIMs.",
-              "line": 290,
+              "line": 292,
               "deprecated": false
             },
             {
@@ -12515,7 +12801,7 @@
               "kind": "staticmethod",
               "signature": "(objs=None, as_strings=True, mat_type=None) -> List[str]",
               "summary": "Returns the set of materials assigned to a given list of objects or components.",
-              "line": 327,
+              "line": 329,
               "deprecated": false
             },
             {
@@ -12524,7 +12810,7 @@
               "kind": "staticmethod",
               "signature": "(objects, cluster_by_distance=False, threshold=10000.0)",
               "summary": "Groups objects based on their assigned material(s).",
-              "line": 495,
+              "line": 497,
               "deprecated": false
             },
             {
@@ -12533,7 +12819,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[Any]] = None, materials: Optional[List[Any]] = None, file_nodes: Optional[List[Any]] = None, texture_names: Optional[List[str]] = None, absolute: bool = True) -> List[str]",
               "summary": "Resolve unique texture file paths for the given scope.",
-              "line": 529,
+              "line": 531,
               "deprecated": false
             },
             {
@@ -12542,16 +12828,61 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, materials=None, file_nodes=None, texture_names=None)",
               "summary": "Get image metadata (size, mode, format) for texture files in scope.",
-              "line": 574,
+              "line": 576,
+              "deprecated": false
+            },
+            {
+              "name": "get_mat_info",
+              "qualname": "MatUtils.get_mat_info",
+              "kind": "classmethod",
+              "signature": "(cls, materials: Optional[List[Any]] = None, objects: Optional[List[Any]] = None, optimize_check: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, **optimize_kwargs) -> List[Dict[str, Any]]",
+              "summary": "Aggregate per-material info: name, type, textures + image metadata.",
+              "line": 597,
+              "deprecated": false
+            },
+            {
+              "name": "format_texture_info_text",
+              "qualname": "MatUtils.format_texture_info_text",
+              "kind": "classmethod",
+              "signature": "(cls, info_list: List[Dict[str, Any]]) -> str",
+              "summary": "Render :meth:`get_texture_info` output as a plain-text report.",
+              "line": 768,
+              "deprecated": false
+            },
+            {
+              "name": "format_texture_info_html",
+              "qualname": "MatUtils.format_texture_info_html",
+              "kind": "classmethod",
+              "signature": "(cls, info_list: List[Dict[str, Any]]) -> str",
+              "summary": "Render :meth:`get_texture_info` output as styled HTML.",
+              "line": 786,
+              "deprecated": false
+            },
+            {
+              "name": "format_mat_info_text",
+              "qualname": "MatUtils.format_mat_info_text",
+              "kind": "classmethod",
+              "signature": "(cls, records: List[Dict[str, Any]]) -> str",
+              "summary": "Render :meth:`get_mat_info` output as a plain-text report.",
+              "line": 809,
+              "deprecated": false
+            },
+            {
+              "name": "format_mat_info_html",
+              "qualname": "MatUtils.format_mat_info_html",
+              "kind": "classmethod",
+              "signature": "(cls, records: List[Dict[str, Any]]) -> str",
+              "summary": "Render :meth:`get_mat_info` output as styled HTML.",
+              "line": 868,
               "deprecated": false
             },
             {
               "name": "get_scene_mats",
               "qualname": "MatUtils.get_scene_mats",
               "kind": "staticmethod",
-              "signature": "(inc=None, exc=None, node_type=None, sort: bool = False, as_dict: bool = False, **filter_kwargs)",
+              "signature": "(inc=None, exc=None, node_type=None, sort: bool = False, as_dict: bool = False, exclude_defaults: bool = True, **filter_kwargs)",
               "summary": "Retrieves all materials from the current scene, with flexible name/type filtering.",
-              "line": 595,
+              "line": 955,
               "deprecated": false
             },
             {
@@ -12560,7 +12891,7 @@
               "kind": "staticmethod",
               "signature": "(file_nodes) -> List[str]",
               "summary": "Return surface shaders connected to one or more file nodes, ignoring intermediates.",
-              "line": 620,
+              "line": 995,
               "deprecated": false
             },
             {
@@ -12569,7 +12900,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, raw: bool = False, return_type: str = 'fileNode') -> list",
               "summary": "Returns file node info in any column order based on return_type.",
-              "line": 656,
+              "line": 1031,
               "deprecated": false
             },
             {
@@ -12578,7 +12909,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Retrieves the list of favorite materials in Maya.",
-              "line": 741,
+              "line": 1116,
               "deprecated": false
             },
             {
@@ -12587,7 +12918,7 @@
               "kind": "staticmethod",
               "signature": "(mat: object, delete: bool = False) -> bool",
               "summary": "Checks if a given material is assigned and optionally deletes it.",
-              "line": 757,
+              "line": 1132,
               "deprecated": false
             },
             {
@@ -12596,7 +12927,7 @@
               "kind": "staticmethod",
               "signature": "(mat_type, prefix='', name='')",
               "summary": "Creates a material based on the provided type or a random material if 'mat_type' is 'random'.",
-              "line": 778,
+              "line": 1153,
               "deprecated": false
             },
             {
@@ -12605,7 +12936,7 @@
               "kind": "staticmethod",
               "signature": "(objects, mat_name)",
               "summary": "Assigns a material to a list of objects or components.",
-              "line": 810,
+              "line": 1185,
               "deprecated": false
             },
             {
@@ -12614,7 +12945,7 @@
               "kind": "staticmethod",
               "signature": "(image_path, name=None, color_space=None)",
               "summary": "Create a ``file`` texture node with a wired ``place2dTexture``.",
-              "line": 844,
+              "line": 1219,
               "deprecated": false
             },
             {
@@ -12623,7 +12954,7 @@
               "kind": "staticmethod",
               "signature": "(shader, name=None, assign_to=None)",
               "summary": "Create a shading group for *shader* and optionally assign objects.",
-              "line": 891,
+              "line": 1266,
               "deprecated": false
             },
             {
@@ -12632,7 +12963,7 @@
               "kind": "staticmethod",
               "signature": "(name, opacity=False, opacity_mode=None)",
               "summary": "Create a StingrayPBS shader by loading a ShaderFX preset graph.",
-              "line": 920,
+              "line": 1295,
               "deprecated": false
             },
             {
@@ -12641,7 +12972,7 @@
               "kind": "classmethod",
               "signature": "(cls, material: str, objects: Optional[List[str]] = None, shell: bool = False) -> List[str]",
               "summary": "Find objects or faces by the material ID.",
-              "line": 967,
+              "line": 1342,
               "deprecated": false
             },
             {
@@ -12650,7 +12981,7 @@
               "kind": "staticmethod",
               "signature": "(materials: Optional[List[str]] = None, attributes: Optional[List[str]] = None, inc_mat_name: bool = False, inc_path_type: bool = False, resolve_full_path: bool = False) -> Union[List[str], List[Tuple[str, ...]]]",
               "summary": "Collects specified attributes file paths for given materials.",
-              "line": 1029,
+              "line": 1404,
               "deprecated": false
             },
             {
@@ -12659,7 +12990,7 @@
               "kind": "staticmethod",
               "signature": "(file_paths: List[str], target_dir: str, silent: bool = False, limit_to_nodes: Optional[List[str]] = None, as_strings: bool = True) -> List[str]",
               "summary": "Internal helper to remap file nodes to target_dir, preserving relative subfolders inside sourceimag…",
-              "line": 1111,
+              "line": 1486,
               "deprecated": false
             },
             {
@@ -12668,7 +12999,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, new_dir: Optional[str] = None, silent: bool = False, file_nodes: Optional[List[str]] = None, objects: Optional[List[str]] = None, as_strings: bool = True) -> None",
               "summary": "Remaps file texture paths for materials to new_dir.",
-              "line": 1186,
+              "line": 1561,
               "deprecated": false
             },
             {
@@ -12677,7 +13008,7 @@
               "kind": "staticmethod",
               "signature": "(material1: str, material2: str) -> bool",
               "summary": "Check if two materials are duplicates based on their textures.",
-              "line": 1231,
+              "line": 1606,
               "deprecated": false
             },
             {
@@ -12686,7 +13017,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, strict: bool = False) -> Dict[str, List[str]]",
               "summary": "Find duplicate materials based on their texture file names or full paths.",
-              "line": 1242,
+              "line": 1617,
               "deprecated": false
             },
             {
@@ -12695,7 +13026,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, delete: bool = False, strict: bool = False) -> None",
               "summary": "Find duplicate materials, remove duplicates, and reassign them to the original material.",
-              "line": 1350,
+              "line": 1725,
               "deprecated": false
             },
             {
@@ -12704,7 +13035,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str], as_strings: bool = True) -> List[str]",
               "summary": "Filter materials assigned to the given objects.",
-              "line": 1413,
+              "line": 1788,
               "deprecated": false
             },
             {
@@ -12713,7 +13044,7 @@
               "kind": "staticmethod",
               "signature": "(materials=None, inc=None, exc=None, log=False, refresh_viewport=False, refresh_hypershade=False, texture_types: Optional[List[str]] = None)",
               "summary": "Reloads textures connected to specified materials with inclusion/exclusion filters.",
-              "line": 1420,
+              "line": 1795,
               "deprecated": false
             },
             {
@@ -12722,25 +13053,25 @@
               "kind": "classmethod",
               "signature": "(cls, found_files: List[Union[str, Tuple[str, str]]], new_dir: str, delete_old: bool = False, create_dir: bool = True, per_file_timeout: float = 120.0, max_workers: int = 8, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> List[Tuple[str, str]]",
               "summary": "Move or copy found texture files to a new directory.",
-              "line": 1474,
+              "line": 1849,
               "deprecated": false
             },
             {
               "name": "find_texture_files",
               "qualname": "MatUtils.find_texture_files",
               "kind": "classmethod",
-              "signature": "(cls, objects: Optional[List[str]] = None, source_dir: str = '', recursive: bool = True, return_dir: bool = False, quiet: bool = False, file_nodes: Optional[List[str]] = None, materials: Optional[List[str]] = None) -> List[Union[str, Tuple[str, str]]]",
+              "signature": "(cls, objects: Optional[List[str]] = None, source_dir: str = '', recursive: bool = True, return_dir: bool = False, quiet: bool = False, file_nodes: Optional[List[str]] = None, materials: Optional[List[str]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Union[str, Tuple[str, str]]]",
               "summary": "Find texture files for given objects' materials inside source_dir.",
-              "line": 1628,
+              "line": 2003,
               "deprecated": false
             },
             {
               "name": "migrate_textures",
               "qualname": "MatUtils.migrate_textures",
               "kind": "classmethod",
-              "signature": "(cls, materials: Optional[List[str]] = None, old_dir: Optional[str] = None, new_dir: Optional[str] = None, silent: bool = False, delete_old: bool = False, objects: Optional[List[str]] = None, file_nodes: Optional[List[str]] = None) -> None",
+              "signature": "(cls, materials: Optional[List[str]] = None, old_dir: Optional[str] = None, new_dir: Optional[str] = None, silent: bool = False, delete_old: bool = False, objects: Optional[List[str]] = None, file_nodes: Optional[List[str]] = None, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> None",
               "summary": "Copies texture files from an old directory to a new one.",
-              "line": 1721,
+              "line": 2100,
               "deprecated": false
             },
             {
@@ -12749,7 +13080,7 @@
               "kind": "staticmethod",
               "signature": "(source_dir: str = None, output_dir: str = None) -> None",
               "summary": "Move unused textures to a specified directory.",
-              "line": 1771,
+              "line": 2152,
               "deprecated": false
             },
             {
@@ -12758,7 +13089,7 @@
               "kind": "staticmethod",
               "signature": "(mat: Union[str, object], size: List[int] = [20, 20], fallback_to_blank: bool = True) -> object",
               "summary": "Get an icon with a color fill matching the given material's RGB value.",
-              "line": 1800,
+              "line": 2181,
               "deprecated": false
             },
             {
@@ -12767,7 +13098,7 @@
               "kind": "staticmethod",
               "signature": "(bump_file_node, output_path: Optional[str] = None, intensity: float = 1.0, format_type: str = 'opengl', filter_type: str = '3x3', wrap_mode: str = 'black', create_file_node: bool = True, node_name: Optional[str] = None) -> Optional[str]",
               "summary": "Convert a bump/height map to a normal map using Maya's bump2d node.",
-              "line": 1833,
+              "line": 2214,
               "deprecated": false
             },
             {
@@ -12776,7 +13107,7 @@
               "kind": "staticmethod",
               "signature": "(normal_file_node, material=None) -> Dict[str, Any]",
               "summary": "Validate normal map file node setup and provide recommendations.",
-              "line": 1947,
+              "line": 2328,
               "deprecated": false
             },
             {
@@ -12785,7 +13116,7 @@
               "kind": "staticmethod",
               "signature": "(materials: Union[str, List[str], object], mode: str = 'showUpAndDownstream') -> None",
               "summary": "Open the Hypershade and graph the specified materials.",
-              "line": 2021,
+              "line": 2402,
               "deprecated": false
             }
           ]
@@ -12800,7 +13131,7 @@
         {
           "name": "GameShader",
           "summary": "A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.",
-          "line": 28,
+          "line": 33,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -12811,7 +13142,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], name: str = '', prefix: str = '', suffix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]",
               "summary": "Create a PBR shader network with textures.",
-              "line": 44,
+              "line": 49,
               "deprecated": false
             },
             {
@@ -12820,7 +13151,7 @@
               "kind": "method",
               "signature": "(self, name: str, opacity: bool) -> object",
               "summary": "Initializes and sets up a StingrayPBS shader node in Maya.",
-              "line": 358,
+              "line": 363,
               "deprecated": false
             },
             {
@@ -12829,7 +13160,7 @@
               "kind": "method",
               "signature": "(self, name: str, shader_node: object) -> Tuple[object, object, object]",
               "summary": "Sets up a basic Arnold shader network for use with a Stingray PBS or Standard Surface shader.",
-              "line": 406,
+              "line": 411,
               "deprecated": false
             },
             {
@@ -12838,7 +13169,7 @@
               "kind": "method",
               "signature": "(self, name: str, opacity: bool) -> object",
               "summary": "Creates and sets up a Maya Standard Surface shader node.",
-              "line": 452,
+              "line": 457,
               "deprecated": false
             },
             {
@@ -12847,7 +13178,7 @@
               "kind": "method",
               "signature": "(self, name: str, opacity: bool) -> object",
               "summary": "Creates and sets up a Maya OpenPBR Surface shader node.",
-              "line": 484,
+              "line": 489,
               "deprecated": false
             },
             {
@@ -12856,7 +13187,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, sr_node: object) -> bool",
               "summary": "Connects texture files to the corresponding slots in the StingrayPBS shader node",
-              "line": 615,
+              "line": 620,
               "deprecated": false
             },
             {
@@ -12865,7 +13196,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, ai_node: object, aiMult_node: object, bump_node: object) -> bool",
               "summary": "Connects texture files to the corresponding slots in the Arnold shader nodes based on the texture t…",
-              "line": 808,
+              "line": 813,
               "deprecated": false
             },
             {
@@ -12874,7 +13205,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, std_node: object) -> bool",
               "summary": "Connects texture files to Maya Standard Surface shader slots.",
-              "line": 996,
+              "line": 1001,
               "deprecated": false
             },
             {
@@ -12883,7 +13214,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, op_node: object) -> bool",
               "summary": "Connects texture files to Maya OpenPBR Surface shader slots.",
-              "line": 1191,
+              "line": 1196,
               "deprecated": false
             },
             {
@@ -12892,7 +13223,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], desired_normal_type: str) -> List[str]",
               "summary": "Filters and ensures only the desired type of normal map is in the textures list.",
-              "line": 1400,
+              "line": 1405,
               "deprecated": false
             },
             {
@@ -12901,7 +13232,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]",
               "summary": "Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…",
-              "line": 1452,
+              "line": 1457,
               "deprecated": false
             },
             {
@@ -12910,7 +13241,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], output_extension: str = 'png') -> List[str]",
               "summary": "Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.",
-              "line": 1575,
+              "line": 1580,
               "deprecated": false
             },
             {
@@ -12919,7 +13250,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], use_albedo_transparency: bool) -> List[str]",
               "summary": "Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…",
-              "line": 1678,
+              "line": 1683,
               "deprecated": false
             }
           ]
@@ -12927,7 +13258,7 @@
         {
           "name": "GameShaderSlots",
           "summary": "",
-          "line": 1723,
+          "line": 1728,
           "bases": [
             "GameShader"
           ],
@@ -12938,7 +13269,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the header widget.",
-              "line": 1767,
+              "line": 1772,
               "deprecated": false
             },
             {
@@ -12947,7 +13278,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Graph the material in the Hypershade.",
-              "line": 1791,
+              "line": 1796,
               "deprecated": false
             },
             {
@@ -12956,16 +13287,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the mat name from the user input text field.",
-              "line": 1801,
-              "deprecated": false
-            },
-            {
-              "name": "affix_is_prefix",
-              "qualname": "GameShaderSlots.affix_is_prefix",
-              "kind": "property",
-              "signature": "(self) -> bool",
-              "summary": "Whether the affix field (txt002) acts as a prefix or a suffix.",
-              "line": 1811,
+              "line": 1806,
               "deprecated": false
             },
             {
@@ -12973,8 +13295,8 @@
               "qualname": "GameShaderSlots.mat_prefix",
               "kind": "property",
               "signature": "(self) -> str",
-              "summary": "Return the affix text when in prefix mode, else empty string.",
-              "line": 1820,
+              "summary": "Return the affix text when it resolves as a prefix, else empty string.",
+              "line": 1816,
               "deprecated": false
             },
             {
@@ -12982,8 +13304,8 @@
               "qualname": "GameShaderSlots.mat_suffix",
               "kind": "property",
               "signature": "(self) -> str",
-              "summary": "Return the affix text when in suffix mode, else empty string.",
-              "line": 1827,
+              "summary": "Return the affix text when it resolves as a suffix, else empty string.",
+              "line": 1824,
               "deprecated": false
             },
             {
@@ -12992,7 +13314,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the normal map type from the comboBoxes current text.",
-              "line": 1834,
+              "line": 1832,
               "deprecated": false
             },
             {
@@ -13001,7 +13323,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the output map extension from the comboBox current text.",
-              "line": 1844,
+              "line": 1842,
               "deprecated": false
             },
             {
@@ -13010,7 +13332,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the shader type selection.",
-              "line": 1854,
+              "line": 1852,
               "deprecated": false
             },
             {
@@ -13019,7 +13341,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Presets",
-              "line": 1868,
+              "line": 1866,
               "deprecated": false
             },
             {
@@ -13028,7 +13350,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Output Extension",
-              "line": 1882,
+              "line": 1880,
               "deprecated": false
             },
             {
@@ -13036,8 +13358,8 @@
               "qualname": "GameShaderSlots.txt002_init",
               "kind": "method",
               "signature": "(self, widget)",
-              "summary": "Add a prefix/suffix toggle to the affix field's option menu.",
-              "line": 1889,
+              "summary": "Add a prefix/suffix/auto-mode combobox to the affix field's option menu.",
+              "line": 1887,
               "deprecated": false
             },
             {
@@ -13046,7 +13368,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Create network.",
-              "line": 1932,
+              "line": 1919,
               "deprecated": false
             }
           ]
@@ -13096,7 +13418,7 @@
         {
           "name": "ImageToPlaneSlots",
           "summary": "Switchboard slots for the Image to Plane UI.",
-          "line": 19,
+          "line": 25,
           "bases": [],
           "members": [
             {
@@ -13105,7 +13427,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header menu.",
-              "line": 48,
+              "line": 54,
               "deprecated": false
             },
             {
@@ -13113,8 +13435,8 @@
               "qualname": "ImageToPlaneSlots.txt_suffix_init",
               "kind": "method",
               "signature": "(self, widget)",
-              "summary": "Add a prefix/suffix toggle to the affix field's option menu.",
-              "line": 81,
+              "summary": "Add a prefix/suffix/auto-mode combobox to the affix field's option menu.",
+              "line": 87,
               "deprecated": false
             }
           ]
@@ -13889,7 +14211,7 @@
         {
           "name": "MatUpdater",
           "summary": "Updates existing materials with processed textures.",
-          "line": 22,
+          "line": 23,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -13898,9 +14220,9 @@
               "name": "update_materials",
               "qualname": "MatUpdater.update_materials",
               "kind": "classmethod",
-              "signature": "(cls, materials: List[Any] = None, config: Union[str, Dict[str, Any]] = None, verbose: bool = False) -> Dict[str, Any]",
+              "signature": "(cls, materials: List[Any] = None, config: Union[str, Dict[str, Any]] = None, verbose: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, Any]",
               "summary": "Update materials with processed textures.",
-              "line": 27,
+              "line": 28,
               "deprecated": false
             },
             {
@@ -13909,7 +14231,7 @@
               "kind": "classmethod",
               "signature": "(cls, material, file_paths, config=None)",
               "summary": "Disconnects PBR attributes if they are driven by the specified files.",
-              "line": 485,
+              "line": 496,
               "deprecated": false
             },
             {
@@ -13918,7 +14240,7 @@
               "kind": "classmethod",
               "signature": "(cls, material, texture_paths, config) -> Dict[str, str]",
               "summary": "Connect processed textures to the material.",
-              "line": 562,
+              "line": 573,
               "deprecated": false
             }
           ]
@@ -13926,7 +14248,7 @@
         {
           "name": "MatUpdaterSlots",
           "summary": "",
-          "line": 601,
+          "line": 612,
           "bases": [
             "MatUpdater"
           ],
@@ -13937,7 +14259,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Format global options in the header menu.",
-              "line": 634,
+              "line": 645,
               "deprecated": false
             },
             {
@@ -13946,7 +14268,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 764,
+              "line": 775,
               "deprecated": false
             },
             {
@@ -13955,7 +14277,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 768,
+              "line": 779,
               "deprecated": false
             },
             {
@@ -13964,7 +14286,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 772,
+              "line": 783,
               "deprecated": false
             },
             {
@@ -13973,7 +14295,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 776,
+              "line": 787,
               "deprecated": false
             },
             {
@@ -13982,7 +14304,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 780,
+              "line": 791,
               "deprecated": false
             },
             {
@@ -13991,7 +14313,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 784,
+              "line": 795,
               "deprecated": false
             },
             {
@@ -14000,7 +14322,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Presets",
-              "line": 787,
+              "line": 798,
               "deprecated": false
             },
             {
@@ -14009,7 +14331,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Update Materials",
-              "line": 837,
+              "line": 849,
               "deprecated": false
             }
           ]
@@ -15075,7 +15397,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Convert to Relative Paths (Global)",
-              "line": 340,
+              "line": 330,
               "deprecated": false
             },
             {
@@ -15084,7 +15406,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Resolve missing textures by exact stem match (different extension) in sourceimages.",
-              "line": 351,
+              "line": 341,
               "deprecated": false
             },
             {
@@ -15093,7 +15415,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Resolve missing textures by fuzzy filename match in sourceimages.",
-              "line": 355,
+              "line": 345,
               "deprecated": false
             },
             {
@@ -15102,7 +15424,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Resolve missing textures using map-type-aware matching in sourceimages.",
-              "line": 359,
+              "line": 349,
               "deprecated": false
             },
             {
@@ -15111,7 +15433,7 @@
               "kind": "method",
               "signature": "(self, selection=None)",
               "summary": "Open a file dialog at sourceimages and repath the selected file node to the chosen file.",
-              "line": 363,
+              "line": 353,
               "deprecated": false
             },
             {
@@ -15120,7 +15442,7 @@
               "kind": "method",
               "signature": "(self, selection=None)",
               "summary": "",
-              "line": 435,
+              "line": 425,
               "deprecated": false
             },
             {
@@ -15129,7 +15451,7 @@
               "kind": "method",
               "signature": "(self, selection=None)",
               "summary": "",
-              "line": 440,
+              "line": 430,
               "deprecated": false
             },
             {
@@ -15138,7 +15460,7 @@
               "kind": "method",
               "signature": "(self, selection=None)",
               "summary": "",
-              "line": 445,
+              "line": 435,
               "deprecated": false
             },
             {
@@ -15147,7 +15469,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Manual refresh trigger from the header refresh button.",
-              "line": 725,
+              "line": 715,
               "deprecated": false
             },
             {
@@ -15156,7 +15478,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "",
-              "line": 732,
+              "line": 722,
               "deprecated": false
             },
             {
@@ -15165,7 +15487,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Clean up scene-change subscriptions via ScriptJobManager.",
-              "line": 947,
+              "line": 937,
               "deprecated": false
             },
             {
@@ -15174,7 +15496,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "",
-              "line": 951,
+              "line": 941,
               "deprecated": false
             },
             {
@@ -15183,7 +15505,7 @@
               "kind": "method",
               "signature": "(self, selection=None)",
               "summary": "Delete the selected file nodes.",
-              "line": 1144,
+              "line": 1134,
               "deprecated": false
             },
             {
@@ -15192,7 +15514,7 @@
               "kind": "method",
               "signature": "(self, selection=None)",
               "summary": "Select the file nodes from the selected rows.",
-              "line": 1180,
+              "line": 1170,
               "deprecated": false
             },
             {
@@ -15201,7 +15523,7 @@
               "kind": "method",
               "signature": "(self, selection=None)",
               "summary": "Graph the selected file node in the Hypershade.",
-              "line": 1203,
+              "line": 1193,
               "deprecated": false
             },
             {
@@ -15210,7 +15532,7 @@
               "kind": "method",
               "signature": "(self, selection=None)",
               "summary": "Select the materials associated with the selected rows.",
-              "line": 1222,
+              "line": 1212,
               "deprecated": false
             },
             {
@@ -15219,7 +15541,7 @@
               "kind": "method",
               "signature": "(self, selection=None)",
               "summary": "Remap the selected file nodes' texture paths to relative paths.",
-              "line": 1253,
+              "line": 1243,
               "deprecated": false
             },
             {
@@ -15228,7 +15550,7 @@
               "kind": "method",
               "signature": "(self, selection=None)",
               "summary": "",
-              "line": 1269,
+              "line": 1259,
               "deprecated": false
             },
             {
@@ -15237,7 +15559,7 @@
               "kind": "method",
               "signature": "(self, selection=None)",
               "summary": "",
-              "line": 1288,
+              "line": 1278,
               "deprecated": false
             },
             {
@@ -15246,7 +15568,7 @@
               "kind": "method",
               "signature": "(self, row: int, col: int)",
               "summary": "",
-              "line": 1303,
+              "line": 1293,
               "deprecated": false
             },
             {
@@ -15255,7 +15577,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Select table rows associated with selected objects.",
-              "line": 1382,
+              "line": 1372,
               "deprecated": false
             },
             {
@@ -15264,7 +15586,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Select Broken Paths",
-              "line": 1439,
+              "line": 1429,
               "deprecated": false
             }
           ]
@@ -18658,6 +18980,15 @@
               "summary": "Run the full export -> RizomUV -> re-import workflow.",
               "line": 178,
               "deprecated": false
+            },
+            {
+              "name": "send_to_rizomuv",
+              "qualname": "RizomUVBridge.send_to_rizomuv",
+              "kind": "method",
+              "signature": "(self, objects, params=None)",
+              "summary": "Export *objects* and open them in a fresh RizomUV session.",
+              "line": 714,
+              "deprecated": false
             }
           ]
         }
@@ -18673,7 +19004,7 @@
           "kind": "function",
           "signature": "(script_text: str) -> 'set[str]'",
           "summary": "Registered keys present in *script_text* (delegates to uitk.bridge).",
-          "line": 247,
+          "line": 296,
           "deprecated": false
         },
         {
@@ -18682,7 +19013,7 @@
           "kind": "function",
           "signature": "() -> 'dict[str, Any]'",
           "summary": "Return ``{key: default}`` for every registered parameter.",
-          "line": 252,
+          "line": 301,
           "deprecated": false
         },
         {
@@ -18691,7 +19022,7 @@
           "kind": "function",
           "signature": "(values: 'dict[str, Any]') -> 'dict[str, str]'",
           "summary": "Format *values* for ``StrUtils.replace_delimited`` using Lua literals.",
-          "line": 257,
+          "line": 306,
           "deprecated": false
         },
         {
@@ -18700,7 +19031,7 @@
           "kind": "function",
           "signature": "(script_text: str, version: 'tuple[int, ...]') -> str",
           "summary": "Drop every line that references a placeholder requiring a newer Rizom.",
-          "line": 302,
+          "line": 351,
           "deprecated": false
         }
       ],
@@ -18769,8 +19100,8 @@
               "qualname": "RizomBridgeSlots.b000",
               "kind": "method",
               "signature": "(self)",
-              "summary": "Process selected transforms with the chosen preset.",
-              "line": 200,
+              "summary": "Run the chosen preset: round-trip, or one-way send when ``send`` is picked.",
+              "line": 212,
               "deprecated": false
             },
             {
@@ -18779,7 +19110,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open Maya's UV Editor (TextureViewWindow).",
-              "line": 253,
+              "line": 274,
               "deprecated": false
             }
           ]
