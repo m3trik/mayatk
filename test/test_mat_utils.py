@@ -87,6 +87,20 @@ class TestMatUtils(MayaTkTestCase):
         self.assertIn(self.lambert1, filtered_mats)
         self.assertNotIn(self.lambert2, filtered_mats)
 
+    def test_get_scene_mats_excludes_defaults_by_default(self):
+        """Maya defaults (lambert1, standardSurface1, ...) are dropped unless opted in."""
+        default_names = {"lambert1", "particleCloud1", "shaderGlow1", "standardSurface1"}
+
+        scene_mats = MatUtils.get_scene_mats()
+        leaked = default_names.intersection({str(m).split("|")[-1] for m in scene_mats})
+        self.assertFalse(leaked, f"Default materials leaked into result: {leaked}")
+
+        # Opt-in: defaults should reappear.
+        all_mats = MatUtils.get_scene_mats(exclude_defaults=False)
+        all_short = {str(m).split("|")[-1] for m in all_mats}
+        # lambert1 exists in every Maya scene; the others may not, depending on plugins.
+        self.assertIn("lambert1", all_short)
+
     def test_get_fav_mats(self):
         """Test getting favorite materials."""
         try:

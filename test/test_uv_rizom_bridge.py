@@ -171,5 +171,183 @@ class TestRizomBridgeUiResize(MayaTkTestCase):
         )
 
 
+class TestRizomBridgeSendFlow(MayaTkTestCase):
+    """One-way ``send_to_rizomuv`` flow: export + Lua render + detached launch.
+
+    Stubs out the actual RizomUV launch so the test exercises the bridge
+    end-to-end (selection, export, script render, texture collection,
+    launch invocation) without needing the external executable.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # The bridge resolves rizom_path via AppLauncher; pass an explicit
+        # bogus value so the .rizom_path property short-circuits.
+        self.bridge = RizomUVBridge(rizom_path="rizom-stub.exe")
+
+        # Force a temp export dir each test so the unique-per-send paths
+        # land in a known sandbox and we can assert on them.
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="rizom_send_test_"))
+        # The export_path property is used to derive the per-send FBX dir;
+        # setting a stem here biases the per-send filename for visibility
+        # in failure messages.
+        self.bridge.export_path = str(self.tmp_dir / "scene.fbx")
+
+        # Capture every AppLauncher.launch call so the test can assert on
+        # the args without spawning a real process.
+        from pythontk.core_utils import app_launcher as _al
+        self._launch_calls = []
+
+        def _fake_launch(app_identifier, args=None, cwd=None, detached=True, env=None):
+            self._launch_calls.append({
+                "app": app_identifier,
+                "args": list(args or []),
+                "detached": detached,
+            })
+            class _Proc:
+                pid = 0
+            return _Proc()
+
+        self._real_launch = _al.AppLauncher.launch
+        _al.AppLauncher.launch = staticmethod(_fake_launch)
+
+    def tearDown(self):
+        from pythontk.core_utils import app_launcher as _al
+        _al.AppLauncher.launch = self._real_launch
+        # Best-effort: drop the test sandbox; ignore stragglers because
+        # Rizom's mtime watch can hold a handle briefly on real hardware.
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+        super().tearDown()
+
+    def test_send_writes_unique_fbx_and_script_per_call(self):
+        """Two consecutive sends must land on distinct FBX + Lua paths.
+
+        Regression: Rizom 2020.1's ``-cfi`` flag watches the script file's
+        mtime and re-executes whenever it changes. If both sends wrote to
+        the same Lua path, the first send's still-open Rizom session
+        would reload the second send's mesh, clobbering any unsaved UV
+        work. Each send must land on its own files.
+        """
+        cube = cmds.polyCube(name="rizom_send_unique_cube")[0]
+
+        self.bridge.send_to_rizomuv([cube])
+        first = self._launch_calls[-1]["args"]
+        # Args shape: ['-cfi', '<script-path>']
+        self.assertEqual(first[0], "-cfi", f"unexpected launch args: {first}")
+        first_script = first[1]
+        # Discover the FBX path the first send wrote (the only *.fbx
+        # under the sandbox so far).
+        first_fbxs = list(self.tmp_dir.glob("*.fbx"))
+        self.assertEqual(
+            len(first_fbxs), 1, f"expected 1 fbx after first send, got {first_fbxs}"
+        )
+
+        self.bridge.send_to_rizomuv([cube])
+        second = self._launch_calls[-1]["args"]
+        second_script = second[1]
+        second_fbxs = sorted(self.tmp_dir.glob("*.fbx"))
+
+        self.assertNotEqual(
+            first_script, second_script,
+            "Lua script path must differ between sends so prior Rizom "
+            "sessions aren't re-triggered via the -cfi mtime watch.",
+        )
+        self.assertEqual(
+            len(second_fbxs), 2,
+            f"expected 2 fbx files after 2 sends (one per send), got {second_fbxs}",
+        )
+
+    def test_send_script_inlines_load_options_and_texture(self):
+        """Param overrides + textures from the shading network reach the Lua."""
+        cube = cmds.polyCube(name="rizom_send_inline_cube")[0]
+
+        # Build a minimal shading network with a file texture so
+        # MatUtils.get_texture_paths finds something.
+        shader = cmds.shadingNode("lambert", asShader=True, name="rizom_send_lam_t")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True,
+            name="rizom_send_lamSG_t",
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        fn = cmds.shadingNode("file", asTexture=True, name="rizom_send_file_t")
+
+        # The texture file must EXIST on disk -- _collect_texture_loads
+        # filters out missing paths (Fix #5 in this commit batch).
+        tex_path = self.tmp_dir / "diffuse.png"
+        # Minimum-valid 1x1 PNG so we don't need PIL in the test env.
+        import base64
+        tex_path.write_bytes(base64.b64decode(
+            b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADklEQVR42mP8z8BQDwAEhQGAh"
+            b"KmMIQAAAABJRU5ErkJggg=="
+        ))
+        cmds.setAttr(f"{fn}.fileTextureName", str(tex_path), type="string")
+        cmds.connectAttr(f"{fn}.outColor", f"{shader}.color", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+
+        self.bridge.send_to_rizomuv(
+            [cube],
+            params={
+                "LOAD_UVS": False,
+                "LOAD_UVW_PROPS": True,
+                "IMPORT_GROUPS": False,
+                "LOAD_TEXTURES": True,
+            },
+        )
+
+        script_path = self._launch_calls[-1]["args"][1]
+        body = Path(script_path).read_text(encoding="utf-8")
+
+        self.assertIn("XYZUVW=false", body, "LOAD_UVS=False did not propagate.")
+        self.assertIn("UVWProps=true", body, "LOAD_UVW_PROPS=True did not propagate.")
+        self.assertIn("ImportGroups=false", body, "IMPORT_GROUPS=False did not propagate.")
+        self.assertIn(
+            "ZomLoadTexture", body,
+            "Texture from shading network did not reach the Lua script.",
+        )
+        # No ZomSave / ZomQuit *calls*: send is one-way, Rizom must stay
+        # open. The wrapper's leading comment block mentions these names
+        # as documentation -- strip comments first so the substring check
+        # only looks at executable Lua.
+        executable = "\n".join(
+            line for line in body.splitlines() if not line.lstrip().startswith("--")
+        )
+        self.assertNotIn("ZomSave(", executable, f"send body must not save: {executable}")
+        self.assertNotIn("ZomQuit(", executable, f"send body must not quit: {executable}")
+
+    def test_send_skips_missing_texture_files(self):
+        """A ``fileTextureName`` pointing at a non-existent file is dropped.
+
+        Regression for the silent-pcall failure: if we emit
+        ``ZomLoadTexture`` for a missing file, Rizom's pcall catches it
+        and the user sees no texture on the model with no explanation.
+        Filter at the bridge level instead.
+        """
+        cube = cmds.polyCube(name="rizom_send_skip_cube")[0]
+        shader = cmds.shadingNode("lambert", asShader=True, name="rizom_send_lam_s")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True,
+            name="rizom_send_lamSG_s",
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        fn = cmds.shadingNode("file", asTexture=True, name="rizom_send_file_s")
+        cmds.setAttr(
+            f"{fn}.fileTextureName",
+            str(self.tmp_dir / "does_not_exist.png"),
+            type="string",
+        )
+        cmds.connectAttr(f"{fn}.outColor", f"{shader}.color", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+
+        self.bridge.send_to_rizomuv([cube], params={"LOAD_TEXTURES": True})
+
+        script_path = self._launch_calls[-1]["args"][1]
+        body = Path(script_path).read_text(encoding="utf-8")
+        self.assertNotIn(
+            "ZomLoadTexture", body,
+            "Missing texture file should be filtered out, not passed to Rizom.",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

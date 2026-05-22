@@ -16,7 +16,7 @@ When Maya is unavailable only in-memory shot bounds are committed,
 matching the graceful-degradation contract of the rest of the shot
 model.
 """
-from typing import Iterable
+from typing import Callable, Iterable, Optional
 
 try:
     import maya.cmds as cmds
@@ -111,7 +111,11 @@ def _shift_audio_range(
     return tids or []
 
 
-def apply(store: ShotStore, plan: MovePlan) -> None:
+def apply(
+    store: ShotStore,
+    plan: MovePlan,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> None:
     """Execute ``plan`` against the scene and ``store``.
 
     Walks the plan's precomputed sequence, moves object keys and audio
@@ -120,9 +124,14 @@ def apply(store: ShotStore, plan: MovePlan) -> None:
     DG audio nodes re-render exactly once.
 
     When Maya is unavailable only the in-memory bounds are committed.
+
+    ``progress_callback`` (when given) is invoked once per shot with
+    ``(current, total, message)``.
     """
     if not plan.sequence:
         return
+
+    total = len(plan.sequence)
 
     if cmds is not None:
         from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
@@ -145,7 +154,9 @@ def apply(store: ShotStore, plan: MovePlan) -> None:
                     )
                 ]
             dirty: set = set()
-            for shot_id in plan.sequence:
+            for i, shot_id in enumerate(plan.sequence):
+                if progress_callback:
+                    progress_callback(i, total, f"Applying shot: {shot_id}")
                 move = plan.moves[shot_id]
                 shot = store.shot_by_id(shot_id)
                 if shot is None:
@@ -163,9 +174,14 @@ def apply(store: ShotStore, plan: MovePlan) -> None:
             if dirty:
                 b.mark_dirty(dirty)
     else:
-        for shot_id in plan.sequence:
+        for i, shot_id in enumerate(plan.sequence):
+            if progress_callback:
+                progress_callback(i, total, f"Applying shot: {shot_id}")
             move = plan.moves[shot_id]
             shot = store.shot_by_id(shot_id)
             if shot is not None:
                 shot.start = move.new_start
                 shot.end = move.new_end
+
+    if progress_callback and total:
+        progress_callback(total, total, "Done")

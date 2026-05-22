@@ -262,13 +262,16 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
         )
 
         try:
-            result = self.bridge.send(
-                objects=selection,
-                template=template,
-                mode=mode,
-                output_dir=output_dir,
-                params=self.collect_param_values(),
-            )
+            with self.sb.progress(
+                text=f"Working: Substance {template} ({mode})"
+            ):
+                result = self.bridge.send(
+                    objects=selection,
+                    template=template,
+                    mode=mode,
+                    output_dir=output_dir,
+                    params=self.collect_param_values(),
+                )
         except Exception:
             self.bridge.logger.error(
                 "Bridge raised:\n" + traceback.format_exc()

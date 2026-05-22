@@ -178,15 +178,21 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
             setText="Instructions",
             setObjectName="btn_instructions",
             setToolTip=(
-                "RizomUV Bridge -- Round-trip selected meshes through RizomUV.\n\n"
+                "RizomUV Bridge -- Round-trip or one-way send to RizomUV.\n\n"
                 "1. Select one or more polygon transforms.\n"
-                "2. Pick a Lua preset (pack, unwrap_hard, unwrap_organic, optimize).\n"
+                "2. Pick a Lua preset:\n"
+                "     pack / unwrap_hard / unwrap_organic / optimize -- round-trip\n"
+                "     send -- one-way: open in RizomUV, no transfer back\n"
                 "3. Adjust the parameters that the preset exposes.\n"
                 "4. Click 'Process Selected'.\n\n"
-                "Maya exports duplicates with a __RZTMP suffix as FBX,\n"
-                "RizomUV runs the script headlessly with your parameter\n"
-                "values substituted in, and the resulting UVs are\n"
-                "transferred back onto the originals.\n\n"
+                "Round-trip: Maya exports duplicates with a __RZTMP suffix\n"
+                "as FBX, RizomUV runs the script headlessly with your\n"
+                "parameter values substituted in, and the resulting UVs\n"
+                "are transferred back onto the originals.\n\n"
+                "Send: Maya exports the selection directly to FBX (no\n"
+                "rename), optionally collects diffuse textures from the\n"
+                "shading networks (ZomLoadTexture), then launches RizomUV\n"
+                "detached. Save manually inside RizomUV when finished.\n\n"
                 "Drop new presets as .lua files into the scripts folder\n"
                 "(use __KEY__ tokens from parameters.py for tunable values)\n"
                 "and use 'Refresh Scripts' to pick them up."
@@ -197,8 +203,14 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
     # b000 -- the per-bridge send action
     # ------------------------------------------------------------------
 
+    # Name of the pseudo-preset that triggers the one-way send flow
+    # instead of the headless round-trip. Picking it in the combo causes
+    # the panel to reveal the load-option widgets (LOAD_UVS, IMPORT_GROUPS,
+    # ...) via the existing placeholder-discovery scan over send.lua.
+    SEND_PRESET = "send"
+
     def b000(self):
-        """Process selected transforms with the chosen preset."""
+        """Run the chosen preset: round-trip, or one-way send when ``send`` is picked."""
         # All operational diagnostics route through the in-window log
         # panel, matching the marmoset/substance bridges' convention.
         if cmds is None:
@@ -235,11 +247,20 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
         )
 
         try:
-            self.bridge.process_with_rizomuv(
-                selection,
-                preset=preset,
-                params=self.collect_param_values(),
-            )
+            with self.sb.progress(text=f"Working: RizomUV {preset}"):
+                if preset == self.SEND_PRESET:
+                    # One-way: open in RizomUV, no UV transfer back. Maya
+                    # returns control immediately after Rizom is launched.
+                    self.bridge.send_to_rizomuv(
+                        selection,
+                        params=self.collect_param_values(),
+                    )
+                else:
+                    self.bridge.process_with_rizomuv(
+                        selection,
+                        preset=preset,
+                        params=self.collect_param_values(),
+                    )
         except Exception:
             self.bridge.logger.error(
                 "Bridge raised:\n" + traceback.format_exc()

@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Tuple, Dict, ClassVar, Optional, Union, Any, Iterable, Set
+from typing import List, Tuple, Dict, ClassVar, Optional, Union, Any, Iterable, Set, Callable
 import math
 
 try:
@@ -1368,6 +1368,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         recursive: bool = True,
         quiet: bool = False,
         stats: Optional[dict] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> List[str]:
         """Optimize animation keys for the given objects by removing static curves,
         redundant flat keys, and simplifying curves.
@@ -1438,6 +1439,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 curves_before_count=curves_before_count,
                 stats=stats,
                 _saved_time_unit=_saved_time_unit,
+                progress_callback=progress_callback,
             )
         finally:
             cmds.refresh(suspend=False)
@@ -1457,6 +1459,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         curves_before_count,
         stats,
         _saved_time_unit,
+        progress_callback=None,
     ):
         import maya.cmds as cmds
 
@@ -1484,6 +1487,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 curves_before_count=curves_before_count,
                 stats=stats,
                 _saved_time_unit=_saved_time_unit,
+                progress_callback=progress_callback,
             )
         finally:
             if _autokey_was_on:
@@ -1506,6 +1510,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         curves_before_count,
         stats,
         _saved_time_unit,
+        progress_callback=None,
     ):
         import maya.cmds as cmds
 
@@ -1514,6 +1519,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         simplified_curves_count = 0
 
         # Phase 1: Remove static curves (if remove_static_curves is True)
+        if progress_callback:
+            progress_callback(0, 4, "Removing static curves")
         if remove_static_curves:
             static_curves = cls.get_static_curves(
                 anim_curves, value_tolerance=value_tolerance, as_strings=True
@@ -1526,6 +1533,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 anim_curves = [c for c in anim_curves if c not in static_set]
 
         # Phase 2: Remove redundant flat keys (if remove_flat_keys is True)
+        if progress_callback:
+            progress_callback(1, 4, "Removing flat keys")
         rebuilt_curves = set()
         if remove_flat_keys:
             redundant_keys_to_delete = cls.get_redundant_flat_keys(
@@ -1547,6 +1556,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         # captures the exact current angle as eTangentUser.
         # This also gives the key reducer explicit angles to work with,
         # allowing it to remove more keys while preserving shape.
+        if progress_callback:
+            progress_callback(2, 4, "Freezing tangents")
         auto_tangents_frozen = 0
         for curve in anim_curves:
             if curve in rebuilt_curves:
@@ -1591,6 +1602,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         # Uses filterCurve(keyReducer) to remove keys whose absence
         # changes the curve by less than value_tolerance.  Runs after
         # auto-freeze so the reducer has explicit tangent angles.
+        if progress_callback:
+            progress_callback(3, 4, "Simplifying curves")
         if simplify_keys:
             simplified = cls.simplify_curve(
                 anim_curves,
@@ -1600,6 +1613,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             )
             simplified_curves_count += len(simplified)
 
+        if progress_callback:
+            progress_callback(4, 4, "Done")
         if not quiet:
             print(f"[optimize] {static_curves_deleted} static curves deleted")
             print(f"[optimize] {flat_keys_deleted} flat keys removed")

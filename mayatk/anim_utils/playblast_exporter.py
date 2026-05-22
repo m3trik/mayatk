@@ -12,7 +12,7 @@ except ImportError:
 import os
 import glob
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 import pythontk as ptk
@@ -280,6 +280,7 @@ class PlayblastExporter:
         base_kwargs: Optional[Dict[str, Any]] = None,
         scene_name: Optional[str] = None,
         variations: Optional[List[Dict[str, Any]]] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> List[Dict[str, Any]]:
         """Produce multiple playblast outputs (formats, sequences, Arnold)."""
 
@@ -288,10 +289,13 @@ class PlayblastExporter:
         variation_specs = variations or self._default_variations()
 
         results: List[Dict[str, Any]] = []
-        for variation in variation_specs:
+        total = len(variation_specs)
+        for i, variation in enumerate(variation_specs):
             variation = dict(variation)
             label = variation["label"]
             summary: Dict[str, Any] = {"label": label}
+            if progress_callback:
+                progress_callback(i, total, f"Rendering: {label}")
 
             try:
                 if variation.get("renderer") == "arnold":
@@ -390,6 +394,8 @@ class PlayblastExporter:
 
             results.append(summary)
 
+        if progress_callback and total:
+            progress_callback(total, total, "Done")
         return results
 
     # ------------------------------------------------------------------

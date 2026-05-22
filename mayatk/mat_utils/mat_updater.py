@@ -8,9 +8,10 @@ except ImportError:
 import os
 import logging
 from qtpy import QtCore
-from typing import List, Dict, Any, Union, Callable
+from typing import List, Dict, Any, Optional, Union, Callable
 
 import pythontk as ptk
+from uitk.switchboard import Cancelable
 
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
@@ -29,6 +30,7 @@ class MatUpdater(ptk.LoggingMixin):
         materials: List[Any] = None,
         config: Union[str, Dict[str, Any]] = None,
         verbose: bool = False,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> Dict[str, Any]:
         """Update materials with processed textures.
 
@@ -37,6 +39,8 @@ class MatUpdater(ptk.LoggingMixin):
             config: Configuration preset name (str) or dictionary.
                     If dict, can contain 'preset' key to inherit from a workflow preset.
             verbose: Print verbose output.
+            progress_callback: ``cb(current, total, message)`` — invoked
+                per material in the apply loop.
 
         Returns:
             Dict[str, Any]: Results keyed by material name.
@@ -169,7 +173,12 @@ class MatUpdater(ptk.LoggingMixin):
             if move_to_folder:
                 cls.logger.notice(f"Output Folder: {move_to_folder}")
 
-            for mat in materials:
+            total_mats = len(materials)
+            for mat_index, mat in enumerate(materials):
+                if progress_callback:
+                    progress_callback(
+                        mat_index, total_mats, f"Updating: {mat}"
+                    )
                 mat_name = str(mat).split("|")[-1].split(":")[-1]
                 mat_link = cls.logger.log_link(mat_name, "select", node=str(mat))
                 cls.logger.log_divider()
@@ -479,6 +488,8 @@ class MatUpdater(ptk.LoggingMixin):
                     "connected": connected_maps,
                 }
 
+            if progress_callback and total_mats:
+                progress_callback(total_mats, total_mats, "Done")
             return results
 
     @classmethod
@@ -834,6 +845,7 @@ class MatUpdaterSlots(MatUpdater):
             return []
         return self._filter_supported(MatUtils.get_connected_shaders(matching_nodes))
 
+    @Cancelable(300)
     def b001(self, widget):
         """Update Materials"""
         config_name = self.ui.cmb001.currentText()
@@ -908,11 +920,17 @@ class MatUpdaterSlots(MatUpdater):
                 "dry_run": dry_run,
             }
 
-            self.update_materials(
-                materials=materials,
-                config=config,
-                verbose=True,
-            )
+            # No ``total=`` needed — :func:`SwitchboardUtilsMixin.progress_adapter`
+            # auto-syncs the bar from ``update_materials``'s callback total
+            # on the first tick. Also avoids ``len(None)`` when materials
+            # defaults to "all scene materials".
+            with self.sb.progress(text="Updating Materials") as update:
+                self.update_materials(
+                    materials=materials,
+                    config=config,
+                    verbose=True,
+                    progress_callback=self.sb.progress_adapter(update),
+                )
             self.ui.txt001.append(self.msg_completed)
         except Exception as e:
             self.ui.txt001.append(f"<br><font color='red'>ERROR: {e}</font>")

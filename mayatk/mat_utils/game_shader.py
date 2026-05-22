@@ -22,6 +22,11 @@ from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.mat_utils._mat_utils import MatUtils
+from mayatk.mat_utils._affix_mode import (
+    add_affix_mode_menu,
+    current_affix_mode,
+    resolve_affix,
+)
 from mayatk.env_utils._env_utils import EnvUtils
 
 
@@ -1808,27 +1813,20 @@ class GameShaderSlots(GameShader):
         return text
 
     @property
-    def affix_is_prefix(self) -> bool:
-        """Whether the affix field (txt002) acts as a prefix or a suffix."""
-        if not hasattr(self.ui, "txt002"):
-            return True
-        chk = getattr(self.ui.txt002.option_box.menu, "chk_use_as_prefix", None)
-        # Default to prefix when the option box hasn't been initialized yet.
-        return chk.isChecked() if chk is not None else True
-
-    @property
     def mat_prefix(self) -> str:
-        """Return the affix text when in prefix mode, else empty string."""
+        """Return the affix text when it resolves as a prefix, else empty string."""
         if not hasattr(self.ui, "txt002"):
             return ""
-        return self.ui.txt002.text() if self.affix_is_prefix else ""
+        prefix, _ = resolve_affix(self.ui.txt002, default="prefix")
+        return prefix
 
     @property
     def mat_suffix(self) -> str:
-        """Return the affix text when in suffix mode, else empty string."""
+        """Return the affix text when it resolves as a suffix, else empty string."""
         if not hasattr(self.ui, "txt002"):
             return ""
-        return "" if self.affix_is_prefix else self.ui.txt002.text()
+        _, suffix = resolve_affix(self.ui.txt002, default="prefix")
+        return suffix
 
     @property
     def normal_map_type(self) -> str:
@@ -1887,46 +1885,35 @@ class GameShaderSlots(GameShader):
             widget.add(file_types)
 
     def txt002_init(self, widget):
-        """Add a prefix/suffix toggle to the affix field's option menu."""
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Use as Prefix",
-            setObjectName="chk_use_as_prefix",
-            setChecked=True,
-            setToolTip=(
-                "Checked: value is prepended to the base name (prefix mode).\n"
-                "Unchecked: value is appended to the base name (suffix mode).\n\n"
-                "The base name is derived from the selected texture filenames\n"
-                "using pythontk.ImgUtils.get_base_texture_name."
-            ),
+        """Add a prefix/suffix/auto-mode combobox to the affix field's option menu."""
+        add_affix_mode_menu(
+            widget,
+            default_mode="prefix",
+            on_change=lambda _mode, w=widget: self._apply_affix_placeholder(w),
         )
-        widget.option_box.menu.chk_use_as_prefix.toggled.connect(
-            lambda checked, w=widget: self._on_affix_mode_toggled(w, checked)
-        )
-        self._apply_affix_placeholder(widget, prefix_mode=True)
-
-    def _on_affix_mode_toggled(self, widget, prefix_mode):
-        text = widget.text()
-        # Auto-swap the conventional pattern when the user hasn't customized it
-        if prefix_mode and text == "_MAT":
-            widget.setText("MAT_")
-        elif not prefix_mode and text == "MAT_":
-            widget.setText("_MAT")
-        self._apply_affix_placeholder(widget, prefix_mode=prefix_mode)
+        self._apply_affix_placeholder(widget)
 
     @staticmethod
-    def _apply_affix_placeholder(widget, prefix_mode):
-        if prefix_mode:
+    def _apply_affix_placeholder(widget):
+        mode = current_affix_mode(widget)
+        if mode == "prefix":
             widget.setPlaceholderText("Prefix")
             widget.setToolTip(
                 'Prefix prepended to the base name.\n'
                 'Example: "MAT_" + "brick" → "MAT_brick".'
             )
-        else:
+        elif mode == "suffix":
             widget.setPlaceholderText("Suffix")
             widget.setToolTip(
                 'Suffix appended to the base name.\n'
                 'Example: "brick" + "_MAT" → "brick_MAT".'
+            )
+        else:  # auto
+            widget.setPlaceholderText("Affix")
+            widget.setToolTip(
+                "Affix — placement inferred from '_' position.\n"
+                "  '_MAT' → suffix (appended)\n"
+                "  'MAT_' → prefix (prepended)"
             )
 
     def b000(self):

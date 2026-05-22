@@ -1,0 +1,12 @@
+-- Send to RizomUV (one-way): export the selection and open it in RizomUV
+-- interactively. Nothing is round-tripped back -- save inside RizomUV when
+-- you're done. Use this when you want to UV by hand, not via a preset.
+
+-- The blank line above terminates the panel's leading-comment extractor.
+-- Everything below is an implementation marker: the bridge swaps the
+-- standard wrapper for templates/send_wrapper.lua when this preset is
+-- active, so this script body is never executed -- the placeholder
+-- references below exist only so _refresh_param_visibility discovers
+-- and shows the matching load-option widgets in the panel.
+--
+-- referenced: __LOAD_UVS__ __LOAD_UVW_PROPS__ __IMPORT_GROUPS__ __LOAD_TEXTURES__

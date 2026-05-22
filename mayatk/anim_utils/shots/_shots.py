@@ -633,7 +633,7 @@ class ShotStore:
         if QSettings is None:
             return
         try:
-            s = QSettings()
+            s = QSettings("uitk", "shots")
             # New key first
             dm = s.value(f"{self._QSETTINGS_PREFIX}/detection_mode")
             if dm is not None and str(dm) in self.DETECTION_MODES:
@@ -676,7 +676,7 @@ class ShotStore:
         if QSettings is None:
             return
         try:
-            s = QSettings()
+            s = QSettings("uitk", "shots")
             s.setValue(
                 f"{self._QSETTINGS_PREFIX}/detection_mode",
                 self.detection_mode,
