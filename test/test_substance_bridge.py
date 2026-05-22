@@ -64,11 +64,10 @@ class TestParseTemplate(unittest.TestCase):
         path = next(p for p in list_templates() if p.stem == "import")
         meta = parse_template(path)
         self.assertEqual(meta["BRIDGE_MODES"], (SEND_TO,))
-        # LAUNCH_ARGS now references the user-tunable PARAMS that mirror
-        # Painter's New Project dialog -- the bridge surfaces these as
-        # widgets in the slot panel.
-        self.assertEqual(meta["LAUNCH_ARGS"][:2], ["--mesh", "__FBX_PATH__"])
-        self.assertIn("__PAINTER_RESOLUTION__", meta["LAUNCH_ARGS"])
+        # LAUNCH_ARGS is the minimal flag set current Painter accepts:
+        # ``--mesh <fbx>``. The bridge appends ``--mesh-map`` per staged
+        # texture and ``--split-by-udim`` (presence flag) at runtime.
+        self.assertEqual(meta["LAUNCH_ARGS"], ["--mesh", "__FBX_PATH__"])
         self.assertEqual(meta["RPC_SCRIPT"], "")
         # import.py builds a manifest (folded in from the deleted with_textures
         # template) and embeds Maya-referenced textures into the FBX.
@@ -344,12 +343,12 @@ class TestParameterRendering(unittest.TestCase):
         self.assertEqual(joined, _os.pathsep.join(["a.png", "b.png"]))
 
 
-class TestBakedMapStaging(unittest.TestCase):
-    """_stage_file_list_params copies files alongside the FBX export."""
+class TestAssignedTextureStaging(unittest.TestCase):
+    """_stage_assigned_textures copies textures from MatUtils into the output dir."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="substance_baked_test_")
-        # Create two fake baked-map files in a 'src' subdir.
+        self.tmpdir = tempfile.mkdtemp(prefix="substance_textures_test_")
+        # Create two fake texture files in a 'src' subdir.
         src_dir = Path(self.tmpdir) / "src"
         src_dir.mkdir()
         self.src_ao = src_dir / "obj_ao.png"
@@ -363,62 +362,77 @@ class TestBakedMapStaging(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def test_copies_files_into_output_dir(self):
-        bridge = SubstanceBridge()
-        staged = bridge._stage_file_list_params(
-            {"PAINTER_BAKED_MAPS": [str(self.src_ao), str(self.src_normal)]},
-            str(self.out_dir),
+    def _patch_mat_utils(self, paths):
+        """Replace MatUtils.get_texture_paths with a stub returning *paths*.
+
+        Cleaned up on test teardown via :meth:`addCleanup`.
+        """
+        from mayatk.mat_utils import _mat_utils
+
+        original = _mat_utils.MatUtils.get_texture_paths
+        _mat_utils.MatUtils.get_texture_paths = classmethod(
+            lambda cls, **kw: list(paths)
         )
-        self.assertIn("PAINTER_BAKED_MAPS", staged)
-        self.assertEqual(len(staged["PAINTER_BAKED_MAPS"]), 2)
-        for dst in staged["PAINTER_BAKED_MAPS"]:
+        self.addCleanup(
+            setattr, _mat_utils.MatUtils, "get_texture_paths", original
+        )
+
+    def test_copies_textures_into_output_dir(self):
+        self._patch_mat_utils([str(self.src_ao), str(self.src_normal)])
+        bridge = SubstanceBridge()
+        staged = bridge._stage_assigned_textures(["dummy_obj"], str(self.out_dir))
+        self.assertEqual(len(staged), 2)
+        for dst in staged:
             self.assertTrue(Path(dst).is_file(),
                             f"staged file missing: {dst}")
             self.assertEqual(Path(dst).parent, self.out_dir)
 
     def test_missing_source_is_skipped(self):
+        self._patch_mat_utils([
+            str(self.src_ao),
+            str(Path(self.tmpdir) / "does_not_exist.png"),
+        ])
         bridge = SubstanceBridge()
-        staged = bridge._stage_file_list_params(
-            {"PAINTER_BAKED_MAPS": [
-                str(self.src_ao),
-                str(Path(self.tmpdir) / "does_not_exist.png"),
-            ]},
-            str(self.out_dir),
-        )
-        self.assertEqual(len(staged["PAINTER_BAKED_MAPS"]), 1)
+        staged = bridge._stage_assigned_textures(["dummy_obj"], str(self.out_dir))
+        self.assertEqual(len(staged), 1)
 
-    def test_empty_list_produces_no_staging_entry(self):
+    def test_no_textures_resolves_to_empty_list(self):
+        self._patch_mat_utils([])
         bridge = SubstanceBridge()
-        staged = bridge._stage_file_list_params(
-            {"PAINTER_BAKED_MAPS": []}, str(self.out_dir)
-        )
-        self.assertEqual(staged, {})
+        staged = bridge._stage_assigned_textures(["dummy_obj"], str(self.out_dir))
+        self.assertEqual(staged, [])
 
-    def test_no_param_value_is_a_no_op(self):
+    def test_prefix_is_prepended_to_basename(self):
+        self._patch_mat_utils([str(self.src_ao)])
         bridge = SubstanceBridge()
-        staged = bridge._stage_file_list_params({}, str(self.out_dir))
-        self.assertEqual(staged, {})
+        staged = bridge._stage_assigned_textures(
+            ["dummy_obj"], str(self.out_dir), prefix="char_"
+        )
+        self.assertEqual(len(staged), 1)
+        self.assertEqual(Path(staged[0]).name, "char_obj_ao.png")
+        self.assertTrue(Path(staged[0]).is_file())
 
-    def test_referenced_keys_gates_staging(self):
-        """When *referenced_keys* is supplied, only PARAMS in that set get
-        staged -- a stale baked-maps list in the panel doesn't pollute a
-        render-template send."""
+    def test_prefix_is_idempotent_when_already_present(self):
+        """A source filename that already starts with *prefix* must not get
+        the prefix doubled -- the staged file is named ``<prefix><tail>``
+        whether or not the source already had it."""
+        src = Path(self.tmpdir) / "src" / "char_body_diff.png"
+        src.write_bytes(b"already-prefixed")
+        self._patch_mat_utils([str(src)])
         bridge = SubstanceBridge()
-        # Empty set => nothing staged even though PAINTER_BAKED_MAPS has files.
-        staged = bridge._stage_file_list_params(
-            {"PAINTER_BAKED_MAPS": [str(self.src_ao)]},
-            str(self.out_dir),
-            referenced_keys=set(),
+        staged = bridge._stage_assigned_textures(
+            ["dummy_obj"], str(self.out_dir), prefix="char_"
         )
-        self.assertEqual(staged, {})
+        self.assertEqual(len(staged), 1)
+        self.assertEqual(Path(staged[0]).name, "char_body_diff.png")
 
-        # Including the key in referenced_keys re-enables staging.
-        staged = bridge._stage_file_list_params(
-            {"PAINTER_BAKED_MAPS": [str(self.src_ao)]},
-            str(self.out_dir),
-            referenced_keys={"PAINTER_BAKED_MAPS"},
+    def test_empty_prefix_is_no_op(self):
+        self._patch_mat_utils([str(self.src_ao)])
+        bridge = SubstanceBridge()
+        staged = bridge._stage_assigned_textures(
+            ["dummy_obj"], str(self.out_dir), prefix=""
         )
-        self.assertEqual(len(staged["PAINTER_BAKED_MAPS"]), 1)
+        self.assertEqual(Path(staged[0]).name, "obj_ao.png")
 
 
 class TestRenderTemplateJs(unittest.TestCase):
@@ -513,8 +527,10 @@ class TestParamsPopulated(unittest.TestCase):
                            "or the slot UI shows an empty panel")
 
     def test_import_template_references_params(self):
-        """import.py must reference at least one registered PARAM key
-        so the rendered LAUNCH_ARGS exercise the new rendering pipeline."""
+        """import.py must reference at least one registered PARAM key so
+        the slot panel surfaces the matching widgets (PAINTER_INCLUDE_TEXTURES
+        and PAINTER_SPLIT_BY_UDIM are wired post-render rather than baked
+        into LAUNCH_ARGS, but appear in the file as comment references)."""
         from mayatk.mat_utils.substance_bridge import parameters as _params
         path = next(
             (p for p in list_templates() if p.stem == "import"), None,
@@ -523,8 +539,8 @@ class TestParamsPopulated(unittest.TestCase):
         used = _params.referenced_keys(path.read_text(encoding="utf-8"))
         self.assertGreater(
             len(used), 0,
-            "with_textures.py should reference at least one PARAMS key "
-            "(e.g. __PAINTER_RESOLUTION__) to surface a user knob",
+            "import.py should reference at least one PARAMS key so the "
+            "slot panel exposes a user-tunable knob",
         )
 
 
@@ -553,58 +569,10 @@ class TestEndToEndLaunchArgsRendering(unittest.TestCase):
             self.assertNotIn("'", arg,
                              f"argv entry has literal quotes: {arg!r}")
 
-        # FBX_PATH substituted; param keys substituted with their defaults.
-        self.assertIn("/tmp/x.fbx", rendered)
-        self.assertIn("2048", rendered)         # PAINTER_RESOLUTION default
-        self.assertIn("OpenGL", rendered)        # PAINTER_NORMAL_FORMAT default
-        self.assertIn("UV", rendered)            # PAINTER_UV_TILE_MODE default
-
-    def test_user_params_override_defaults(self):
-        bridge = SubstanceBridge()
-        path = next(p for p in list_templates() if p.stem == "import")
-        meta = parse_template(path)
-
-        cli_ctx, _ = bridge._build_contexts(
-            fbx_path="/tmp/x.fbx",
-            manifest_path="/tmp/x.materials.json",
-            output_dir="/tmp",
-            params={"PAINTER_RESOLUTION": 4096, "PAINTER_NORMAL_FORMAT": "DirectX"},
-        )
-        rendered = bridge._render_launch_args(meta["LAUNCH_ARGS"], cli_ctx)
-        self.assertIn("4096", rendered)
-        self.assertIn("DirectX", rendered)
-
-    def test_empty_project_template_pair_is_dropped(self):
-        """``--template`` followed by an empty rendered value gets stripped
-        so we don't ship Painter a broken ``--template ""`` argv pair."""
-        bridge = SubstanceBridge()
-        path = next(p for p in list_templates() if p.stem == "import")
-        meta = parse_template(path)
-
-        cli_ctx, _ = bridge._build_contexts(
-            fbx_path="/tmp/x.fbx",
-            manifest_path="/tmp/x.materials.json",
-            output_dir="/tmp",
-            params=None,  # PAINTER_PROJECT_TEMPLATE defaults to ""
-        )
-        rendered = bridge._render_launch_args(meta["LAUNCH_ARGS"], cli_ctx)
-        self.assertNotIn("--template", rendered)
-        self.assertNotIn("", rendered)
-
-    def test_populated_project_template_passes_through(self):
-        bridge = SubstanceBridge()
-        path = next(p for p in list_templates() if p.stem == "import")
-        meta = parse_template(path)
-
-        cli_ctx, _ = bridge._build_contexts(
-            fbx_path="/tmp/x.fbx",
-            manifest_path="/tmp/x.materials.json",
-            output_dir="/tmp",
-            params={"PAINTER_PROJECT_TEMPLATE": "C:/templates/foo.spt"},
-        )
-        rendered = bridge._render_launch_args(meta["LAUNCH_ARGS"], cli_ctx)
-        self.assertIn("--template", rendered)
-        self.assertIn("C:/templates/foo.spt", rendered)
+        # Current Painter only accepts ``--mesh <fbx>`` here; the dynamic
+        # ``--mesh-map`` / ``--split-by-udim`` extensions are appended by
+        # ``send()`` after this static render, not by the template.
+        self.assertEqual(rendered, ["--mesh", "/tmp/x.fbx"])
 
     def test_render_launch_args_drops_only_flag_empty_pairs(self):
         """Sanity: non-flag entries followed by empty strings are preserved

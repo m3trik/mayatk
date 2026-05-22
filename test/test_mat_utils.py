@@ -146,6 +146,112 @@ class TestMatUtils(MayaTkTestCase):
         mats = MatUtils.get_mats(self.cube)
         self.assertEqual(mats[0], "new_created_mat")
 
+    def test_is_mat_assigned(self):
+        """``is_mat_assigned`` reports True only when an SG has DAG members."""
+        # lambert1 from setUp has a shading group but no geometry yet.
+        self.assertFalse(MatUtils.is_mat_assigned(self.lambert1))
+
+        # Wire the sphere into lambert1's shading group.
+        cmds.sets(self.sphere, edit=True, forceElement=self.sg1)
+        self.assertTrue(MatUtils.is_mat_assigned(self.lambert1))
+        # lambert2's SG is still empty.
+        self.assertFalse(MatUtils.is_mat_assigned(self.lambert2))
+
+        # Material with no shading engine at all is also unassigned.
+        orphan = cmds.shadingNode("blinn", asShader=True, name="orphan_mat")
+        self.assertFalse(MatUtils.is_mat_assigned(orphan))
+
+    def test_is_mat_assigned_displacement_shader(self):
+        """Non-surface shaders (displacement) wire through other attrs but still count."""
+        # Build a displacementShader and route it into sg1 alongside lambert1.
+        disp = cmds.shadingNode(
+            "displacementShader", asShader=True, name="test_disp"
+        )
+        cmds.connectAttr(
+            f"{disp}.displacement", f"{self.sg1}.displacementShader", force=True
+        )
+
+        # SG is still empty — both shaders should report unassigned.
+        self.assertFalse(MatUtils.is_mat_assigned(disp))
+        # Wire geometry into the SG; now the surface AND the displacement
+        # shader connected to it both count as assigned.
+        cmds.sets(self.cube, edit=True, forceElement=self.sg1)
+        self.assertTrue(MatUtils.is_mat_assigned(disp))
+
+    def test_get_mat_info_filter_flags(self):
+        """``get_mat_info`` honors exclude_defaults / exclude_unassigned / field toggles."""
+        cmds.sets(self.sphere, edit=True, forceElement=self.sg1)
+        # lambert2 stays unassigned (empty SG from setUp).
+
+        # Baseline: all materials, full detail.
+        all_records = MatUtils.get_mat_info(
+            include_image_metadata=False  # avoid PIL on textureless mats
+        )
+        all_names = {r["material"] for r in all_records}
+        self.assertIn(self.lambert1, all_names)
+        self.assertIn(self.lambert2, all_names)
+        self.assertIn("lambert1", all_names)  # default included by default
+
+        # exclude_defaults drops lambert1/standardSurface1/etc.
+        no_defaults = MatUtils.get_mat_info(
+            exclude_defaults=True, include_image_metadata=False
+        )
+        no_default_names = {r["material"] for r in no_defaults}
+        self.assertNotIn("lambert1", no_default_names)
+        self.assertIn(self.lambert1, no_default_names)  # test_lambert1 != default
+
+        # exclude_unassigned drops materials with empty shading engines.
+        only_assigned = MatUtils.get_mat_info(
+            exclude_unassigned=True, include_image_metadata=False
+        )
+        assigned_names = {r["material"] for r in only_assigned}
+        self.assertIn(self.lambert1, assigned_names)
+        self.assertNotIn(self.lambert2, assigned_names)
+
+        # include_textures=False yields empty texture lists regardless of wiring.
+        no_tex = MatUtils.get_mat_info(
+            materials=[self.lambert1], include_textures=False
+        )
+        self.assertEqual(no_tex[0]["textures"], [])
+
+    def test_get_mat_info_skip_image_metadata(self):
+        """``include_image_metadata=False`` omits PIL-derived fields per texture."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+
+        import shutil
+        import tempfile
+
+        tmp_dir = tempfile.mkdtemp(prefix="matinfo_tex_")
+        tex_path = os.path.join(tmp_dir, "tiny.png")
+        Image.new("RGB", (8, 8), color=(255, 0, 0)).save(tex_path)
+        self.addCleanup(lambda: shutil.rmtree(tmp_dir, ignore_errors=True))
+
+        file_node = cmds.shadingNode("file", asTexture=True, name="meta_test_file")
+        cmds.setAttr(f"{file_node}.fileTextureName", tex_path, type="string")
+        cmds.connectAttr(
+            f"{file_node}.outColor", f"{self.lambert1}.color", force=True
+        )
+
+        records = MatUtils.get_mat_info(
+            materials=[self.lambert1],
+            include_image_metadata=False,
+            optimize_check=False,
+        )
+        textures = records[0]["textures"]
+        self.assertEqual(len(textures), 1)
+        t = textures[0]
+        self.assertIn("path", t)
+        self.assertNotIn("width", t)
+        self.assertNotIn("mode", t)
+        self.assertNotIn("bit_depth", t)
+
+        # Formatter must not emit "Res: NonexNone" lines when metadata is absent.
+        text = MatUtils.format_mat_info_text(records)
+        self.assertNotIn("Res:", text)
+
     def test_is_connected(self):
         """Test checking if material is connected to shading group."""
         # lambert1 is connected in setUp

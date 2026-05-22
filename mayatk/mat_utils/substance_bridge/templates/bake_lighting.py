@@ -52,14 +52,12 @@
 
 BRIDGE_MODES = ("send_to",)
 
-# Same launch line as import.py -- the project is created from the FBX
-# with the user-tunable Painter dialog options applied.
+# Same launch line as import.py -- the project is created from the FBX.
+# Resolution / normal-map format / project template etc. are no longer
+# CLI-tunable in current Painter; the user sets them in the New Project
+# dialog. See import.py for the full reasoning behind the trimmed list.
 LAUNCH_ARGS = [
     "--mesh", "__FBX_PATH__",
-    "--resolution", "__PAINTER_RESOLUTION__",
-    "--normal-map-format", "__PAINTER_NORMAL_FORMAT__",
-    "--uvtile-mode", "__PAINTER_UV_TILE_MODE__",
-    "--template", "__PAINTER_PROJECT_TEMPLATE__",
 ]
 
 # Multi-step JS body delivered to Painter after the project is open and

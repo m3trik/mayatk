@@ -57,78 +57,35 @@ from uitk.bridge import (
 # * ``RPC_SCRIPT`` -- JavaScript literals embedded in the RPC body. Use
 #   :func:`js_literal` (double-quoted, escapes backslashes + quotes).
 #
-# The kind ``"file_list"`` is registered in :mod:`uitk.bridge.spec`; it
-# produces a ``list[str]`` widget value that the bridge stages
-# out-of-band alongside the FBX export rather than substituting into
-# argv directly.
+# The boolean ``PAINTER_INCLUDE_TEXTURES`` triggers an out-of-band
+# texture stage: the bridge walks the selection's shading networks via
+# :meth:`mayatk.mat_utils.MatUtils.get_texture_paths` and copies each
+# resolved file into the FBX output folder. Nothing is substituted into
+# argv -- Painter discovers the textures by scanning the folder.
 
 
 # Display order is iteration order over this dict.
+#
+# NOTE on missing project-setup knobs: earlier Painter releases accepted
+# ``--resolution``, ``--normal-map-format``, ``--uvtile-mode`` and
+# ``--template`` on the CLI. Current Painter (verified 2026-05-22) rejects
+# every one of them with a help-popup that prevents launch. Until Painter
+# brings them back (or a Painter-side plugin re-exposes them via JS), the
+# project-setup knobs live inside Painter's New Project dialog.
 PARAMS: "dict[str, AttributeSpec]" = {
     # ------------------------------------------------------------------
     # Project setup (Painter CLI flags applied at --mesh launch time)
     # ------------------------------------------------------------------
-    "PAINTER_RESOLUTION": AttributeSpec(
-        key="PAINTER_RESOLUTION",
-        label="Resolution",
-        kind="choice",
-        default=2048,
-        choices=[
-            ("512", 512),
-            ("1024", 1024),
-            ("2048", 2048),
-            ("4096", 4096),
-            ("8192", 8192),
-        ],
+    "PAINTER_SPLIT_BY_UDIM": AttributeSpec(
+        key="PAINTER_SPLIT_BY_UDIM",
+        label="Split by UDIM",
+        kind="bool",
+        default=False,
         tooltip=(
-            "Default texture set resolution Painter will create new\n"
-            "documents at. Passed to Painter as ``--resolution <N>``."
-        ),
-    ),
-    "PAINTER_NORMAL_FORMAT": AttributeSpec(
-        key="PAINTER_NORMAL_FORMAT",
-        label="Normal Format",
-        kind="choice",
-        default="OpenGL",
-        choices=[
-            ("OpenGL (Maya, Unity)", "OpenGL"),
-            ("DirectX (Unreal, 3ds Max)", "DirectX"),
-        ],
-        tooltip=(
-            "Tangent-space normal convention for new documents.\n"
-            "Maya viewports default to OpenGL; Unreal Engine to DirectX.\n"
-            "Mismatched normals look 'inverted' on lit surfaces."
-        ),
-    ),
-    "PAINTER_UV_TILE_MODE": AttributeSpec(
-        key="PAINTER_UV_TILE_MODE",
-        label="UV Mode",
-        kind="choice",
-        default="UV",
-        choices=[
-            ("Single UV (one texture set)", "UV"),
-            ("UDIM (per-tile texture sets)", "UDIM"),
-        ],
-        tooltip=(
-            "How Painter slices the mesh into texture sets.\n"
-            "UDIM creates one set per UV tile -- only useful if the\n"
-            "mesh actually has UVs laid out across multiple tiles."
-        ),
-    ),
-    "PAINTER_PROJECT_TEMPLATE": AttributeSpec(
-        key="PAINTER_PROJECT_TEMPLATE",
-        label="Project Template",
-        # ``painter_template_file`` is a substance-specific kind registered
-        # at import time by :mod:`mayatk.mat_utils.substance_bridge.substance_bridge_slots`
-        # -- a single-file picker filtered on ``.spt`` / ``.spp``. The
-        # standard ``path`` kind is a directory picker, which would
-        # produce a folder path Painter's ``--template`` flag rejects.
-        kind="painter_template_file",
-        default="",
-        tooltip=(
-            "Optional Painter project template (.spt) to seed the new\n"
-            "project with (channel layout, default smart materials, etc.).\n"
-            "Leave empty to use Painter's default."
+            "Create one texture set per UDIM tile (Painter's\n"
+            "``--split-by-udim`` presence flag). Only useful if the mesh\n"
+            "has UVs laid out across multiple tiles -- on a single-UV mesh\n"
+            "Painter ignores the flag."
         ),
     ),
     # ------------------------------------------------------------------
@@ -180,20 +137,35 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "Leave empty to default to ``<scene_dir>/painter_render.png``."
         ),
     ),
-    "PAINTER_BAKED_MAPS": AttributeSpec(
-        key="PAINTER_BAKED_MAPS",
-        label="Import Baked Maps",
-        kind="file_list",
-        default=[],
+    "PAINTER_INCLUDE_TEXTURES": AttributeSpec(
+        key="PAINTER_INCLUDE_TEXTURES",
+        label="Include Textures",
+        kind="bool",
+        default=True,
         tooltip=(
-            "Pre-baked mesh maps to ship to Painter alongside the FBX\n"
-            "(AO, normals, curvature, etc.).\n\n"
-            "The bridge copies each selected file into the FBX output\n"
-            "folder and records the list in the material manifest. In\n"
-            "Painter's New Project dialog, click 'Import Baked Maps' and\n"
-            "point at the same folder to wire them into texture sets --\n"
-            "Painter auto-detects channel by the filename suffix\n"
-            "(e.g. '_normal', '_ao')."
+            "Auto-collect file textures from the selection's assigned\n"
+            "materials and stage them alongside the FBX in the output\n"
+            "folder. Painter's New Project dialog can then point at the\n"
+            "same folder via 'Import Baked Maps' to wire them into\n"
+            "texture sets -- Painter auto-detects channel by the filename\n"
+            "suffix (e.g. '_normal', '_ao').\n\n"
+            "Off = ship only the FBX; the artist wires textures by hand."
+        ),
+    ),
+    "PAINTER_TEXTURE_PREFIX": AttributeSpec(
+        key="PAINTER_TEXTURE_PREFIX",
+        label="Texture Prefix",
+        kind="str",
+        default="",
+        tooltip=(
+            "Optional prefix prepended to every staged texture's filename.\n"
+            "Useful for namespacing maps in Painter's shelf -- e.g. a\n"
+            "prefix of 'character_' renames 'body_normal.png' to\n"
+            "'character_body_normal.png' on the way out.\n\n"
+            "Idempotent: if a filename already starts with the prefix it\n"
+            "is stripped first, so re-running with the same prefix never\n"
+            "doubles it.\n\n"
+            "Disabled when Include Textures is off."
         ),
     ),
 }

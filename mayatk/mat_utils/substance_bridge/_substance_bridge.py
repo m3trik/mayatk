@@ -526,25 +526,40 @@ class SubstanceBridge(ptk.LoggingMixin):
                 "Template declares EXPORT_FBX=False; skipping Maya FBX export."
             )
 
-        # -- Stage file_list params (e.g. PAINTER_BAKED_MAPS) ------------
-        # Only stage params the active template claims to use, so a stray
-        # baked-maps list left in the panel doesn't get copied into the
-        # output of an unrelated template (e.g. ``render.py``).
+        # -- Stage textures assigned to the selection's materials --------
+        # Only when the active template claims the PAINTER_INCLUDE_TEXTURES
+        # widget AND the user left it on -- otherwise a stale value in the
+        # panel doesn't pollute an unrelated template (e.g. ``render.py``).
         from mayatk.mat_utils.substance_bridge import parameters as _params
         referenced = _params.referenced_keys(
             template_path.read_text(encoding="utf-8")
         )
-        staged_file_lists = self._stage_file_list_params(
-            params or {}, output_dir, referenced_keys=referenced,
+        merged_params = _params.defaults()
+        merged_params.update(params or {})
+        include_textures = (
+            "PAINTER_INCLUDE_TEXTURES" in referenced
+            and bool(merged_params.get("PAINTER_INCLUDE_TEXTURES", True))
         )
+        # Resolve scope once -- shared by texture staging and manifest build.
+        # Skipped entirely when neither needs it so render.py-style templates
+        # don't pay for a needless ``cmds.ls`` round-trip.
+        scope_objects: List[str] = []
+        if include_textures or meta["BUILD_MANIFEST"]:
+            scope_objects = objects or cmds.ls(selection=True, long=True) or []
+        staged_textures: List[str] = []
+        if include_textures and scope_objects:
+            staged_textures = self._stage_assigned_textures(
+                scope_objects,
+                output_dir,
+                prefix=str(merged_params.get("PAINTER_TEXTURE_PREFIX", "")),
+            )
 
         # -- Optional material manifest -----------------------------------
         if meta["BUILD_MANIFEST"]:
             self.logger.info("Building material manifest ...")
-            manifest_objects = objects or cmds.ls(selection=True, long=True)
-            manifest = MatManifest.build(manifest_objects)
-            if staged_file_lists:
-                manifest["bridge_file_lists"] = staged_file_lists
+            manifest = MatManifest.build(scope_objects)
+            if staged_textures:
+                manifest["staged_textures"] = staged_textures
             with open(manifest_path, "w", encoding="utf-8") as fh:
                 json.dump(manifest, fh, indent=2)
             self.logger.info(
@@ -560,6 +575,17 @@ class SubstanceBridge(ptk.LoggingMixin):
             params=params,
         )
         launch_args = self._render_launch_args(meta["LAUNCH_ARGS"], cli_ctx)
+        # Dynamic argv extensions that don't fit the static __KEY__ shape:
+        # - ``--mesh-map <path>`` per staged texture (variable-length).
+        # - ``--split-by-udim`` as a bare presence flag (no value follows).
+        if "--mesh" in launch_args:
+            for tex_path in staged_textures:
+                launch_args.extend(["--mesh-map", tex_path])
+            if (
+                "PAINTER_SPLIT_BY_UDIM" in referenced
+                and bool(merged_params.get("PAINTER_SPLIT_BY_UDIM", False))
+            ):
+                launch_args.append("--split-by-udim")
         rpc_script = StrUtils.replace_delimited(meta["RPC_SCRIPT"], js_ctx)
 
         # -- Resolve target connection ------------------------------------
@@ -683,57 +709,62 @@ class SubstanceBridge(ptk.LoggingMixin):
             i += 1
         return out
 
-    def _stage_file_list_params(
+    def _stage_assigned_textures(
         self,
-        params: Dict[str, Any],
+        objects: List[str],
         output_dir: str,
-        referenced_keys: Optional[set] = None,
-    ) -> Dict[str, List[str]]:
-        """Copy each ``file_list`` PARAM's selected files into *output_dir*.
+        prefix: str = "",
+    ) -> List[str]:
+        """Copy every texture assigned to *objects*' materials into *output_dir*.
 
-        If *referenced_keys* is provided, only PARAMS whose key appears in
-        the active template's referenced set are staged. Templates that
-        don't claim a file_list param (e.g. ``render.py``) won't trigger
-        a copy of files the user happened to leave in the panel from a
-        previous import session.
+        Walks the shading networks via
+        :meth:`mayatk.mat_utils.MatUtils.get_texture_paths` and copies each
+        resolved file into *output_dir* so Painter's "Import Baked Maps"
+        dialog can pick them up alongside the FBX. Skips paths whose
+        source doesn't exist on disk (logs a warning for each).
 
-        Returns ``{param_key: [staged_path, ...]}`` -- the same payload the
-        manifest gets so the user (or a Painter plugin) can find what shipped.
-        Skips files that don't exist on disk, logs a warning for each.
+        If *prefix* is non-empty, each destination filename gets *prefix*
+        prepended. The operation is idempotent: a basename that already
+        starts with *prefix* has it stripped first, so the staged file
+        ends up as ``<prefix><tail>`` no matter how the source was named.
+
+        Returns the list of staged destination paths -- the same payload
+        the manifest records under ``"staged_textures"``.
         """
         import shutil
-        from mayatk.mat_utils.substance_bridge import parameters as _params
 
-        staged: Dict[str, List[str]] = {}
-        for key, spec in _params.PARAMS.items():
-            if spec.kind != "file_list":
+        try:
+            from mayatk.mat_utils._mat_utils import MatUtils
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(
+                f"Texture collection skipped (could not import MatUtils): {e}"
+            )
+            return []
+
+        try:
+            paths = MatUtils.get_texture_paths(objects=objects, absolute=True)
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"Texture collection failed: {e}")
+            return []
+
+        staged: List[str] = []
+        for src in paths:
+            src = str(src)
+            if not src or not os.path.isfile(src):
+                self.logger.warning("Assigned texture missing on disk: %s", src)
                 continue
-            if referenced_keys is not None and key not in referenced_keys:
+            base = os.path.basename(src)
+            if prefix and base.startswith(prefix):
+                base = base[len(prefix):]
+            dst = os.path.join(output_dir, f"{prefix}{base}")
+            try:
+                if os.path.abspath(src) != os.path.abspath(dst):
+                    shutil.copyfile(src, dst)
+            except OSError as e:
+                self.logger.warning("Could not stage %s -> %s: %s", src, dst, e)
                 continue
-            paths = params.get(key) or []
-            if not isinstance(paths, (list, tuple)):
-                self.logger.warning(
-                    "PARAM %s expected a list, got %s; skipping stage.",
-                    key, type(paths).__name__,
-                )
-                continue
-            out_for_key: List[str] = []
-            for src in paths:
-                src = str(src)
-                if not src or not os.path.isfile(src):
-                    self.logger.warning("Baked map missing on disk: %s", src)
-                    continue
-                dst = os.path.join(output_dir, os.path.basename(src))
-                try:
-                    if os.path.abspath(src) != os.path.abspath(dst):
-                        shutil.copyfile(src, dst)
-                except OSError as e:
-                    self.logger.warning("Could not stage %s -> %s: %s", src, dst, e)
-                    continue
-                out_for_key.append(dst)
-                self.logger.info("Staged baked map: %s", dst)
-            if out_for_key:
-                staged[key] = out_for_key
+            staged.append(dst)
+            self.logger.info("Staged texture: %s", dst)
         return staged
 
     def _announce_handoff(

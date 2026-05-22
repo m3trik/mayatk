@@ -4,29 +4,27 @@
 
 Thin subclass of :class:`mayatk.ui_utils.maya_bridge_slots.MayaBridgeSlotsBase`
 (itself a :class:`uitk.bridge.BridgeSlotsBase`). The panel machinery
-lives upstream. Substance-specific extras:
+lives upstream. Substance-specific extras live below: the ``b000`` send
+action (FBX export + Painter handoff with optional RPC dispatch).
 
-* A custom widget kind, ``painter_template_file``, registered on module
-  import -- a single-file picker filtered on ``.spt`` / ``.spp`` for
-  Painter project templates.
-* The ``b000`` send action (FBX export + Painter handoff with optional
-  RPC dispatch).
-
-The ``file_list`` kind used for ``PAINTER_BAKED_MAPS`` is no longer
-substance-specific -- it's part of the shared ``uitk.bridge.spec``
-registry now, so substance just references it by name.
+Assigned-mesh textures (formerly a ``file_list`` browser called
+``PAINTER_BAKED_MAPS``) are now driven by the boolean
+``PAINTER_INCLUDE_TEXTURES`` -- when True, the bridge walks the
+selection's shading networks and stages the resolved textures into the
+FBX output folder, then passes each one via ``--mesh-map`` on launch.
+The companion ``PAINTER_TEXTURE_PREFIX`` widget is greyed out while
+INCLUDE_TEXTURES is off so the user can't dial in a prefix that won't
+be applied.
 """
 import traceback
 from pathlib import Path
-
-from qtpy import QtWidgets
 
 try:
     import maya.cmds as cmds
 except ImportError:
     cmds = None
 
-from uitk.bridge.spec import KindHandler, register_kind
+from uitk.bridge.spec import connect_changed, read_value
 from mayatk.ui_utils.maya_bridge_slots import MayaBridgeSlotsBase
 
 # From this package:
@@ -40,70 +38,6 @@ from mayatk.mat_utils.substance_bridge import parameters as _params
 
 
 _PRESETS_ROOT = Path("mayatk/substance_bridge")
-
-
-# ---------------------------------------------------------------------
-# Custom kind: painter_template_file (single-file picker for .spt / .spp)
-# ---------------------------------------------------------------------
-
-
-def _build_painter_template_file(spec, parent):
-    """Composite line edit + browse button with Painter-template filter."""
-    container = QtWidgets.QWidget(parent)
-    hl = QtWidgets.QHBoxLayout(container)
-    hl.setContentsMargins(0, 0, 0, 0)
-    hl.setSpacing(2)
-    edit = QtWidgets.QLineEdit("" if spec.default is None else str(spec.default))
-    edit.setMinimumHeight(19)
-    edit.setMaximumHeight(19)
-    browse = QtWidgets.QPushButton("...")
-    browse.setFixedWidth(22)
-    browse.setMinimumHeight(19)
-    browse.setMaximumHeight(19)
-    hl.addWidget(edit, 1)
-    hl.addWidget(browse)
-    container._line_edit = edit
-
-    def _on_browse():
-        start = edit.text() or str(Path.home())
-        path, _filter = QtWidgets.QFileDialog.getOpenFileName(
-            container,
-            "Select Painter project template",
-            start,
-            "Painter template (*.spt);;Painter project (*.spp);;All files (*)",
-        )
-        if path:
-            edit.setText(path)
-
-    browse.clicked.connect(_on_browse)
-    return container
-
-
-def _read_painter_template_file(widget):
-    return widget._line_edit.text()
-
-
-def _write_painter_template_file(widget, value):
-    widget._line_edit.setText("" if value is None else str(value))
-
-
-def _connect_painter_template_file(widget, callback):
-    widget._line_edit.textChanged.connect(
-        lambda *_: callback(_read_painter_template_file(widget))
-    )
-
-
-# Registered exactly once -- the global registry is process-wide, so a
-# subsequent import of this module is a no-op overwrite.
-register_kind(
-    "painter_template_file",
-    KindHandler(
-        _build_painter_template_file,
-        _read_painter_template_file,
-        _write_painter_template_file,
-        connect=_connect_painter_template_file,
-    ),
-)
 
 
 # ---------------------------------------------------------------------
@@ -123,10 +57,27 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
     PRESETS_ROOT = _PRESETS_ROOT
     LOG_TAG = "substance_bridge"
 
-    # ``painter_template_file`` is a composite (line edit + browse), so it
-    # belongs to the same "do not clamp the row to 19px" group as the
-    # standard composite kinds.
-    PATH_LIKE_KINDS = MayaBridgeSlotsBase.PATH_LIKE_KINDS + ("painter_template_file",)
+    def __init__(self, switchboard):
+        super().__init__(switchboard)
+        self._wire_texture_prefix_dependency()
+
+    def _wire_texture_prefix_dependency(self) -> None:
+        """Grey out the ``Texture Prefix`` field while ``Include Textures`` is off.
+
+        Both widgets only exist when the active template references them
+        (e.g. ``import.py``); the lookup gracefully no-ops otherwise so
+        the panel stays usable on templates that omit either knob.
+        """
+        include_widget = self._param_widgets.get("PAINTER_INCLUDE_TEXTURES")
+        prefix_widget = self._param_widgets.get("PAINTER_TEXTURE_PREFIX")
+        if include_widget is None or prefix_widget is None:
+            return
+
+        def _sync(_value=None):
+            prefix_widget.setEnabled(bool(read_value(include_widget)))
+
+        connect_changed(include_widget, _sync)
+        _sync()
 
     # ------------------------------------------------------------------
     # Required base-class hooks
@@ -147,11 +98,9 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
         return list_template_modes()
 
     def select_initial_template_index(self, pairs):
-        """Prefer 'with_textures (send_to)' then 'import (send_to)'."""
-        for pref in (("with_textures", "send_to"), ("import", "send_to")):
-            if pref in pairs:
-                return pairs.index(pref)
-        return 0
+        """Default the panel to ``import (send_to)`` when it's available."""
+        pref = ("import", "send_to")
+        return pairs.index(pref) if pref in pairs else 0
 
     # ------------------------------------------------------------------
     # Header menu
