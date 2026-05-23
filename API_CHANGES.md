@@ -2,12 +2,12 @@
 
 _Diff vs prior baseline. Generated 2026-05-23._
 
-## Added (1)
+## Removed (2)
 
-- `mat_utils/_mat_utils.py::MatUtils.is_mat_assigned(mat: object) -> bool`
+- `env_utils/hierarchy_manager/hierarchy_manager_slots.py::HierarchyManagerSlots.tb001_init` — was `(self, widget)`
+- `env_utils/hierarchy_manager/hierarchy_manager_slots.py::HierarchyManagerSlots.tb002_init` — was `(self, widget)`
 
-## Signature changed (1)
+## Added (2)
 
-- `mat_utils/_mat_utils.py::MatUtils.get_mat_info`
-  - was: `(cls, materials: Optional[List[Any]] = None, objects: Optional[List[Any]] = None, optimize_check: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, **optimize_kwargs) -> List[Dict[str, Any]]`
-  - now: `(cls, materials: Optional[List[Any]] = None, objects: Optional[List[Any]] = None, optimize_check: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, exclude_defaults: bool = False, exclude_unassigned: bool = False, include_textures: bool = True, include_image_metadata: bool = True, **optimize_kwargs) -> List[Dict[str, Any]]`
+- `env_utils/hierarchy_manager/hierarchy_manager_slots.py::HierarchyManagerSlots.cmb_diff_options_init(self, widget)`
+- `env_utils/hierarchy_manager/hierarchy_manager_slots.py::HierarchyManagerSlots.cmb_pull_options_init(self, widget)`

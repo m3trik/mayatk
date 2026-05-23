@@ -9785,21 +9785,21 @@
               "deprecated": false
             },
             {
-              "name": "tb001_init",
-              "qualname": "HierarchyManagerSlots.tb001_init",
+              "name": "cmb_diff_options_init",
+              "qualname": "HierarchyManagerSlots.cmb_diff_options_init",
               "kind": "method",
               "signature": "(self, widget)",
-              "summary": "Initialize the diff analysis toggle button with options menu.",
+              "summary": "Populate the diff-options WidgetComboBox below the Diff button.",
               "line": 1570,
               "deprecated": false
             },
             {
-              "name": "tb002_init",
-              "qualname": "HierarchyManagerSlots.tb002_init",
+              "name": "cmb_pull_options_init",
+              "qualname": "HierarchyManagerSlots.cmb_pull_options_init",
               "kind": "method",
               "signature": "(self, widget)",
-              "summary": "Initialize the pull objects toggle button with options menu.",
-              "line": 1639,
+              "summary": "Populate the pull-options WidgetComboBox below the Pull button.",
+              "line": 1656,
               "deprecated": false
             },
             {
@@ -9808,7 +9808,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the fix/repair toggle button with options menu.",
-              "line": 1664,
+              "line": 1685,
               "deprecated": false
             },
             {
@@ -9816,8 +9816,8 @@
               "qualname": "HierarchyManagerSlots.tb001",
               "kind": "method",
               "signature": "(self, state=None)",
-              "summary": "Toggle button for diff check with options option_box.menu.",
-              "line": 1710,
+              "summary": "Run the diff analysis using settings from cmb_diff_options.",
+              "line": 1731,
               "deprecated": false
             },
             {
@@ -9826,7 +9826,7 @@
               "kind": "method",
               "signature": "(self, state=None)",
               "summary": "Toggle button for pull objects with options menu.",
-              "line": 1872,
+              "line": 1889,
               "deprecated": false
             },
             {
@@ -9835,7 +9835,7 @@
               "kind": "method",
               "signature": "(self, state=None)",
               "summary": "Toggle button for fix/repair operations.",
-              "line": 2060,
+              "line": 2073,
               "deprecated": false
             },
             {
@@ -9844,7 +9844,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Browse for reference scene file.",
-              "line": 2125,
+              "line": 2138,
               "deprecated": false
             },
             {
@@ -9853,7 +9853,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Refresh current scene hierarchy tree.",
-              "line": 2160,
+              "line": 2173,
               "deprecated": false
             },
             {
@@ -9862,7 +9862,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Select checked objects in Maya scene.",
-              "line": 2164,
+              "line": 2177,
               "deprecated": false
             },
             {
@@ -9871,7 +9871,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Expand all items in current scene tree.",
-              "line": 2173,
+              "line": 2186,
               "deprecated": false
             },
             {
@@ -9880,7 +9880,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Collapse all items in current scene tree.",
-              "line": 2177,
+              "line": 2190,
               "deprecated": false
             },
             {
@@ -9889,7 +9889,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Refresh reference hierarchy tree.",
-              "line": 2181,
+              "line": 2194,
               "deprecated": false
             },
             {
@@ -9898,7 +9898,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Show differences between hierarchies.",
-              "line": 2189,
+              "line": 2202,
               "deprecated": false
             },
             {
@@ -9907,7 +9907,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Analyze hierarchies and perform comparison.",
-              "line": 2202,
+              "line": 2215,
               "deprecated": false
             },
             {
@@ -9916,7 +9916,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Ignore selected items in the reference tree.",
-              "line": 2234,
+              "line": 2245,
               "deprecated": false
             },
             {
@@ -9925,7 +9925,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unignore selected items in the reference tree.",
-              "line": 2238,
+              "line": 2249,
               "deprecated": false
             },
             {
@@ -9934,7 +9934,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Ignore selected items in the current scene tree.",
-              "line": 2242,
+              "line": 2253,
               "deprecated": false
             },
             {
@@ -9943,7 +9943,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unignore selected items in the current scene tree.",
-              "line": 2246,
+              "line": 2257,
               "deprecated": false
             },
             {
@@ -9952,7 +9952,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Delete selected objects from the Maya scene and refresh the tree.",
-              "line": 2250,
+              "line": 2261,
               "deprecated": false
             },
             {
@@ -9961,7 +9961,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Rename current-scene items to match reference names.",
-              "line": 2290,
+              "line": 2301,
               "deprecated": false
             },
             {
@@ -9970,7 +9970,7 @@
               "kind": "method",
               "signature": "(self, tree_widget)",
               "summary": "Count total items in a tree widget.",
-              "line": 3437,
+              "line": 3448,
               "deprecated": false
             }
           ]
@@ -11782,7 +11782,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 1105,
+              "line": 1113,
               "deprecated": false
             },
             {
@@ -11791,7 +11791,7 @@
               "kind": "method",
               "signature": "(self, value)",
               "summary": "Invalidate the materials cache whenever objects change.",
-              "line": 1109,
+              "line": 1117,
               "deprecated": false
             },
             {
@@ -11800,7 +11800,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return the task definitions for the UI.",
-              "line": 1121,
+              "line": 1129,
               "deprecated": false
             },
             {
@@ -11809,7 +11809,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return the check definitions for the UI.",
-              "line": 1249,
+              "line": 1257,
               "deprecated": false
             },
             {
@@ -11818,7 +11818,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return all definitions combined for backward compatibility.",
-              "line": 1367,
+              "line": 1375,
               "deprecated": false
             }
           ]

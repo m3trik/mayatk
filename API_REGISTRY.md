@@ -1654,10 +1654,10 @@ Primitive creation utilities for Maya.
   - `HierarchyManagerSlots.header_init(self, widget)` — Initialize the header widget.
   - `HierarchyManagerSlots.tree000_init(self, widget)` — Initialize the reference/imported hierarchy tree widget.
   - `HierarchyManagerSlots.tree001_init(self, widget)` — Initialize the current scene hierarchy tree widget.
-  - `HierarchyManagerSlots.tb001_init(self, widget)` — Initialize the diff analysis toggle button with options menu.
-  - `HierarchyManagerSlots.tb002_init(self, widget)` — Initialize the pull objects toggle button with options menu.
+  - `HierarchyManagerSlots.cmb_diff_options_init(self, widget)` — Populate the diff-options WidgetComboBox below the Diff button.
+  - `HierarchyManagerSlots.cmb_pull_options_init(self, widget)` — Populate the pull-options WidgetComboBox below the Pull button.
   - `HierarchyManagerSlots.tb003_init(self, widget)` — Initialize the fix/repair toggle button with options menu.
-  - `HierarchyManagerSlots.tb001(self, state=None)` — Toggle button for diff check with options option_box.menu.
+  - `HierarchyManagerSlots.tb001(self, state=None)` — Run the diff analysis using settings from cmb_diff_options.
   - `HierarchyManagerSlots.tb002(self, state=None)` — Toggle button for pull objects with options menu.
   - `HierarchyManagerSlots.tb003(self, state=None)` — Toggle button for fix/repair operations.
   - `HierarchyManagerSlots.b003(self)` — Browse for reference scene file.
