@@ -51,7 +51,7 @@
        <number>0</number>
       </property>
       <item>
-       <widget class="Header" name="header" native="true">
+       <widget class="Header" name="header">
         <property name="minimumSize">
          <size>
           <width>0</width>
@@ -65,7 +65,7 @@
          </font>
         </property>
         <property name="text">
-         <string>HIERARCHY MGR</string>
+         <string>HIERARCHY MANAGER</string>
         </property>
        </widget>
       </item>
@@ -127,7 +127,45 @@
           </property>
          </widget>
         </item>
-        <item row="2" column="0" colspan="2">
+        <item row="2" column="0">
+         <widget class="WidgetComboBox" name="cmb_diff_options">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Diff analysis options.</string>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="1">
+         <widget class="WidgetComboBox" name="cmb_pull_options">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Pull operation options.</string>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="0" colspan="2">
          <widget class="PushButton" name="tb003">
           <property name="minimumSize">
            <size>
@@ -208,14 +246,14 @@
  </widget>
  <customwidgets>
   <customwidget>
-   <class>Footer</class>
-   <extends>QWidget</extends>
-   <header>uitk.widgets.footer</header>
+   <class>Header</class>
+   <extends>QLabel</extends>
+   <header>uitk.widgets.header</header>
   </customwidget>
   <customwidget>
-   <class>Header</class>
-   <extends>QWidget</extends>
-   <header>uitk.widgets.header</header>
+   <class>PushButton</class>
+   <extends>QPushButton</extends>
+   <header>widgets.pushbutton.h</header>
   </customwidget>
   <customwidget>
    <class>CollapsableGroup</class>
@@ -224,14 +262,19 @@
    <container>1</container>
   </customwidget>
   <customwidget>
-   <class>PushButton</class>
-   <extends>QPushButton</extends>
-   <header>widgets.pushbutton.h</header>
+   <class>Footer</class>
+   <extends>QWidget</extends>
+   <header>uitk.widgets.footer</header>
   </customwidget>
   <customwidget>
    <class>TreeWidget</class>
    <extends>QTreeWidget</extends>
    <header>widgets.treewidget.h</header>
+  </customwidget>
+  <customwidget>
+   <class>WidgetComboBox</class>
+   <extends>QComboBox</extends>
+   <header>uitk.widgets.widgetComboBox.WidgetComboBox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

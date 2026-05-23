@@ -611,7 +611,7 @@ class MatUtils(MatUtilsInternals):
         Each entry bundles the material's identity with one record per file
         node it drives. When ``optimize_check`` is True, each texture record
         also gets an ``optimization`` block from
-        :meth:`ptk.TextureOptimizer.assess` — useful for spotting oversized /
+        :meth:`ptk.MapOptimizer.assess` — useful for spotting oversized /
         wrong-mode textures from a UI report.
 
         Parameters:
@@ -631,7 +631,7 @@ class MatUtils(MatUtilsInternals):
                 bit_depth from texture records. PIL is only opened when this
                 or ``optimize_check`` requires it.
             **optimize_kwargs: Forwarded to
-                ``ptk.TextureOptimizer.assess`` (``max_size``, ``force_pot``,
+                ``ptk.MapOptimizer.assess`` (``max_size``, ``force_pot``,
                 ``optimize_bit_depth``, ``map_type``, ``allow_palette``).
 
         Returns:
@@ -752,7 +752,7 @@ class MatUtils(MatUtilsInternals):
                         })
                     if optimize_check:
                         info["optimization"] = (
-                            ptk.TextureOptimizer.assess(
+                            ptk.MapOptimizer.assess(
                                 path, image=pil_image, **optimize_kwargs
                             )
                         )

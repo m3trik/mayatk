@@ -1083,7 +1083,15 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
     ]
 
     _frame_rate_options: Dict[str, Any] = {
-        f"Check Scene FPS: {k}": k if v is not None else None
+        (
+            f"Check Scene FPS: {k}"
+            if v is None
+            else (
+                f"Check Scene FPS: {v:g} fps"
+                if any(c.isdigit() for c in k)
+                else f"Check Scene FPS: {k} ({v:g} fps)"
+            )
+        ): (k if v is not None else None)
         for k, v in ptk.insert_into_dict(ptk.VidUtils.FRAME_RATES, "OFF", None).items()
     }
 

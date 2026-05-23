@@ -1567,99 +1567,120 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         # Always populate the current scene tree when initialized
         self.controller.tree.populate_current_scene_tree(widget)
 
-    def tb001_init(self, widget):
-        """Initialize the diff analysis toggle button with options menu."""
-        widget.option_box.menu.setTitle("Diff Options:")
+    def cmb_diff_options_init(self, widget):
+        """Populate the diff-options WidgetComboBox below the Diff button.
 
-        # Add diff mode options
-        widget.option_box.menu.add(
-            self.sb.registered_widgets.ComboBox,
-            setObjectName="cmb_diff_mode",
-            setToolTip="Select diff analysis mode.",
-        )
-        diff_mode_options = {
-            "Mode: Full Hierarchy Compare": "Full Hierarchy Compare",
-            "Mode: Selected Objects Only": "Selected Objects Only",
-            "Mode: Missing Objects Only": "Missing Objects Only",
-            "Mode: Extra Objects Only": "Extra Objects Only",
-        }
-        widget.option_box.menu.cmb_diff_mode.add(diff_mode_options)
+        Replaces the legacy ``tb001.option_box.menu`` — option widgets are
+        embedded as rows in the combo's dropdown (matching the task/check
+        buttons in scene_exporter).  Children are named via ``setObjectName``
+        so they remain accessible via ``self.ui.<name>``.
+        """
+        items = []
 
-        # Add selection mode combobox (replaces individual checkboxes)
-        widget.option_box.menu.add(
-            self.sb.registered_widgets.ComboBox,
-            setObjectName="cmb_selection_mode",
-            setToolTip="Select how differences should be selected in trees.",
+        cmb_diff_mode = self.sb.registered_widgets.ComboBox()
+        cmb_diff_mode.setObjectName("cmb_diff_mode")
+        cmb_diff_mode.setToolTip("Select diff analysis mode.")
+        cmb_diff_mode.add(
+            {
+                "Mode: Full Hierarchy Compare": "Full Hierarchy Compare",
+                "Mode: Selected Objects Only": "Selected Objects Only",
+                "Mode: Missing Objects Only": "Missing Objects Only",
+                "Mode: Extra Objects Only": "Extra Objects Only",
+            }
         )
-        selection_mode_options = {
-            "Select: All Differences": "all",
-            "Select: Root Only": "root_only",
-            "Select: Leaves Only": "leaves_only",
-            "Select: No Auto-Selection": "none",
-        }
-        widget.option_box.menu.cmb_selection_mode.add(selection_mode_options)
+        items.append((cmb_diff_mode, "Diff Mode"))
 
-        # Add remaining diff display options
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Expand Difference Nodes",
-            setObjectName="chk_expand_diff",
-            setChecked=True,
-            setToolTip="Automatically expand nodes with differences.",
+        cmb_selection_mode = self.sb.registered_widgets.ComboBox()
+        cmb_selection_mode.setObjectName("cmb_selection_mode")
+        cmb_selection_mode.setToolTip(
+            "Select how differences should be selected in trees."
         )
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Force Re-analysis",
-            setObjectName="chk_force_reanalysis",
-            setChecked=False,
-            setToolTip="Force re-import and re-analysis even if reference was already analyzed.",
+        cmb_selection_mode.add(
+            {
+                "Select: All Differences": "all",
+                "Select: Root Only": "root_only",
+                "Select: Leaves Only": "leaves_only",
+                "Select: No Auto-Selection": "none",
+            }
         )
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Enable Fuzzy Matching",
-            setObjectName="chk_fuzzy_matching",
-            setChecked=True,
-            setToolTip="Enable fuzzy name matching for improved object identification.",
-        )
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Filter Mesh Objects",
-            setObjectName="chk_filter_meshes",
-            setChecked=False,
-            setToolTip="Exclude mesh-bearing transforms from the comparison. When unchecked, all transforms (including geometry) are compared.",
-        )
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Ignore Quarantine Group",
-            setObjectName="chk_ignore_quarantine",
-            setChecked=True,
-            setToolTip="Automatically ignore the quarantine group (e.g. _QUARANTINE) in the current scene tree during diff analysis.",
-        )
+        items.append((cmb_selection_mode, "Selection Mode"))
 
-    def tb002_init(self, widget):
-        """Initialize the pull objects toggle button with options menu."""
-        widget.option_box.menu.setTitle("Pull Options:")
+        chk_expand_diff = self.sb.registered_widgets.CheckBox()
+        chk_expand_diff.setText("Expand Difference Nodes")
+        chk_expand_diff.setObjectName("chk_expand_diff")
+        chk_expand_diff.setChecked(True)
+        chk_expand_diff.setToolTip("Automatically expand nodes with differences.")
+        items.append((chk_expand_diff, "Expand Difference Nodes"))
 
-        # Add pull mode options
-        widget.option_box.menu.add(
-            self.sb.registered_widgets.ComboBox,
-            setObjectName="cmb_pull_mode",
-            setToolTip="Select how objects should be pulled.",
+        chk_force_reanalysis = self.sb.registered_widgets.CheckBox()
+        chk_force_reanalysis.setText("Force Re-analysis")
+        chk_force_reanalysis.setObjectName("chk_force_reanalysis")
+        chk_force_reanalysis.setChecked(False)
+        chk_force_reanalysis.setToolTip(
+            "Force re-import and re-analysis even if reference was already analyzed."
         )
-        pull_mode_options = {
-            "Mode: Add to Scene": "Add to Scene",
-            "Mode: Merge Hierarchies": "Merge Hierarchies",
-        }
-        widget.option_box.menu.cmb_pull_mode.add(pull_mode_options)
+        items.append((chk_force_reanalysis, "Force Re-analysis"))
 
-        # Add pull children option
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Pull Children",
-            setObjectName="chk_pull_children",
-            setChecked=True,
-            setToolTip="Include all children when pulling objects. When enabled, complete hierarchies are pulled; when disabled, only the selected objects are pulled.",
+        chk_fuzzy_matching = self.sb.registered_widgets.CheckBox()
+        chk_fuzzy_matching.setText("Enable Fuzzy Matching")
+        chk_fuzzy_matching.setObjectName("chk_fuzzy_matching")
+        chk_fuzzy_matching.setChecked(True)
+        chk_fuzzy_matching.setToolTip(
+            "Enable fuzzy name matching for improved object identification."
         )
+        items.append((chk_fuzzy_matching, "Enable Fuzzy Matching"))
+
+        chk_filter_meshes = self.sb.registered_widgets.CheckBox()
+        chk_filter_meshes.setText("Filter Mesh Objects")
+        chk_filter_meshes.setObjectName("chk_filter_meshes")
+        chk_filter_meshes.setChecked(False)
+        chk_filter_meshes.setToolTip(
+            "Exclude mesh-bearing transforms from the comparison. When unchecked, "
+            "all transforms (including geometry) are compared."
+        )
+        items.append((chk_filter_meshes, "Filter Mesh Objects"))
+
+        chk_ignore_quarantine = self.sb.registered_widgets.CheckBox()
+        chk_ignore_quarantine.setText("Ignore Quarantine Group")
+        chk_ignore_quarantine.setObjectName("chk_ignore_quarantine")
+        chk_ignore_quarantine.setChecked(True)
+        chk_ignore_quarantine.setToolTip(
+            "Automatically ignore the quarantine group (e.g. _QUARANTINE) in the "
+            "current scene tree during diff analysis."
+        )
+        items.append((chk_ignore_quarantine, "Ignore Quarantine Group"))
+
+        widget.add(items, header="Diff Options", header_alignment="center", clear=True)
+        widget.add_defaults_button = True
+
+    def cmb_pull_options_init(self, widget):
+        """Populate the pull-options WidgetComboBox below the Pull button."""
+        items = []
+
+        cmb_pull_mode = self.sb.registered_widgets.ComboBox()
+        cmb_pull_mode.setObjectName("cmb_pull_mode")
+        cmb_pull_mode.setToolTip("Select how objects should be pulled.")
+        cmb_pull_mode.add(
+            {
+                "Mode: Add to Scene": "Add to Scene",
+                "Mode: Merge Hierarchies": "Merge Hierarchies",
+            }
+        )
+        items.append((cmb_pull_mode, "Pull Mode"))
+
+        chk_pull_children = self.sb.registered_widgets.CheckBox()
+        chk_pull_children.setText("Pull Children")
+        chk_pull_children.setObjectName("chk_pull_children")
+        chk_pull_children.setChecked(True)
+        chk_pull_children.setToolTip(
+            "Include all children when pulling objects. When enabled, complete "
+            "hierarchies are pulled; when disabled, only the selected objects "
+            "are pulled."
+        )
+        items.append((chk_pull_children, "Pull Children"))
+
+        widget.add(items, header="Pull Options", header_alignment="center", clear=True)
+        widget.add_defaults_button = True
 
     def tb003_init(self, widget):
         """Initialize the fix/repair toggle button with options menu."""
@@ -1708,7 +1729,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         )
 
     def tb001(self, state=None):
-        """Toggle button for diff check with options option_box.menu."""
+        """Run the diff analysis using settings from cmb_diff_options."""
         self.ui.txt003.clear()
 
         reference_path = self.controller.reference_path
@@ -1736,20 +1757,18 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         force_reanalysis = False
         filter_meshes = False  # Default: compare all transforms
 
-        if hasattr(self.ui, "tb001"):
-            _m = self.ui.tb001.option_box.menu
-            if hasattr(_m, "cmb_diff_mode"):
-                diff_mode = _m.cmb_diff_mode.currentData() or diff_mode
-            if hasattr(_m, "cmb_selection_mode"):
-                selection_mode = _m.cmb_selection_mode.currentData() or selection_mode
-            if hasattr(_m, "chk_expand_diff"):
-                expand_diff = _m.chk_expand_diff.isChecked()
-            if hasattr(_m, "chk_force_reanalysis"):
-                force_reanalysis = _m.chk_force_reanalysis.isChecked()
-            if hasattr(_m, "chk_fuzzy_matching"):
-                fuzzy_matching = _m.chk_fuzzy_matching.isChecked()
-            if hasattr(_m, "chk_filter_meshes"):
-                filter_meshes = _m.chk_filter_meshes.isChecked()
+        if hasattr(self.ui, "cmb_diff_mode"):
+            diff_mode = self.ui.cmb_diff_mode.currentData() or diff_mode
+        if hasattr(self.ui, "cmb_selection_mode"):
+            selection_mode = self.ui.cmb_selection_mode.currentData() or selection_mode
+        if hasattr(self.ui, "chk_expand_diff"):
+            expand_diff = self.ui.chk_expand_diff.isChecked()
+        if hasattr(self.ui, "chk_force_reanalysis"):
+            force_reanalysis = self.ui.chk_force_reanalysis.isChecked()
+        if hasattr(self.ui, "chk_fuzzy_matching"):
+            fuzzy_matching = self.ui.chk_fuzzy_matching.isChecked()
+        if hasattr(self.ui, "chk_filter_meshes"):
+            filter_meshes = self.ui.chk_filter_meshes.isChecked()
 
         # Parse selection mode
         auto_select = selection_mode != "none"
@@ -1791,10 +1810,8 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         # Auto-ignore the quarantine group BEFORE logging/formatting so that
         # counts and styling reflect the exclusion.
         ignore_quarantine = True
-        if hasattr(self.ui, "tb001"):
-            _m = self.ui.tb001.option_box.menu
-            if hasattr(_m, "chk_ignore_quarantine"):
-                ignore_quarantine = _m.chk_ignore_quarantine.isChecked()
+        if hasattr(self.ui, "chk_ignore_quarantine"):
+            ignore_quarantine = self.ui.chk_ignore_quarantine.isChecked()
         if ignore_quarantine:
             self._auto_ignore_quarantine_group()
 
@@ -1893,22 +1910,18 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         fuzzy_matching = True  # Default value
         dry_run = self.ui.chk002.isChecked()
 
-        # Get fuzzy matching setting from diff options menu
-        if hasattr(self.ui, "tb001"):
-            _m = self.ui.tb001.option_box.menu
-            if hasattr(_m, "chk_fuzzy_matching"):
-                fuzzy_matching = _m.chk_fuzzy_matching.isChecked()
+        # Get fuzzy matching setting from diff options combo
+        if hasattr(self.ui, "chk_fuzzy_matching"):
+            fuzzy_matching = self.ui.chk_fuzzy_matching.isChecked()
 
-        # Get pull options from toggle button menu
+        # Get pull options from the pull-options combo
         pull_mode = "Add to Scene"  # Default
         pull_children = True  # Default
 
-        if hasattr(self.ui, "tb002"):
-            _m = self.ui.tb002.option_box.menu
-            if hasattr(_m, "cmb_pull_mode"):
-                pull_mode = _m.cmb_pull_mode.currentData() or pull_mode
-            if hasattr(_m, "chk_pull_children"):
-                pull_children = _m.chk_pull_children.isChecked()
+        if hasattr(self.ui, "cmb_pull_mode"):
+            pull_mode = self.ui.cmb_pull_mode.currentData() or pull_mode
+        if hasattr(self.ui, "chk_pull_children"):
+            pull_children = self.ui.chk_pull_children.isChecked()
 
         children_msg = "with children" if pull_children else "individual only"
         self.logger.notice(f"Pull: '{pull_mode}' mode, {children_msg}")
@@ -2207,12 +2220,10 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         fuzzy_matching = True  # Default value
         filter_meshes = False
 
-        if hasattr(self.ui, "tb001"):
-            _m = self.ui.tb001.option_box.menu
-            if hasattr(_m, "chk_fuzzy_matching"):
-                fuzzy_matching = _m.chk_fuzzy_matching.isChecked()
-            if hasattr(_m, "chk_filter_meshes"):
-                filter_meshes = _m.chk_filter_meshes.isChecked()
+        if hasattr(self.ui, "chk_fuzzy_matching"):
+            fuzzy_matching = self.ui.chk_fuzzy_matching.isChecked()
+        if hasattr(self.ui, "chk_filter_meshes"):
+            filter_meshes = self.ui.chk_filter_meshes.isChecked()
 
         dry_run = self.ui.chk002.isChecked()
         log_level = self.ui.cmb001.currentData()
