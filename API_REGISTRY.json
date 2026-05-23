@@ -1,7 +1,7 @@
 {
   "name": "mayatk",
   "source_root": "mayatk/mayatk",
-  "generated_at": "2026-05-22",
+  "generated_at": "2026-05-23",
   "modules": [
     {
       "relpath": "anim_utils/_anim_utils.py",
@@ -12835,7 +12835,7 @@
               "name": "get_mat_info",
               "qualname": "MatUtils.get_mat_info",
               "kind": "classmethod",
-              "signature": "(cls, materials: Optional[List[Any]] = None, objects: Optional[List[Any]] = None, optimize_check: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, **optimize_kwargs) -> List[Dict[str, Any]]",
+              "signature": "(cls, materials: Optional[List[Any]] = None, objects: Optional[List[Any]] = None, optimize_check: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, exclude_defaults: bool = False, exclude_unassigned: bool = False, include_textures: bool = True, include_image_metadata: bool = True, **optimize_kwargs) -> List[Dict[str, Any]]",
               "summary": "Aggregate per-material info: name, type, textures + image metadata.",
               "line": 597,
               "deprecated": false
@@ -12846,7 +12846,7 @@
               "kind": "classmethod",
               "signature": "(cls, info_list: List[Dict[str, Any]]) -> str",
               "summary": "Render :meth:`get_texture_info` output as a plain-text report.",
-              "line": 768,
+              "line": 795,
               "deprecated": false
             },
             {
@@ -12855,7 +12855,7 @@
               "kind": "classmethod",
               "signature": "(cls, info_list: List[Dict[str, Any]]) -> str",
               "summary": "Render :meth:`get_texture_info` output as styled HTML.",
-              "line": 786,
+              "line": 813,
               "deprecated": false
             },
             {
@@ -12864,7 +12864,7 @@
               "kind": "classmethod",
               "signature": "(cls, records: List[Dict[str, Any]]) -> str",
               "summary": "Render :meth:`get_mat_info` output as a plain-text report.",
-              "line": 809,
+              "line": 836,
               "deprecated": false
             },
             {
@@ -12873,7 +12873,7 @@
               "kind": "classmethod",
               "signature": "(cls, records: List[Dict[str, Any]]) -> str",
               "summary": "Render :meth:`get_mat_info` output as styled HTML.",
-              "line": 868,
+              "line": 896,
               "deprecated": false
             },
             {
@@ -12882,7 +12882,7 @@
               "kind": "staticmethod",
               "signature": "(inc=None, exc=None, node_type=None, sort: bool = False, as_dict: bool = False, exclude_defaults: bool = True, **filter_kwargs)",
               "summary": "Retrieves all materials from the current scene, with flexible name/type filtering.",
-              "line": 955,
+              "line": 984,
               "deprecated": false
             },
             {
@@ -12891,7 +12891,7 @@
               "kind": "staticmethod",
               "signature": "(file_nodes) -> List[str]",
               "summary": "Return surface shaders connected to one or more file nodes, ignoring intermediates.",
-              "line": 995,
+              "line": 1021,
               "deprecated": false
             },
             {
@@ -12900,7 +12900,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, raw: bool = False, return_type: str = 'fileNode') -> list",
               "summary": "Returns file node info in any column order based on return_type.",
-              "line": 1031,
+              "line": 1057,
               "deprecated": false
             },
             {
@@ -12909,7 +12909,16 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Retrieves the list of favorite materials in Maya.",
-              "line": 1116,
+              "line": 1142,
+              "deprecated": false
+            },
+            {
+              "name": "is_mat_assigned",
+              "qualname": "MatUtils.is_mat_assigned",
+              "kind": "staticmethod",
+              "signature": "(mat: object) -> bool",
+              "summary": "True iff *mat*'s shading engines contain at least one DAG member.",
+              "line": 1175,
               "deprecated": false
             },
             {
@@ -12918,7 +12927,7 @@
               "kind": "staticmethod",
               "signature": "(mat: object, delete: bool = False) -> bool",
               "summary": "Checks if a given material is assigned and optionally deletes it.",
-              "line": 1132,
+              "line": 1204,
               "deprecated": false
             },
             {
@@ -12927,7 +12936,7 @@
               "kind": "staticmethod",
               "signature": "(mat_type, prefix='', name='')",
               "summary": "Creates a material based on the provided type or a random material if 'mat_type' is 'random'.",
-              "line": 1153,
+              "line": 1225,
               "deprecated": false
             },
             {
@@ -12936,7 +12945,7 @@
               "kind": "staticmethod",
               "signature": "(objects, mat_name)",
               "summary": "Assigns a material to a list of objects or components.",
-              "line": 1185,
+              "line": 1257,
               "deprecated": false
             },
             {
@@ -12945,7 +12954,7 @@
               "kind": "staticmethod",
               "signature": "(image_path, name=None, color_space=None)",
               "summary": "Create a ``file`` texture node with a wired ``place2dTexture``.",
-              "line": 1219,
+              "line": 1291,
               "deprecated": false
             },
             {
@@ -12954,7 +12963,7 @@
               "kind": "staticmethod",
               "signature": "(shader, name=None, assign_to=None)",
               "summary": "Create a shading group for *shader* and optionally assign objects.",
-              "line": 1266,
+              "line": 1338,
               "deprecated": false
             },
             {
@@ -12963,7 +12972,7 @@
               "kind": "staticmethod",
               "signature": "(name, opacity=False, opacity_mode=None)",
               "summary": "Create a StingrayPBS shader by loading a ShaderFX preset graph.",
-              "line": 1295,
+              "line": 1367,
               "deprecated": false
             },
             {
@@ -12972,7 +12981,7 @@
               "kind": "classmethod",
               "signature": "(cls, material: str, objects: Optional[List[str]] = None, shell: bool = False) -> List[str]",
               "summary": "Find objects or faces by the material ID.",
-              "line": 1342,
+              "line": 1414,
               "deprecated": false
             },
             {
@@ -12981,7 +12990,7 @@
               "kind": "staticmethod",
               "signature": "(materials: Optional[List[str]] = None, attributes: Optional[List[str]] = None, inc_mat_name: bool = False, inc_path_type: bool = False, resolve_full_path: bool = False) -> Union[List[str], List[Tuple[str, ...]]]",
               "summary": "Collects specified attributes file paths for given materials.",
-              "line": 1404,
+              "line": 1476,
               "deprecated": false
             },
             {
@@ -12990,7 +12999,7 @@
               "kind": "staticmethod",
               "signature": "(file_paths: List[str], target_dir: str, silent: bool = False, limit_to_nodes: Optional[List[str]] = None, as_strings: bool = True) -> List[str]",
               "summary": "Internal helper to remap file nodes to target_dir, preserving relative subfolders inside sourceimag…",
-              "line": 1486,
+              "line": 1558,
               "deprecated": false
             },
             {
@@ -12999,7 +13008,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, new_dir: Optional[str] = None, silent: bool = False, file_nodes: Optional[List[str]] = None, objects: Optional[List[str]] = None, as_strings: bool = True) -> None",
               "summary": "Remaps file texture paths for materials to new_dir.",
-              "line": 1561,
+              "line": 1633,
               "deprecated": false
             },
             {
@@ -13008,7 +13017,7 @@
               "kind": "staticmethod",
               "signature": "(material1: str, material2: str) -> bool",
               "summary": "Check if two materials are duplicates based on their textures.",
-              "line": 1606,
+              "line": 1678,
               "deprecated": false
             },
             {
@@ -13017,7 +13026,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, strict: bool = False) -> Dict[str, List[str]]",
               "summary": "Find duplicate materials based on their texture file names or full paths.",
-              "line": 1617,
+              "line": 1689,
               "deprecated": false
             },
             {
@@ -13026,7 +13035,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, delete: bool = False, strict: bool = False) -> None",
               "summary": "Find duplicate materials, remove duplicates, and reassign them to the original material.",
-              "line": 1725,
+              "line": 1797,
               "deprecated": false
             },
             {
@@ -13035,7 +13044,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str], as_strings: bool = True) -> List[str]",
               "summary": "Filter materials assigned to the given objects.",
-              "line": 1788,
+              "line": 1860,
               "deprecated": false
             },
             {
@@ -13044,7 +13053,7 @@
               "kind": "staticmethod",
               "signature": "(materials=None, inc=None, exc=None, log=False, refresh_viewport=False, refresh_hypershade=False, texture_types: Optional[List[str]] = None)",
               "summary": "Reloads textures connected to specified materials with inclusion/exclusion filters.",
-              "line": 1795,
+              "line": 1867,
               "deprecated": false
             },
             {
@@ -13053,7 +13062,7 @@
               "kind": "classmethod",
               "signature": "(cls, found_files: List[Union[str, Tuple[str, str]]], new_dir: str, delete_old: bool = False, create_dir: bool = True, per_file_timeout: float = 120.0, max_workers: int = 8, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> List[Tuple[str, str]]",
               "summary": "Move or copy found texture files to a new directory.",
-              "line": 1849,
+              "line": 1921,
               "deprecated": false
             },
             {
@@ -13062,7 +13071,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[str]] = None, source_dir: str = '', recursive: bool = True, return_dir: bool = False, quiet: bool = False, file_nodes: Optional[List[str]] = None, materials: Optional[List[str]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Union[str, Tuple[str, str]]]",
               "summary": "Find texture files for given objects' materials inside source_dir.",
-              "line": 2003,
+              "line": 2075,
               "deprecated": false
             },
             {
@@ -13071,7 +13080,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, old_dir: Optional[str] = None, new_dir: Optional[str] = None, silent: bool = False, delete_old: bool = False, objects: Optional[List[str]] = None, file_nodes: Optional[List[str]] = None, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> None",
               "summary": "Copies texture files from an old directory to a new one.",
-              "line": 2100,
+              "line": 2172,
               "deprecated": false
             },
             {
@@ -13080,7 +13089,7 @@
               "kind": "staticmethod",
               "signature": "(source_dir: str = None, output_dir: str = None) -> None",
               "summary": "Move unused textures to a specified directory.",
-              "line": 2152,
+              "line": 2224,
               "deprecated": false
             },
             {
@@ -13089,7 +13098,7 @@
               "kind": "staticmethod",
               "signature": "(mat: Union[str, object], size: List[int] = [20, 20], fallback_to_blank: bool = True) -> object",
               "summary": "Get an icon with a color fill matching the given material's RGB value.",
-              "line": 2181,
+              "line": 2253,
               "deprecated": false
             },
             {
@@ -13098,7 +13107,7 @@
               "kind": "staticmethod",
               "signature": "(bump_file_node, output_path: Optional[str] = None, intensity: float = 1.0, format_type: str = 'opengl', filter_type: str = '3x3', wrap_mode: str = 'black', create_file_node: bool = True, node_name: Optional[str] = None) -> Optional[str]",
               "summary": "Convert a bump/height map to a normal map using Maya's bump2d node.",
-              "line": 2214,
+              "line": 2286,
               "deprecated": false
             },
             {
@@ -13107,7 +13116,7 @@
               "kind": "staticmethod",
               "signature": "(normal_file_node, material=None) -> Dict[str, Any]",
               "summary": "Validate normal map file node setup and provide recommendations.",
-              "line": 2328,
+              "line": 2400,
               "deprecated": false
             },
             {
@@ -13116,7 +13125,7 @@
               "kind": "staticmethod",
               "signature": "(materials: Union[str, List[str], object], mode: str = 'showUpAndDownstream') -> None",
               "summary": "Open the Hypershade and graph the specified materials.",
-              "line": 2402,
+              "line": 2474,
               "deprecated": false
             }
           ]
@@ -15171,7 +15180,7 @@
           "kind": "function",
           "signature": "(script_text: str) -> 'set[str]'",
           "summary": "Registered keys present in *script_text* (delegates to uitk.bridge).",
-          "line": 202,
+          "line": 174,
           "deprecated": false
         },
         {
@@ -15180,7 +15189,7 @@
           "kind": "function",
           "signature": "() -> 'dict[str, Any]'",
           "summary": "Return ``{key: default}`` for every registered parameter.",
-          "line": 207,
+          "line": 179,
           "deprecated": false
         },
         {
@@ -15189,7 +15198,7 @@
           "kind": "function",
           "signature": "(values: 'dict[str, Any]') -> 'dict[str, str]'",
           "summary": "Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting.",
-          "line": 212,
+          "line": 184,
           "deprecated": false
         },
         {
@@ -15198,7 +15207,7 @@
           "kind": "function",
           "signature": "(values: 'dict[str, Any]') -> 'dict[str, str]'",
           "summary": "Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping.",
-          "line": 217,
+          "line": 189,
           "deprecated": false
         }
       ],
@@ -15212,7 +15221,7 @@
         {
           "name": "SubstanceBridgeSlots",
           "summary": "Slots wired to ``substance_bridge.ui`` via :class:`MayaBridgeSlotsBase`.",
-          "line": 114,
+          "line": 48,
           "bases": [
             "MayaBridgeSlotsBase"
           ],
@@ -15223,7 +15232,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 136,
+              "line": 87,
               "deprecated": false
             },
             {
@@ -15232,7 +15241,7 @@
               "kind": "property",
               "signature": "(self) -> Path",
               "summary": "",
-              "line": 140,
+              "line": 91,
               "deprecated": false
             },
             {
@@ -15241,7 +15250,7 @@
               "kind": "method",
               "signature": "(self) -> SubstanceBridge",
               "summary": "",
-              "line": 143,
+              "line": 94,
               "deprecated": false
             },
             {
@@ -15250,7 +15259,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 146,
+              "line": 97,
               "deprecated": false
             },
             {
@@ -15258,8 +15267,8 @@
               "qualname": "SubstanceBridgeSlots.select_initial_template_index",
               "kind": "method",
               "signature": "(self, pairs)",
-              "summary": "Prefer 'with_textures (send_to)' then 'import (send_to)'.",
-              "line": 149,
+              "summary": "Default the panel to ``import (send_to)`` when it's available.",
+              "line": 100,
               "deprecated": false
             },
             {
@@ -15268,7 +15277,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure the header menu with template / log utilities.",
-              "line": 160,
+              "line": 109,
               "deprecated": false
             },
             {
@@ -15277,7 +15286,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Process the selected transforms with the chosen template + mode.",
-              "line": 216,
+              "line": 165,
               "deprecated": false
             }
           ]

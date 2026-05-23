@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-05-22_
+_Generated: 2026-05-23_
 
 ## Index
 
@@ -2058,7 +2058,7 @@ Shared affix-mode option-box helper for mat_utils slot files.
   - `MatUtils.group_objects_by_material(objects, cluster_by_distance=False, threshold=10000.0)` *(static)* — Groups objects based on their assigned material(s).
   - `MatUtils.get_texture_paths(cls, objects: Optional[List[Any]] = None, materials: Optional[List[Any]] = None, file_nodes: Optional[List[Any]] = None, texture_names: Optional[List[str]] = None, absolute: bool = True) -> List[str]` *(class)* — Resolve unique texture file paths for the given scope.
   - `MatUtils.get_texture_info(cls, objects=None, materials=None, file_nodes=None, texture_names=None)` *(class)* — Get image metadata (size, mode, format) for texture files in scope.
-  - `MatUtils.get_mat_info(cls, materials: Optional[List[Any]] = None, objects: Optional[List[Any]] = None, optimize_check: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, **optimize_kwargs) -> List[Dict[str, Any]]` *(class)* — Aggregate per-material info: name, type, textures + image metadata.
+  - `MatUtils.get_mat_info(cls, materials: Optional[List[Any]] = None, objects: Optional[List[Any]] = None, optimize_check: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, exclude_defaults: bool = False, exclude_unassigned: bool = False, include_textures: bool = True, include_image_metadata: bool = True, **optimize_kwargs) -> List[Dict[str, Any]]` *(class)* — Aggregate per-material info: name, type, textures + image metadata.
   - `MatUtils.format_texture_info_text(cls, info_list: List[Dict[str, Any]]) -> str` *(class)* — Render :meth:`get_texture_info` output as a plain-text report.
   - `MatUtils.format_texture_info_html(cls, info_list: List[Dict[str, Any]]) -> str` *(class)* — Render :meth:`get_texture_info` output as styled HTML.
   - `MatUtils.format_mat_info_text(cls, records: List[Dict[str, Any]]) -> str` *(class)* — Render :meth:`get_mat_info` output as a plain-text report.
@@ -2067,6 +2067,7 @@ Shared affix-mode option-box helper for mat_utils slot files.
   - `MatUtils.get_connected_shaders(file_nodes) -> List[str]` *(static)* — Return surface shaders connected to one or more file nodes, ignoring intermediates.
   - `MatUtils.get_file_nodes(cls, materials: Optional[List[str]] = None, raw: bool = False, return_type: str = 'fileNode') -> list` *(class)* — Returns file node info in any column order based on return_type.
   - `MatUtils.get_fav_mats()` *(static)* — Retrieves the list of favorite materials in Maya.
+  - `MatUtils.is_mat_assigned(mat: object) -> bool` *(static)* — True iff *mat*'s shading engines contain at least one DAG member.
   - `MatUtils.is_connected(mat: object, delete: bool = False) -> bool` *(static)* — Checks if a given material is assigned and optionally deletes it.
   - `MatUtils.create_mat(mat_type, prefix='', name='')` *(static)* — Creates a material based on the provided type or a random material if 'mat_type' is 'random'.
   - `MatUtils.assign_mat(objects, mat_name)` *(static)* — Assigns a material to a list of objects or components.
@@ -2461,22 +2462,22 @@ Substance 3D Painter connection module.
 
 Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
 
-- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L202) — Registered keys present in *script_text* (delegates to uitk.bridge).
-- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L207) — Return ``{key: default}`` for every registered parameter.
-- [`render_cli_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L212) — Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting.
-- [`render_js_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L217) — Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping.
+- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L174) — Registered keys present in *script_text* (delegates to uitk.bridge).
+- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L179) — Return ``{key: default}`` for every registered parameter.
+- [`render_cli_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L184) — Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting.
+- [`render_js_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L189) — Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping.
 
 <a id="mat_utils--substance_bridge--substance_bridge_slots"></a>
 ### `mat_utils/substance_bridge/substance_bridge_slots.py`
 
 Slots for the Substance Painter bridge panel.
 
-- **[`class SubstanceBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/mat_utils/substance_bridge/substance_bridge_slots.py#L114)** — Slots wired to ``substance_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
+- **[`class SubstanceBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/mat_utils/substance_bridge/substance_bridge_slots.py#L48)** — Slots wired to ``substance_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
   - `SubstanceBridgeSlots.params_module(self)` *(property)*
   - `SubstanceBridgeSlots.template_dir(self) -> Path` *(property)*
   - `SubstanceBridgeSlots.make_bridge(self) -> SubstanceBridge`
   - `SubstanceBridgeSlots.list_template_modes(self)`
-  - `SubstanceBridgeSlots.select_initial_template_index(self, pairs)` — Prefer 'with_textures (send_to)' then 'import (send_to)'.
+  - `SubstanceBridgeSlots.select_initial_template_index(self, pairs)` — Default the panel to ``import (send_to)`` when it's available.
   - `SubstanceBridgeSlots.header_init(self, widget)` — Configure the header menu with template / log utilities.
   - `SubstanceBridgeSlots.b000(self)` — Process the selected transforms with the chosen template + mode.
 
