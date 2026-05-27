@@ -11,6 +11,7 @@ except ImportError as error:
     print(__file__, error)
 import math
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # from this package:
 from mayatk.display_utils._display_utils import DisplayUtils
@@ -212,19 +213,28 @@ class DuplicateLinearSlots:
         self.toggle_weight_ui()
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Duplicate Linear — Duplicate objects along a linear path.\n\n"
-                "• Set number of copies and end transforms.\n"
-                "• Interpolation modes: Linear, Ease In/Out, Weighted, etc.\n"
-                "• Choose pivot point for transformations.\n"
-                "• Enable Preview to iterate before committing."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Duplicate Linear",
+                body="Duplicate selected objects along a linear path with "
+                "per-copy translate, rotate, and scale offsets.",
+                steps=[
+                    "Select one or more transforms.",
+                    "Set <b>Copies</b> and the end-state <b>Translate</b> / "
+                    "<b>Rotate</b> / <b>Scale</b> offsets — each copy interpolates "
+                    "from source to that final offset.",
+                    "Pick an interpolation <b>Mode</b> (linear, ease in/out, "
+                    "weighted, sine, bounce, elastic, …).",
+                    "Pick a <b>Pivot</b>.",
+                    "Toggle <b>Preview</b>, then <b>Duplicate</b> to commit.",
+                ],
+                notes=[
+                    "<b>Weight Bias</b> only applies to the <i>weighted</i> mode; "
+                    "<b>Weight Curve</b> applies to non-linear modes. Disabled "
+                    "spinners are simply ignored by the current mode.",
+                ],
+            )
         )
 
     def toggle_weight_ui(self):

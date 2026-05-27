@@ -622,10 +622,14 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         )
 
     def test_unfreeze_scale_only_restores_scale(self):
-        """Restoring only scale brings S back to its pre-freeze value
-        without touching T or R."""
+        """Cumulative-S unfreeze composes the stored scale onto current.
+
+        Scale composes multiplicatively: stored S=(2,3,4) baked at freeze
+        time, current post-freeze S=(5,5,5) → unfrozen S=(10,15,20).
+        Other channels are untouched (post-freeze rotate stays).
+        """
         cmds.xform(self.cube, scale=(2.0, 3.0, 4.0))
-        Channels.freeze_transforms([self.cube])  # store_transforms captures S=(2,3,4)
+        Channels.freeze_transforms([self.cube])  # stored.S_bake = (2,3,4)
         # Modify scale and rotate after the freeze.
         cmds.xform(self.cube, scale=(5.0, 5.0, 5.0))
         cmds.xform(self.cube, rotation=(45.0, 0.0, 0.0), relative=False)
@@ -635,19 +639,15 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         )
         self.assertTrue(restored)
 
-        # Scale restored to the value captured at freeze time — the
-        # ``store_transforms`` step runs BEFORE ``makeIdentity`` so the
-        # stored matrix's scale component is the user's pre-freeze (2,3,4),
-        # not the post-freeze (1,1,1) that makeIdentity bakes into the
-        # local attrs.
+        # Scale = stored * current (component-wise).
         self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.scaleX"), 2.0, places=4
+            cmds.getAttr(f"{self.cube}.scaleX"), 10.0, places=4
         )
         self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.scaleY"), 3.0, places=4
+            cmds.getAttr(f"{self.cube}.scaleY"), 15.0, places=4
         )
         self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.scaleZ"), 4.0, places=4
+            cmds.getAttr(f"{self.cube}.scaleZ"), 20.0, places=4
         )
         # Post-freeze rotation change preserved.
         self.assertAlmostEqual(
@@ -707,28 +707,33 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
             cmds.getAttr(f"{self.cube}.rotateX"), 99.0, places=4
         )
 
-    def test_refreezing_same_channel_updates_stored_value(self):
-        """Re-freezing the SAME channel rebaselines that channel only.
+    def test_refreezing_same_channel_accumulates_stored_value(self):
+        """Re-freezing the SAME channel accumulates onto the bake history.
 
-        Sister case to ``test_sequential_partial_freezes_*``: there we
-        freeze T then R (different channels).  Here we freeze T, modify
-        T, freeze T again — the second freeze should refresh stored.T
-        from the new current value (so unfreeze restores to the new
-        baseline), while leaving R and S untouched in stored.
+        Freeze T at 1 → bake history = T(1,2,3).  Move to 50, freeze T
+        again → bake history accumulates to T(51,2,3).  Move to 99,99,99,
+        unfreeze T → local T = stored * current = (51+99, 2+99, 3+99) =
+        (150, 101, 102).  Each freeze adds to the bake history, no
+        information is discarded.
         """
         Channels.freeze_transforms([self.cube], attrs=["translate"])
         # Move post-freeze and re-freeze the SAME channel.
         cmds.xform(self.cube, translation=(50.0, 0.0, 0.0), relative=False)
         Channels.freeze_transforms([self.cube], attrs=["translate"])
 
-        # The post-modify state is now the baseline.  After moving
-        # somewhere else, unfreeze translate should pull us back to
-        # (50, 0, 0), not the original (1, 2, 3) from setUp.
         cmds.xform(self.cube, translation=(99.0, 99.0, 99.0))
         Channels.unfreeze_transforms([self.cube], attrs=["translate"])
 
+        # Bake history: (1,2,3) + (50,0,0) = (51,2,3); plus current
+        # (99,99,99) → (150, 101, 102).
         self.assertAlmostEqual(
-            cmds.getAttr(f"{self.cube}.translateX"), 50.0, places=3
+            cmds.getAttr(f"{self.cube}.translateX"), 150.0, places=3
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateY"), 101.0, places=3
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateZ"), 102.0, places=3
         )
 
     def test_full_freeze_after_partial_overwrites_baseline(self):
@@ -814,32 +819,112 @@ class TestFreezeUnfreezeTransforms(MayaTkTestCase):
         )
         self.assertEqual(restored, [])
 
-    def test_refreeze_after_move_unfreezes_to_most_recent(self):
-        """Re-freezing after a move stores an independent restore point.
+    def test_refreeze_after_move_accumulates_in_bake_history(self):
+        """Re-freezing after a move accumulates onto the bake history.
 
-        Each freeze should overwrite the stored matrix (not compose
-        with it), so Unfreeze restores to the pose at the *most
-        recent* freeze — never to a never-visited composed pose.
+        Freeze1 stores T(1,2,3).  Move +5 in X then freeze2 stores the
+        full bake history T(6,2,3).  Move to (99,99,99), unfreeze →
+        local T = (6,2,3) + (99,99,99) = (105, 101, 102).  Cumulative
+        — the bake history of every previous freeze is preserved.
         """
         # First freeze at (1, 2, 3).
         Channels.freeze_transforms([self.cube])
 
-        # Move local translate to (5, 0, 0). Pivot is at world (1,2,3)
-        # post-freeze, so world becomes (6, 2, 3).
+        # Move local translate to (5, 0, 0).
         cmds.xform(self.cube, translation=(5.0, 0.0, 0.0), relative=False)
-        ws_before_refreeze = cmds.xform(self.cube, q=True, ws=True, t=True)
 
-        # Second freeze captures the new world matrix as the restore
-        # point.
+        # Second freeze accumulates: bake history becomes (1+5, 2, 3).
         Channels.freeze_transforms([self.cube])
 
-        # Move again to confirm unfreeze ignores the post-freeze move.
+        # Move again — unfreeze should compose this onto bake history.
         cmds.xform(self.cube, translation=(99.0, 99.0, 99.0), relative=False)
 
         Channels.unfreeze_transforms([self.cube])
-        ws_after_unfreeze = cmds.xform(self.cube, q=True, ws=True, t=True)
-        for expected, actual in zip(ws_before_refreeze, ws_after_unfreeze):
-            self.assertAlmostEqual(expected, actual, places=4)
+
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateX"), 105.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateY"), 101.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateZ"), 102.0, places=4
+        )
+
+    def test_freeze_move_unfreeze_keeps_post_freeze_move_in_local(self):
+        """Regression: freeze, move, unfreeze must NOT snap back to pre-freeze pose.
+
+        User-reported behaviour:  freezing + moving + unfreezing used to
+        discard the post-freeze move and snap the object back to its
+        pre-freeze world position.  Under the cumulative contract the
+        post-freeze move composes onto the bake history, so the visible
+        geometry stays where the user put it and the local channels hold
+        the cumulative T = (pre-freeze + post-freeze).
+        """
+        # setUp gave us T=(1,2,3), R=(10,20,30).
+        Channels.freeze_transforms([self.cube])
+        cmds.xform(self.cube, translation=(5.0, 0.0, 0.0), relative=False)
+
+        bbox = cmds.exactWorldBoundingBox(self.cube)
+        center_before = (
+            (bbox[0] + bbox[3]) / 2,
+            (bbox[1] + bbox[4]) / 2,
+            (bbox[2] + bbox[5]) / 2,
+        )
+
+        Channels.unfreeze_transforms([self.cube])
+
+        # Local T = stored.T + current.T = (1,2,3) + (5,0,0).
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateX"), 6.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateY"), 2.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateZ"), 3.0, places=4
+        )
+
+        # Visual world bbox center is preserved across the unfreeze.
+        bbox = cmds.exactWorldBoundingBox(self.cube)
+        center_after = (
+            (bbox[0] + bbox[3]) / 2,
+            (bbox[1] + bbox[4]) / 2,
+            (bbox[2] + bbox[5]) / 2,
+        )
+        for a, b in zip(center_before, center_after):
+            self.assertAlmostEqual(a, b, delta=1e-3)
+
+    def test_freeze_move_freeze_move_unfreeze_accumulates(self):
+        """Regression: two freezes interspersed with moves still recover the full history.
+
+        Pre: T=(1,2,3).  freeze → move (5,0,0) → freeze → move (7,8,9) →
+        unfreeze.  Expected local T = ((1+5) + 7, (2+0) + 8, (3+0) + 9) =
+        (13, 10, 12).  Each freeze adds to bake history; nothing is
+        discarded.
+        """
+        # Start with a clean cube (override the rotation setUp does so the
+        # math is a pure translation chain).
+        cmds.file(new=True, force=True)
+        self.cube = cmds.polyCube(name="frz_cube")[0]
+        cmds.xform(self.cube, translation=(1.0, 2.0, 3.0))
+
+        Channels.freeze_transforms([self.cube])           # bake = T(1,2,3)
+        cmds.xform(self.cube, translation=(5.0, 0.0, 0.0), relative=False)
+        Channels.freeze_transforms([self.cube])           # bake = T(6,2,3)
+        cmds.xform(self.cube, translation=(7.0, 8.0, 9.0), relative=False)
+
+        Channels.unfreeze_transforms([self.cube])
+
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateX"), 13.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateY"), 10.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateZ"), 12.0, places=4
+        )
 
 
 if __name__ == "__main__":

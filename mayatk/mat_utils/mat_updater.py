@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Optional, Union, Callable
 
 import pythontk as ptk
 from uitk.switchboard import Cancelable
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
@@ -754,21 +755,42 @@ class MatUpdaterSlots(MatUpdater):
             setPlaceholderText="Archive To (Optional)",
             setToolTip="Optional: Folder to move original files to.",
         )
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Material Updater — Batch-process and update material textures.\n\n"
-                "• Process selected materials or all scene materials.\n"
-                "• Convert texture formats, enforce max resolution,\n"
-                "  and scale mask maps.\n"
-                "• Generate packed maps (ORM, MSAO) with force\n"
-                "  and fallback options.\n"
-                "• Copy/move processed textures to an output folder.\n"
-                "• Dry Run mode to preview changes without modifying files."
-            ),
+        widget.set_help_text(
+            fmt(
+                title="Material Updater",
+                body="Batch-process scene materials and their textures — "
+                "format conversion, max-size enforcement, mask scaling, and "
+                "packed-map (ORM / MSAO) generation.",
+                steps=[
+                    "Pick a <b>Selection Mode</b> (Selected materials / All "
+                    "scene materials).",
+                    "Open the header menu (▸) and configure the processing "
+                    "and file-management options below.",
+                    "Press <b>Update</b> to run.",
+                ],
+                sections=[
+                    ("Processing options", [
+                        "<b>Max Size</b> — clamp texture resolution.",
+                        "<b>Mask Map Scale</b> — independent resolution for "
+                        "mask outputs.",
+                        "<b>Force Packed Maps</b> — emit ORM / MSAO regardless "
+                        "of whether the source channels exist (uses input fallbacks).",
+                        "<b>Use Input Fallbacks</b> — generate missing inputs "
+                        "from related ones (e.g. Base Color from Diffuse).",
+                        "<b>Use Output Fallbacks</b> — substitute missing "
+                        "outputs (e.g. AO alone for Mask Map). Disabled when "
+                        "Force Packed Maps is on.",
+                        "<b>Dry Run</b> — preview the plan without writing files.",
+                    ]),
+                    ("File management", [
+                        "<b>Transfer Mode</b> — Copy / Move / Use Existing.",
+                        "<b>Output Folder</b> — destination (disabled when "
+                        "Use Existing is selected).",
+                        "<b>Archive To</b> — optional folder to move original "
+                        "files into for safekeeping.",
+                    ]),
+                ],
+            )
         )
 
     @property

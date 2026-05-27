@@ -80,22 +80,37 @@ class RenderOpacitySlots:
                 ],
             ),
         )
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=fmt(
+        widget.set_help_text(
+            fmt(
                 title="Render Opacity",
-                body="Adds a keyable opacity attribute to objects for engine-ready transparency control.",
+                body="Add a keyable opacity attribute to objects for "
+                "engine-ready transparency control. The <b>Mode</b> combo "
+                "picks material- vs attribute-driven opacity; <b>Key Render "
+                "Opacity</b> drives fades in either mode.",
                 steps=[
                     "Select one or more objects.",
-                    "Choose Material or Attribute mode (option box ▸).",
-                    "Press <b>Create</b> to apply.",
-                    "Press <b>Key Render Opacity</b> to animate fades. Use the option box to set frames, direction (Fade In / Fade Out / Auto), and timing.",
-                    "Use <b>Remove Opacity</b> to clean up all artifacts.",
+                    "Pick a <b>Mode</b>: <i>Material</i> (per-shader opacity) "
+                    "or <i>Attribute</i> (visibility / custom attribute).",
+                    "Press <b>Create</b>.",
+                    "Press <b>Key Render Opacity</b> to animate a fade. The "
+                    "option box (▸) configures <b>Frames</b>, <b>End at "
+                    "Playhead</b>, and <b>Direction</b> (Fade In / Fade Out / "
+                    "Auto).",
                 ],
-            ),
+                sections=[
+                    ("Header menu", [
+                        "<b>Last Selected Only</b> — only the most-recent "
+                        "selection participates in Create / Key / Remove.",
+                        "<b>Delete Visibility Keys</b> — when on, existing "
+                        "visibility keys are removed before Create; when off, "
+                        "objects with vis keys are skipped with a warning.",
+                    ]),
+                ],
+                notes=[
+                    "Use <b>Remove Opacity</b> to clean up every artifact "
+                    "(attribute, expression, keys) the tool added.",
+                ],
+            )
         )
 
     # ------------------------------------------------------------------

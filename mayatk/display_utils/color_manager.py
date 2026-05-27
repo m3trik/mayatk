@@ -8,6 +8,7 @@ try:
 except ModuleNotFoundError as error:
     print(__file__, error)
 
+from uitk.widgets.mixins.tooltip_mixin import fmt, kbd
 # from this package:
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils.attributes._attributes import Attributes
@@ -399,20 +400,38 @@ class ColorManagerSlots(ColorManager):
             presets.metadata_provider = original
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Color Manager — Assign colors via materials, outliner,\n"
-                "wireframe, or vertex coloring.\n\n"
-                "• Pick a color from the palette buttons.\n"
-                "• Apply as material color, outliner tint, wireframe\n"
-                "  override, or vertex color on selected objects.\n"
-                "• Remove vertex colors when no longer needed."
-            ),
+        """Configure header help text and preset combobox."""
+        widget.set_help_text(
+            fmt(
+                title="Color Manager",
+                body="Assign colors to scene objects through any combination "
+                "of four channels: material, outliner tint, wireframe "
+                "override, and vertex colors.",
+                steps=[
+                    "Click a palette swatch to pick the active color (right-"
+                    "click a swatch to change its color).",
+                    "Enable the channels to apply via <b>Material</b>, "
+                    "<b>Outliner</b>, <b>Wireframe</b>, <b>Vertex</b> "
+                    "checkboxes.",
+                    "Select objects and press <b>Apply</b>.",
+                    "Use <b>Select By Color</b> to find scene objects "
+                    "matching the active color across the enabled channels.",
+                ],
+                sections=[
+                    ("Other actions", [
+                        "<b>Reset Colors</b> — clear assignments on the "
+                        f"current selection (or every geometry node with "
+                        f"{kbd('Ctrl')}-click).",
+                        "<b>Remove Vertex Colors</b> — clear vertex-color "
+                        "data without touching other channels.",
+                    ]),
+                    ("Presets", [
+                        "The header menu's preset combo saves / restores "
+                        "swatch palettes. Use <b>Save</b> to capture the "
+                        "current colors; pick a preset to restore them.",
+                    ]),
+                ],
+            )
         )
         # Preset combobox — swatches aren't standard widgets, so colors
         # are carried in metadata rather than per-widget value reads.

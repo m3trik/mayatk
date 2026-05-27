@@ -11,6 +11,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # From this package:
 from mayatk import CoreUtils, NodeUtils
@@ -915,19 +916,38 @@ class ShadowRigSlots:
         self.ui.b001.clicked.connect(self.b001)
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Shadow Rig — Create a projected-shadow plane rig.\n\n"
-                "• Select target objects, then enable Preview to build live.\n"
-                "• Tweak resolution, axis, mode, etc. — preview refreshes.\n"
-                "• Press Create Shadow to commit; toggle Preview off to discard.\n"
-                "• Exports cleanly for game engines like Unity."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Shadow Rig",
+                body="Create a projected-shadow plane rig that exports cleanly "
+                "for game engines (Unity, etc.). The plane carries a baked "
+                "silhouette PNG; its transform is driven by an expression "
+                "you can bake to keyframes before FBX export.",
+                steps=[
+                    "Select one or more target objects.",
+                    "Enable <b>Preview</b> to build the rig live.",
+                    "Tweak <b>Mode</b>, <b>Resolution</b>, <b>Axis</b>, and "
+                    "<b>Combine</b>. The preview refreshes on each change.",
+                    "Press <b>Create Shadow</b> to commit, or disable Preview "
+                    "to discard.",
+                ],
+                sections=[
+                    ("Modes", [
+                        "<b>Orbit</b> — Plane rotates around the target to face "
+                        "away from the light. Simple, shadow always points away.",
+                        "<b>Stretch</b> — Plane stays axis-aligned; uses scale "
+                        "and compensatory translation to warp the shadow. Better "
+                        "for baking, but the silhouette may appear mirrored at "
+                        "extreme light angles.",
+                    ]),
+                ],
+                notes=[
+                    "For Unity export: bake the simulation (Edit ▸ Keys ▸ Bake "
+                    "Simulation), export FBX with the shadow plane + texture, "
+                    "and use an Unlit/Transparent shader in Unity.",
+                ],
+            )
         )
 
     def b001(self):

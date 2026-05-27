@@ -2,6 +2,7 @@
 # coding=utf-8
 # from this package:
 import maya.cmds as cmds
+from uitk.widgets.mixins.tooltip_mixin import fmt
 from mayatk.core_utils.preview import Preview
 from mayatk.core_utils.components import Components
 
@@ -83,17 +84,23 @@ class BevelSlots:
         self.sb.connect_multi(self.ui, "s000-1", "valueChanged", self.preview.refresh)
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Bevel — Add chamfer bevels to selected edges.\n\n"
-                "• Adjust bevel width and segment count.\n"
-                "• Enable Preview to see results before committing."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Bevel",
+                body="Add chamfer bevels to selected polygon edges.",
+                steps=[
+                    "Select one or more polygon edges.",
+                    "Set <b>Width</b> (0–1 fraction) and <b>Segments</b> (1+).",
+                    "Toggle <b>Preview</b> to iterate non-destructively, "
+                    "or press <b>Bevel</b> to commit.",
+                ],
+                notes=[
+                    "Mitering, smoothing, and vertex-merge tolerance use the "
+                    "<i>Bevel.bevel</i> defaults (auto-fit, 30° smoothing). "
+                    "Edit the slot if you need finer control.",
+                ],
+            )
         )
 
     def perform_operation(self, objects, contract):

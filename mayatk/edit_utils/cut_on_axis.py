@@ -2,6 +2,7 @@
 # coding=utf-8
 # from this package:
 import maya.cmds as cmds
+from uitk.widgets.mixins.tooltip_mixin import fmt
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.node_utils._node_utils import NodeUtils
@@ -79,19 +80,29 @@ class CutOnAxisSlots:
         self._pivot_watcher.attach_widget(self.ui)
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Cut on Axis — Cut, delete, or mirror geometry along an axis.\n\n"
-                "• Select axis (X, Y, Z) and pivot reference.\n"
-                "• Set number of cuts and cut offset.\n"
-                "• Delete one side or mirror across the axis.\n"
-                "• Enable Preview to iterate before committing."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Cut on Axis",
+                body="Slice selected meshes along an axis, then optionally "
+                "delete or mirror the cut half.",
+                steps=[
+                    "Select one or more polygon transforms.",
+                    "Check an <b>Axis</b> (X / -X / Y / -Y / Z / -Z).",
+                    "Pick a <b>Pivot</b> — Manip / Object / World / Center.",
+                    "Set <b>Cuts</b> (number of slices) and <b>Offset</b>.",
+                    "Toggle <b>Preview</b>, then press <b>Cut</b> to commit.",
+                ],
+                sections=[
+                    ("Options", [
+                        "<b>Delete</b> — discard faces on the negative side of "
+                        "the axis after cutting.",
+                        "<b>Mirror</b> — after deleting one side, mirror the "
+                        "remaining half across the axis to rebuild symmetric "
+                        "geometry.",
+                    ]),
+                ],
+            )
         )
 
     def perform_operation(self, objects, contract):

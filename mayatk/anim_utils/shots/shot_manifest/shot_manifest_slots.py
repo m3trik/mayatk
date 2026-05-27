@@ -970,12 +970,8 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             setToolTip="Open shared shot generation, gap, and editing settings.",
         )
 
-        menu.add("Separator", setTitle="About")
-        menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=fmt(
+        self.ui.header.set_help_text(
+            fmt(
                 title="Shot Manifest",
                 body="Build and validate shots from a CSV file or by generating from scene animation.",
                 sections=[
@@ -1005,7 +1001,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                         "Right-click step row: Exclude, Open in Sequencer, Show Excluded.",
                     ]),
                 ],
-            ),
+            )
         )
 
     @property

@@ -6,6 +6,7 @@ try:
 except ImportError:
     cmds = None
 
+from uitk.widgets.mixins.tooltip_mixin import fmt
 from mayatk.core_utils.preview import Preview
 from mayatk.core_utils.components import Components
 
@@ -96,19 +97,27 @@ class BridgeSlots:
         self.sb.connect_multi(self.ui, "chk001", "toggled", self.preview.refresh)
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Bridge — Connect edge borders with new polygon faces.\n\n"
-                "• Choose curve type and segment count.\n"
-                "• Twist, taper, and smooth options.\n"
-                "• Enable Preview to iterate before applying.\n"
-                "• Optionally cleans up intermediate curves."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Bridge",
+                body="Connect two open edge loops with new polygon faces.",
+                steps=[
+                    "Select two open edge loops on the same mesh.",
+                    "Pick a <b>Curve Type</b> — Linear / Blend / Curve. "
+                    "Curve mode creates a NURBS handle you can shape, then "
+                    "rebuilds the bridge each preview/apply.",
+                    "Adjust <b>Divisions</b>, <b>Smoothing Angle</b>, "
+                    "<b>Offset</b>, <b>Taper</b>, and <b>Twist</b>.",
+                    "Toggle <b>Preview</b> to iterate, or press <b>Bridge</b> "
+                    "to commit.",
+                ],
+                notes=[
+                    "Enable <b>Cleanup curves</b> to delete the temporary "
+                    "control curve and construction history left behind by "
+                    "Curve-mode bridges on commit.",
+                ],
+            )
         )
 
     def perform_operation(self, objects, contract):

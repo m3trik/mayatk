@@ -862,13 +862,9 @@ class ShotsSlots(ptk.LoggingMixin):
     # ---- header ----------------------------------------------------------
 
     def header_init(self, widget):
-        """Configure header menu."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=fmt(
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
                 title="Shots",
                 body="Generation settings, shot properties, and gap control shared by the Shot Manifest and Shot Sequencer.",
                 sections=[
@@ -898,7 +894,7 @@ class ShotsSlots(ptk.LoggingMixin):
                         "<b>Delete</b> \u2014 Remove shot; option box \u25b8 for Delete All.",
                     ]),
                 ],
-            ),
+            )
         )
 
     # ---- widget slots (objectName \u2192 method) ------------------------------

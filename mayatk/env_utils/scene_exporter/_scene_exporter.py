@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import List, Dict, Optional, Callable, Union, Any
 
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # From this package:
 from mayatk.env_utils._env_utils import EnvUtils
@@ -679,18 +680,26 @@ class SceneExporterSlots(SceneExporter):
             setCurrentIndex=1,  # Default to INFO
             setToolTip="Set the log level.",
         )
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Scene Exporter — Batch-export scene objects to FBX.\n\n"
-                "• Configure export presets and output paths.\n"
-                "• Optionally generate a log file alongside each FBX.\n"
-                "• Set the log level (DEBUG / INFO / WARNING / ERROR)\n"
-                "  in Global Settings."
-            ),
+        widget.set_help_text(
+            fmt(
+                title="Scene Exporter",
+                body="Batch-export scene objects to FBX using configurable "
+                "task pipelines and YAML presets.",
+                steps=[
+                    "Pick a <b>Preset</b> (option box ▸ for preset management — "
+                    "Save / Save As / Delete / Open Folder).",
+                    "Configure the task list and output path in the panel.",
+                    "Press the export action button to run.",
+                ],
+                sections=[
+                    ("Header menu", [
+                        "<b>Create Log File</b> — write a sidecar log next to "
+                        "each FBX.",
+                        "<b>Log Level</b> — DEBUG / INFO / WARNING / ERROR / "
+                        "CRITICAL output verbosity.",
+                    ]),
+                ],
+            )
         )
 
     def cmb000_init(self, widget) -> None:

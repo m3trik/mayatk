@@ -19,6 +19,8 @@ be applied.
 import traceback
 from pathlib import Path
 
+from uitk.widgets.mixins.tooltip_mixin import fmt
+
 try:
     import maya.cmds as cmds
 except ImportError:
@@ -133,29 +135,37 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
         )
         widget.menu.btn_clear_log.clicked.connect(self.clear_log)
 
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Substance Bridge -- Send selected meshes to Substance Painter.\n\n"
-                "1. Set Output Dir (or leave blank for scene-dir default).\n"
-                "2. Select one or more polygon transforms.\n"
-                "3. Pick a template + mode from the dropdown:\n"
-                "     * 'send_to' launches Painter for you to drive interactively.\n"
-                "     * 'roundtrip' launches Painter with remote scripting,\n"
-                "        sends the template's JS body via JSON-RPC, and waits\n"
-                "        for completion.\n"
-                "4. Adjust the parameters the template exposes.\n"
-                "5. Click 'Send to Painter'.\n\n"
-                "Maya exports the selection as FBX. The template's metadata\n"
-                "constants (BRIDGE_MODES, LAUNCH_ARGS, RPC_SCRIPT,\n"
-                "BUILD_MANIFEST, FBX_OPTIONS) drive the launch line and\n"
-                "optional RPC step. Drop new templates into the templates\n"
-                "folder (use __KEY__ tokens from parameters.py for tunable\n"
-                "values) and use 'Refresh Templates' to pick them up."
-            ),
+        widget.set_help_text(
+            fmt(
+                title="Substance Bridge",
+                body="Send selected meshes to Substance Painter. Maya exports "
+                "the selection as FBX; the template's metadata constants "
+                "(<i>BRIDGE_MODES</i>, <i>LAUNCH_ARGS</i>, <i>RPC_SCRIPT</i>, "
+                "<i>BUILD_MANIFEST</i>, <i>FBX_OPTIONS</i>) drive the launch "
+                "line and optional RPC step.",
+                steps=[
+                    "Set the <b>Output Dir</b> (or leave blank to use the "
+                    "scene directory).",
+                    "Select one or more polygon transforms.",
+                    "Pick a <b>Template + Mode</b> from the dropdown.",
+                    "Tweak the template's exposed parameters.",
+                    "Click <b>Send to Painter</b>.",
+                ],
+                sections=[
+                    ("Modes", [
+                        "<b>send_to</b> — launches Painter for interactive work.",
+                        "<b>roundtrip</b> — launches Painter with remote "
+                        "scripting, sends the template's JS body via "
+                        "JSON-RPC, and waits for completion.",
+                    ]),
+                ],
+                notes=[
+                    "Add custom templates by dropping new files into the "
+                    "templates folder (use <code>__KEY__</code> tokens from "
+                    "<i>parameters.py</i> for tunable values), then click "
+                    "<b>Refresh Templates</b> in the header menu.",
+                ],
+            )
         )
 
     # ------------------------------------------------------------------

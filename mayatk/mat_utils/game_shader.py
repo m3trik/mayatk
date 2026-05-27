@@ -11,6 +11,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 
 def _plug(node, attr: str) -> str:
@@ -1777,20 +1778,29 @@ class GameShaderSlots(GameShader):
             setText="Open in Editor",
             setToolTip="Graph the material in the Hypershade.",
         )
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Game Shader — Create PBR shader networks from texture maps.\n\n"
-                "• Supports Stingray PBS, Standard Surface, and OpenPBR Surface\n"
-                "  (with optional Arnold aiStandardSurface bridging).\n"
-                "• Auto-detects texture map types (Base Color, Normal,\n"
-                "  Roughness, Metallic, etc.).\n"
-                "• Browse a texture folder to build complete shader networks.\n"
-                "• Open the result in Maya's Hypershade via the menu."
-            ),
+        widget.set_help_text(
+            fmt(
+                title="Game Shader",
+                body="Build complete PBR shader networks from a folder of "
+                "texture maps. Map types (Base Color, Normal, Roughness, "
+                "Metallic, AO, etc.) are auto-detected from file names.",
+                steps=[
+                    "Set <b>Material Name</b> and the <b>Prefix / Suffix</b> "
+                    "(affix-mode option box selects placement).",
+                    "Pick a <b>Shader Type</b> — Stingray PBS / Standard "
+                    "Surface / OpenPBR Surface.",
+                    "Pick a <b>Preset</b> — the preset's tooltip describes "
+                    "its target workflow (UE/Unity/film/etc.).",
+                    "Enable <b>Arnold</b> to also create an aiStandardSurface "
+                    "bridge for IPR rendering.",
+                    "Press <b>Create</b> and select a folder; results stream "
+                    "into the log panel.",
+                ],
+                notes=[
+                    "Use <b>Open in Editor</b> from the header menu to graph "
+                    "the resulting material in the Hypershade.",
+                ],
+            )
         )
 
     def lbl_graph_material(self):

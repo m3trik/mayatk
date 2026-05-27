@@ -193,27 +193,36 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         """Configure header buttons + about menu."""
         widget.config_buttons("menu", "minimize", "hide")
 
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=fmt(
+        widget.set_help_text(
+            fmt(
                 title="Blendshape Animator",
-                body=(
-                    "Build a morph between two meshes, add tween (in-between) shapes "
-                    "for custom curve control, edit them, and apply the edits back."
-                ),
-                bullets=[
-                    "<b>Setup</b> — select 2 meshes (source, target) and click Create Setup.",
-                    "<b>Edit</b> — add tweens by weight (count or CSV) or by frame.",
-                    "<b>Tween list</b> — click rows to select; right-click for per-tween "
-                    "actions including re-apply (single or multi-select).",
-                    "<b>Apply</b> — bulk via Export &gt; Apply All Edits.",
-                    "<b>Diagnostics</b> — flag topology mismatches and recover lost keys.",
-                    "<b>Export</b> — finalize the scene for baking/FBX.",
+                body="Build a morph between two meshes, add in-between "
+                "(tween) shapes for custom curve control, edit them, and "
+                "apply the edits back to the rig.",
+                sections=[
+                    ("Setup", [
+                        "Select two meshes — <b>source</b> first, <b>target</b> "
+                        "second.",
+                        "Click <b>Create Setup</b>. The option box (▸) offers "
+                        "<i>Load From Existing</i> for resuming an in-progress "
+                        "setup.",
+                    ]),
+                    ("Edit", [
+                        "Add tweens by <b>weight</b> (count or comma-separated "
+                        "values) or by <b>frame</b>.",
+                        "Click rows in the tween list to select; right-click "
+                        "for per-tween actions (re-apply, delete, etc.) — "
+                        "supports multi-select.",
+                    ]),
+                    ("Apply &amp; export", [
+                        "<b>Apply All Edits</b> — bulk-apply every queued edit "
+                        "back to the blendshape rig.",
+                        "<b>Diagnostics</b> — flag topology mismatches and "
+                        "recover lost keys.",
+                        "<b>Export</b> — finalize the scene for baking / FBX.",
+                    ]),
                 ],
-            ),
+            )
         )
 
     # =========================================================================

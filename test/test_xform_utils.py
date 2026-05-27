@@ -187,13 +187,20 @@ class TestXformUtils(MayaTkTestCase):
     # -------------------------------------------------------------------------
 
     def test_store_and_restore_transforms(self):
-        """Test storing and restoring transforms."""
+        """Round-trip: store -> move to 0 -> restore composes back to original.
+
+        Under cumulative semantics, after store_transforms captures the
+        bake history and the user moves to 0, restore_transforms composes
+        stored + 0 = stored, so the object lands back at its stored pose.
+        """
         cmds.move(10, 20, 30, self.cube1)
         cmds.rotate(45, 45, 0, self.cube1)
 
         # Store
         XformUtils.store_transforms(self.cube1, prefix="test")
-        self.assertTrue(cmds.attributeQuery("test_worldMatrix", node=str(self.cube1), exists=True))
+        self.assertTrue(
+            cmds.attributeQuery("test_T_bake", node=str(self.cube1), exists=True)
+        )
 
         # Move it somewhere else
         cmds.move(0, 0, 0, self.cube1)
@@ -208,9 +215,9 @@ class TestXformUtils(MayaTkTestCase):
         self.assertAlmostEqual(pos[2], 30.0)
 
     def test_store_transforms_attrs_hidden_from_channel_box(self):
-        """Stored attrs must be non-keyable and not displayed in the channel box."""
+        """Stored bake attrs must be non-keyable and not in the channel box."""
         XformUtils.store_transforms(self.cube1, prefix="test")
-        for attr in ("test_worldMatrix", "test_rotatePivot", "test_scalePivot"):
+        for attr in ("test_T_bake", "test_R_bake", "test_S_bake"):
             plug = f"{self.cube1}.{attr}"
             self.assertFalse(
                 cmds.getAttr(plug, keyable=True),
@@ -285,7 +292,7 @@ class TestXformUtils(MayaTkTestCase):
 
         XformUtils.restore_transforms(self.cube1, prefix="test")
 
-        for attr in ("test_worldMatrix", "test_rotatePivot", "test_scalePivot"):
+        for attr in ("test_T_bake", "test_R_bake", "test_S_bake"):
             self.assertFalse(
                 cmds.attributeQuery(attr, node=str(self.cube1), exists=True),
                 f"{attr} should be deleted after default restore",
@@ -299,7 +306,7 @@ class TestXformUtils(MayaTkTestCase):
 
         XformUtils.restore_transforms(self.cube1, prefix="test", delete_attrs=False)
 
-        for attr in ("test_worldMatrix", "test_rotatePivot", "test_scalePivot"):
+        for attr in ("test_T_bake", "test_R_bake", "test_S_bake"):
             self.assertTrue(
                 cmds.attributeQuery(attr, node=str(self.cube1), exists=True),
                 f"{attr} should be preserved with delete_attrs=False",
@@ -308,7 +315,7 @@ class TestXformUtils(MayaTkTestCase):
     def test_clear_stored_transforms_removes_attrs(self):
         """Explicit cleanup without restoration."""
         XformUtils.store_transforms(self.cube1, prefix="test")
-        for attr in ("test_worldMatrix", "test_rotatePivot", "test_scalePivot"):
+        for attr in ("test_T_bake", "test_R_bake", "test_S_bake"):
             self.assertTrue(
                 cmds.attributeQuery(attr, node=str(self.cube1), exists=True)
             )
@@ -316,7 +323,7 @@ class TestXformUtils(MayaTkTestCase):
         cleared = XformUtils.clear_stored_transforms(self.cube1, prefix="test")
 
         self.assertIn(str(self.cube1), cleared)
-        for attr in ("test_worldMatrix", "test_rotatePivot", "test_scalePivot"):
+        for attr in ("test_T_bake", "test_R_bake", "test_S_bake"):
             self.assertFalse(
                 cmds.attributeQuery(attr, node=str(self.cube1), exists=True),
                 f"{attr} should be gone after clear_stored_transforms",
@@ -328,10 +335,10 @@ class TestXformUtils(MayaTkTestCase):
         self.assertEqual(cleared, [])
 
     def test_store_transforms_traverse_writes_to_descendants(self):
-        """traverse=True must write stored attrs on every descendant transform.
+        """traverse=True must write bake attrs on every descendant transform.
 
-        Without this, a freeze_children=True cascade leaves child LOC/GEO with no
-        original_worldMatrix attr and restore_transforms warns + skips.
+        Without this, a freeze_children=True cascade leaves child LOC/GEO
+        with no bake attrs and restore_transforms warns + skips.
         """
         # Build GRP > LOC > GEO chain.
         grp = cmds.group(empty=True, name="rig_GRP")
@@ -346,22 +353,17 @@ class TestXformUtils(MayaTkTestCase):
             XformUtils.store_transforms(grp, prefix="test", traverse=True)
 
             for node in (grp, loc, geo):
-                self.assertTrue(
-                    cmds.attributeQuery("test_worldMatrix", node=node, exists=True),
-                    f"{node} should have test_worldMatrix after traverse=True",
-                )
-                self.assertTrue(
-                    cmds.attributeQuery("test_rotatePivot", node=node, exists=True),
-                )
-                self.assertTrue(
-                    cmds.attributeQuery("test_scalePivot", node=node, exists=True),
-                )
+                for attr in ("test_T_bake", "test_R_bake", "test_S_bake"):
+                    self.assertTrue(
+                        cmds.attributeQuery(attr, node=node, exists=True),
+                        f"{node} should have {attr} after traverse=True",
+                    )
 
-            # And the stored matrix on a descendant must actually be its
-            # world matrix (not its parent's, not identity).
-            stored_loc = cmds.getAttr(f"{loc}.test_worldMatrix")
-            self.assertAlmostEqual(stored_loc[12], 7.0, delta=1e-4)
-            self.assertAlmostEqual(stored_loc[13], 3.0, delta=1e-4)
+            # The T_bake on the LOC records its local translate channel,
+            # not the world-space accumulation.
+            stored_loc_t = cmds.getAttr(f"{loc}.test_T_bake")[0]
+            self.assertAlmostEqual(stored_loc_t[0], 0.0, delta=1e-4)
+            self.assertAlmostEqual(stored_loc_t[1], 3.0, delta=1e-4)
         finally:
             for n in (grp, loc, geo):
                 if cmds.objExists(n):
@@ -375,10 +377,10 @@ class TestXformUtils(MayaTkTestCase):
         try:
             XformUtils.store_transforms(grp, prefix="test")  # default traverse=False
             self.assertTrue(
-                cmds.attributeQuery("test_worldMatrix", node=grp, exists=True),
+                cmds.attributeQuery("test_T_bake", node=grp, exists=True),
             )
             self.assertFalse(
-                cmds.attributeQuery("test_worldMatrix", node=loc, exists=True),
+                cmds.attributeQuery("test_T_bake", node=loc, exists=True),
                 "Descendants must be untouched when traverse=False",
             )
         finally:
@@ -387,12 +389,16 @@ class TestXformUtils(MayaTkTestCase):
                     cmds.delete(n)
 
     def test_store_then_freeze_then_restore_full_chain(self):
-        """End-to-end: store(traverse) → freeze(children) → restore on each node.
+        """End-to-end: store(traverse) → freeze(children) → restore each node.
 
-        Reproduces the user-reported bug: after freezing a GRP > LOC > GEO chain
-        with freeze_children, calling restore_transforms on the LOC was warning
-        about a missing original_worldMatrix. With traverse=True at store time
-        every node has its attr and the warning never fires.
+        Under the cumulative per-channel contract, restoration operates on
+        a node's LOCAL channels.  Restoring a child without its ancestors
+        only recovers the child's local TRS, so the chain has to be
+        restored top-down for the original world positions to come back.
+
+        Reproduces the original user-reported regression: with
+        traverse=True at store time every node has its bake attrs and
+        ``restore_transforms`` never warns about missing data on a child.
         """
         grp = cmds.group(empty=True, name="rig_GRP")
         loc = cmds.spaceLocator(name="rig_LOC")[0]
@@ -410,14 +416,15 @@ class TestXformUtils(MayaTkTestCase):
             XformUtils.store_transforms(grp, prefix="test", traverse=True)
             XformUtils.freeze_transforms(grp, freeze_children=True)
 
-            # Both descendants must still have their stored attrs so restore works.
-            self.assertTrue(
-                cmds.attributeQuery("test_worldMatrix", node=loc, exists=True),
-            )
-            self.assertTrue(
-                cmds.attributeQuery("test_worldMatrix", node=geo, exists=True),
-            )
+            # Every node must still have its bake attrs so restore works.
+            for node in (grp, loc, geo):
+                self.assertTrue(
+                    cmds.attributeQuery("test_T_bake", node=node, exists=True),
+                )
 
+            # Restore top-down — parent first so children inherit the
+            # restored ancestor world space.
+            XformUtils.restore_transforms(grp, prefix="test")
             XformUtils.restore_transforms(loc, prefix="test")
             XformUtils.restore_transforms(geo, prefix="test")
 
@@ -442,10 +449,10 @@ class TestXformUtils(MayaTkTestCase):
             # Both passed explicitly + traverse=True; should be a no-op merge.
             XformUtils.store_transforms([grp, loc], prefix="test", traverse=True)
             self.assertTrue(
-                cmds.attributeQuery("test_worldMatrix", node=grp, exists=True),
+                cmds.attributeQuery("test_T_bake", node=grp, exists=True),
             )
             self.assertTrue(
-                cmds.attributeQuery("test_worldMatrix", node=loc, exists=True),
+                cmds.attributeQuery("test_T_bake", node=loc, exists=True),
             )
         finally:
             for n in (grp, loc):
@@ -455,13 +462,13 @@ class TestXformUtils(MayaTkTestCase):
     def test_store_transforms_heals_legacy_keyable_attrs(self):
         """Re-storing on attrs created keyable (legacy scenes) should normalize them."""
         # Simulate legacy state: attrs added with keyable=True.
-        cmds.addAttr(self.cube1, ln="test_worldMatrix", at="matrix", keyable=True)
-        cmds.addAttr(self.cube1, ln="test_rotatePivot", dt="double3", keyable=True)
-        cmds.addAttr(self.cube1, ln="test_scalePivot", dt="double3", keyable=True)
+        cmds.addAttr(self.cube1, ln="test_T_bake", dt="double3", keyable=True)
+        cmds.addAttr(self.cube1, ln="test_R_bake", at="matrix", keyable=True)
+        cmds.addAttr(self.cube1, ln="test_S_bake", dt="double3", keyable=True)
 
         XformUtils.store_transforms(self.cube1, prefix="test")
 
-        for attr in ("test_worldMatrix", "test_rotatePivot", "test_scalePivot"):
+        for attr in ("test_T_bake", "test_R_bake", "test_S_bake"):
             plug = f"{self.cube1}.{attr}"
             self.assertFalse(cmds.getAttr(plug, keyable=True))
             self.assertFalse(cmds.getAttr(plug, channelBox=True))

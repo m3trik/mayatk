@@ -10,6 +10,7 @@ except ImportError:
 from typing import List, Tuple, Optional, Union
 
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt, kbd
 
 # from this package:
 from mayatk.core_utils.script_job_manager import ScriptJobManager
@@ -357,39 +358,47 @@ class WheelRigSlots:
         )
         chk_ws.toggled.connect(self._on_world_space_toggled)
 
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Wheel Rig \u2014 Links wheel rotation to a driver's linear movement.\n\n"
-                "Selection Order:\n"
-                "  1. Select one or more wheel objects (or locators driving them).\n"
-                "  2. Shift-select the driver / control object last.\n"
-                "  3. Click 'Rig Rotation'.\n\n"
-                "Axis Combo:\n"
-                "  Choose which translation axis drives which rotation axis.\n"
-                "  e.g. 'Move Z \u2192 Rotate X' means forward Z movement\n"
-                "  produces pitch rotation on X.\n\n"
-                "Wheel Height:\n"
-                "  The diameter used to compute rotation speed.\n"
-                "  Use 'Get Wheel Size' (slider option box) to auto-detect\n"
-                "  from the selected object's bounding box.\n\n"
-                "Modes:\n"
-                "  \u2022 Local (default): reads driver's local translate.\n"
-                "    Best when the driver itself is animated.\n"
-                "  \u2022 World Space: uses a decomposeMatrix node so parent\n"
-                "    movement is captured.  Enable via the header menu.\n\n"
-                "Re-running:\n"
-                "  Running the tool again on the same driver updates\n"
-                "  the existing expressions without duplication.\n"
-                "  A 'wheelRigId' attribute is stored on the driver for this.\n\n"
-                "Attributes added to driver:\n"
-                "  \u2022 wheelHeight \u2014 animation-friendly diameter control\n"
-                "  \u2022 enableRotation \u2014 on/off toggle (0..1)\n"
-                "  \u2022 spinDirection \u2014 flip spin direction (+1 / -1)"
-            ),
+        widget.set_help_text(
+            fmt(
+                title="Wheel Rig",
+                body="Drive wheel rotation from a control's linear movement. "
+                "Wheel diameter (Wheel Height) and travel axis determine the "
+                "rotation speed.",
+                sections=[
+                    ("Selection order", [
+                        "Select one or more <b>wheel</b> objects "
+                        "(or locators driving them).",
+                        f"{kbd('Shift')}-select the <b>driver / control</b> "
+                        "object last.",
+                        "Click <b>Rig Rotation</b>.",
+                    ]),
+                    ("Settings", [
+                        "<b>Axis</b> \u2014 which translation axis drives which "
+                        "rotation axis. e.g. <i>Move Z \u2192 Rotate X</i> means "
+                        "forward Z movement produces pitch on X.",
+                        "<b>Wheel Height</b> \u2014 diameter used to compute "
+                        "rotation speed. Use <b>Get Wheel Size</b> (slider "
+                        "option box) to auto-detect from the bounding box.",
+                    ]),
+                    ("Modes", [
+                        "<b>Local</b> (default) \u2014 reads the driver's local "
+                        "translate. Best when the driver itself is animated.",
+                        "<b>World Space</b> \u2014 uses a decomposeMatrix node so "
+                        "parent transform movement is captured. Toggle via "
+                        "the header menu.",
+                    ]),
+                    ("Driver attributes added", [
+                        "<b>wheelHeight</b> \u2014 animation-friendly diameter control.",
+                        "<b>enableRotation</b> \u2014 on/off toggle (0..1).",
+                        "<b>spinDirection</b> \u2014 flip direction (+1 / -1).",
+                    ]),
+                ],
+                notes=[
+                    "Re-running on the same driver updates the existing "
+                    "expression in place (a <i>wheelRigId</i> string attribute "
+                    "on the driver acts as the idempotency key \u2014 no duplicates).",
+                ],
+            )
         )
 
     def _on_world_space_toggled(self, checked: bool):

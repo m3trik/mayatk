@@ -146,23 +146,38 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
         )
         btn_attrs.clicked.connect(self._launch_channels)
 
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=fmt(
+        widget.set_help_text(
+            fmt(
                 title="Audio Clips",
-                body="Scene-wide audio tracks keyed on the canonical data node; drives a single composite WAV for Time-Slider scrubbing.",
+                body="Scene-wide audio tracks keyed on a canonical data node. "
+                "Keyed events drive a single composite WAV used for "
+                "Time-Slider scrubbing.",
                 steps=[
-                    "Click the <b>folder icon</b> on the tracks combo to browse for audio files. File stems become track IDs; re-adding a file with the same stem replaces the path (keyframes are preserved).",
+                    "Click the <b>folder icon</b> on the tracks combo to "
+                    "browse for audio files. File stems become track IDs; "
+                    "re-adding a file with the same stem replaces the path "
+                    "(keyframes are preserved).",
                     "Select a loaded track in the combo.",
                     "Move the timeline cursor to the desired start frame.",
-                    "Press <b>Key Audio Event</b> to key the track ON. Enable <b>Auto End None</b> (option box ▸) to auto-key an OFF value at the clip end. Enable <b>Next Event</b> to auto-advance through tracks.",
+                    "Press <b>Key Audio Event</b> to key the track <i>ON</i>.",
                     "Repeat for each audio cue.",
-                    "Click <b>↻</b> on the <b>Key Audio Event</b> option box to sync DG nodes and rebuild the composite WAV for scrub playback.",
+                    "Click <b>↻</b> on the <b>Key Audio Event</b> option box "
+                    "to sync DG nodes and rebuild the composite WAV for "
+                    "scrub playback.",
                 ],
-            ),
+                sections=[
+                    ("Key Audio Event option box (▸)", [
+                        "<b>Auto End None</b> — auto-key an <i>OFF</i> value "
+                        "at the clip's natural end.",
+                        "<b>Next Event</b> — auto-advance the track combo "
+                        "after each key.",
+                    ]),
+                    ("Header menu", [
+                        "<b>Channels</b> — open the Channels UI pinned to the "
+                        "audio carrier node, filtered to per-track attributes.",
+                    ]),
+                ],
+            )
         )
 
     def _launch_channels(self, *_):

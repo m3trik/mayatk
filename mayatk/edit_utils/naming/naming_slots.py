@@ -41,23 +41,37 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             ),
         )
 
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=fmt(
+        widget.set_help_text(
+            fmt(
                 title="Naming",
-                body="Batch find, rename, and suffix scene objects. Use the option box (▸) on each button for per-operation settings.",
-                bullets=[
-                    "<b>Find:</b> Select objects by name pattern (wildcards or regex).",
-                    "<b>Rename:</b> Replace matched names with a new pattern. Option: retain existing type suffix.",
-                    "<b>Convert Case:</b> Change selected names to upper, lower, title, capitalize, or swapcase.",
-                    "<b>Suffix by Location:</b> Auto-number objects by distance from a reference point (alphabetical or integer).",
-                    "<b>Strip Chars:</b> Remove leading or trailing characters.",
-                    "<b>Suffix by Type:</b> Append type-based suffixes (_GEO, _GRP, _JNT, etc.) with configurable strings.",
+                body="Batch find, rename, and suffix scene objects. Each "
+                "operation button has an option box (▸) for its parameters.",
+                sections=[
+                    ("Operations", [
+                        "<b>Find</b> — select objects by name pattern "
+                        "(wildcards or regex; case-sensitivity, locator-only, "
+                        "and regex toggles in the option box).",
+                        "<b>Rename</b> — replace matched names with a new "
+                        "pattern. Option box: retain existing type suffix.",
+                        "<b>Convert Case</b> — upper / lower / title / "
+                        "capitalize / swapcase the selected names.",
+                        "<b>Strip Chars</b> — remove leading or trailing "
+                        "characters.",
+                        "<b>Suffix by Location</b> — auto-number objects by "
+                        "distance from a reference point (alphabetical or "
+                        "integer).",
+                        "<b>Suffix by Type</b> — append type-based suffixes "
+                        "(<code>_GEO</code>, <code>_GRP</code>, "
+                        "<code>_JNT</code>, etc.). Suffix strings are "
+                        "editable in the option box.",
+                    ]),
+                    ("Header menu", [
+                        "<b>Scope</b> — <i>Selection</i> (the current "
+                        "selection only) or <i>All Objects</i> (the whole "
+                        "scene). Applies to every operation.",
+                    ]),
                 ],
-            ),
+            )
         )
 
     @property

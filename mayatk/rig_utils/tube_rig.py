@@ -15,6 +15,7 @@ except ImportError as error:
     om = None
     print(__file__, error)
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
@@ -1979,20 +1980,26 @@ class TubeRigSlots:
             self.apply_mode(0)
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Tube Rig — Generate joint rigs along tube-shaped meshes.\n\n"
-                "• Select a tube mesh and press Build.\n"
-                "• Auto-detects the tube's centerline via edge loops\n"
-                "  or surface normals.\n"
-                "• Set joint count (or use Auto to derive from edge loops).\n"
-                "• Multiple rig modes available via the Mode preset combo."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Tube Rig",
+                body="Generate joint rigs along tube-shaped meshes. The tool "
+                "auto-detects the tube's centerline via edge loops or surface "
+                "normals.",
+                steps=[
+                    "Select a tube mesh.",
+                    "Pick a <b>Mode</b> preset — each mode preconfigures joint "
+                    "count, controls, and constraint topology.",
+                    "Adjust <b>Joints</b> (or set to <i>Auto</i> to derive from "
+                    "edge loops) and the mode-specific parameters.",
+                    "Press <b>Build</b>.",
+                ],
+                notes=[
+                    "<b>Joints = Auto</b> reads the tube's longitudinal edge "
+                    "loops and places one joint per loop.",
+                ],
+            )
         )
 
     def apply_mode(self, index: int):

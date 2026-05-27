@@ -8,6 +8,7 @@ except ImportError:
 from typing import List, Union, Optional
 
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
@@ -260,19 +261,30 @@ class SnapSlots:
         self.ui = self.sb.loaded_ui.snap
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Snap — Snap vertices to other vertices or surfaces.\n\n"
-                "• Snap to Closest Vertex: aligns selected verts\n"
-                "  to nearest target vertex.\n"
-                "• Snap to Surface: projects verts onto a target mesh.\n"
-                "• Configurable offset and distance threshold."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Snap",
+                body="Snap vertices to other vertices, surfaces, or world grid. "
+                "Each button has an option box (▸) for its per-tool parameters.",
+                sections=[
+                    ("Snap to Surface", [
+                        "Select source mesh(es) first, then the target mesh last.",
+                        "Source verts are projected onto the target surface.",
+                        "Option box: <b>Offset</b>, <b>Threshold</b>, <b>Invert</b>.",
+                    ]),
+                    ("Snap to Closest Vertex", [
+                        "Select exactly two meshes: source first, target last.",
+                        "Source verts within <b>Tolerance</b> snap to the "
+                        "closest target vert.",
+                    ]),
+                    ("Snap to Grid", [
+                        "Select transforms or components.",
+                        "Option box: <b>Grid Size</b> + per-axis filter (X/Y/Z).",
+                        "Components snap their positions; transforms snap their pivots.",
+                    ]),
+                ],
+            )
         )
 
     def b000_init(self, widget):

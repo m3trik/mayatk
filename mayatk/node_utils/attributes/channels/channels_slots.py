@@ -18,7 +18,7 @@ from mayatk.node_utils.attributes.channels._channels import (
 )
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import fmt, kbd
 
 
 class ChannelsSlots:
@@ -341,22 +341,47 @@ class ChannelsSlots:
         widget.menu.hdr_connection_editor.clicked.connect(
             lambda: mel.eval("ConnectionEditor")
         )
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=fmt(
+        widget.set_help_text(
+            fmt(
                 title="Channels",
-                body="Inspect, edit, and manage Maya node attributes.",
-                bullets=[
-                    "Filter attributes by type: Custom, Keyable, Locked, Connected, etc.",
-                    "Edit attribute values, lock/unlock, and toggle keyable state.",
-                    "Create new custom attributes on selected objects.",
-                    "Select Shape or History nodes from the header menu.",
-                    "Open Maya's <b>Channel Control</b> or <b>Connection Editor</b>.",
+                body="Inspect, edit, and manage Maya node attributes in a "
+                "spreadsheet-style table with bulk operations and wheel-scrub "
+                "editing.",
+                sections=[
+                    ("Table", [
+                        "Each row is one attribute on the active selection.",
+                        "Edit values directly, or wheel-scrub on a value cell.",
+                        "Right-click rows for lock/unlock, keyable toggles, "
+                        "and selection-set actions.",
+                    ]),
+                    ("Wheel-scrub modifiers", [
+                        f"plain &mdash; ×1",
+                        f"{kbd('Ctrl')} &mdash; ×10 (coarse)",
+                        f"{kbd('Ctrl', 'Shift')} &mdash; ×100 (very coarse)",
+                        f"{kbd('Alt')} &mdash; ÷10 (fine)",
+                        f"{kbd('Ctrl', 'Alt')} &mdash; smallest representable step",
+                    ]),
+                    ("Filter (header menu)", [
+                        "Filter by attribute type: <b>Custom</b>, "
+                        "<b>Keyable</b>, <b>Locked</b>, <b>Connected</b>, etc.",
+                        "<b>Compact View</b> — collapse rows to essential columns.",
+                        "<b>Auto-fit Window</b> — resize columns and grow/shrink "
+                        "the window to match contents on every refresh.",
+                    ]),
+                    ("Selection helpers (header menu)", [
+                        "<b>Select Shape Node</b> — select the shape(s) of "
+                        "the current selection.",
+                        "<b>Select History Node</b> — select construction "
+                        "history node(s).",
+                    ]),
+                    ("Maya editors (header menu)", [
+                        "<b>Channel Control…</b> — open the native Channel "
+                        "Control editor.",
+                        "<b>Connection Editor…</b> — open the native "
+                        "Connection Editor.",
+                    ]),
                 ],
-            ),
+            )
         )
 
     # --- Header action handlers ---

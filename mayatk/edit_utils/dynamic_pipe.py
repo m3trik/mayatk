@@ -5,6 +5,8 @@ except ImportError:
 
 from typing import List, Optional, Sequence
 
+from uitk.widgets.mixins.tooltip_mixin import fmt
+
 
 class DynamicPipe:
     """Build a pipe-style mesh by lofting NURBS circles parented to a chain of locators.
@@ -147,19 +149,26 @@ class DynamicPipeSlots:
         self.pipe: Optional[DynamicPipe] = None
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Dynamic Pipe — Create pipe geometry from locators.\n\n"
-                "• Place locators to define the pipe path.\n"
-                "• Select locators in order, then press Initialize Pipe.\n"
-                "• Each locator drives a cross-section circle;\n"
-                "  consecutive circles are lofted into pipe segments."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Dynamic Pipe",
+                body="Build a pipe-style mesh by lofting NURBS circles "
+                "parented to a chain of locators. Each locator drives a "
+                "cross-section circle; consecutive circles loft into pipe "
+                "segments that follow the locators interactively.",
+                steps=[
+                    "Place locators in the scene along the desired path.",
+                    "Select the locators <b>in order</b> (Maya tracks "
+                    "selection order).",
+                    "Press <b>Initialize Pipe</b>.",
+                ],
+                notes=[
+                    "Requires at least two locators. Moving a locator in the "
+                    "viewport updates its associated circle and any lofted "
+                    "segment that includes it.",
+                ],
+            )
         )
 
     def b000(self):

@@ -61,23 +61,34 @@ class ImageToPlaneSlots:
             setToolTip="Parent all created planes under a single group node.",
         )
 
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=fmt(
+        widget.set_help_text(
+            fmt(
                 title="Image to Plane",
-                body="Creates textured polygon planes from images.",
+                body="Creates textured polygon planes from image files — one "
+                "plane per image, sized to its aspect ratio and assigned a "
+                "lambert / PBR material with the image as Base Color.",
                 steps=[
-                    "Press <b>Browse…</b> to select one or more image files.",
-                    "Choose material type (Stingray PBS / Standard Surface).",
-                    "Set the material affix (default: _MAT). Use the option button to choose Suffix / Prefix / Auto.",
-                    "Set the plane height in scene units.",
-                    "Press <b>Create Planes</b> to generate textured planes.",
-                    "Use <b>Remove Selected</b> to delete planes and their materials.",
+                    "Press <b>Browse…</b> to select one or more image files "
+                    "(or drop a folder).",
+                    "Pick a <b>Material Type</b> (Stingray PBS / Standard "
+                    "Surface).",
+                    "Set the <b>Material Affix</b> (default <code>_MAT</code>). "
+                    "The affix option box selects Suffix / Prefix / Auto.",
+                    "Set the <b>Plane Height</b> in scene units (width is "
+                    "derived from each image's aspect ratio).",
+                    "Press <b>Create Planes</b>.",
                 ],
-            ),
+                sections=[
+                    ("Menu options", [
+                        "<b>Group Result</b> — parent all created planes under "
+                        "a single group node.",
+                    ]),
+                ],
+                notes=[
+                    "Use <b>Remove Selected</b> to delete planes and their "
+                    "auto-created materials together.",
+                ],
+            )
         )
 
     # ------------------------------------------------------------------
