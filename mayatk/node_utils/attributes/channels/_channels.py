@@ -1053,6 +1053,311 @@ class Channels:
         return False
 
     # ------------------------------------------------------------------
+    # Transform helpers — node-level freeze / unfreeze
+    # ------------------------------------------------------------------
+
+    # Maya's ``makeIdentity`` (the engine behind ``XformUtils.freeze_transforms``)
+    # operates on T/R/S as whole groups — there is no native way to freeze
+    # a single axis like ``translateX`` while leaving ``translateY`` /
+    # ``translateZ`` untouched.  These sets describe what counts as a
+    # "complete group" so the UI can gate the Freeze action accordingly.
+    _FREEZE_GROUPS = {
+        "translate": {
+            "parents": {"translate", "t"},
+            "children": {"translateX", "tx", "translateY", "ty", "translateZ", "tz"},
+            "axis_pairs": (
+                {"translateX", "tx"},
+                {"translateY", "ty"},
+                {"translateZ", "tz"},
+            ),
+        },
+        "rotate": {
+            "parents": {"rotate", "r"},
+            "children": {"rotateX", "rx", "rotateY", "ry", "rotateZ", "rz"},
+            "axis_pairs": (
+                {"rotateX", "rx"},
+                {"rotateY", "ry"},
+                {"rotateZ", "rz"},
+            ),
+        },
+        "scale": {
+            "parents": {"scale", "s"},
+            "children": {"scaleX", "sx", "scaleY", "sy", "scaleZ", "sz"},
+            "axis_pairs": (
+                {"scaleX", "sx"},
+                {"scaleY", "sy"},
+                {"scaleZ", "sz"},
+            ),
+        },
+    }
+
+    @classmethod
+    def _strip_plug(cls, name):
+        """Return ``foo.translateX`` → ``translateX``; passes plain names through."""
+        if isinstance(name, str) and "." in name:
+            return name.rsplit(".", 1)[-1]
+        return name
+
+    @classmethod
+    def can_freeze_selection(cls, attr_names):
+        """Test if *attr_names* maps to a clean group-level freeze.
+
+        Returns True iff:
+
+        * the selection is empty (caller will freeze every channel), OR
+        * every name is a transform channel (parent or per-axis child),
+          AND for each group that appears in the selection either the
+          parent attribute is selected or all three axes of that group
+          are selected.
+
+        Used by ``ChannelsSlots._update_context_menu_state`` to enable /
+        disable the *Freeze Transforms* menu item.
+        """
+        if not attr_names:
+            return True
+
+        names = {cls._strip_plug(n) for n in attr_names}
+
+        all_transform_names = set()
+        for grp in cls._FREEZE_GROUPS.values():
+            all_transform_names |= grp["parents"] | grp["children"]
+        if not names.issubset(all_transform_names):
+            return False
+
+        for grp in cls._FREEZE_GROUPS.values():
+            sel_parents = names & grp["parents"]
+            sel_children = names & grp["children"]
+            if not sel_parents and not sel_children:
+                continue  # group not present in selection at all
+            if sel_parents:
+                continue  # parent attr counts as a complete group
+            if not all(pair & sel_children for pair in grp["axis_pairs"]):
+                return False  # partial group → not freezable cleanly
+        return True
+
+    @classmethod
+    def _groups_from_attrs(cls, attr_names):
+        """Return the set of T/R/S group names that *attr_names* touches.
+
+        Pure mapping (no completeness check); use
+        :meth:`can_freeze_selection` first to validate that each touched
+        group is fully covered.  Returns an empty set for an empty /
+        ``None`` input.
+        """
+        if not attr_names:
+            return set()
+        names = {cls._strip_plug(n) for n in attr_names}
+        return {
+            grp_key
+            for grp_key, grp in cls._FREEZE_GROUPS.items()
+            if (names & grp["parents"]) or (names & grp["children"])
+        }
+
+    @classmethod
+    def _freeze_kwargs_for_attrs(cls, attr_names):
+        """Translate *attr_names* into ``XformUtils.freeze_transforms`` kwargs.
+
+        Thin wrapper around :meth:`_groups_from_attrs` that materialises
+        the result as a ``{group: True}`` dict for ``**kwargs`` spread.
+        """
+        return {grp: True for grp in cls._groups_from_attrs(attr_names)}
+
+    @classmethod
+    def freeze_transforms(cls, nodes, attrs=None, store=True):
+        """Freeze transforms on *nodes*.
+
+        Parameters:
+            nodes (list): Transform nodes to freeze.
+            attrs (list): Optional attribute names (e.g. ``["translate",
+                "rotate"]`` or ``["translateX", "translateY",
+                "translateZ"]``) restricting the freeze to those groups.
+                Must form a clean group-level selection — partial groups
+                or non-transform attributes are rejected (use
+                :meth:`can_freeze_selection` to pre-check).  Pass ``None``
+                (default) to freeze every transform channel.
+            store (bool): When True, save the current world matrix as
+                custom attributes first so the operation is reversible
+                via :meth:`unfreeze_transforms`.
+
+        Stored-data semantics (when *store* is True):
+            * First freeze on a node, or any full freeze, overwrites the
+              stored data with the current world matrix.
+            * A partial freeze on a node that already has stored data
+              *merges*: channels in *attrs* are refreshed from current,
+              channels NOT in *attrs* keep their previously-stored
+              values.  This preserves channel-specific original state
+              across sequential partial freezes — e.g. ``freeze T``,
+              ``freeze R`` then ``unfreeze T`` restores T to its value
+              before the first freeze, not the post-first-freeze zero.
+
+        Returns:
+            bool: True when the freeze ran, False when *attrs* failed
+            validation (no freeze performed).
+        """
+        if not nodes:
+            return False
+        if not cls.can_freeze_selection(attrs or []):
+            return False
+
+        from mayatk.xform_utils._xform_utils import XformUtils
+
+        kwargs = cls._freeze_kwargs_for_attrs(attrs or [])
+        freezing_groups = cls._groups_from_attrs(attrs or [])
+
+        cmds.undoInfo(openChunk=True, chunkName="Freeze Transforms")
+        try:
+            if store:
+                cls._store_pre_freeze(nodes, freezing_groups)
+            XformUtils.freeze_transforms(nodes, **kwargs)
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        return True
+
+    @classmethod
+    def _store_pre_freeze(cls, nodes, freezing_groups):
+        """Capture pre-freeze state, merging across sequential partial freezes.
+
+        First freeze on a node (no existing stored data) — or a full
+        freeze (``freezing_groups`` empty) — overwrites the stored data
+        with the current world matrix + pivots.  Subsequent partial
+        freezes merge: channels in *freezing_groups* are refreshed from
+        the current world matrix, channels NOT in *freezing_groups*
+        retain their previously-stored values.
+
+        Without this merge, sequential partial freezes (freeze T, then
+        freeze R) lose the channel-specific original state — a later
+        ``unfreeze translate`` would restore to the post-T-freeze value
+        (zero), not the pre-T-freeze value the user expects.
+
+        Pivots (``rotatePivot`` / ``scalePivot``) are refreshed only
+        when ``"translate"`` is in *freezing_groups* (since only
+        ``makeIdentity -t`` relocates pivots); otherwise the previously
+        stored pivots are kept.
+        """
+        from mayatk.xform_utils._xform_utils import (
+            XformUtils,
+            _partial_world_matrix,
+            _mmatrix_to_flat,
+        )
+        import maya.api.OpenMaya as om
+
+        # Full-freeze path or no existing data → overwrite.  For the
+        # partial path, we still want overwrite on nodes that have no
+        # prior stored data, so handle each node individually.
+        if not freezing_groups:
+            XformUtils.store_transforms(nodes, accumulate=False)
+            return
+
+        all_groups = {"translate", "rotate", "scale"}
+        preserved = all_groups - freezing_groups
+
+        matrix_attr = "original_worldMatrix"
+        rp_attr = "original_rotatePivot"
+        sp_attr = "original_scalePivot"
+
+        for node in nodes:
+            if not cmds.objExists(node):
+                continue
+
+            has_existing = cmds.attributeQuery(
+                matrix_attr, node=node, exists=True
+            )
+
+            # Nothing to preserve → ordinary overwrite store.
+            if not has_existing or not preserved:
+                XformUtils.store_transforms([node], accumulate=False)
+                continue
+
+            try:
+                existing_flat = cmds.getAttr(f"{node}.{matrix_attr}")
+                if existing_flat and isinstance(existing_flat[0], (list, tuple)):
+                    existing_flat = [v for row in existing_flat for v in row]
+                existing_matrix = om.MMatrix(list(existing_flat))
+            except (RuntimeError, ValueError, TypeError) as exc:
+                # Corrupt or unreadable stored data — fall back to a
+                # clean overwrite so the user isn't left with broken
+                # half-state.  Warn so they know we discarded their
+                # previous restore point.
+                cmds.warning(
+                    f"Channels.freeze_transforms: '{node}' has unreadable "
+                    f"stored data ({exc}). Overwriting with current state."
+                )
+                XformUtils.store_transforms([node], accumulate=False)
+                continue
+
+            current_matrix = om.MMatrix(
+                cmds.xform(node, q=True, matrix=True, worldSpace=True)
+            )
+
+            # Preserved channels come from the existing stored matrix;
+            # the channels being frozen now come from current.
+            merged = _partial_world_matrix(
+                current_matrix, existing_matrix, channels=preserved
+            )
+            merged_flat = _mmatrix_to_flat(merged)
+            cmds.setAttr(
+                f"{node}.{matrix_attr}", *merged_flat, type="matrix"
+            )
+
+            # Pivot update is gated on "translate" — the only freeze
+            # variant that relocates pivots.
+            if "translate" in freezing_groups:
+                rp = cmds.xform(node, q=True, ws=True, rp=True)
+                sp = cmds.xform(node, q=True, ws=True, sp=True)
+                if cmds.attributeQuery(rp_attr, node=node, exists=True):
+                    cmds.setAttr(f"{node}.{rp_attr}", *rp, type="double3")
+                if cmds.attributeQuery(sp_attr, node=node, exists=True):
+                    cmds.setAttr(f"{node}.{sp_attr}", *sp, type="double3")
+
+    @classmethod
+    def unfreeze_transforms(cls, nodes, attrs=None):
+        """Restore previously stored transforms on *nodes*.
+
+        Parameters:
+            nodes (list): Transform nodes to unfreeze.
+            attrs (list): Optional attribute names restricting which
+                channel group(s) to restore (e.g. ``["translate"]`` or
+                ``["rotateX", "rotateY", "rotateZ"]``).  Must form a
+                clean group-level selection — partial groups or
+                non-transform attributes are rejected (use
+                :meth:`can_freeze_selection` to pre-check).  ``None``
+                (default) restores every transform channel and is the
+                only mode that deletes the stored attrs afterwards.
+
+        Returns:
+            list: Names of nodes whose transforms were restored.  Empty
+            when no node had stored data or *attrs* failed validation.
+        """
+        if not nodes:
+            return []
+
+        channels = None
+        if attrs is not None:
+            if not cls.can_freeze_selection(attrs):
+                return []
+            groups = cls._groups_from_attrs(attrs)
+            if groups:
+                channels = groups
+
+        from mayatk.xform_utils._xform_utils import XformUtils
+
+        cmds.undoInfo(openChunk=True, chunkName="Unfreeze Transforms")
+        try:
+            return XformUtils.restore_transforms(nodes, channels=channels) or []
+        finally:
+            cmds.undoInfo(closeChunk=True)
+
+    @staticmethod
+    def has_unfreeze_info(nodes):
+        """Return True when at least one of *nodes* has stored unfreeze data."""
+        if not nodes:
+            return False
+        from mayatk.xform_utils._xform_utils import XformUtils
+
+        statuses = XformUtils.has_stored_transforms(nodes) or {}
+        return any(statuses.values())
+
+    # ------------------------------------------------------------------
     # Enum field helpers — thin wrappers around Attributes.*
     # ------------------------------------------------------------------
 

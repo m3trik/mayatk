@@ -74,6 +74,47 @@ def _mmatrix_to_flat(m) -> List[float]:
     return list(m)
 
 
+def _partial_world_matrix(current, stored, channels):
+    """Compose a world matrix by picking T/R/S components per *channels*.
+
+    Components named in *channels* (a subset of ``{"translate", "rotate",
+    "scale"}``) are sourced from *stored*; the rest come from *current*.
+    Used by :func:`XformUtils.restore_transforms` for partial unfreeze.
+
+    Decomposition is via ``MTransformationMatrix``; quaternions are used
+    for rotation to avoid Euler-order ambiguity on round-trip.
+
+    Shear is preserved from the *current* matrix in all cases.  Shear is
+    not exposed as a freezable channel in the menu, and a fresh
+    ``MTransformationMatrix`` defaults its shear to zero — without this
+    explicit copy, ``cmds.xform(matrix=...)`` would silently zero
+    ``obj.shear`` on any partial restore.
+    """
+    if om is None:
+        return current
+    current_tm = om.MTransformationMatrix(current)
+    stored_tm = om.MTransformationMatrix(stored)
+    target_tm = om.MTransformationMatrix()
+
+    src_t = stored_tm if "translate" in channels else current_tm
+    target_tm.setTranslation(
+        src_t.translation(om.MSpace.kWorld), om.MSpace.kWorld
+    )
+
+    src_r = stored_tm if "rotate" in channels else current_tm
+    target_tm.setRotation(src_r.rotation(asQuaternion=True))
+
+    src_s = stored_tm if "scale" in channels else current_tm
+    target_tm.setScale(src_s.scale(om.MSpace.kWorld), om.MSpace.kWorld)
+
+    # Shear is not a freezable channel — preserve whatever the object
+    # currently has (a fresh TM defaults shear to zero, which would
+    # silently destroy user-set shear on partial restore).
+    target_tm.setShear(current_tm.shear(om.MSpace.kWorld), om.MSpace.kWorld)
+
+    return target_tm.asMatrix()
+
+
 def _shift_shape_points(shape: str, transform_matrix) -> None:
     """Bulk-transform a shape's points by *transform_matrix* (world-space).
 
@@ -932,7 +973,9 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def restore_transforms(objects, prefix="original", delete_attrs=True):
+    def restore_transforms(
+        objects, prefix="original", delete_attrs=True, channels=None
+    ):
         """Restore transforms from stored custom attributes.
 
         Counterpart of ``store_transforms``: reads the saved world matrix +
@@ -960,11 +1003,33 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             delete_attrs (bool): Delete the ``{prefix}_worldMatrix``,
                 ``{prefix}_rotatePivot``, ``{prefix}_scalePivot`` attributes
                 after a successful restore. Default True — keeps the scene
-                clean. Set False to retain the stored values for re-restoration.
+                clean.  Only takes effect on a *full* restore; partial
+                restores leave the stored attrs in place so subsequent
+                calls can restore the remaining channels.
+            channels (iterable): Optional subset of ``{"translate",
+                "rotate", "scale"}`` restricting which world-matrix
+                components to restore.  ``None`` (default) or the full
+                set means "restore everything" (original behaviour).
+                Partial restore composes the target matrix by taking
+                the named components from the stored matrix and the
+                rest from the object's current world matrix, preserves
+                visual position via the same geometry-shift mechanism
+                as full restore, and only restores rotate / scale
+                pivots when ``"translate"`` is in *channels* (since
+                freeze-rotate / freeze-scale don't touch pivots).
 
         Returns:
             list: Object names successfully restored.
         """
+        valid_channels = {"translate", "rotate", "scale"}
+        if channels is None:
+            target_channels = valid_channels
+        else:
+            target_channels = set(channels) & valid_channels
+            if not target_channels:
+                return []
+        full_restore = target_channels == valid_channels
+
         restored = []
 
         for obj in cmds.ls(as_strings(objects), type="transform") or []:
@@ -999,11 +1064,23 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             stored_matrix_flat = list(stored_matrix_flat)
             stored_matrix = om.MMatrix(stored_matrix_flat)
 
+            if full_restore:
+                target_matrix = stored_matrix
+                target_flat = stored_matrix_flat
+            else:
+                current_matrix = om.MMatrix(
+                    cmds.xform(obj, q=True, matrix=True, worldSpace=True)
+                )
+                target_matrix = _partial_world_matrix(
+                    current_matrix, stored_matrix, target_channels
+                )
+                target_flat = _mmatrix_to_flat(target_matrix)
+
             try:
-                inverse_stored = stored_matrix.inverse()
+                inverse_target = target_matrix.inverse()
             except Exception:
                 cmds.warning(
-                    f"restore_transforms: '{obj}' has singular matrix. Skipping."
+                    f"restore_transforms: '{obj}' has singular target matrix. Skipping."
                 )
                 continue
 
@@ -1014,27 +1091,37 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 or []
             )
 
-            # Transform geometry by M.inverse() so world point positions are
-            # preserved once we then set obj.world = stored.
+            # Transform geometry by target.inverse() so world point positions
+            # are preserved once we then set obj.world = target.
             for shape in shapes:
-                _shift_shape_points(shape, inverse_stored)
+                _shift_shape_points(shape, inverse_target)
 
             # Unlock TRS so cmds.xform can write all components — otherwise
             # locked channels are silently skipped and the restore is partial.
             # ``temporarily_unlock`` always operates on the full TRS set; the
             # ``attributes=`` parameter on it is currently unused.
             with Attributes.temporarily_unlock([obj]):
-                cmds.xform(obj, matrix=stored_matrix_flat, worldSpace=True)
+                cmds.xform(obj, matrix=target_flat, worldSpace=True)
 
-                if cmds.attributeQuery(rp_attr, node=obj, exists=True):
-                    rotate_pivot = cmds.getAttr(f"{obj}.{rp_attr}")[0]
-                    cmds.xform(obj, rotatePivot=rotate_pivot, worldSpace=True)
+                # Pivots are only relocated by freeze-translate (makeIdentity
+                # adjusts ``rotatePivotTranslate`` / ``scalePivotTranslate``
+                # to preserve world position).  Freeze-rotate / freeze-scale
+                # bake geometry instead, so restoring pivots when *only* R
+                # or S is being unfrozen would teleport the pivot away from
+                # the object's current position.
+                if "translate" in target_channels:
+                    if cmds.attributeQuery(rp_attr, node=obj, exists=True):
+                        rotate_pivot = cmds.getAttr(f"{obj}.{rp_attr}")[0]
+                        cmds.xform(obj, rotatePivot=rotate_pivot, worldSpace=True)
 
-                if cmds.attributeQuery(sp_attr, node=obj, exists=True):
-                    scale_pivot = cmds.getAttr(f"{obj}.{sp_attr}")[0]
-                    cmds.xform(obj, scalePivot=scale_pivot, worldSpace=True)
+                    if cmds.attributeQuery(sp_attr, node=obj, exists=True):
+                        scale_pivot = cmds.getAttr(f"{obj}.{sp_attr}")[0]
+                        cmds.xform(obj, scalePivot=scale_pivot, worldSpace=True)
 
-            if delete_attrs:
+            # Partial restore keeps the stored attrs so the remaining
+            # channels can be restored later.  Full restore is the only
+            # path that cleans them up.
+            if delete_attrs and full_restore:
                 for attr in (matrix_attr, rp_attr, sp_attr):
                     if cmds.attributeQuery(attr, node=obj, exists=True):
                         plug = f"{obj}.{attr}"

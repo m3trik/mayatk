@@ -424,5 +424,423 @@ class TestSelectConnections(MayaTkTestCase):
         self.assertFalse(result)
 
 
+class TestFreezeUnfreezeTransforms(MayaTkTestCase):
+    """Tests for freeze_transforms / unfreeze_transforms / has_unfreeze_info."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="frz_cube")[0]
+        cmds.xform(self.cube, translation=(1.0, 2.0, 3.0), rotation=(10.0, 20.0, 30.0))
+
+    def test_has_unfreeze_info_false_initially(self):
+        self.assertFalse(Channels.has_unfreeze_info([self.cube]))
+
+    def test_has_unfreeze_info_empty_nodes(self):
+        self.assertFalse(Channels.has_unfreeze_info([]))
+        self.assertFalse(Channels.has_unfreeze_info(None))
+
+    def test_freeze_zeros_transforms_and_stores(self):
+        Channels.freeze_transforms([self.cube])
+
+        # Translation and rotation should be zeroed.
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 0.0)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateX"), 0.0)
+        # And stored info now exists for unfreeze.
+        self.assertTrue(Channels.has_unfreeze_info([self.cube]))
+
+    def test_unfreeze_restores_world_position(self):
+        ws_before = cmds.xform(self.cube, q=True, ws=True, t=True)
+        Channels.freeze_transforms([self.cube])
+        restored = Channels.unfreeze_transforms([self.cube])
+
+        self.assertTrue(restored, "Expected at least one node to be restored")
+        ws_after = cmds.xform(self.cube, q=True, ws=True, t=True)
+        for a, b in zip(ws_before, ws_after):
+            self.assertAlmostEqual(a, b, places=4)
+
+    def test_unfreeze_without_stored_info_returns_empty(self):
+        restored = Channels.unfreeze_transforms([self.cube])
+        self.assertFalse(restored)
+
+    def test_freeze_without_store_leaves_no_unfreeze_info(self):
+        Channels.freeze_transforms([self.cube], store=False)
+        self.assertFalse(Channels.has_unfreeze_info([self.cube]))
+
+    # -- can_freeze_selection ---------------------------------------------
+
+    def test_can_freeze_empty_selection(self):
+        self.assertTrue(Channels.can_freeze_selection([]))
+        self.assertTrue(Channels.can_freeze_selection(None))
+
+    def test_can_freeze_full_translate_group_via_children(self):
+        self.assertTrue(
+            Channels.can_freeze_selection(
+                ["translateX", "translateY", "translateZ"]
+            )
+        )
+
+    def test_can_freeze_full_translate_group_via_parent(self):
+        self.assertTrue(Channels.can_freeze_selection(["translate"]))
+
+    def test_can_freeze_short_names(self):
+        self.assertTrue(Channels.can_freeze_selection(["tx", "ty", "tz"]))
+
+    def test_can_freeze_strips_plug_prefix(self):
+        self.assertTrue(
+            Channels.can_freeze_selection(
+                [
+                    f"{self.cube}.translateX",
+                    f"{self.cube}.translateY",
+                    f"{self.cube}.translateZ",
+                ]
+            )
+        )
+
+    def test_can_freeze_multiple_groups(self):
+        self.assertTrue(
+            Channels.can_freeze_selection(
+                [
+                    "translateX", "translateY", "translateZ",
+                    "rotateX", "rotateY", "rotateZ",
+                ]
+            )
+        )
+
+    def test_cannot_freeze_partial_group(self):
+        self.assertFalse(
+            Channels.can_freeze_selection(["translateX", "translateY"])
+        )
+
+    def test_cannot_freeze_partial_group_single_axis(self):
+        self.assertFalse(Channels.can_freeze_selection(["rotateX"]))
+
+    def test_cannot_freeze_with_non_transform_attr(self):
+        self.assertFalse(
+            Channels.can_freeze_selection(
+                ["translateX", "translateY", "translateZ", "visibility"]
+            )
+        )
+
+    def test_cannot_freeze_only_non_transform(self):
+        self.assertFalse(Channels.can_freeze_selection(["visibility"]))
+
+    # -- freeze_transforms with attrs -------------------------------------
+
+    def test_freeze_complete_translate_group_only(self):
+        """Selecting all 3 translate axes freezes translate; rotate stays."""
+        Channels.freeze_transforms(
+            [self.cube], attrs=["translateX", "translateY", "translateZ"]
+        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 0.0)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateY"), 0.0)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateZ"), 0.0)
+        # Rotate group untouched.
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateX"), 10.0)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateY"), 20.0)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateZ"), 30.0)
+
+    def test_freeze_translate_via_parent_attr(self):
+        """Selecting just the 'translate' parent is equivalent to all 3 axes."""
+        Channels.freeze_transforms([self.cube], attrs=["translate"])
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 0.0)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateY"), 0.0)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateZ"), 0.0)
+        # Rotate group untouched.
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.rotateX"), 10.0)
+
+    def test_freeze_partial_group_returns_false(self):
+        """A partial-group selection is rejected; no freeze occurs."""
+        result = Channels.freeze_transforms(
+            [self.cube], attrs=["translateX", "translateY"]
+        )
+        self.assertFalse(result)
+        # Original values intact — including the unselected translateZ.
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 1.0)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateY"), 2.0)
+
+    def test_freeze_non_transform_attrs_returns_false(self):
+        result = Channels.freeze_transforms(
+            [self.cube], attrs=["visibility"]
+        )
+        self.assertFalse(result)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube}.translateX"), 1.0)
+
+    # -- partial unfreeze -------------------------------------------------
+
+    def test_unfreeze_translate_only_restores_translate_attribute(self):
+        """Unfreezing only translate brings translate back to its pre-freeze
+        value while leaving the (post-freeze) rotate value alone."""
+        Channels.freeze_transforms([self.cube])  # freezes T+R+S, stores M
+        # Add a rotation change after the freeze.
+        cmds.xform(self.cube, rotation=(45.0, 0.0, 0.0), relative=False)
+
+        restored = Channels.unfreeze_transforms(
+            [self.cube], attrs=["translate"]
+        )
+        self.assertTrue(restored)
+
+        # Translate restored to the pre-freeze value.
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateX"), 1.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateY"), 2.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateZ"), 3.0, places=4
+        )
+        # The post-freeze rotation change is preserved (not overwritten by
+        # the stored pre-freeze rotation).
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.rotateX"), 45.0, places=4
+        )
+
+    def test_unfreeze_rotate_only_restores_rotation(self):
+        """Restoring only rotate brings R back without touching T."""
+        Channels.freeze_transforms([self.cube])
+        # Move post-freeze; rotate should not pick up this move.
+        cmds.xform(self.cube, translation=(99.0, 0.0, 0.0), relative=False)
+
+        restored = Channels.unfreeze_transforms(
+            [self.cube], attrs=["rotateX", "rotateY", "rotateZ"]
+        )
+        self.assertTrue(restored)
+
+        # Rotation restored to pre-freeze values.
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.rotateX"), 10.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.rotateY"), 20.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.rotateZ"), 30.0, places=4
+        )
+        # Post-freeze translate change is preserved.
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateX"), 99.0, places=4
+        )
+
+    def test_unfreeze_scale_only_restores_scale(self):
+        """Restoring only scale brings S back to its pre-freeze value
+        without touching T or R."""
+        cmds.xform(self.cube, scale=(2.0, 3.0, 4.0))
+        Channels.freeze_transforms([self.cube])  # store_transforms captures S=(2,3,4)
+        # Modify scale and rotate after the freeze.
+        cmds.xform(self.cube, scale=(5.0, 5.0, 5.0))
+        cmds.xform(self.cube, rotation=(45.0, 0.0, 0.0), relative=False)
+
+        restored = Channels.unfreeze_transforms(
+            [self.cube], attrs=["scale"]
+        )
+        self.assertTrue(restored)
+
+        # Scale restored to the value captured at freeze time — the
+        # ``store_transforms`` step runs BEFORE ``makeIdentity`` so the
+        # stored matrix's scale component is the user's pre-freeze (2,3,4),
+        # not the post-freeze (1,1,1) that makeIdentity bakes into the
+        # local attrs.
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.scaleX"), 2.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.scaleY"), 3.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.scaleZ"), 4.0, places=4
+        )
+        # Post-freeze rotation change preserved.
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.rotateX"), 45.0, places=4
+        )
+
+    # -- safety / regression tests ---------------------------------------
+
+    def test_partial_unfreeze_preserves_shear(self):
+        """Partial restore must not zero ``obj.shear`` — shear isn't a
+        freezable channel, so ``cmds.xform(matrix=...)`` would silently
+        wipe it without explicit preservation in the target matrix."""
+        cmds.setAttr(f"{self.cube}.shearXY", 0.5)
+        Channels.freeze_transforms([self.cube])
+        # Modify shear after freeze; partial restore of rotate should
+        # leave THIS value alone (not snap to the stored 0.5 nor to 0).
+        cmds.setAttr(f"{self.cube}.shearXY", 0.8)
+
+        Channels.unfreeze_transforms([self.cube], attrs=["rotate"])
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.shearXY"), 0.8, places=4
+        )
+
+    def test_sequential_partial_freezes_preserve_channel_originals(self):
+        """Sequential partial freezes (T then R) must keep each channel's
+        pre-freeze value so a later partial unfreeze restores correctly.
+
+        Without merge-on-store, the second freeze would overwrite the
+        stored matrix with the post-first-freeze state — destroying T's
+        pre-freeze value of 1 before unfreeze ever runs.
+        """
+        # Setup gives us T=(1,2,3), R=(10,20,30).
+        # Freeze translate first.
+        Channels.freeze_transforms([self.cube], attrs=["translate"])
+        # Modify R, then freeze rotate.
+        cmds.xform(self.cube, rotation=(99.0, 0.0, 0.0), relative=False)
+        Channels.freeze_transforms([self.cube], attrs=["rotate"])
+
+        # Now unfreeze translate — should restore to the original
+        # pre-translate-freeze value (1), not to 0 which is what the
+        # local translate became after the first freeze.
+        Channels.unfreeze_transforms([self.cube], attrs=["translate"])
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateX"), 1.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateY"), 2.0, places=4
+        )
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateZ"), 3.0, places=4
+        )
+
+        # And unfreeze rotate should restore to the value captured at
+        # rotate-freeze time (99), not the original 10.
+        Channels.unfreeze_transforms([self.cube], attrs=["rotate"])
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.rotateX"), 99.0, places=4
+        )
+
+    def test_refreezing_same_channel_updates_stored_value(self):
+        """Re-freezing the SAME channel rebaselines that channel only.
+
+        Sister case to ``test_sequential_partial_freezes_*``: there we
+        freeze T then R (different channels).  Here we freeze T, modify
+        T, freeze T again — the second freeze should refresh stored.T
+        from the new current value (so unfreeze restores to the new
+        baseline), while leaving R and S untouched in stored.
+        """
+        Channels.freeze_transforms([self.cube], attrs=["translate"])
+        # Move post-freeze and re-freeze the SAME channel.
+        cmds.xform(self.cube, translation=(50.0, 0.0, 0.0), relative=False)
+        Channels.freeze_transforms([self.cube], attrs=["translate"])
+
+        # The post-modify state is now the baseline.  After moving
+        # somewhere else, unfreeze translate should pull us back to
+        # (50, 0, 0), not the original (1, 2, 3) from setUp.
+        cmds.xform(self.cube, translation=(99.0, 99.0, 99.0))
+        Channels.unfreeze_transforms([self.cube], attrs=["translate"])
+
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.translateX"), 50.0, places=3
+        )
+
+    def test_full_freeze_after_partial_overwrites_baseline(self):
+        """A full freeze (no attrs) re-baselines everything, overwriting
+        any merged partial-freeze state.
+
+        The distinguishing assertion is the rotation: if the full freeze
+        correctly overwrote, Unfreeze restores R to 45 (the value at
+        time of the most recent freeze); if it incorrectly preserved
+        the prior partial-freeze data, it would restore to the original
+        10 from setUp.
+        """
+        Channels.freeze_transforms([self.cube], attrs=["translate"])
+        cmds.xform(self.cube, rotation=(45.0, 0.0, 0.0), relative=False)
+        # Full freeze should overwrite, not merge.
+        Channels.freeze_transforms([self.cube])
+
+        # Mess with the state, then unfreeze.
+        cmds.xform(self.cube, translation=(7.0, 7.0, 7.0))
+        cmds.xform(self.cube, rotation=(0.0, 0.0, 0.0), relative=False)
+        Channels.unfreeze_transforms([self.cube])
+
+        # R restored to the re-baselined 45 (not the original 10).
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{self.cube}.rotateX"), 45.0, places=4
+        )
+
+    def test_groups_from_attrs_helper(self):
+        """``_groups_from_attrs`` exposes the group set used by both freeze
+        and unfreeze paths."""
+        self.assertEqual(Channels._groups_from_attrs([]), set())
+        self.assertEqual(Channels._groups_from_attrs(None), set())
+        self.assertEqual(
+            Channels._groups_from_attrs(["translate"]), {"translate"}
+        )
+        self.assertEqual(
+            Channels._groups_from_attrs(["translateX", "rotateY"]),
+            {"translate", "rotate"},
+        )
+        # Plug prefix stripped.
+        self.assertEqual(
+            Channels._groups_from_attrs(["pCube1.scaleZ"]), {"scale"}
+        )
+        # Non-transform attrs are dropped (completeness check happens
+        # separately in ``can_freeze_selection``).
+        self.assertEqual(
+            Channels._groups_from_attrs(["visibility"]), set()
+        )
+
+    def test_partial_unfreeze_keeps_stored_attrs_for_future_calls(self):
+        """A partial unfreeze must not delete the stored data — the user
+        may still want to unfreeze the remaining groups later."""
+        Channels.freeze_transforms([self.cube])
+        Channels.unfreeze_transforms([self.cube], attrs=["translate"])
+        # Stored attrs survive a partial restore.
+        self.assertTrue(Channels.has_unfreeze_info([self.cube]))
+
+        # And a subsequent unfreeze of the remaining groups still works.
+        restored = Channels.unfreeze_transforms(
+            [self.cube], attrs=["rotate"]
+        )
+        self.assertTrue(restored)
+
+    def test_full_unfreeze_deletes_stored_attrs(self):
+        """A full restore (default) cleans the stored attrs up."""
+        Channels.freeze_transforms([self.cube])
+        Channels.unfreeze_transforms([self.cube])  # no attrs → full restore
+        self.assertFalse(Channels.has_unfreeze_info([self.cube]))
+
+    def test_unfreeze_rejects_partial_group(self):
+        Channels.freeze_transforms([self.cube])
+        restored = Channels.unfreeze_transforms(
+            [self.cube], attrs=["translateX", "translateY"]
+        )
+        self.assertEqual(restored, [])
+        # Stored data still intact.
+        self.assertTrue(Channels.has_unfreeze_info([self.cube]))
+
+    def test_unfreeze_rejects_non_transform_attr(self):
+        Channels.freeze_transforms([self.cube])
+        restored = Channels.unfreeze_transforms(
+            [self.cube], attrs=["visibility"]
+        )
+        self.assertEqual(restored, [])
+
+    def test_refreeze_after_move_unfreezes_to_most_recent(self):
+        """Re-freezing after a move stores an independent restore point.
+
+        Each freeze should overwrite the stored matrix (not compose
+        with it), so Unfreeze restores to the pose at the *most
+        recent* freeze — never to a never-visited composed pose.
+        """
+        # First freeze at (1, 2, 3).
+        Channels.freeze_transforms([self.cube])
+
+        # Move local translate to (5, 0, 0). Pivot is at world (1,2,3)
+        # post-freeze, so world becomes (6, 2, 3).
+        cmds.xform(self.cube, translation=(5.0, 0.0, 0.0), relative=False)
+        ws_before_refreeze = cmds.xform(self.cube, q=True, ws=True, t=True)
+
+        # Second freeze captures the new world matrix as the restore
+        # point.
+        Channels.freeze_transforms([self.cube])
+
+        # Move again to confirm unfreeze ignores the post-freeze move.
+        cmds.xform(self.cube, translation=(99.0, 99.0, 99.0), relative=False)
+
+        Channels.unfreeze_transforms([self.cube])
+        ws_after_unfreeze = cmds.xform(self.cube, q=True, ws=True, t=True)
+        for expected, actual in zip(ws_before_refreeze, ws_after_unfreeze):
+            self.assertAlmostEqual(expected, actual, places=4)
+
+
 if __name__ == "__main__":
     unittest.main()
