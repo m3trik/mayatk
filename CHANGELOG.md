@@ -2,6 +2,21 @@
 
 ## 2026
 
+- **Channels wheel-scroll — symmetric ladder + axis-swap fix** — wheel-scroll on a channel-box value cell now mirrors uitk `SpinBox`'s symmetric ladder. The two user-visible bugs both root in the table layer:
+  - **Alt-held wheels did nothing**: `TableWidget._emit_wheel_scrub` read only `event.angleDelta().y()`, which is 0 on some Qt builds when Alt is held (Qt transposes the delta onto `.x()`). The widget now reads `delta.y() or delta.x()`, so Alt and Ctrl+Alt both fire reliably. (Fix in uitk; the channels module is just the consumer.)
+  - **Ctrl+Shift fell to the default 0.1 step**: the old `_wheel_step` matched modifiers with `(mods & MASK) == MASK`, which can return False under PySide6 when the live `KeyboardModifiers` flag set is compared to a `KeyboardModifier` flag value. Detection now uses `bool(mods & SPECIFIC)` per modifier, making the comparison robust to PySide5/6 type quirks.
+  - **Modifiers source**: `_on_wheel_scrolled` now takes the modifiers from the `cellWheelScrolled` signal payload (added in uitk) rather than polling `QApplication.keyboardModifiers()`. Removes a race against the wheel event.
+  - **Ladder** (matches uitk `WheelStepMixin`):
+
+        plain         ×1       (default)
+        Ctrl          ×10      (coarse)
+        Ctrl+Shift    ×100     (very coarse)
+        Alt           ÷10      (fine)
+        Ctrl+Alt      smallest representable step (10⁻ᵈᵉᶜⁱᵐᵃˡˢ; for ints = 1)
+
+    For int attrs `Alt` collapses to 0 (no sub-1 step exists) -- the wheel notch is honestly a no-op there. The earlier *Ctrl+Alt = snap-to-integer* iteration was reverted: it visually matched `Ctrl` for any integer-aligned starting value, so it looked broken even when working correctly. The smallest-step gesture is now distinct from `Ctrl` regardless of value alignment.
+  - **Breaking**: `WHEEL_MOD_FINE` / `WHEEL_MOD_SMALLEST` class attributes (overrideable in subclasses) are gone; per-app hotkey customization will need a different mechanism if/when it's needed.
+
 - **RizomUV Bridge unwrap fix + hard/organic split** — replaced the broken `unwrap.lua` (passed `Auto={HardEdge=true, ..., Skeleton={}}`, which RizomUV silently ignores → zero seams selected → mesh re-imported as one welded shell, i.e. "all edges sewn"). Two new presets ship: `unwrap_hard.lua` (driven by `Auto={SharpEdges={AngleMin=…}, QuadLoopCutter=true, ...}`, canonical Titus/3ds-max signature) and `unwrap_organic.lua` (QuadLoopCutter off, higher default angle, leans on HandleCutter / PipesCutter / StretchLimiter). New `SHARP_ANGLE` parameter exposes the dihedral threshold in the panel.
 - **RizomUV Bridge pack fix** — wrapper `ZomLoad` was `XYZ=true` (positions only), so incoming UVs were dropped on load. Pack/optimize then ran on zero islands and the file round-tripped with degenerate UVs ("UVs gone"). Wrapper now loads `XYZUVW=true, UVWProps=true` to bring mesh + existing UVs through together. Matches the C4D bridge and Titus batch-load signatures.
 - **RizomUV Bridge pack attributes exposed** — added five user-tunable `ZomPack` knobs: `PACK_RESOLUTION` (texel-density baseline), `PACK_MAX_MUTATIONS` (solver iterations), `PACK_ROTATE_ENABLE`, `PACK_TRANSLATE`, `SCALING_MIX`. Hardcoded `Translate=true` and the absent `Rotate.Enable`/`MaxMutations`/`Resolution` are now driven from the panel; preset Lua across `pack`/`optimize`/`unwrap_hard`/`unwrap_organic` updated in lockstep. `Margin` and `Quality` remain absent (still crash 2020.1, comment in `parameters.py`).

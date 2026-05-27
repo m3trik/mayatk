@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-05-25_
+_Generated: 2026-05-27_
 
 ## Index
 
@@ -2663,6 +2663,10 @@ Channels — Maya attribute query / mutation logic.
   - `Channels.show_attrs(nodes, attr_names)` *(static)* — Show (unhide) *attr_names* in the channel box.
   - `Channels.lock_and_hide_attrs(nodes, attr_names)` *(static)* — Lock and hide *attr_names*.
   - `Channels.select_connections(nodes, attr_name)` *(static)* — Select the upstream node driving *attr_name* on the primary node.
+  - `Channels.can_freeze_selection(cls, attr_names)` *(class)* — Test if *attr_names* maps to a clean group-level freeze.
+  - `Channels.freeze_transforms(cls, nodes, attrs=None, store=True)` *(class)* — Freeze transforms on *nodes*.
+  - `Channels.unfreeze_transforms(cls, nodes, attrs=None)` *(class)* — Restore previously stored transforms on *nodes*.
+  - `Channels.has_unfreeze_info(nodes)` *(static)* — Return True when at least one of *nodes* has stored unfreeze data.
 
 <a id="node_utils--attributes--channels--channels_slots"></a>
 ### `node_utils/attributes/channels/channels_slots.py`
@@ -3025,8 +3029,8 @@ Slots for the RizomUV bridge panel.
 - [`get_translation(node, world: bool = False)`](mayatk/mayatk/xform_utils/_xform_utils.py#L28) — Translation as ``om.MVector``.
 - [`get_object_matrix(node, world: bool = False)`](mayatk/mayatk/xform_utils/_xform_utils.py#L39) — Local or world matrix as ``om.MMatrix``.
 - [`set_object_matrix(node, value, world: bool = False) -> None`](mayatk/mayatk/xform_utils/_xform_utils.py#L46) — Apply *value* to *node*'s local or world transformation matrix.
-- **[`class XformUtilsInternals`](mayatk/mayatk/xform_utils/_xform_utils.py#L118)** — Internal helper methods for XformUtils.
-- **[`class XformUtils(XformUtilsInternals, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L168)** — Transform utilities for Maya objects.
+- **[`class XformUtilsInternals`](mayatk/mayatk/xform_utils/_xform_utils.py#L159)** — Internal helper methods for XformUtils.
+- **[`class XformUtils(XformUtilsInternals, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L209)** — Transform utilities for Maya objects.
   - `XformUtils.convert_axis(value, invert=False, ortho=False, to_integer=False)` *(static)* — Converts between axis representations and optionally inverts the axis or returns an orthogonal axis.
   - `XformUtils.move_to(cls, source, target, group_move=False)` *(class)* — Move source object(s) to align with the target object(s).
   - `XformUtils.drop_to_grid(objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)` *(static)* — Align objects to Y origin on the grid using a helper plane.
@@ -3036,7 +3040,7 @@ Slots for the RizomUV bridge panel.
   - `XformUtils.freeze_transforms(cls, objects, center_pivot=0, force=True, delete_history=False, freeze_children=False, unlock_children=True, connection_strategy='preserve', from_channel_box=False, **kwargs)` *(class)* — Freezes transformations on the given objects.
   - `XformUtils.freeze_to_opm(objects, reset_rotate_axis: bool = False, reset_joint_orient: bool = False) -> None` *(static)* — Freeze transforms into offsetParentMatrix while preserving pivot placement.
   - `XformUtils.unfreeze_to_parent(objects, traverse: bool = False, preserve_root: bool = True) -> List[str]` *(static)* — Push a child transform's local matrix up into its parent and zero the child.
-  - `XformUtils.restore_transforms(objects, prefix='original', delete_attrs=True)` *(static)* — Restore transforms from stored custom attributes.
+  - `XformUtils.restore_transforms(objects, prefix='original', delete_attrs=True, channels=None)` *(static)* — Restore transforms from stored custom attributes.
   - `XformUtils.clear_stored_transforms(objects, prefix='original') -> List[str]` *(static)* — Delete the stored-transform custom attributes without restoring.
   - `XformUtils.has_stored_transforms(objects, prefix='original')` *(static)* — Check if objects have stored transform attributes.
   - `XformUtils.clear_stored_transforms(objects, prefix='original')` *(static)* — Remove stored transform attributes from objects.

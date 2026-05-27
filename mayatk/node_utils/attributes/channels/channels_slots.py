@@ -899,6 +899,19 @@ class ChannelsSlots:
         if self._footer_controller:
             widget.itemSelectionChanged.connect(self._footer_controller.update)
 
+        # customContextMenuRequested → state updater + table's own popup.
+        # The framework wires ``widget._show_context_menu`` in TableWidget's
+        # __init__; we must intercept *before* that runs so our state
+        # update lands on the menu before it paints.  Qt fires slots in
+        # connection order, so we clear all bindings and re-add ours
+        # first, the original second.
+        try:
+            widget.customContextMenuRequested.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        widget.customContextMenuRequested.connect(self._update_context_menu_state)
+        widget.customContextMenuRequested.connect(widget._show_context_menu)
+
     def _setup_action_columns(self, widget):
         """Register Lock and Connect as icon-toggle action columns."""
         clr = self.ACTION_COLOR_MAP
@@ -988,6 +1001,9 @@ class ChannelsSlots:
             ("Lock and Hide",     "ctx_lock_and_hide", "Lock the attribute and hide it from the channel box."),
             ("Select Connection", "ctx_select_connection", "Select the upstream node driving this attribute."),
             ("Break Connection",  "ctx_break_connection",  "Break incoming connection(s) on the selected attribute(s)."),
+            ("Transform",  None),
+            ("Freeze Transforms",   "ctx_freeze_transforms",   "Freeze transforms on the selected node(s). Stores original world matrix so the freeze can be reversed."),
+            ("Unfreeze Transforms", "ctx_unfreeze_transforms", "Restore previously frozen transforms on the selected node(s). Requires stored transform data."),
             ("Manage",     None),
             ("Delete Attribute",  "ctx_delete",   "Delete the selected custom attribute(s)."),
         ]
@@ -1008,7 +1024,19 @@ class ChannelsSlots:
             "ctx_lock_and_hide": self._ctx_lock_and_hide,
             "ctx_select_connection": self._ctx_select_connection,
             "ctx_break_connection": self._ctx_break_connection,
+            "ctx_freeze_transforms": self._ctx_freeze_transforms,
+            "ctx_unfreeze_transforms": self._ctx_unfreeze_transforms,
             "ctx_delete": self._ctx_delete,
+        }
+
+        # Node-level actions operate on the selected transforms regardless
+        # of whether any attributes are highlighted in the table.  Freeze
+        # additionally uses the per-row attr selection (when present) to
+        # restrict the freeze to specific channels — so we still want the
+        # standard column aliases passed through.
+        _node_level_actions = {
+            "ctx_freeze_transforms",
+            "ctx_unfreeze_transforms",
         }
 
         for entry in _items:
@@ -1032,7 +1060,96 @@ class ChannelsSlots:
                         obj_name,
                         lambda sel, fn=handler: fn(sel),
                         columns=self._ROW_SELECTION_COLUMNS,
+                        allow_empty=obj_name in _node_level_actions,
                     )
+
+    # Shared tooltip strings — kept consistent across both enable
+    # branches so the message doesn't drift between code paths.
+    _FREEZE_TOOLTIP_ENABLED = (
+        "Freeze the selected transform(s).\n"
+        "Stores the pre-freeze world matrix so the operation can be "
+        "reversed with Unfreeze Transforms."
+    )
+    _FREEZE_TOOLTIP_DISABLED = (
+        "Freeze unavailable — Maya freezes T/R/S as whole groups.\n"
+        "Select either nothing (to freeze everything) or every axis of "
+        "the group(s) you want to freeze. Non-transform attributes mixed "
+        "into the selection also disable this."
+    )
+    _UNFREEZE_TOOLTIP_ENABLED = (
+        "Restore the selected channel group(s) from the stored pre-freeze "
+        "matrix.\nWith no row selection, every transform channel is restored."
+    )
+    _UNFREEZE_TOOLTIP_BAD_SELECTION = (
+        "Unfreeze unavailable — restore follows the same group rules as "
+        "Freeze.\nSelect either nothing (to restore everything) or every "
+        "axis of the group(s) you want to restore. Non-transform "
+        "attributes mixed into the selection also disable this."
+    )
+    _UNFREEZE_TOOLTIP_NO_STORED = (
+        "Unfreeze unavailable — no stored unfreeze data on the selected "
+        "node(s). Use 'Freeze Transforms' first to store restorable data."
+    )
+
+    def _update_context_menu_state(self, _position):
+        """Refresh dynamic enable/disable state of context menu items.
+
+        * *Freeze Transforms* — enabled only when the row selection maps
+          to a clean group-level freeze (Maya freezes T/R/S as whole
+          groups; partial-group or non-transform selections are
+          rejected).  Empty selection is allowed and means "freeze all".
+        * *Unfreeze Transforms* — same group-level selection gate as
+          Freeze, PLUS at least one selected node must have stored
+          unfreeze data.  Distinguishes "bad selection" from "nothing
+          to restore" in the tooltip so the user can tell which
+          condition to fix.
+
+        Runs from ``customContextMenuRequested`` *before* the table's own
+        ``_show_context_menu`` so the menu paints with the correct state.
+        """
+        tbl = self.ui.tbl000
+        if not self._is_widget_alive(tbl):
+            return
+        menu = getattr(tbl, "menu", None)
+        if menu is None:
+            return
+
+        nodes = self.controller.get_selected_nodes()
+        try:
+            selection = tbl.get_selection(
+                columns=self._ROW_SELECTION_COLUMNS, include_current=True
+            )
+        except RuntimeError:
+            return
+        attr_names = [s["name"] for s in (selection or []) if s.get("name")]
+
+        group_level_ok = bool(nodes) and self.controller.can_freeze_selection(
+            attr_names
+        )
+
+        freeze_btn = getattr(menu, "ctx_freeze_transforms", None)
+        if freeze_btn is not None:
+            freeze_btn.setEnabled(group_level_ok)
+            freeze_btn.setToolTip(
+                self._FREEZE_TOOLTIP_ENABLED
+                if group_level_ok
+                else self._FREEZE_TOOLTIP_DISABLED
+            )
+
+        unfreeze_btn = getattr(menu, "ctx_unfreeze_transforms", None)
+        if unfreeze_btn is not None:
+            has_stored = bool(nodes) and self.controller.has_unfreeze_info(
+                nodes
+            )
+            can_unfreeze = group_level_ok and has_stored
+            unfreeze_btn.setEnabled(can_unfreeze)
+            if can_unfreeze:
+                tooltip = self._UNFREEZE_TOOLTIP_ENABLED
+            elif not group_level_ok:
+                tooltip = self._UNFREEZE_TOOLTIP_BAD_SELECTION
+            else:
+                tooltip = self._UNFREEZE_TOOLTIP_NO_STORED
+            unfreeze_btn.setToolTip(tooltip)
 
     # ------------------------------------------------------------------
     # Table data
@@ -1844,6 +1961,59 @@ class ChannelsSlots:
         else:
             self.sb.message_box("Warning: No connections to break.")
 
+    def _ctx_freeze_transforms(self, selection):
+        """Freeze transforms on the currently selected transform node(s).
+
+        Operates at the group level (T/R/S) because that's what Maya's
+        ``makeIdentity`` natively supports — the button is only enabled
+        when the row selection forms a clean group-level freeze (see
+        :meth:`_update_context_menu_state` for the gating rule).
+
+        With no row selection, every transform channel is frozen.  With
+        a complete-group selection (e.g. all three translate axes, or
+        the ``translate`` parent), only the matching group(s) are frozen.
+        """
+        nodes = self.controller.get_selected_nodes()
+        if not nodes:
+            self.sb.message_box("Warning: No transform node(s) selected.")
+            return
+
+        attr_names = [s["name"] for s in (selection or []) if s.get("name")]
+        if not self.controller.freeze_transforms(nodes, attrs=attr_names or None):
+            # Reached only if the menu was triggered programmatically with
+            # an invalid selection — the UI normally disables the button.
+            self.sb.message_box(
+                "Warning: Selection is not a valid freeze target — "
+                "select complete T/R/S group(s) or nothing."
+            )
+            return
+        self._refresh_table(self.ui.tbl000)
+
+    def _ctx_unfreeze_transforms(self, selection):
+        """Restore previously frozen transforms on the selected node(s).
+
+        Honours per-row attribute selection identically to Freeze: with
+        a complete-group selection (e.g. all three translate axes, or
+        the ``translate`` parent), only the matching group(s) are
+        restored.  No row selection restores every channel.  Partial-
+        group / non-transform selections are rejected (the button is
+        normally disabled in those cases).
+        """
+        nodes = self.controller.get_selected_nodes()
+        if not nodes:
+            self.sb.message_box("Warning: No transform node(s) selected.")
+            return
+
+        attr_names = [s["name"] for s in (selection or []) if s.get("name")]
+        restored = self.controller.unfreeze_transforms(
+            nodes, attrs=attr_names or None
+        )
+        if not restored:
+            self.sb.message_box(
+                "Warning: No stored unfreeze data on the selected node(s)."
+            )
+        self._refresh_table(self.ui.tbl000)
+
     # ------------------------------------------------------------------
     # Enum field editing
     # ------------------------------------------------------------------
@@ -1897,28 +2067,23 @@ class ChannelsSlots:
     _SCRUB_FLOAT_STEP = 0.01
     _SCRUB_INT_PIXELS_PER_UNIT = 4
 
-    # Wheel-scroll step per Qt notch.  Modifiers select between three
-    # step sizes — see ``WHEEL_MOD_FINE`` and ``WHEEL_MOD_SMALLEST``
-    # below for the modifier mapping.  ``_WHEEL_SMALLEST_STEP`` should
-    # match the controller's display precision so the user can step
-    # the *visible* last decimal place — currently 4 decimals
-    # (``Channels._fmt_float`` default), so ``1e-4``.
-    _WHEEL_FLOAT_STEP = 0.1  # default (no modifier)
-    _WHEEL_SMALLEST_STEP = 0.0001  # ``WHEEL_MOD_SMALLEST`` modifier
-
-    # ------------------------------------------------------------------
-    # Wheel-scroll hotkeys (overrideable per app / per instance)
-    # ------------------------------------------------------------------
-    # Apps embedding this slots class can reassign these to fit their
-    # hotkey scheme — either as class-level overrides in a subclass or
-    # as instance assignment after construction.  Both are
-    # ``Qt.KeyboardModifier`` masks; matching uses ``(mods & MASK) ==
-    # MASK`` so combined modifiers (Ctrl+Alt) take priority over the
-    # less-specific Ctrl-only mapping.
-    WHEEL_MOD_FINE = QtCore.Qt.ControlModifier  # whole-number step
-    WHEEL_MOD_SMALLEST = (
-        QtCore.Qt.ControlModifier | QtCore.Qt.AltModifier
-    )  # smallest-decimal step
+    # Wheel-scroll step per Qt notch.  Symmetric ladder matching uitk's
+    # ``WheelStepMixin``: ``Ctrl`` scales **up** (×10 / ×100 with Shift),
+    # ``Alt`` scales **down** (÷10 / smallest with Ctrl).
+    # ``_WHEEL_FLOAT_SMALLEST`` matches the controller's display
+    # precision so the user can step the *visible* last decimal place --
+    # currently 4 decimals (``Channels._fmt_float`` default), so ``1e-4``.
+    _WHEEL_FLOAT_STEP = 0.1          # default (no modifier)
+    _WHEEL_FLOAT_COARSE = 1.0        # Ctrl         (×10)
+    _WHEEL_FLOAT_VERY_COARSE = 10.0  # Ctrl+Shift   (×100)
+    _WHEEL_FLOAT_FINE = 0.01         # Alt          (÷10)
+    _WHEEL_FLOAT_SMALLEST = 0.0001   # Ctrl+Alt     (smallest representable)
+    _WHEEL_INT_COARSE = 10           # Ctrl on int  (×10)
+    _WHEEL_INT_VERY_COARSE = 100     # Ctrl+Shift on int  (×100)
+    _WHEEL_INT_SMALLEST = 1          # Ctrl+Alt on int -- smallest int step
+    _WHEEL_INT_FINE = 0              # Alt on int -- no sub-1 step exists,
+                                     # so honestly do nothing (the wheel
+                                     # event is consumed silently).
 
     def _setup_value_input(self, widget):
         """Enable MMB-drag scrub, wheel-scroll, and click-to-edit on the
@@ -2019,38 +2184,62 @@ class ChannelsSlots:
             self._scrub_state = None
 
     def _wheel_step(self, mods, is_int):
-        """Per-notch step size given the active modifier state.
+        """Per-notch step amount given the active modifier state.
 
-        Modifier precedence (most-specific first):
-        - ``WHEEL_MOD_SMALLEST`` (default Ctrl+Alt) → smallest decimal,
-          ignored for int attrs (already whole).
-        - ``WHEEL_MOD_FINE`` (default Ctrl) → whole-number step.
-        - none → ``_WHEEL_FLOAT_STEP`` for floats, ``1.0`` for ints.
+        Symmetric ladder mirroring uitk's ``WheelStepMixin``::
+
+            plain         default                          (×1)
+            Ctrl          ×10 of default                   (coarse)
+            Ctrl+Shift    ×100 of default                  (very coarse)
+            Alt           ÷10 of default                   (fine)
+            Ctrl+Alt      smallest representable step      (10⁻ᵈᵉᶜⁱᵐᵃˡˢ)
+
+        For int attrs the fine / smallest tiers collapse: ``Ctrl+Alt``
+        returns 1 (the smallest integer step), and ``Alt`` returns 0
+        (no sub-1 step exists, so the wheel notch is silently consumed
+        in :meth:`_on_wheel_scrolled`).
+
+        Detection uses ``bool(mods & SPECIFIC)`` per modifier rather than
+        ``(mods & MASK) == MASK`` -- the latter can return False under
+        PySide6 when the live ``KeyboardModifiers`` flag set is compared
+        to a ``KeyboardModifier`` flag value (the symptom that previously
+        made Ctrl+Shift fall to the default).
         """
-        if (
-            not is_int
-            and (mods & self.WHEEL_MOD_SMALLEST) == self.WHEEL_MOD_SMALLEST
-        ):
-            return self._WHEEL_SMALLEST_STEP
-        if (mods & self.WHEEL_MOD_FINE) == self.WHEEL_MOD_FINE:
-            return 1.0
-        return 1.0 if is_int else self._WHEEL_FLOAT_STEP
+        ctrl = bool(mods & QtCore.Qt.ControlModifier)
+        alt = bool(mods & QtCore.Qt.AltModifier)
+        shift = bool(mods & QtCore.Qt.ShiftModifier)
 
-    def _on_wheel_scrolled(self, row, col, steps):
+        if ctrl and alt:
+            return self._WHEEL_INT_SMALLEST if is_int else self._WHEEL_FLOAT_SMALLEST
+        if ctrl and shift:
+            return self._WHEEL_INT_VERY_COARSE if is_int else self._WHEEL_FLOAT_VERY_COARSE
+        if ctrl:
+            return self._WHEEL_INT_COARSE if is_int else self._WHEEL_FLOAT_COARSE
+        if alt:
+            return self._WHEEL_INT_FINE if is_int else self._WHEEL_FLOAT_FINE
+        # No modifier -- default per-notch step.
+        return 1 if is_int else self._WHEEL_FLOAT_STEP
+
+    def _on_wheel_scrolled(self, row, col, steps, mods):
         """Adjust a numeric attribute by *steps* notches (signed).
+
+        ``mods`` comes from the wheel event itself (passed via
+        ``TableWidget.cellWheelScrolled``) so we don't have to poll
+        ``QApplication.keyboardModifiers()`` and race against the
+        application state.
 
         Two paths.
 
         **Edit mode** — when the cell has an open editor, it is the
-        user-visible source of truth.  Read its text, parse, add the
-        delta, write the new text back, and call ``cmds.setAttr`` to
+        user-visible source of truth.  Read its text, parse, apply the
+        gesture, write the new text back, and call ``cmds.setAttr`` to
         match.  This single-direction flow avoids the model→editor
         sync problems that plague the alternative (model.setText
         followed by ``setEditorData`` is brittle on focused editors;
         repaints are inconsistent across Qt styles).
 
         **Display mode** — no editor open; read current value via
-        ``cmds.getAttr``, add delta, ``cmds.setAttr``, then refresh
+        ``cmds.getAttr``, apply gesture, ``cmds.setAttr``, then refresh
         the cell text via ``_on_attr_value_set`` (the async callback
         path would also do this but only on the next idle, leaving
         a visible lag).
@@ -2078,8 +2267,14 @@ class ChannelsSlots:
             return
 
         is_int = attr_type in {"long", "short", "byte", "int"}
-        mods = QtWidgets.QApplication.keyboardModifiers()
-        delta = self._wheel_step(mods, is_int) * steps
+        step = self._wheel_step(mods, is_int)
+        if step == 0:
+            # Alt on an int attr: no sub-1 step exists. Honest no-op --
+            # the gesture is recognised but nothing finer than 1 is
+            # reachable, and there's no channel-cell HUD to surface a
+            # "Step: 0" message, so just return.
+            return
+        delta = step * steps
 
         # Detect an open editor on the wheel-scrubbed cell.  If found,
         # treat its text as the source of truth.
@@ -2094,6 +2289,12 @@ class ChannelsSlots:
                 and cur_idx.column() == col
             ):
                 editor = candidate
+
+        def apply_delta(cur):
+            new = cur + delta
+            if is_int:
+                new = int(round(new))
+            return new
 
         if editor is not None:
             # ----- Edit-mode path -----
@@ -2113,9 +2314,7 @@ class ChannelsSlots:
                 except (TypeError, ValueError):
                     primary_cur = 0.0
 
-            new_primary = primary_cur + delta
-            if is_int:
-                new_primary = int(round(new_primary))
+            new_primary = apply_delta(primary_cur)
             new_text = self.controller.format_value(new_primary)
 
             # Update the editor first so the user sees the change
@@ -2129,8 +2328,8 @@ class ChannelsSlots:
             editor.setCursorPosition(max(0, len(new_text) - cursor_from_end))
 
             # Apply per-node — primary takes the editor-derived value,
-            # others get ``their_cur + delta`` so divergence between
-            # selected nodes is retained across wheel notches.
+            # others get ``apply_delta(their_cur)`` so divergence
+            # between selected nodes is retained across wheel notches.
             cmds.undoInfo(openChunk=True, chunkName=f"Wheel {attr_name}")
             try:
                 for node in nodes:
@@ -2145,9 +2344,7 @@ class ChannelsSlots:
                             cur = cmds.getAttr(f"{node}.{attr_name}")
                             if not isinstance(cur, (int, float)):
                                 continue
-                            new_val = cur + delta
-                            if is_int:
-                                new_val = int(round(new_val))
+                            new_val = apply_delta(cur)
                         cmds.setAttr(f"{node}.{attr_name}", new_val)
                     except Exception:
                         continue
@@ -2178,9 +2375,7 @@ class ChannelsSlots:
         cmds.undoInfo(openChunk=True, chunkName=f"Wheel {attr_name}")
         try:
             for node, cur in targets:
-                new_val = cur + delta
-                if is_int:
-                    new_val = int(round(new_val))
+                new_val = apply_delta(cur)
                 try:
                     cmds.setAttr(f"{node}.{attr_name}", new_val)
                 except Exception:

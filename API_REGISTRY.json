@@ -1,7 +1,7 @@
 {
   "name": "mayatk",
   "source_root": "mayatk/mayatk",
-  "generated_at": "2026-05-25",
+  "generated_at": "2026-05-27",
   "modules": [
     {
       "relpath": "anim_utils/_anim_utils.py",
@@ -16686,6 +16686,42 @@
               "summary": "Select the upstream node driving *attr_name* on the primary node.",
               "line": 1035,
               "deprecated": false
+            },
+            {
+              "name": "can_freeze_selection",
+              "qualname": "Channels.can_freeze_selection",
+              "kind": "classmethod",
+              "signature": "(cls, attr_names)",
+              "summary": "Test if *attr_names* maps to a clean group-level freeze.",
+              "line": 1102,
+              "deprecated": false
+            },
+            {
+              "name": "freeze_transforms",
+              "qualname": "Channels.freeze_transforms",
+              "kind": "classmethod",
+              "signature": "(cls, nodes, attrs=None, store=True)",
+              "summary": "Freeze transforms on *nodes*.",
+              "line": 1166,
+              "deprecated": false
+            },
+            {
+              "name": "unfreeze_transforms",
+              "qualname": "Channels.unfreeze_transforms",
+              "kind": "classmethod",
+              "signature": "(cls, nodes, attrs=None)",
+              "summary": "Restore previously stored transforms on *nodes*.",
+              "line": 1313,
+              "deprecated": false
+            },
+            {
+              "name": "has_unfreeze_info",
+              "qualname": "Channels.has_unfreeze_info",
+              "kind": "staticmethod",
+              "signature": "(nodes)",
+              "summary": "Return True when at least one of *nodes* has stored unfreeze data.",
+              "line": 1351,
+              "deprecated": false
             }
           ]
         }
@@ -16762,7 +16798,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Tear down every event subscription owned by this slots instance.",
-              "line": 2707,
+              "line": 2902,
               "deprecated": false
             }
           ]
@@ -19162,14 +19198,14 @@
         {
           "name": "XformUtilsInternals",
           "summary": "Internal helper methods for XformUtils.",
-          "line": 118,
+          "line": 159,
           "bases": [],
           "members": []
         },
         {
           "name": "XformUtils",
           "summary": "Transform utilities for Maya objects.",
-          "line": 168,
+          "line": 209,
           "bases": [
             "XformUtilsInternals",
             "ptk.HelpMixin"
@@ -19181,7 +19217,7 @@
               "kind": "staticmethod",
               "signature": "(value, invert=False, ortho=False, to_integer=False)",
               "summary": "Converts between axis representations and optionally inverts the axis or returns an orthogonal axis.",
-              "line": 172,
+              "line": 213,
               "deprecated": false
             },
             {
@@ -19190,7 +19226,7 @@
               "kind": "classmethod",
               "signature": "(cls, source, target, group_move=False)",
               "summary": "Move source object(s) to align with the target object(s).",
-              "line": 232,
+              "line": 273,
               "deprecated": false
             },
             {
@@ -19199,7 +19235,7 @@
               "kind": "staticmethod",
               "signature": "(objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)",
               "summary": "Align objects to Y origin on the grid using a helper plane.",
-              "line": 261,
+              "line": 302,
               "deprecated": false
             },
             {
@@ -19208,7 +19244,7 @@
               "kind": "classmethod",
               "signature": "(cls, a, b, scale=True, average=False)",
               "summary": "Scale each of the given objects in 'a' to the combined bounding box of the objects in 'b'.",
-              "line": 295,
+              "line": 336,
               "deprecated": false
             },
             {
@@ -19217,7 +19253,7 @@
               "kind": "staticmethod",
               "signature": "(objects, scale_factor=1.1) -> None",
               "summary": "Scales each set of connected edges separately, either uniformly or non-uniformly.",
-              "line": 335,
+              "line": 376,
               "deprecated": false
             },
             {
@@ -19226,7 +19262,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original', accumulate=True, traverse=False)",
               "summary": "Store the current world-space transforms as custom attributes.",
-              "line": 381,
+              "line": 422,
               "deprecated": false
             },
             {
@@ -19235,7 +19271,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, center_pivot=0, force=True, delete_history=False, freeze_children=False, unlock_children=True, connection_strategy='preserve', from_channel_box=False, **kwargs)",
               "summary": "Freezes transformations on the given objects.",
-              "line": 458,
+              "line": 499,
               "deprecated": false
             },
             {
@@ -19244,7 +19280,7 @@
               "kind": "staticmethod",
               "signature": "(objects, reset_rotate_axis: bool = False, reset_joint_orient: bool = False) -> None",
               "summary": "Freeze transforms into offsetParentMatrix while preserving pivot placement.",
-              "line": 722,
+              "line": 763,
               "deprecated": false
             },
             {
@@ -19253,16 +19289,16 @@
               "kind": "staticmethod",
               "signature": "(objects, traverse: bool = False, preserve_root: bool = True) -> List[str]",
               "summary": "Push a child transform's local matrix up into its parent and zero the child.",
-              "line": 817,
+              "line": 858,
               "deprecated": false
             },
             {
               "name": "restore_transforms",
               "qualname": "XformUtils.restore_transforms",
               "kind": "staticmethod",
-              "signature": "(objects, prefix='original', delete_attrs=True)",
+              "signature": "(objects, prefix='original', delete_attrs=True, channels=None)",
               "summary": "Restore transforms from stored custom attributes.",
-              "line": 935,
+              "line": 976,
               "deprecated": false
             },
             {
@@ -19271,7 +19307,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original') -> List[str]",
               "summary": "Delete the stored-transform custom attributes without restoring.",
-              "line": 1054,
+              "line": 1141,
               "deprecated": false
             },
             {
@@ -19280,7 +19316,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original')",
               "summary": "Check if objects have stored transform attributes.",
-              "line": 1094,
+              "line": 1181,
               "deprecated": false
             },
             {
@@ -19289,7 +19325,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original')",
               "summary": "Remove stored transform attributes from objects.",
-              "line": 1111,
+              "line": 1198,
               "deprecated": false
             },
             {
@@ -19298,7 +19334,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects)",
               "summary": "Reset the translation transformations on the given object(s).",
-              "line": 1140,
+              "line": 1227,
               "deprecated": false
             },
             {
@@ -19307,7 +19343,7 @@
               "kind": "staticmethod",
               "signature": "(node)",
               "summary": "Set an object's translation value from its pivot location.",
-              "line": 1149,
+              "line": 1236,
               "deprecated": false
             },
             {
@@ -19316,7 +19352,7 @@
               "kind": "staticmethod",
               "signature": "(obj, **kwargs)",
               "summary": "Return the object's transform matrix using xform, allowing kwargs override.",
-              "line": 1158,
+              "line": 1245,
               "deprecated": false
             },
             {
@@ -19325,7 +19361,7 @@
               "kind": "staticmethod",
               "signature": "(obj, matrix, **kwargs) -> None",
               "summary": "Apply a transformation matrix's position and orientation to the manip pivot.",
-              "line": 1168,
+              "line": 1255,
               "deprecated": false
             },
             {
@@ -19334,7 +19370,7 @@
               "kind": "classmethod",
               "signature": "(cls)",
               "summary": "Returns a list of supported pivot options.",
-              "line": 1182,
+              "line": 1269,
               "deprecated": false
             },
             {
@@ -19343,7 +19379,7 @@
               "kind": "classmethod",
               "signature": "(cls)",
               "summary": "Clears the cached manipulator pivot data.",
-              "line": 1201,
+              "line": 1288,
               "deprecated": false
             },
             {
@@ -19352,7 +19388,7 @@
               "kind": "classmethod",
               "signature": "(cls, node)",
               "summary": "Snapshot the current manipulator pivot state for the given node into the cache.",
-              "line": 1206,
+              "line": 1293,
               "deprecated": false
             },
             {
@@ -19361,7 +19397,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, pivot: str)",
               "summary": "Determines the pivot matrix (orientation + position) for transformations.",
-              "line": 1242,
+              "line": 1329,
               "deprecated": false
             },
             {
@@ -19370,7 +19406,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, pivot, axis_index=None)",
               "summary": "Determines the pivot position for mirroring/cutting along a specified axis or all axes.",
-              "line": 1310,
+              "line": 1397,
               "deprecated": false
             },
             {
@@ -19379,7 +19415,7 @@
               "kind": "staticmethod",
               "signature": "(align_from=None, align_to=None, translate=True)",
               "summary": "Align one object's pivot point to another using 3-point alignment.",
-              "line": 1432,
+              "line": 1519,
               "deprecated": false
             },
             {
@@ -19388,7 +19424,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None) -> None",
               "summary": "Reset Pivot Transforms for the specified objects or selected objects.",
-              "line": 1480,
+              "line": 1567,
               "deprecated": false
             },
             {
@@ -19397,7 +19433,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, pivot_type: str = 'object', mode: str = 'set')",
               "summary": "Get or set a world-aligned pivot for the specified objects.",
-              "line": 1501,
+              "line": 1588,
               "deprecated": false
             },
             {
@@ -19406,7 +19442,7 @@
               "kind": "staticmethod",
               "signature": "(objects, position=False, orientation=False)",
               "summary": "Bake the pivot orientation and position of the given object(s).",
-              "line": 1573,
+              "line": 1660,
               "deprecated": false
             },
             {
@@ -19415,7 +19451,7 @@
               "kind": "staticmethod",
               "signature": "(objects, translate: bool = False, rotate: bool = False, scale: bool = False, bake: bool = False, world_space: bool = True, select_targets_after_transfer: bool = False)",
               "summary": "Transfer the pivot orientation from the first given object to the remaining given objects.",
-              "line": 1654,
+              "line": 1741,
               "deprecated": false
             },
             {
@@ -19424,7 +19460,7 @@
               "kind": "staticmethod",
               "signature": "(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0))",
               "summary": "Aim the given object(s) at the given world space position.",
-              "line": 1771,
+              "line": 1858,
               "deprecated": false
             },
             {
@@ -19433,7 +19469,7 @@
               "kind": "staticmethod",
               "signature": "(transform, aim_vector=(1, 0, 0), up_vector=(0, 1, 0))",
               "summary": "Orients a transform so its local +X aims along the given world-space vector.",
-              "line": 1801,
+              "line": 1888,
               "deprecated": false
             },
             {
@@ -19442,7 +19478,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, target_pos)",
               "summary": "Aim the given object at the given world space position.",
-              "line": 1842,
+              "line": 1929,
               "deprecated": false
             },
             {
@@ -19451,7 +19487,7 @@
               "kind": "staticmethod",
               "signature": "(objects, returned_type='point')",
               "summary": "Get an objects orientation as a point or vector.",
-              "line": 1871,
+              "line": 1958,
               "deprecated": false
             },
             {
@@ -19460,7 +19496,7 @@
               "kind": "staticmethod",
               "signature": "(a, b)",
               "summary": "Get the magnatude of a vector using the center points of two given objects.",
-              "line": 1904,
+              "line": 1991,
               "deprecated": false
             },
             {
@@ -19469,7 +19505,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Get the bounding box center point of any given object(s).",
-              "line": 1918,
+              "line": 2005,
               "deprecated": false
             },
             {
@@ -19478,7 +19514,7 @@
               "kind": "staticmethod",
               "signature": "(objects, value='', world_space=True, return_valid_keys=False)",
               "summary": "Calculate and retrieve specific properties of the bounding box for the given object(s) or component…",
-              "line": 1943,
+              "line": 2030,
               "deprecated": false
             },
             {
@@ -19487,7 +19523,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, value='volume', descending=True, also_return_value=False)",
               "summary": "Sort the given objects by their bounding box value.",
-              "line": 2017,
+              "line": 2104,
               "deprecated": false
             },
             {
@@ -19496,7 +19532,7 @@
               "kind": "staticmethod",
               "signature": "(vertices)",
               "summary": "Move and align the object defined by the first 3 points to the last 3 points.",
-              "line": 2033,
+              "line": 2120,
               "deprecated": false
             },
             {
@@ -19505,7 +19541,7 @@
               "kind": "staticmethod",
               "signature": "(a, b, tolerance=0.001)",
               "summary": "Check if the vertices in a and b are overlapping within the given tolerance.",
-              "line": 2099,
+              "line": 2186,
               "deprecated": false
             },
             {
@@ -19514,7 +19550,7 @@
               "kind": "staticmethod",
               "signature": "(objects, plane_point, plane_normal, return_type: str = 'bool')",
               "summary": "General method to check if any object's geometry is below a defined plane.",
-              "line": 2115,
+              "line": 2202,
               "deprecated": false
             },
             {
@@ -19523,7 +19559,7 @@
               "kind": "staticmethod",
               "signature": "(objects, worldSpace=True)",
               "summary": "Get all vertex positions for the given objects.",
-              "line": 2191,
+              "line": 2278,
               "deprecated": false
             },
             {
@@ -19532,7 +19568,7 @@
               "kind": "classmethod",
               "signature": "(cls, a, b, world_space=False)",
               "summary": "Find any vertices which point locations match between two given mesh.",
-              "line": 2215,
+              "line": 2302,
               "deprecated": false
             },
             {
@@ -19541,7 +19577,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, reference_point=None, reverse=False)",
               "summary": "Order the given objects by their distance from the given reference point.",
-              "line": 2232,
+              "line": 2319,
               "deprecated": false
             },
             {
@@ -19550,7 +19586,7 @@
               "kind": "staticmethod",
               "signature": "(mode, average=False, edgeloop=False)",
               "summary": "Align selected vertices along one or more axes.",
-              "line": 2258,
+              "line": 2345,
               "deprecated": false
             }
           ]
