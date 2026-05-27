@@ -9,6 +9,7 @@ except ImportError as error:
     print(__file__, error)
 
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 from mayatk.core_utils._core_utils import CoreUtils
 
 
@@ -191,19 +192,28 @@ class TelescopeRigSlots(ptk.LoggingMixin):
         UiUtils.dispatch_log_link(url, self.logger)
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Telescope Rig — Build a telescoping segment rig.\n\n"
-                "• Select: Base Locator ▸ Segments (min 2) ▸ End Locator.\n"
-                "• Press Build to create driven-key animation on each segment.\n"
-                "• Segments extend/retract between the base and end locators.\n"
-                "• Results are logged in the text panel below."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Telescope Rig",
+                body="Build a telescoping segment rig where segments extend "
+                "and retract between a base and end locator, driven by their "
+                "distance.",
+                steps=[
+                    "Place locators / segments and select them <b>in order</b>:",
+                    "  &nbsp;1. Base locator (first)",
+                    "  &nbsp;2. Segments (min 2, in extension order)",
+                    "  &nbsp;3. End locator (last)",
+                    "Set <b>Collapsed Distance</b> — the base-to-end distance "
+                    "at which segments are fully retracted.",
+                    "Press <b>Build</b> to wire driven keys on each segment.",
+                ],
+                notes=[
+                    "Build results stream to the log panel; locator names are "
+                    "rendered as clickable <i>action://</i> links that select "
+                    "the node in Maya.",
+                ],
+            )
         )
 
     @CoreUtils.undoable

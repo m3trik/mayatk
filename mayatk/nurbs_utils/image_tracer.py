@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from typing import List, Optional, Union
 
+from uitk.widgets.mixins.tooltip_mixin import fmt
+
 try:
     import cv2
 except ImportError:
@@ -432,17 +434,25 @@ class ImageTracerSlots:
             setToolTip="Open the Blue Pencil tool in Maya.",
             clicked=lambda: mel.eval("OpenBluePencil"),
         )
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Image Tracer — Convert raster images to NURBS curves.\n\n"
-                "• Load an image file or use Blue Pencil strokes as input.\n"
-                "• Traces image contours and generates editable NURBS curves.\n"
-                "• Adjust tracing parameters for detail and smoothness."
-            ),
+        widget.set_help_text(
+            fmt(
+                title="Image Tracer",
+                body="Trace contours from a raster image (or Blue Pencil "
+                "strokes) into editable NURBS curves.",
+                steps=[
+                    "Browse (▸) to an image file, or check <b>Use Blue Pencil</b> "
+                    "in the header menu to trace Blue Pencil strokes "
+                    "(<b>Open Blue Pencil</b> launches the Maya tool).",
+                    "Adjust the tracing parameters (threshold, smoothness, "
+                    "min-area, etc.) for the desired level of detail.",
+                    "Press <b>Trace</b> to generate NURBS curves.",
+                ],
+                notes=[
+                    "Curves are created at the world origin and can be "
+                    "extruded, lofted, or used as construction history "
+                    "drivers like any other NURBS curve.",
+                ],
+            )
         )
 
     def txt000_init(self, widget):

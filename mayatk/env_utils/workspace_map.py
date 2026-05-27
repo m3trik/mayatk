@@ -6,6 +6,7 @@ import re
 from typing import Optional, Dict, List, Tuple
 
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # from this package:
 from mayatk.env_utils._env_utils import EnvUtils
@@ -375,19 +376,29 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.logger.debug("WorkspaceMapSlots initialized.")
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Workspace Map — Browse and manage Maya workspaces.\n\n"
-                "• Enter or browse to a root directory.\n"
-                "• The tree displays discovered workspace folders.\n"
-                "• Click a workspace to navigate to it.\n"
-                "• Refresh to rescan the directory structure."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Workspace Map",
+                body="Browse a directory tree of Maya workspaces; click a "
+                "node to set it as the active workspace.",
+                steps=[
+                    "Enter or browse to a root directory in the "
+                    "<b>Directory</b> field (option box ▸ for browse / "
+                    "Set To Workspace / Recursive Search).",
+                    "Expand the tree and click any workspace folder — Maya's "
+                    "<i>workspace</i> command switches to it.",
+                ],
+                sections=[
+                    ("Directory field option box (▸)", [
+                        "<b>Browse…</b> — pick a root directory.",
+                        "<b>Set To Workspace</b> — set the root to the "
+                        "current workspace's directory.",
+                        "<b>Recursive Search</b> — also discover nested "
+                        "workspace folders under each child folder.",
+                    ]),
+                ],
+            )
         )
 
     def txt000_init(self, widget):

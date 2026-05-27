@@ -15,6 +15,8 @@ upstream. This file owns only Marmoset-specific bits:
 import traceback
 from pathlib import Path
 
+from uitk.widgets.mixins.tooltip_mixin import fmt
+
 try:
     import maya.cmds as cmds
 except ImportError:
@@ -109,29 +111,35 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
         )
         widget.menu.btn_clear_log.clicked.connect(self.clear_log)
 
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Marmoset Bridge -- Send selected meshes to Toolbag.\n\n"
-                "1. Set Output Dir (required).\n"
-                "2. Select one or more polygon transforms.\n"
-                "3. Pick a template + mode from the dropdown:\n"
-                "     * 'send_to' opens Toolbag for you to drive interactively.\n"
-                "     * 'roundtrip' runs Toolbag headless, then re-surfaces\n"
-                "        the generated maps in the log panel below as\n"
-                "        clickable links (Maya scene untouched).\n"
-                "4. Adjust the parameters the template exposes.\n"
-                "5. Click 'Send to Marmoset'.\n\n"
-                "Maya exports the selection as FBX with a MatManifest JSON\n"
-                "sidecar; Toolbag runs the rendered template with your\n"
-                "parameter values substituted in.\n\n"
-                "Drop new templates into the templates folder (use __KEY__\n"
-                "tokens from parameters.py for tunable values) and use\n"
-                "'Refresh Templates' to pick them up."
-            ),
+        widget.set_help_text(
+            fmt(
+                title="Marmoset Bridge",
+                body="Send selected meshes to Marmoset Toolbag. Maya exports "
+                "the selection as FBX with a <i>MatManifest</i> JSON sidecar; "
+                "Toolbag runs the rendered template with your parameter values "
+                "substituted in.",
+                steps=[
+                    "Set the <b>Output Dir</b> (required).",
+                    "Select one or more polygon transforms.",
+                    "Pick a <b>Template + Mode</b> from the dropdown.",
+                    "Tweak the template's exposed parameters.",
+                    "Click <b>Send to Marmoset</b>.",
+                ],
+                sections=[
+                    ("Modes", [
+                        "<b>send_to</b> — opens Toolbag for interactive work.",
+                        "<b>roundtrip</b> — runs Toolbag headless, then "
+                        "re-surfaces generated maps as clickable links in the "
+                        "log panel below. Maya scene is left untouched.",
+                    ]),
+                ],
+                notes=[
+                    "Add custom templates by dropping new files into the "
+                    "templates folder (use <code>__KEY__</code> tokens from "
+                    "<i>parameters.py</i> for tunable values), then click "
+                    "<b>Refresh Templates</b> in the header menu.",
+                ],
+            )
         )
 
     # ------------------------------------------------------------------

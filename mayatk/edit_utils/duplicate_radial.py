@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import List, Dict, Tuple, Union
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 try:
     import maya.cmds as cmds
@@ -305,19 +306,37 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
         self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Duplicate Radial — Duplicate objects in a radial pattern.\n\n"
-                "• Set copy count, start/end angle, and rotation axis.\n"
-                "• Weight bias and curve for non-uniform distribution.\n"
-                "• Instance, keep original, or combine copies.\n"
-                "• Enable Preview to check the pattern before finalizing."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Duplicate Radial",
+                body="Duplicate selected objects in a radial / circular pattern "
+                "around a chosen pivot.",
+                steps=[
+                    "Select one or more transforms.",
+                    "Set <b>Copies</b>, <b>Start Angle</b>, <b>End Angle</b>, "
+                    "and the <b>Rotate Axis</b> (X / Y / Z).",
+                    "Pick the <b>Pivot</b> — Object or World.",
+                    "Optionally set per-copy <b>Translate</b> / <b>Rotate</b> / "
+                    "<b>Scale</b> offsets and a <b>Pivot Offset</b>.",
+                    "Toggle <b>Preview</b>, then <b>Duplicate</b> to commit.",
+                ],
+                sections=[
+                    ("Options", [
+                        "<b>Instance</b> — copies share a shape; cheaper and "
+                        "edits propagate.",
+                        "<b>Keep Original</b> — leave the source object in place "
+                        "(off discards it after the pattern is built).",
+                        "<b>Combine</b> — merge result into a single mesh.",
+                        "<b>Suffix</b> — append a numeric suffix to copy names.",
+                    ]),
+                ],
+                notes=[
+                    "<b>Weight Bias</b> and <b>Weight Curve</b> control "
+                    "non-uniform angular spacing of copies between start and "
+                    "end angle.",
+                ],
+            )
         )
 
     def b001(self):

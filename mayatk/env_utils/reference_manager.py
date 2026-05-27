@@ -12,6 +12,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.core_utils._core_utils import CoreUtils
@@ -2033,22 +2034,35 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             setObjectName="btn_unreference_all",
             setToolTip="Remove all references from the scene.",
         )
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Reference Manager — Manage scene references, workspace files,\n"
-                "and naming conventions from a single interface.\n\n"
-                "• Workspace file discovery with filtering by folder structure,\n"
-                "  suffix, and extension.\n"
-                "• Save scenes with configurable naming conventions\n"
-                "  (case style, suffix, folder structure).\n"
-                "• Bulk reference operations: Convert to Assembly,\n"
-                "  Unlink & Import, Un-Reference All.\n"
-                "• Right-click file rows for per-reference actions."
-            ),
+        widget.set_help_text(
+            fmt(
+                title="Reference Manager",
+                body="Manage scene references, workspace files, and naming "
+                "conventions from a single interface.",
+                sections=[
+                    ("File discovery", [
+                        "Workspace files are discovered and filtered by "
+                        "folder structure, file suffix, and extension.",
+                        "The table shows comments / metadata for each file.",
+                    ]),
+                    ("Save & naming", [
+                        "<b>Save</b> uses configurable naming conventions: "
+                        "case style, suffix, and folder structure.",
+                    ]),
+                    ("Bulk reference operations (header menu)", [
+                        "<b>Convert to Assembly</b> — replace references with "
+                        "assembly representations.",
+                        "<b>Unlink &amp; Import</b> — import referenced "
+                        "content as native nodes.",
+                        "<b>Un-Reference All</b> — strip all references from "
+                        "the scene.",
+                    ]),
+                ],
+                notes=[
+                    "<b>Right-click</b> a file row for per-reference actions "
+                    "(open, edit comment, repath, etc.).",
+                ],
+            )
         )
 
     def tbl000_init(self, widget):

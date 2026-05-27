@@ -1164,7 +1164,7 @@ class Channels:
 
     @classmethod
     def freeze_transforms(cls, nodes, attrs=None, store=True):
-        """Freeze transforms on *nodes*.
+        """Freeze transforms on *nodes* under cumulative bake semantics.
 
         Parameters:
             nodes (list): Transform nodes to freeze.
@@ -1175,20 +1175,17 @@ class Channels:
                 or non-transform attributes are rejected (use
                 :meth:`can_freeze_selection` to pre-check).  Pass ``None``
                 (default) to freeze every transform channel.
-            store (bool): When True, save the current world matrix as
-                custom attributes first so the operation is reversible
-                via :meth:`unfreeze_transforms`.
+            store (bool): When True, accumulate the current local TRS
+                onto the per-channel bake history so the operation is
+                reversible via :meth:`unfreeze_transforms`.
 
-        Stored-data semantics (when *store* is True):
-            * First freeze on a node, or any full freeze, overwrites the
-              stored data with the current world matrix.
-            * A partial freeze on a node that already has stored data
-              *merges*: channels in *attrs* are refreshed from current,
-              channels NOT in *attrs* keep their previously-stored
-              values.  This preserves channel-specific original state
-              across sequential partial freezes — e.g. ``freeze T``,
-              ``freeze R`` then ``unfreeze T`` restores T to its value
-              before the first freeze, not the post-first-freeze zero.
+        Cumulative semantics (when *store* is True):
+            * Each freeze composes the current local T/R/S onto the
+              per-channel bake history attributes.
+            * Channels not in *attrs* are not touched.
+            * A later ``unfreeze`` of any channel pushes its bake
+              history (composed with whatever the user has done since
+              the last freeze) back into the local channel.
 
         Returns:
             bool: True when the freeze ran, False when *attrs* failed
@@ -1215,99 +1212,18 @@ class Channels:
 
     @classmethod
     def _store_pre_freeze(cls, nodes, freezing_groups):
-        """Capture pre-freeze state, merging across sequential partial freezes.
+        """Accumulate the current local TRS onto the per-channel bake history.
 
-        First freeze on a node (no existing stored data) — or a full
-        freeze (``freezing_groups`` empty) — overwrites the stored data
-        with the current world matrix + pivots.  Subsequent partial
-        freezes merge: channels in *freezing_groups* are refreshed from
-        the current world matrix, channels NOT in *freezing_groups*
-        retain their previously-stored values.
-
-        Without this merge, sequential partial freezes (freeze T, then
-        freeze R) lose the channel-specific original state — a later
-        ``unfreeze translate`` would restore to the post-T-freeze value
-        (zero), not the pre-T-freeze value the user expects.
-
-        Pivots (``rotatePivot`` / ``scalePivot``) are refreshed only
-        when ``"translate"`` is in *freezing_groups* (since only
-        ``makeIdentity -t`` relocates pivots); otherwise the previously
-        stored pivots are kept.
+        ``freezing_groups`` (empty for full freeze, otherwise a subset of
+        ``{"translate", "rotate", "scale"}``) selects which channels to
+        update.  Delegates to ``XformUtils.store_transforms`` with
+        ``accumulate=True`` so repeated freezes compose instead of
+        overwriting.
         """
-        from mayatk.xform_utils._xform_utils import (
-            XformUtils,
-            _partial_world_matrix,
-            _mmatrix_to_flat,
-        )
-        import maya.api.OpenMaya as om
+        from mayatk.xform_utils._xform_utils import XformUtils
 
-        # Full-freeze path or no existing data → overwrite.  For the
-        # partial path, we still want overwrite on nodes that have no
-        # prior stored data, so handle each node individually.
-        if not freezing_groups:
-            XformUtils.store_transforms(nodes, accumulate=False)
-            return
-
-        all_groups = {"translate", "rotate", "scale"}
-        preserved = all_groups - freezing_groups
-
-        matrix_attr = "original_worldMatrix"
-        rp_attr = "original_rotatePivot"
-        sp_attr = "original_scalePivot"
-
-        for node in nodes:
-            if not cmds.objExists(node):
-                continue
-
-            has_existing = cmds.attributeQuery(
-                matrix_attr, node=node, exists=True
-            )
-
-            # Nothing to preserve → ordinary overwrite store.
-            if not has_existing or not preserved:
-                XformUtils.store_transforms([node], accumulate=False)
-                continue
-
-            try:
-                existing_flat = cmds.getAttr(f"{node}.{matrix_attr}")
-                if existing_flat and isinstance(existing_flat[0], (list, tuple)):
-                    existing_flat = [v for row in existing_flat for v in row]
-                existing_matrix = om.MMatrix(list(existing_flat))
-            except (RuntimeError, ValueError, TypeError) as exc:
-                # Corrupt or unreadable stored data — fall back to a
-                # clean overwrite so the user isn't left with broken
-                # half-state.  Warn so they know we discarded their
-                # previous restore point.
-                cmds.warning(
-                    f"Channels.freeze_transforms: '{node}' has unreadable "
-                    f"stored data ({exc}). Overwriting with current state."
-                )
-                XformUtils.store_transforms([node], accumulate=False)
-                continue
-
-            current_matrix = om.MMatrix(
-                cmds.xform(node, q=True, matrix=True, worldSpace=True)
-            )
-
-            # Preserved channels come from the existing stored matrix;
-            # the channels being frozen now come from current.
-            merged = _partial_world_matrix(
-                current_matrix, existing_matrix, channels=preserved
-            )
-            merged_flat = _mmatrix_to_flat(merged)
-            cmds.setAttr(
-                f"{node}.{matrix_attr}", *merged_flat, type="matrix"
-            )
-
-            # Pivot update is gated on "translate" — the only freeze
-            # variant that relocates pivots.
-            if "translate" in freezing_groups:
-                rp = cmds.xform(node, q=True, ws=True, rp=True)
-                sp = cmds.xform(node, q=True, ws=True, sp=True)
-                if cmds.attributeQuery(rp_attr, node=node, exists=True):
-                    cmds.setAttr(f"{node}.{rp_attr}", *rp, type="double3")
-                if cmds.attributeQuery(sp_attr, node=node, exists=True):
-                    cmds.setAttr(f"{node}.{sp_attr}", *sp, type="double3")
+        channels = freezing_groups if freezing_groups else None
+        XformUtils.store_transforms(nodes, accumulate=True, channels=channels)
 
     @classmethod
     def unfreeze_transforms(cls, nodes, attrs=None):

@@ -30,7 +30,14 @@ from uitk.widgets.sequencer._sequencer import (
     _COMMON_ATTRIBUTES,
     _DEFAULT_ATTRIBUTE_COLORS,
 )
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import fmt, kbd
+
+# Arrow-key labels used in keyboard-shortcut help. Defined as module
+# constants so the help builder can pass them into kbd() without
+# triggering Python 3.11's "backslash inside f-string expression" error
+# (the source file's text auto-escapes non-ASCII as ``\uXXXX``).
+_KB_LEFT = "←"   # ←
+_KB_RIGHT = "→"  # →
 from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
     ShotSequencer,
     ShotBlock,
@@ -2774,12 +2781,8 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             setObjectName="btn_shot_settings",
             setToolTip="Open shared shot generation, gap, and editing settings.",
         )
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=fmt(
+        widget.set_help_text(
+            fmt(
                 title="Shot Sequencer",
                 body="Visual timeline editor for per-shot animation with ripple editing, gap management, markers, and audio tracks.",
                 sections=[
@@ -2811,12 +2814,28 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                         "<b>Audio:</b> Auto-discovered from Maya audio nodes. Read-only.",
                     ]),
                     ("Keyboard", [
-                        "\u2190/\u2192 prev/next key &nbsp;\u00b7&nbsp; Shift+\u2190/\u2192 step \u00b11 frame",
-                        "Home/End start/end &nbsp;\u00b7&nbsp; F frame shot &nbsp;\u00b7&nbsp; M add marker",
-                        "Ctrl+Z undo &nbsp;\u00b7&nbsp; Ctrl+Shift+Z redo &nbsp;\u00b7&nbsp; Del delete keys",
+                        # NOTE: \u2190/\u2192 keys + Shift+\u2190/\u2192 \u2014 kbd() args are pulled
+                        # out of the expression because Python 3.11 forbids
+                        # backslashes (and thus ``\uXXXX`` escapes) inside
+                        # f-string ``{}`` expressions. Using module-level
+                        # constants keeps the surface text readable in tools
+                        # that auto-escape non-ASCII on save.
+                        (kbd(_KB_LEFT) + " / " + kbd(_KB_RIGHT)
+                         + " \u2014 prev / next key &nbsp;\u00b7&nbsp; "
+                         + kbd("Shift", _KB_LEFT) + " / "
+                         + kbd("Shift", _KB_RIGHT)
+                         + " \u2014 step \u00b11 frame"),
+                        (kbd("Home") + " / " + kbd("End")
+                         + " \u2014 start / end &nbsp;\u00b7&nbsp; "
+                         + kbd("F") + " \u2014 frame shot &nbsp;\u00b7&nbsp; "
+                         + kbd("M") + " \u2014 add marker"),
+                        (kbd("Ctrl", "Z") + " \u2014 undo &nbsp;\u00b7&nbsp; "
+                         + kbd("Ctrl", "Shift", "Z")
+                         + " \u2014 redo &nbsp;\u00b7&nbsp; "
+                         + kbd("Del") + " \u2014 delete keys"),
                     ]),
                 ],
-            ),
+            )
         )
 
     def btn_colors(self):

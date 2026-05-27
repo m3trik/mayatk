@@ -8,6 +8,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 from pythontk.img_utils.map_factory import (
     ConversionRegistry,
     TextureProcessor,
@@ -507,18 +508,29 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
             setText="Graph Material",
             setToolTip="Graph the selected material in the Hypershade.",
         )
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Shader Templates — Save and restore shader presets.\n\n"
-                "• Save the current shader network as a reusable template.\n"
-                "• Browse and restore templates from the templates directory.\n"
-                "• Open the templates directory or graph the restored material\n"
-                "  in Maya's Hypershade via the header menu."
-            ),
+        widget.set_help_text(
+            fmt(
+                title="Shader Templates",
+                body="Save and restore shader networks as reusable YAML "
+                "templates. Templates live under the package's "
+                "<i>templates/</i> directory.",
+                steps=[
+                    "Select a material in the scene to capture its full "
+                    "network.",
+                    "Press <b>Save Template</b> to write the current "
+                    "network out under a new name.",
+                    "To restore, pick a template from the combo and press "
+                    "<b>Restore Template</b>.",
+                ],
+                sections=[
+                    ("Menu options", [
+                        "<b>Open Templates Directory</b> — reveal the "
+                        "templates folder in Explorer.",
+                        "<b>Graph Material</b> — open the most recently "
+                        "restored material in Maya's Hypershade.",
+                    ]),
+                ],
+            )
         )
 
     def lbl_graph_material(self):

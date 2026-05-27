@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # from this package:
 from mayatk.core_utils.preview import Preview
@@ -45,18 +46,30 @@ class MirrorSlots(ptk.LoggingMixin):
         self._pivot_watcher.attach_widget(self.ui)
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Mirror — Mirror selected geometry across an axis.\n\n"
-                "• Choose axis (X, Y, Z) and pivot reference.\n"
-                "• Merge border vertices option.\n"
-                "• Enable Preview for non-destructive iteration."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Mirror",
+                body="Mirror selected geometry across an axis, optionally "
+                "merging seam vertices and discarding the original half.",
+                steps=[
+                    "Select one or more polygon transforms.",
+                    "Check an <b>Axis</b> (X / -X / Y / -Y / Z / -Z).",
+                    "Pick a <b>Pivot</b> — Manip / Object / World / Center / "
+                    "Axis Extent. Axis-Extent snaps the pivot to the bounding "
+                    "box edge of the chosen axis.",
+                    "Pick a <b>Merge Mode</b> — None / Border / All.",
+                    "Toggle <b>Preview</b> to iterate, or press <b>Mirror</b> "
+                    "to commit.",
+                ],
+                sections=[
+                    ("Options", [
+                        "<b>Uninstance</b> — break instance links before mirroring.",
+                        "<b>Delete Original Half</b> — discard the source side "
+                        "after the mirror copy is created.",
+                    ]),
+                ],
+            )
         )
 
     def perform_operation(self, objects, contract):

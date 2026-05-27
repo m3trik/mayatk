@@ -4,6 +4,8 @@ import numpy as np
 import functools
 from typing import Optional
 
+from uitk.widgets.mixins.tooltip_mixin import fmt
+
 try:
     import maya.cmds as cmds
 except ModuleNotFoundError as error:
@@ -236,19 +238,27 @@ class ExplodedViewSlots(ExplodedView):
         self.ui = self.sb.loaded_ui.exploded_view
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Exploded View — Spread objects outward from their shared center.\n\n"
-                "• Explode: pushes objects away from the group center.\n"
-                "• Un-Explode: returns selected objects to original positions.\n"
-                "• Un-Explode All: resets every exploded object in the scene.\n"
-                "• Toggle Explode: swap between exploded and normal views."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Exploded View",
+                body="Spread selected objects outward from their shared "
+                "center to inspect interior parts. Original world positions "
+                "are stored on each object via an <i>original_position</i> "
+                "attribute, so the explode is fully reversible.",
+                sections=[
+                    ("Actions", [
+                        "<b>Explode</b> — push selected objects away from the "
+                        "group's centroid by the configured factor.",
+                        "<b>Un-Explode</b> — return selected objects to their "
+                        "stored positions.",
+                        "<b>Un-Explode All</b> — reset every exploded object "
+                        "in the scene (regardless of selection).",
+                        "<b>Toggle Explode</b> — alternate between exploded "
+                        "and original views on the current selection.",
+                    ]),
+                ],
+            )
         )
 
     def b000(self):

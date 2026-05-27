@@ -378,28 +378,43 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             setObjectName="clear_network",
             setToolTip="Delete the skydome and its connected file / place2d nodes.",
         )
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=fmt(
+        widget.set_help_text(
+            fmt(
                 title="HDR Manager",
-                body="Manage the scene's Arnold HDR environment lighting.",
+                body="Manage the scene's Arnold HDR environment lighting "
+                "(aiSkyDomeLight + file + place2dTexture network).",
                 steps=[
-                    "Pick an HDR / EXR from the dropdown (lists files in <i>sourceimages</i>).",
-                    "Use <b>…</b> to add a new HDR. The button's option box"
-                    " (gear icon) picks the mode: <b>Copy</b> / <b>Move</b> /"
-                    " <b>Link</b>. Copy and Move land in <i>sourceimages</i>;"
-                    " Link wires the original path in place.",
-                    "<b>Right-click</b> the dropdown to select the skydome / file / transform"
-                    " nodes, or reveal the texture in Explorer.",
+                    "Pick an HDR / EXR from the dropdown (lists files in "
+                    "<i>sourceimages</i>).",
+                    "Use <b>…</b> to add a new HDR; its option box (▸) picks "
+                    "the import mode.",
                     "Adjust <b>Intensity</b> (linear) and <b>Exposure</b> (stops).",
                     "Drag the rotation slider to spin the environment around Y.",
                     "Toggle <b>Visible</b> to show the HDR as a viewport backdrop.",
-                    "Press <b>Set HDR</b> to create/refresh the skydome network.",
+                    "Press <b>Set HDR</b> to create or refresh the skydome network.",
                 ],
-            ),
+                sections=[
+                    ("Add HDR modes (… option box)", [
+                        "<b>Copy</b> — duplicate the file into sourceimages "
+                        "(default; keeps scenes portable).",
+                        "<b>Move</b> — relocate into sourceimages.",
+                        "<b>Link</b> — wire the file in at its original path.",
+                    ]),
+                    ("Dropdown right-click", [
+                        "Select skydome / file / transform nodes.",
+                        "Reveal the texture in Explorer.",
+                    ]),
+                    ("Header menu", [
+                        "<b>Open Sourceimages Folder</b> — Explorer shortcut.",
+                        "<b>Clear Network</b> — delete the skydome and its "
+                        "file / place2d nodes.",
+                    ]),
+                ],
+                notes=[
+                    "Requires the Arnold (mtoa) plugin to be loaded — the "
+                    "footer reports if it's missing.",
+                ],
+            )
         )
 
     def b001_init(self, widget) -> None:

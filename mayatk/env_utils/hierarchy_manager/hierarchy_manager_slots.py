@@ -1238,26 +1238,34 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             setToolTip="Set the log level.",
         )
 
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=fmt(
-                title='Hierarchy Manager',
-                body='Compare, diff, and synchronise scene hierarchies against a reference file.',
+        widget.set_help_text(
+            fmt(
+                title="Hierarchy Manager",
+                body="Compare, diff, and synchronise scene hierarchies "
+                "against a reference file.",
                 steps=[
-                    'Click the <b>folder icon</b> in the source tree header to browse for a reference scene (.ma / .mb).',
-                    'Press <b>Diff</b> to compare the current scene against the reference. Differences are highlighted in the tree views and logged below.',
-                    'Select objects in the reference tree that you want to bring into the current scene.',
-                    'Press <b>Pull</b> to import the selected objects.',
+                    "Click the <b>folder icon</b> in the source tree header "
+                    "to browse for a reference scene (.ma / .mb).",
+                    "Press <b>Diff</b> to compare the current scene against "
+                    "the reference. Differences are highlighted in the tree "
+                    "views and logged below.",
+                    "Select objects in the reference tree that you want to "
+                    "bring into the current scene.",
+                    "Press <b>Pull</b> to import the selected objects.",
                 ],
-                bullets=[
-                    'Enable <b>Dry Run</b> in this menu to preview changes without modifying the scene.',
-                    'Right-click either tree for additional actions (refresh, show differences, select in Maya).',
-                    'Use the log-level combo to control output verbosity.',
+                sections=[
+                    ("Header menu", [
+                        "<b>Dry Run</b> — preview changes without modifying "
+                        "the scene.",
+                        "<b>Log Level</b> — control verbosity of the output "
+                        "panel.",
+                    ]),
                 ],
-            ),
+                notes=[
+                    "<b>Right-click</b> either tree for additional actions: "
+                    "refresh, show differences, select in Maya.",
+                ],
+            )
         )
 
     def tree000_init(self, widget):

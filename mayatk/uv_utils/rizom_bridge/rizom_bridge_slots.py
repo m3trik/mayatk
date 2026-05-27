@@ -27,6 +27,8 @@ needed here.
 import traceback
 from pathlib import Path
 
+from uitk.widgets.mixins.tooltip_mixin import fmt
+
 try:
     import maya.cmds as cmds
     import maya.mel as mel
@@ -172,31 +174,46 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
         )
         widget.menu.btn_clear_log.clicked.connect(self.clear_log)
 
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "RizomUV Bridge -- Round-trip or one-way send to RizomUV.\n\n"
-                "1. Select one or more polygon transforms.\n"
-                "2. Pick a Lua preset:\n"
-                "     pack / unwrap_hard / unwrap_organic / optimize -- round-trip\n"
-                "     send -- one-way: open in RizomUV, no transfer back\n"
-                "3. Adjust the parameters that the preset exposes.\n"
-                "4. Click 'Process Selected'.\n\n"
-                "Round-trip: Maya exports duplicates with a __RZTMP suffix\n"
-                "as FBX, RizomUV runs the script headlessly with your\n"
-                "parameter values substituted in, and the resulting UVs\n"
-                "are transferred back onto the originals.\n\n"
-                "Send: Maya exports the selection directly to FBX (no\n"
-                "rename), optionally collects diffuse textures from the\n"
-                "shading networks (ZomLoadTexture), then launches RizomUV\n"
-                "detached. Save manually inside RizomUV when finished.\n\n"
-                "Drop new presets as .lua files into the scripts folder\n"
-                "(use __KEY__ tokens from parameters.py for tunable values)\n"
-                "and use 'Refresh Scripts' to pick them up."
-            ),
+        widget.set_help_text(
+            fmt(
+                title="RizomUV Bridge",
+                body="Round-trip selected meshes through RizomUV using a "
+                "Lua preset, or one-way send them and continue working in "
+                "RizomUV directly.",
+                steps=[
+                    "Select one or more polygon transforms.",
+                    "Pick a <b>Lua preset</b> from the dropdown.",
+                    "Tweak the parameters that the preset exposes.",
+                    "Click <b>Process Selected</b>.",
+                ],
+                sections=[
+                    ("Presets", [
+                        "<b>pack / unwrap_hard / unwrap_organic / optimize</b> "
+                        "— round-trip: Maya exports duplicates with "
+                        "<code>__RZTMP</code> suffix, RizomUV runs the script "
+                        "headlessly, UVs are transferred back onto originals.",
+                        "<b>send</b> — one-way: exports the selection directly "
+                        "(no rename), optionally collects diffuse textures "
+                        "from the shading networks, then launches RizomUV "
+                        "detached. Save manually inside RizomUV when done.",
+                    ]),
+                    ("Header menu", [
+                        "<b>Open UV Editor</b> — open Maya's UV Editor to "
+                        "inspect the result.",
+                        "<b>Open Scripts Folder</b> — reveal the bundled "
+                        "Lua preset folder in Explorer.",
+                        "<b>Refresh Scripts</b> — re-scan the scripts folder "
+                        "and rebuild the script combo.",
+                        "<b>Clear Log</b> — clear the log panel below.",
+                    ]),
+                ],
+                notes=[
+                    "Add custom presets by dropping new <code>.lua</code> "
+                    "files into the scripts folder (use <code>__KEY__</code> "
+                    "tokens from <i>parameters.py</i> for tunable values), "
+                    "then click <b>Refresh Scripts</b>.",
+                ],
+            )
         )
 
     # ------------------------------------------------------------------

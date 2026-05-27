@@ -8,6 +8,7 @@ except ImportError as error:
     print(__file__, error)
 from typing import List, Tuple, Union, Optional
 import pythontk as ptk
+from uitk.widgets.mixins.tooltip_mixin import fmt
 
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.core_utils.preview import Preview
@@ -204,19 +205,26 @@ class DuplicateGridSlots(ptk.LoggingMixin):
         )
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Duplicate Grid — Duplicate objects in a 3D grid pattern.\n\n"
-                "• Set counts for X, Y, Z grid dimensions.\n"
-                "• Adjust spacing between copies.\n"
-                "• Instance or group copies.\n"
-                "• Enable Preview to visualize the grid before finalizing."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Duplicate Grid",
+                body="Duplicate selected objects into a 3D grid layout.",
+                steps=[
+                    "Select one or more transforms.",
+                    "Set per-axis counts <b>X</b> / <b>Y</b> / <b>Z</b> and a "
+                    "uniform <b>Spacing</b>.",
+                    "Toggle <b>Preview</b> to iterate, or press <b>Duplicate</b> "
+                    "to commit.",
+                ],
+                sections=[
+                    ("Options", [
+                        "<b>Instance</b> — link copies to the source (cheaper, "
+                        "edits propagate).",
+                        "<b>Group</b> — parent all copies under a new group node.",
+                    ]),
+                ],
+            )
         )
 
     def b001(self):

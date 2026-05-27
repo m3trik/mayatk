@@ -115,6 +115,174 @@ def _partial_world_matrix(current, stored, channels):
     return target_tm.asMatrix()
 
 
+# ---------------------------------------------------------------------------
+# Per-channel bake helpers used by store_transforms / restore_transforms.
+#
+# The freeze/unfreeze contract is *cumulative*: each freeze composes the
+# current local TRS onto a per-channel bake history; each unfreeze pushes
+# that bake history (composed with whatever the user did since) back into
+# the local channels.  Tracking T/R/S separately keeps composition clean
+# regardless of which channels the user freezes (you can freeze T, then R,
+# and unfreeze them independently without rotation entangling the
+# translation).
+# ---------------------------------------------------------------------------
+
+_IDENTITY_ROT_FLAT = [
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0,
+]
+
+
+def _decompose_local(node):
+    """Read ``node``'s T/R/S CHANNEL values as ``(t_vec, r_quat, s_vec)``.
+
+    Reads the translate/rotate/scale channel attributes directly rather
+    than decomposing the local matrix.  Maya's local matrix folds in
+    ``rotatePivotTranslate`` / ``scalePivotTranslate`` (left non-zero by
+    ``makeIdentity``), so the matrix translation row may not match the
+    channel value.  For freeze/unfreeze accumulation we want the channel
+    values — what the user sees and edits.
+    """
+    t_raw = cmds.getAttr(f"{node}.translate")[0]
+    r_raw = cmds.getAttr(f"{node}.rotate")[0]
+    s_raw = cmds.getAttr(f"{node}.scale")[0]
+    rot_order = cmds.getAttr(f"{node}.rotateOrder") or 0
+    euler = om.MEulerRotation(
+        math.radians(r_raw[0]),
+        math.radians(r_raw[1]),
+        math.radians(r_raw[2]),
+        rot_order,
+    )
+    return (
+        om.MVector(t_raw[0], t_raw[1], t_raw[2]),
+        euler.asQuaternion(),
+        [s_raw[0], s_raw[1], s_raw[2]],
+    )
+
+
+def _compose_local(t_vec, r_quat, s_vec):
+    """Build an ``MMatrix`` from a translation vector, rotation quaternion, and scale vector."""
+    tm = om.MTransformationMatrix()
+    tm.setTranslation(t_vec, om.MSpace.kTransform)
+    tm.setRotation(r_quat)
+    tm.setScale(s_vec, om.MSpace.kTransform)
+    return tm.asMatrix()
+
+
+def _read_bake_t(node, t_attr):
+    """Read the stored translation bake as an ``MVector``; identity if missing/unset."""
+    if not cmds.attributeQuery(t_attr, node=node, exists=True):
+        return om.MVector(0.0, 0.0, 0.0)
+    raw = cmds.getAttr(f"{node}.{t_attr}")
+    if raw and isinstance(raw[0], (list, tuple)):
+        raw = raw[0]
+    if raw is None or any(v is None for v in raw):
+        return om.MVector(0.0, 0.0, 0.0)
+    return om.MVector(raw[0], raw[1], raw[2])
+
+
+def _read_bake_r(node, r_attr):
+    """Read the stored rotation bake as an ``MQuaternion``; identity if missing/unset."""
+    if not cmds.attributeQuery(r_attr, node=node, exists=True):
+        return om.MQuaternion()
+    raw = cmds.getAttr(f"{node}.{r_attr}")
+    if raw and isinstance(raw[0], (list, tuple)):
+        raw = [v for row in raw for v in row]
+    if raw is None or any(v is None for v in raw):
+        return om.MQuaternion()
+    mat = om.MMatrix(list(raw))
+    return om.MTransformationMatrix(mat).rotation(asQuaternion=True)
+
+
+def _read_bake_s(node, s_attr):
+    """Read the stored scale bake as a 3-element list; identity (1,1,1) if missing/unset."""
+    if not cmds.attributeQuery(s_attr, node=node, exists=True):
+        return [1.0, 1.0, 1.0]
+    raw = cmds.getAttr(f"{node}.{s_attr}")
+    if raw and isinstance(raw[0], (list, tuple)):
+        raw = raw[0]
+    if raw is None or any(v is None for v in raw):
+        return [1.0, 1.0, 1.0]
+    return [raw[0], raw[1], raw[2]]
+
+
+def _write_bake_t(node, t_attr, t_vec):
+    if not cmds.attributeQuery(t_attr, node=node, exists=True):
+        cmds.addAttr(node, ln=t_attr, dt="double3", keyable=False)
+    plug = f"{node}.{t_attr}"
+    cmds.setAttr(plug, t_vec[0], t_vec[1], t_vec[2], type="double3")
+    if cmds.getAttr(plug, keyable=True) or cmds.getAttr(plug, channelBox=True):
+        cmds.setAttr(plug, keyable=False, channelBox=False)
+
+
+def _write_bake_r(node, r_attr, r_quat):
+    if not cmds.attributeQuery(r_attr, node=node, exists=True):
+        cmds.addAttr(node, ln=r_attr, at="matrix", keyable=False)
+    plug = f"{node}.{r_attr}"
+    flat = _mmatrix_to_flat(r_quat.asMatrix())
+    cmds.setAttr(plug, *flat, type="matrix")
+    if cmds.getAttr(plug, keyable=True) or cmds.getAttr(plug, channelBox=True):
+        cmds.setAttr(plug, keyable=False, channelBox=False)
+
+
+def _write_bake_s(node, s_attr, s_vec):
+    if not cmds.attributeQuery(s_attr, node=node, exists=True):
+        cmds.addAttr(node, ln=s_attr, dt="double3", keyable=False)
+    plug = f"{node}.{s_attr}"
+    cmds.setAttr(plug, s_vec[0], s_vec[1], s_vec[2], type="double3")
+    if cmds.getAttr(plug, keyable=True) or cmds.getAttr(plug, channelBox=True):
+        cmds.setAttr(plug, keyable=False, channelBox=False)
+
+
+def _bake_attr_names(prefix):
+    """``(t_attr, r_attr, s_attr)`` triple used by store/restore/clear/has."""
+    return f"{prefix}_T_bake", f"{prefix}_R_bake", f"{prefix}_S_bake"
+
+
+def _apply_clean_local(node, t_vec, r_quat, s_vec):
+    """Write target T/R/S to ``node`` and zero any pivot offsets.
+
+    ``makeIdentity`` leaves non-zero ``rotatePivotTranslate`` /
+    ``scalePivotTranslate`` behind so the world pivot stays put across the
+    freeze.  Those offsets would otherwise fold into the channel values
+    when we restore via ``cmds.xform(matrix=...)`` — translate ends up
+    shifted by the pivot delta.  Writing channels directly with the
+    pivots cleared sidesteps the decomposition entirely.
+    """
+    with Attributes.temporarily_unlock([node]):
+        for attr in (
+            "rotatePivot",
+            "scalePivot",
+            "rotatePivotTranslate",
+            "scalePivotTranslate",
+        ):
+            if cmds.attributeQuery(attr, node=node, exists=True):
+                cmds.setAttr(f"{node}.{attr}", 0.0, 0.0, 0.0, type="double3")
+
+        if cmds.attributeQuery("rotateAxis", node=node, exists=True):
+            cmds.setAttr(f"{node}.rotateAxis", 0.0, 0.0, 0.0, type="double3")
+
+        cmds.setAttr(
+            f"{node}.translate", t_vec.x, t_vec.y, t_vec.z, type="double3"
+        )
+        cmds.setAttr(
+            f"{node}.scale", s_vec[0], s_vec[1], s_vec[2], type="double3"
+        )
+
+        rot_order = cmds.getAttr(f"{node}.rotateOrder") or 0
+        euler = r_quat.asEulerRotation()
+        euler.reorderIt(rot_order)
+        cmds.setAttr(
+            f"{node}.rotate",
+            math.degrees(euler.x),
+            math.degrees(euler.y),
+            math.degrees(euler.z),
+            type="double3",
+        )
+
+
 def _shift_shape_points(shape: str, transform_matrix) -> None:
     """Bulk-transform a shape's points by *transform_matrix* (world-space).
 
@@ -419,19 +587,47 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def store_transforms(objects, prefix="original", accumulate=True, traverse=False):
-        """Store the current world-space transforms as custom attributes.
+    def store_transforms(
+        objects,
+        prefix="original",
+        accumulate=True,
+        traverse=False,
+        channels=None,
+    ):
+        """Capture the current local TRS as a cumulative per-channel bake history.
+
+        Stored as three custom attributes per node:
+
+            ``{prefix}_T_bake`` (double3) — cumulative translation
+            ``{prefix}_R_bake`` (matrix)  — cumulative rotation
+            ``{prefix}_S_bake`` (double3) — cumulative scale
+
+        The freeze/unfreeze contract is cumulative: each call composes the
+        current local TRS onto whatever was previously stored for each
+        channel listed in *channels*.
 
         Parameters:
             objects (str/obj/list): Transform nodes to store transforms for.
             prefix (str): Attribute name prefix (default: "original").
-            accumulate (bool): If True and attributes already exist, compose the
-                current local transforms with the stored matrix. If False, overwrite.
+            accumulate (bool): When True (default) and a bake already exists
+                for a channel, compose the current local value onto it; when
+                False, overwrite that channel with the current local value.
             traverse (bool): If True, also store transforms on every descendant
-                transform of the given objects. Mirrors ``freeze_transforms
+                transform of the given objects.  Mirrors ``freeze_transforms
                 (freeze_children=True)`` so that a later ``restore_transforms``
-                on any node in the chain finds its pre-freeze matrix.
+                on any node in the chain finds its bake history.
+            channels (iterable): Subset of ``{"translate", "rotate", "scale"}``
+                restricting which channel(s) to update.  ``None`` (default)
+                updates all three.
         """
+        valid_channels = {"translate", "rotate", "scale"}
+        if channels is None:
+            target_channels = valid_channels
+        else:
+            target_channels = set(channels) & valid_channels
+            if not target_channels:
+                return
+
         targets = cmds.ls(as_strings(objects), type="transform", long=True) or []
         if traverse:
             seen = set(targets)
@@ -443,56 +639,26 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                     if child not in seen:
                         targets.append(child)
                         seen.add(child)
+
+        t_attr, r_attr, s_attr = _bake_attr_names(prefix)
+
         for obj in targets:
-            current_world_matrix = om.MMatrix(
-                cmds.xform(obj, query=True, matrix=True, worldSpace=True)
-            )
-            rotate_pivot = cmds.xform(obj, query=True, rotatePivot=True, worldSpace=True)
-            scale_pivot = cmds.xform(obj, query=True, scalePivot=True, worldSpace=True)
+            cur_t, cur_r, cur_s = _decompose_local(obj)
 
-            mat_attr = f"{prefix}_worldMatrix"
-            rp_attr = f"{prefix}_rotatePivot"
-            sp_attr = f"{prefix}_scalePivot"
-            has_existing = bool(cmds.attributeQuery(mat_attr, node=obj, exists=True))
+            if "translate" in target_channels:
+                old_t = _read_bake_t(obj, t_attr) if accumulate else om.MVector(0, 0, 0)
+                new_t = old_t + cur_t
+                _write_bake_t(obj, t_attr, [new_t.x, new_t.y, new_t.z])
 
-            if has_existing and accumulate:
-                stored_matrix_list = cmds.getAttr(f"{obj}.{mat_attr}")
-                # cmds.getAttr on a matrix returns a flat list of 16 floats.
-                if stored_matrix_list and isinstance(
-                    stored_matrix_list[0], (list, tuple)
-                ):
-                    stored_matrix_flat = [v for row in stored_matrix_list for v in row]
-                else:
-                    stored_matrix_flat = list(stored_matrix_list)
-                stored_matrix = om.MMatrix(stored_matrix_flat)
+            if "rotate" in target_channels:
+                old_r = _read_bake_r(obj, r_attr) if accumulate else om.MQuaternion()
+                new_r = old_r * cur_r
+                _write_bake_r(obj, r_attr, new_r)
 
-                # Compose: new total = current * stored
-                accumulated = current_world_matrix * stored_matrix
-                accum_flat = _mmatrix_to_flat(accumulated)
-                cmds.setAttr(f"{obj}.{mat_attr}", *accum_flat, type="matrix")
-                cmds.setAttr(f"{obj}.{rp_attr}", *rotate_pivot, type="double3")
-                cmds.setAttr(f"{obj}.{sp_attr}", *scale_pivot, type="double3")
-
-            else:
-                if not cmds.attributeQuery(mat_attr, node=obj, exists=True):
-                    cmds.addAttr(obj, ln=mat_attr, at="matrix", keyable=False)
-                if not cmds.attributeQuery(rp_attr, node=obj, exists=True):
-                    cmds.addAttr(obj, ln=rp_attr, dt="double3", keyable=False)
-                if not cmds.attributeQuery(sp_attr, node=obj, exists=True):
-                    cmds.addAttr(obj, ln=sp_attr, dt="double3", keyable=False)
-
-                matrix_flat = cmds.xform(obj, query=True, matrix=True, worldSpace=True)
-                cmds.setAttr(f"{obj}.{mat_attr}", *matrix_flat, type="matrix")
-                cmds.setAttr(f"{obj}.{rp_attr}", *rotate_pivot, type="double3")
-                cmds.setAttr(f"{obj}.{sp_attr}", *scale_pivot, type="double3")
-
-            # Heal legacy attrs created with k=True so they leave the channel box.
-            for attr in (mat_attr, rp_attr, sp_attr):
-                plug = f"{obj}.{attr}"
-                if cmds.getAttr(plug, keyable=True) or cmds.getAttr(
-                    plug, channelBox=True
-                ):
-                    cmds.setAttr(plug, keyable=False, channelBox=False)
+            if "scale" in target_channels:
+                old_s = _read_bake_s(obj, s_attr) if accumulate else [1.0, 1.0, 1.0]
+                new_s = [old_s[i] * cur_s[i] for i in range(3)]
+                _write_bake_s(obj, s_attr, new_s)
 
     @classmethod
     @CoreUtils.undoable
@@ -976,47 +1142,38 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     def restore_transforms(
         objects, prefix="original", delete_attrs=True, channels=None
     ):
-        """Restore transforms from stored custom attributes.
+        """Compose stored bake history with current local TRS, per channel.
 
-        Counterpart of ``store_transforms``: reads the saved world matrix +
-        rotate/scale pivots back onto each transform, shifts mesh/NURBS points
-        so their world position is preserved, and (by default) deletes the
-        stored custom attributes once restoration succeeds.
+        For each channel C in *channels*:
+
+            new local C = stored bake C  *  current local C
+
+        (vector addition for T, quaternion composition for R, component-
+        wise multiplication for S).  Channels not in *channels* keep their
+        current local value.  Geometry is shifted so visual world position
+        is preserved across the operation.
+
+        Counterpart of ``store_transforms`` under the cumulative
+        freeze/unfreeze contract — repeated freeze + transform + unfreeze
+        cycles compose, never snap back.
 
         Robustness:
-            * Temporarily unlocks ``translate`` / ``rotate`` / ``scale``
-              channels on the object before writing the matrix — Maya
-              otherwise silently skips locked channels and leaves the
-              restoration partial.
-            * Skips referenced nodes with a warning (can't modify referenced
-              attributes).
-            * Skips nodes with no stored attrs (matrix attr missing) with a
-              warning.
-            * Vectorizes the per-vertex update via ``MFnMesh.setPoints`` /
-              ``MFnNurbsCurve.setCVPositions`` / ``MFnNurbsSurface.setCVs``,
-              avoiding O(n_verts) cmds calls.
+            * Temporarily unlocks T/R/S channels before writing.
+            * Skips referenced nodes with a warning.
+            * Skips nodes with no stored bake attributes with a warning.
+            * Vectorizes per-vertex updates via the OpenMaya 2.0 API.
 
         Parameters:
             objects (str/obj/list): Transforms to restore.
-            prefix (str): Custom-attr prefix used by ``store_transforms``.
+            prefix (str): Bake-attr prefix used by ``store_transforms``.
                 Default ``"original"``.
-            delete_attrs (bool): Delete the ``{prefix}_worldMatrix``,
-                ``{prefix}_rotatePivot``, ``{prefix}_scalePivot`` attributes
-                after a successful restore. Default True — keeps the scene
-                clean.  Only takes effect on a *full* restore; partial
-                restores leave the stored attrs in place so subsequent
-                calls can restore the remaining channels.
+            delete_attrs (bool): Delete each ``{prefix}_{T,R,S}_bake`` attr
+                after consuming it.  Default True; channels NOT in
+                *channels* are never consumed so their bake history
+                remains available for future restore calls.
             channels (iterable): Optional subset of ``{"translate",
-                "rotate", "scale"}`` restricting which world-matrix
-                components to restore.  ``None`` (default) or the full
-                set means "restore everything" (original behaviour).
-                Partial restore composes the target matrix by taking
-                the named components from the stored matrix and the
-                rest from the object's current world matrix, preserves
-                visual position via the same geometry-shift mechanism
-                as full restore, and only restores rotate / scale
-                pivots when ``"translate"`` is in *channels* (since
-                freeze-rotate / freeze-scale don't touch pivots).
+                "rotate", "scale"}`` restricting which channels to
+                restore.  ``None`` (default) restores all three.
 
         Returns:
             list: Object names successfully restored.
@@ -1030,17 +1187,16 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 return []
         full_restore = target_channels == valid_channels
 
+        t_attr, r_attr, s_attr = _bake_attr_names(prefix)
         restored = []
 
         for obj in cmds.ls(as_strings(objects), type="transform") or []:
-            matrix_attr = f"{prefix}_worldMatrix"
-            rp_attr = f"{prefix}_rotatePivot"
-            sp_attr = f"{prefix}_scalePivot"
-
-            if not cmds.attributeQuery(matrix_attr, node=obj, exists=True):
+            has_t = cmds.attributeQuery(t_attr, node=obj, exists=True)
+            has_r = cmds.attributeQuery(r_attr, node=obj, exists=True)
+            has_s = cmds.attributeQuery(s_attr, node=obj, exists=True)
+            if not (has_t or has_r or has_s):
                 cmds.warning(
-                    f"restore_transforms: '{obj}' has no stored transforms "
-                    f"(missing {matrix_attr} attribute). Skipping."
+                    f"restore_transforms: '{obj}' has no stored bake history. Skipping."
                 )
                 continue
 
@@ -1054,30 +1210,50 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             except Exception:
                 pass
 
-            stored_matrix_flat = cmds.getAttr(f"{obj}.{matrix_attr}")
-            if stored_matrix_flat and isinstance(
-                stored_matrix_flat[0], (list, tuple)
-            ):
-                stored_matrix_flat = [
-                    v for row in stored_matrix_flat for v in row
-                ]
-            stored_matrix_flat = list(stored_matrix_flat)
-            stored_matrix = om.MMatrix(stored_matrix_flat)
+            local_current = om.MMatrix(
+                cmds.xform(obj, q=True, matrix=True, objectSpace=True)
+            )
+            world_current = om.MMatrix(
+                cmds.xform(obj, q=True, matrix=True, worldSpace=True)
+            )
+            cur_t, cur_r, cur_s = _decompose_local(obj)
 
-            if full_restore:
-                target_matrix = stored_matrix
-                target_flat = stored_matrix_flat
+            # Compose stored bake history with the current local TRS per
+            # channel.  Channels not in target_channels stay at current.
+            if "translate" in target_channels and has_t:
+                stored_t = _read_bake_t(obj, t_attr)
+                target_t = stored_t + cur_t
             else:
-                current_matrix = om.MMatrix(
-                    cmds.xform(obj, q=True, matrix=True, worldSpace=True)
-                )
-                target_matrix = _partial_world_matrix(
-                    current_matrix, stored_matrix, target_channels
-                )
-                target_flat = _mmatrix_to_flat(target_matrix)
+                target_t = cur_t
+
+            if "rotate" in target_channels and has_r:
+                stored_r = _read_bake_r(obj, r_attr)
+                target_r = stored_r * cur_r
+            else:
+                target_r = cur_r
+
+            if "scale" in target_channels and has_s:
+                stored_s = _read_bake_s(obj, s_attr)
+                target_s = [stored_s[i] * cur_s[i] for i in range(3)]
+            else:
+                target_s = cur_s
+
+            # The new clean local matrix is just T * R * S with zero
+            # pivots and zero pivot translates — that's the state the
+            # user expects after unfreeze.
+            new_local = _compose_local(target_t, target_r, target_s)
+
+            # In Maya's row-vector convention: world = local * parent.
+            # Recover parent_world from the current pair so the new world
+            # matrix can be derived for the geometry shift.
+            try:
+                parent_world = local_current.inverse() * world_current
+            except Exception:
+                parent_world = om.MMatrix()
+            new_world = new_local * parent_world
 
             try:
-                inverse_target = target_matrix.inverse()
+                inverse_new_world = new_world.inverse()
             except Exception:
                 cmds.warning(
                     f"restore_transforms: '{obj}' has singular target matrix. Skipping."
@@ -1091,43 +1267,33 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
                 or []
             )
 
-            # Transform geometry by target.inverse() so world point positions
-            # are preserved once we then set obj.world = target.
+            # Shape shift preserves visual world position once we write
+            # the new world matrix (built from clean channel values, no
+            # pivot offsets).
             for shape in shapes:
-                _shift_shape_points(shape, inverse_target)
+                _shift_shape_points(shape, inverse_new_world)
 
-            # Unlock TRS so cmds.xform can write all components — otherwise
-            # locked channels are silently skipped and the restore is partial.
-            # ``temporarily_unlock`` always operates on the full TRS set; the
-            # ``attributes=`` parameter on it is currently unused.
-            with Attributes.temporarily_unlock([obj]):
-                cmds.xform(obj, matrix=target_flat, worldSpace=True)
+            # Set channels directly so Maya doesn't fold lingering
+            # ``rotatePivotTranslate`` / ``scalePivotTranslate`` (left by
+            # ``makeIdentity``) into the new translate values.
+            _apply_clean_local(obj, target_t, target_r, target_s)
 
-                # Pivots are only relocated by freeze-translate (makeIdentity
-                # adjusts ``rotatePivotTranslate`` / ``scalePivotTranslate``
-                # to preserve world position).  Freeze-rotate / freeze-scale
-                # bake geometry instead, so restoring pivots when *only* R
-                # or S is being unfrozen would teleport the pivot away from
-                # the object's current position.
-                if "translate" in target_channels:
-                    if cmds.attributeQuery(rp_attr, node=obj, exists=True):
-                        rotate_pivot = cmds.getAttr(f"{obj}.{rp_attr}")[0]
-                        cmds.xform(obj, rotatePivot=rotate_pivot, worldSpace=True)
-
-                    if cmds.attributeQuery(sp_attr, node=obj, exists=True):
-                        scale_pivot = cmds.getAttr(f"{obj}.{sp_attr}")[0]
-                        cmds.xform(obj, scalePivot=scale_pivot, worldSpace=True)
-
-            # Partial restore keeps the stored attrs so the remaining
-            # channels can be restored later.  Full restore is the only
-            # path that cleans them up.
-            if delete_attrs and full_restore:
-                for attr in (matrix_attr, rp_attr, sp_attr):
-                    if cmds.attributeQuery(attr, node=obj, exists=True):
-                        plug = f"{obj}.{attr}"
-                        if cmds.getAttr(plug, lock=True):
-                            cmds.setAttr(plug, lock=False)
-                        cmds.deleteAttr(plug)
+            # Channels we just consumed are reset to identity bake so a
+            # later freeze doesn't double-apply them.  Channels not yet
+            # restored keep their bake history for future calls.
+            if delete_attrs:
+                if "translate" in target_channels and has_t:
+                    if cmds.getAttr(f"{obj}.{t_attr}", lock=True):
+                        cmds.setAttr(f"{obj}.{t_attr}", lock=False)
+                    cmds.deleteAttr(f"{obj}.{t_attr}")
+                if "rotate" in target_channels and has_r:
+                    if cmds.getAttr(f"{obj}.{r_attr}", lock=True):
+                        cmds.setAttr(f"{obj}.{r_attr}", lock=False)
+                    cmds.deleteAttr(f"{obj}.{r_attr}")
+                if "scale" in target_channels and has_s:
+                    if cmds.getAttr(f"{obj}.{s_attr}", lock=True):
+                        cmds.setAttr(f"{obj}.{s_attr}", lock=False)
+                    cmds.deleteAttr(f"{obj}.{s_attr}")
 
             restored.append(obj)
 
@@ -1139,10 +1305,10 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     @staticmethod
     @CoreUtils.undoable
     def clear_stored_transforms(objects, prefix="original") -> List[str]:
-        """Delete the stored-transform custom attributes without restoring.
+        """Delete the per-channel bake attrs without restoring.
 
         Use when you committed to the frozen state and just want to remove
-        the ``{prefix}_worldMatrix`` / ``rotatePivot`` / ``scalePivot``
+        the ``{prefix}_T_bake`` / ``{prefix}_R_bake`` / ``{prefix}_S_bake``
         attributes that ``store_transforms`` left behind. Safe to call on
         objects that don't have stored attributes (silently skipped).
 
@@ -1154,11 +1320,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             list: Object names from which stored attrs were deleted.
         """
         cleared: List[str] = []
-        attr_names = (
-            f"{prefix}_worldMatrix",
-            f"{prefix}_rotatePivot",
-            f"{prefix}_scalePivot",
-        )
+        attr_names = _bake_attr_names(prefix)
         for obj in cmds.ls(as_strings(objects), type="transform") or []:
             removed_any = False
             for attr in attr_names:
@@ -1179,48 +1341,22 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
 
     @staticmethod
     def has_stored_transforms(objects, prefix="original"):
-        """Check if objects have stored transform attributes.
+        """Check if objects have any stored bake history.
 
         Returns:
-            dict: Mapping of object names to bool (True if has stored transforms).
+            dict: Mapping of object short names to bool (True if any
+            T/R/S bake attribute exists).
         """
         result = {}
+        attr_names = _bake_attr_names(prefix)
         for obj in cmds.ls(as_strings(objects), type="transform") or []:
-            has_stored = bool(
-                cmds.attributeQuery(f"{prefix}_worldMatrix", node=obj, exists=True)
+            has_stored = any(
+                cmds.attributeQuery(attr, node=obj, exists=True)
+                for attr in attr_names
             )
             short = obj.split("|")[-1].split(":")[-1]
             result[short] = has_stored
         return result
-
-    @staticmethod
-    @CoreUtils.undoable
-    def clear_stored_transforms(objects, prefix="original"):
-        """Remove stored transform attributes from objects.
-
-        Returns:
-            list: Objects that had attributes removed.
-        """
-        cleared = []
-        attrs = [
-            f"{prefix}_worldMatrix",
-            f"{prefix}_rotatePivot",
-            f"{prefix}_scalePivot",
-        ]
-
-        for obj in cmds.ls(as_strings(objects), type="transform") or []:
-            had_attrs = False
-            for attr in attrs:
-                if cmds.attributeQuery(attr, node=obj, exists=True):
-                    cmds.deleteAttr(f"{obj}.{attr}")
-                    had_attrs = True
-            if had_attrs:
-                cleared.append(obj)
-
-        if cleared:
-            print(f"clear_stored_transforms: Cleared {len(cleared)} object(s).")
-
-        return cleared
 
     @classmethod
     @CoreUtils.undoable

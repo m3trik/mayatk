@@ -4,6 +4,8 @@ import maya.cmds as cmds
 import maya.mel as mel
 import math
 
+from uitk.widgets.mixins.tooltip_mixin import fmt
+
 
 from qtpy import QtWidgets, QtCore
 
@@ -122,19 +124,36 @@ class CalculatorSlots:
         self.ui.txt_display.returnPressed.connect(self.on_equal)
 
     def header_init(self, widget):
-        """Configure header menu with tool instructions."""
-        widget.menu.add("Separator", setTitle="About")
-        widget.menu.add(
-            "QPushButton",
-            setText="Instructions",
-            setObjectName="btn_instructions",
-            setToolTip=(
-                "Calculator — Math calculator with Maya time and unit conversion.\n\n"
-                "• Type expressions and press Enter or '=' to evaluate.\n"
-                "• Supports math functions (sin, cos, sqrt, etc.).\n"
-                "• Convert units (mm, cm, m, in, ft, etc.).\n"
-                "• Maya-specific: frames to seconds, get current time."
-            ),
+        """Configure header help text."""
+        widget.set_help_text(
+            fmt(
+                title="Calculator",
+                body="Expression-based calculator with unit conversion and "
+                "Maya time helpers.",
+                sections=[
+                    ("Expression entry", [
+                        "Type or click button keys to build an expression in "
+                        "the display field.",
+                        "Press <b>=</b> or <b>Enter</b> to evaluate.",
+                        "Standard math operators plus functions: "
+                        "<code>sin</code>, <code>cos</code>, <code>tan</code>, "
+                        "<code>sqrt</code>, <code>pow</code>, <code>pi</code>, "
+                        "etc.",
+                    ]),
+                    ("Unit conversion", [
+                        "Pick <b>From</b> and <b>To</b> units (mm, cm, m, km, "
+                        "in, ft, yd, mi).",
+                        "Press <b>Convert</b> to convert the current display "
+                        "value.",
+                    ]),
+                    ("Maya helpers", [
+                        "<b>Get FPS</b> — read the scene's frame rate.",
+                        "<b>Get Time</b> — read the current frame.",
+                        "<b>Frames → Sec</b> / <b>Sec → Frames</b> — convert "
+                        "the display value using the scene FPS.",
+                    ]),
+                ],
+            )
         )
 
     def _init_units(self):
