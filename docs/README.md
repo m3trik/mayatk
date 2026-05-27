@@ -1,5 +1,5 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/Version-0.12.13-blue.svg)](https://pypi.org/project/mayatk/)
+[![Version](https://img.shields.io/badge/Version-0.12.14-blue.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
 [![Tests](https://img.shields.io/badge/Tests-44%20passed-brightgreen.svg)](test/)
