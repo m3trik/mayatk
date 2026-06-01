@@ -1,7 +1,7 @@
 {
   "name": "mayatk",
   "source_root": "mayatk/mayatk",
-  "generated_at": "2026-05-27",
+  "generated_at": "2026-06-01",
   "modules": [
     {
       "relpath": "anim_utils/_anim_utils.py",
