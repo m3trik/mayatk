@@ -215,12 +215,38 @@
          <property name="bottomMargin"><number>3</number></property>
          <property name="spacing"><number>1</number></property>
          <item>
+          <widget class="DoubleSpinBox" name="s019">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Intensity of V-folds that fork down from a random ~1/4-1/2 of the hang points, fanning into the neighbouring spans to interrupt the plain in/out belly. Each crease folds the cloth out and in (material-conserving), not just outward (0 = off).</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Mid Folds:	</string></property>
+           <property name="decimals"><number>2</number></property>
+           <property name="minimum"><double>0.000000</double></property>
+           <property name="maximum"><double>3.000000</double></property>
+           <property name="singleStep"><double>0.050000</double></property>
+           <property name="value"><double>0.000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QSpinBox" name="s010">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Random seed for which hang points fork and each V's length, width, and depth. The variation per seed is large, so it does most of the look's work.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Mid Fold Seed:	</string></property>
+           <property name="minimum"><number>0</number></property>
+           <property name="maximum"><number>99999</number></property>
+           <property name="value"><number>0</number></property>
+          </widget>
+         </item>
+         <item>
           <widget class="DoubleSpinBox" name="s014">
            <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
            <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
            <property name="toolTip"><string>Intensity of extra V-shaped creases that radiate down from random points near the top and run various lengths (0 = off).</string></property>
            <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
-           <property name="prefix"><string>Mid Folds:	</string></property>
+           <property name="prefix"><string>Creases:	</string></property>
            <property name="decimals"><number>2</number></property>
            <property name="minimum"><double>0.000000</double></property>
            <property name="maximum"><double>3.000000</double></property>
@@ -232,9 +258,9 @@
           <widget class="QSpinBox" name="s015">
            <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
            <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
-           <property name="toolTip"><string>Random seed for the mid-fold placement, length, and depth.</string></property>
+           <property name="toolTip"><string>Random seed for the crease placement, length, and depth.</string></property>
            <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
-           <property name="prefix"><string>Fold Seed:	</string></property>
+           <property name="prefix"><string>Crease Seed:	</string></property>
            <property name="minimum"><number>0</number></property>
            <property name="maximum"><number>99999</number></property>
            <property name="value"><number>0</number></property>
@@ -244,7 +270,7 @@
           <widget class="DoubleSpinBox" name="s008">
            <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
            <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
-           <property name="toolTip"><string>Subtle low-frequency billow + a touch of per-vertex grain.</string></property>
+           <property name="toolTip"><string>Subtle coherent, band-limited surface grain (a few smooth wave octaves), not per-vertex static.</string></property>
            <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
            <property name="prefix"><string>Irregularity:	</string></property>
            <property name="decimals"><number>3</number></property>
@@ -252,18 +278,6 @@
            <property name="maximum"><double>5.000000</double></property>
            <property name="singleStep"><double>0.010000</double></property>
            <property name="value"><double>0.150000</double></property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QSpinBox" name="s010">
-           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
-           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
-           <property name="toolTip"><string>Random seed for irregularity and per-fold variation.</string></property>
-           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
-           <property name="prefix"><string>Seed:	</string></property>
-           <property name="minimum"><number>0</number></property>
-           <property name="maximum"><number>99999</number></property>
-           <property name="value"><number>0</number></property>
           </widget>
          </item>
         </layout>

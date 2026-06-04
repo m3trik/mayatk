@@ -1313,6 +1313,8 @@ Centralized Maya event subscription manager.
   - `EditUtils.merge_vertices(objects, tolerance=0.001, selected_only=False)` *(static)* — Merge Vertices on the given objects.
   - `EditUtils.merge_vertex_pairs(vertices)` *(static)* — Merge vertices in pairs by moving them to their center and merging.
   - `EditUtils.detach_components(components=None, duplicate: bool = True, separate: bool = True, offset: bool = False, keep_faces_together: bool = True) -> Optional[List]` *(static)* — Detach mesh components (vertices or faces) from their parent mesh.
+  - `EditUtils.decimate(objects=None, percentage: float = 50.0, preserve_borders: bool = True, preserve_hard_edges: bool = True, preserve_uv_borders: bool = True, preserve_quads: bool = True, symmetry: bool = False, symmetry_tolerance: float = 0.01, delete_history: bool = True) -> List[str]` *(static)* — Decimate (``polyReduce``) meshes toward a target reduction percentage.
+  - `EditUtils.dissolve_coplanar(objects=None, angle_tolerance: float = 1.0, delete_history: bool = True) -> List[str]` *(static)* — Planar decimation (limited dissolve) — merge faces across near-coplanar edges.
   - `EditUtils.get_all_faces_on_axis(obj, axis='x', pivot='center', use_object_axes=True)` *(static)* — Get all faces on the specified axis of an object.
   - `EditUtils.cut_along_axis(cls, objects, axis='x', pivot='center', amount=1, offset=0, invert=False, ortho=False, delete=False, mirror=False, use_object_axes=True)` *(class)* — Cut objects along the specified axis.
   - `EditUtils.delete_along_axis(cls, objects, axis='-x', pivot='center', delete_history=True, mirror=False, use_object_axes=True)` *(class)* — Delete faces along the specified axis and optionally mirror the result.
@@ -1355,21 +1357,19 @@ Centralized Maya event subscription manager.
 
 Procedural draped-cloth (curtain) generator for Maya.
 
-- [`catenary_shape(t: float, tension: float) -> float`](mayatk/mayatk/edit_utils/curtain.py#L83) — Normalized catenary profile across a span.
-- [`sag_profile(t: float, tension: float, round_amount: float) -> float`](mayatk/mayatk/edit_utils/curtain.py#L102) — Catenary sag profile, optionally rounded at the supports.
-- **[`class Rail`](mayatk/mayatk/edit_utils/curtain.py#L125)** — Pure rail-polyline geometry — the line a curtain hangs from.
+- **[`class Rail`](mayatk/mayatk/edit_utils/curtain.py#L95)** — Pure rail-polyline geometry — the line a curtain hangs from.
   - `Rail.make(width: float = 6.0, curvature: float = 0.0, segments: int = 24, closed: bool = False, y: float = 0.0) -> Tuple[List[Vec], bool]` *(static)* — Build a default rail: a straight line of ``width`` (``curvature == 0``).
   - `Rail.from_selection(objects) -> Optional[Tuple[List[Vec], bool]]` *(static)* — Resolve a rail polyline from a Maya selection.
   - `Rail.sample_curve(shape: str, count: int = 200) -> Tuple[List[Vec], bool]` *(static)* — Sample a NURBS curve into a dense polyline (resampled later by length).
   - `Rail.length(points: Sequence[Vec], closed: bool) -> float` *(static)* — Total arc length of the polyline (wrapping last->first if closed).
   - `Rail.resample(points: Sequence[Vec], count: int) -> List[Vec]` *(static)* — Resample to *count* evenly-spaced points (ecosystem SSoT helper).
   - `Rail.frames(points: Sequence[Vec], u_segs: int, closed: bool) -> List[Tuple[Vec, Vec, Vec]]` *(static)* — Resample the rail to ``u_segs + 1`` even points with local frames.
-- **[`class CurtainMesh(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/curtain.py#L299)** — Generate a pleated, gravity-draped curtain mesh from a rail polyline.
+- **[`class CurtainMesh(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/curtain.py#L269)** — Generate a pleated, gravity-draped curtain mesh from a rail polyline.
   - `CurtainMesh.create(cls, rail: Sequence[Vec], **opts) -> str` *(class)*
   - `CurtainMesh.build(self) -> str` — Create the curtain mesh and return its transform name.
-- **[`class CurtainRig`](mayatk/mayatk/edit_utils/curtain.py#L607)** — Make a curve drive a finished curtain.
+- **[`class CurtainRig`](mayatk/mayatk/edit_utils/curtain.py#L694)** — Make a curve drive a finished curtain.
   - `CurtainRig.attach(curtain: str, curve: str, dropoff: float, cluster: bool = True) -> str` *(static)* — Wire-deform *curtain* with *curve* and add per-CV cluster controls.
-- **[`class CurtainSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/curtain.py#L669)** — Switchboard slot wiring for the curtain UI (hermetic preview + presets).
+- **[`class CurtainSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/curtain.py#L756)** — Switchboard slot wiring for the curtain UI (hermetic preview + presets).
   - `CurtainSlots.header_init(self, widget)` — Configure header help text (the preset combo lives in the panel).
   - `CurtainSlots.cmb000_init(self, widget)` — Wire the in-panel preset selector (built-in + user tiers).
   - `CurtainSlots.b001(self)` — Reset to Defaults.

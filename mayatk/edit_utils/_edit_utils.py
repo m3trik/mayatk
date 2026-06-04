@@ -499,6 +499,148 @@ class EditUtils(ptk.HelpMixin):
             return None
 
     @staticmethod
+    @CoreUtils.undoable
+    def decimate(
+        objects=None,
+        percentage: float = 50.0,
+        preserve_borders: bool = True,
+        preserve_hard_edges: bool = True,
+        preserve_uv_borders: bool = True,
+        preserve_quads: bool = True,
+        symmetry: bool = False,
+        symmetry_tolerance: float = 0.01,
+        delete_history: bool = True,
+    ) -> List[str]:
+        """Decimate (``polyReduce``) meshes toward a target reduction percentage.
+
+        A reusable wrapper over ``polyReduce`` with the boundary-preserving
+        defaults you almost always want — keep open borders, hard/crease edges,
+        UV/color borders, and bias toward quads — exposed as plain flags. Shared
+        by the Subdivision panel's Decimate button and the procedural Curtain
+        generator.
+
+        Parameters:
+            objects: Mesh transforms (uses the selection when ``None``).
+            percentage: Percent of faces to remove (``0``–``99``; clamped).
+            preserve_borders: Hold open mesh + face-group borders fixed.
+            preserve_hard_edges: Hold hard and crease edges.
+            preserve_uv_borders: Hold UV (map) and color borders.
+            preserve_quads: Bias the solver toward keeping quads.
+            symmetry: Reduce symmetrically (virtual symmetry about X).
+            symmetry_tolerance: Tolerance for the symmetry plane.
+            delete_history: Delete construction history afterward.
+
+        Returns:
+            The decimated mesh transforms.
+        """
+        objects = (
+            cmds.ls(objects or cmds.ls(selection=True), objectsOnly=True, type="transform")
+            or []
+        )
+        if not objects:
+            return []
+        pct = max(0.0, min(99.0, float(percentage)))
+        if pct <= 0.0:  # nothing to remove — skip the no-op polyReduce node
+            return objects
+        cmds.polyReduce(
+            objects,
+            version=1,
+            percentage=pct,
+            keepBorder=preserve_borders,
+            keepFaceGroupBorder=preserve_borders,
+            keepHardEdge=preserve_hard_edges,
+            keepCreaseEdge=preserve_hard_edges,
+            keepMapBorder=preserve_uv_borders,
+            keepColorBorder=preserve_uv_borders,
+            keepQuadsWeight=1.0 if preserve_quads else 0.0,
+            preserveTopology=True,
+            useVirtualSymmetry=1 if symmetry else 0,
+            symmetryTolerance=symmetry_tolerance,
+            replaceOriginal=True,
+            cachingReduce=True,
+            constructionHistory=not delete_history,
+        )
+        if delete_history:
+            cmds.delete(objects, constructionHistory=True)
+        return objects
+
+    @staticmethod
+    @CoreUtils.undoable
+    def dissolve_coplanar(
+        objects=None,
+        angle_tolerance: float = 1.0,
+        delete_history: bool = True,
+    ) -> List[str]:
+        """Planar decimation (limited dissolve) — merge faces across near-coplanar edges.
+
+        Removes every *interior* edge whose two adjacent faces are within
+        ``angle_tolerance`` degrees of coplanar (merging them into larger
+        n-gons), leaving feature edges — creases, corners, silhouette, open
+        borders — untouched. At a small tolerance this is **lossless** on
+        hard-surface meshes: it strips the interior tessellation of flat regions
+        without moving any point that defines the shape. Curved/organic surfaces
+        have no coplanar interior edges, so it does little there — use
+        :meth:`decimate` (quadric error metric) for those.
+
+        Unlike :meth:`decimate` (a percentage/error-budget QEM reduce that
+        triangulates), this is angle-driven and keeps clean n-gons/quads.
+
+        Note: dissolving an edge merges the UVs of its two faces, so prefer a
+        small tolerance on UV'd meshes.
+
+        Parameters:
+            objects: Mesh transforms (uses the selection when ``None``).
+            angle_tolerance: Max dihedral angle (degrees) treated as coplanar.
+            delete_history: Delete construction history afterward.
+
+        Returns:
+            The processed mesh transforms.
+        """
+        objects = (
+            cmds.ls(objects or cmds.ls(selection=True), objectsOnly=True, type="transform")
+            or []
+        )
+        if not objects:
+            return []
+        tol = math.radians(max(0.0, float(angle_tolerance)))
+        for obj in objects:
+            shapes = (
+                cmds.listRelatives(
+                    obj, shapes=True, type="mesh", noIntermediate=True, fullPath=True
+                )
+                or []
+            )
+            if not shapes:
+                continue
+            sel = om.MSelectionList()
+            sel.add(shapes[0])
+            dag = sel.getDagPath(0)
+            mesh = om.MFnMesh(dag)
+            edge_it = om.MItMeshEdge(dag)
+            flat_edges = []
+            while not edge_it.isDone():
+                # Interior edges only — boundary edges are the silhouette.
+                if not edge_it.onBoundary():
+                    faces = edge_it.getConnectedFaces()
+                    if len(faces) == 2:
+                        # Object space: coplanarity is intrinsic to the mesh, so
+                        # the result shouldn't depend on the object's transform.
+                        n0 = mesh.getPolygonNormal(faces[0], om.MSpace.kObject)
+                        n1 = mesh.getPolygonNormal(faces[1], om.MSpace.kObject)
+                        if n0.angle(n1) <= tol:
+                            flat_edges.append(edge_it.index())
+                edge_it.next()
+            if flat_edges:
+                cmds.polyDelEdge(
+                    [f"{obj}.e[{i}]" for i in flat_edges],
+                    cleanVertices=True,
+                    constructionHistory=not delete_history,
+                )
+                if delete_history:
+                    cmds.delete(obj, constructionHistory=True)
+        return objects
+
+    @staticmethod
     def get_all_faces_on_axis(obj, axis="x", pivot="center", use_object_axes=True):
         """Get all faces on the specified axis of an object.
 

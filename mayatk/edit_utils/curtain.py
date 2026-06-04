@@ -46,6 +46,7 @@ from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # from this package:
 from mayatk.core_utils.preview import Preview
+from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.edit_utils.naming._naming import Naming
 
 # Shipped, read-only presets (loaded via PresetManager's built-in tier).
@@ -53,68 +54,37 @@ _PRESETS_DIR = Path(__file__).resolve().parent / "presets" / "curtain"
 
 
 # ----------------------------------------------------------------------------
-# Math helpers. Vector ops delegate to ``ptk.MathUtils`` (the ecosystem SSoT);
-# only the two it doesn't expose — a two-point lerp and a zero-guarded unit
-# vector — are defined here.
+# Math helpers. The reusable primitives — vector lerp, zero-guarded normalize,
+# the clamped smoothstep ease, the Ricker fold wavelet, and the catenary sag
+# profiles — now live in ``ptk.MathUtils`` (the ecosystem SSoT). These are thin
+# aliases so the drape code below reads unchanged; ``catenary_shape`` /
+# ``sag_profile`` stay importable for back-compat. ``_v_arms`` (the two-armed
+# fold V) is a curtain-specific composition and stays local.
 # ----------------------------------------------------------------------------
 
 Vec = Tuple[float, float, float]
 
+_lerp = ptk.MathUtils.lerp                # point/vector lerp
+_unit = ptk.MathUtils.safe_normalize      # normalize with a degenerate fallback
+_smoothstep = ptk.MathUtils.smoothstep    # clamped Hermite ease
+catenary_shape = ptk.MathUtils.catenary   # back-compat re-export
+sag_profile = ptk.MathUtils.catenary_sag  # back-compat re-export
 
-def _lerp(a: Vec, b: Vec, t: float) -> Vec:
-    return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t)
 
+def _v_arms(u: float, u0: float, spread: float, depth: float, half_width: float) -> float:
+    """Sum of the two **mean-preserving** arms of a downward **V** apexed at ``u0``.
 
-def _unit(v: Vec, fallback: Vec) -> Vec:
-    """Unit vector via ``ptk.MathUtils.normalize``, falling back when degenerate."""
-    return (
-        ptk.MathUtils.normalize(v)
-        if ptk.MathUtils.get_magnitude(v) > 1e-9
-        else fallback
+    Each arm is a Ricker wavelet (:meth:`ptk.MathUtils.ricker` — a ridge with
+    flanking troughs), so a fold reads as in/out undulation rather than a
+    one-sided bulge. The arms coincide at the apex (``depth == 0``) and fan
+    symmetrically to ``u0 ± spread·depth`` as the V runs down (``depth`` =
+    distance below the apex); ``half_width`` sets each arm's width. Shared by the
+    surface creases and the mid-fold forks.
+    """
+    ricker = ptk.MathUtils.ricker
+    return ricker((u - (u0 - spread * depth)) / half_width) + ricker(
+        (u - (u0 + spread * depth)) / half_width
     )
-
-
-def _smoothstep(w: float) -> float:
-    """Clamped Hermite ease (``3w² - 2w³``) on ``w`` in 0..1."""
-    w = max(0.0, min(1.0, w))
-    return w * w * (3.0 - 2.0 * w)
-
-
-def catenary_shape(t: float, tension: float) -> float:
-    """Normalized catenary profile across a span.
-
-    Returns ``1`` at the span center (``t == 0``) and ``0`` at the supports
-    (``|t| == 1``), following ``cosh`` — the true curve of a chain/cloth hung
-    between two points. ``tension`` is the catenary *shape* parameter: as it
-    approaches ``0`` the curve degenerates to a parabola; larger values give
-    the deeper, more V-shaped sag of a slack, heavy fabric. The peak is always
-    ``1`` so the absolute sag *depth* stays governed by ``gravity`` while
-    ``tension`` only reshapes the curve between the supports.
-    """
-    t = max(-1.0, min(1.0, t))
-    tension = max(0.0, min(50.0, tension))  # clamp: cosh stays well in float range
-    if tension <= 1e-6:
-        return 1.0 - t * t  # parabolic limit
-    ct = math.cosh(tension)
-    return (ct - math.cosh(tension * t)) / (ct - 1.0)
-
-
-def sag_profile(t: float, tension: float, round_amount: float) -> float:
-    """Catenary sag profile, optionally rounded at the supports.
-
-    ``t`` is the centered span coordinate (``-1``..``1``; ``0`` = mid-span).
-    A pure catenary meets each support (hanging point) with a non-zero slope,
-    so adjacent spans form a sharp upward cusp there. Blending toward
-    ``sin²(πs)`` — which has *zero* slope at both ends — rounds that cusp into a
-    smooth dome. ``round_amount`` (0..1) is the blend: ``0`` keeps the crisp
-    catenary, ``1`` is fully rounded. The center peak stays ``1`` either way.
-    """
-    cat = catenary_shape(t, tension)
-    if round_amount <= 0.0:
-        return cat
-    s = (t + 1.0) * 0.5  # back to 0..1 within the span
-    rounded = math.sin(math.pi * s) ** 2
-    return cat + (rounded - cat) * min(1.0, round_amount)
 
 
 # ----------------------------------------------------------------------------
@@ -318,18 +288,29 @@ class CurtainMesh(ptk.LoggingMixin):
         fullness: Drapery fullness ratio (≥1); drives fold/belly depth.
         taper: ``-1``–``1`` vertical bias of the fold depth — positive gathers
             the pleats at the top and flares them toward the free hem.
-        mid_folds: Intensity of extra **V-shaped creases** that radiate down
-            from random points near the top and run various lengths (``0`` =
-            off). Evokes the diagonal break-lines of gathered fabric.
-        fold_seed: RNG seed for the mid-fold placement / length / depth.
+        mid_folds: Intensity of **V-folds** that fork down from the hang points
+            (``0`` = off). Each apex sits on a seeded ~1/4–1/2 subset of the
+            (interior) hang points and its two arms fan out and down into the
+            neighbouring spans — some short, some running nearly to the hem —
+            interrupting their plain in/out belly the way a heavy gathered drape
+            forks below each hook. Each arm creases the cloth **out** at its line
+            and **in** to either side (material-conserving), so the fold reads
+            without ballooning the surface outward.
+        mid_fold_seed: RNG seed for which hang points fork and each V's length /
+            width / depth; the variation per seed is large, so it does most of
+            the look's work.
+        creases: Intensity of extra **V-shaped creases** that radiate down from
+            random points near the top and run various lengths (``0`` = off).
+            Evokes the diagonal break-lines of gathered fabric.
+        crease_seed: RNG seed for the crease placement / length / depth.
         end_bend_left: Signed sideways bend applied to the left end of the
             curtain (e.g. a panel curling toward the camera); ``0`` = none.
         end_bend_right: Signed sideways bend applied to the right end.
         end_bend_falloff: ``0``–``1`` — fraction of the width over which each
             end bend ramps in from the edge.
-        irregularity: Combined low-frequency billow + fine per-vertex noise
-            (kept subtle; the deliberate folds come from fullness / mid_folds).
-        seed: RNG seed for ``irregularity`` and per-span fold variation.
+        irregularity: Coherent, band-limited surface grain — a few smooth,
+            zero-mean wave octaves (kept subtle; the deliberate folds come from
+            fullness / mid_folds).
         density: Mesh resolution in segments per world unit.
         reduce: Percent (0–100) to decimate the result via ``polyReduce``
             (``0`` = none).
@@ -351,12 +332,13 @@ class CurtainMesh(ptk.LoggingMixin):
         fullness: float = 2.5,
         taper: float = 0.5,
         mid_folds: float = 0.0,
-        fold_seed: int = 0,
+        mid_fold_seed: int = 0,
+        creases: float = 0.0,
+        crease_seed: int = 0,
         end_bend_left: float = 0.0,
         end_bend_right: float = 0.0,
         end_bend_falloff: float = 0.25,
         irregularity: float = 0.15,
-        seed: int = 0,
         density: float = 8.0,
         reduce: float = 0.0,
         thickness: float = 0.0,
@@ -380,12 +362,13 @@ class CurtainMesh(ptk.LoggingMixin):
         self.fullness = max(1.0, float(fullness))
         self.taper = float(taper)
         self.mid_folds = max(0.0, float(mid_folds))
-        self.fold_seed = int(fold_seed)
+        self.mid_fold_seed = int(mid_fold_seed)
+        self.creases = max(0.0, float(creases))
+        self.crease_seed = int(crease_seed)
         self.end_bend_left = float(end_bend_left)
         self.end_bend_right = float(end_bend_right)
         self.end_bend_falloff = max(1e-4, min(1.0, float(end_bend_falloff)))
         self.irregularity = float(irregularity)
-        self.seed = int(seed)
         self.density = max(0.1, float(density))
         self.reduce = float(reduce)
         self.thickness = float(thickness)
@@ -410,10 +393,16 @@ class CurtainMesh(ptk.LoggingMixin):
         u_segs, v_segs = self._resolve_resolution()
         frames = Rail.frames(self.rail, u_segs, self.closed)
 
-        rng = random.Random(self.seed)
+        # Fixed-seed base RNG for the always-on subtle variation (the band-
+        # limited grain and per-span depth jitter): deliberately subtle, so a
+        # user-facing seed for it never earned its keep — the seeds that matter
+        # are the per-feature ones (mid_fold_seed / crease_seed).
+        rng = random.Random(self._BASE_SEED)
         # Per-span depth variation so the folds aren't mechanically identical.
         self._span_jitter = [rng.uniform(0.8, 1.2) for _ in range(self.spans)]
         self._creases = self._make_creases()
+        self._midfolds = self._make_midfolds()
+        self._billow = self._make_billow()
 
         plane = cmds.polyPlane(
             name=Naming.generate_unique_name(self.name),
@@ -447,7 +436,7 @@ class CurtainMesh(ptk.LoggingMixin):
             v = (p.z - zmin) / h
             col = max(0, min(u_segs, int(round(u * u_segs))))
             pos, _tan, normal = frames[col]
-            pts[i] = om.MPoint(*self._drape(u, v, pos, normal, rng))
+            pts[i] = om.MPoint(*self._drape(u, v, pos, normal))
 
         mesh.setPoints(pts, om.MSpace.kObject)
         mesh.updateSurface()
@@ -459,14 +448,7 @@ class CurtainMesh(ptk.LoggingMixin):
             )
             cmds.delete(plane, constructionHistory=True)
         if self.reduce > 0:
-            cmds.select(plane, replace=True)
-            cmds.polyReduce(
-                percentage=min(self.reduce, 99.0),
-                version=1,
-                keepBorder=True,
-                keepMapBorder=True,
-            )
-            cmds.delete(plane, constructionHistory=True)
+            EditUtils.decimate([plane], percentage=self.reduce)
         if self.invert:
             cmds.polyNormal(
                 plane, normalMode=0, userNormalMode=0, constructionHistory=False
@@ -477,7 +459,7 @@ class CurtainMesh(ptk.LoggingMixin):
 
     # ------------------------------------------------------------- internals
 
-    def _drape(self, u, v, pos, normal, rng) -> Vec:
+    def _drape(self, u, v, pos, normal) -> Vec:
         """Place one cloth vertex.
 
         ``u`` runs along the rail (0..1), ``v`` runs vertically (0 = hem,
@@ -501,14 +483,18 @@ class CurtainMesh(ptk.LoggingMixin):
         belly = depth * math.sin(math.pi * phase)
 
         # Kept subtle (the deliberate folds come from fullness / mid_folds):
-        # a gentle low-frequency billow plus a touch of per-vertex grain.
-        irr = self.irregularity * (
-            0.2 * math.sin(u * 2.0 * math.pi * 1.3 + 0.7) * (0.4 + 0.6 * (1.0 - v))
-            + 0.08 * rng.uniform(-1.0, 1.0)
-        )
+        # coherent, band-limited surface grain built from zero-mean waves, so it
+        # ripples the cloth in and out rather than puffing it one way.
+        irr = self.irregularity * 0.2 * self._billow_offset(u, v)
         # All sideways shaping rides the in-plane normal: belly fold, billow,
-        # the V-creases, and the per-end bend.
-        offset = belly + irr + self._crease_offset(u, v) + self._end_bend_offset(u)
+        # the mid-fold forks, the V-creases, and the per-end bend.
+        offset = (
+            belly
+            + irr
+            + self._midfold_offset(u, v)
+            + self._crease_offset(u, v)
+            + self._end_bend_offset(u)
+        )
 
         x = pos[0] + normal[0] * offset
         z = pos[2] + normal[2] * offset
@@ -523,11 +509,14 @@ class CurtainMesh(ptk.LoggingMixin):
         y = pos[1] - sag - (1.0 - v) * self.height
         return (x, y, z)
 
+    # Fixed seed for the always-on subtle grain + per-span depth jitter (the
+    # tunable seeds are the per-feature mid_fold_seed / crease_seed).
+    _BASE_SEED = 0
     # Crease half-width in u (narrow enough to read as a fold, wide enough that
     # a normal-density mesh resolves it without aliasing).
     _CREASE_WIDTH = 0.05
     # Peak of the spindle profile x^0.6·(1-x)^1.3 (at x = 0.6/1.9); the profile
-    # is divided by this so its crest is 1, keeping the mid_folds slider's
+    # is divided by this so its crest is 1, keeping the creases slider's
     # strength independent of the exact profile exponents.
     _CREASE_PEAK = 0.3058
 
@@ -539,11 +528,11 @@ class CurtainMesh(ptk.LoggingMixin):
         a mix of ridges and valleys rather than bumps all on one side —, and
         ``spread`` how far the two arms diverge (each crease draws a downward
         **V** of a different length). Count scales with the number of spans;
-        empty when ``mid_folds`` is off.
+        empty when ``creases`` is off.
         """
-        if self.mid_folds <= 0.0:
+        if self.creases <= 0.0:
             return []
-        rng = random.Random(self.fold_seed)
+        rng = random.Random(self.crease_seed)
         n = max(3, round(self.spans * 2.5))
         return [
             (
@@ -556,7 +545,7 @@ class CurtainMesh(ptk.LoggingMixin):
         ]
 
     def _crease_offset(self, u: float, v: float) -> float:
-        """Summed V-crease displacement at ``(u, v)`` (0 when mid_folds off)."""
+        """Summed V-crease displacement at ``(u, v)`` (0 when creases off)."""
         if not self._creases:
             return 0.0
         depth_from_top = 1.0 - v  # 0 at the rail, 1 at the hem
@@ -575,9 +564,77 @@ class CurtainMesh(ptk.LoggingMixin):
             # ``1 - x`` non-negative for the fractional power.
             x = depth_from_top / length
             fall = (x ** 0.6) * ((1.0 - x) ** 1.3) / self._CREASE_PEAK
-            arm_l = (u - (u0 - spread * depth_from_top)) / self._CREASE_WIDTH
-            arm_r = (u - (u0 + spread * depth_from_top)) / self._CREASE_WIDTH
-            total += amp * fall * (math.exp(-arm_l * arm_l) + math.exp(-arm_r * arm_r))
+            total += amp * fall * _v_arms(
+                u, u0, spread, depth_from_top, self._CREASE_WIDTH
+            )
+        return self.creases * 0.15 * total
+
+    # Mid-fold vertical fade (top & tip): each fork fades in just below the rail
+    # (so the pinned top edge stays put) and out at its lower tip, holding full
+    # strength between — so a long fork reads all the way down toward the hem.
+    _MIDFOLD_FADE = 0.12
+
+    def _make_midfolds(self):
+        """Seeded mid-folds: downward **V** forks anchored at the hang points.
+
+        Returns ``(u0, length, amp, spread, half_width)`` per fork. Unlike the
+        belly (one in/out bulge per span) these apex *on* a hang point (``u0``)
+        and fan **out and down** into the neighbouring spans, interrupting that
+        plain in/out cycle the way a heavy gathered drape forks below each hook.
+        Only a random ~1/4–1/2 of the (interior) hang points are chosen; lengths
+        vary (some stop high, some run nearly to the hem) as do width/depth
+        (narrow-deep vs wide-shallow). Empty when ``mid_folds`` is off.
+        """
+        if self.mid_folds <= 0.0:
+            return []
+        # A fork at the very end would be half-clipped, so anchor only on
+        # interior hang points; a closed loop wraps, so every point is interior.
+        points = (
+            list(range(self.spans)) if self.closed else list(range(1, self.spans))
+        )
+        if not points:
+            return []
+        # Arm spread and fold width are stored in global u but authored as
+        # fractions of a *span* (1/spans wide), so the fork keeps the same shape
+        # relative to the gap whatever the hang-point count — amp stays absolute
+        # (a fold's depth shouldn't change just because there are more pleats).
+        span_u = 1.0 / self.spans
+        rng = random.Random(self.mid_fold_seed)
+        frac = rng.uniform(0.25, 0.5)
+        chosen = rng.sample(points, max(1, round(len(points) * frac)))
+        folds = []
+        for i in chosen:
+            if rng.random() < 0.5:                  # long, narrow, deep
+                length = rng.uniform(0.7, 1.0)
+                width_frac = rng.uniform(0.18, 0.30)
+                amp = rng.uniform(0.7, 1.1)
+            else:                                   # short, wide, shallow
+                length = rng.uniform(0.3, 0.6)
+                width_frac = rng.uniform(0.35, 0.55)
+                amp = rng.uniform(0.4, 0.7)
+            spread_frac = rng.uniform(0.25, 0.6)    # arms fan this much of a span
+            folds.append(
+                (i / self.spans, length, amp, spread_frac * span_u, width_frac * span_u)
+            )
+        return folds
+
+    def _midfold_offset(self, u: float, v: float) -> float:
+        """Summed mid-fold V displacement at ``(u, v)`` (0 when off)."""
+        if not self._midfolds:
+            return 0.0
+        depth_from_top = 1.0 - v  # 0 at the rail, 1 at the hem
+        fade = self._MIDFOLD_FADE
+        total = 0.0
+        for u0, length, amp, spread, half_width in self._midfolds:
+            if depth_from_top > length:
+                continue  # this fork has petered out above the vertex
+            if abs(u - u0) > spread * length + 4.5 * half_width:
+                continue  # past the fork's u-band (incl. the ricker troughs)
+            # Hold full strength between the top fade-in and the tip fade-out.
+            v_prof = _smoothstep(depth_from_top / fade) * _smoothstep(
+                (length - depth_from_top) / fade
+            )
+            total += amp * v_prof * _v_arms(u, u0, spread, depth_from_top, half_width)
         return self.mid_folds * 0.15 * total
 
     def _end_bend_offset(self, u: float) -> float:
@@ -588,6 +645,36 @@ class CurtainMesh(ptk.LoggingMixin):
         wl = _smoothstep((fo - u) / fo)            # 1 at u=0 -> 0 at u=fo
         wr = _smoothstep((u - (1.0 - fo)) / fo)    # 0 -> 1 at u=1
         return self.end_bend_left * wl + self.end_bend_right * wr
+
+    # Band-limited surface grain: a handful of smooth wave octaves read as soft
+    # fabric relief, where per-vertex white noise (the prior approach) read as
+    # static. Amplitude rolls off ~1/f per octave.
+    _BILLOW_OCTAVES = 4
+    _BILLOW_FALLOFF = 0.55
+
+    def _make_billow(self):
+        """Build the coherent band-limited surface-grain field (``None`` when off).
+
+        Delegates to :class:`ptk.BandLimitedNoise` (the reusable primitive); a
+        ``closed`` rail makes the field wrap across the u-seam. The drape-
+        specific weighting (stronger toward the free hem) lives in
+        :meth:`_billow_offset`, not baked into the noise.
+        """
+        if self.irregularity <= 0.0:
+            return None
+        return ptk.BandLimitedNoise(
+            seed=self._BASE_SEED,
+            octaves=self._BILLOW_OCTAVES,
+            falloff=self._BILLOW_FALLOFF,
+            u_periodic=self.closed,
+        )
+
+    def _billow_offset(self, u: float, v: float) -> float:
+        """Coherent surface grain at ``(u, v)`` (0 when off), weighted to the hem."""
+        if self._billow is None:
+            return 0.0
+        # More relief toward the free hem; the gathered top stays calmer.
+        return self._billow.at(u, v) * (0.4 + 0.6 * (1.0 - v))
 
     def _resolve_resolution(self) -> Tuple[int, int]:
         # Relies on self._total_length (set first in build()).
@@ -701,7 +788,7 @@ class CurtainSlots(ptk.LoggingMixin):
         # Re-drape live as any numeric field changes; rail-shaping fields also
         # resync the generated driver. Closed reshapes the rail; Invert is a
         # pure re-drape.
-        self.sb.connect_multi(self.ui, "s000-18", "valueChanged", self._on_param_changed)
+        self.sb.connect_multi(self.ui, "s000-19", "valueChanged", self._on_param_changed)
         self.ui.chk001.toggled.connect(self._on_param_changed)
         self.ui.chk004.toggled.connect(self.preview.refresh)
 
@@ -733,14 +820,16 @@ class CurtainSlots(ptk.LoggingMixin):
                         "further); <b>Catenary Tension</b> shapes that curve.",
                         "<b>Taper</b> gathers the pleats at the top and flares "
                         "them toward the hem.",
-                        "<b>Mid Folds</b> add V-creases; the <b>Ends</b> group "
-                        "bends each end; <b>Round</b> softens the hooks.",
+                        "<b>Mid Folds</b> fork V-folds down from some hang "
+                        "points (seed varies which), breaking the plain in/out "
+                        "belly; <b>Creases</b> add diagonal V break-lines; the "
+                        "<b>Ends</b> group bends each end; <b>Round</b> softens "
+                        "the hooks.",
                     ]),
                 ],
                 notes=[
                     "The <b>preset</b> combo loads built-in looks "
-                    "(Flat Backdrop, Stage Swag, Shower Curtain, Booth Ring) "
-                    "and saves your own.",
+                    "(Stage Swag, Shower Curtain) and saves your own.",
                 ],
             )
         )
@@ -936,8 +1025,10 @@ class CurtainSlots(ptk.LoggingMixin):
             round_points=self.ui.s013.value(),
             fullness=self.ui.s006.value(),
             taper=self.ui.s007.value(),
-            mid_folds=self.ui.s014.value(),
-            fold_seed=self.ui.s015.value(),
+            mid_folds=self.ui.s019.value(),
+            mid_fold_seed=self.ui.s010.value(),
+            creases=self.ui.s014.value(),
+            crease_seed=self.ui.s015.value(),
             end_bend_left=self.ui.s016.value(),
             end_bend_right=self.ui.s017.value(),
             end_bend_falloff=self.ui.s018.value(),
