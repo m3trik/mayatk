@@ -2,12 +2,13 @@
 # coding=utf-8
 """Marmoset Toolbag JSON-RPC bridge -- target a running Toolbag instance.
 
-The "talk to a running Toolbag" half of :mod:`marmoset_bridge`. Both
-share the same parent subpackage so the two trade-offs sit side by side:
+The "talk to a running Toolbag" half of
+:mod:`mayatk.mat_utils.marmoset_bridge`. Both share the same parent
+subpackage so the two trade-offs sit side by side:
 
-* :mod:`marmoset_bridge`              -- launches a fresh Toolbag and
+* :class:`MarmosetEngine`             -- launches a fresh Toolbag and
   runs a templated script. Safe by default; never touches a live session.
-* :mod:`marmoset_bridge.marmoset_rpc` -- talks to a Toolbag that's
+* :mod:`marmoset_rpc` (this module)   -- talks to a Toolbag that's
   already running with the plugin loaded. Faster, but caller must
   confirm before mutating the open scene.
 

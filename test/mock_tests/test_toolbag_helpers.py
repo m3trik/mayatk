@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Mock-based tests for ``marmoset_bridge._toolbag_helpers``.
+"""Mock-based tests for ``mayatk.mat_utils.marmoset_bridge._toolbag_helpers``.
 
 These helpers run inside Marmoset Toolbag's bundled Python (``mset``),
 not inside Maya. We stub ``mset`` here and exercise the pure-Python
@@ -188,6 +188,23 @@ class TestWireMaterialsFromManifest(unittest.TestCase):
         # Toolbag API: subroutine.setField(name, path)
         mat.albedo.setField.assert_called_with("Albedo Map", self.base_png)
         mat.surface.setField.assert_called_with("Normal Map", self.normal_png)
+
+    def test_color_slots_tagged_srgb_data_slots_left_linear(self):
+        """After wiring, colour maps must be flagged sRGB and data maps
+        Linear. Toolbag's setField loads every texture sRGB=False (Linear),
+        which washes out albedo/emissive; the helper reads the field's
+        Texture back and corrects the colour-space per slot."""
+        mat = self._make_material("MAT_Test")
+        _fake_mset.getAllMaterials.return_value = [mat]
+
+        helpers.wire_materials_from_manifest(
+            self._manifest_path.name, verbose=False
+        )
+
+        # baseColor -> albedo: colour map, must be sRGB.
+        self.assertIs(mat.albedo.getField.return_value.sRGB, True)
+        # normal -> surface: data map, must stay Linear.
+        self.assertIs(mat.surface.getField.return_value.sRGB, False)
 
     def test_returns_zero_when_no_matching_material(self):
         unrelated = self._make_material("Other")
@@ -613,12 +630,13 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        # Defer the bridge import to avoid pulling Maya at module load.
-        from mayatk.mat_utils.marmoset_bridge._marmoset_bridge import (
-            MarmosetBridge,
+        # The engine is DCC-free; Maya is mocked by the mock_tests conftest
+        # only so the marmoset_bridge package __init__ imports cleanly.
+        from mayatk.mat_utils.marmoset_bridge._marmoset_engine import (
+            MarmosetEngine,
             SEND_TO,
         )
-        cls.MarmosetBridge = MarmosetBridge
+        cls.MarmosetEngine = MarmosetEngine
         cls.SEND_TO = SEND_TO
 
     def setUp(self):
@@ -690,11 +708,11 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
 
     def _render_and_exec(self, template):
         """Render *template* and exec it with our mocked mset in scope."""
-        bridge = self.MarmosetBridge()
+        bridge = self.MarmosetEngine()
         rendered = bridge.render_template(
             template=template,
             mode=self.SEND_TO,
-            fbx_path=self.fbx_path,
+            model_path=self.fbx_path,
             manifest_path=self.manifest_path,
             output_dir=self._tmpdir,
             headless=False,
@@ -801,14 +819,18 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
         baker, group, imported, high_p, low_p = self._stage_bake_scene(
             ["body_high", "body_low", "decoration"]
         )
-        # Default params have HIGH=_high, LOW=_low.
-        bridge = self.MarmosetBridge()
+        # Explicit both-suffix config (the test name): HIGH=_high, LOW=_low,
+        # so an unmatched mesh ('decoration') lands in neither bucket. The
+        # registry default for LOW_SUFFIX is "" ("rest is low"), which would
+        # sweep 'decoration' into low -- this test exercises the explicit case.
+        bridge = self.MarmosetEngine()
         rendered = bridge.render_template(
             template="bake",
             mode=self.SEND_TO,
-            fbx_path=self.fbx_path,
+            model_path=self.fbx_path,
             manifest_path=self.manifest_path,
             output_dir=self._tmpdir,
+            params={"HIGH_SUFFIX": "_high", "LOW_SUFFIX": "_low"},
         )
         ns = {"__name__": "__toolbag_template__"}
         exec(compile(rendered, "<bake>", "exec"), ns)
@@ -828,11 +850,11 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
         baker, group, imported, high_p, low_p = self._stage_bake_scene(
             ["body_high", "retopo_a", "retopo_b"]
         )
-        bridge = self.MarmosetBridge()
+        bridge = self.MarmosetEngine()
         rendered = bridge.render_template(
             template="bake",
             mode=self.SEND_TO,
-            fbx_path=self.fbx_path,
+            model_path=self.fbx_path,
             manifest_path=self.manifest_path,
             output_dir=self._tmpdir,
             params={"LOW_SUFFIX": ""},
@@ -860,11 +882,11 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
         baker, group, imported, high_p, low_p = self._stage_bake_scene(
             ["body_high", "body_low"]
         )
-        bridge = self.MarmosetBridge()
+        bridge = self.MarmosetEngine()
         rendered = bridge.render_template(
             template="bake",
             mode=self.SEND_TO,
-            fbx_path=self.fbx_path,
+            model_path=self.fbx_path,
             manifest_path=self.manifest_path,
             output_dir=self._tmpdir,
         )
@@ -904,11 +926,11 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
             side_effect=_explode_on_assign
         )
 
-        bridge = self.MarmosetBridge()
+        bridge = self.MarmosetEngine()
         rendered = bridge.render_template(
             template="bake",
             mode=self.SEND_TO,
-            fbx_path=self.fbx_path,
+            model_path=self.fbx_path,
             manifest_path=self.manifest_path,
             output_dir=self._tmpdir,
         )

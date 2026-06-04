@@ -63,7 +63,7 @@ class TestMarmosetBridgeRender(MayaTkTestCase):
                 rendered = bridge.render_template(
                     template=stem,
                     mode=mode,
-                    fbx_path=os.path.join(self.out_dir, "x.fbx"),
+                    model_path=os.path.join(self.out_dir, "x.fbx"),
                     manifest_path=os.path.join(self.out_dir, "x.materials.json"),
                     output_dir=self.out_dir,
                 )
@@ -86,7 +86,7 @@ class TestMarmosetBridgeRender(MayaTkTestCase):
         rendered = bridge.render_template(
             template="bake",
             mode=ROUNDTRIP,
-            fbx_path=os.path.join(self.out_dir, "scene.fbx"),
+            model_path=os.path.join(self.out_dir, "scene.fbx"),
             manifest_path=os.path.join(self.out_dir, "scene.materials.json"),
             output_dir=self.out_dir,
         )
@@ -106,7 +106,7 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
         super().setUp()
         self.out_dir = tempfile.mkdtemp(prefix="marmoset_test_")
         self._launch_patch = unittest.mock.patch(
-            "mayatk.mat_utils.marmoset_bridge._marmoset_bridge.AppLauncher.launch",
+            "mayatk.mat_utils.marmoset_bridge._marmoset_engine.AppLauncher.launch",
             return_value=None,
         )
         self._launch_patch.start()
@@ -188,7 +188,7 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
             return r
 
         with unittest.mock.patch(
-            "mayatk.mat_utils.marmoset_bridge._marmoset_bridge.AppLauncher.run",
+            "mayatk.mat_utils.marmoset_bridge._marmoset_engine.AppLauncher.run",
             side_effect=fake_run,
         ):
             bridge = MarmosetBridge(toolbag_path="fake_toolbag.exe")
@@ -263,10 +263,11 @@ class TestMarmosetBridgeUiResize(MayaTkTestCase):
             MarmosetBridgeSlots,
         )
         from mayatk.mat_utils.marmoset_bridge import _marmoset_bridge as bridge_mod
+        from mayatk.mat_utils.marmoset_bridge import _marmoset_engine as engine_mod
         from mayatk.mat_utils.marmoset_bridge import parameters as _p
 
         sb = Switchboard(
-            ui_source=str(bridge_mod._PKG_DIR),
+            ui_source=str(engine_mod._PKG_DIR),
             slot_source=MarmosetBridgeSlots,
         )
         ui = sb.loaded_ui.marmoset_bridge
@@ -275,7 +276,11 @@ class TestMarmosetBridgeUiResize(MayaTkTestCase):
         QtWidgets.QApplication.processEvents()
         ui.is_initialized = True
 
-        templates = sorted(p.stem for p in bridge_mod._TEMPLATE_DIR.glob("*.py"))
+        # Enumerate via the production discovery helper (not a raw *.py glob) so
+        # the test applies the same "_"-prefixed filter the combo does — else the
+        # templates/ package's __init__.py is picked up as a bogus "__init__"
+        # template and has no combo entry.
+        templates = sorted(p.stem for p in bridge_mod.list_templates())
         if len(templates) < 2:
             self.skipTest("Need at least two bundled templates to compare heights.")
 

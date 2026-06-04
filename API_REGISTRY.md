@@ -74,6 +74,7 @@ _Generated: 2026-06-04_
 - [`edit_utils/_edit_utils.py`](#edit_utils--_edit_utils)
 - [`edit_utils/bevel.py`](#edit_utils--bevel)
 - [`edit_utils/bridge.py`](#edit_utils--bridge)
+- [`edit_utils/curtain.py`](#edit_utils--curtain) — Procedural draped-cloth (curtain) generator for Maya.
 - [`edit_utils/cut_on_axis.py`](#edit_utils--cut_on_axis)
 - [`edit_utils/duplicate_grid.py`](#edit_utils--duplicate_grid)
 - [`edit_utils/duplicate_linear.py`](#edit_utils--duplicate_linear)
@@ -112,10 +113,11 @@ _Generated: 2026-06-04_
 - [`mat_utils/game_shader.py`](#mat_utils--game_shader)
 - [`mat_utils/image_to_plane/_image_to_plane.py`](#mat_utils--image_to_plane--_image_to_plane) — Map image files to textured polygon planes in Maya.
 - [`mat_utils/image_to_plane/image_to_plane_slots.py`](#mat_utils--image_to_plane--image_to_plane_slots) — Switchboard slots for the Image to Plane UI.
-- [`mat_utils/marmoset_bridge/_marmoset_bridge.py`](#mat_utils--marmoset_bridge--_marmoset_bridge)
+- [`mat_utils/marmoset_bridge/_marmoset_bridge.py`](#mat_utils--marmoset_bridge--_marmoset_bridge) — Maya-side glue for the Marmoset Toolbag engine.
+- [`mat_utils/marmoset_bridge/_marmoset_engine.py`](#mat_utils--marmoset_bridge--_marmoset_engine) — Drive Marmoset Toolbag from the outside -- launch + templated automation.
 - [`mat_utils/marmoset_bridge/_toolbag_helpers.py`](#mat_utils--marmoset_bridge--_toolbag_helpers) — Shared helpers for Marmoset Toolbag template scripts.
 - [`mat_utils/marmoset_bridge/marmoset_bridge_slots.py`](#mat_utils--marmoset_bridge--marmoset_bridge_slots) — Slots for the Marmoset Toolbag bridge panel.
-- [`mat_utils/marmoset_bridge/marmoset_rpc/connection.py`](#mat_utils--marmoset_bridge--marmoset_rpc--connection) — Maya-side JSON-RPC client for the marmoset_rpc Toolbag plugin.
+- [`mat_utils/marmoset_bridge/marmoset_rpc/connection.py`](#mat_utils--marmoset_bridge--marmoset_rpc--connection) — JSON-RPC client bound to the marmoset_rpc Toolbag plugin.
 - [`mat_utils/marmoset_bridge/marmoset_rpc/installer.py`](#mat_utils--marmoset_bridge--marmoset_rpc--installer) — Install the marmoset_rpc plugin into Toolbag's user plugin folder.
 - [`mat_utils/marmoset_bridge/marmoset_rpc/job.py`](#mat_utils--marmoset_bridge--marmoset_rpc--job) — One-shot batch pipeline for the marmoset_rpc bridge.
 - [`mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/main_thread.py`](#mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--main_thread) — Main-thread marshalling for ops that touch Toolbag's API.
@@ -124,9 +126,11 @@ _Generated: 2026-06-04_
 - [`mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/registry.py`](#mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--registry) — Op registry for the marmoset_rpc plugin.
 - [`mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py`](#mat_utils--marmoset_bridge--marmoset_rpc--plugin_src--marmoset_rpc--server) — HTTP JSON-RPC server for the marmoset_rpc plugin.
 - [`mat_utils/marmoset_bridge/parameters.py`](#mat_utils--marmoset_bridge--parameters) — Registry of user-tunable Marmoset Toolbag parameters exposed to the bridge UI.
+- [`mat_utils/marmoset_bridge/template_params.py`](#mat_utils--marmoset_bridge--template_params) — Plain default values + literal formatting for Marmoset template tokens.
 - [`mat_utils/marmoset_bridge/templates/bake.py`](#mat_utils--marmoset_bridge--templates--bake) — Bake high-poly detail into a low-poly target via Marmoset Toolbag.
-- [`mat_utils/marmoset_bridge/templates/import.py`](#mat_utils--marmoset_bridge--templates--import) — Open the FBX in Toolbag and wire materials from the Maya manifest.
-- [`mat_utils/marmoset_bridge/templates/lookdev.py`](#mat_utils--marmoset_bridge--templates--lookdev) — Open the FBX in Toolbag, apply a Sky preset, and frame the model.
+- [`mat_utils/marmoset_bridge/templates/import.py`](#mat_utils--marmoset_bridge--templates--import) — Open the model in Toolbag and wire materials from the manifest.
+- [`mat_utils/marmoset_bridge/templates/lookdev.py`](#mat_utils--marmoset_bridge--templates--lookdev) — Open the model in Toolbag, apply a Sky preset, and frame the model.
+- [`mat_utils/marmoset_bridge/toolbag_log.py`](#mat_utils--marmoset_bridge--toolbag_log) — Marmoset Toolbag log-file resolution, classification, and live tailing.
 - [`mat_utils/mat_manifest.py`](#mat_utils--mat_manifest)
 - [`mat_utils/mat_snapshot.py`](#mat_utils--mat_snapshot) — Lightweight material state snapshot and restore.
 - [`mat_utils/mat_transfer.py`](#mat_utils--mat_transfer)
@@ -1176,12 +1180,13 @@ Instancing strategy logic for AutoInstancer.
 
 Hermetic preview with replay-on-commit (H1 design).
 
-- [`cleanup_all_previews() -> None`](mayatk/mayatk/core_utils/preview.py#L632)
-- **[`class CleanupContract`](mayatk/mayatk/core_utils/preview.py#L50)** — Captures and reverses side effects of a previewed operation.
+- [`cleanup_all_previews() -> None`](mayatk/mayatk/core_utils/preview.py#L809)
+- **[`class OperationError(Exception)`](mayatk/mayatk/core_utils/preview.py#L57)** — User-facing operation failure for the Preview message box.
+- **[`class CleanupContract`](mayatk/mayatk/core_utils/preview.py#L105)** — Captures and reverses side effects of a previewed operation.
   - `CleanupContract.add_file(self, path) -> None`
   - `CleanupContract.record_modification(self, node: str, attr: str) -> None`
   - `CleanupContract.rollback(self) -> None`
-- **[`class Preview`](mayatk/mayatk/core_utils/preview.py#L285)** — Hermetic preview orchestrator (H1).
+- **[`class Preview`](mayatk/mayatk/core_utils/preview.py#L444)** — Hermetic preview orchestrator (H1).
   - `Preview.cleanup_all_instances(cls) -> None` *(class)*
   - `Preview.init_show_hide_behavior(self, enable_on_show: bool, disable_on_hide: bool) -> None`
   - `Preview.conditionally_enable(self) -> None`
@@ -1338,12 +1343,37 @@ Centralized Maya event subscription manager.
 ### `edit_utils/bridge.py`
 
 - **[`class Bridge`](mayatk/mayatk/edit_utils/bridge.py#L14)**
-  - `Bridge.bridge(edges, **kwargs)` *(static)*
+  - `Bridge.bridge(edges, **kwargs)` *(static)* — Bridge open edge loops, grouped per owning mesh.
   - `Bridge.get_child_curves_from_bridge(mesh_nodes)` *(static)* — Find child curves created by polyBridgeEdge operations on mesh nodes.
   - `Bridge.cleanup_bridge_curves_and_history(mesh_nodes)` *(static)* — Clean up child curves and deformer history from mesh nodes.
-- **[`class BridgeSlots`](mayatk/mayatk/edit_utils/bridge.py#L80)**
+- **[`class BridgeSlots`](mayatk/mayatk/edit_utils/bridge.py#L166)**
   - `BridgeSlots.header_init(self, widget)` — Configure header help text.
   - `BridgeSlots.perform_operation(self, objects, contract)`
+
+<a id="edit_utils--curtain"></a>
+### `edit_utils/curtain.py`
+
+Procedural draped-cloth (curtain) generator for Maya.
+
+- [`catenary_shape(t: float, tension: float) -> float`](mayatk/mayatk/edit_utils/curtain.py#L83) — Normalized catenary profile across a span.
+- [`sag_profile(t: float, tension: float, round_amount: float) -> float`](mayatk/mayatk/edit_utils/curtain.py#L102) — Catenary sag profile, optionally rounded at the supports.
+- **[`class Rail`](mayatk/mayatk/edit_utils/curtain.py#L125)** — Pure rail-polyline geometry — the line a curtain hangs from.
+  - `Rail.make(width: float = 6.0, curvature: float = 0.0, segments: int = 24, closed: bool = False, y: float = 0.0) -> Tuple[List[Vec], bool]` *(static)* — Build a default rail: a straight line of ``width`` (``curvature == 0``).
+  - `Rail.from_selection(objects) -> Optional[Tuple[List[Vec], bool]]` *(static)* — Resolve a rail polyline from a Maya selection.
+  - `Rail.sample_curve(shape: str, count: int = 200) -> Tuple[List[Vec], bool]` *(static)* — Sample a NURBS curve into a dense polyline (resampled later by length).
+  - `Rail.length(points: Sequence[Vec], closed: bool) -> float` *(static)* — Total arc length of the polyline (wrapping last->first if closed).
+  - `Rail.resample(points: Sequence[Vec], count: int) -> List[Vec]` *(static)* — Resample to *count* evenly-spaced points (ecosystem SSoT helper).
+  - `Rail.frames(points: Sequence[Vec], u_segs: int, closed: bool) -> List[Tuple[Vec, Vec, Vec]]` *(static)* — Resample the rail to ``u_segs + 1`` even points with local frames.
+- **[`class CurtainMesh(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/curtain.py#L299)** — Generate a pleated, gravity-draped curtain mesh from a rail polyline.
+  - `CurtainMesh.create(cls, rail: Sequence[Vec], **opts) -> str` *(class)*
+  - `CurtainMesh.build(self) -> str` — Create the curtain mesh and return its transform name.
+- **[`class CurtainRig`](mayatk/mayatk/edit_utils/curtain.py#L607)** — Make a curve drive a finished curtain.
+  - `CurtainRig.attach(curtain: str, curve: str, dropoff: float, cluster: bool = True) -> str` *(static)* — Wire-deform *curtain* with *curve* and add per-CV cluster controls.
+- **[`class CurtainSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/curtain.py#L669)** — Switchboard slot wiring for the curtain UI (hermetic preview + presets).
+  - `CurtainSlots.header_init(self, widget)` — Configure header help text (the preset combo lives in the panel).
+  - `CurtainSlots.cmb000_init(self, widget)` — Wire the in-panel preset selector (built-in + user tiers).
+  - `CurtainSlots.b001(self)` — Reset to Defaults.
+  - `CurtainSlots.perform_operation(self, objects, contract)` — Build the curtain from the resolved rail (Preview entry point).
 
 <a id="edit_utils--cut_on_axis"></a>
 ### `edit_utils/cut_on_axis.py`
@@ -2144,19 +2174,26 @@ Switchboard slots for the Image to Plane UI.
 <a id="mat_utils--marmoset_bridge--_marmoset_bridge"></a>
 ### `mat_utils/marmoset_bridge/_marmoset_bridge.py`
 
-- [`resolve_toolbag_log_path(toolbag_exe: Optional[str]) -> Optional[str]`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L64) — Return the path to Toolbag's application log, robust to version bumps.
-- [`classify_log_line(line: str) -> 'Optional[Tuple[str, str]]'`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L126) — Map a Toolbag log line to ``(level, line)`` for routing into the bridge logger.
-- [`dispatch_log_lines(lines, logger) -> None`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L177) — Forward each classified line to *logger* at its routed level.
-- [`list_templates() -> 'list[Path]'`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L258) — Return user-visible templates in ``templates/`` (skips underscore-prefixed).
-- [`template_modes(template_path: Path) -> Tuple[str, ...]`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L265) — Return the modes declared by *template_path*'s ``BRIDGE_MODES`` constant.
-- [`build_bake_pairs_manifest(objects: Sequence[str], high_suffix: str, low_suffix: str) -> Dict[str, str]`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L314) — Build the ``{mesh_short_name: 'high'|'low'}`` sidecar for the bake.
-- [`list_template_modes() -> 'list[tuple[str, str]]'`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L364) — Return ``[(stem, mode), ...]`` for every (template, mode) pairing.
-- **[`class MarmosetBridge(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L378)** — Export Maya selection to Marmoset Toolbag with templated automation.
-  - `MarmosetBridge.toolbag_path(self) -> Optional[str]` *(property)* — Resolve the Toolbag executable path.
-  - `MarmosetBridge.toolbag_path(self, value: Optional[str]) -> None`
-  - `MarmosetBridge.toolbag_log_path(self) -> Optional[str]` *(property)* — Resolve Toolbag's application log file (where script prints + tracebacks land).
-  - `MarmosetBridge.send(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, toolbag_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]` — Export objects, render *template* in *mode*, and hand off to Toolbag.
-  - `MarmosetBridge.render_template(self, template: str, fbx_path: str, manifest_path: str, output_dir: str, mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None, headless: Optional[bool] = None, pairs_path: Optional[str] = None) -> Optional[str]` — Return the rendered Toolbag Python script body, or *None* on miss.
+Maya-side glue for the Marmoset Toolbag engine.
+
+- [`build_bake_pairs_manifest(objects: Sequence[str], high_suffix: str, low_suffix: str) -> Dict[str, str]`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L88) — Build the ``{mesh_short_name: 'high'|'low'}`` sidecar for the bake.
+- **[`class MarmosetBridge(MarmosetEngine)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L138)** — Export the Maya selection to Marmoset Toolbag with templated automation.
+  - `MarmosetBridge.send(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, toolbag_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]` — Export *objects*, build sidecars, and hand the FBX to the engine.
+
+<a id="mat_utils--marmoset_bridge--_marmoset_engine"></a>
+### `mat_utils/marmoset_bridge/_marmoset_engine.py`
+
+Drive Marmoset Toolbag from the outside -- launch + templated automation.
+
+- [`list_templates() -> List[Path]`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_engine.py#L58) — Return user-visible templates in ``templates/`` (skips underscore-prefixed).
+- [`template_modes(template_path: Path) -> Tuple[str, ...]`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_engine.py#L65) — Return the modes declared by *template_path*'s ``BRIDGE_MODES`` constant.
+- [`list_template_modes() -> List[Tuple[str, str]]`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_engine.py#L89) — Return ``[(stem, mode), ...]`` for every (template, mode) pairing.
+- **[`class MarmosetEngine(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_engine.py#L103)** — Export-agnostic Marmoset Toolbag automation.
+  - `MarmosetEngine.toolbag_path(self) -> Optional[str]` *(property)* — Resolve the Toolbag executable path.
+  - `MarmosetEngine.toolbag_path(self, value: Optional[str]) -> None`
+  - `MarmosetEngine.toolbag_log_path(self) -> Optional[str]` *(property)* — Resolve Toolbag's application log file (script prints + tracebacks).
+  - `MarmosetEngine.send(self, model_path: str, manifest_path: Optional[str] = None, pairs_path: Optional[str] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, toolbag_exe: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]` — Render *template* in *mode* against *model_path* and hand off to Toolbag.
+  - `MarmosetEngine.render_template(self, template: str, model_path: str, manifest_path: str, output_dir: str, mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None, headless: Optional[bool] = None, pairs_path: Optional[str] = None) -> Optional[str]` — Return the rendered Toolbag Python script body, or *None* on miss.
 
 <a id="mat_utils--marmoset_bridge--_toolbag_helpers"></a>
 ### `mat_utils/marmoset_bridge/_toolbag_helpers.py`
@@ -2166,13 +2203,13 @@ Shared helpers for Marmoset Toolbag template scripts.
 - [`derive_per_run_log_path(manifest_path)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L41) — Return the ``<base>.toolbag.log`` path next to *manifest_path*.
 - [`begin_log(reference_path)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L55) — Start a fresh log file alongside *reference_path*.
 - [`log(msg)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L75) — Print *msg* and (best-effort) append it to the active log file.
-- [`find_material(name, scene_mats)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L127) — Return the Toolbag material whose name matches *name*.
-- [`load_manifest(manifest_path)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L142) — Return the ``materials`` dict from a MatManifest JSON sidecar.
-- [`wire_materials_from_manifest(manifest_path, verbose=True)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L159) — Wire every texture slot in *manifest_path* onto matching Toolbag mats.
-- [`split_high_low(objects, high_suffix, low_suffix, pre_classified=None)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L282) — Group *objects* into ``(highs, lows, others)`` by name suffix.
-- [`collect_mesh_objects(root)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L364) — Recursively gather ``mset.MeshObject`` descendants of *root*.
-- [`apply_sky_preset(preset_path)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L404) — Load a ``.tbsky`` preset onto the scene's existing SkyObject.
-- [`frame_in_viewport()`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L428) — Frame the imported scene in the viewport (best-effort).
+- [`find_material(name, scene_mats)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L153) — Return the Toolbag material whose name matches *name*.
+- [`load_manifest(manifest_path)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L168) — Return the ``materials`` dict from a MatManifest JSON sidecar.
+- [`wire_materials_from_manifest(manifest_path, verbose=True)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L185) — Wire every texture slot in *manifest_path* onto matching Toolbag mats.
+- [`split_high_low(objects, high_suffix, low_suffix, pre_classified=None)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L309) — Group *objects* into ``(highs, lows, others)`` by name suffix.
+- [`collect_mesh_objects(root)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L391) — Recursively gather ``mset.MeshObject`` descendants of *root*.
+- [`apply_sky_preset(preset_path)`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L431) — Load a ``.tbsky`` preset onto the scene's existing SkyObject.
+- [`frame_in_viewport()`](mayatk/mayatk/mat_utils/marmoset_bridge/_toolbag_helpers.py#L455) — Frame the imported scene in the viewport (best-effort).
 
 <a id="mat_utils--marmoset_bridge--marmoset_bridge_slots"></a>
 ### `mat_utils/marmoset_bridge/marmoset_bridge_slots.py`
@@ -2191,7 +2228,7 @@ Slots for the Marmoset Toolbag bridge panel.
 <a id="mat_utils--marmoset_bridge--marmoset_rpc--connection"></a>
 ### `mat_utils/marmoset_bridge/marmoset_rpc/connection.py`
 
-Maya-side JSON-RPC client for the marmoset_rpc Toolbag plugin.
+JSON-RPC client bound to the marmoset_rpc Toolbag plugin.
 
 - **[`class MarmosetConnection(RpcClient)`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/connection.py#L46)** — JSON-RPC client bound to Toolbag's default port + finder.
 
@@ -2267,6 +2304,15 @@ Registry of user-tunable Marmoset Toolbag parameters exposed to the bridge UI.
 - [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L240) — Return ``{key: default}`` for every registered parameter.
 - [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L245) — Format *values* for ``StrUtils.replace_delimited`` using Python literals.
 
+<a id="mat_utils--marmoset_bridge--template_params"></a>
+### `mat_utils/marmoset_bridge/template_params.py`
+
+Plain default values + literal formatting for Marmoset template tokens.
+
+- [`python_literal(value: Any) -> str`](mayatk/mayatk/mat_utils/marmoset_bridge/template_params.py#L49) — Format *value* as a Python source literal for template substitution.
+- [`defaults() -> Dict[str, Any]`](mayatk/mayatk/mat_utils/marmoset_bridge/template_params.py#L60) — Return a copy of :data:`DEFAULTS`.
+- [`to_context(values: Dict[str, Any]) -> Dict[str, str]`](mayatk/mayatk/mat_utils/marmoset_bridge/template_params.py#L65) — Map ``{KEY: value}`` to ``{KEY: python-literal-string}``.
+
 <a id="mat_utils--marmoset_bridge--templates--bake"></a>
 ### `mat_utils/marmoset_bridge/templates/bake.py`
 
@@ -2277,16 +2323,26 @@ Bake high-poly detail into a low-poly target via Marmoset Toolbag.
 <a id="mat_utils--marmoset_bridge--templates--import"></a>
 ### `mat_utils/marmoset_bridge/templates/import.py`
 
-Open the FBX in Toolbag and wire materials from the Maya manifest.
+Open the model in Toolbag and wire materials from the manifest.
 
-- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/import.py#L31)
+- [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/import.py#L32)
 
 <a id="mat_utils--marmoset_bridge--templates--lookdev"></a>
 ### `mat_utils/marmoset_bridge/templates/lookdev.py`
 
-Open the FBX in Toolbag, apply a Sky preset, and frame the model.
+Open the model in Toolbag, apply a Sky preset, and frame the model.
 
 - [`main()`](mayatk/mayatk/mat_utils/marmoset_bridge/templates/lookdev.py#L41)
+
+<a id="mat_utils--marmoset_bridge--toolbag_log"></a>
+### `mat_utils/marmoset_bridge/toolbag_log.py`
+
+Marmoset Toolbag log-file resolution, classification, and live tailing.
+
+- [`resolve_toolbag_log_path(toolbag_exe: Optional[str]) -> Optional[str]`](mayatk/mayatk/mat_utils/marmoset_bridge/toolbag_log.py#L29) — Return the path to Toolbag's application log, robust to version bumps.
+- [`classify_log_line(line: str) -> Optional[Tuple[str, str]]`](mayatk/mayatk/mat_utils/marmoset_bridge/toolbag_log.py#L83) — Map a Toolbag log line to ``(level, line)`` for routing into a logger.
+- [`dispatch_log_lines(lines, logger) -> None`](mayatk/mayatk/mat_utils/marmoset_bridge/toolbag_log.py#L134) — Forward each classified line to *logger* at its routed level.
+- [`start_toolbag_log_tail(log_path: str, start_offset: int, process, logger, poll_interval: float = 0.4, file_wait_timeout: float = 60.0)`](mayatk/mayatk/mat_utils/marmoset_bridge/toolbag_log.py#L148) — Tail *log_path* from *start_offset* in a daemon thread.
 
 <a id="mat_utils--mat_manifest"></a>
 ### `mat_utils/mat_manifest.py`
@@ -3030,7 +3086,7 @@ Slots for the RizomUV bridge panel.
 - **[`class XformUtilsInternals`](mayatk/mayatk/xform_utils/_xform_utils.py#L327)** — Internal helper methods for XformUtils.
 - **[`class XformUtils(XformUtilsInternals, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L377)** — Transform utilities for Maya objects.
   - `XformUtils.convert_axis(value, invert=False, ortho=False, to_integer=False)` *(static)* — Converts between axis representations and optionally inverts the axis or returns an orthogonal axis.
-  - `XformUtils.move_to(cls, source, target, group_move=False)` *(class)* — Move source object(s) to align with the target object(s).
+  - `XformUtils.move_to(cls, source, target, pivot='center', group_move=False)` *(class)* — Move source object(s) to align with the target object(s).
   - `XformUtils.drop_to_grid(objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)` *(static)* — Align objects to Y origin on the grid using a helper plane.
   - `XformUtils.match_scale(cls, a, b, scale=True, average=False)` *(class)* — Scale each of the given objects in 'a' to the combined bounding box of the objects in 'b'.
   - `XformUtils.scale_connected_edges(objects, scale_factor=1.1) -> None` *(static)* — Scales each set of connected edges separately, either uniformly or non-uniformly.

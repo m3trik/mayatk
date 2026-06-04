@@ -1,0 +1,445 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>QtUi</class>
+ <widget class="QMainWindow" name="QtUi">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>230</width><height>680</height></rect></property>
+  <property name="tabShape"><enum>QTabWidget::Triangular</enum></property>
+  <property name="dockNestingEnabled"><bool>true</bool></property>
+  <widget class="QWidget" name="central_widget">
+   <property name="minimumSize"><size><width>230</width><height>0</height></size></property>
+   <layout class="QVBoxLayout" name="verticalLayout_2">
+    <property name="leftMargin"><number>2</number></property>
+    <property name="topMargin"><number>2</number></property>
+    <property name="rightMargin"><number>2</number></property>
+    <property name="bottomMargin"><number>2</number></property>
+    <property name="spacing"><number>2</number></property>
+    <item>
+     <layout class="QVBoxLayout" name="verticalLayout">
+      <property name="spacing"><number>2</number></property>
+      <item>
+       <widget class="Header" name="header">
+        <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+        <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+        <property name="font"><font><weight>75</weight><bold>true</bold></font></property>
+        <property name="text"><string>CURTAIN</string></property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="chk000">
+        <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+        <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+        <property name="toolTip"><string>Start the live curtain preview. A rail is auto-created if none is selected.</string></property>
+        <property name="text"><string>Preview</string></property>
+        <property name="checkable"><bool>true</bool></property>
+        <property name="checked"><bool>false</bool></property>
+       </widget>
+      </item>
+      <item>
+       <widget class="CollapsableGroup" name="grp_rail">
+        <property name="title"><string>Rail</string></property>
+        <layout class="QVBoxLayout" name="lay_rail">
+         <property name="leftMargin"><number>3</number></property>
+         <property name="topMargin"><number>1</number></property>
+         <property name="rightMargin"><number>3</number></property>
+         <property name="bottomMargin"><number>3</number></property>
+         <property name="spacing"><number>1</number></property>
+         <item>
+          <widget class="DoubleSpinBox" name="s001">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Length of the generated rail (used when no rail is selected).</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Width:	</string></property>
+           <property name="decimals"><number>3</number></property>
+           <property name="minimum"><double>0.001000</double></property>
+           <property name="maximum"><double>99999.000000</double></property>
+           <property name="singleStep"><double>0.500000</double></property>
+           <property name="value"><double>6.000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="DoubleSpinBox" name="s002">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Bow of the generated rail (0 = straight; positive bows forward, negative bows back). Ignored when you select your own rail.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Curvature:	</string></property>
+           <property name="decimals"><number>3</number></property>
+           <property name="minimum"><double>-1.000000</double></property>
+           <property name="maximum"><double>1.000000</double></property>
+           <property name="singleStep"><double>0.050000</double></property>
+           <property name="value"><double>0.000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="chk001">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Treat the rail as a closed loop / ring.</string></property>
+           <property name="text"><string>Closed</string></property>
+           <property name="checkable"><bool>true</bool></property>
+           <property name="checked"><bool>false</bool></property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="CollapsableGroup" name="grp_hang">
+        <property name="title"><string>Hanging</string></property>
+        <layout class="QVBoxLayout" name="lay_hang">
+         <property name="leftMargin"><number>3</number></property>
+         <property name="topMargin"><number>1</number></property>
+         <property name="rightMargin"><number>3</number></property>
+         <property name="bottomMargin"><number>3</number></property>
+         <property name="spacing"><number>1</number></property>
+         <item>
+          <widget class="QSpinBox" name="s003">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Pins/pleats evenly spaced along the rail. The fabric gathers at each and sags between them.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Hanging Points:	</string></property>
+           <property name="minimum"><number>2</number></property>
+           <property name="maximum"><number>999</number></property>
+           <property name="value"><number>8</number></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="DoubleSpinBox" name="s013">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Round off the sharp cusp at each hanging point into a smooth dome (0 = crisp catenary, 1 = fully rounded).</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Round:	</string></property>
+           <property name="decimals"><number>2</number></property>
+           <property name="minimum"><double>0.000000</double></property>
+           <property name="maximum"><double>1.000000</double></property>
+           <property name="singleStep"><double>0.050000</double></property>
+           <property name="value"><double>0.000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="DoubleSpinBox" name="s004">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>How far the fabric falls between hanging points (catenary sag depth; wider gaps fall further).</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Gravity:	</string></property>
+           <property name="decimals"><number>3</number></property>
+           <property name="minimum"><double>0.000000</double></property>
+           <property name="maximum"><double>5.000000</double></property>
+           <property name="singleStep"><double>0.050000</double></property>
+           <property name="value"><double>0.300000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="DoubleSpinBox" name="s005">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Shape of the sag between points: low = shallow parabola, high = deep V. Depth itself is set by Gravity.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Catenary Tension:	</string></property>
+           <property name="decimals"><number>2</number></property>
+           <property name="minimum"><double>0.100000</double></property>
+           <property name="maximum"><double>5.000000</double></property>
+           <property name="singleStep"><double>0.050000</double></property>
+           <property name="value"><double>1.500000</double></property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="CollapsableGroup" name="grp_drape">
+        <property name="title"><string>Drape</string></property>
+        <layout class="QVBoxLayout" name="lay_drape">
+         <property name="leftMargin"><number>3</number></property>
+         <property name="topMargin"><number>1</number></property>
+         <property name="rightMargin"><number>3</number></property>
+         <property name="bottomMargin"><number>3</number></property>
+         <property name="spacing"><number>1</number></property>
+         <item>
+          <widget class="DoubleSpinBox" name="s000">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Drop of the curtain below the rail.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Height:	</string></property>
+           <property name="decimals"><number>3</number></property>
+           <property name="minimum"><double>0.001000</double></property>
+           <property name="maximum"><double>99999.000000</double></property>
+           <property name="singleStep"><double>0.100000</double></property>
+           <property name="value"><double>3.000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="DoubleSpinBox" name="s006">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Drapery fullness ratio; drives fold/belly depth.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Fullness:	</string></property>
+           <property name="decimals"><number>2</number></property>
+           <property name="minimum"><double>1.000000</double></property>
+           <property name="maximum"><double>10.000000</double></property>
+           <property name="singleStep"><double>0.100000</double></property>
+           <property name="value"><double>2.500000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="DoubleSpinBox" name="s007">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Vertical fold bias: + gathers pleats at the top and flares them at the hem.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Taper:	</string></property>
+           <property name="decimals"><number>2</number></property>
+           <property name="minimum"><double>-1.000000</double></property>
+           <property name="maximum"><double>1.000000</double></property>
+           <property name="singleStep"><double>0.050000</double></property>
+           <property name="value"><double>0.500000</double></property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="CollapsableGroup" name="grp_folds">
+        <property name="title"><string>Folds / Noise</string></property>
+        <property name="checked"><bool>false</bool></property>
+        <layout class="QVBoxLayout" name="lay_folds">
+         <property name="leftMargin"><number>3</number></property>
+         <property name="topMargin"><number>1</number></property>
+         <property name="rightMargin"><number>3</number></property>
+         <property name="bottomMargin"><number>3</number></property>
+         <property name="spacing"><number>1</number></property>
+         <item>
+          <widget class="DoubleSpinBox" name="s014">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Intensity of extra V-shaped creases that radiate down from random points near the top and run various lengths (0 = off).</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Mid Folds:	</string></property>
+           <property name="decimals"><number>2</number></property>
+           <property name="minimum"><double>0.000000</double></property>
+           <property name="maximum"><double>3.000000</double></property>
+           <property name="singleStep"><double>0.050000</double></property>
+           <property name="value"><double>0.000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QSpinBox" name="s015">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Random seed for the mid-fold placement, length, and depth.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Fold Seed:	</string></property>
+           <property name="minimum"><number>0</number></property>
+           <property name="maximum"><number>99999</number></property>
+           <property name="value"><number>0</number></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="DoubleSpinBox" name="s008">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Subtle low-frequency billow + a touch of per-vertex grain.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Irregularity:	</string></property>
+           <property name="decimals"><number>3</number></property>
+           <property name="minimum"><double>0.000000</double></property>
+           <property name="maximum"><double>5.000000</double></property>
+           <property name="singleStep"><double>0.010000</double></property>
+           <property name="value"><double>0.150000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QSpinBox" name="s010">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Random seed for irregularity and per-fold variation.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Seed:	</string></property>
+           <property name="minimum"><number>0</number></property>
+           <property name="maximum"><number>99999</number></property>
+           <property name="value"><number>0</number></property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="CollapsableGroup" name="grp_ends">
+        <property name="title"><string>Ends</string></property>
+        <property name="checked"><bool>false</bool></property>
+        <layout class="QVBoxLayout" name="lay_ends">
+         <property name="leftMargin"><number>3</number></property>
+         <property name="topMargin"><number>1</number></property>
+         <property name="rightMargin"><number>3</number></property>
+         <property name="bottomMargin"><number>3</number></property>
+         <property name="spacing"><number>1</number></property>
+         <item>
+          <widget class="DoubleSpinBox" name="s016">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Signed sideways bend of the left end (curl the panel toward / away). 0 = straight.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Left Bend:	</string></property>
+           <property name="decimals"><number>2</number></property>
+           <property name="minimum"><double>-2.000000</double></property>
+           <property name="maximum"><double>2.000000</double></property>
+           <property name="singleStep"><double>0.050000</double></property>
+           <property name="value"><double>0.000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="DoubleSpinBox" name="s017">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Signed sideways bend of the right end (curl the panel toward / away). 0 = straight.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Right Bend:	</string></property>
+           <property name="decimals"><number>2</number></property>
+           <property name="minimum"><double>-2.000000</double></property>
+           <property name="maximum"><double>2.000000</double></property>
+           <property name="singleStep"><double>0.050000</double></property>
+           <property name="value"><double>0.000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="DoubleSpinBox" name="s018">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Fraction of the width over which each end bend ramps in from the edge.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Bend Falloff:	</string></property>
+           <property name="decimals"><number>2</number></property>
+           <property name="minimum"><double>0.010000</double></property>
+           <property name="maximum"><double>1.000000</double></property>
+           <property name="singleStep"><double>0.050000</double></property>
+           <property name="value"><double>0.250000</double></property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="CollapsableGroup" name="grp_mesh">
+        <property name="title"><string>Mesh</string></property>
+        <layout class="QVBoxLayout" name="lay_mesh">
+         <property name="leftMargin"><number>3</number></property>
+         <property name="topMargin"><number>1</number></property>
+         <property name="rightMargin"><number>3</number></property>
+         <property name="bottomMargin"><number>3</number></property>
+         <property name="spacing"><number>1</number></property>
+         <item>
+          <widget class="DoubleSpinBox" name="s009">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Mesh resolution in segments per world unit.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Mesh Density:	</string></property>
+           <property name="decimals"><number>2</number></property>
+           <property name="minimum"><double>0.500000</double></property>
+           <property name="maximum"><double>200.000000</double></property>
+           <property name="singleStep"><double>0.500000</double></property>
+           <property name="value"><double>8.000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="DoubleSpinBox" name="s011">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Optional shell thickness (0 = single-sided cloth).</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Thickness:	</string></property>
+           <property name="decimals"><number>3</number></property>
+           <property name="minimum"><double>0.000000</double></property>
+           <property name="maximum"><double>1000.000000</double></property>
+           <property name="singleStep"><double>0.010000</double></property>
+           <property name="value"><double>0.000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="DoubleSpinBox" name="s012">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Decimate the result by this percent via polyReduce (0 = none).</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Reduce %:	</string></property>
+           <property name="decimals"><number>1</number></property>
+           <property name="minimum"><double>0.000000</double></property>
+           <property name="maximum"><double>99.000000</double></property>
+           <property name="singleStep"><double>1.000000</double></property>
+           <property name="value"><double>0.000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="chk004">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Reverse face normals (flip which side the cloth faces).</string></property>
+           <property name="text"><string>Invert Normals</string></property>
+           <property name="checkable"><bool>true</bool></property>
+           <property name="checked"><bool>false</bool></property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="WidgetComboBox" name="cmb000">
+        <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+        <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+        <property name="toolTip"><string>Load a built-in or saved curtain preset (Save / Rename / Delete from the dropdown's actions).</string></property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="b001">
+        <property name="enabled"><bool>true</bool></property>
+        <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+        <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+        <property name="toolTip"><string>Reset all fields to their default values.</string></property>
+        <property name="text"><string>Reset to Defaults</string></property>
+        <property name="autoDefault"><bool>false</bool></property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="b000">
+        <property name="enabled"><bool>false</bool></property>
+        <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+        <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+        <property name="toolTip"><string>Commit the previewed curtain.</string></property>
+        <property name="layoutDirection"><enum>Qt::RightToLeft</enum></property>
+        <property name="text"><string>Create</string></property>
+        <property name="autoDefault"><bool>false</bool></property>
+       </widget>
+      </item>
+      <item>
+       <spacer name="verticalSpacer">
+        <property name="orientation"><enum>Qt::Vertical</enum></property>
+        <property name="sizeHint" stdset="0"><size><width>0</width><height>10</height></size></property>
+       </spacer>
+      </item>
+      <item>
+       <widget class="Footer" name="footer" native="true">
+        <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+        <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+   </layout>
+  </widget>
+ </widget>
+ <customwidgets>
+  <customwidget><class>Footer</class><extends>QWidget</extends><header>uitk.widgets.footer</header></customwidget>
+  <customwidget><class>Header</class><extends>QLabel</extends><header>uitk.widgets.header.Header.h</header></customwidget>
+  <customwidget><class>DoubleSpinBox</class><extends>QDoubleSpinBox</extends><header>widgets.doublespinbox.h</header></customwidget>
+  <customwidget><class>WidgetComboBox</class><extends>QComboBox</extends><header>uitk.widgets.widgetComboBox.WidgetComboBox.h</header></customwidget>
+  <customwidget><class>CollapsableGroup</class><extends>QGroupBox</extends><header>uitk.widgets.collapsableGroup.CollapsableGroup.h</header></customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>

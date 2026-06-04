@@ -1,16 +1,22 @@
 # !/usr/bin/python
 # coding=utf-8
-"""
-Test Suite for mayatk.core_utils.preview module
+"""Test suite for mayatk.core_utils.preview (hermetic ``CleanupContract`` design).
 
-Tests for Preview class functionality including:
-- Basic enable/disable/finalize operations
-- Selection change detection and undo sync protection
-- External undo detection
-- Error resilience
-- Undo queue integrity
+Covers the Preview orchestration contract:
+- enable / disable / refresh / finalize lifecycle + UI wiring
+- the two rollback paths Preview drives: attr-snapshot restore
+  (``contract.record_modification``) and node-diff cleanup
+- no-selection / validation gating, error resilience
+- undo-queue integrity (preview must not flush the user's history)
+
+``perform_operation`` is ``(self, objects, contract)``; ``contract`` is the
+:class:`CleanupContract` during preview and ``None`` during the commit replay.
+Selection-change / external-undo "auto-disable" and scriptJobs were removed
+when Preview moved to the hermetic snapshot/diff design, so those tests are
+gone (see the module docstring of ``core_utils/preview.py``).
 """
 import unittest
+
 try:
     from qtpy import QtWidgets
 except ImportError:
@@ -22,24 +28,32 @@ import maya.cmds as cmds
 
 
 class MockOperation:
-    """Mock operation class for testing Preview."""
+    """Records its attr mutation then moves +1 in Y.
+
+    Recording via ``contract.record_modification`` before the mutation is what
+    lets the hermetic rollback revert a non-node-creating op (the documented
+    contract for in-place attribute edits). ``contract`` is ``None`` on the
+    commit replay, so the guard skips recording there.
+    """
 
     def __init__(self):
         self.operated_objects = set()
         self.perform_count = 0
         self.should_fail = False
 
-    def perform_operation(self, objects):
+    def perform_operation(self, objects, contract):
         if self.should_fail:
             raise RuntimeError("Simulated failure")
         self.perform_count += 1
         for obj in objects:
+            if contract:
+                contract.record_modification(obj, "translateY")
             cmds.move(0, 1, 0, obj, r=True)
 
 
 @unittest.skipIf(QtWidgets is None, "Qt not available")
 class TestPreview(MayaTkTestCase):
-    """Tests for Preview class undo sync protection."""
+    """Lifecycle + rollback behaviour of the Preview orchestrator."""
 
     def setUp(self):
         super().setUp()
@@ -57,296 +71,134 @@ class TestPreview(MayaTkTestCase):
 
     def tearDown(self):
         try:
-            self.preview.disable()
-        except:
+            self.preview.cleanup()
+        except Exception:
             pass
         if hasattr(self, "window"):
             self.window.close()
         super().tearDown()
 
-    # -------------------------------------------------------------------------
-    # Basic Operation Tests
-    # -------------------------------------------------------------------------
+    def _y(self, node):
+        return cmds.xform(node, query=True, worldSpace=True, translation=True)[1]
 
+    # ------------------------------------------------------------- basic API
     def test_preview_excluded_from_restore(self):
-        """Verify that the preview checkbox is marked to skip state restoration.
+        """The preview checkbox must skip uitk state-restore so a previewed
+        op doesn't auto-fire on UI load."""
+        self.assertTrue(hasattr(self.chk, "restore_state"))
+        self.assertFalse(self.chk.restore_state)
 
-        Bug: Preview checkbox state was being restored, causing previews to
-        trigger unexpectedly on UI load.
-        Fixed: 2026-01-30
-        """
-        # restore_state attribute is set during __init__
-        self.assertTrue(
-            hasattr(self.chk, "restore_state"),
-            "Checkbox missing restore_state attribute",
-        )
-        self.assertFalse(
-            self.chk.restore_state,
-            "Checkbox should be excluded from state restoration (restore_state=False)",
-        )
-
-    def test_enable_disable_cycle(self):
-        """Test basic enable/disable reverts the operation."""
+    def test_enable_applies_then_disable_reverts(self):
+        """enable() runs the op (Y+1); disable() rolls it back to the original."""
         cmds.select(self.cube)
-        initial_pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
+        initial_y = self._y(self.cube)
 
         self.preview.enable()
         self.assertTrue(self.chk.isChecked())
-
-        current_pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
-        self.assertAlmostEqual(current_pos[1], initial_pos[1] + 1, places=4)
+        self.assertTrue(self.preview.is_enabled)
+        self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
 
         self.preview.disable()
-        final_pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
-        self.assertAlmostEqual(final_pos[1], initial_pos[1], places=4)
-        self.assertFalse(self.preview.needs_undo)
-
-    def test_disable_always_undoes_operation(self):
-        """Test that disable ALWAYS undoes the operation regardless of how it's called.
-
-        This verifies that whether disable() is called from:
-        - User unchecking the checkbox
-        - Selection change detection
-        - External undo detection
-        The operation is properly reverted.
-        """
-        cmds.select(self.cube)
-        initial_pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
-
-        self.preview.enable()
-        self.assertTrue(self.preview.needs_undo)
-
-        # Simulate selection change calling disable
-        self.preview.disable()
-
-        final_pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
-        self.assertAlmostEqual(
-            final_pos[1],
-            initial_pos[1],
-            places=4,
-            msg="Operation was NOT undone when disable() was called",
-        )
+        self.assertFalse(self.chk.isChecked())
+        self.assertFalse(self.preview.is_enabled)
+        self.assertAlmostEqual(self._y(self.cube), initial_y, places=4)
 
     def test_finalize_preserves_changes(self):
-        """Test finalize_changes keeps the operation applied."""
+        """finalize_changes() commits the op (Y+1 persists) and disables preview."""
         cmds.select(self.cube)
-        initial_pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
+        initial_y = self._y(self.cube)
 
         self.preview.enable()
         self.preview.finalize_changes()
 
-        final_pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
-        self.assertAlmostEqual(final_pos[1], initial_pos[1] + 1, places=4)
-
-    def test_refresh_updates_preview(self):
-        """Test refresh applies operation again after undo."""
-        cmds.select(self.cube)
-        self.preview.enable()
-
-        # First operation moves Y+1
-        pos_after_enable = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
-
-        # Refresh should undo then redo (net effect: still Y+1)
-        self.preview.refresh()
-
-        pos_after_refresh = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
-        self.assertAlmostEqual(pos_after_enable[1], pos_after_refresh[1], places=4)
-
-    def test_multiple_refresh_calls_keep_checkbox_checked(self):
-        """Test that calling refresh multiple times keeps preview enabled.
-
-        This simulates changing slider values in the UI - each value change
-        triggers refresh(), but the checkbox should remain checked.
-        """
-        cmds.select(self.cube)
-        self.preview.enable()
-        self.assertTrue(self.chk.isChecked())
-
-        # Simulate multiple value changes (like moving a slider)
-        for i in range(5):
-            self.preview.refresh()
-            self.assertTrue(
-                self.chk.isChecked(), f"Checkbox was unchecked after refresh #{i+1}"
-            )
-
-        # Verify operation is still undoable
-        self.assertTrue(self.preview.needs_undo)
-
-    def test_refresh_does_not_trigger_selection_change_disable(self):
-        """Test that refresh doesn't incorrectly trigger selection change detection.
-
-        Some Maya operations clear the selection. The preview should handle this
-        by temporarily disabling selection monitoring during refresh.
-        """
-        cmds.select(self.cube)
-        self.preview.enable()
-        self.assertTrue(self.chk.isChecked())
-
-        # Mock an operation that clears selection (like polyBevel does)
-        original_perform = self.op.perform_operation
-
-        def selection_clearing_operation(objects):
-            original_perform(objects)
-            cmds.select(clear=True)  # Simulate Maya clearing selection
-
-        self.op.perform_operation = selection_clearing_operation
-
-        # This should NOT uncheck the preview
-        self.preview.refresh()
-
-        self.assertTrue(
-            self.chk.isChecked(),
-            "Preview was disabled due to selection change during refresh",
-        )
-
-        # Restore original
-        self.op.perform_operation = original_perform
-
-    # -------------------------------------------------------------------------
-    # Selection Change Tests
-    # -------------------------------------------------------------------------
-
-    def test_selection_change_disables_preview(self):
-        """Test that changing selection disables preview."""
-        cmds.select(self.cube)
-        self.preview.enable()
-        self.assertTrue(self.chk.isChecked())
-
-        # Simulate selection change by calling the handler directly
-        cmds.select(self.sphere)
-        self.preview.disable_on_selection_change()
-
         self.assertFalse(self.chk.isChecked())
+        self.assertFalse(self.preview.is_enabled)
+        self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
 
-    def test_selection_cleared_disables_preview(self):
-        """Test that clearing selection disables preview."""
+    def test_finalized_change_is_one_undo_chunk(self):
+        """The committed op replays inside a single openChunk/closeChunk pair,
+        so one Ctrl+Z reverts it (and only it)."""
         cmds.select(self.cube)
+        initial_y = self._y(self.cube)
+
         self.preview.enable()
-        self.assertTrue(self.chk.isChecked())
+        self.preview.finalize_changes()
+        self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
 
-        cmds.select(clear=True)
-        self.preview.disable_on_selection_change()
-
-        self.assertFalse(self.chk.isChecked())
-
-    def test_same_selection_does_not_disable(self):
-        """Test that re-selecting the same objects does not disable preview."""
-        cmds.select(self.cube)
-        self.preview.enable()
-        self.assertTrue(self.chk.isChecked())
-
-        # Re-select same object
-        cmds.select(self.cube)
-        self.preview.disable_on_selection_change()
-
-        # Should still be enabled
-        self.assertTrue(self.chk.isChecked())
-
-    def test_selection_change_during_refresh_ignored(self):
-        """Test that selection changes during refresh are ignored."""
-        cmds.select(self.cube)
-        self.preview.enable()
-
-        # Simulate being in refresh
-        self.preview.is_refreshing = True
-        cmds.select(self.sphere)
-        self.preview.disable_on_selection_change()
-
-        # Should still be enabled because we were refreshing
-        self.assertTrue(self.chk.isChecked())
-        self.preview.is_refreshing = False
-
-    def test_adding_to_selection_disables_preview(self):
-        """Test that adding objects to selection disables preview."""
-        cmds.select(self.cube)
-        self.preview.enable()
-        self.assertTrue(self.chk.isChecked())
-
-        # Add sphere to selection
-        cmds.select(self.sphere, add=True)
-        self.preview.disable_on_selection_change()
-
-        self.assertFalse(self.chk.isChecked())
-
-    def test_removing_from_selection_disables_preview(self):
-        """Test that removing objects from selection disables preview."""
-        cmds.select([self.cube, self.sphere])
-        self.preview.enable()
-        self.assertTrue(self.chk.isChecked())
-
-        # Deselect sphere
-        cmds.select(self.sphere, deselect=True)
-        self.preview.disable_on_selection_change()
-
-        self.assertFalse(self.chk.isChecked())
-
-    # -------------------------------------------------------------------------
-    # External Undo Tests
-    # -------------------------------------------------------------------------
-
-    def test_external_undo_disables_preview(self):
-        """Test that manual undo disables the preview."""
-        cmds.select(self.cube)
-        self.preview.enable()
-        self.preview.refresh()
-
-        # Consume any expected events from refresh
-        while self.preview.expected_undo_events > 0:
-            self.preview.disable_on_external_undo()
-
-        # Simulate manual undo
         cmds.undo()
-        self.preview.disable_on_external_undo()
+        self.assertAlmostEqual(self._y(self.cube), initial_y, places=4)
 
-        self.assertFalse(self.chk.isChecked())
+    def test_refresh_does_not_accumulate(self):
+        """refresh() rolls back the prior preview before re-running, so the
+        net effect stays Y+1 no matter how many refreshes."""
+        cmds.select(self.cube)
+        initial_y = self._y(self.cube)
+        self.preview.enable()
 
-    def test_internal_undo_does_not_disable(self):
-        """Test that internal undo during refresh does not disable preview."""
+        for _ in range(5):
+            self.preview.refresh()
+            self.assertTrue(self.chk.isChecked(), "refresh must keep preview enabled")
+
+        self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
+
+    def test_refresh_with_selection_clearing_op_stays_enabled(self):
+        """An op that clears the selection mid-preview (e.g. polyBevel) must not
+        knock the preview out — the hermetic design has no selection watcher."""
         cmds.select(self.cube)
         self.preview.enable()
 
-        # Refresh triggers internal undo
-        self.preview.refresh()
+        original = self.op.perform_operation
 
-        # Should still be enabled
-        self.assertTrue(self.chk.isChecked())
+        def clears_selection(objects, contract):
+            original(objects, contract)
+            cmds.select(clear=True)
 
-    def test_expected_undo_events_consumed(self):
-        """Test that expected undo events are properly counted down."""
-        cmds.select(self.cube)
-        self.preview.enable()
+        self.op.perform_operation = clears_selection
+        try:
+            self.preview.refresh()
+            self.assertTrue(self.chk.isChecked())
+        finally:
+            self.op.perform_operation = original
 
-        # Manually set expected events
-        self.preview.expected_undo_events = 2
+    # --------------------------------------------------- node-diff rollback
+    def test_created_nodes_rolled_back_then_kept_on_finalize(self):
+        """The node-diff path: nodes a previewed op creates are deleted on
+        disable and re-created (persisted) on finalize."""
 
-        # First call should decrement
-        self.preview.disable_on_external_undo()
-        self.assertEqual(self.preview.expected_undo_events, 1)
-        self.assertTrue(self.chk.isChecked())
+        class _CreateOp:
+            def perform_operation(self, objects, contract):
+                cmds.polyCube(name="preview_probe")
 
-        # Second call should decrement
-        self.preview.disable_on_external_undo()
-        self.assertEqual(self.preview.expected_undo_events, 0)
-        self.assertTrue(self.chk.isChecked())
+        preview = Preview(
+            _CreateOp(),
+            QtWidgets.QCheckBox(),
+            QtWidgets.QPushButton(),
+            message_func=lambda m: None,
+        )
+        try:
+            cmds.select(self.cube)
+            self.assertEqual(cmds.ls("preview_probe", type="transform"), [])
 
-    # -------------------------------------------------------------------------
-    # Error Resilience Tests
-    # -------------------------------------------------------------------------
+            preview.enable()
+            self.assertTrue(cmds.ls("preview_probe", type="transform"))
 
-    def test_operation_failure_clears_needs_undo(self):
-        """Test that failed operations don't leave stale undo state."""
-        cmds.select(self.cube)
-        self.preview.enable()
-        self.assertTrue(self.preview.needs_undo)
+            preview.disable()
+            self.assertEqual(cmds.ls("preview_probe", type="transform"), [])
 
-        # Force failure
-        self.op.should_fail = True
-        self.preview.refresh()
+            # The op's polyCube auto-selected the cube it created; disable's
+            # rollback then deleted it, leaving nothing selected. A real op
+            # works on the user's (persistent) selection — this bare-create op
+            # doesn't — so re-select before the commit pass, which enable()
+            # gates on a non-empty selection.
+            cmds.select(self.cube)
+            preview.enable()
+            preview.finalize_changes()
+            self.assertTrue(cmds.ls("preview_probe", type="transform"))
+        finally:
+            preview.cleanup()
 
-        self.assertFalse(self.preview.needs_undo)
-
-    def test_no_selection_shows_message(self):
-        """Test that enabling with no selection shows message and disables."""
+    # ----------------------------------------------------- gating / messages
+    def test_no_selection_shows_message_and_stays_disabled(self):
         cmds.select(clear=True)
         messages = []
         self.preview.message_func = messages.append
@@ -354,165 +206,151 @@ class TestPreview(MayaTkTestCase):
         self.preview.enable()
 
         self.assertFalse(self.chk.isChecked())
-        self.assertTrue(any("No objects" in msg for msg in messages))
+        self.assertFalse(self.preview.is_enabled)
+        self.assertTrue(any("No objects" in m for m in messages))
 
-    def test_operation_failure_reverts_position(self):
-        """Test that failed operation leaves object at original position."""
+    def test_validation_failure_prevents_enable(self):
+        """A validation_func returning False blocks enable and messages."""
+        messages = []
+        preview = Preview(
+            MockOperation(),
+            QtWidgets.QCheckBox(),
+            QtWidgets.QPushButton(),
+            message_func=messages.append,
+            validation_func=lambda objs: False,
+        )
+        try:
+            cmds.select(self.cube)
+            preview.enable()
+            self.assertFalse(preview.is_enabled)
+            self.assertTrue(any("validation" in m.lower() for m in messages))
+        finally:
+            preview.cleanup()
+
+    def test_operation_failure_reverts_to_clean_state(self):
+        """A failure during refresh rolls back the prior preview and the failed
+        op applies nothing — the object is left at its original position."""
         cmds.select(self.cube)
+        initial_y = self._y(self.cube)
         self.preview.enable()
-
-        initial_y = 1.0  # After first successful operation
+        self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
 
         self.op.should_fail = True
         self.preview.refresh()
 
-        # Undo happened, but new op failed, so cube should be at 0
-        pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
-        self.assertAlmostEqual(pos[1], 0, places=4)
+        self.assertAlmostEqual(self._y(self.cube), initial_y, places=4)
 
-    # -------------------------------------------------------------------------
-    # Undo Queue Integrity Tests
-    # -------------------------------------------------------------------------
-
+    # ------------------------------------------------- undo-queue integrity
     def test_undo_queue_not_cleared(self):
-        """Ensure preview does not clear the undo queue."""
+        """Preview suppresses recording WITHOUT flushing the user's history,
+        so a pre-preview action is still undoable afterward."""
         cmds.select(self.sphere)
-        cmds.move(10, 0, 0, self.sphere)  # Sentinel action
+        cmds.move(10, 0, 0, self.sphere)  # sentinel action on the user's queue
 
         cmds.select(self.cube)
         self.preview.enable()
         self.preview.disable()
 
-        # Undo the select
-        cmds.undo()
-        # Undo the sentinel move
-        cmds.undo()
-
-        pos = cmds.xform(self.sphere, query=True, worldSpace=True, translation=True)
+        cmds.undo()  # reverts "select cube"
+        cmds.undo()  # reverts the sentinel move
         self.assertAlmostEqual(
-            pos[0], 0, places=4, msg="Undo queue was cleared by Preview"
+            cmds.xform(self.sphere, q=True, ws=True, t=True)[0],
+            0,
+            places=4,
+            msg="Undo queue was cleared by Preview",
         )
 
     def test_disable_restores_undo_state(self):
-        """Test that disable restores previous undo info state."""
         cmds.select(self.cube)
-
-        # Check initial state
         initial_state = cmds.undoInfo(q=True, state=True)
 
         self.preview.enable()
         self.preview.disable()
 
-        final_state = cmds.undoInfo(q=True, state=True)
-        self.assertEqual(initial_state, final_state)
+        self.assertEqual(initial_state, cmds.undoInfo(q=True, state=True))
 
-    # -------------------------------------------------------------------------
-    # Widget State Tests
-    # -------------------------------------------------------------------------
-
+    # ------------------------------------------------------- widget wiring
     def test_checkbox_toggled_enables_preview(self):
-        """Test that toggling checkbox via signal enables preview."""
+        """Toggling the checkbox (its signal) runs the op."""
         cmds.select(self.cube)
+        initial_y = self._y(self.cube)
 
-        # Simulate checkbox toggle (this triggers the toggled signal)
         self.chk.setChecked(True)
 
         self.assertTrue(self.chk.isChecked())
-        # Operation should have been performed
-        pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
-        self.assertAlmostEqual(pos[1], 1.0, places=4)
+        self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
 
-    def test_create_button_disabled_initially(self):
-        """Test create button state management."""
+    def test_create_button_state_tracks_enabled(self):
         cmds.select(self.cube)
-
         self.preview.enable()
         self.assertTrue(self.btn.isEnabled())
-
         self.preview.disable()
         self.assertFalse(self.btn.isEnabled())
 
     def test_create_button_finalizes(self):
-        """Test that clicking create button finalizes changes."""
+        """Clicking Create commits and disables the preview."""
         cmds.select(self.cube)
+        initial_y = self._y(self.cube)
         self.preview.enable()
 
-        # Simulate button click
         self.btn.click()
 
-        # Should be disabled and changes preserved
         self.assertFalse(self.chk.isChecked())
-        pos = cmds.xform(self.cube, query=True, worldSpace=True, translation=True)
-        self.assertAlmostEqual(pos[1], 1.0, places=4)
+        self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
 
 
 @unittest.skipIf(QtWidgets is None, "Qt not available")
 class TestPreviewEdgeCases(MayaTkTestCase):
-    """Edge case tests for Preview class."""
+    """Constructor guards + cleanup."""
 
     def test_missing_perform_operation_raises(self):
-        """Test that missing perform_operation method raises ValueError."""
-
         class BadOperation:
             pass
 
-        window = QtWidgets.QMainWindow()
-        chk = QtWidgets.QCheckBox("Preview")
-        btn = QtWidgets.QPushButton("Create")
-
         with self.assertRaises(ValueError) as ctx:
-            Preview(BadOperation(), chk, btn)
-
+            Preview(BadOperation(), QtWidgets.QCheckBox(), QtWidgets.QPushButton())
         self.assertIn("perform_operation", str(ctx.exception))
-        window.close()
 
     def test_none_checkbox_raises(self):
-        """Test that None checkbox raises ValueError."""
-        op = MockOperation()
-        btn = QtWidgets.QPushButton("Create")
-
         with self.assertRaises(ValueError):
-            Preview(op, None, btn)
-
-        btn.close()
+            Preview(MockOperation(), None, QtWidgets.QPushButton())
 
     def test_none_button_raises(self):
-        """Test that None button raises ValueError."""
-        op = MockOperation()
-        chk = QtWidgets.QCheckBox("Preview")
-
         with self.assertRaises(ValueError):
-            Preview(op, chk, None)
+            Preview(MockOperation(), QtWidgets.QCheckBox(), None)
 
-        chk.close()
+    def test_cleanup_disables_active_preview_and_deregisters(self):
+        """cleanup() rolls back an active preview and drops the instance from
+        the class registry (replacing the old scriptJob-teardown contract)."""
+        cube = cmds.polyCube(name="cleanup_cube")[0]
+        chk = QtWidgets.QCheckBox()
+        btn = QtWidgets.QPushButton()
+        preview = Preview(MockOperation(), chk, btn, message_func=lambda m: None)
 
-    def test_cleanup_removes_scriptjobs(self):
-        """Test that cleanup() removes all scriptJobs."""
-        window = QtWidgets.QMainWindow()
-        chk = QtWidgets.QCheckBox("Preview")
-        btn = QtWidgets.QPushButton("Create")
-        op = MockOperation()
+        cmds.select(cube)
+        preview.enable()
+        self.assertTrue(preview.is_enabled)
+        self.assertIn(preview, Preview._instances)
+        y_enabled = cmds.xform(cube, q=True, ws=True, t=True)[1]
+        self.assertAlmostEqual(y_enabled, 1.0, places=4)
 
-        preview = Preview(op, chk, btn, message_func=lambda msg: None)
-        job_ids = preview.script_jobs.copy()
-
-        # Verify jobs exist
-        for job_id in job_ids:
-            self.assertTrue(cmds.scriptJob(exists=job_id))
-
-        # Explicit cleanup
         preview.cleanup()
 
-        # Jobs should be cleaned up
-        for job_id in job_ids:
-            self.assertFalse(
-                cmds.scriptJob(exists=job_id), f"ScriptJob {job_id} was not cleaned up"
-            )
+        self.assertFalse(preview.is_enabled)
+        self.assertNotIn(preview, Preview._instances)
+        # disable() during cleanup rolled the move back.
+        self.assertAlmostEqual(
+            cmds.xform(cube, q=True, ws=True, t=True)[1], 0.0, places=4
+        )
 
-        # script_jobs list should be empty
-        self.assertEqual(len(preview.script_jobs), 0)
+    def test_cleanup_all_instances_clears_registry(self):
+        chk = QtWidgets.QCheckBox()
+        btn = QtWidgets.QPushButton()
+        preview = Preview(MockOperation(), chk, btn, message_func=lambda m: None)
+        self.assertIn(preview, Preview._instances)
 
-        window.close()
+        Preview.cleanup_all_instances()
+        self.assertEqual(len(Preview._instances), 0)
 
 
 if __name__ == "__main__":

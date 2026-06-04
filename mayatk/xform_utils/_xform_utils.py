@@ -438,18 +438,26 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undoable
-    def move_to(cls, source, target, group_move=False):
+    def move_to(cls, source, target, pivot="center", group_move=False):
         """Move source object(s) to align with the target object(s).
 
         Parameters:
             source (str/obj/list): The Maya object(s) to move.
             target (str/obj/list): The Maya object(s) to move to.
+            pivot (str/list): Which point of the target to align to. Accepts any value
+                from `get_pivot_options()` — 'manip', 'object', 'world', 'center',
+                'baked', or a bounding-box extent ('xmin'/'xmax'/'ymin'/'ymax'/
+                'zmin'/'zmax') — or an explicit (x, y, z) world position. Per-node
+                pivots (manip/object/baked) resolve against the last target; bounding-box
+                pivots aggregate across the full target set. Defaults to 'center'.
             group_move (bool): If True, move the source objects as a single group centered around their common bounding box.
         """
         source = cmds.ls(as_strings(source), flatten=True) or []
         target = cmds.ls(as_strings(target), flatten=True) or []
+        if not source or not target:
+            return
 
-        target_pos = cls.get_bounding_box(target, "center")
+        target_pos = cls._resolve_target_position(target, pivot)
 
         if group_move:
             group_center = cls.get_bounding_box(source, "center")
@@ -464,6 +472,47 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         else:
             for src in source:
                 cmds.xform(src, translation=target_pos, worldSpace=True)
+
+    @classmethod
+    def _resolve_target_position(cls, targets, pivot):
+        """Resolve the world-space alignment point for `move_to`.
+
+        Parameters:
+            targets (list): Resolved (flattened), non-empty target node(s).
+            pivot (str/list): A pivot option (see `get_pivot_options()`) or an explicit
+                (x, y, z) world position.
+
+        Returns:
+            list: The [x, y, z] world-space position to align the source to.
+        """
+        # Explicit coordinate triple passes straight through.
+        if isinstance(pivot, (tuple, list)) and len(pivot) == 3:
+            return [float(p) for p in pivot]
+
+        if pivot == "world":
+            return [0.0, 0.0, 0.0]
+
+        # Per-node pivots (manip/object/baked) don't aggregate across a set; resolve
+        # them against the last target as the representative node.
+        if pivot in ("manip", "object", "baked"):
+            return list(cls.get_operation_axis_pos(targets[-1], pivot))
+
+        # Bounding-box pivots collapse the full target set into one combined box,
+        # preserving the legacy 'center' behavior for multi-object targets.
+        bbox_pivots = {"center", "xmin", "xmax", "ymin", "ymax", "zmin", "zmax"}
+        if pivot in bbox_pivots:
+            if pivot == "center":
+                return list(cls.get_bounding_box(targets, "center"))
+            # One bbox eval for both the center and the requested extent.
+            center, extent = cls.get_bounding_box(targets, f"center|{pivot}")
+            center = list(center)
+            center[{"x": 0, "y": 1, "z": 2}[pivot[0]]] = float(extent)
+            return center
+
+        cmds.warning(
+            f"[move_to] Unknown pivot '{pivot}'; using target bounding box center."
+        )
+        return list(cls.get_bounding_box(targets, "center"))
 
     @staticmethod
     @CoreUtils.undoable
