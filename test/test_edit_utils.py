@@ -517,6 +517,52 @@ class TestEditUtils(MayaTkTestCase):
         self.assertTrue(all(n.startswith("MyComp") for n in names))
         cmds.delete(res4)
 
+    # -------------------------------------------------------------------------
+    # Decimate
+    # -------------------------------------------------------------------------
+
+    def test_decimate_reduces_faces(self):
+        sphere = cmds.polySphere(subdivisionsX=40, subdivisionsY=40, ch=False)[0]
+        before = cmds.polyEvaluate(sphere, face=True)
+        result = EditUtils.decimate([sphere], percentage=50.0)
+        self.assertEqual(result, [sphere])
+        self.assertLess(cmds.polyEvaluate(sphere, face=True), before)
+        # delete_history (default) removes the polyReduce node.
+        self.assertNotIn("polyReduce", str(cmds.listHistory(sphere) or []))
+
+    def test_decimate_no_objects_is_noop(self):
+        cmds.select(clear=True)
+        self.assertEqual(EditUtils.decimate([]), [])
+
+    def test_decimate_zero_percent_leaves_mesh_untouched(self):
+        sphere = cmds.polySphere(subdivisionsX=12, subdivisionsY=12, ch=False)[0]
+        before = cmds.polyEvaluate(sphere, face=True)
+        EditUtils.decimate([sphere], percentage=0.0)
+        self.assertEqual(cmds.polyEvaluate(sphere, face=True), before)
+        self.assertNotIn("polyReduce", str(cmds.listHistory(sphere) or []))
+
+    def test_dissolve_coplanar_strips_flat_regions_losslessly(self):
+        # A subdivided cube is all coplanar quads per side + 90 deg cube edges:
+        # planar dissolve must merge each side back to one face (6 total) while
+        # leaving the shape (bounding box) identical.
+        cube = cmds.polyCube(sx=5, sy=5, sz=5, ch=False)[0]
+        before = cmds.polyEvaluate(cube, face=True)
+        bb_before = cmds.exactWorldBoundingBox(cube)
+        result = EditUtils.dissolve_coplanar([cube], angle_tolerance=1.0)
+        self.assertEqual(result, [cube])
+        self.assertLess(cmds.polyEvaluate(cube, face=True), before)
+        self.assertEqual(cmds.polyEvaluate(cube, face=True), 6)
+        for a, b in zip(bb_before, cmds.exactWorldBoundingBox(cube)):
+            self.assertAlmostEqual(a, b, places=5)
+
+    def test_dissolve_coplanar_keeps_curved_features(self):
+        # On a sphere every interior edge is a real angle change, so a tight
+        # tolerance must leave the face count essentially unchanged.
+        sphere = cmds.polySphere(subdivisionsX=16, subdivisionsY=16, ch=False)[0]
+        before = cmds.polyEvaluate(sphere, face=True)
+        EditUtils.dissolve_coplanar([sphere], angle_tolerance=0.5)
+        self.assertEqual(cmds.polyEvaluate(sphere, face=True), before)
+
 
 if __name__ == "__main__":
     unittest.main()

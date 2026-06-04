@@ -156,7 +156,7 @@ class CurtainBuildTest(MayaTkTestCase):
         bb = cmds.exactWorldBoundingBox(transform)
         return bb[5] - bb[2]
 
-    def test_mid_folds_add_relief(self):
+    def test_creases_add_relief(self):
         # On a flat panel (no belly/gravity/noise) the only Z relief comes from
         # the V-creases, so turning them on must push the surface out of plane.
         flat = CurtainMesh(
@@ -164,18 +164,99 @@ class CurtainBuildTest(MayaTkTestCase):
         ).build()
         folded = CurtainMesh(
             self.rail, fullness=1.0, gravity=0.0, irregularity=0.0,
-            mid_folds=2.0, fold_seed=1,
+            creases=2.0, crease_seed=1,
         ).build()
         self.assertLess(self._z_range(flat), 1e-3)
         self.assertGreater(self._z_range(folded), 0.02)
 
-    def test_mid_folds_seed_changes_pattern(self):
+    def test_creases_seed_changes_pattern(self):
         a = CurtainMesh(self.rail, fullness=1.0, gravity=0.0, irregularity=0.0,
-                        mid_folds=2.0, fold_seed=1).build()
+                        creases=2.0, crease_seed=1).build()
         b = CurtainMesh(self.rail, fullness=1.0, gravity=0.0, irregularity=0.0,
-                        mid_folds=2.0, fold_seed=2).build()
+                        creases=2.0, crease_seed=2).build()
         # Different seeds -> different crease placement -> different relief.
         self.assertNotAlmostEqual(self._z_range(a), self._z_range(b), places=4)
+
+    def test_midfolds_add_relief(self):
+        # On a flat panel the only Z relief comes from the mid-fold forks, so
+        # turning Mid Folds on must push the surface out of plane.
+        flat = CurtainMesh(
+            self.rail, fullness=1.0, gravity=0.0, irregularity=0.0
+        ).build()
+        forked = CurtainMesh(
+            self.rail, fullness=1.0, gravity=0.0, irregularity=0.0,
+            mid_folds=3.0, mid_fold_seed=1,
+        ).build()
+        self.assertLess(self._z_range(flat), 1e-3)
+        self.assertGreater(self._z_range(forked), 0.02)
+
+    def test_midfolds_seed_changes_pattern(self):
+        a = CurtainMesh(self.rail, fullness=1.0, gravity=0.0, irregularity=0.0,
+                        mid_folds=3.0, mid_fold_seed=1).build()
+        b = CurtainMesh(self.rail, fullness=1.0, gravity=0.0, irregularity=0.0,
+                        mid_folds=3.0, mid_fold_seed=2).build()
+        # Different seeds -> different hang points fork -> different relief.
+        self.assertNotAlmostEqual(self._z_range(a), self._z_range(b), places=4)
+
+    def test_midfolds_anchor_at_subset_of_hang_points(self):
+        # The point of Mid Folds: fork only ~1/4-1/2 of the interior hang points,
+        # each apex landing exactly on a hang point. No geometry needed.
+        m = CurtainMesh(self.rail, hanging_points=20, mid_folds=1.0, mid_fold_seed=3)
+        folds = m._make_midfolds()
+        interior = m.spans - 1  # interior hang points on an open rail
+        self.assertGreaterEqual(len(folds), 1)
+        self.assertLess(len(folds), interior, "some hang points must stay unforked")
+        self.assertLessEqual(len(folds), interior // 2 + 1, "only ~1/4-1/2 fork")
+        for u0, *_ in folds:
+            # u0 must sit on a hang point: u0 * spans is an integer.
+            self.assertAlmostEqual(u0 * m.spans, round(u0 * m.spans), places=9)
+
+    def test_midfolds_off_leaves_no_forks(self):
+        m = CurtainMesh(self.rail, hanging_points=20, mid_folds=0.0)
+        self.assertEqual(m._make_midfolds(), [])
+
+    def test_midfolds_pin_top_edge(self):
+        # The forks fade in below the rail, so the pinned top edge (v = 1) is
+        # untouched no matter how strong the mid-folds are.
+        m = CurtainMesh(self.rail, hanging_points=12, mid_folds=3.0, mid_fold_seed=7)
+        m._midfolds = m._make_midfolds()
+        self.assertTrue(m._midfolds, "expected some forks for this seed")
+        for u in (0.0, 0.25, 0.5, 0.75, 1.0):
+            self.assertAlmostEqual(m._midfold_offset(u, 1.0), 0.0, places=9)
+
+    def test_midfolds_push_both_ways(self):
+        # Material conservation: each ricker crease pushes the cloth out at its
+        # line and pulls it in to the sides, so a horizontal scan crosses both
+        # signs -- not a one-sided bulge (which is what the old gaussian gave).
+        m = CurtainMesh(self.rail, hanging_points=12, mid_folds=3.0, mid_fold_seed=7)
+        m._midfolds = m._make_midfolds()
+        self.assertTrue(m._midfolds, "expected some forks for this seed")
+        vals = [m._midfold_offset(i / 400.0, 0.75) for i in range(401)]
+        self.assertGreater(max(vals), 1e-4, "folds should push the cloth out")
+        self.assertLess(min(vals), -1e-4, "folds should also pull the cloth in")
+
+    def test_irregularity_is_coherent_not_white_noise(self):
+        # The grain must be band-limited/coherent: a tiny step in u changes the
+        # value only a little (per-vertex white noise jumped arbitrarily), while
+        # still actually varying across the surface.
+        m = CurtainMesh(self.rail, irregularity=1.0)
+        m._billow = m._make_billow()
+        self.assertTrue(m._billow, "billow populated when irregularity > 0")
+        vals = [m._billow_offset(i / 500.0, 0.5) for i in range(501)]
+        steps = [abs(vals[i] - vals[i - 1]) for i in range(1, len(vals))]
+        self.assertGreater(max(vals) - min(vals), 0.05, "grain must vary")
+        self.assertLess(max(steps), 0.1, "neighbouring samples must stay close")
+
+    def test_billow_wraps_seamlessly_when_closed(self):
+        # On a ring the grain must match across the u=0/u=1 seam (whole-cycle
+        # frequencies), else the closed curtain shows a vertical crack.
+        pts, closed = Rail.make(closed=True)
+        m = CurtainMesh(pts, closed=closed, irregularity=1.0)
+        m._billow = m._make_billow()
+        for v in (0.0, 0.5, 1.0):
+            self.assertAlmostEqual(
+                m._billow_offset(0.0, v), m._billow_offset(1.0, v), places=6
+            )
 
     def test_end_bend_displaces_ends(self):
         flat = CurtainMesh(
@@ -294,7 +375,7 @@ class PresetTest(MayaTkTestCase):
         names = store.list(tier="builtin")
         self.assertEqual(
             set(names),
-            {"Flat Backdrop", "Stage Swag", "Shower Curtain", "Booth Ring"},
+            {"Stage Swag", "Shower Curtain"},
         )
         # Each preset is a widget-state dict the panel can apply.
         for n in names:
