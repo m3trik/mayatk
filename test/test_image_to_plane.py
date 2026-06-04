@@ -166,11 +166,7 @@ class TestCreateShadingGroup(MayaTkTestCase):
         """Assign multiple objects at once."""
         shader = cmds.shadingNode("lambert", asShader=True, name="multi_mat")
         a = cmds.polyCube(name="a")[0]
-        b = (
-            cmds.polySphere(name="b")[0]
-            if hasattr(pm, "poleSphere")
-            else cmds.polySphere(name="b")[0]
-        )
+        b = cmds.polySphere(name="b")[0]
         sg = MatUtils.create_shading_group(shader, assign_to=[a, b])
         members = cmds.sets(sg, query=True) or []
         self.assertTrue(len(members) >= 2)

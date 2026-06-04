@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Mock-based tests for the ``marmoset_rpc`` package.
+"""Mock-based tests for the ``mayatk.mat_utils.marmoset_bridge.marmoset_rpc`` package.
 
 Three surfaces under test:
 

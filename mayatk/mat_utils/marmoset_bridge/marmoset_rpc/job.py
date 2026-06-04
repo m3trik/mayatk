@@ -41,7 +41,7 @@ def run_batch(
 
     The bridge plugin must already be loaded inside a running Toolbag.
     Use :meth:`MarmosetConnection.ping` upstream if you want to verify
-    that and fall back to :class:`MarmosetBridge` (fresh-launch) on miss.
+    that and fall back to :class:`MarmosetEngine` (fresh-launch) on miss.
     """
     return _generic_run_batch(
         calls=calls,

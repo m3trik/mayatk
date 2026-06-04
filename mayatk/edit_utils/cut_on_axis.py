@@ -53,6 +53,14 @@ class CutOnAxis:
 
 
 class CutOnAxisSlots:
+    # polyCut mutates the mesh in place. On a historyless mesh (frozen /
+    # imported) it spawns an intermediate orig-shape that holds the only
+    # pristine copy, so the hermetic preview's node-diff rollback would bake
+    # the cut in instead of reverting it -> cuts stack on every value change.
+    # Opting into geometry preservation makes the contract snapshot the mesh
+    # and restore it in place on rollback. See mayatk/core_utils/preview.py.
+    PRESERVE_GEOMETRY = True
+
     def __init__(self, switchboard):
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.cut_on_axis

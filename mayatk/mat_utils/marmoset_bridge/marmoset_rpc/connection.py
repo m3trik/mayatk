@@ -1,22 +1,22 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Maya-side JSON-RPC client for the marmoset_rpc Toolbag plugin.
+"""JSON-RPC client bound to the marmoset_rpc Toolbag plugin.
 
-Thin DCC-specific binding around :class:`pythontk.RpcClient` -- pre-fills
-the Toolbag port and exe finder so callers can just say
+Thin Toolbag-specific binding around :class:`pythontk.RpcClient` --
+pre-fills the Toolbag port and exe finder so callers can just say
 ``MarmosetConnection()`` and have it Just Work.
 
-This module sits next to its sibling :mod:`mayatk.mat_utils.marmoset_bridge`
-inside the same parent subpackage. The two share Toolbag knowledge but
-have opposite trade-offs:
+This module sits next to its sibling
+:mod:`mayatk.mat_utils.marmoset_bridge._marmoset_engine` inside the same
+parent subpackage. The two share Toolbag knowledge but have opposite
+trade-offs:
 
-* :mod:`marmoset_bridge` (parent) -- launches a fresh Toolbag and feeds
-  it a rendered Python script via ``toolbag.exe -run``. Fire-and-forget,
+* :class:`MarmosetEngine` -- launches a fresh Toolbag and feeds it a
+  rendered Python script via ``toolbag.exe -run``. Fire-and-forget,
   safe by default.
-* :mod:`marmoset_bridge.marmoset_rpc` (this module) -- talks to a Toolbag
-  that is *already running* with the plugin loaded. Targets the live
-  scene. Caller is responsible for asking the user before mutating that
-  scene.
+* :mod:`marmoset_rpc` (this module) -- talks to a Toolbag that is
+  *already running* with the plugin loaded. Targets the live scene.
+  Caller is responsible for asking the user before mutating that scene.
 
 Usage::
 

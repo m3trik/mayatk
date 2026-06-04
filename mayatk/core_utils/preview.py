@@ -21,7 +21,13 @@ Why this shape:
 Constraints on ``perform_operation`` authors:
   - Signature is ``perform_operation(self, objects, contract)``.
   - Mesh ops must use ``constructionHistory=True`` so rollback can revert
-    geometry by deleting the history node.
+    geometry by deleting the history node. This is sufficient only when the
+    mesh has upstream history to fall back to. For ops that mutate a mesh in
+    place and may run on historyless (frozen/imported) meshes -- where a
+    poly op bakes its result when its auto-created orig-shape is deleted --
+    set ``PRESERVE_GEOMETRY = True`` on the operation instance. The contract
+    then snapshots the operated objects and, on rollback, restores any that
+    survived but diverged from the snapshot (identity/UUID preserved).
   - Do not delete pre-existing nodes inside ``perform_operation`` (diff is
     one-way; deletions cannot be reversed).
   - Mutating an attribute on a pre-existing node requires
@@ -45,6 +51,55 @@ import maya.api.OpenMaya as om
 
 # From this package:
 from mayatk.display_utils._display_utils import DisplayUtils
+from mayatk.node_utils._node_utils import NodeUtils
+
+
+class OperationError(Exception):
+    """User-facing operation failure for the Preview message box.
+
+    Raise from ``perform_operation`` -- chained with ``from`` so the console
+    keeps the original traceback -- to replace a raw, multi-line driver error
+    (e.g. Maya's ``polyBridgeEdge`` wall of text + help URLs) with a short,
+    readable popup. ``causes`` render as bullet points to help the user
+    self-diagnose; inline HTML (e.g. ``<b>...</b>``) is supported.
+    """
+
+    def __init__(self, message: str, causes=None, title: str = "Operation failed"):
+        super().__init__(message)
+        self.user_message = message
+        self.causes = list(causes) if causes else []
+        self.title = title
+
+
+def _format_op_error(err: Exception) -> str:
+    """Build a clean, readable message-box string from an exception.
+
+    The full traceback is logged to the console separately; this is only the
+    popup text. :class:`OperationError` contributes its curated message and
+    bullet causes; any other exception is reduced to its first non-empty line
+    so multi-line driver errors don't leak into the popup. Falls back to plain
+    text if the ``uitk`` rich-text helper is unavailable.
+    """
+    if isinstance(err, OperationError):
+        # Author-controlled text -- inline HTML (e.g. <b>) is intentional.
+        title, body, bullets = err.title, err.user_message, (err.causes or None)
+    else:
+        from html import escape
+
+        title = "Operation failed"
+        lines = [ln.strip() for ln in str(err).splitlines() if ln.strip()]
+        # Untrusted text -> escape so a stray '<' (e.g. "'<' not supported")
+        # renders literally instead of being swallowed as an HTML tag.
+        body = escape(lines[0]) if lines else type(err).__name__
+        bullets = None
+
+    try:
+        from uitk.widgets.mixins.tooltip_mixin import fmt
+
+        return fmt(title=title, body=body, bullets=bullets)
+    except Exception:  # uitk unavailable -- degrade to plain text
+        tail = (" " + " ".join(bullets)) if bullets else ""
+        return f"{title}: {body}{tail}"
 
 
 class CleanupContract:
@@ -173,6 +228,80 @@ class CleanupContract:
             except Exception:
                 pass
 
+    # ----------------------------------------------- in-place mesh restore
+    @classmethod
+    def _mesh_signature(cls, transform: str):
+        """Cheap topology + world-extent signature used to decide whether a
+        surviving original still matches its pristine duplicate.
+
+        Returns ``None`` for non-mesh (or shape-less) transforms, which the
+        divergence check treats as "not diverged" -- so the in-place restore
+        only ever runs on genuine meshes.
+        """
+        shape = NodeUtils.get_shape(transform, no_intermediate=True)
+        if not shape:
+            return None
+        try:
+            sig = (
+                cmds.polyEvaluate(shape, vertex=True),
+                cmds.polyEvaluate(shape, edge=True),
+                cmds.polyEvaluate(shape, face=True),
+            )
+        except Exception:
+            return None
+        # polyEvaluate returns a str/dict on non-mesh or error shapes.
+        if not all(isinstance(n, int) for n in sig):
+            return None
+        try:
+            bbox = tuple(round(v, 5) for v in cmds.exactWorldBoundingBox(transform))
+        except Exception:
+            bbox = None
+        return sig + (bbox,)
+
+    @classmethod
+    def _mesh_diverged(cls, transform: str, dup: str) -> bool:
+        a = cls._mesh_signature(transform)
+        b = cls._mesh_signature(dup)
+        if a is None or b is None:
+            return False
+        return a != b
+
+    @classmethod
+    def _restore_mesh_in_place(cls, transform: str, dup: str) -> None:
+        """Overwrite *transform*'s mesh with the pristine *dup*'s mesh while
+        keeping the original shape node (and thus its identity/UUID) intact.
+
+        Feeds the duplicate's ``outMesh`` into the original ``inMesh`` then
+        bakes it via ``delete(ch=True)`` -- which evaluates the pristine mesh
+        into the shape and severs the temporary connection.
+        """
+        orig_shape = NodeUtils.get_shape(transform, no_intermediate=True)
+        dup_shape = NodeUtils.get_shape(dup, no_intermediate=True)
+        if not orig_shape or not dup_shape:
+            return
+        cmds.connectAttr(f"{dup_shape}.outMesh", f"{orig_shape}.inMesh", force=True)
+        cmds.delete(orig_shape, constructionHistory=True)
+
+    @staticmethod
+    def _shares_surviving_instance(path: str, created: Set[str]) -> bool:
+        """True if *path* is a shape node that is multiply-instanced and at least
+        one of its instance paths is NOT in *created* -- i.e. it's shared with a
+        surviving original. Deleting such a shape by its created path would orphan
+        the survivor's geometry (instance-mode DuplicateLinear/Radial share the
+        original's shape); deleting the created instance transform removes the
+        extra instance safely instead.
+        """
+        try:
+            sel = om.MSelectionList()
+            sel.add(path)
+            if not sel.getDependNode(0).hasFn(om.MFn.kShape):
+                return False
+            node = sel.getDagPath(0).node()
+            all_paths = [p.fullPathName() for p in om.MDagPath.getAllPathsTo(node)]
+            return len(all_paths) > 1 and any(p not in created for p in all_paths)
+        except Exception:
+            return False
+
     def rollback(self) -> None:
         prev = cmds.undoInfo(q=True, state=True)
         cmds.undoInfo(stateWithoutFlush=False)
@@ -193,8 +322,18 @@ class CleanupContract:
                 except Exception:
                     pass
             # 2. Delete created nodes -- expressions first to avoid eval errors
-            # on still-dangling references.
-            existing = [n for n in self.created if cmds.objExists(n)]
+            # on still-dangling references. Skip multiply-instanced shape paths
+            # shared with a surviving (non-created) instance: instance-mode ops
+            # (e.g. DuplicateLinear) share the ORIGINAL's shape, and deleting it
+            # by the created path destroys the original's geometry. Deleting the
+            # created instance *transforms* removes the extra instance safely and
+            # leaves the shared shape on the survivor.
+            existing = [
+                n
+                for n in self.created
+                if cmds.objExists(n)
+                and not self._shares_surviving_instance(n, self.created)
+            ]
             exprs = [n for n in existing if cmds.nodeType(n) == "expression"]
             rest = [n for n in existing if n not in exprs]
             if exprs:
@@ -241,8 +380,28 @@ class CleanupContract:
                                 except Exception:
                                     pass  # collision or invalid; leave dup uuid
                     elif cmds.objExists(p["dup"]):
-                        # Original survived; the duplicate is unused.
-                        cmds.delete(p["dup"])
+                        # Original survived. Node-diff deletion may still have
+                        # BAKED an in-place mesh mutation: ops like polyCut run
+                        # on a HISTORYLESS mesh create an intermediate orig
+                        # shape that holds the only pristine copy, and deleting
+                        # it (counted as a "created" node) leaves the mutated
+                        # result baked into the visible shape. Detect that by
+                        # comparing the live mesh to the pristine duplicate; if
+                        # they diverged, restore the mesh in place -- preserving
+                        # the original shape's identity/UUID -- rather than
+                        # leaving the bake. When they match (node-diff already
+                        # reverted, e.g. a mesh WITH upstream history), skip the
+                        # restore so legitimate construction history is kept.
+                        try:
+                            orig_path = (
+                                cmds.ls(p["orig_uuid"], long=True) or [None]
+                            )[0]
+                            if orig_path and self._mesh_diverged(orig_path, p["dup"]):
+                                self._restore_mesh_in_place(orig_path, p["dup"])
+                        finally:
+                            # Always remove the snapshot, even if restore raised.
+                            if cmds.objExists(p["dup"]):
+                                cmds.delete(p["dup"])
                 except Exception:
                     continue
             # 4. Files
@@ -264,7 +423,7 @@ def _safe(func):
         except Exception as e:
             self.logger.exception(f"Error in {func.__name__}: {e}")
             if self.message_func:
-                self.message_func(f"Preview error: {e}")
+                self.message_func(_format_op_error(e))
             # Reentry guard: if disable() itself raises, _safe(disable) would
             # otherwise call self.disable() again -> infinite recursion.
             if not getattr(self, "_in_recovery", False):
@@ -454,11 +613,14 @@ class Preview:
     def _run_preview_phase(self) -> None:
         """Build a fresh contract and run perform_operation under it.
 
-        If the operation_instance declares ``MUTATES_SELECTION = True``, the
-        contract preserves (duplicates+hides) the captured selection so
-        rollback can restore originals that perform_operation deletes.
-        Default is opt-in to avoid paying duplication cost for ops that
-        don't need it (e.g. ShadowRig on a 10k-node hierarchy).
+        If the operation_instance declares ``MUTATES_SELECTION = True`` or
+        ``PRESERVE_GEOMETRY = True``, the contract preserves (duplicates+hides)
+        the captured selection's owning transform(s) so rollback can restore
+        originals that perform_operation deletes or bakes in place. The
+        selection is resolved to transforms because component selections (e.g.
+        Bridge's edges) can't be duplicated. Default is opt-in to avoid paying
+        duplication cost for ops that don't need it (e.g. ShadowRig on a 10k-node
+        hierarchy).
 
         Caller must hold ``_refresh_in_progress`` for the duration --
         ``enable`` and ``refresh`` are the only callers. The flag covers
@@ -469,11 +631,26 @@ class Preview:
         etc.) fire on idle and are handled separately by PivotWatcher's
         signature dedup -- those don't reach the flag.
         """
-        preserve = (
-            self._captured_objects
-            if getattr(self.operation_instance, "MUTATES_SELECTION", False)
-            else None
-        )
+        preserve = None
+        if getattr(self.operation_instance, "MUTATES_SELECTION", False) or getattr(
+            self.operation_instance, "PRESERVE_GEOMETRY", False
+        ):
+            # Resolve the captured selection to its owning transform(s).
+            # Component selections (e.g. Bridge's edges) can't be
+            # duplicated/UUID'd, and on a historyless mesh rollback's node-diff
+            # bakes the op's result when it deletes the auto-created orig-shape
+            # -- so the preserved geometry is what restores it. get_transform_node
+            # is idempotent for transform selections (Mirror, CutOnAxis), so this
+            # is safe for every preserve user.
+            resolved = NodeUtils.get_transform_node(
+                self._captured_objects, returned_type="str"
+            )
+            if resolved:
+                preserve = (
+                    list(resolved)
+                    if isinstance(resolved, (list, tuple))
+                    else [resolved]
+                )
         self._contract = CleanupContract(preserve=preserve)
         try:
             with self._contract:
@@ -507,7 +684,7 @@ class Preview:
                     pass
         except Exception as e:
             self.logger.exception(f"perform_operation raised: {e}")
-            self.message_func(f"Operation failed: {e}")
+            self.message_func(_format_op_error(e))
 
     @_safe
     def refresh(self, *args) -> None:

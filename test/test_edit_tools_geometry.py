@@ -18,9 +18,10 @@ import maya.cmds as cmds
 from mayatk.edit_utils.bevel import Bevel
 from mayatk.edit_utils.bridge import Bridge
 from mayatk.edit_utils.snap import Snap
-from mayatk.edit_utils.cut_on_axis import CutOnAxis
+from mayatk.edit_utils.cut_on_axis import CutOnAxis, CutOnAxisSlots
 from mayatk.edit_utils.mirror import MirrorSlots
 from mayatk.edit_utils._edit_utils import EditUtils
+from mayatk.core_utils.preview import Preview
 
 from base_test import MayaTkTestCase, QuickTestCase
 
@@ -307,6 +308,234 @@ class TestCutOnAxis(MayaTkTestCase):
         bbox = cmds.exactWorldBoundingBox(cube)
         self.assertLess(bbox[3], 0.01)
         self.assertAlmostEqual(bbox[0], -0.7, places=3)
+
+
+class _MockSignal:
+    """Minimal Qt-signal stand-in so Preview can be driven Qt-free."""
+
+    def __init__(self):
+        self._slots = []
+
+    def connect(self, fn):
+        self._slots.append(fn)
+
+    def emit(self, *args):
+        for fn in list(self._slots):
+            fn(*args)
+
+
+class _MockWidget:
+    """Mock checkbox / button exposing only what Preview touches."""
+
+    def __init__(self):
+        self.toggled = _MockSignal()
+        self.clicked = _MockSignal()
+        self._checked = False
+        self._enabled = True
+        self.exclude_from_reset = False
+        self.restore_state = True
+
+    def setChecked(self, v):
+        self._checked = bool(v)
+
+    def isChecked(self):
+        return self._checked
+
+    def setEnabled(self, v):
+        self._enabled = bool(v)
+
+    def isEnabled(self):
+        return self._enabled
+
+    def blockSignals(self, v):
+        return False
+
+    def window(self):
+        return None
+
+
+class _CutPreviewOp:
+    """Stand-in for CutOnAxisSlots' preview contract: holds mutable params
+    (like the UI widgets would) and forwards to CutOnAxis.perform_cut_on_axis.
+
+    Mirrors the real slots class' PRESERVE_GEOMETRY opt-in so the Preview
+    contract snapshots geometry for in-place-mutation rollback.
+    """
+
+    PRESERVE_GEOMETRY = True
+
+    def __init__(self, **params):
+        self.params = dict(
+            axis="-x", pivot="object", cuts=1, cut_offset=0,
+            delete=False, mirror=False, use_object_axes=True,
+        )
+        self.params.update(params)
+
+    def perform_operation(self, objects, contract):
+        CutOnAxis.perform_cut_on_axis(objects, **self.params)
+
+
+class TestCutOnAxisPreviewRollback(MayaTkTestCase):
+    """Regression: the Cut-on-Axis preview must roll back the previous cut
+    before producing a new one when a value changes, even on meshes with no
+    upstream construction history (frozen / imported).
+
+    Bug: polyCut(ch=True) on a historyless mesh creates an intermediate
+    orig-shape that holds the only pristine copy. The hermetic preview's
+    node-diff rollback deleted that orig-shape along with the polyCut node,
+    which BAKED the cut into the visible mesh instead of reverting it. Each
+    value change therefore stacked another cut ("creating multiple cuts
+    instead of undoing and creating a new cut"). Verified in Maya before fix.
+    """
+
+    @staticmethod
+    def _counts(node):
+        return (
+            cmds.polyEvaluate(node, vertex=True),
+            cmds.polyEvaluate(node, edge=True),
+            cmds.polyEvaluate(node, face=True),
+        )
+
+    def _make_preview(self, op):
+        chk, btn = _MockWidget(), _MockWidget()
+        pv = Preview(op, chk, btn, message_func=lambda *a: None)
+        self._previews.append(pv)
+        return pv
+
+    def setUp(self):
+        super().setUp()
+        self._previews = []
+
+    def tearDown(self):
+        for pv in self._previews:
+            try:
+                pv.cleanup()
+            except Exception:
+                pass
+        Preview.cleanup_all_instances()
+        super().tearDown()
+
+    def _historyless_cube(self, name="cut_preview"):
+        cube = cmds.polyCube(name=name)[0]
+        cmds.delete(cube, constructionHistory=True)  # drop upstream history
+        return cube
+
+    def _clean_cut_counts(self, cuts, name):
+        """Counts from a single fresh preview-enable of `cuts` on a
+        historyless cube (the reference a refresh sequence must match)."""
+        ref = self._historyless_cube(name)
+        pv = self._make_preview(_CutPreviewOp(cuts=cuts))
+        cmds.select(ref)
+        pv.enable()
+        result = self._counts(ref)
+        pv.disable()
+        return result
+
+    def test_slots_class_opts_into_geometry_preservation(self):
+        """CutOnAxisSlots must declare PRESERVE_GEOMETRY so the preview
+        snapshots geometry for robust rollback."""
+        self.assertTrue(
+            getattr(CutOnAxisSlots, "PRESERVE_GEOMETRY", False),
+            "CutOnAxisSlots must set PRESERVE_GEOMETRY = True",
+        )
+
+    def test_refresh_does_not_accumulate_on_historyless_mesh(self):
+        cube = self._historyless_cube()
+        original = self._counts(cube)
+
+        # Reference: a clean 2-cut preview on a fresh historyless cube.
+        clean_two_cut = self._clean_cut_counts(2, "cut_preview_ref")
+
+        # Live tool: enable with 1 cut, then "change the value" -> refresh
+        # with 2 cuts. The 2-cut result must match the clean reference,
+        # i.e. the 1-cut preview was rolled back rather than stacked.
+        op = _CutPreviewOp(cuts=1)
+        pv = self._make_preview(op)
+        cmds.select(cube)
+        pv.enable()
+        after_one = self._counts(cube)
+        self.assertNotEqual(after_one, original, "1-cut preview did nothing")
+
+        op.params["cuts"] = 2
+        pv.refresh()
+        after_two = self._counts(cube)
+
+        self.assertEqual(
+            after_two, clean_two_cut,
+            f"Cuts accumulated across refresh: got {after_two}, "
+            f"expected a clean 2-cut {clean_two_cut}",
+        )
+
+        # Disabling the preview must restore the mesh to its original state.
+        pv.disable()
+        self.assertEqual(
+            self._counts(cube), original,
+            "Disabling preview did not restore the original mesh",
+        )
+
+    def test_repeated_refresh_does_not_leak_geometry(self):
+        """Many value changes in a row must not stack cuts or leave stray
+        intermediate shapes on a historyless mesh."""
+        cube = self._historyless_cube("cut_preview_repeat")
+        original = self._counts(cube)
+        shapes_before = len(cmds.ls(type="mesh") or [])
+
+        op = _CutPreviewOp(cuts=1)
+        pv = self._make_preview(op)
+        cmds.select(cube)
+        pv.enable()
+
+        for n in (2, 3, 4, 1, 5):
+            op.params["cuts"] = n
+            pv.refresh()
+
+        # Final preview is 5 cuts; compare against a clean 5-cut reference.
+        clean_five = self._clean_cut_counts(5, "cut_preview_repeat_ref")
+
+        self.assertEqual(
+            self._counts(cube), clean_five,
+            "Repeated refresh accumulated geometry instead of replacing it",
+        )
+
+        pv.disable()
+        self.assertEqual(self._counts(cube), original)
+        # No leaked intermediate shapes under the restored cube.
+        self.assertEqual(
+            cmds.listRelatives(cube, shapes=True, type="mesh") or [],
+            cmds.listRelatives(cube, shapes=True, type="mesh", noIntermediate=True) or [],
+            "Rollback left a stray intermediate shape on the mesh",
+        )
+
+    def test_with_history_mesh_keeps_construction_history(self):
+        """On a mesh WITH upstream history, node-diff already reverts the cut,
+        so the in-place restore must be SKIPPED — otherwise rollback would
+        strip the user's legitimate construction history. Guards the
+        signature-divergence shortcut against false positives."""
+        cube = cmds.polyCube(name="cut_with_hist")[0]  # keeps polyCube history
+
+        def poly_creators():
+            return [
+                h for h in (cmds.listHistory(cube, pruneDagObjects=True) or [])
+                if cmds.nodeType(h) == "polyCube"
+            ]
+
+        original = self._counts(cube)
+        self.assertTrue(poly_creators(), "fixture should have polyCube history")
+
+        op = _CutPreviewOp(cuts=1)
+        pv = self._make_preview(op)
+        cmds.select(cube)
+        pv.enable()
+        op.params["cuts"] = 2
+        pv.refresh()
+        pv.disable()
+
+        self.assertEqual(self._counts(cube), original, "geometry not reverted")
+        self.assertTrue(
+            poly_creators(),
+            "Rollback stripped the mesh's construction history (false-positive "
+            "divergence baked the mesh instead of skipping the restore)",
+        )
 
 
 class TestMirrorResolvePivot(QuickTestCase):

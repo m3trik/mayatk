@@ -16,6 +16,7 @@ import maya.cmds as cmds
 from mayatk.edit_utils.duplicate_linear import DuplicateLinear, DuplicateLinearSlots
 from mayatk.edit_utils.duplicate_radial import DuplicateRadial, DuplicateRadialSlots
 from mayatk.edit_utils.duplicate_grid import DuplicateGrid
+from mayatk.core_utils.preview import Preview
 
 from base_test import MayaTkTestCase, QuickTestCase
 
@@ -309,6 +310,132 @@ class TestDuplicateSlotsContract(QuickTestCase):
         no-ops via rollback's UUID restore path.
         """
         self.assertTrue(getattr(DuplicateLinearSlots, "MUTATES_SELECTION", False))
+
+
+class _MockSignal:
+    def __init__(self):
+        self._slots = []
+
+    def connect(self, fn):
+        self._slots.append(fn)
+
+    def emit(self, *args):
+        for fn in list(self._slots):
+            fn(*args)
+
+
+class _MockWidget:
+    """Mock checkbox / button exposing only what Preview touches."""
+
+    def __init__(self):
+        self.toggled = _MockSignal()
+        self.clicked = _MockSignal()
+        self._checked = False
+        self._enabled = True
+        self.exclude_from_reset = False
+        self.restore_state = True
+
+    def setChecked(self, v):
+        self._checked = bool(v)
+
+    def isChecked(self):
+        return self._checked
+
+    def setEnabled(self, v):
+        self._enabled = bool(v)
+
+    def isEnabled(self):
+        return self._enabled
+
+    def blockSignals(self, v):
+        return False
+
+    def window(self):
+        return None
+
+
+class _DupLinearPreviewOp:
+    """Stand-in for DuplicateLinearSlots: mutable params forwarding to
+    DuplicateLinear.duplicate_linear. Mirrors the real MUTATES_SELECTION opt-in."""
+
+    MUTATES_SELECTION = True
+
+    def __init__(self, **params):
+        self.params = dict(num_copies=2, translate=(3, 0, 0), instance=True)
+        self.params.update(params)
+
+    def perform_operation(self, objects, contract):
+        DuplicateLinear.duplicate_linear(objects, **self.params)
+
+
+class TestDuplicateLinearPreviewRollback(MayaTkTestCase):
+    """Regression: instance-mode preview must not destroy the original's shape
+    on rollback.
+
+    Bug: cmds.instance shares the ORIGINAL's shape node across the new instance
+    transforms. The hermetic preview's node-diff (cmds.ls allPaths=True) captured
+    the instanced shape PATH as 'created' and deleted it on rollback, which
+    orphaned the original -- the transform survived (so the MUTATES_SELECTION
+    UUID restore saw it as alive) but its shape was gone. "Losing the object I'm
+    trying to duplicate." Verified in Maya before fix.
+    """
+
+    @staticmethod
+    def _has_shape(node):
+        return bool(cmds.listRelatives(node, shapes=True, fullPath=True))
+
+    def _make_preview(self, op):
+        pv = Preview(op, _MockWidget(), _MockWidget(), message_func=lambda *a: None)
+        self._previews.append(pv)
+        return pv
+
+    def setUp(self):
+        super().setUp()
+        self._previews = []
+
+    def tearDown(self):
+        for pv in self._previews:
+            try:
+                pv.cleanup()
+            except Exception:
+                pass
+        Preview.cleanup_all_instances()
+        super().tearDown()
+
+    def test_instance_preview_disable_keeps_original(self):
+        cube = cmds.polyCube(name="dl_inst_keep")[0]
+        orig_faces = cmds.polyEvaluate(cube, face=True)
+
+        op = _DupLinearPreviewOp(instance=True)
+        pv = self._make_preview(op)
+        cmds.select(cube)
+        pv.enable()
+        self.assertTrue(self._has_shape(cube), "preview lost the shape on enable")
+
+        pv.disable()
+        self.assertTrue(
+            self._has_shape(cube), "rollback destroyed the original's shape"
+        )
+        self.assertEqual(cmds.polyEvaluate(cube, face=True), orig_faces)
+
+    def test_instance_preview_refresh_keeps_original(self):
+        cube = cmds.polyCube(name="dl_inst_refresh")[0]
+        orig_faces = cmds.polyEvaluate(cube, face=True)
+
+        op = _DupLinearPreviewOp(instance=True, num_copies=2)
+        pv = self._make_preview(op)
+        cmds.select(cube)
+        pv.enable()
+
+        op.params["num_copies"] = 4  # "change the count" -> refresh
+        pv.refresh()
+        self.assertTrue(
+            self._has_shape(cube), "refresh destroyed the original's shape"
+        )
+
+        pv.disable()
+        self.assertTrue(self._has_shape(cube))
+        self.assertEqual(cmds.polyEvaluate(cube, face=True), orig_faces)
 
 
 if __name__ == "__main__":

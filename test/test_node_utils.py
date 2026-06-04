@@ -148,8 +148,11 @@ class TestNodeUtils(MayaTkTestCase):
 
         children = NodeUtils.get_unique_children(grp)
         self.assertEqual(len(children), 2)
-        self.assertIn(c1, children)
-        self.assertIn(c2, children)
+        # get_unique_children returns full DAG paths (listRelatives fullPath=True),
+        # so compare by leaf name rather than the bare creation name.
+        leaves = {c.split("|")[-1] for c in children}
+        self.assertIn(c1, leaves)
+        self.assertIn(c2, leaves)
 
     def test_get_shapes(self):
         """get_shapes returns non-intermediate shape children of a transform."""

@@ -1,7 +1,7 @@
 {
   "name": "mayatk",
   "source_root": "mayatk/mayatk",
-  "generated_at": "2026-05-27",
+  "generated_at": "2026-06-04",
   "modules": [
     {
       "relpath": "anim_utils/_anim_utils.py",
@@ -6269,15 +6269,24 @@
           "kind": "function",
           "signature": "() -> None",
           "summary": "",
-          "line": 632,
+          "line": 809,
           "deprecated": false
         }
       ],
       "classes": [
         {
+          "name": "OperationError",
+          "summary": "User-facing operation failure for the Preview message box.",
+          "line": 57,
+          "bases": [
+            "Exception"
+          ],
+          "members": []
+        },
+        {
           "name": "CleanupContract",
           "summary": "Captures and reverses side effects of a previewed operation.",
-          "line": 50,
+          "line": 105,
           "bases": [],
           "members": [
             {
@@ -6286,7 +6295,7 @@
               "kind": "method",
               "signature": "(self, path) -> None",
               "summary": "",
-              "line": 165,
+              "line": 220,
               "deprecated": false
             },
             {
@@ -6295,7 +6304,7 @@
               "kind": "method",
               "signature": "(self, node: str, attr: str) -> None",
               "summary": "",
-              "line": 168,
+              "line": 223,
               "deprecated": false
             },
             {
@@ -6304,7 +6313,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 176,
+              "line": 305,
               "deprecated": false
             }
           ]
@@ -6312,7 +6321,7 @@
         {
           "name": "Preview",
           "summary": "Hermetic preview orchestrator (H1).",
-          "line": 285,
+          "line": 444,
           "bases": [],
           "members": [
             {
@@ -6321,7 +6330,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "",
-              "line": 296,
+              "line": 455,
               "deprecated": false
             },
             {
@@ -6330,7 +6339,7 @@
               "kind": "method",
               "signature": "(self, enable_on_show: bool, disable_on_hide: bool) -> None",
               "summary": "",
-              "line": 376,
+              "line": 535,
               "deprecated": false
             },
             {
@@ -6339,7 +6348,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 391,
+              "line": 550,
               "deprecated": false
             },
             {
@@ -6348,7 +6357,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 395,
+              "line": 554,
               "deprecated": false
             },
             {
@@ -6357,7 +6366,7 @@
               "kind": "method",
               "signature": "(self, state: bool) -> None",
               "summary": "",
-              "line": 400,
+              "line": 559,
               "deprecated": false
             },
             {
@@ -6366,7 +6375,7 @@
               "kind": "method",
               "signature": "(self, objects: List[Any]) -> bool",
               "summary": "",
-              "line": 406,
+              "line": 565,
               "deprecated": false
             },
             {
@@ -6375,7 +6384,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 416,
+              "line": 575,
               "deprecated": false
             },
             {
@@ -6384,7 +6393,7 @@
               "kind": "method",
               "signature": "(self, *args) -> None",
               "summary": "Roll back the previous preview and re-run perform_operation.",
-              "line": 513,
+              "line": 690,
               "deprecated": false
             },
             {
@@ -6393,7 +6402,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Roll back the preview without committing.",
-              "line": 538,
+              "line": 715,
               "deprecated": false
             },
             {
@@ -6402,7 +6411,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Commit: rollback the hermetic version, then replay under undo.",
-              "line": 560,
+              "line": 737,
               "deprecated": false
             },
             {
@@ -6411,7 +6420,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 608,
+              "line": 785,
               "deprecated": false
             },
             {
@@ -6420,7 +6429,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "",
-              "line": 621,
+              "line": 798,
               "deprecated": false
             },
             {
@@ -6429,7 +6438,7 @@
               "kind": "property",
               "signature": "(self) -> int",
               "summary": "",
-              "line": 625,
+              "line": 802,
               "deprecated": false
             },
             {
@@ -6438,7 +6447,7 @@
               "kind": "method",
               "signature": "(self) -> List[str]",
               "summary": "",
-              "line": 628,
+              "line": 805,
               "deprecated": false
             }
           ]
@@ -7473,7 +7482,7 @@
               "qualname": "Bridge.bridge",
               "kind": "staticmethod",
               "signature": "(edges, **kwargs)",
-              "summary": "",
+              "summary": "Bridge open edge loops, grouped per owning mesh.",
               "line": 16,
               "deprecated": false
             },
@@ -7483,7 +7492,7 @@
               "kind": "staticmethod",
               "signature": "(mesh_nodes)",
               "summary": "Find child curves created by polyBridgeEdge operations on mesh nodes.",
-              "line": 24,
+              "line": 110,
               "deprecated": false
             },
             {
@@ -7492,7 +7501,7 @@
               "kind": "staticmethod",
               "signature": "(mesh_nodes)",
               "summary": "Clean up child curves and deformer history from mesh nodes.",
-              "line": 47,
+              "line": 133,
               "deprecated": false
             }
           ]
@@ -7500,7 +7509,7 @@
         {
           "name": "BridgeSlots",
           "summary": "",
-          "line": 80,
+          "line": 166,
           "bases": [],
           "members": [
             {
@@ -7509,7 +7518,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text.",
-              "line": 99,
+              "line": 192,
               "deprecated": false
             },
             {
@@ -7518,7 +7527,186 @@
               "kind": "method",
               "signature": "(self, objects, contract)",
               "summary": "",
-              "line": 123,
+              "line": 216,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relpath": "edit_utils/curtain.py",
+      "summary": "Procedural draped-cloth (curtain) generator for Maya.",
+      "functions": [
+        {
+          "name": "catenary_shape",
+          "qualname": "catenary_shape",
+          "kind": "function",
+          "signature": "(t: float, tension: float) -> float",
+          "summary": "Normalized catenary profile across a span.",
+          "line": 83,
+          "deprecated": false
+        },
+        {
+          "name": "sag_profile",
+          "qualname": "sag_profile",
+          "kind": "function",
+          "signature": "(t: float, tension: float, round_amount: float) -> float",
+          "summary": "Catenary sag profile, optionally rounded at the supports.",
+          "line": 102,
+          "deprecated": false
+        }
+      ],
+      "classes": [
+        {
+          "name": "Rail",
+          "summary": "Pure rail-polyline geometry — the line a curtain hangs from.",
+          "line": 125,
+          "bases": [],
+          "members": [
+            {
+              "name": "make",
+              "qualname": "Rail.make",
+              "kind": "staticmethod",
+              "signature": "(width: float = 6.0, curvature: float = 0.0, segments: int = 24, closed: bool = False, y: float = 0.0) -> Tuple[List[Vec], bool]",
+              "summary": "Build a default rail: a straight line of ``width`` (``curvature == 0``).",
+              "line": 135,
+              "deprecated": false
+            },
+            {
+              "name": "from_selection",
+              "qualname": "Rail.from_selection",
+              "kind": "staticmethod",
+              "signature": "(objects) -> Optional[Tuple[List[Vec], bool]]",
+              "summary": "Resolve a rail polyline from a Maya selection.",
+              "line": 163,
+              "deprecated": false
+            },
+            {
+              "name": "sample_curve",
+              "qualname": "Rail.sample_curve",
+              "kind": "staticmethod",
+              "signature": "(shape: str, count: int = 200) -> Tuple[List[Vec], bool]",
+              "summary": "Sample a NURBS curve into a dense polyline (resampled later by length).",
+              "line": 216,
+              "deprecated": false
+            },
+            {
+              "name": "length",
+              "qualname": "Rail.length",
+              "kind": "staticmethod",
+              "signature": "(points: Sequence[Vec], closed: bool) -> float",
+              "summary": "Total arc length of the polyline (wrapping last->first if closed).",
+              "line": 231,
+              "deprecated": false
+            },
+            {
+              "name": "resample",
+              "qualname": "Rail.resample",
+              "kind": "staticmethod",
+              "signature": "(points: Sequence[Vec], count: int) -> List[Vec]",
+              "summary": "Resample to *count* evenly-spaced points (ecosystem SSoT helper).",
+              "line": 240,
+              "deprecated": false
+            },
+            {
+              "name": "frames",
+              "qualname": "Rail.frames",
+              "kind": "staticmethod",
+              "signature": "(points: Sequence[Vec], u_segs: int, closed: bool) -> List[Tuple[Vec, Vec, Vec]]",
+              "summary": "Resample the rail to ``u_segs + 1`` even points with local frames.",
+              "line": 248,
+              "deprecated": false
+            }
+          ]
+        },
+        {
+          "name": "CurtainMesh",
+          "summary": "Generate a pleated, gravity-draped curtain mesh from a rail polyline.",
+          "line": 299,
+          "bases": [
+            "ptk.LoggingMixin"
+          ],
+          "members": [
+            {
+              "name": "create",
+              "qualname": "CurtainMesh.create",
+              "kind": "classmethod",
+              "signature": "(cls, rail: Sequence[Vec], **opts) -> str",
+              "summary": "",
+              "line": 404,
+              "deprecated": false
+            },
+            {
+              "name": "build",
+              "qualname": "CurtainMesh.build",
+              "kind": "method",
+              "signature": "(self) -> str",
+              "summary": "Create the curtain mesh and return its transform name.",
+              "line": 407,
+              "deprecated": false
+            }
+          ]
+        },
+        {
+          "name": "CurtainRig",
+          "summary": "Make a curve drive a finished curtain.",
+          "line": 607,
+          "bases": [],
+          "members": [
+            {
+              "name": "attach",
+              "qualname": "CurtainRig.attach",
+              "kind": "staticmethod",
+              "signature": "(curtain: str, curve: str, dropoff: float, cluster: bool = True) -> str",
+              "summary": "Wire-deform *curtain* with *curve* and add per-CV cluster controls.",
+              "line": 617,
+              "deprecated": false
+            }
+          ]
+        },
+        {
+          "name": "CurtainSlots",
+          "summary": "Switchboard slot wiring for the curtain UI (hermetic preview + presets).",
+          "line": 669,
+          "bases": [
+            "ptk.LoggingMixin"
+          ],
+          "members": [
+            {
+              "name": "header_init",
+              "qualname": "CurtainSlots.header_init",
+              "kind": "method",
+              "signature": "(self, widget)",
+              "summary": "Configure header help text (the preset combo lives in the panel).",
+              "line": 710,
+              "deprecated": false
+            },
+            {
+              "name": "cmb000_init",
+              "qualname": "CurtainSlots.cmb000_init",
+              "kind": "method",
+              "signature": "(self, widget)",
+              "summary": "Wire the in-panel preset selector (built-in + user tiers).",
+              "line": 756,
+              "deprecated": false
+            },
+            {
+              "name": "b001",
+              "qualname": "CurtainSlots.b001",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Reset to Defaults.",
+              "line": 920,
+              "deprecated": false
+            },
+            {
+              "name": "perform_operation",
+              "qualname": "CurtainSlots.perform_operation",
+              "kind": "method",
+              "signature": "(self, objects, contract)",
+              "summary": "Build the curtain from the resolved rail (Preview entry point).",
+              "line": 926,
               "deprecated": false
             }
           ]
@@ -7559,7 +7747,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text.",
-              "line": 82,
+              "line": 90,
               "deprecated": false
             },
             {
@@ -7568,7 +7756,7 @@
               "kind": "method",
               "signature": "(self, objects, contract)",
               "summary": "",
-              "line": 108,
+              "line": 116,
               "deprecated": false
             }
           ]
@@ -13454,42 +13642,51 @@
     },
     {
       "relpath": "mat_utils/marmoset_bridge/_marmoset_bridge.py",
-      "summary": "",
+      "summary": "Maya-side glue for the Marmoset Toolbag engine.",
       "functions": [
         {
-          "name": "resolve_toolbag_log_path",
-          "qualname": "resolve_toolbag_log_path",
+          "name": "build_bake_pairs_manifest",
+          "qualname": "build_bake_pairs_manifest",
           "kind": "function",
-          "signature": "(toolbag_exe: Optional[str]) -> Optional[str]",
-          "summary": "Return the path to Toolbag's application log, robust to version bumps.",
-          "line": 64,
+          "signature": "(objects: Sequence[str], high_suffix: str, low_suffix: str) -> Dict[str, str]",
+          "summary": "Build the ``{mesh_short_name: 'high'|'low'}`` sidecar for the bake.",
+          "line": 88,
           "deprecated": false
-        },
+        }
+      ],
+      "classes": [
         {
-          "name": "classify_log_line",
-          "qualname": "classify_log_line",
-          "kind": "function",
-          "signature": "(line: str) -> 'Optional[Tuple[str, str]]'",
-          "summary": "Map a Toolbag log line to ``(level, line)`` for routing into the bridge logger.",
-          "line": 126,
-          "deprecated": false
-        },
-        {
-          "name": "dispatch_log_lines",
-          "qualname": "dispatch_log_lines",
-          "kind": "function",
-          "signature": "(lines, logger) -> None",
-          "summary": "Forward each classified line to *logger* at its routed level.",
-          "line": 177,
-          "deprecated": false
-        },
+          "name": "MarmosetBridge",
+          "summary": "Export the Maya selection to Marmoset Toolbag with templated automation.",
+          "line": 138,
+          "bases": [
+            "MarmosetEngine"
+          ],
+          "members": [
+            {
+              "name": "send",
+              "qualname": "MarmosetBridge.send",
+              "kind": "method",
+              "signature": "(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, toolbag_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]",
+              "summary": "Export *objects*, build sidecars, and hand the FBX to the engine.",
+              "line": 153,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relpath": "mat_utils/marmoset_bridge/_marmoset_engine.py",
+      "summary": "Drive Marmoset Toolbag from the outside -- launch + templated automation.",
+      "functions": [
         {
           "name": "list_templates",
           "qualname": "list_templates",
           "kind": "function",
-          "signature": "() -> 'list[Path]'",
+          "signature": "() -> List[Path]",
           "summary": "Return user-visible templates in ``templates/`` (skips underscore-prefixed).",
-          "line": 258,
+          "line": 58,
           "deprecated": false
         },
         {
@@ -13498,80 +13695,71 @@
           "kind": "function",
           "signature": "(template_path: Path) -> Tuple[str, ...]",
           "summary": "Return the modes declared by *template_path*'s ``BRIDGE_MODES`` constant.",
-          "line": 265,
-          "deprecated": false
-        },
-        {
-          "name": "build_bake_pairs_manifest",
-          "qualname": "build_bake_pairs_manifest",
-          "kind": "function",
-          "signature": "(objects: Sequence[str], high_suffix: str, low_suffix: str) -> Dict[str, str]",
-          "summary": "Build the ``{mesh_short_name: 'high'|'low'}`` sidecar for the bake.",
-          "line": 314,
+          "line": 65,
           "deprecated": false
         },
         {
           "name": "list_template_modes",
           "qualname": "list_template_modes",
           "kind": "function",
-          "signature": "() -> 'list[tuple[str, str]]'",
+          "signature": "() -> List[Tuple[str, str]]",
           "summary": "Return ``[(stem, mode), ...]`` for every (template, mode) pairing.",
-          "line": 364,
+          "line": 89,
           "deprecated": false
         }
       ],
       "classes": [
         {
-          "name": "MarmosetBridge",
-          "summary": "Export Maya selection to Marmoset Toolbag with templated automation.",
-          "line": 378,
+          "name": "MarmosetEngine",
+          "summary": "Export-agnostic Marmoset Toolbag automation.",
+          "line": 103,
           "bases": [
             "ptk.LoggingMixin"
           ],
           "members": [
             {
               "name": "toolbag_path",
-              "qualname": "MarmosetBridge.toolbag_path",
+              "qualname": "MarmosetEngine.toolbag_path",
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "Resolve the Toolbag executable path.",
-              "line": 405,
+              "line": 137,
               "deprecated": false
             },
             {
               "name": "toolbag_path",
-              "qualname": "MarmosetBridge.toolbag_path",
+              "qualname": "MarmosetEngine.toolbag_path",
               "kind": "method",
               "signature": "(self, value: Optional[str]) -> None",
               "summary": "",
-              "line": 426,
+              "line": 158,
               "deprecated": false
             },
             {
               "name": "toolbag_log_path",
-              "qualname": "MarmosetBridge.toolbag_log_path",
+              "qualname": "MarmosetEngine.toolbag_log_path",
               "kind": "property",
               "signature": "(self) -> Optional[str]",
-              "summary": "Resolve Toolbag's application log file (where script prints + tracebacks land).",
-              "line": 448,
+              "summary": "Resolve Toolbag's application log file (script prints + tracebacks).",
+              "line": 180,
               "deprecated": false
             },
             {
               "name": "send",
-              "qualname": "MarmosetBridge.send",
+              "qualname": "MarmosetEngine.send",
               "kind": "method",
-              "signature": "(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, toolbag_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]",
-              "summary": "Export objects, render *template* in *mode*, and hand off to Toolbag.",
-              "line": 467,
+              "signature": "(self, model_path: str, manifest_path: Optional[str] = None, pairs_path: Optional[str] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, toolbag_exe: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]",
+              "summary": "Render *template* in *mode* against *model_path* and hand off to Toolbag.",
+              "line": 191,
               "deprecated": false
             },
             {
               "name": "render_template",
-              "qualname": "MarmosetBridge.render_template",
+              "qualname": "MarmosetEngine.render_template",
               "kind": "method",
-              "signature": "(self, template: str, fbx_path: str, manifest_path: str, output_dir: str, mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None, headless: Optional[bool] = None, pairs_path: Optional[str] = None) -> Optional[str]",
+              "signature": "(self, template: str, model_path: str, manifest_path: str, output_dir: str, mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None, headless: Optional[bool] = None, pairs_path: Optional[str] = None) -> Optional[str]",
               "summary": "Return the rendered Toolbag Python script body, or *None* on miss.",
-              "line": 668,
+              "line": 331,
               "deprecated": false
             }
           ]
@@ -13615,7 +13803,7 @@
           "kind": "function",
           "signature": "(name, scene_mats)",
           "summary": "Return the Toolbag material whose name matches *name*.",
-          "line": 127,
+          "line": 153,
           "deprecated": false
         },
         {
@@ -13624,7 +13812,7 @@
           "kind": "function",
           "signature": "(manifest_path)",
           "summary": "Return the ``materials`` dict from a MatManifest JSON sidecar.",
-          "line": 142,
+          "line": 168,
           "deprecated": false
         },
         {
@@ -13633,7 +13821,7 @@
           "kind": "function",
           "signature": "(manifest_path, verbose=True)",
           "summary": "Wire every texture slot in *manifest_path* onto matching Toolbag mats.",
-          "line": 159,
+          "line": 185,
           "deprecated": false
         },
         {
@@ -13642,7 +13830,7 @@
           "kind": "function",
           "signature": "(objects, high_suffix, low_suffix, pre_classified=None)",
           "summary": "Group *objects* into ``(highs, lows, others)`` by name suffix.",
-          "line": 282,
+          "line": 309,
           "deprecated": false
         },
         {
@@ -13651,7 +13839,7 @@
           "kind": "function",
           "signature": "(root)",
           "summary": "Recursively gather ``mset.MeshObject`` descendants of *root*.",
-          "line": 364,
+          "line": 391,
           "deprecated": false
         },
         {
@@ -13660,7 +13848,7 @@
           "kind": "function",
           "signature": "(preset_path)",
           "summary": "Load a ``.tbsky`` preset onto the scene's existing SkyObject.",
-          "line": 404,
+          "line": 431,
           "deprecated": false
         },
         {
@@ -13669,7 +13857,7 @@
           "kind": "function",
           "signature": "()",
           "summary": "Frame the imported scene in the viewport (best-effort).",
-          "line": 428,
+          "line": 455,
           "deprecated": false
         }
       ],
@@ -13757,7 +13945,7 @@
     },
     {
       "relpath": "mat_utils/marmoset_bridge/marmoset_rpc/connection.py",
-      "summary": "Maya-side JSON-RPC client for the marmoset_rpc Toolbag plugin.",
+      "summary": "JSON-RPC client bound to the marmoset_rpc Toolbag plugin.",
       "functions": [],
       "classes": [
         {
@@ -14044,6 +14232,40 @@
       "classes": []
     },
     {
+      "relpath": "mat_utils/marmoset_bridge/template_params.py",
+      "summary": "Plain default values + literal formatting for Marmoset template tokens.",
+      "functions": [
+        {
+          "name": "python_literal",
+          "qualname": "python_literal",
+          "kind": "function",
+          "signature": "(value: Any) -> str",
+          "summary": "Format *value* as a Python source literal for template substitution.",
+          "line": 49,
+          "deprecated": false
+        },
+        {
+          "name": "defaults",
+          "qualname": "defaults",
+          "kind": "function",
+          "signature": "() -> Dict[str, Any]",
+          "summary": "Return a copy of :data:`DEFAULTS`.",
+          "line": 60,
+          "deprecated": false
+        },
+        {
+          "name": "to_context",
+          "qualname": "to_context",
+          "kind": "function",
+          "signature": "(values: Dict[str, Any]) -> Dict[str, str]",
+          "summary": "Map ``{KEY: value}`` to ``{KEY: python-literal-string}``.",
+          "line": 65,
+          "deprecated": false
+        }
+      ],
+      "classes": []
+    },
+    {
       "relpath": "mat_utils/marmoset_bridge/templates/bake.py",
       "summary": "Bake high-poly detail into a low-poly target via Marmoset Toolbag.",
       "functions": [
@@ -14061,7 +14283,7 @@
     },
     {
       "relpath": "mat_utils/marmoset_bridge/templates/import.py",
-      "summary": "Open the FBX in Toolbag and wire materials from the Maya manifest.",
+      "summary": "Open the model in Toolbag and wire materials from the manifest.",
       "functions": [
         {
           "name": "main",
@@ -14069,7 +14291,7 @@
           "kind": "function",
           "signature": "()",
           "summary": "",
-          "line": 31,
+          "line": 32,
           "deprecated": false
         }
       ],
@@ -14077,7 +14299,7 @@
     },
     {
       "relpath": "mat_utils/marmoset_bridge/templates/lookdev.py",
-      "summary": "Open the FBX in Toolbag, apply a Sky preset, and frame the model.",
+      "summary": "Open the model in Toolbag, apply a Sky preset, and frame the model.",
       "functions": [
         {
           "name": "main",
@@ -14086,6 +14308,49 @@
           "signature": "()",
           "summary": "",
           "line": 41,
+          "deprecated": false
+        }
+      ],
+      "classes": []
+    },
+    {
+      "relpath": "mat_utils/marmoset_bridge/toolbag_log.py",
+      "summary": "Marmoset Toolbag log-file resolution, classification, and live tailing.",
+      "functions": [
+        {
+          "name": "resolve_toolbag_log_path",
+          "qualname": "resolve_toolbag_log_path",
+          "kind": "function",
+          "signature": "(toolbag_exe: Optional[str]) -> Optional[str]",
+          "summary": "Return the path to Toolbag's application log, robust to version bumps.",
+          "line": 29,
+          "deprecated": false
+        },
+        {
+          "name": "classify_log_line",
+          "qualname": "classify_log_line",
+          "kind": "function",
+          "signature": "(line: str) -> Optional[Tuple[str, str]]",
+          "summary": "Map a Toolbag log line to ``(level, line)`` for routing into a logger.",
+          "line": 83,
+          "deprecated": false
+        },
+        {
+          "name": "dispatch_log_lines",
+          "qualname": "dispatch_log_lines",
+          "kind": "function",
+          "signature": "(lines, logger) -> None",
+          "summary": "Forward each classified line to *logger* at its routed level.",
+          "line": 134,
+          "deprecated": false
+        },
+        {
+          "name": "start_toolbag_log_tail",
+          "qualname": "start_toolbag_log_tail",
+          "kind": "function",
+          "signature": "(log_path: str, start_offset: int, process, logger, poll_interval: float = 0.4, file_wait_timeout: float = 60.0)",
+          "summary": "Tail *log_path* from *start_offset* in a daemon thread.",
+          "line": 148,
           "deprecated": false
         }
       ],
@@ -19206,7 +19471,7 @@
               "name": "move_to",
               "qualname": "XformUtils.move_to",
               "kind": "classmethod",
-              "signature": "(cls, source, target, group_move=False)",
+              "signature": "(cls, source, target, pivot='center', group_move=False)",
               "summary": "Move source object(s) to align with the target object(s).",
               "line": 441,
               "deprecated": false
@@ -19217,7 +19482,7 @@
               "kind": "staticmethod",
               "signature": "(objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)",
               "summary": "Align objects to Y origin on the grid using a helper plane.",
-              "line": 470,
+              "line": 519,
               "deprecated": false
             },
             {
@@ -19226,7 +19491,7 @@
               "kind": "classmethod",
               "signature": "(cls, a, b, scale=True, average=False)",
               "summary": "Scale each of the given objects in 'a' to the combined bounding box of the objects in 'b'.",
-              "line": 504,
+              "line": 553,
               "deprecated": false
             },
             {
@@ -19235,7 +19500,7 @@
               "kind": "staticmethod",
               "signature": "(objects, scale_factor=1.1) -> None",
               "summary": "Scales each set of connected edges separately, either uniformly or non-uniformly.",
-              "line": 544,
+              "line": 593,
               "deprecated": false
             },
             {
@@ -19244,7 +19509,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original', accumulate=True, traverse=False, channels=None)",
               "summary": "Capture the current local TRS as a cumulative per-channel bake history.",
-              "line": 590,
+              "line": 639,
               "deprecated": false
             },
             {
@@ -19253,7 +19518,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, center_pivot=0, force=True, delete_history=False, freeze_children=False, unlock_children=True, connection_strategy='preserve', from_channel_box=False, **kwargs)",
               "summary": "Freezes transformations on the given objects.",
-              "line": 665,
+              "line": 714,
               "deprecated": false
             },
             {
@@ -19262,7 +19527,7 @@
               "kind": "staticmethod",
               "signature": "(objects, reset_rotate_axis: bool = False, reset_joint_orient: bool = False) -> None",
               "summary": "Freeze transforms into offsetParentMatrix while preserving pivot placement.",
-              "line": 929,
+              "line": 978,
               "deprecated": false
             },
             {
@@ -19271,7 +19536,7 @@
               "kind": "staticmethod",
               "signature": "(objects, traverse: bool = False, preserve_root: bool = True) -> List[str]",
               "summary": "Push a child transform's local matrix up into its parent and zero the child.",
-              "line": 1024,
+              "line": 1073,
               "deprecated": false
             },
             {
@@ -19280,7 +19545,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original', delete_attrs=True, channels=None)",
               "summary": "Compose stored bake history with current local TRS, per channel.",
-              "line": 1142,
+              "line": 1191,
               "deprecated": false
             },
             {
@@ -19289,7 +19554,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original') -> List[str]",
               "summary": "Delete the per-channel bake attrs without restoring.",
-              "line": 1307,
+              "line": 1356,
               "deprecated": false
             },
             {
@@ -19298,7 +19563,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original')",
               "summary": "Check if objects have any stored bake history.",
-              "line": 1343,
+              "line": 1392,
               "deprecated": false
             },
             {
@@ -19307,7 +19572,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects)",
               "summary": "Reset the translation transformations on the given object(s).",
-              "line": 1363,
+              "line": 1412,
               "deprecated": false
             },
             {
@@ -19316,7 +19581,7 @@
               "kind": "staticmethod",
               "signature": "(node)",
               "summary": "Set an object's translation value from its pivot location.",
-              "line": 1372,
+              "line": 1421,
               "deprecated": false
             },
             {
@@ -19325,7 +19590,7 @@
               "kind": "staticmethod",
               "signature": "(obj, **kwargs)",
               "summary": "Return the object's transform matrix using xform, allowing kwargs override.",
-              "line": 1381,
+              "line": 1430,
               "deprecated": false
             },
             {
@@ -19334,7 +19599,7 @@
               "kind": "staticmethod",
               "signature": "(obj, matrix, **kwargs) -> None",
               "summary": "Apply a transformation matrix's position and orientation to the manip pivot.",
-              "line": 1391,
+              "line": 1440,
               "deprecated": false
             },
             {
@@ -19343,7 +19608,7 @@
               "kind": "classmethod",
               "signature": "(cls)",
               "summary": "Returns a list of supported pivot options.",
-              "line": 1405,
+              "line": 1454,
               "deprecated": false
             },
             {
@@ -19352,7 +19617,7 @@
               "kind": "classmethod",
               "signature": "(cls)",
               "summary": "Clears the cached manipulator pivot data.",
-              "line": 1424,
+              "line": 1473,
               "deprecated": false
             },
             {
@@ -19361,7 +19626,7 @@
               "kind": "classmethod",
               "signature": "(cls, node)",
               "summary": "Snapshot the current manipulator pivot state for the given node into the cache.",
-              "line": 1429,
+              "line": 1478,
               "deprecated": false
             },
             {
@@ -19370,7 +19635,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, pivot: str)",
               "summary": "Determines the pivot matrix (orientation + position) for transformations.",
-              "line": 1465,
+              "line": 1514,
               "deprecated": false
             },
             {
@@ -19379,7 +19644,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, pivot, axis_index=None)",
               "summary": "Determines the pivot position for mirroring/cutting along a specified axis or all axes.",
-              "line": 1533,
+              "line": 1582,
               "deprecated": false
             },
             {
@@ -19388,7 +19653,7 @@
               "kind": "staticmethod",
               "signature": "(align_from=None, align_to=None, translate=True)",
               "summary": "Align one object's pivot point to another using 3-point alignment.",
-              "line": 1655,
+              "line": 1704,
               "deprecated": false
             },
             {
@@ -19397,7 +19662,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None) -> None",
               "summary": "Reset Pivot Transforms for the specified objects or selected objects.",
-              "line": 1703,
+              "line": 1752,
               "deprecated": false
             },
             {
@@ -19406,7 +19671,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, pivot_type: str = 'object', mode: str = 'set')",
               "summary": "Get or set a world-aligned pivot for the specified objects.",
-              "line": 1724,
+              "line": 1773,
               "deprecated": false
             },
             {
@@ -19415,7 +19680,7 @@
               "kind": "staticmethod",
               "signature": "(objects, position=False, orientation=False)",
               "summary": "Bake the pivot orientation and position of the given object(s).",
-              "line": 1796,
+              "line": 1845,
               "deprecated": false
             },
             {
@@ -19424,7 +19689,7 @@
               "kind": "staticmethod",
               "signature": "(objects, translate: bool = False, rotate: bool = False, scale: bool = False, bake: bool = False, world_space: bool = True, select_targets_after_transfer: bool = False)",
               "summary": "Transfer the pivot orientation from the first given object to the remaining given objects.",
-              "line": 1877,
+              "line": 1926,
               "deprecated": false
             },
             {
@@ -19433,7 +19698,7 @@
               "kind": "staticmethod",
               "signature": "(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0))",
               "summary": "Aim the given object(s) at the given world space position.",
-              "line": 1994,
+              "line": 2043,
               "deprecated": false
             },
             {
@@ -19442,7 +19707,7 @@
               "kind": "staticmethod",
               "signature": "(transform, aim_vector=(1, 0, 0), up_vector=(0, 1, 0))",
               "summary": "Orients a transform so its local +X aims along the given world-space vector.",
-              "line": 2024,
+              "line": 2073,
               "deprecated": false
             },
             {
@@ -19451,7 +19716,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, target_pos)",
               "summary": "Aim the given object at the given world space position.",
-              "line": 2065,
+              "line": 2114,
               "deprecated": false
             },
             {
@@ -19460,7 +19725,7 @@
               "kind": "staticmethod",
               "signature": "(objects, returned_type='point')",
               "summary": "Get an objects orientation as a point or vector.",
-              "line": 2094,
+              "line": 2143,
               "deprecated": false
             },
             {
@@ -19469,7 +19734,7 @@
               "kind": "staticmethod",
               "signature": "(a, b)",
               "summary": "Get the magnatude of a vector using the center points of two given objects.",
-              "line": 2127,
+              "line": 2176,
               "deprecated": false
             },
             {
@@ -19478,7 +19743,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Get the bounding box center point of any given object(s).",
-              "line": 2141,
+              "line": 2190,
               "deprecated": false
             },
             {
@@ -19487,7 +19752,7 @@
               "kind": "staticmethod",
               "signature": "(objects, value='', world_space=True, return_valid_keys=False)",
               "summary": "Calculate and retrieve specific properties of the bounding box for the given object(s) or component…",
-              "line": 2166,
+              "line": 2215,
               "deprecated": false
             },
             {
@@ -19496,7 +19761,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, value='volume', descending=True, also_return_value=False)",
               "summary": "Sort the given objects by their bounding box value.",
-              "line": 2240,
+              "line": 2289,
               "deprecated": false
             },
             {
@@ -19505,7 +19770,7 @@
               "kind": "staticmethod",
               "signature": "(vertices)",
               "summary": "Move and align the object defined by the first 3 points to the last 3 points.",
-              "line": 2256,
+              "line": 2305,
               "deprecated": false
             },
             {
@@ -19514,7 +19779,7 @@
               "kind": "staticmethod",
               "signature": "(a, b, tolerance=0.001)",
               "summary": "Check if the vertices in a and b are overlapping within the given tolerance.",
-              "line": 2322,
+              "line": 2371,
               "deprecated": false
             },
             {
@@ -19523,7 +19788,7 @@
               "kind": "staticmethod",
               "signature": "(objects, plane_point, plane_normal, return_type: str = 'bool')",
               "summary": "General method to check if any object's geometry is below a defined plane.",
-              "line": 2338,
+              "line": 2387,
               "deprecated": false
             },
             {
@@ -19532,7 +19797,7 @@
               "kind": "staticmethod",
               "signature": "(objects, worldSpace=True)",
               "summary": "Get all vertex positions for the given objects.",
-              "line": 2414,
+              "line": 2463,
               "deprecated": false
             },
             {
@@ -19541,7 +19806,7 @@
               "kind": "classmethod",
               "signature": "(cls, a, b, world_space=False)",
               "summary": "Find any vertices which point locations match between two given mesh.",
-              "line": 2438,
+              "line": 2487,
               "deprecated": false
             },
             {
@@ -19550,7 +19815,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, reference_point=None, reverse=False)",
               "summary": "Order the given objects by their distance from the given reference point.",
-              "line": 2455,
+              "line": 2504,
               "deprecated": false
             },
             {
@@ -19559,7 +19824,7 @@
               "kind": "staticmethod",
               "signature": "(mode, average=False, edgeloop=False)",
               "summary": "Align selected vertices along one or more axes.",
-              "line": 2481,
+              "line": 2530,
               "deprecated": false
             }
           ]

@@ -8,8 +8,8 @@ crash Toolbag. This module exposes :func:`run_on_main_thread` which:
 
 * Inside Toolbag (Qt event loop alive, current thread != main):
   schedules the call via ``QTimer.singleShot(0, ...)`` and blocks the
-  caller on a queue until it completes. The mirror of substancetk's
-  approach.
+  caller on a queue until it completes. The mirror of
+  extapps.substance_workflow's approach.
 * Outside Toolbag (no QApplication) OR already on the main thread:
   just calls the function directly. Lets tests run the same code path
   without needing a Qt event loop.

@@ -381,7 +381,7 @@ class TestReferenceManager(unittest.TestCase):
         self.assertTrue(t.isRowHidden(1))
 
         # Now simulate notes on row 0 matching the filter
-        notes_item = t.item(0, 3)
+        notes_item = t.item(0, 4)  # Notes is column 4 (col 3 is the display-mode action column)
         self.assertIsNotNone(notes_item)
         notes_item.setText("CXAL, Speedrun")
 
@@ -443,7 +443,7 @@ class TestReferenceManager(unittest.TestCase):
         self.controller.update_table(files, paths)
 
         # Set notes that would match
-        notes_item = t.item(0, 3)
+        notes_item = t.item(0, 4)  # Notes is column 4 (col 3 is the display-mode action column)
         notes_item.setText("CXAL, Speedrun")
         self.controller.update_table(files, paths)
 

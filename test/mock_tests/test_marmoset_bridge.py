@@ -39,13 +39,17 @@ from mayatk.mat_utils.marmoset_bridge._marmoset_bridge import (
     SEND_TO,
     ROUNDTRIP,
     _TEMPLATE_DIR,
+    list_templates,
     list_template_modes,
     template_modes,
+    build_bake_pairs_manifest,
+)
+# Log helpers are bundled in the marmoset_bridge subpackage alongside the engine.
+from mayatk.mat_utils.marmoset_bridge.toolbag_log import (
     resolve_toolbag_log_path,
     classify_log_line,
     dispatch_log_lines,
-    _start_toolbag_log_tail,
-    build_bake_pairs_manifest,
+    start_toolbag_log_tail,
 )
 from mayatk.mat_utils.marmoset_bridge import parameters as _params
 
@@ -127,8 +131,18 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             ) as mock_builder:
                 mock_builder.build.return_value = {"materials": {}}
 
+                # The engine verifies the exported model exists before it
+                # renders, so the mocked export must actually drop a file.
+                def _fake_export(**kwargs):
+                    with open(kwargs["file_path"], "w", encoding="utf-8") as fh:
+                        fh.write("")
+
+                mock_fbx.export.side_effect = _fake_export
+
+                # Launch now happens in the engine; patch AppLauncher there
+                # so send_to doesn't spawn a real Toolbag.
                 with unittest.mock.patch(
-                    "mayatk.mat_utils.marmoset_bridge._marmoset_bridge.AppLauncher"
+                    "mayatk.mat_utils.marmoset_bridge._marmoset_engine.AppLauncher"
                 ):
                     output_dir = tempfile.mkdtemp(prefix="marmoset_test_")
                     bridge = MarmosetBridge()
@@ -171,7 +185,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
                             f"Placeholder __{key}__ was not substituted in bake.py",
                         )
                     for fixed in (
-                        "__FBX_PATH__",
+                        "__MODEL_PATH__",
                         "__MANIFEST_PATH__",
                         "__PAIRS_PATH__",
                         "__OUTPUT_DIR__",
@@ -213,7 +227,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
 
     def test_every_bundled_template_renders_and_parses(self):
         """Each bundled template, rendered with defaults, must parse as Python."""
-        templates = sorted(p.stem for p in _TEMPLATE_DIR.glob("*.py"))
+        templates = sorted(p.stem for p in list_templates())
         self.assertTrue(templates, "No bundled templates found.")
 
         bridge = MarmosetBridge()
@@ -221,7 +235,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             with self.subTest(template=stem):
                 rendered = bridge.render_template(
                     template=stem,
-                    fbx_path="/tmp/a.fbx",
+                    model_path="/tmp/a.fbx",
                     manifest_path="/tmp/a.materials.json",
                     output_dir="/tmp/out",
                     headless=False,
@@ -237,7 +251,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         bridge = MarmosetBridge()
         rendered = bridge.render_template(
             template="bake",
-            fbx_path="/tmp/a.fbx",
+            model_path="/tmp/a.fbx",
             manifest_path="/tmp/a.materials.json",
             output_dir="/tmp/out",
             headless=False,
@@ -253,7 +267,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         self.assertIsNone(
             bridge.render_template(
                 template="does_not_exist",
-                fbx_path="/tmp/a.fbx",
+                model_path="/tmp/a.fbx",
                 manifest_path="/tmp/a.materials.json",
                 output_dir="/tmp/out",
             )
@@ -265,7 +279,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
 
     def test_bridge_modes_per_template(self):
         """Each bundled template declares the modes we expect."""
-        modes = {p.stem: template_modes(p) for p in _TEMPLATE_DIR.glob("*.py")}
+        modes = {p.stem: template_modes(p) for p in list_templates()}
         self.assertEqual(modes.get("import"), (SEND_TO,))
         self.assertEqual(modes.get("lookdev"), (SEND_TO,))
         # bake supports both -- order matters: it's the source of truth for
@@ -289,14 +303,14 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         send_to = bridge.render_template(
             template="bake",
             mode=SEND_TO,
-            fbx_path="/tmp/x.fbx",
+            model_path="/tmp/x.fbx",
             manifest_path="/tmp/x.materials.json",
             output_dir="/tmp/out",
         )
         roundtrip = bridge.render_template(
             template="bake",
             mode=ROUNDTRIP,
-            fbx_path="/tmp/x.fbx",
+            model_path="/tmp/x.fbx",
             manifest_path="/tmp/x.materials.json",
             output_dir="/tmp/out",
         )
@@ -718,7 +732,7 @@ class TestToolbagLogTail(unittest.TestCase):
         proc = FakeProcess()
         logger = unittest.mock.MagicMock()
 
-        thread = _start_toolbag_log_tail(
+        thread = start_toolbag_log_tail(
             self.log_path, self.start_offset, proc, logger, poll_interval=0.05
         )
 
@@ -760,7 +774,7 @@ class TestToolbagLogTail(unittest.TestCase):
             def poll(self):
                 return 0   # already exited
 
-        thread = _start_toolbag_log_tail(
+        thread = start_toolbag_log_tail(
             self.log_path, 0, FakeProcess(), unittest.mock.MagicMock(),
             poll_interval=0.05,
         )
@@ -785,7 +799,7 @@ class TestToolbagLogTail(unittest.TestCase):
         proc = FakeProcess()
         logger = unittest.mock.MagicMock()
 
-        thread = _start_toolbag_log_tail(
+        thread = start_toolbag_log_tail(
             self.log_path, 0, proc, logger,
             poll_interval=0.05,
             file_wait_timeout=5.0,
@@ -823,7 +837,7 @@ class TestToolbagLogTail(unittest.TestCase):
                 return None if self._alive else 0
 
         proc = FakeProcess()
-        thread = _start_toolbag_log_tail(
+        thread = start_toolbag_log_tail(
             self.log_path, 0, proc, unittest.mock.MagicMock(),
             poll_interval=0.05,
             file_wait_timeout=30.0,  # Generous -- we should exit on process death, not timeout.

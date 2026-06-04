@@ -84,7 +84,7 @@ def log(msg):
         pass
 
 
-# Maya shader slot -> (Toolbag subroutine attr, [candidate field names]).
+# Maya shader slot -> (Toolbag subroutine attr, [candidate field names], sRGB?).
 #
 # Toolbag's subroutines (albedo, microsurface, reflectivity, etc.) have
 # multiple variants, and each variant's field is named after itself. The
@@ -94,15 +94,41 @@ def log(msg):
 #
 # We try each candidate against ``subroutine.getFieldNames()`` and use the
 # first match, falling back to the first listed name if discovery fails.
+#
+# The trailing bool is the texture colour-space: colour maps (albedo,
+# emissive) must load sRGB or they wash out; data maps stay Linear. Toolbag's
+# ``setField`` loads every texture Linear, so we re-tag per slot after wiring.
 SLOT_MAP = {
-    "baseColor": ("albedo", ["Albedo Map"]),
-    "normal": ("surface", ["Normal Map"]),
-    "roughness": ("microsurface", ["Roughness Map", "Gloss Map", "Microsurface Map"]),
-    "metallic": ("reflectivity", ["Metalness Map"]),
-    "ambientOcclusion": ("occlusion", ["Occlusion Map"]),
-    "emission": ("emissive", ["Emissive Map"]),
-    "opacity": ("transparency", ["Transparency Map"]),
+    "baseColor": ("albedo", ["Albedo Map"], True),
+    "normal": ("surface", ["Normal Map"], False),
+    "roughness": ("microsurface", ["Roughness Map", "Gloss Map", "Microsurface Map"], False),
+    "metallic": ("reflectivity", ["Metalness Map"], False),
+    "ambientOcclusion": ("occlusion", ["Occlusion Map"], False),
+    "emission": ("emissive", ["Emissive Map"], True),
+    "opacity": ("transparency", ["Transparency Map"], False),
 }
+
+
+def _set_texture_srgb(sub, field_name, srgb, verbose=True):
+    """Pin the just-wired texture's colour-space (sRGB vs Linear).
+
+    Toolbag's ``setField(name, path)`` loads every texture Linear
+    (``Texture.sRGB = False``); colour maps then render washed-out. We read
+    the field's live Texture back and set its ``sRGB`` flag (verified to
+    persist on the material). Best-effort: a subroutine/stub whose
+    ``getField`` returns no Texture-like object is left untouched.
+    """
+    try:
+        tex = sub.getField(field_name)
+    except Exception:
+        return
+    if tex is None or not hasattr(tex, "sRGB"):
+        return
+    try:
+        tex.sRGB = srgb
+    except Exception as exc:
+        if verbose:
+            log(f"      (could not set sRGB={srgb} on '{field_name}': {exc})")
 
 
 def _pick_field_name(sub, candidates):
@@ -211,7 +237,7 @@ def wire_materials_from_manifest(manifest_path, verbose=True):
                     log(f"    ! {slot_key}: file not found on disk -> {tex_path}")
                 continue
 
-            module_attr, candidates = mapping
+            module_attr, candidates, is_srgb = mapping
             sub = getattr(tb_mat, module_attr, None)
             if sub is None:
                 if verbose:
@@ -233,6 +259,7 @@ def wire_materials_from_manifest(manifest_path, verbose=True):
 
             try:
                 sub.setField(field_name, tex_path)
+                _set_texture_srgb(sub, field_name, is_srgb, verbose)
                 wired += 1
                 if verbose:
                     log(

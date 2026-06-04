@@ -38,10 +38,10 @@ class TestSceneDiagnostics(MayaTkTestCase):
         records = self.analyzer.analyze([cube])
         report = self.analyzer.generate_report(records)
 
-        self.assertEqual(report.total_meshes, 1)
-        self.assertEqual(report.total_tris, 12)
-        self.assertEqual(len(report.top_offenders), 1)
-        self.assertEqual(report.top_offenders[0].score, 0)  # Should be perfect
+        self.assertEqual(report.summary.total_meshes, 1)
+        self.assertEqual(report.summary.total_tris, 12)
+        self.assertEqual(len(report.offenders.by_score), 1)
+        self.assertEqual(report.offenders.by_score[0].score, 0)  # Should be perfect
 
     def test_high_poly(self):
         """Test detection of high poly meshes."""
@@ -54,7 +54,7 @@ class TestSceneDiagnostics(MayaTkTestCase):
         profile = AuditProfile(max_tris=10000)
         records = self.analyzer.analyze([sphere], profile=profile)
         report = self.analyzer.generate_report(records)
-        rec = report.top_offenders[0]
+        rec = report.offenders.by_score[0]
 
         self.assertTrue(rec.mesh.tris >= 19000)
         self.assertTrue(rec.score > 0)
@@ -68,7 +68,7 @@ class TestSceneDiagnostics(MayaTkTestCase):
 
         records = self.analyzer.analyze([plane])
         report = self.analyzer.generate_report(records)
-        rec = report.top_offenders[0]
+        rec = report.offenders.by_score[0]
 
         self.assertTrue(rec.mesh.ngons > 0)
         self.assertTrue(rec.score > 0)
@@ -92,7 +92,7 @@ class TestSceneDiagnostics(MayaTkTestCase):
         profile = AuditProfile(max_slots=1)
         records = self.analyzer.analyze([cube], profile=profile)
         report = self.analyzer.generate_report(records)
-        rec = report.top_offenders[0]
+        rec = report.offenders.by_score[0]
 
         self.assertEqual(rec.material.slot_count, 2)
         self.assertTrue(rec.score > 0)
@@ -122,12 +122,14 @@ class TestSceneDiagnostics(MayaTkTestCase):
             report = self.analyzer.generate_report(records)
 
             rec1 = next(
-                r for r in report.top_offenders
+                r for r in report.offenders.by_score
                 if r.transform.split("|")[-1].split(":")[-1] == "Cube1"
             )
 
             self.assertEqual(rec1.material.unique_paths_local, 0)
-            self.assertEqual(rec1.material.unique_paths_scene, 1)
+            # texture_count = distinct texture paths this material references (the one
+            # shared texture); 0 are local-unique since it is shared with Cube2.
+            self.assertEqual(rec1.material.texture_count, 1)
 
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp2:
                 tmp2.write(b"fake image data 2")
@@ -144,7 +146,7 @@ class TestSceneDiagnostics(MayaTkTestCase):
             records = self.analyzer.analyze([cube1, cube2])
             report = self.analyzer.generate_report(records)
             rec1 = next(
-                r for r in report.top_offenders
+                r for r in report.offenders.by_score
                 if r.transform.split("|")[-1].split(":")[-1] == "Cube1"
             )
 
@@ -191,8 +193,10 @@ class TestSceneDiagnostics(MayaTkTestCase):
         # Mock _analyze_material_node to return a large texture
         original_method = self.analyzer._analyze_material_node
 
-        def mock_analyze_material_node(mat_node):
-            # Check if the node name matches (it might be a PyNode or string)
+        def mock_analyze_material_node(mat_node, collect_textures=True):
+            # Mirror the real signature (gained ``collect_textures``); the fake
+            # 4k texture is returned regardless so the oversized-texture logic
+            # has something to evaluate.
             if mat_node and mat_node == mat:
                 return {
                     "transparent": False,
@@ -208,7 +212,7 @@ class TestSceneDiagnostics(MayaTkTestCase):
                     ],
                     "missing_textures": 0,
                 }
-            return original_method(mat_node)
+            return original_method(mat_node, collect_textures=collect_textures)
 
         # Patch the method
         self.analyzer._analyze_material_node = mock_analyze_material_node
@@ -222,7 +226,7 @@ class TestSceneDiagnostics(MayaTkTestCase):
 
         # Check Cube1 findings
         # Note: shape name might be Cube1Shape or similar
-        rec1 = next(r for r in report.top_offenders if "Cube1" in r.mesh.shape_name)
+        rec1 = next(r for r in report.offenders.by_score if "Cube1" in r.mesh.shape_name)
 
         # Should NOT have "Oversized Texture" because it's shared (count=2)
         # Should have "Max texture dimension"
@@ -238,7 +242,7 @@ class TestSceneDiagnostics(MayaTkTestCase):
         # If we only analyze Cube1, the texture appears unique to the selection scope (count=1)
         records_single = self.analyzer.analyze([cube1], profile=profile)
         report_single = self.analyzer.generate_report(records_single)
-        rec1_single = report_single.top_offenders[0]
+        rec1_single = report_single.offenders.by_score[0]
 
         findings_str_single = str(rec1_single.findings)
         self.assertIn("Oversized Texture", findings_str_single)

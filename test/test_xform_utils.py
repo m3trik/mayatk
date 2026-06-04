@@ -81,6 +81,40 @@ class TestXformUtils(MayaTkTestCase):
         for i in range(3):
             self.assertAlmostEqual(cube1_pos[i], cube2_pos[i], places=2)
 
+    def test_move_to_pivot_center(self):
+        """move_to defaults to the target bounding-box center."""
+        XformUtils.move_to(self.cube1, self.cube2, pivot="center")
+        p = cmds.xform(self.cube1, q=True, ws=True, t=True)
+        center = XformUtils.get_bounding_box(self.cube2, "center")
+        for i in range(3):
+            self.assertAlmostEqual(p[i], center[i], places=2)
+
+    def test_move_to_pivot_bbox_extent(self):
+        """move_to honors a bounding-box extent pivot on the target."""
+        XformUtils.move_to(self.cube1, self.cube2, pivot="ymax")
+        p = cmds.xform(self.cube1, q=True, ws=True, t=True)
+        center = XformUtils.get_bounding_box(self.cube2, "center")
+        ymax = float(XformUtils.get_bounding_box(self.cube2, "ymax"))
+        self.assertAlmostEqual(p[0], center[0], places=2)  # x at center
+        self.assertAlmostEqual(p[1], ymax, places=2)  # y at the +Y extent
+        self.assertAlmostEqual(p[2], center[2], places=2)  # z at center
+
+    def test_move_to_pivot_object(self):
+        """move_to with pivot='object' aligns to the target's pivot."""
+        XformUtils.move_to(self.cube1, self.cube2, pivot="object")
+        p = cmds.xform(self.cube1, q=True, ws=True, t=True)
+        obj_pivot = cmds.xform(self.cube2, q=True, ws=True, rp=True)
+        for i in range(3):
+            self.assertAlmostEqual(p[i], obj_pivot[i], places=2)
+
+    def test_move_to_empty_target(self):
+        """move_to is a no-op (no raise) when the target list is empty."""
+        before = cmds.xform(self.cube1, q=True, ws=True, t=True)
+        XformUtils.move_to(self.cube1, [])
+        after = cmds.xform(self.cube1, q=True, ws=True, t=True)
+        for i in range(3):
+            self.assertAlmostEqual(before[i], after[i], places=4)
+
     def test_move_to_group(self):
         """Test moving multiple objects as a group."""
         # Create a group of objects

@@ -21,7 +21,7 @@ def describe_op(op=""):
     """Return the JSON-friendly description of *op* or all ops if empty.
 
     Each entry: ``{"name", "doc", "params": [{"name", "default"}, ...]}``.
-    Mirrors substancetk's introspection -- lets a client (agent or human)
+    Mirrors extapps.substance_workflow's introspection -- lets a client (agent or human)
     discover the surface without reading source.
     """
     return describe(op or None)
