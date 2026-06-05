@@ -66,41 +66,6 @@ def _nurbs_outward(surf):
     return (nrm * (p - center)) > 0
 
 
-def _tube_outward_fraction(mesh, curve):
-    """Fraction of `mesh` face normals pointing away from `curve`'s centerline.
-
-    General for a bent tube (no fixed axis): each face center is compared to the
-    nearest of a set of sampled curve points. 1.0 == fully outward, ~0 == fully
-    inverted. Mirrors `CurveToTube._conform_poly_outward`'s own check.
-    """
-    shp = cmds.listRelatives(curve, shapes=True)[0]
-    mn, mx = cmds.getAttr(f"{shp}.minValue"), cmds.getAttr(f"{shp}.maxValue")
-    cl = [
-        om.MVector(*cmds.pointOnCurve(shp, pr=mn + (mx - mn) * i / 23.0, position=True))
-        for i in range(24)
-    ]
-    sel = om.MSelectionList()
-    sel.add(mesh)
-    dag = sel.getDagPath(0)
-    dag.extendToShape()
-    fn = om.MFnMesh(dag)
-    pts = fn.getPoints(om.MSpace.kWorld)
-    out = total = 0
-    for i in range(fn.numPolygons):
-        verts = fn.getPolygonVertices(i)
-        fc = om.MVector(0, 0, 0)
-        for vi in verts:
-            fc += om.MVector(pts[vi])
-        fc /= len(verts)
-        radial = fc - min(cl, key=lambda c: (c - fc).length())
-        if radial.length() < 1e-9:
-            continue
-        total += 1
-        if fn.getPolygonNormal(i, om.MSpace.kWorld) * radial > 0:
-            out += 1
-    return out / max(total, 1)
-
-
 def _side_faces_outward(mesh, axis=om.MVector(1, 0, 0)):
     """For a tube whose axis passes through the origin along `axis`, count
     side faces whose normal points inward (should be zero)."""
@@ -410,7 +375,9 @@ class TestCurveToTube(MayaTkTestCase):
         f = cmds.polyEvaluate(tube, face=True)
         self.assertEqual(v - e + f, 2)  # capped watertight shell
         self.assertGreater(_signed_volume(tube), 0)  # outward
-        self.assertIn("nurbsTessellate", [cmds.nodeType(h) for h in cmds.listHistory(tube)])
+        # Open live tubes are driven by a curveWarp deformer (a baked base mesh
+        # repositioned along the curve), not a live extrude->nurbsToPoly graph.
+        self.assertIn("curveWarp", [cmds.nodeType(h) for h in cmds.listHistory(tube)])
         # The source curve was RESAMPLED in place (fewer CVs) and still drives
         # the tube live -- editing it updates the mesh.
         cvs_after = cmds.getAttr(shp + ".spans") + cmds.getAttr(shp + ".degree")
@@ -419,52 +386,44 @@ class TestCurveToTube(MayaTkTestCase):
         cmds.move(0, 8, 0, f"{crv}.cv[1]", relative=True)  # editing the SOURCE curve...
         self.assertNotEqual(cmds.exactWorldBoundingBox(tube), before)  # ...drives the tube
 
-    def test_live_polygon_normals_invert_on_curve_edit_is_extrude_limitation(self):
-        """REPLICATES the reported quirk: a LIVE polygon tube's normals can
-        invert when the control curve is edited.
+    def test_live_polygon_normals_stable_on_curve_edit(self):
+        """A LIVE polygon tube must keep its normals OUTWARD when the control
+        curve is edited — including the large end-CV moves that used to invert it.
 
-        Root cause (localized in test/temp_tests): `cmds.extrude`'s swept-surface
-        normal orientation is NOT invariant under path edits — a large enough CV
-        move makes the whole NURBS surface normal flip — and `nurbsToPoly` plus
-        the baked `polyNormal` conform faithfully propagate that flip into the
-        live mesh. The conform's reverse-or-not is a one-time decision frozen at
-        build time, so it cannot track the flip. No `cmds.extrude` option keeps
-        the surface stable and no baked `polyNormal` mode keeps the mesh outward
-        across edits (verified by sweep). A baked tube (Keep History off) is
-        immune because it has no upstream curve driving it.
-
-        This is a characterization test: it pins the limitation (and will fail —
-        as a reminder to update it — if the construction is reworked to be
-        orientation-stable). Mitigation today: bake for the final mesh, or re-run
-        Conform Normals after editing the curve."""
+        History: `cmds.extrude`'s swept-surface orientation is not edit-invariant
+        (a large CV move globally flips the surface normal), and the old live
+        build (extrude -> nurbsToPoly + a baked conform) faithfully propagated
+        that, inverting the live mesh. The fix drives a straight, already-conformed
+        base mesh with a `curveWarp` DEFORMER: a deformer only repositions
+        vertices, so the winding (and normals) can't flip. Several aggressive
+        edits — including the exact one (`cv[0]` +5y) that used to invert — must
+        leave the tube outward."""
         crv = cmds.curve(
             d=3, p=[(0, 0, 0), (3, 4, 0), (6, -2, 0), (9, 3, 0), (12, 0, 0)],
             name="ctt_flip",
         )
-        tube = CurveToTube.create(crv, output_type="polygon", sections=8, live=True)[0]
-        self.assertGreater(_tube_outward_fraction(tube, crv), 0.9, "build is outward")
+        # Capped so signed volume gives an unambiguous global-orientation read
+        # (>0 outward, <0 inverted) — robust on sharp bends where a face-by-face
+        # radial check gets noisy.
+        tube = CurveToTube.create(
+            crv, output_type="polygon", sections=8, live=True, caps=True
+        )[0]
+        # The live driver is a curveWarp deformer (no extrude/nurbsToPoly in the
+        # live graph), which is what makes the normals edit-stable.
+        self.assertIn("curveWarp", [cmds.nodeType(h) for h in cmds.listHistory(tube)])
+        self.assertGreater(_signed_volume(tube), 0, "build is outward")
 
-        # A large end-CV move flips the swept surface; the live mesh follows.
-        cmds.move(0, 5, 0, f"{crv}.cv[0]", relative=True)
-        cmds.dgdirty(tube)
-        cmds.polyEvaluate(tube, vertex=True)  # force history re-evaluation
-        self.assertLess(
-            _tube_outward_fraction(tube, crv), 0.1, "normals inverted after edit"
-        )
-
-        # Baked control: no live driver, so editing the curve can't change it at
-        # all — the tube is immune. Measure outward against the (matching) build
-        # curve BEFORE moving, then prove immunity by vertex invariance.
-        cmds.file(new=True, force=True)
-        crv2 = cmds.curve(
-            d=3, p=[(0, 0, 0), (3, 4, 0), (6, -2, 0), (9, 3, 0), (12, 0, 0)]
-        )
-        baked = CurveToTube.create(crv2, output_type="polygon", sections=8, live=False)[0]
-        self.assertGreater(_tube_outward_fraction(baked, crv2), 0.9, "baked is outward")
-        before = cmds.xform(f"{baked}.vtx[*]", q=True, ws=True, t=True)
-        cmds.move(0, 5, 0, f"{crv2}.cv[0]", relative=True)
-        after = cmds.xform(f"{baked}.vtx[*]", q=True, ws=True, t=True)
-        self.assertEqual(before, after, "baked tube is unaffected by curve edits")
+        # Aggressive edits — incl. cv[0] +5y, which inverted the old build to
+        # ~2.5% outward — must all leave the tube outward (volume stays positive).
+        for cv, off in [(0, (0, 5, 0)), (1, (0, -8, 0)), (1, (-6, -6, -6)), (4, (0, 9, 5))]:
+            cmds.move(*off, f"{crv}.cv[{cv}]", relative=True)
+            cmds.dgdirty(tube)
+            cmds.polyEvaluate(tube, vertex=True)  # force re-evaluation
+            self.assertGreater(
+                _signed_volume(tube), 0,
+                f"normals must stay outward after editing cv[{cv}] by {off}",
+            )
+            cmds.move(-off[0], -off[1], -off[2], f"{crv}.cv[{cv}]", relative=True)
 
     def test_live_polygon_exact_sides_on_curved_path(self):
         # `sections` is exact around even on a bend (nurbsToPoly uType=2).

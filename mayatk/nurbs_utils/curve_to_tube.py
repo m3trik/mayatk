@@ -331,6 +331,14 @@ class CurveToTube(ptk.LoggingMixin):
         restores it on rollback (``PRESERVE_GEOMETRY``). Baked builds a throwaway
         path through the points and leaves the source curve untouched. Either way
         the topology is identical.
+
+        Open tubes are then driven by a ``curveWarp`` **deformer** on a straight,
+        already-conformed base mesh (:meth:`_polygon_tube_warped`) rather than a
+        live ``extrude -> nurbsToPoly`` graph, so a live curve edit only
+        repositions vertices and the normals can't flip (``cmds.extrude``'s
+        swept-surface orientation is not edit-invariant). Closed (torus) paths
+        and the no-plugin fallback keep the curved ``extrude -> nurbsToPoly``
+        build; the finishing steps are shared via :meth:`_finish_poly_tube`.
         """
         closed = cmds.getAttr(f"{curve_shape}.form") in (1, 2)  # 1 closed, 2 periodic
         dense = cls._sample_centerline(curve_shape, cls._DENSE_SAMPLES)
@@ -367,9 +375,40 @@ class CurveToTube(ptk.LoggingMixin):
                 path, constructionHistory=False, replaceOriginal=True, preserveShape=0
             )
 
-        surface, profile = cls._extrude_surface(path, radius, sections, 3, name)
-        # uType=2 -> exactly `sections` segments around; vType=1 -> one ring per
-        # surface V-span (i.e. at each kept point). format=3 keeps it clean.
+        # Open tubes drive the mesh with a curveWarp DEFORMER on a straight base:
+        # a deformer only repositions vertices, so a live curve edit can never
+        # flip the winding/normals. (cmds.extrude's swept-surface orientation is
+        # NOT edit-invariant — it globally flips when the path tangent swings
+        # into the profile axis — and nurbsToPoly + the baked conform faithfully
+        # propagate that, inverting a live tube; see _conform_poly_outward.)
+        # Closed (torus) paths and the no-plugin fallback keep the original
+        # curved extrude -> nurbsToPoly build.
+        if not closed and cls._load_curvewarp():
+            return cls._polygon_tube_warped(
+                path, rdp_pts, radius, sections, caps, quads, live, throwaway, name
+            )
+
+        mesh, surface, profile = cls._extrude_poly_mesh(path, radius, sections, name)
+        cls._finish_poly_tube(mesh, sections, caps, quads, dense, closed)
+
+        if live:
+            # Bundle the hidden construction inputs under the tube; the resampled
+            # source curve stays separate as the visible, editable driver.
+            cls._bundle_under(mesh, surface, profile)
+        else:
+            cmds.delete(mesh, constructionHistory=True)  # bake to a plain mesh
+            for node in [surface, profile] + throwaway:
+                cls._safe_delete(node)
+        return mesh
+
+    @classmethod
+    def _extrude_poly_mesh(cls, path_shape, radius, sections, name):
+        """Extrude the profile along ``path_shape`` and tessellate to a polygon
+        mesh: exactly ``sections`` sides around (``uType=2``), one ring per span
+        (``vType=1``), ``format=3`` for a clean result. Returns
+        ``(mesh, surface, profile)`` with history live (callers bake/bundle).
+        """
+        surface, profile = cls._extrude_surface(path_shape, radius, sections, 3, name)
         mesh = cmds.nurbsToPoly(
             surface,
             constructionHistory=True,
@@ -380,12 +419,36 @@ class CurveToTube(ptk.LoggingMixin):
             vType=1,
             vNumber=1,
         )[0]
-        mesh = cmds.rename(mesh, f"{name}#")
+        return cmds.rename(mesh, f"{name}#"), surface, profile
 
+    @staticmethod
+    def _load_curvewarp() -> bool:
+        """Load the ``curveWarp`` plugin (ships with Maya). True if usable.
+
+        The live open-polygon tube drives a baked mesh with a ``curveWarp``
+        deformer; if the plugin can't load we fall back to the curved
+        ``extrude -> nurbsToPoly`` build (which works but can flip normals on a
+        live curve edit — see ``_conform_poly_outward``).
+        """
+        try:
+            if not cmds.pluginInfo("curveWarp", query=True, loaded=True):
+                cmds.loadPlugin("curveWarp", quiet=True)
+            return bool(cmds.pluginInfo("curveWarp", query=True, loaded=True))
+        except Exception:
+            return False
+
+    @classmethod
+    def _finish_poly_tube(cls, mesh, sections, caps, quads, centerline, closed):
+        """Cap the open ends, UV-seam (one lengthwise cut + a ring per cap),
+        conform the normals outward, soften the body with hard cap rims, and
+        triangulate when ``quads`` is off. Shared by the curved-extrude build
+        and the straight-base (curveWarp) build — ``centerline`` is whichever
+        path the mesh was swept along (the outward check is relative to it).
+        """
         # Cap the open ends first (capturing the new cap faces so the seams are
         # exact for any section count), then let UvUtils place the UV seams:
-        # one lengthwise cut plus each cap's ring, so the body unwraps to a
-        # strip and the caps peel into their own UV shells.
+        # one lengthwise cut plus each cap's ring, so the body unwraps to a strip
+        # and the caps peel into their own UV shells.
         cap_faces = None
         if caps and not closed:
             n_before = cmds.polyEvaluate(mesh, face=True)
@@ -397,23 +460,72 @@ class CurveToTube(ptk.LoggingMixin):
         for seam in (length_loop, cap_rings):
             if seam:
                 cmds.polyMapCut(seam, constructionHistory=True)
-        cls._conform_poly_outward(mesh, dense)
+        cls._conform_poly_outward(mesh, centerline)
         # Smooth the body but keep the caps crisp: soften every edge, then
         # re-harden the cap rings so the tube shades smooth while the cap edges
-        # read as hard. Kept in history so a live tube stays correct on edits.
+        # read as hard.
         cmds.polySoftEdge(mesh, angle=180, constructionHistory=True)
         if cap_rings:
             cmds.polySoftEdge(cap_rings, angle=0, constructionHistory=True)
         if not quads:
             cmds.polyTriangulate(mesh, constructionHistory=True)
+        return mesh
 
-        if live:
-            # Bundle the hidden construction inputs under the tube; the resampled
-            # source curve stays separate as the visible, editable driver.
-            cls._bundle_under(mesh, surface, profile)
-        else:
-            cmds.delete(mesh, constructionHistory=True)  # bake to a plain mesh
-            for node in [surface, profile] + throwaway:
+    @classmethod
+    def _polygon_tube_warped(
+        cls, driver, rdp_pts, radius, sections, caps, quads, live, throwaway, name
+    ):
+        """Open polygon tube built on a STRAIGHT base + a ``curveWarp`` deformer.
+
+        The straight base is the same ``extrude -> nurbsToPoly`` mesh (so the
+        topology — exact sides, RDP rings, caps, UV seams — is identical to the
+        curved build), laid out along +X with its rings at the RDP points'
+        cumulative-chord positions scaled to the driver's arc length. It is baked
+        (history deleted) and then driven by a ``curveWarp`` whose input is the
+        driver curve, so editing the curve only *repositions* vertices — the face
+        winding (hence the normals) is fixed and can't flip. Baked builds
+        additionally collapse the deformer into the mesh.
+        """
+        driver_shape = (
+            cmds.listRelatives(driver, shapes=True, fullPath=True) or [driver]
+        )[0]
+        arclen = cmds.arclen(driver_shape) or 1.0
+        # Rings at the RDP points' cumulative chord length, scaled to the driver
+        # arc length so curveWarp maps each ring back to its curvature spot.
+        cum = [0.0]
+        for k in range(1, len(rdp_pts)):
+            a, b = rdp_pts[k - 1], rdp_pts[k]
+            cum.append(
+                cum[-1]
+                + ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2) ** 0.5
+            )
+        scale = arclen / cum[-1] if cum[-1] else 1.0
+        degree = max(1, min(3, len(rdp_pts) - 1))
+        base_path = cmds.rename(
+            cmds.curve(degree=degree, point=[(c * scale, 0, 0) for c in cum]),
+            f"{name}_base#",
+        )
+        base_shape = cmds.listRelatives(base_path, shapes=True)[0]
+
+        mesh, surface, profile = cls._extrude_poly_mesh(base_shape, radius, sections, name)
+        cls._finish_poly_tube(
+            mesh, sections, caps, quads,
+            cls._sample_centerline(base_shape, cls._DENSE_SAMPLES), closed=False,
+        )
+
+        # Bake the straight base, drop the build inputs, then let ONLY the
+        # deformer reposition the (fixed-winding) mesh.
+        cmds.delete(mesh, constructionHistory=True)
+        for node in (surface, profile, base_path):
+            cls._safe_delete(node)
+        deformer = cmds.deformer(mesh, type="curveWarp")[0]
+        cmds.connectAttr(
+            f"{driver_shape}.worldSpace[0]", f"{deformer}.inputCurve", force=True
+        )
+
+        if not live:
+            cmds.delete(mesh, constructionHistory=True)  # collapse the warp
+            for node in throwaway:
                 cls._safe_delete(node)
         return mesh
 
@@ -433,15 +545,15 @@ class CurveToTube(ptk.LoggingMixin):
 
         Each sampled face normal is compared to the radial direction from the
         nearest centerline point; an inward majority is reversed with
-        ``polyNormal``. NOTE: this reverse-or-not is a one-time decision frozen
-        at build time. For a LIVE tube it is correct at build, but a large
-        control-curve edit can globally flip ``cmds.extrude``'s swept-surface
-        normal (an intrinsic extrude instability — no extrude option or baked
-        ``polyNormal`` mode prevents it), which ``nurbsToPoly`` and this node
-        then faithfully propagate, inverting the mesh. See the characterization
-        test ``test_live_polygon_normals_invert_on_curve_edit_is_extrude_limitation``.
-        Mitigation: bake (Keep History off) for the final mesh, or re-run
-        Conform Normals after editing.
+        ``polyNormal``. This reverse-or-not is a one-time decision frozen at
+        build time, which is fine because every caller conforms a mesh whose
+        orientation is then stable: the open-tube path conforms the **straight**
+        base (a straight extrude can't flip) before the ``curveWarp`` deformer
+        takes over — and a deformer only repositions vertices, so the winding
+        never changes on a live edit. Only the curved-extrude fallback (closed
+        torus / no curveWarp plugin) keeps a live tube whose swept-surface
+        normal could still flip on a large edit (``cmds.extrude`` orientation is
+        not edit-invariant); there, bake or re-run Conform Normals.
         """
         sel = om.MSelectionList()
         sel.add(mesh)
