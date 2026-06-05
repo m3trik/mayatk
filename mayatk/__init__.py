@@ -132,6 +132,7 @@ DEFAULT_INCLUDE = {
     "xform_utils.pivot_watcher": "PivotWatcher",
     # NURBS utils
     "nurbs_utils.image_tracer": "ImageTracer",
+    "nurbs_utils.curve_to_tube": "CurveToTube",
     # Rig utils
     "rig_utils.controls": "Controls",
     "rig_utils.shadow_rig": "ShadowRig",

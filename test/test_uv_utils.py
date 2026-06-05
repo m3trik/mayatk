@@ -188,6 +188,85 @@ class TestUvUtils(MayaTkTestCase):
     #     pass
 
 
+class TestUvCylinderUnwrap(MayaTkTestCase):
+    """Tests for the cylinder / tube auto-unwrap helpers."""
+
+    def _uv_shells(self, mesh):
+        return cmds.polyEvaluate(mesh, uvShell=True)
+
+    @staticmethod
+    def _flatten_uvs_to_one_shell(mesh):
+        """Project all faces from one plane so the mesh is a single UV shell."""
+        cmds.polyProjection(
+            f"{mesh}.f[*]", type="Planar", md="y", insertBeforeDeformers=0
+        )
+
+    def test_seam_edges_capped_cylinder(self):
+        """A capped cylinder yields a lengthwise loop + a ring per cap."""
+        cyl = cmds.polyCylinder(
+            name="seam_capped", radius=1, height=4, subdivisionsAxis=12
+        )[0]
+        length_loop, cap_rings = UvUtils.get_cylinder_seam_edges(cyl)
+        self.assertTrue(length_loop)  # one lengthwise loop
+        # 12 sides around -> each cap ring is 12 edges; two caps -> 24 edges.
+        self.assertEqual(len(cmds.ls(cap_rings, flatten=True)), 24)
+
+    def test_unwrap_capped_cylinder_three_shells(self):
+        """Seaming a single-shell capped cylinder -> body + 2 caps (3 shells),
+        with no change to mesh topology."""
+        cyl = cmds.polyCylinder(
+            name="unwrap_capped", radius=1, height=4, subdivisionsAxis=12
+        )[0]
+        self._flatten_uvs_to_one_shell(cyl)
+        self.assertEqual(self._uv_shells(cyl), 1)
+
+        seamed = UvUtils.unwrap_cylinder(cyl, unfold=False)
+        self.assertEqual(seamed, [cmds.ls(cyl, long=True)[0]])
+        self.assertEqual(self._uv_shells(cyl), 3)  # body + 2 caps
+        v = cmds.polyEvaluate(cyl, vertex=True)
+        e = cmds.polyEvaluate(cyl, edge=True)
+        f = cmds.polyEvaluate(cyl, face=True)
+        self.assertEqual(v - e + f, 2)  # cuts don't change topology
+
+    def test_unwrap_open_tube_one_strip(self):
+        """An open tube (caps deleted) unwraps to a single lengthwise strip."""
+        cyl = cmds.polyCylinder(
+            name="unwrap_open", radius=1, height=4, subdivisionsAxis=12
+        )[0]
+        # Delete the two n-gon end caps -> an open tube (boundary at each end).
+        caps = [
+            i
+            for i in range(cmds.polyEvaluate(cyl, face=True))
+            if len(cmds.ls(cmds.polyListComponentConversion(
+                f"{cyl}.f[{i}]", toVertex=True), flatten=True)) > 4
+        ]
+        cmds.delete([f"{cyl}.f[{i}]" for i in caps])
+        self._flatten_uvs_to_one_shell(cyl)
+
+        length_loop, cap_rings = UvUtils.get_cylinder_seam_edges(cyl)
+        self.assertTrue(length_loop)
+        self.assertEqual(cap_rings, [])  # open tube -> no cap rings
+        UvUtils.unwrap_cylinder(cyl, unfold=False)
+        self.assertEqual(self._uv_shells(cyl), 1)  # one strip
+        # The lengthwise cut duplicates the UVs along the seam.
+        self.assertGreater(
+            cmds.polyEvaluate(cyl, uvcoord=True), cmds.polyEvaluate(cyl, vertex=True)
+        )
+
+    def test_invert_seam_opposite_side(self):
+        """Inverting the seam runs the lengthwise loop on the opposite side
+        (a disjoint set of edges from the default seam)."""
+        cyl = cmds.polyCylinder(
+            name="seam_invert", radius=1, height=4, subdivisionsAxis=12
+        )[0]
+        default_loop, _ = UvUtils.get_cylinder_seam_edges(cyl, invert_seam=False)
+        inverted_loop, _ = UvUtils.get_cylinder_seam_edges(cyl, invert_seam=True)
+        default_ids = set(cmds.ls(default_loop, flatten=True))
+        inverted_ids = set(cmds.ls(inverted_loop, flatten=True))
+        self.assertTrue(default_ids and inverted_ids)
+        self.assertEqual(default_ids & inverted_ids, set())  # opposite sides
+
+
 class TestUvUtilsEdgeCases(MayaTkTestCase):
     """Edge case tests for UvUtils."""
 

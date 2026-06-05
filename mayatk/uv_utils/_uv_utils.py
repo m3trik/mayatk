@@ -409,6 +409,247 @@ class UvUtils(ptk.HelpMixin):
 
         return uv_border_edges
 
+    # --------------------------------------------------------- cylinder unwrap
+    @classmethod
+    def get_cylinder_seam_edges(
+        cls, mesh, sections=None, invert_seam: bool = False, cap_faces=None
+    ):
+        """Identify the UV seam edges for unwrapping a cylinder / tube.
+
+        Returns ``(length_loop, cap_rings)`` -- two lists of edge component
+        strings:
+
+        - ``length_loop`` -- one edge loop running *along* the cylinder (the
+          lengthwise seam that opens the body into a flat strip).
+        - ``cap_rings`` -- the edges where each end cap meets the body, so
+          cutting them peels every cap into its own UV shell. Empty for an open
+          (uncapped) tube or a closed torus.
+
+        Three topologies are handled:
+
+        - **Open tube** (has boundary edges): the lengthwise edge at a rim
+          vertex seeds the loop; no cap rings.
+        - **Capped cylinder** (end caps): the cap faces' edges are the cap
+          rings; the lengthwise edge at a cap-corner vertex seeds the loop.
+        - **Closed torus** (no boundary, no caps): the loop whose edge count
+          differs from ``sections`` (the around-ring count) is lengthwise.
+
+        Parameters:
+            mesh (str): A polygon cylinder / tube transform or shape.
+            sections (int, optional): Sides around the cylinder. Only used to
+                disambiguate the lengthwise loop on a closed torus.
+            invert_seam (bool): Place the lengthwise seam on the opposite side
+                of the cylinder (the diametrically opposite vertex of the start
+                ring), letting the caller control where the seam lands.
+            cap_faces (list, optional): Explicit cap face indices. A caller that
+                just created the caps (e.g. via ``polyCloseBorder``) can pass
+                them so detection is exact for any section count; otherwise caps
+                are auto-detected as n-gons (reliable for >= 5 sides).
+        """
+        import maya.api.OpenMaya as om
+
+        sel = om.MSelectionList()
+        sel.add(str(mesh))
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        fn = om.MFnMesh(dag)
+
+        # Boundary edge ids (the open ends of an uncapped tube).
+        eit = om.MItMeshEdge(dag)
+        boundary_ids = set()
+        while not eit.isDone():
+            if eit.onBoundary():
+                boundary_ids.add(eit.index())
+            eit.next()
+
+        # Caps: either supplied by the caller (exact, any section count) or
+        # auto-detected as n-gons (a clean tube body is all quads / tris, so a
+        # face with >4 sides is an end cap -- reliable for >= 5 sections).
+        if cap_faces is None:
+            cap_faces = [
+                i for i in range(fn.numPolygons) if len(fn.getPolygonVertices(i)) > 4
+            ]
+        cap_faces = list(cap_faces)
+
+        def _ids(components):
+            return {
+                int(c.split("[")[1].rstrip("]"))
+                for c in (cmds.ls(components or [], flatten=True) or [])
+            }
+
+        cap_ring_comps = []
+        if cap_faces:
+            cap_face_comps = [f"{mesh}.f[{i}]" for i in cap_faces]
+            cap_ring_comps = (
+                cmds.ls(
+                    cmds.polyListComponentConversion(
+                        cap_face_comps, fromFace=True, toEdge=True
+                    )
+                    or [],
+                    flatten=True,
+                )
+                or []
+            )
+
+        # Closed torus: no boundary and no caps -> the lengthwise loop is the
+        # one whose edge count differs from the around-ring count.
+        if not boundary_ids and not cap_faces:
+            return cls._torus_length_loop(mesh, sections), []
+
+        # Seed the lengthwise loop from a start-ring vertex.
+        if cap_faces:
+            ring_vids = list(fn.getPolygonVertices(cap_faces[0]))
+        else:  # open tube -- the vertices of one boundary loop
+            first_b = next(iter(boundary_ids))
+            border = cmds.polySelect(mesh, edgeBorder=first_b, ass=True) or []
+            ring_vids = list(
+                _ids(
+                    cmds.polyListComponentConversion(
+                        border, fromEdge=True, toVertex=True
+                    )
+                )
+            )
+        if not ring_vids:
+            return [], cap_ring_comps
+
+        v0 = ring_vids[0]
+        if invert_seam and len(ring_vids) > 2:
+            p0 = fn.getPoint(v0, om.MSpace.kWorld)
+            v0 = max(
+                ring_vids,
+                key=lambda v: (fn.getPoint(v, om.MSpace.kWorld) - p0).length(),
+            )
+
+        # The lengthwise edge at v0 is the one that is neither a boundary edge
+        # nor a cap-ring edge (those run *around* the cylinder).
+        v0_edge_ids = _ids(
+            cmds.polyListComponentConversion(
+                f"{mesh}.vtx[{v0}]", fromVertex=True, toEdge=True
+            )
+        )
+        lengthwise = sorted(v0_edge_ids - boundary_ids - _ids(cap_ring_comps))
+        if not lengthwise:
+            return [], cap_ring_comps
+        length_loop = cmds.polySelect(mesh, edgeLoop=lengthwise[0], ass=True) or []
+        return length_loop, cap_ring_comps
+
+    @staticmethod
+    def _torus_length_loop(mesh, sections):
+        """The lengthwise edge loop of a closed (torus) tube.
+
+        The around-ring loop has ``sections`` edges; the first edge loop that
+        doesn't is the lengthwise one. Without ``sections`` (standalone use)
+        fall back to the longer of two perpendicular loops.
+        """
+        if sections:
+            for cand in range(3):
+                loop = cmds.polySelect(mesh, edgeLoop=cand, ass=True) or []
+                if len(cmds.ls(loop, flatten=True) or []) != int(sections):
+                    return loop
+            return []
+        loops = [
+            cmds.ls(cmds.polySelect(mesh, edgeLoop=c, ass=True) or [], flatten=True)
+            or []
+            for c in range(2)
+        ]
+        return max(loops, key=len) if any(loops) else []
+
+    @classmethod
+    def _seam_cut_one(cls, mesh, invert_seam=False, sections=None, history=True):
+        """Cut the cylinder UV seams on one mesh; return whether anything was cut."""
+        length_loop, cap_rings = cls.get_cylinder_seam_edges(
+            mesh, sections=sections, invert_seam=invert_seam
+        )
+        cut = False
+        for seam in (length_loop, cap_rings):
+            if seam:
+                cmds.polyMapCut(seam, constructionHistory=history)
+                cut = True
+        return cut
+
+    @classmethod
+    @CoreUtils.undoable
+    def cut_cylinder_seams(cls, objects=None, invert_seam=False, history=True):
+        """Cut UV seams for cylinder / tube unwrapping on each selected mesh.
+
+        Adds one lengthwise seam plus the ring(s) where any end cap meets the
+        body, so the body unwraps to a strip and the caps peel into their own
+        UV shells. Returns the list of mesh transforms that were seamed.
+
+        Parameters:
+            objects (str/obj/list): Cylinder / tube mesh(es). If None, uses the
+                current selection.
+            invert_seam (bool): Land the lengthwise seam on the opposite side.
+            history (bool): Keep the ``polyMapCut`` construction history.
+        """
+        meshes = cls._cylinder_meshes(objects)
+        return [m for m in meshes if cls._seam_cut_one(m, invert_seam, history=history)]
+
+    @classmethod
+    @CoreUtils.undoable
+    def unwrap_cylinder(
+        cls, objects=None, invert_seam=False, unfold=True, orient=True, map_size=4096
+    ):
+        """Auto-unwrap cylinder / tube meshes: seam, then unfold them flat.
+
+        Cuts the cylinder seams (lengthwise + cap rings) on each mesh, then
+        unfolds the result so the body lays out as a clean rectangular strip
+        and each cap as its own shell. Returns the seamed mesh transforms.
+
+        Parameters:
+            objects (str/obj/list): Cylinder / tube mesh(es). If None, uses the
+                current selection.
+            invert_seam (bool): Land the lengthwise seam on the opposite side,
+                giving control over where the seam runs.
+            unfold (bool): Unfold (flatten) the UVs after seaming (Unfold3D).
+            orient (bool): Orient each shell to its nearest U/V axis after the
+                unfold.
+            map_size (int): Texture size the unfold optimizes spacing against.
+        """
+        meshes = cls._cylinder_meshes(objects)
+        seamed = [m for m in meshes if cls._seam_cut_one(m, invert_seam)]
+        if unfold and seamed:
+            uvs = cmds.polyListComponentConversion(seamed, toUV=True) or []
+            try:
+                cmds.loadPlugin("Unfold3D.mll", quiet=True)
+                cmds.u3dUnfold(
+                    uvs,
+                    iterations=1,
+                    pack=0,
+                    borderintersection=1,
+                    triangleflip=1,
+                    mapsize=map_size,
+                    roomspace=0,
+                )
+                if orient:
+                    cls.orient_shells(seamed)
+            except Exception as error:  # plugin missing / non-unfoldable
+                cmds.warning(f"unwrap_cylinder: unfold skipped ({error}).")
+        return seamed
+
+    @staticmethod
+    def _cylinder_meshes(objects):
+        """Resolve *objects* (or the selection) to a list of mesh transforms."""
+        if objects is None:
+            objects = cmds.ls(selection=True) or []
+        shapes = (
+            cmds.ls(
+                as_strings(objects),
+                dag=True,
+                type="mesh",
+                noIntermediate=True,
+                long=True,
+            )
+            or []
+        )
+        meshes = []
+        for s in shapes:
+            parent = cmds.listRelatives(s, parent=True, fullPath=True)
+            t = parent[0] if parent else s
+            if t not in meshes:
+                meshes.append(t)
+        return meshes
+
     @staticmethod
     def get_texel_density(objects, map_size):
         """Calculate the texel density for the given objects' faces.

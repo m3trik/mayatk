@@ -23,11 +23,12 @@ Constraints on ``perform_operation`` authors:
   - Mesh ops must use ``constructionHistory=True`` so rollback can revert
     geometry by deleting the history node. This is sufficient only when the
     mesh has upstream history to fall back to. For ops that mutate a mesh in
-    place and may run on historyless (frozen/imported) meshes -- where a
-    poly op bakes its result when its auto-created orig-shape is deleted --
-    set ``PRESERVE_GEOMETRY = True`` on the operation instance. The contract
-    then snapshots the operated objects and, on rollback, restores any that
-    survived but diverged from the snapshot (identity/UUID preserved).
+    place (a poly op on a historyless mesh that bakes its result when its
+    auto-created orig-shape is deleted, or Curve to Tube resampling its source
+    curve in place), set ``PRESERVE_GEOMETRY = True`` on the operation instance.
+    The contract then snapshots the operated objects and, on rollback, restores
+    any mesh or curve that survived but diverged from the snapshot (identity/UUID
+    preserved).
   - Do not delete pre-existing nodes inside ``perform_operation`` (diff is
     one-way; deletions cannot be reversed).
   - Mutating an attribute on a pre-existing node requires
@@ -228,58 +229,85 @@ class CleanupContract:
             except Exception:
                 pass
 
-    # ----------------------------------------------- in-place mesh restore
+    # ------------------------------------------- in-place geometry restore
     @classmethod
-    def _mesh_signature(cls, transform: str):
-        """Cheap topology + world-extent signature used to decide whether a
-        surviving original still matches its pristine duplicate.
+    def _geo_signature(cls, transform: str):
+        """Cheap signature used to decide whether a surviving original still
+        matches its pristine duplicate.
 
-        Returns ``None`` for non-mesh (or shape-less) transforms, which the
-        divergence check treats as "not diverged" -- so the in-place restore
-        only ever runs on genuine meshes.
+        Handles polygon meshes (topology + world extent) and NURBS curves
+        (spans / degree / form + world extent). Returns ``None`` for shapes of
+        neither kind, which the divergence check treats as "not diverged" -- so
+        the in-place restore only ever runs on geometry it knows how to rebuild.
         """
         shape = NodeUtils.get_shape(transform, no_intermediate=True)
         if not shape:
             return None
         try:
-            sig = (
-                cmds.polyEvaluate(shape, vertex=True),
-                cmds.polyEvaluate(shape, edge=True),
-                cmds.polyEvaluate(shape, face=True),
-            )
-        except Exception:
-            return None
-        # polyEvaluate returns a str/dict on non-mesh or error shapes.
-        if not all(isinstance(n, int) for n in sig):
-            return None
-        try:
             bbox = tuple(round(v, 5) for v in cmds.exactWorldBoundingBox(transform))
         except Exception:
             bbox = None
-        return sig + (bbox,)
+        stype = cmds.objectType(shape)
+        if stype == "mesh":
+            try:
+                sig = (
+                    cmds.polyEvaluate(shape, vertex=True),
+                    cmds.polyEvaluate(shape, edge=True),
+                    cmds.polyEvaluate(shape, face=True),
+                )
+            except Exception:
+                return None
+            # polyEvaluate returns a str/dict on non-mesh or error shapes.
+            if not all(isinstance(n, int) for n in sig):
+                return None
+            return ("mesh",) + sig + (bbox,)
+        if stype == "nurbsCurve":
+            try:
+                # CV positions (not just count/bbox): a resample can keep the
+                # span count and world extent while moving the control points,
+                # which spans+bbox alone would miss.
+                cvs = cmds.xform(
+                    f"{shape}.cv[*]", query=True, objectSpace=True, translation=True
+                )
+                sig = (
+                    cmds.getAttr(f"{shape}.degree"),
+                    cmds.getAttr(f"{shape}.form"),
+                    tuple(round(c, 5) for c in cvs),
+                )
+            except Exception:
+                return None
+            return ("curve",) + sig
+        return None
 
     @classmethod
-    def _mesh_diverged(cls, transform: str, dup: str) -> bool:
-        a = cls._mesh_signature(transform)
-        b = cls._mesh_signature(dup)
+    def _geo_diverged(cls, transform: str, dup: str) -> bool:
+        a = cls._geo_signature(transform)
+        b = cls._geo_signature(dup)
         if a is None or b is None:
             return False
         return a != b
 
     @classmethod
-    def _restore_mesh_in_place(cls, transform: str, dup: str) -> None:
-        """Overwrite *transform*'s mesh with the pristine *dup*'s mesh while
+    def _restore_geo_in_place(cls, transform: str, dup: str) -> None:
+        """Overwrite *transform*'s geometry with the pristine *dup*'s while
         keeping the original shape node (and thus its identity/UUID) intact.
 
-        Feeds the duplicate's ``outMesh`` into the original ``inMesh`` then
-        bakes it via ``delete(ch=True)`` -- which evaluates the pristine mesh
-        into the shape and severs the temporary connection.
+        Feeds the duplicate's object-space output into the original's input
+        (mesh: ``outMesh -> inMesh``; curve: ``local -> create``) then bakes it
+        via ``delete(ch=True)`` -- which evaluates the pristine geometry into the
+        shape and severs the temporary connection.
         """
         orig_shape = NodeUtils.get_shape(transform, no_intermediate=True)
         dup_shape = NodeUtils.get_shape(dup, no_intermediate=True)
         if not orig_shape or not dup_shape:
             return
-        cmds.connectAttr(f"{dup_shape}.outMesh", f"{orig_shape}.inMesh", force=True)
+        stype = cmds.objectType(orig_shape)
+        if stype == "mesh":
+            cmds.connectAttr(f"{dup_shape}.outMesh", f"{orig_shape}.inMesh", force=True)
+        elif stype == "nurbsCurve":
+            cmds.connectAttr(f"{dup_shape}.local", f"{orig_shape}.create", force=True)
+        else:
+            return
         cmds.delete(orig_shape, constructionHistory=True)
 
     @staticmethod
@@ -380,24 +408,23 @@ class CleanupContract:
                                 except Exception:
                                     pass  # collision or invalid; leave dup uuid
                     elif cmds.objExists(p["dup"]):
-                        # Original survived. Node-diff deletion may still have
-                        # BAKED an in-place mesh mutation: ops like polyCut run
-                        # on a HISTORYLESS mesh create an intermediate orig
-                        # shape that holds the only pristine copy, and deleting
-                        # it (counted as a "created" node) leaves the mutated
-                        # result baked into the visible shape. Detect that by
-                        # comparing the live mesh to the pristine duplicate; if
-                        # they diverged, restore the mesh in place -- preserving
+                        # Original survived but may have been mutated in place:
+                        # ops like polyCut on a HISTORYLESS mesh create an
+                        # intermediate orig shape that holds the only pristine
+                        # copy, and deleting it (counted as "created") leaves the
+                        # mutated result baked in; Curve to Tube resamples the
+                        # source curve in place. Detect divergence against the
+                        # pristine duplicate and restore in place -- preserving
                         # the original shape's identity/UUID -- rather than
-                        # leaving the bake. When they match (node-diff already
-                        # reverted, e.g. a mesh WITH upstream history), skip the
+                        # leaving the mutation. When they match (node-diff already
+                        # reverted, e.g. geometry WITH upstream history), skip the
                         # restore so legitimate construction history is kept.
                         try:
                             orig_path = (
                                 cmds.ls(p["orig_uuid"], long=True) or [None]
                             )[0]
-                            if orig_path and self._mesh_diverged(orig_path, p["dup"]):
-                                self._restore_mesh_in_place(orig_path, p["dup"])
+                            if orig_path and self._geo_diverged(orig_path, p["dup"]):
+                                self._restore_geo_in_place(orig_path, p["dup"])
                         finally:
                             # Always remove the snapshot, even if restore raised.
                             if cmds.objExists(p["dup"]):
