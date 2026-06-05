@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.12.26"
+__version__ = "0.12.29"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -132,6 +132,7 @@ DEFAULT_INCLUDE = {
     "xform_utils.pivot_watcher": "PivotWatcher",
     # NURBS utils
     "nurbs_utils.image_tracer": "ImageTracer",
+    "nurbs_utils.curve_to_tube": "CurveToTube",
     # Rig utils
     "rig_utils.controls": "Controls",
     "rig_utils.shadow_rig": "ShadowRig",
