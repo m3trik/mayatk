@@ -6269,7 +6269,7 @@
           "kind": "function",
           "signature": "() -> None",
           "summary": "",
-          "line": 809,
+          "line": 836,
           "deprecated": false
         }
       ],
@@ -6277,7 +6277,7 @@
         {
           "name": "OperationError",
           "summary": "User-facing operation failure for the Preview message box.",
-          "line": 57,
+          "line": 58,
           "bases": [
             "Exception"
           ],
@@ -6286,7 +6286,7 @@
         {
           "name": "CleanupContract",
           "summary": "Captures and reverses side effects of a previewed operation.",
-          "line": 105,
+          "line": 106,
           "bases": [],
           "members": [
             {
@@ -6295,7 +6295,7 @@
               "kind": "method",
               "signature": "(self, path) -> None",
               "summary": "",
-              "line": 220,
+              "line": 221,
               "deprecated": false
             },
             {
@@ -6304,7 +6304,7 @@
               "kind": "method",
               "signature": "(self, node: str, attr: str) -> None",
               "summary": "",
-              "line": 223,
+              "line": 224,
               "deprecated": false
             },
             {
@@ -6313,7 +6313,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 305,
+              "line": 333,
               "deprecated": false
             }
           ]
@@ -6321,7 +6321,7 @@
         {
           "name": "Preview",
           "summary": "Hermetic preview orchestrator (H1).",
-          "line": 444,
+          "line": 471,
           "bases": [],
           "members": [
             {
@@ -6330,7 +6330,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "",
-              "line": 455,
+              "line": 482,
               "deprecated": false
             },
             {
@@ -6339,7 +6339,7 @@
               "kind": "method",
               "signature": "(self, enable_on_show: bool, disable_on_hide: bool) -> None",
               "summary": "",
-              "line": 535,
+              "line": 562,
               "deprecated": false
             },
             {
@@ -6348,7 +6348,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 550,
+              "line": 577,
               "deprecated": false
             },
             {
@@ -6357,7 +6357,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 554,
+              "line": 581,
               "deprecated": false
             },
             {
@@ -6366,7 +6366,7 @@
               "kind": "method",
               "signature": "(self, state: bool) -> None",
               "summary": "",
-              "line": 559,
+              "line": 586,
               "deprecated": false
             },
             {
@@ -6375,7 +6375,7 @@
               "kind": "method",
               "signature": "(self, objects: List[Any]) -> bool",
               "summary": "",
-              "line": 565,
+              "line": 592,
               "deprecated": false
             },
             {
@@ -6384,7 +6384,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 575,
+              "line": 602,
               "deprecated": false
             },
             {
@@ -6393,7 +6393,7 @@
               "kind": "method",
               "signature": "(self, *args) -> None",
               "summary": "Roll back the previous preview and re-run perform_operation.",
-              "line": 690,
+              "line": 717,
               "deprecated": false
             },
             {
@@ -6402,7 +6402,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Roll back the preview without committing.",
-              "line": 715,
+              "line": 742,
               "deprecated": false
             },
             {
@@ -6411,7 +6411,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Commit: rollback the hermetic version, then replay under undo.",
-              "line": 737,
+              "line": 764,
               "deprecated": false
             },
             {
@@ -6420,7 +6420,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 785,
+              "line": 812,
               "deprecated": false
             },
             {
@@ -6429,7 +6429,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "",
-              "line": 798,
+              "line": 825,
               "deprecated": false
             },
             {
@@ -6438,7 +6438,7 @@
               "kind": "property",
               "signature": "(self) -> int",
               "summary": "",
-              "line": 802,
+              "line": 829,
               "deprecated": false
             },
             {
@@ -6447,7 +6447,7 @@
               "kind": "method",
               "signature": "(self) -> List[str]",
               "summary": "",
-              "line": 805,
+              "line": 832,
               "deprecated": false
             }
           ]
@@ -17183,6 +17183,69 @@
       ]
     },
     {
+      "relpath": "nurbs_utils/curve_to_tube.py",
+      "summary": "Sweep a circular profile along NURBS curve(s) to build a tube.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "CurveToTube",
+          "summary": "Extrude a circular profile along NURBS curve(s) to build a tube.",
+          "line": 53,
+          "bases": [
+            "ptk.LoggingMixin"
+          ],
+          "members": [
+            {
+              "name": "create",
+              "qualname": "CurveToTube.create",
+              "kind": "classmethod",
+              "signature": "(cls, curves, output_type: str = 'nurbs', radius: float = 1.0, sections: int = 8, path_divisions: int = 1, degree: int = 3, caps: bool = True, quads: bool = True, live: bool = False, cleanup: bool = True, name: str = 'tube') -> List[str]",
+              "summary": "Build a tube along each selected curve.",
+              "line": 77,
+              "deprecated": false
+            }
+          ]
+        },
+        {
+          "name": "CurveToTubeSlots",
+          "summary": "Switchboard slot wiring for the Curve to Tube UI (hermetic preview).",
+          "line": 655,
+          "bases": [
+            "ptk.LoggingMixin"
+          ],
+          "members": [
+            {
+              "name": "header_init",
+              "qualname": "CurveToTubeSlots.header_init",
+              "kind": "method",
+              "signature": "(self, widget)",
+              "summary": "Configure header help text.",
+              "line": 703,
+              "deprecated": false
+            },
+            {
+              "name": "b001",
+              "qualname": "CurveToTubeSlots.b001",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Reset to Defaults.",
+              "line": 752,
+              "deprecated": false
+            },
+            {
+              "name": "perform_operation",
+              "qualname": "CurveToTubeSlots.perform_operation",
+              "kind": "method",
+              "signature": "(self, objects, contract)",
+              "summary": "Build the tube(s) from the selected curves (Preview entry point).",
+              "line": 756,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
       "relpath": "nurbs_utils/image_tracer.py",
       "summary": "",
       "functions": [],
@@ -19112,12 +19175,39 @@
               "deprecated": false
             },
             {
+              "name": "get_cylinder_seam_edges",
+              "qualname": "UvUtils.get_cylinder_seam_edges",
+              "kind": "classmethod",
+              "signature": "(cls, mesh, sections=None, invert_seam: bool = False, cap_faces=None)",
+              "summary": "Identify the UV seam edges for unwrapping a cylinder / tube.",
+              "line": 414,
+              "deprecated": false
+            },
+            {
+              "name": "cut_cylinder_seams",
+              "qualname": "UvUtils.cut_cylinder_seams",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None, invert_seam=False, history=True)",
+              "summary": "Cut UV seams for cylinder / tube unwrapping on each selected mesh.",
+              "line": 572,
+              "deprecated": false
+            },
+            {
+              "name": "unwrap_cylinder",
+              "qualname": "UvUtils.unwrap_cylinder",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None, invert_seam=False, unfold=True, orient=True, map_size=4096)",
+              "summary": "Auto-unwrap cylinder / tube meshes: seam, then unfold them flat.",
+              "line": 590,
+              "deprecated": false
+            },
+            {
               "name": "get_texel_density",
               "qualname": "UvUtils.get_texel_density",
               "kind": "staticmethod",
               "signature": "(objects, map_size)",
               "summary": "Calculate the texel density for the given objects' faces.",
-              "line": 413,
+              "line": 654,
               "deprecated": false
             },
             {
@@ -19126,7 +19216,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, density=1.0, map_size=4096)",
               "summary": "Set the texel density for the given objects.",
-              "line": 461,
+              "line": 702,
               "deprecated": false
             },
             {
@@ -19135,7 +19225,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Sequence[Union[str, object]], prefix: str = '_uv_snap') -> List[UvSnapshot]",
               "summary": "Copy each object's active UV set into a uniquely-named backup set.",
-              "line": 519,
+              "line": 760,
               "deprecated": false
             },
             {
@@ -19144,7 +19234,7 @@
               "kind": "staticmethod",
               "signature": "(snapshots: Sequence[UvSnapshot]) -> None",
               "summary": "Restore UVs captured by ``snapshot_uv_sets``.",
-              "line": 565,
+              "line": 806,
               "deprecated": false
             },
             {
@@ -19153,7 +19243,7 @@
               "kind": "staticmethod",
               "signature": "(snapshots: Sequence[UvSnapshot]) -> None",
               "summary": "Delete the snapshot UV sets without restoring them.",
-              "line": 587,
+              "line": 828,
               "deprecated": false
             },
             {
@@ -19162,7 +19252,7 @@
               "kind": "staticmethod",
               "signature": "(source: Union[str, object, List[Union[str, object]]], target: Union[str, object, List[Union[str, object]]], tolerance: float = 0.1) -> None",
               "summary": "Transfers UVs from source meshes to target meshes based on geometric similarity.",
-              "line": 602,
+              "line": 843,
               "deprecated": false
             },
             {
@@ -19171,7 +19261,7 @@
               "kind": "staticmethod",
               "signature": "(obj: str, new_order: list[str]) -> None",
               "summary": "Reorder UV sets of the given object to match the specified new order.",
-              "line": 634,
+              "line": 875,
               "deprecated": false
             },
             {
@@ -19180,7 +19270,7 @@
               "kind": "staticmethod",
               "signature": "(objects, quiet: bool = False) -> None",
               "summary": "Remove empty UV sets from the given objects.",
-              "line": 667,
+              "line": 908,
               "deprecated": false
             }
           ]

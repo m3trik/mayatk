@@ -155,6 +155,7 @@ _Generated: 2026-06-05_
 - [`node_utils/attributes/channels/channels_slots.py`](#node_utils--attributes--channels--channels_slots) — UI slots for the Channels UI.
 - [`node_utils/data_nodes.py`](#node_utils--data_nodes)
 - [`nurbs_utils/_nurbs_utils.py`](#nurbs_utils--_nurbs_utils)
+- [`nurbs_utils/curve_to_tube.py`](#nurbs_utils--curve_to_tube) — Sweep a circular profile along NURBS curve(s) to build a tube.
 - [`nurbs_utils/image_tracer.py`](#nurbs_utils--image_tracer)
 - [`rig_utils/_rig_utils.py`](#rig_utils--_rig_utils)
 - [`rig_utils/controls.py`](#rig_utils--controls)
@@ -1180,13 +1181,13 @@ Instancing strategy logic for AutoInstancer.
 
 Hermetic preview with replay-on-commit (H1 design).
 
-- [`cleanup_all_previews() -> None`](mayatk/mayatk/core_utils/preview.py#L809)
-- **[`class OperationError(Exception)`](mayatk/mayatk/core_utils/preview.py#L57)** — User-facing operation failure for the Preview message box.
-- **[`class CleanupContract`](mayatk/mayatk/core_utils/preview.py#L105)** — Captures and reverses side effects of a previewed operation.
+- [`cleanup_all_previews() -> None`](mayatk/mayatk/core_utils/preview.py#L836)
+- **[`class OperationError(Exception)`](mayatk/mayatk/core_utils/preview.py#L58)** — User-facing operation failure for the Preview message box.
+- **[`class CleanupContract`](mayatk/mayatk/core_utils/preview.py#L106)** — Captures and reverses side effects of a previewed operation.
   - `CleanupContract.add_file(self, path) -> None`
   - `CleanupContract.record_modification(self, node: str, attr: str) -> None`
   - `CleanupContract.rollback(self) -> None`
-- **[`class Preview`](mayatk/mayatk/core_utils/preview.py#L444)** — Hermetic preview orchestrator (H1).
+- **[`class Preview`](mayatk/mayatk/core_utils/preview.py#L471)** — Hermetic preview orchestrator (H1).
   - `Preview.cleanup_all_instances(cls) -> None` *(class)*
   - `Preview.init_show_hide_behavior(self, enable_on_show: bool, disable_on_hide: bool) -> None`
   - `Preview.conditionally_enable(self) -> None`
@@ -2757,6 +2758,18 @@ UI slots for the Channels UI.
   - `NurbsUtils.get_cv_info(cls, c, returned_type='cv', filter_=[])` *(class)* — Get a dict containing CV's of the given curve(s) and their corresponding point positions (based on…
   - `NurbsUtils.getCrossProductOfCurves(cls, curves, normalize=1, values=False)` *(class)* — Get the cross product of two vectors using points derived from the given curves.
 
+<a id="nurbs_utils--curve_to_tube"></a>
+### `nurbs_utils/curve_to_tube.py`
+
+Sweep a circular profile along NURBS curve(s) to build a tube.
+
+- **[`class CurveToTube(ptk.LoggingMixin)`](mayatk/mayatk/nurbs_utils/curve_to_tube.py#L53)** — Extrude a circular profile along NURBS curve(s) to build a tube.
+  - `CurveToTube.create(cls, curves, output_type: str = 'nurbs', radius: float = 1.0, sections: int = 8, path_divisions: int = 1, degree: int = 3, caps: bool = True, quads: bool = True, live: bool = False, cleanup: bool = True, name: str = 'tube') -> List[str]` *(class)* — Build a tube along each selected curve.
+- **[`class CurveToTubeSlots(ptk.LoggingMixin)`](mayatk/mayatk/nurbs_utils/curve_to_tube.py#L655)** — Switchboard slot wiring for the Curve to Tube UI (hermetic preview).
+  - `CurveToTubeSlots.header_init(self, widget)` — Configure header help text.
+  - `CurveToTubeSlots.b001(self)` — Reset to Defaults.
+  - `CurveToTubeSlots.perform_operation(self, objects, contract)` — Build the tube(s) from the selected curves (Preview entry point).
+
 <a id="nurbs_utils--image_tracer"></a>
 ### `nurbs_utils/image_tracer.py`
 
@@ -3030,6 +3043,9 @@ Reusable helper for resolving Maya node icons at runtime.
   - `UvUtils.flip_uvs(cls, objects, axis: str = 'u', pivot: tuple | None = None, per_shell: bool = True, preserve_position: bool = True)` *(class)* — Backward-compatible alias for :meth:`mirror_uvs`.
   - `UvUtils.get_uv_shell_sets(objects=None, returned_type='shell')` *(static)* — Get UV shells and their corresponding sets of faces.
   - `UvUtils.get_uv_shell_border_edges(objects)` *(static)* — Get the edges that make up any UV islands of the given objects.
+  - `UvUtils.get_cylinder_seam_edges(cls, mesh, sections=None, invert_seam: bool = False, cap_faces=None)` *(class)* — Identify the UV seam edges for unwrapping a cylinder / tube.
+  - `UvUtils.cut_cylinder_seams(cls, objects=None, invert_seam=False, history=True)` *(class)* — Cut UV seams for cylinder / tube unwrapping on each selected mesh.
+  - `UvUtils.unwrap_cylinder(cls, objects=None, invert_seam=False, unfold=True, orient=True, map_size=4096)` *(class)* — Auto-unwrap cylinder / tube meshes: seam, then unfold them flat.
   - `UvUtils.get_texel_density(objects, map_size)` *(static)* — Calculate the texel density for the given objects' faces.
   - `UvUtils.set_texel_density(cls, objects=None, density=1.0, map_size=4096)` *(class)* — Set the texel density for the given objects.
   - `UvUtils.snapshot_uv_sets(objects: Sequence[Union[str, object]], prefix: str = '_uv_snap') -> List[UvSnapshot]` *(static)* — Copy each object's active UV set into a uniquely-named backup set.
