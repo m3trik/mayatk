@@ -693,7 +693,7 @@ class CurveToTubeSlots(ptk.LoggingMixin):
 
         self._toggle_output_options()
 
-        # Footer doubles as a stats readout (tri / vert counts, spans) once a
+        # Footer doubles as a stats readout (triangle count, spans) once a
         # tube is built; show a hint until then.
         try:
             self.ui.footer.setDefaultStatusText("Select NURBS curve(s), then Preview.")
@@ -784,7 +784,7 @@ class CurveToTubeSlots(ptk.LoggingMixin):
         self._apply_result_selection(defer=contract is None)
 
     def _update_footer(self):
-        """Show stats for the last build in the footer (tri / vert counts for a
+        """Show stats for the last build in the footer (triangle count for a
         polygon tube, spans for a NURBS one). Updates live as the preview
         re-sweeps; clears to the default hint when there is no result."""
         try:
@@ -798,11 +798,7 @@ class CurveToTubeSlots(ptk.LoggingMixin):
         prefix = f"{len(tubes)} tubes — " if len(tubes) > 1 else ""
         if self.ui.cmb000.currentData() == "polygon":
             tris = sum(cmds.polyEvaluate(t, triangle=True) or 0 for t in tubes)
-            faces = sum(cmds.polyEvaluate(t, face=True) or 0 for t in tubes)
-            verts = sum(cmds.polyEvaluate(t, vertex=True) or 0 for t in tubes)
-            footer.setStatusText(
-                f"{prefix}{tris:,} tris · {faces:,} faces · {verts:,} verts"
-            )
+            footer.setStatusText(f"{prefix}{tris:,} tris")
         else:
             spans = []
             for t in tubes:

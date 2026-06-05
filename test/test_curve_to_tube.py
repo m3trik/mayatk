@@ -550,7 +550,7 @@ class TestCurveToTube(MayaTkTestCase):
                     self.assertEqual(tube_long in sel, want, "commit after idle")
 
     def test_update_footer_reports_stats(self):
-        """_update_footer reports tri/vert counts for a polygon result, span
+        """_update_footer reports the triangle count for a polygon result, span
         counts for a NURBS one, and clears when there is no result."""
 
         class _Footer:
@@ -573,7 +573,7 @@ class TestCurveToTube(MayaTkTestCase):
         f = fake_for("polygon", poly)
         CurveToTubeSlots._update_footer(f)
         self.assertIn("tris", f.ui.footer._t)
-        self.assertIn("verts", f.ui.footer._t)
+        self.assertNotIn("verts", f.ui.footer._t)  # tri count only
 
         cmds.file(new=True, force=True)
         crv = cmds.curve(d=3, p=[(0, 0, 0), (3, 3, 0), (6, 0, 0)])
