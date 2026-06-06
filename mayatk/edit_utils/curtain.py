@@ -28,6 +28,7 @@ Responsibilities are deliberately split so each stays reusable on its own
 """
 from __future__ import annotations
 
+import bisect
 import math
 import random
 from pathlib import Path
@@ -45,6 +46,7 @@ import pythontk as ptk
 from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # from this package:
+from mayatk.core_utils._core_utils import BoundingBox
 from mayatk.core_utils.preview import Preview
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.edit_utils.naming._naming import Naming
@@ -107,26 +109,35 @@ class Rail:
         curvature: float = 0.0,
         segments: int = 24,
         closed: bool = False,
-        y: float = 0.0,
+        center: Vec = (0.0, 0.0, 0.0),
     ) -> Tuple[List[Vec], bool]:
         """Build a default rail: a straight line of ``width`` (``curvature == 0``).
 
         ``curvature`` (-1..1) bows the rail by a parabola — positive forward in
         +Z, negative back in -Z — so the default is flat and bowing is opt-in.
-        ``closed`` makes a ring instead.
+        ``closed`` makes a ring instead. ``center`` (x, y, z) is where the rail
+        is centered — the straight line's midpoint / the ring's center (default
+        origin).
         """
         segments = max(2, int(segments))
+        cx, cy, cz = (float(c) for c in center)
         pts: List[Vec] = []
         if closed:
             r = width / 2.0
             for i in range(segments):
                 a = (i / segments) * 2.0 * math.pi
-                pts.append((r * math.sin(a), y, r * math.cos(a)))
+                pts.append((cx + r * math.sin(a), cy, cz + r * math.cos(a)))
         else:
             bow = curvature * width * 0.5
             for i in range(segments + 1):
                 f = i / segments
-                pts.append(((f - 0.5) * width, y, bow * (1.0 - (2.0 * f - 1.0) ** 2)))
+                pts.append(
+                    (
+                        cx + (f - 0.5) * width,
+                        cy,
+                        cz + bow * (1.0 - (2.0 * f - 1.0) ** 2),
+                    )
+                )
         return pts, closed
 
     @staticmethod
@@ -279,12 +290,23 @@ class CurtainMesh(ptk.LoggingMixin):
         hanging_points: Number of evenly-spaced pins along the rail. Each is a
             pleat (the fabric gathers/attaches there); the fabric bellies and
             sags between consecutive points. ``2`` = a single span.
+        hang_jitter: ``0``–``1`` — randomize the *spacing* of the hanging points
+            along the rail (``0`` = evenly spaced). The outer ends (and a closed
+            seam) stay pinned; only the interior points shift, so spans become
+            uneven — wider gaps belly and sag further. ``hang_seed`` picks the
+            pattern.
+        hang_seed: RNG seed for the random hang-point spacing.
         gravity: How far the fabric falls between hanging points (the catenary
             sag depth, scaled by the span width — wider gaps fall further).
         tension: Catenary shape parameter for that sag (see
             :func:`catenary_shape`).
         round_points: ``0``–``1`` — round off the sharp cusp at each hanging
             point into a smooth dome (see :func:`sag_profile`).
+        round_gather: ``≥0`` — *push-pull* gather at each hanging point: the
+            fabric puckers **up** above the rail right at the point and **dips**
+            just inside as the slack falls off (a gathered/pleated header),
+            easing out by mid-span. Independent of ``round_points`` (``0`` =
+            off).
         fullness: Drapery fullness ratio (≥1); drives fold/belly depth.
         taper: ``-1``–``1`` vertical bias of the fold depth — positive gathers
             the pleats at the top and flares them toward the free hem.
@@ -303,6 +325,11 @@ class CurtainMesh(ptk.LoggingMixin):
             random points near the top and run various lengths (``0`` = off).
             Evokes the diagonal break-lines of gathered fabric.
         crease_seed: RNG seed for the crease placement / length / depth.
+        sway: **Lateral** fold lean — randomly leans a subset of the folds left
+            or right *along the rail* (not just in/out), so pushed-in and -out
+            areas drift sideways. Direction and amount per fold are random;
+            pinned at the hang points and strongest toward the hem (``0`` = off).
+        sway_seed: RNG seed for which folds sway and how far / which way.
         end_bend_left: Signed sideways bend applied to the left end of the
             curtain (e.g. a panel curling toward the camera); ``0`` = none.
         end_bend_right: Signed sideways bend applied to the right end.
@@ -326,15 +353,20 @@ class CurtainMesh(ptk.LoggingMixin):
         rail: Sequence[Vec],
         height: float = 3.0,
         hanging_points: int = 8,
+        hang_jitter: float = 0.0,
+        hang_seed: int = 0,
         gravity: float = 0.3,
         tension: float = 1.5,
         round_points: float = 0.0,
+        round_gather: float = 0.0,
         fullness: float = 2.5,
         taper: float = 0.5,
         mid_folds: float = 0.0,
         mid_fold_seed: int = 0,
         creases: float = 0.0,
         crease_seed: int = 0,
+        sway: float = 0.0,
+        sway_seed: int = 0,
         end_bend_left: float = 0.0,
         end_bend_right: float = 0.0,
         end_bend_falloff: float = 0.25,
@@ -356,15 +388,20 @@ class CurtainMesh(ptk.LoggingMixin):
         self.rail = rail
         self.height = float(height)
         self.hanging_points = max(2, int(hanging_points))
+        self.hang_jitter = max(0.0, min(1.0, float(hang_jitter)))
+        self.hang_seed = int(hang_seed)
         self.gravity = float(gravity)
         self.tension = float(tension)
         self.round_points = max(0.0, min(1.0, float(round_points)))
+        self.round_gather = max(0.0, float(round_gather))
         self.fullness = max(1.0, float(fullness))
         self.taper = float(taper)
         self.mid_folds = max(0.0, float(mid_folds))
         self.mid_fold_seed = int(mid_fold_seed)
         self.creases = max(0.0, float(creases))
         self.crease_seed = int(crease_seed)
+        self.sway = max(0.0, float(sway))
+        self.sway_seed = int(sway_seed)
         self.end_bend_left = float(end_bend_left)
         self.end_bend_right = float(end_bend_right)
         self.end_bend_falloff = max(1e-4, min(1.0, float(end_bend_falloff)))
@@ -381,6 +418,10 @@ class CurtainMesh(ptk.LoggingMixin):
         self.spans = (
             self.hanging_points if self.closed else max(self.hanging_points - 1, 1)
         )
+        # u-positions (0..1) of the hanging points along the rail — evenly spaced
+        # unless hang_jitter randomizes the interior spacing. Param-derived, so
+        # computed here (always available to the offset helpers, even standalone).
+        self._hang_points = self._make_hang_points()
 
     # Alias so callers can `CurtainMesh.create(rail, **opts)` in one line.
     @classmethod
@@ -402,6 +443,7 @@ class CurtainMesh(ptk.LoggingMixin):
         self._span_jitter = [rng.uniform(0.8, 1.2) for _ in range(self.spans)]
         self._creases = self._make_creases()
         self._midfolds = self._make_midfolds()
+        self._sway = self._make_sway()
         self._billow = self._make_billow()
 
         plane = cmds.polyPlane(
@@ -435,8 +477,8 @@ class CurtainMesh(ptk.LoggingMixin):
             u = (p.x - xmin) / w
             v = (p.z - zmin) / h
             col = max(0, min(u_segs, int(round(u * u_segs))))
-            pos, _tan, normal = frames[col]
-            pts[i] = om.MPoint(*self._drape(u, v, pos, normal))
+            pos, tan, normal = frames[col]
+            pts[i] = om.MPoint(*self._drape(u, v, pos, tan, normal))
 
         mesh.setPoints(pts, om.MSpace.kObject)
         mesh.updateSurface()
@@ -459,18 +501,48 @@ class CurtainMesh(ptk.LoggingMixin):
 
     # ------------------------------------------------------------- internals
 
-    def _drape(self, u, v, pos, normal) -> Vec:
+    def _make_hang_points(self) -> List[float]:
+        """u-positions (0..1) of the hanging points, ``spans + 1`` of them.
+
+        Evenly spaced unless ``hang_jitter`` perturbs the interior spacing. The
+        ends (``0`` and ``1`` — the outer pins, or a closed rail's seam) stay
+        pinned so the cloth still spans the full rail. Each interior point shifts
+        by at most ``0.4`` of a span, so the points stay strictly ordered (no
+        crossed/zero-width spans) at any jitter.
+        """
+        n = self.spans
+        pts = [i / n for i in range(n + 1)]
+        if self.hang_jitter > 0.0:
+            rng = random.Random(self.hang_seed)
+            span_u = 1.0 / n
+            for i in range(1, n):  # interior points only
+                pts[i] += rng.uniform(-1.0, 1.0) * self.hang_jitter * 0.4 * span_u
+        return pts
+
+    def _span_at(self, u: float) -> Tuple[int, float]:
+        """Map a rail position ``u`` (0..1) to its ``(span index, local t)``.
+
+        ``t`` is 0..1 within the (possibly uneven) span; ``span index + t`` is
+        the old uniform ``u * spans`` phase, so the belly/sway half-sines stay
+        zero at every (now uneven) hang point.
+        """
+        hp = self._hang_points
+        k = max(0, min(bisect.bisect_right(hp, u) - 1, self.spans - 1))
+        w = hp[k + 1] - hp[k]
+        return k, (u - hp[k]) / w if w > 0.0 else 0.0
+
+    def _drape(self, u, v, pos, tan, normal) -> Vec:
         """Place one cloth vertex.
 
         ``u`` runs along the rail (0..1), ``v`` runs vertically (0 = hem,
         1 = rail). The fabric is pinned at each hanging point (``belly`` and
         ``sag`` both vanish there) and, between points, bellies into an
         alternating fold (``normal`` direction) while its whole strip sags down
-        a catenary under gravity.
+        a catenary under gravity. ``sway`` additionally leans a fold sideways
+        along ``tan`` (the in-plane rail tangent).
         """
-        phase = u * self.spans              # 0 .. spans ; integers = hang points
-        k = min(int(phase), self.spans - 1)
-        t = phase - k                       # 0..1 within the current span
+        k, t = self._span_at(u)             # span index + local 0..1
+        phase = k + t                       # integers = hang points
 
         # Fold belly: an alternating half-sine that is zero at every hang point.
         # taper deepens it toward the hem and gathers (shallows) it at the top.
@@ -496,15 +568,23 @@ class CurtainMesh(ptk.LoggingMixin):
             + self._end_bend_offset(u)
         )
 
-        x = pos[0] + normal[0] * offset
-        z = pos[2] + normal[2] * offset
+        # Lateral lean rides the in-plane tangent (along the rail) — the random
+        # left/right drift of a fold, distinct from the in/out `offset`.
+        lateral = self._sway_offset(u, v)
+        x = pos[0] + normal[0] * offset + tan[0] * lateral
+        z = pos[2] + normal[2] * offset + tan[2] * lateral
 
         # Gravity: the span between two hang points sags along a catenary
-        # (optionally rounded at the pins); the whole vertical strip drops with
-        # its (sagged) top edge.
-        span_world = self._total_length / self.spans
+        # (optionally rounded and/or push-pull gathered at the pins); the whole
+        # vertical strip drops with its (sagged) top edge. The span's *own* width
+        # scales the sag, so a wider (jittered) gap falls further. The 0.5
+        # calibrates the gather dial so a full slider lifts the pin ~half a
+        # sag-unit (matches the subtle scaling the other shaping dials use).
+        span_world = (
+            self._hang_points[k + 1] - self._hang_points[k]
+        ) * self._total_length
         sag = self.gravity * span_world * sag_profile(
-            2.0 * t - 1.0, self.tension, self.round_points
+            2.0 * t - 1.0, self.tension, self.round_points, self.round_gather * 0.5
         )
         y = pos[1] - sag - (1.0 - v) * self.height
         return (x, y, z)
@@ -569,10 +649,12 @@ class CurtainMesh(ptk.LoggingMixin):
             )
         return self.creases * 0.15 * total
 
-    # Mid-fold vertical fade (top & tip): each fork fades in just below the rail
-    # (so the pinned top edge stays put) and out at its lower tip, holding full
-    # strength between — so a long fork reads all the way down toward the hem.
-    _MIDFOLD_FADE = 0.12
+    # Mid-fold vertical fades. The fork ramps in over a *small* top fade so it
+    # reads nearly to the rail (only the pinned rail row v=1 itself stays put)
+    # and out over a wider tip fade at its lower end, holding full strength
+    # between — so a long fork reads from just under the hooks all the way down.
+    _MIDFOLD_TOP_FADE = 0.04
+    _MIDFOLD_FADE = 0.12  # tip fade-out width
 
     def _make_midfolds(self):
         """Seeded mid-folds: downward **V** forks anchored at the hang points.
@@ -604,17 +686,26 @@ class CurtainMesh(ptk.LoggingMixin):
         chosen = rng.sample(points, max(1, round(len(points) * frac)))
         folds = []
         for i in chosen:
-            if rng.random() < 0.5:                  # long, narrow, deep
+            if rng.random() < 0.5:                  # long, narrow-ish, deep
                 length = rng.uniform(0.7, 1.0)
-                width_frac = rng.uniform(0.18, 0.30)
+                width_frac = rng.uniform(0.18, 0.42)
                 amp = rng.uniform(0.7, 1.1)
             else:                                   # short, wide, shallow
                 length = rng.uniform(0.3, 0.6)
-                width_frac = rng.uniform(0.35, 0.55)
+                width_frac = rng.uniform(0.45, 0.85)
                 amp = rng.uniform(0.4, 0.7)
             spread_frac = rng.uniform(0.25, 0.6)    # arms fan this much of a span
+            # Anchor on the hang point's *actual* (possibly jittered) u-position;
+            # arm spread / width stay relative to the average span so the fork
+            # shape is invariant to hang-point count.
             folds.append(
-                (i / self.spans, length, amp, spread_frac * span_u, width_frac * span_u)
+                (
+                    self._hang_points[i],
+                    length,
+                    amp,
+                    spread_frac * span_u,
+                    width_frac * span_u,
+                )
             )
         return folds
 
@@ -623,19 +714,55 @@ class CurtainMesh(ptk.LoggingMixin):
         if not self._midfolds:
             return 0.0
         depth_from_top = 1.0 - v  # 0 at the rail, 1 at the hem
-        fade = self._MIDFOLD_FADE
         total = 0.0
         for u0, length, amp, spread, half_width in self._midfolds:
             if depth_from_top > length:
                 continue  # this fork has petered out above the vertex
             if abs(u - u0) > spread * length + 4.5 * half_width:
                 continue  # past the fork's u-band (incl. the ricker troughs)
-            # Hold full strength between the top fade-in and the tip fade-out.
-            v_prof = _smoothstep(depth_from_top / fade) * _smoothstep(
-                (length - depth_from_top) / fade
+            # Ramp in quickly below the rail (small top fade -> runs to the top)
+            # and fade out at the tip; hold full strength between.
+            v_prof = _smoothstep(depth_from_top / self._MIDFOLD_TOP_FADE) * _smoothstep(
+                (length - depth_from_top) / self._MIDFOLD_FADE
             )
             total += amp * v_prof * _v_arms(u, u0, spread, depth_from_top, half_width)
         return self.mid_folds * 0.15 * total
+
+    def _make_sway(self):
+        """Seeded per-span lateral lean (one signed factor per span).
+
+        Only a random ~half of the spans lean (the rest sit at ``0``, so the
+        effect reads as *certain areas* drifting sideways, not a uniform shear);
+        the chosen ones get a random sign (left/right) and magnitude. Empty when
+        ``sway`` is off.
+        """
+        if self.sway <= 0.0:
+            return []
+        rng = random.Random(self.sway_seed)
+        return [
+            rng.choice((-1.0, 1.0)) * rng.uniform(0.4, 1.0)
+            if rng.random() < 0.5
+            else 0.0
+            for _ in range(self.spans)
+        ]
+
+    def _sway_offset(self, u: float, v: float) -> float:
+        """Lateral (along-rail) lean at ``(u, v)`` (0 when off).
+
+        Rides the belly envelope — ``|sin(pi*phase)|`` is zero at the pinned
+        hang points and peaks mid-span — so a fold drifts sideways most where it
+        bulges most, and grows toward the free hem (calm at the gathered top).
+        """
+        if not self._sway:
+            return 0.0
+        k, t = self._span_at(u)
+        lean = self._sway[k]
+        if lean == 0.0:
+            return 0.0
+        phase = k + t
+        env = abs(math.sin(math.pi * phase))  # pinned at hang points, peak mid-span
+        hem = 0.3 + 0.7 * (1.0 - v)           # more sway toward the free hem
+        return self.sway * 0.2 * lean * env * hem
 
     def _end_bend_offset(self, u: float) -> float:
         """Signed bend ramped in from each end over ``end_bend_falloff``."""
@@ -784,13 +911,31 @@ class CurtainSlots(ptk.LoggingMixin):
             self.ui.b000,
             finalize_func=self._finalize,
             message_func=self.sb.message_box,
+            # Select Result is first-class in Preview: it (de)selects the
+            # curtain on every preview build and on commit (after _finalize
+            # discards the auto-rail), and wires chk005 live.
+            select_result_checkbox=self.ui.chk005,
+            result_provider=lambda: self.last_curtain,
         )
         # Re-drape live as any numeric field changes; rail-shaping fields also
         # resync the generated driver. Closed reshapes the rail; Invert is a
         # pure re-drape.
-        self.sb.connect_multi(self.ui, "s000-19", "valueChanged", self._on_param_changed)
+        self.sb.connect_multi(self.ui, "s000-27", "valueChanged", self._on_param_changed)
         self.ui.chk001.toggled.connect(self._on_param_changed)
         self.ui.chk004.toggled.connect(self.preview.refresh)
+
+        # Per-parameter "disable" toggle (uitk option-box plugin): a small icon
+        # button beside each field that bypasses it to its default (greyed) and
+        # restores it on the next click. The X/Y/Z Position triplet is skipped —
+        # it already shares a tight row with the Get button.
+        self._add_param_disable_buttons(skip=("s025", "s026", "s027"))
+
+        # Footer doubles as a stats readout (the result's tri count) once a
+        # curtain is built; show a hint until then.
+        try:
+            self.ui.footer.setDefaultStatusText("Toggle Preview to drape a curtain.")
+        except Exception:
+            pass
 
     # --------------------------------------------------------------- header
 
@@ -822,7 +967,9 @@ class CurtainSlots(ptk.LoggingMixin):
                         "them toward the hem.",
                         "<b>Mid Folds</b> fork V-folds down from some hang "
                         "points (seed varies which), breaking the plain in/out "
-                        "belly; <b>Creases</b> add diagonal V break-lines; the "
+                        "belly; <b>Creases</b> add diagonal V break-lines; "
+                        "<b>Sway</b> randomly leans a subset of the folds left "
+                        "or right along the rail (not just in/out); the "
                         "<b>Ends</b> group bends each end; <b>Round</b> softens "
                         "the hooks.",
                     ]),
@@ -830,6 +977,8 @@ class CurtainSlots(ptk.LoggingMixin):
                 notes=[
                     "The <b>preset</b> combo loads built-in looks "
                     "(Stage Swag, Shower Curtain) and saves your own.",
+                    "<b>Select Result</b> selects the finished curtain on "
+                    "<b>Create</b> so you can see the result.",
                 ],
             )
         )
@@ -861,6 +1010,28 @@ class CurtainSlots(ptk.LoggingMixin):
 
     # ------------------------------------------------- spinbox value alignment
 
+    def _add_param_disable_buttons(self, skip=()) -> None:
+        """Give each parameter spinbox a uitk option-box *disable* toggle.
+
+        The button bypasses the field to its default (greyed) and restores it on
+        the next click; the default is resolved from the UI's ``StateManager``
+        at click time, so this needs no per-field wiring. Non-persistent — each
+        session starts with every parameter active. ``skip`` is a set of
+        objectNames to leave alone.
+        """
+        try:
+            from qtpy import QtWidgets
+        except Exception:
+            return
+        skip = set(skip)
+        for sb in self.ui.findChildren(QtWidgets.QAbstractSpinBox):
+            if sb.objectName() in skip:
+                continue
+            try:
+                sb.option_box.set_disable()
+            except Exception as e:
+                self.logger.debug(f"disable button skipped for {sb.objectName()}: {e}")
+
     def _align_spinbox_prefixes(self) -> None:
         """Pad each spinbox prefix so the values line up within each group.
 
@@ -878,13 +1049,29 @@ class CurtainSlots(ptk.LoggingMixin):
         except Exception:
             return
 
-        # Bucket the spinboxes by their container (titled group box).
+        # Bucket the spinboxes by their titled group. Walk up to the nearest
+        # CollapsableGroup rather than using the immediate parent, since the
+        # option-box "disable" wrapping reparents each spinbox into its own
+        # container — grouping on that would defeat the per-section alignment.
+        try:
+            from uitk.widgets.collapsableGroup import CollapsableGroup
+        except Exception:
+            CollapsableGroup = ()
+
+        def _group_of(w):
+            p = w.parentWidget()
+            while p is not None:
+                if CollapsableGroup and isinstance(p, CollapsableGroup):
+                    return p
+                p = p.parentWidget()
+            return w.parentWidget()
+
         groups = {}
         for sb in self.ui.findChildren(QtWidgets.QAbstractSpinBox):
             base = sb.prefix().rstrip()  # drop the trailing tab/space
             if not base:
                 continue
-            groups.setdefault(sb.parentWidget(), []).append(
+            groups.setdefault(_group_of(sb), []).append(
                 (sb, base, QtGui.QFontMetrics(sb.font()))
             )
 
@@ -913,11 +1100,12 @@ class CurtainSlots(ptk.LoggingMixin):
         self.preview.refresh()
 
     def _field_rail(self) -> Tuple[List[Vec], bool]:
-        """The generated rail from the Width / Curvature / Closed fields."""
+        """The generated rail from the Width / Curvature / Position / Closed fields."""
         return Rail.make(
             width=self.ui.s001.value(),
             curvature=self.ui.s002.value(),
             closed=self.ui.chk001.isChecked(),
+            center=(self.ui.s025.value(), self.ui.s026.value(), self.ui.s027.value()),
         )
 
     def _build_driver(self, points: Sequence[Vec], closed: bool) -> str:
@@ -937,8 +1125,9 @@ class CurtainSlots(ptk.LoggingMixin):
         """Rebuild the owned driver curve when a rail-shaping field changed.
 
         No-op unless we're in generated mode. The signature
-        (width/curvature/closed/hanging-points) gates the rebuild so dragging a
-        drape-only field (gravity, taper…) doesn't churn the curve.
+        (width/curvature/position/closed/hanging-points) gates the rebuild so
+        dragging a drape-only field (gravity, taper, hang spacing…) doesn't churn
+        the curve.
         """
         if not self._generated:
             return
@@ -947,6 +1136,9 @@ class CurtainSlots(ptk.LoggingMixin):
             self.ui.s002.value(),
             self.ui.chk001.isChecked(),
             int(self.ui.s003.value()),
+            self.ui.s025.value(),
+            self.ui.s026.value(),
+            self.ui.s027.value(),
         )
         have = bool(self._driver and cmds.objExists(self._driver))
         if have and not force and sig == self._driver_sig:
@@ -1010,6 +1202,32 @@ class CurtainSlots(ptk.LoggingMixin):
         """Reset to Defaults."""
         self.ui.state.reset_all()
 
+    def b002(self):
+        """Set Position to the bounding-box center of the selected object(s).
+
+        Centers the generated rail on whatever is selected (its combined world
+        bounding box). Ignores the panel's own auto-rail driver and the curtain
+        it's building, so Get centers on the *external* target. The three
+        Position fields are set in one shot (signals blocked) and a single
+        re-drape is fired, so the curtain re-centers immediately.
+        """
+        ours = {self._driver, self.last_curtain}
+        sel = [s for s in (cmds.ls(selection=True, flatten=True) or []) if s not in ours]
+        if not sel:
+            self.sb.message_box("Select object(s) to center the rail on.")
+            return
+        bb = cmds.exactWorldBoundingBox(sel)  # combined; accepts one or many
+        center = BoundingBox(bb[:3], bb[3:]).center
+        for widget, value in (
+            (self.ui.s025, center.x),
+            (self.ui.s026, center.y),
+            (self.ui.s027, center.z),
+        ):
+            widget.blockSignals(True)
+            widget.setValue(value)
+            widget.blockSignals(False)
+        self._on_param_changed()
+
     # ------------------------------------------------------------- operation
 
     def perform_operation(self, objects, contract):
@@ -1020,15 +1238,20 @@ class CurtainSlots(ptk.LoggingMixin):
             points,
             height=self.ui.s000.value(),
             hanging_points=self.ui.s003.value(),
+            hang_jitter=self.ui.s023.value(),
+            hang_seed=self.ui.s024.value(),
             gravity=self.ui.s004.value(),
             tension=self.ui.s005.value(),
             round_points=self.ui.s013.value(),
+            round_gather=self.ui.s022.value(),
             fullness=self.ui.s006.value(),
             taper=self.ui.s007.value(),
             mid_folds=self.ui.s019.value(),
             mid_fold_seed=self.ui.s010.value(),
             creases=self.ui.s014.value(),
             crease_seed=self.ui.s015.value(),
+            sway=self.ui.s020.value(),
+            sway_seed=self.ui.s021.value(),
             end_bend_left=self.ui.s016.value(),
             end_bend_right=self.ui.s017.value(),
             end_bend_falloff=self.ui.s018.value(),
@@ -1039,23 +1262,39 @@ class CurtainSlots(ptk.LoggingMixin):
             invert=self.ui.chk004.isChecked(),
             closed=closed,
         ).build()
+        self._update_footer()
+        # Select Result is applied by Preview itself (it owns the checkbox +
+        # result_provider) after this build and on commit -- see __init__.
+
+    def _update_footer(self):
+        """Show the result's triangle count in the footer; clears to the default
+        hint when there is no result. Updates live as the preview re-drapes."""
+        try:
+            footer = self.ui.footer
+        except Exception:
+            return
+        curtain = self.last_curtain
+        if not curtain or not cmds.objExists(curtain):
+            footer.setStatusText("")  # falls back to the default hint
+            return
+        tris = cmds.polyEvaluate(curtain, triangle=True) or 0
+        footer.setStatusText(f"{tris:,} tris")
 
     def _finalize(self):
-        """On commit, drop the preview's auto-rail and select the curtain.
+        """On commit, drop the preview's auto-rail.
 
         The auto-rail is only a preview aid (it shows where the cloth hangs and
         satisfies Preview's selection gate); it isn't wanted in the committed
         scene. Wrapped in its own undo chunk (finalize_func runs outside
         Preview's commit chunk). The next preview recomputes the rail mode from
-        the live selection, so the mode flag is cleared here.
+        the live selection, so the mode flag is cleared here. Preview applies
+        the Select Result toggle *after* this runs (the discard can change the
+        active selection), so the result wins.
         """
         self._generated = False
         cmds.undoInfo(openChunk=True)
         try:
             self._discard_driver()
-            curtain = self.last_curtain
-            if curtain and cmds.objExists(curtain):
-                cmds.select(curtain)
         finally:
             cmds.undoInfo(closeChunk=True)
 

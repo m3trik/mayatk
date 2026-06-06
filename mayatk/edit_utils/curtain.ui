@@ -81,6 +81,58 @@
            <property name="checked"><bool>false</bool></property>
           </widget>
          </item>
+         <item>
+          <layout class="QHBoxLayout" name="lay_position">
+           <property name="spacing"><number>1</number></property>
+           <item>
+            <widget class="DoubleSpinBox" name="s025">
+             <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+             <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+             <property name="toolTip"><string>X of the generated rail's center position. Use Get to grab the selection's bounding-box center.</string></property>
+             <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+             <property name="prefix"><string>X </string></property>
+             <property name="decimals"><number>3</number></property>
+             <property name="minimum"><double>-99999.000000</double></property>
+             <property name="maximum"><double>99999.000000</double></property>
+             <property name="value"><double>0.000000</double></property>
+            </widget>
+           </item>
+           <item>
+            <widget class="DoubleSpinBox" name="s026">
+             <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+             <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+             <property name="toolTip"><string>Y of the generated rail's center position.</string></property>
+             <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+             <property name="prefix"><string>Y </string></property>
+             <property name="decimals"><number>3</number></property>
+             <property name="minimum"><double>-99999.000000</double></property>
+             <property name="maximum"><double>99999.000000</double></property>
+             <property name="value"><double>0.000000</double></property>
+            </widget>
+           </item>
+           <item>
+            <widget class="DoubleSpinBox" name="s027">
+             <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+             <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+             <property name="toolTip"><string>Z of the generated rail's center position.</string></property>
+             <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+             <property name="prefix"><string>Z </string></property>
+             <property name="decimals"><number>3</number></property>
+             <property name="minimum"><double>-99999.000000</double></property>
+             <property name="maximum"><double>99999.000000</double></property>
+             <property name="value"><double>0.000000</double></property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="b002">
+             <property name="minimumSize"><size><width>30</width><height>19</height></size></property>
+             <property name="maximumSize"><size><width>34</width><height>19</height></size></property>
+             <property name="toolTip"><string>Set Position to the bounding-box center of the selected object(s).</string></property>
+             <property name="text"><string>Get</string></property>
+            </widget>
+           </item>
+          </layout>
+         </item>
         </layout>
        </widget>
       </item>
@@ -106,12 +158,52 @@
           </widget>
          </item>
          <item>
+          <widget class="DoubleSpinBox" name="s023">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Randomize the spacing of the hanging points along the rail (0 = evenly spaced). The ends stay pinned; interior points shift, so spans become uneven and wider gaps sag further.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Hang Spacing:	</string></property>
+           <property name="decimals"><number>2</number></property>
+           <property name="minimum"><double>0.000000</double></property>
+           <property name="maximum"><double>1.000000</double></property>
+           <property name="singleStep"><double>0.050000</double></property>
+           <property name="value"><double>0.000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QSpinBox" name="s024">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Random seed for the hanging-point spacing.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Spacing Seed:	</string></property>
+           <property name="minimum"><number>0</number></property>
+           <property name="maximum"><number>99999</number></property>
+           <property name="value"><number>0</number></property>
+          </widget>
+         </item>
+         <item>
           <widget class="DoubleSpinBox" name="s013">
            <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
            <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
            <property name="toolTip"><string>Round off the sharp cusp at each hanging point into a smooth dome (0 = crisp catenary, 1 = fully rounded).</string></property>
            <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
            <property name="prefix"><string>Round:	</string></property>
+           <property name="decimals"><number>2</number></property>
+           <property name="minimum"><double>0.000000</double></property>
+           <property name="maximum"><double>1.000000</double></property>
+           <property name="singleStep"><double>0.050000</double></property>
+           <property name="value"><double>0.000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="DoubleSpinBox" name="s022">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Push-pull gather at each hanging point: the fabric puckers up above the rail at the point and dips just inside as the slack falls off (a gathered/pleated header). Independent of Round (0 = off).</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Gather:	</string></property>
            <property name="decimals"><number>2</number></property>
            <property name="minimum"><double>0.000000</double></property>
            <property name="maximum"><double>1.000000</double></property>
@@ -267,6 +359,32 @@
           </widget>
          </item>
          <item>
+          <widget class="DoubleSpinBox" name="s020">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Lateral sway: randomly leans a subset of the folds left or right ALONG the rail (not just in/out). Direction and amount per fold are random; pinned at the hang points and strongest toward the hem (0 = off).</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Sway:	</string></property>
+           <property name="decimals"><number>2</number></property>
+           <property name="minimum"><double>0.000000</double></property>
+           <property name="maximum"><double>6.000000</double></property>
+           <property name="singleStep"><double>0.050000</double></property>
+           <property name="value"><double>0.000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QSpinBox" name="s021">
+           <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+           <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+           <property name="toolTip"><string>Random seed for which folds sway and how far / which way.</string></property>
+           <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
+           <property name="prefix"><string>Sway Seed:	</string></property>
+           <property name="minimum"><number>0</number></property>
+           <property name="maximum"><number>99999</number></property>
+           <property name="value"><number>0</number></property>
+          </widget>
+         </item>
+         <item>
           <widget class="DoubleSpinBox" name="s008">
            <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
            <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
@@ -407,6 +525,16 @@
         <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
         <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
         <property name="toolTip"><string>Load a built-in or saved curtain preset (Save / Rename / Delete from the dropdown's actions).</string></property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="chk005">
+        <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
+        <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
+        <property name="toolTip"><string>Select the curtain when the operation finishes, so you can see the result.</string></property>
+        <property name="text"><string>Select Result</string></property>
+        <property name="checkable"><bool>true</bool></property>
+        <property name="checked"><bool>true</bool></property>
        </widget>
       </item>
       <item>
