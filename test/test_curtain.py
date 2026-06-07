@@ -6,6 +6,7 @@ Separation of concerns mirrors the module: :class:`Rail` (rail geometry),
 :class:`CurtainMesh` (the drape/deformation), and :class:`CurtainRig` (the
 wire deformer + cluster rig) are exercised independently.
 """
+import statistics
 import types
 import unittest
 from pathlib import Path
@@ -458,6 +459,108 @@ class CurtainBuildTest(MayaTkTestCase):
         self.assertGreater(
             cmds.polyEvaluate(hi, vertex=True), cmds.polyEvaluate(lo, vertex=True)
         )
+
+
+class TestFoldsPerPleat(MayaTkTestCase):
+    """Hanging Points map ~1:1 to folds.
+
+    The catenary sag + push-pull gather fire once per hang point (one clean
+    pleat/cusp at the rail), while the belly runs ``_BELLY_HUMPS_PER_SPAN``
+    humps (one full fold) per pleat-span — so the body fold density is decoupled
+    from (and double) the top cusp frequency, and the sag depth is normalized so
+    halving the dial reproduces the old depth instead of ballooning.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Straight rail along X (length 6, y = 0): the drape rides the in-plane
+        # normal (-Z) and the rail tangent (X), so every vertex in a column
+        # shares one X — letting us read the top edge and belly per column.
+        self.rail, self.closed = Rail.make()
+
+    @staticmethod
+    def _columns(transform):
+        """Bucket draped verts into rail columns sorted by X.
+
+        Returns ``(bellies, top_ys)``: per column the in/out belly (``-z``, taper
+        is 0 in these tests so it's constant down the column) and the rail-row
+        height (``max y`` = ``-sag`` at that point, since lower rows drop by the
+        height term).
+        """
+        sel = om.MSelectionList()
+        sel.add(transform)
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        pts = om.MFnMesh(dag).getPoints(om.MSpace.kWorld)
+        cols = {}
+        for p in pts:
+            cols.setdefault(round(p.x, 4), []).append((p.y, p.z))
+        xs = sorted(cols)
+        bellies = [-statistics.median([z for _, z in cols[x]]) for x in xs]
+        top_ys = [max(y for y, _ in cols[x]) for x in xs]
+        return bellies, top_ys
+
+    @staticmethod
+    def _count_peaks(vals):
+        """Local maxima (endpoints count when above their one neighbor)."""
+        n = len(vals)
+        return sum(
+            1
+            for i in range(n)
+            if (i == 0 or vals[i] > vals[i - 1])
+            and (i == n - 1 or vals[i] > vals[i + 1])
+        )
+
+    @staticmethod
+    def _count_positive_runs(vals, tol=0.01):
+        """Number of contiguous runs above ``tol`` (one per out-ridge)."""
+        runs, inside = 0, False
+        for v in vals:
+            if v > tol and not inside:
+                runs, inside = runs + 1, True
+            elif v <= tol:
+                inside = False
+        return runs
+
+    def test_pinch_count_equals_hanging_points(self):
+        # The catenary returns the rail row to its peak height (sag -> 0) once
+        # per hang point: one clean cusp/pleat at the rail, not two per fold.
+        hp = 6
+        t = CurtainMesh(
+            self.rail, hanging_points=hp, gravity=0.5, fullness=4.0, taper=0.0,
+            round_points=0.0, irregularity=0.0, density=16.0,
+        ).build()
+        _, top_ys = self._columns(t)
+        self.assertEqual(self._count_peaks(top_ys), hp)
+
+    def test_fold_density_is_doubled_vs_pinches(self):
+        # The belly runs _BELLY_HUMPS_PER_SPAN (2) humps = one full fold per
+        # span, so out-ridges number ~ spans (= hanging_points - 1) -- DOUBLE the
+        # old half-hump-per-span (which gave ceil(spans/2) = 3 here).
+        hp = 6
+        t = CurtainMesh(
+            self.rail, hanging_points=hp, gravity=0.0, fullness=4.0, taper=0.0,
+            irregularity=0.0, density=16.0,
+        ).build()
+        bellies, _ = self._columns(t)
+        self.assertEqual(CurtainMesh._BELLY_HUMPS_PER_SPAN, 2)
+        self.assertEqual(self._count_positive_runs(bellies), hp - 1)
+
+    def test_sag_depth_normalized_to_per_fold_width(self):
+        # Halving the dial doubles each span's width; normalizing the sag by
+        # _BELLY_HUMPS_PER_SPAN keeps the depth at the per-hump scale (the
+        # previous look). Deepest dip == gravity * (L / spans) / HUMPS, NOT the
+        # un-normalized gravity * (L / spans) (which would be twice as deep).
+        hp, gravity = 6, 0.5
+        t = CurtainMesh(
+            self.rail, hanging_points=hp, gravity=gravity, fullness=1.0,
+            taper=0.0, round_points=0.0, irregularity=0.0, density=24.0,
+        ).build()
+        _, top_ys = self._columns(t)
+        length = Rail.length(self.rail, self.closed)
+        spans = hp - 1
+        expected = gravity * (length / spans) / CurtainMesh._BELLY_HUMPS_PER_SPAN
+        self.assertAlmostEqual(min(top_ys), -expected, delta=0.02)
 
 
 class RailResolutionTest(MayaTkTestCase):

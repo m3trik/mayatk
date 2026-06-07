@@ -287,9 +287,13 @@ class CurtainMesh(ptk.LoggingMixin):
     Parameters:
         rail: Ordered world-space points the cloth hangs from (the rail).
         height: Drop of the curtain below the rail.
-        hanging_points: Number of evenly-spaced pins along the rail. Each is a
-            pleat (the fabric gathers/attaches there); the fabric bellies and
-            sags between consecutive points. ``2`` = a single span.
+        hanging_points: Number of evenly-spaced pins (pleats) along the rail.
+            Each is a pleat where the fabric gathers/attaches; the catenary sag
+            and push-pull gather fire once per point — one clean pleat at the
+            rail. Between consecutive points the fabric bellies into one full
+            fold (``_BELLY_HUMPS_PER_SPAN`` half-sine humps) and sags, so the
+            dialed count maps ~1:1 to the visible folds (you set roughly the fold
+            count you want). ``2`` = a single span.
         hang_jitter: ``0``–``1`` — randomize the *spacing* of the hanging points
             along the rail (``0`` = evenly spaced). The outer ends (and a closed
             seam) stay pinned; only the interior points shift, so spans become
@@ -544,15 +548,19 @@ class CurtainMesh(ptk.LoggingMixin):
         k, t = self._span_at(u)             # span index + local 0..1
         phase = k + t                       # integers = hang points
 
-        # Fold belly: an alternating half-sine that is zero at every hang point.
-        # taper deepens it toward the hem and gathers (shallows) it at the top.
+        # Fold belly: ``_BELLY_HUMPS_PER_SPAN`` half-sine humps per pleat-span (2
+        # = one out-bulge + one in-recess = a full fold), zero at every hang
+        # point *and* at the in/out crossover inside the span — so one dialed
+        # hang point reads as one pleat with a full out-and-in fold between it
+        # and the next (instead of a single half-hump per span). taper deepens it
+        # toward the hem and gathers (shallows) it at the top.
         depth = (
             0.15
             * (self.fullness - 1.0)
             * (1.0 + self.taper * (1.0 - 2.0 * v))
             * self._span_jitter[k]
         )
-        belly = depth * math.sin(math.pi * phase)
+        belly = depth * math.sin(math.pi * self._BELLY_HUMPS_PER_SPAN * phase)
 
         # Kept subtle (the deliberate folds come from fullness / mid_folds):
         # coherent, band-limited surface grain built from zero-mean waves, so it
@@ -577,17 +585,34 @@ class CurtainMesh(ptk.LoggingMixin):
         # Gravity: the span between two hang points sags along a catenary
         # (optionally rounded and/or push-pull gathered at the pins); the whole
         # vertical strip drops with its (sagged) top edge. The span's *own* width
-        # scales the sag, so a wider (jittered) gap falls further. The 0.5
-        # calibrates the gather dial so a full slider lifts the pin ~half a
-        # sag-unit (matches the subtle scaling the other shaping dials use).
-        span_world = (
-            self._hang_points[k + 1] - self._hang_points[k]
-        ) * self._total_length
-        sag = self.gravity * span_world * sag_profile(
+        # scales the sag, so a wider (jittered) gap falls further. Dividing by
+        # ``_BELLY_HUMPS_PER_SPAN`` normalizes that to the per-hump width: the
+        # catenary and its push-pull gather fire once per pleat (one clean cusp
+        # at the rail — a smoother header) at the same depth as before, so
+        # halving the dialed hang points (each span now that much wider)
+        # reproduces the old sag rather than ballooning it. The 0.5 calibrates
+        # the gather dial so a full slider lifts the pin ~half a sag-unit
+        # (matches the other dials).
+        sag_width = (
+            (self._hang_points[k + 1] - self._hang_points[k])
+            * self._total_length
+            / self._BELLY_HUMPS_PER_SPAN
+        )
+        sag = self.gravity * sag_width * sag_profile(
             2.0 * t - 1.0, self.tension, self.round_points, self.round_gather * 0.5
         )
         y = pos[1] - sag - (1.0 - v) * self.height
         return (x, y, z)
+
+    # Belly half-sine humps per pleat-span (the run between two consecutive hang
+    # points): ``2`` = one out-bulge + one in-recess = a single full fold per
+    # span. Decouples the *body* fold density from the *top* gather frequency —
+    # the catenary sag + push-pull gather fire once per hang point (one clean
+    # pleat at the rail), while the belly runs at this many humps, so the dialed
+    # hang-point count maps ~1:1 to the visible folds. ``2`` gives the previous
+    # look at half the dialed points (and half the top cusps). The same factor
+    # rescales the sag (per-hump width) and the mesh resolution (cols per hump).
+    _BELLY_HUMPS_PER_SPAN = 2
 
     # Fixed seed for the always-on subtle grain + per-span depth jitter (the
     # tunable seeds are the per-feature mid_fold_seed / crease_seed).
@@ -749,9 +774,10 @@ class CurtainMesh(ptk.LoggingMixin):
     def _sway_offset(self, u: float, v: float) -> float:
         """Lateral (along-rail) lean at ``(u, v)`` (0 when off).
 
-        Rides the belly envelope — ``|sin(pi*phase)|`` is zero at the pinned
-        hang points and peaks mid-span — so a fold drifts sideways most where it
-        bulges most, and grows toward the free hem (calm at the gathered top).
+        Rides the belly envelope — ``|sin(pi * _BELLY_HUMPS_PER_SPAN * phase)|``
+        is zero at the pinned hang points and peaks where the fabric bellies most
+        — so a fold drifts sideways most where it bulges most, and grows toward
+        the free hem (calm at the gathered top).
         """
         if not self._sway:
             return 0.0
@@ -760,7 +786,9 @@ class CurtainMesh(ptk.LoggingMixin):
         if lean == 0.0:
             return 0.0
         phase = k + t
-        env = abs(math.sin(math.pi * phase))  # pinned at hang points, peak mid-span
+        # Track the belly: zero at the pinned hang points (and the in/out
+        # crossover), peak where the fabric bellies most.
+        env = abs(math.sin(math.pi * self._BELLY_HUMPS_PER_SPAN * phase))
         hem = 0.3 + 0.7 * (1.0 - v)           # more sway toward the free hem
         return self.sway * 0.2 * lean * env * hem
 
@@ -805,8 +833,13 @@ class CurtainMesh(ptk.LoggingMixin):
 
     def _resolve_resolution(self) -> Tuple[int, int]:
         # Relies on self._total_length (set first in build()).
+        # Resolve at least ~8 segments per belly hump: the belly runs
+        # _BELLY_HUMPS_PER_SPAN humps per span, so guarantee that many more
+        # columns.
         u_segs = max(
-            int(math.ceil(self._total_length * self.density)), self.spans * 8, 12
+            int(math.ceil(self._total_length * self.density)),
+            self.spans * 8 * self._BELLY_HUMPS_PER_SPAN,
+            12,
         )
         v_segs = max(int(math.ceil(self.height * self.density)), 8)
         # Cap so an extreme density slider can't lock up the session.
@@ -905,6 +938,15 @@ class CurtainSlots(ptk.LoggingMixin):
         # select an unrelated object.
         self.ui.chk000.toggled.connect(self._ensure_rail)
 
+        # Per-parameter reset button (uitk option-box plugin): a small icon
+        # button beside each field that resets it to its default on click, or
+        # bypasses it to default (greyed, restorable) on Alt/Ctrl+click. The
+        # X/Y/Z Position triplet is skipped — it already shares a tight row with
+        # the Get button.
+        # Must precede connect_multi/Preview — wrapping reparents the widgets and
+        # invalidates any already-deferred wrapper (see add_reset_buttons docstring).
+        self.sb.add_reset_buttons(self.ui, skip=("s025", "s026", "s027"))
+
         self.preview = Preview(
             self,
             self.ui.chk000,
@@ -924,11 +966,10 @@ class CurtainSlots(ptk.LoggingMixin):
         self.ui.chk001.toggled.connect(self._on_param_changed)
         self.ui.chk004.toggled.connect(self.preview.refresh)
 
-        # Per-parameter "disable" toggle (uitk option-box plugin): a small icon
-        # button beside each field that bypasses it to its default (greyed) and
-        # restores it on the next click. The X/Y/Z Position triplet is skipped —
-        # it already shares a tight row with the Get button.
-        self._add_param_disable_buttons(skip=("s025", "s026", "s027"))
+        # The Position fields dropped their "X "/"Y "/"Z " prefixes; color-code
+        # the values red/green/blue instead (axis convention) so the row stays
+        # compact while still reading per-axis at a glance.
+        self._color_code_position_fields()
 
         # Footer doubles as a stats readout (the result's tri count) once a
         # curtain is built; show a hint until then.
@@ -959,8 +1000,10 @@ class CurtainSlots(ptk.LoggingMixin):
                 sections=[
                     ("Model", [
                         "Each <b>Hanging Point</b> is a pleat where the fabric "
-                        "pins to the rail; the spans between them belly into "
-                        "folds and sag down a real <b>catenary</b> (cosh).",
+                        "pins to the rail — one clean gather at the rail — and "
+                        "bellies into a full fold between consecutive points, so "
+                        "the count maps roughly 1:1 to the folds you see. The "
+                        "spans sag down a real <b>catenary</b> (cosh).",
                         "<b>Gravity</b> sets the sag depth (wider gaps fall "
                         "further); <b>Catenary Tension</b> shapes that curve.",
                         "<b>Taper</b> gathers the pleats at the top and flares "
@@ -1010,27 +1053,24 @@ class CurtainSlots(ptk.LoggingMixin):
 
     # ------------------------------------------------- spinbox value alignment
 
-    def _add_param_disable_buttons(self, skip=()) -> None:
-        """Give each parameter spinbox a uitk option-box *disable* toggle.
+    def _color_code_position_fields(self) -> None:
+        """Tint the rail Position values red/green/blue for X/Y/Z.
 
-        The button bypasses the field to its default (greyed) and restores it on
-        the next click; the default is resolved from the UI's ``StateManager``
-        at click time, so this needs no per-field wiring. Non-persistent — each
-        session starts with every parameter active. ``skip`` is a set of
-        objectNames to leave alone.
+        The fields dropped their "X "/"Y "/"Z " prefixes (see curtain.ui); the
+        axis-coded value text now carries that meaning at a glance, with the
+        tooltips naming the axis as a textual fallback. Colors come from the
+        shared ``pythontk.Palette.axes()`` (Maya/3D RGB convention), applied via
+        the uitk ``SpinBox``/``DoubleSpinBox`` ``set_text_color`` helper.
         """
         try:
-            from qtpy import QtWidgets
-        except Exception:
+            axes = ptk.Palette.axes()
+        except Exception as e:
+            self.logger.debug(f"Position color-coding unavailable: {e}")
             return
-        skip = set(skip)
-        for sb in self.ui.findChildren(QtWidgets.QAbstractSpinBox):
-            if sb.objectName() in skip:
-                continue
-            try:
-                sb.option_box.set_disable()
-            except Exception as e:
-                self.logger.debug(f"disable button skipped for {sb.objectName()}: {e}")
+        for name, key in (("s025", "x"), ("s026", "y"), ("s027", "z")):
+            setter = getattr(getattr(self.ui, name, None), "set_text_color", None)
+            if callable(setter):
+                setter(axes[key].hex)
 
     def _align_spinbox_prefixes(self) -> None:
         """Pad each spinbox prefix so the values line up within each group.

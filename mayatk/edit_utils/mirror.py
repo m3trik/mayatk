@@ -22,6 +22,14 @@ class MirrorSlots(ptk.LoggingMixin):
         self.logger.setLevel(log_level)
         self.logger.set_log_prefix("[Mirror] ")
 
+        # Per-field reset buttons (uitk option-box) on the Pivot / Merge Mode
+        # combos — Mirror has no numeric params, and the Axis checkboxes are a
+        # mutually-exclusive group (a per-box reset would be confusing). Click
+        # resets the combo to its default; Alt/Ctrl+click bypasses it.
+        # Must precede connect_multi/Preview — wrapping reparents the widgets and
+        # invalidates any already-deferred wrapper (see add_reset_buttons docstring).
+        self.sb.add_reset_buttons(self.ui, "cmb000-1")
+
         self.preview = Preview(
             self, self.ui.chk000, self.ui.b000, message_func=self.sb.message_box
         )

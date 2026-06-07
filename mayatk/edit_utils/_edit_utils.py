@@ -95,38 +95,44 @@ class EditUtils(ptk.HelpMixin):
             )
             return None
 
-        if group_by_material:
-            groups = MatUtils.group_objects_by_material(
-                objects, cluster_by_distance=cluster_by_distance, threshold=threshold
-            )
-            combined_meshes = []
-            for mat_key, group_objs in groups.items():
-                if len(group_objs) < 2:
-                    continue
+        # Suspend viewport refresh across the heavy work. On large selections
+        # the per-command idle redraws in interactive Maya are what make this
+        # appear to hang; the guard re-enables refresh even on error.
+        with CoreUtils.suspended_refresh():
+            if group_by_material:
+                groups = MatUtils.group_objects_by_material(
+                    objects,
+                    cluster_by_distance=cluster_by_distance,
+                    threshold=threshold,
+                )
+                combined_meshes = []
+                for mat_key, group_objs in groups.items():
+                    if len(group_objs) < 2:
+                        continue
 
+                    # Get name before combine destroys the object
+                    first_obj = group_objs[0]
+                    name = str(first_obj).split("|")[-1].split(":")[-1]
+
+                    try:
+                        united = cmds.polyUnite(group_objs, centerPivot=True, ch=False)
+                        mesh = cmds.rename(united[0], name)
+                        combined_meshes.append(mesh)
+                    except Exception as e:
+                        cmds.warning(f"Failed to combine group {mat_key}: {e}")
+
+                if not combined_meshes:
+                    cmds.warning("No groups found with more than 1 object to combine.")
+                    return None
+
+                return combined_meshes
+
+            else:
                 # Get name before combine destroys the object
-                first_obj = group_objs[0]
-                name = str(first_obj).split("|")[-1].split(":")[-1]
-
-                try:
-                    mesh = cmds.polyUnite(group_objs, centerPivot=True, ch=False)[0]
-                    mesh = cmds.rename(mesh, name)
-                    combined_meshes.append(mesh)
-                except Exception as e:
-                    cmds.warning(f"Failed to combine group {mat_key}: {e}")
-
-            if not combined_meshes:
-                cmds.warning("No groups found with more than 1 object to combine.")
-                return None
-
-            return combined_meshes
-
-        else:
-            # Get name before combine destroys the object
-            name = str(objects[0]).split("|")[-1].split(":")[-1]
-            combined_mesh = cmds.polyUnite(objects, centerPivot=True, ch=False)[0]
-            combined_mesh = cmds.rename(combined_mesh, name)
-            return combined_mesh
+                name = str(objects[0]).split("|")[-1].split(":")[-1]
+                combined_mesh = cmds.polyUnite(objects, centerPivot=True, ch=False)[0]
+                combined_mesh = cmds.rename(combined_mesh, name)
+                return combined_mesh
 
     @staticmethod
     @CoreUtils.undoable

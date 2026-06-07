@@ -667,6 +667,12 @@ class CurveToTubeSlots(ptk.LoggingMixin):
         # Output-type combo (NURBS / Polygon) drives which options apply.
         self.ui.cmb000.add(list(CurveToTube.OUTPUT_TYPES))
 
+        # Per-field reset buttons (uitk option-box): click resets a field to its
+        # default; Alt/Ctrl+click bypasses it to default (greyed, restorable).
+        # Must precede connect_multi/Preview — wrapping reparents the widgets and
+        # invalidates any already-deferred wrapper (see add_reset_buttons docstring).
+        self.sb.add_reset_buttons(self.ui)
+
         # Select Result is first-class in Preview: it (de)selects the tube(s)
         # on every preview build and on commit, and wires chk004 live.
         self.preview = Preview(

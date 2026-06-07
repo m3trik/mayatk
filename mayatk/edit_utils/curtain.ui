@@ -90,7 +90,6 @@
              <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
              <property name="toolTip"><string>X of the generated rail's center position. Use Get to grab the selection's bounding-box center.</string></property>
              <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
-             <property name="prefix"><string>X </string></property>
              <property name="decimals"><number>3</number></property>
              <property name="minimum"><double>-99999.000000</double></property>
              <property name="maximum"><double>99999.000000</double></property>
@@ -103,7 +102,6 @@
              <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
              <property name="toolTip"><string>Y of the generated rail's center position.</string></property>
              <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
-             <property name="prefix"><string>Y </string></property>
              <property name="decimals"><number>3</number></property>
              <property name="minimum"><double>-99999.000000</double></property>
              <property name="maximum"><double>99999.000000</double></property>
@@ -116,7 +114,6 @@
              <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
              <property name="toolTip"><string>Z of the generated rail's center position.</string></property>
              <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
-             <property name="prefix"><string>Z </string></property>
              <property name="decimals"><number>3</number></property>
              <property name="minimum"><double>-99999.000000</double></property>
              <property name="maximum"><double>99999.000000</double></property>
@@ -149,12 +146,12 @@
           <widget class="QSpinBox" name="s003">
            <property name="minimumSize"><size><width>0</width><height>19</height></size></property>
            <property name="maximumSize"><size><width>16777215</width><height>19</height></size></property>
-           <property name="toolTip"><string>Pins/pleats evenly spaced along the rail. The fabric gathers at each and sags between them.</string></property>
+           <property name="toolTip"><string>Pins/pleats evenly spaced along the rail. The fabric gathers (one clean pleat) at each and bellies into a full fold between them, so the count maps roughly 1:1 to the visible folds.</string></property>
            <property name="buttonSymbols"><enum>QAbstractSpinBox::NoButtons</enum></property>
            <property name="prefix"><string>Hanging Points:	</string></property>
            <property name="minimum"><number>2</number></property>
            <property name="maximum"><number>999</number></property>
-           <property name="value"><number>8</number></property>
+           <property name="value"><number>5</number></property>
           </widget>
          </item>
          <item>

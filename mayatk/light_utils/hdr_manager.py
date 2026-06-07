@@ -16,6 +16,17 @@ Knobs the manager owns on the skydome:
 * ``rotation``   — Y rotation on the transform parent.
 * ``visibility`` — primary-ray (``camera``) flag controlling whether the
   HDR is visible *as a backdrop* rather than just as lighting.
+* ``resolution`` — importance-sampling resolution of the HDR (``resolution``).
+* ``samples``    — light samples (``aiSamples``) governing IBL noise.
+* ``diffuse`` / ``specular`` — per-component contribution scales
+  (``aiDiffuse`` / ``aiSpecular``).
+
+The skydome's scalar attributes (``intensity``, ``exposure``, ``resolution``,
+``samples``, ``diffuse``, ``specular``) are all read/written through
+:meth:`_get_light_attr` / :meth:`_set_light_attr`, which fall back to the
+Arnold default (and no-op the write) when the attribute is absent — so the
+manager stays robust across mtoa versions. (``rotation`` lives on the
+transform and ``visibility`` is the ``camera`` flag, so those go direct.)
 
 Maya 2025+ / Arnold (``mtoa``) plugin required for any network mutation.
 """
@@ -58,17 +69,37 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def arnold_available() -> bool:
-        """True if the ``mtoa`` plugin can be loaded right now."""
+    def arnold_loaded() -> bool:
+        """True if ``mtoa`` is *already* loaded — cheap, side-effect-free query.
+
+        Unlike :meth:`arnold_available` this never triggers ``loadPlugin``,
+        so it's safe for read-only UI gating (e.g. on panel open). Loading
+        ``mtoa`` boots the whole Arnold renderer and costs seconds — defer
+        that to the first mutating action, not merely showing the panel.
+        """
         if cmds is None:
             return False
         try:
-            if cmds.pluginInfo("mtoa", query=True, loaded=True):
-                return True
-            cmds.loadPlugin("mtoa", quiet=True)
             return bool(cmds.pluginInfo("mtoa", query=True, loaded=True))
         except Exception:
             return False
+
+    @staticmethod
+    def arnold_available() -> bool:
+        """True if the ``mtoa`` plugin can be loaded right now.
+
+        Loads ``mtoa`` if it isn't already (use :meth:`arnold_loaded` for a
+        non-loading check). Never raises — returns ``False`` on any failure.
+        """
+        if HdrManager.arnold_loaded():
+            return True
+        if cmds is None:
+            return False
+        try:
+            cmds.loadPlugin("mtoa", quiet=True)
+        except Exception:
+            return False
+        return HdrManager.arnold_loaded()
 
     @classmethod
     def ensure_plugin_loaded(cls) -> bool:
@@ -82,6 +113,12 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
     @property
     def hdr_env(self) -> Optional[str]:
         """The skydome shape node, or ``None`` if not present."""
+        # Without mtoa loaded the aiSkyDomeLight type isn't registered and no
+        # such node can exist — short-circuit to skip the ls (and the
+        # "Unknown object type" warning it emits) on every UI sync. This keeps
+        # panel open / refresh cheap now that Arnold is no longer force-loaded.
+        if not self.arnold_loaded():
+            return None
         node = cmds.ls(self.hdr_env_name, exactType="aiSkyDomeLight") or []
         return node[0] if node else None
 
@@ -182,14 +219,11 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
     @property
     def intensity(self) -> float:
         """Linear light-output multiplier on the skydome; 1.0 if absent."""
-        node = self.hdr_env
-        return float(cmds.getAttr(f"{node}.intensity")) if node else 1.0
+        return self._get_light_attr("intensity", 1.0)
 
     @intensity.setter
     def intensity(self, value: float) -> None:
-        node = self.hdr_env
-        if node:
-            cmds.setAttr(f"{node}.intensity", float(value))
+        self._set_light_attr("intensity", float(value))
 
     @property
     def exposure(self) -> float:
@@ -197,20 +231,51 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
 
         Returns 0.0 when the skydome or attribute is absent (older mtoa).
         """
-        node = self.hdr_env
-        if not node or not cmds.attributeQuery("aiExposure", node=node, exists=True):
-            return 0.0
-        return float(cmds.getAttr(f"{node}.aiExposure"))
+        return self._get_light_attr("aiExposure", 0.0)
 
     @exposure.setter
     def exposure(self, stops: float) -> None:
-        node = self.hdr_env
-        if not node:
-            return
-        if cmds.attributeQuery("aiExposure", node=node, exists=True):
-            cmds.setAttr(f"{node}.aiExposure", float(stops))
-        else:
-            self.logger.debug("aiExposure not present on %s; skipping.", node)
+        self._set_light_attr("aiExposure", float(stops))
+
+    @property
+    def resolution(self) -> int:
+        """Importance-sampling resolution of the HDR (``resolution``); 1000 if absent.
+
+        Higher = cleaner light and shadows from bright spots (e.g. a sun
+        baked into the HDR), at the cost of a longer sampling precompute.
+        """
+        return self._get_light_attr("resolution", 1000, cast=int)
+
+    @resolution.setter
+    def resolution(self, value: int) -> None:
+        self._set_light_attr("resolution", int(value))
+
+    @property
+    def samples(self) -> int:
+        """Light samples (``aiSamples``) — soft-IBL noise control; 1 if absent."""
+        return self._get_light_attr("aiSamples", 1, cast=int)
+
+    @samples.setter
+    def samples(self, value: int) -> None:
+        self._set_light_attr("aiSamples", int(value))
+
+    @property
+    def diffuse(self) -> float:
+        """Diffuse contribution scale (``aiDiffuse``); 1.0 if absent."""
+        return self._get_light_attr("aiDiffuse", 1.0)
+
+    @diffuse.setter
+    def diffuse(self, value: float) -> None:
+        self._set_light_attr("aiDiffuse", float(value))
+
+    @property
+    def specular(self) -> float:
+        """Specular contribution scale (``aiSpecular``); 1.0 if absent."""
+        return self._get_light_attr("aiSpecular", 1.0)
+
+    @specular.setter
+    def specular(self, value: float) -> None:
+        self._set_light_attr("aiSpecular", float(value))
 
     # ------------------------------------------------------------------
     # Network lifecycle
@@ -224,10 +289,16 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
         intensity: Optional[float] = None,
         exposure: Optional[float] = None,
         rotation: Optional[float] = None,
+        resolution: Optional[int] = None,
+        samples: Optional[int] = None,
+        diffuse: Optional[float] = None,
+        specular: Optional[float] = None,
     ) -> Optional[str]:
         """Apply settings to the (lazily-created) skydome network.
 
-        Returns the skydome shape node, or ``None`` if Arnold is unavailable.
+        Only non-``None`` knobs are written, so callers can update a subset
+        without disturbing the rest. Returns the skydome shape node, or
+        ``None`` if Arnold is unavailable.
         """
         if not self.arnold_available():
             self.logger.warning("Arnold (mtoa) not available — create_network skipped.")
@@ -235,12 +306,17 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
 
         self.hdr_env = hdrMap
         self.set_hdr_map_visibility(hdrMapVisibility)
-        if intensity is not None:
-            self.intensity = intensity
-        if exposure is not None:
-            self.exposure = exposure
-        if rotation is not None:
-            self.rotation = rotation
+        for attr, value in (
+            ("intensity", intensity),
+            ("exposure", exposure),
+            ("rotation", rotation),
+            ("resolution", resolution),
+            ("samples", samples),
+            ("diffuse", diffuse),
+            ("specular", specular),
+        ):
+            if value is not None:
+                setattr(self, attr, value)
         return self.hdr_env
 
     @CoreUtils.undoable
@@ -265,6 +341,28 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _get_light_attr(self, attr: str, default, cast=float):
+        """Read numeric *attr* off the skydome shape.
+
+        Returns *default* (cast left untouched) when the skydome or the
+        attribute is absent — keeps the manager robust across mtoa builds
+        that may not expose a given knob.
+        """
+        node = self.hdr_env
+        if not node or not cmds.attributeQuery(attr, node=node, exists=True):
+            return default
+        return cast(cmds.getAttr(f"{node}.{attr}"))
+
+    def _set_light_attr(self, attr: str, value) -> None:
+        """Set numeric *attr* on the skydome shape; no-op if it's absent."""
+        node = self.hdr_env
+        if not node:
+            return
+        if cmds.attributeQuery(attr, node=node, exists=True):
+            cmds.setAttr(f"{node}.{attr}", value)
+        else:
+            self.logger.debug("%s not present on %s; skipping.", attr, node)
 
     def _create_skydome(self) -> str:
         """Create the named ``aiSkyDomeLight`` and stash its transform."""
@@ -341,9 +439,6 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self.ui = self.sb.loaded_ui.hdr_manager
         self.manager = HdrManager()
 
-        self._refresh_combo()
-        self._sync_ui_to_scene()
-
         # Auto-refresh the HDR list when the user opens a new scene —
         # otherwise the combo silently lists sourceimages from the
         # previous workspace.
@@ -352,9 +447,28 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         mgr.subscribe("NewSceneOpened", self._on_scene_changed, owner=self)
         mgr.connect_cleanup(self.ui, owner=self)
 
-        # Gate UI affordances on plugin availability.
-        if not self.manager.arnold_available():
-            self.ui.footer.setText("Arnold (mtoa) plugin not loaded.")
+        # Initial population is deferred to the next event-loop tick. The
+        # switchboard constructs this slots instance *mid-load* — child
+        # widgets (footer, spinboxes, slider) aren't wired onto self.ui until
+        # register_children runs after __init__ returns, so touching them now
+        # hits AttributeError on None. By the next tick the UI is fully wired.
+        self.sb.QtCore.QTimer.singleShot(0, self._initialize_ui)
+
+    def _initialize_ui(self) -> None:
+        """Populate the combobox and sync widgets from the scene.
+
+        Deferred from __init__ (see there) so the full UI is registered
+        before any ``self.ui.<widget>`` access.
+        """
+        self._refresh_combo()
+        self._sync_ui_to_scene()
+
+        # Gate UI affordances on plugin state — but do NOT force-load Arnold
+        # here. loadPlugin("mtoa") boots the whole renderer (seconds) and was
+        # the cause of the panel's slow open. Only report when it isn't loaded
+        # yet; the real load happens lazily on the first mutating action.
+        if not self.manager.arnold_loaded():
+            self.ui.footer.setText("Arnold (mtoa) not loaded — loads on first use.")
 
     # ------------------------------------------------------------------
     # Header
@@ -386,15 +500,23 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                 steps=[
                     "Pick an HDR / EXR from the dropdown (lists files in "
                     "<i>sourceimages</i>).",
-                    "Use <b>…</b> to add a new HDR; its option box (▸) picks "
-                    "the import mode.",
-                    "Adjust <b>Intensity</b> (linear) and <b>Exposure</b> (stops).",
+                    "Use the folder button on the dropdown to add a new HDR; "
+                    "the option-box menu (▸) beside it picks the import mode.",
+                    "Adjust <b>Intensity</b> (linear), <b>Exposure</b> (stops), "
+                    "and <b>Resolution</b> (HDR importance-sampling res).",
                     "Drag the rotation slider to spin the environment around Y.",
                     "Toggle <b>Visible</b> to show the HDR as a viewport backdrop.",
                     "Press <b>Set HDR</b> to create or refresh the skydome network.",
                 ],
                 sections=[
-                    ("Add HDR modes (… option box)", [
+                    ("Advanced Options (collapsible)", [
+                        "<b>Samples</b> — light samples; raise to clean up "
+                        "soft-IBL noise (<i>aiSamples</i>).",
+                        "<b>Diffuse</b> / <b>Specular</b> — scale the dome's "
+                        "diffuse vs specular contribution independently "
+                        "(<i>aiDiffuse</i> / <i>aiSpecular</i>).",
+                    ]),
+                    ("Add HDR modes (option-box menu ▸)", [
                         "<b>Copy</b> — duplicate the file into sourceimages "
                         "(default; keeps scenes portable).",
                         "<b>Move</b> — relocate into sourceimages.",
@@ -417,29 +539,14 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             )
         )
 
-    def b001_init(self, widget) -> None:
-        """Attach the Add-HDR mode selector to the button's option box."""
-        widget.option_box.menu.setTitle("Add HDR Mode")
-        widget.option_box.menu.add(
-            "QComboBox",
-            setObjectName="cmb_add_mode",
-            setToolTip=(
-                "Choose what the … button does with the picked file:\n"
-                "  • Copy — duplicate it into sourceimages (default, scenes stay portable).\n"
-                "  • Move — relocate it into sourceimages (original is removed).\n"
-                "  • Link — leave it in place and wire the original path directly\n"
-                "    (the file won't appear in the dropdown afterward)."
-            ),
-            addItems=[label for label, _token in self._ADD_MODES],
-        )
-
     def cmb000_init(self, widget) -> None:
-        """Wire right-click context menu + auto-refresh on dropdown."""
+        """Wire the HDR dropdown: option-box plugins, context menu, auto-refresh."""
         # Auto-refresh from disk every time the user opens the dropdown,
         # so newly-saved HDRs appear without hitting the header refresh.
         widget.before_popup_shown.connect(self._refresh_combo)
 
-        # Right-click → context menu (MenuMixin on uitk ComboBox).
+        # Right-click → context menu (MenuMixin on uitk ComboBox). Kept
+        # separate from the option-box menu below (different Menu instance).
         widget.configure_menu(trigger_button="right")
         widget.menu.add(
             "QPushButton",
@@ -465,6 +572,37 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             setText="Reveal in Explorer",
             setObjectName="ctx_reveal_in_explorer",
             setToolTip="Open the HDR file's containing folder in Explorer.",
+        )
+
+        # Option-box icon buttons on the combobox (replace the old standalone
+        # "…" button): a folder/browse button that launches the Add-HDR file
+        # dialog, and an option-box menu button that picks the import mode.
+        widget.option_box.browse(
+            file_types=self.HDR_FILTER,
+            title="Add HDR / EXR",
+            start_dir=lambda: EnvUtils.get_env_info("sourceimages") or "",
+            icon="folder",
+            tooltip=(
+                "Add an HDR/EXR — runs the mode picked in the option menu (▸):\n"
+                "  • Copy — duplicate it into sourceimages (default, scenes stay portable).\n"
+                "  • Move — relocate it into sourceimages (original is removed).\n"
+                "  • Link — leave it in place and wire the original path directly\n"
+                "    (the file won't appear in the dropdown afterward)."
+            ),
+            callback=self._add_hdr,
+        )
+        widget.option_box.menu.setTitle("Add HDR Mode")
+        widget.option_box.menu.add(
+            "QComboBox",
+            setObjectName="cmb_add_mode",
+            setToolTip=(
+                "Choose what the folder (browse) button does with the picked file:\n"
+                "  • Copy — duplicate it into sourceimages (default, scenes stay portable).\n"
+                "  • Move — relocate it into sourceimages (original is removed).\n"
+                "  • Link — leave it in place and wire the original path directly\n"
+                "    (the file won't appear in the dropdown afterward)."
+            ),
+            addItems=[label for label, _token in self._ADD_MODES],
         )
 
     # ------------------------------------------------------------------
@@ -533,12 +671,20 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         intensity = self.manager.intensity if has_env else 1.0
         exposure = self.manager.exposure if has_env else 0.0
         visible = self.manager.visibility if has_env else False
+        resolution = self.manager.resolution if has_env else 1000
+        samples = self.manager.samples if has_env else 1
+        diffuse = self.manager.diffuse if has_env else 1.0
+        specular = self.manager.specular if has_env else 1.0
 
         for widget, setter, value in (
             (self.ui.slider000, "setSliderPosition", rotation),
             (self.ui.spn_intensity, "setValue", intensity),
             (self.ui.spn_exposure, "setValue", exposure),
             (self.ui.chk000, "setChecked", visible),
+            (self.ui.spn_resolution, "setValue", resolution),
+            (self.ui.spn_samples, "setValue", samples),
+            (self.ui.spn_diffuse, "setValue", diffuse),
+            (self.ui.spn_specular, "setValue", specular),
         ):
             widget.blockSignals(True)
             try:
@@ -586,6 +732,18 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     def spn_exposure(self, value) -> None:
         self.manager.exposure = value
 
+    def spn_resolution(self, value) -> None:
+        self.manager.resolution = value
+
+    def spn_samples(self, value) -> None:
+        self.manager.samples = value
+
+    def spn_diffuse(self, value) -> None:
+        self.manager.diffuse = value
+
+    def spn_specular(self, value) -> None:
+        self.manager.specular = value
+
     def b000(self) -> None:
         """Create / refresh the skydome network from current UI state."""
         if not self.manager.arnold_available():
@@ -601,13 +759,19 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             intensity=self.ui.spn_intensity.value(),
             exposure=self.ui.spn_exposure.value(),
             rotation=self.ui.slider000.sliderPosition(),
+            resolution=self.ui.spn_resolution.value(),
+            samples=self.ui.spn_samples.value(),
+            diffuse=self.ui.spn_diffuse.value(),
+            specular=self.ui.spn_specular.value(),
         )
         self.ui.footer.setText(f"Applied: {os.path.basename(path)}")
 
-    def b001(self) -> None:
-        """Add an HDR using the mode selected in the option box.
+    def _add_hdr(self, result) -> None:
+        """Browse-plugin callback — import the picked HDR per the option mode.
 
-        Three modes (set via the gear icon next to ``…``):
+        Wired as the ``cmb000`` option-box ``browse`` callback; *result* is
+        the path the file dialog returned. Three modes (set via the option-box
+        menu button next to the dropdown):
           - **Copy** — duplicate into sourceimages, wire it up.
           - **Move** — relocate into sourceimages, wire it up.
           - **Link** — wire the original path directly; file stays put
@@ -617,7 +781,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         Copy / Move require a workspace sourceimages directory. Link
         works anywhere.
         """
-        path = self._browse_for_hdr(title="Add HDR / EXR")
+        path = result if isinstance(result, str) else (result[0] if result else None)
         if not path:
             return
 
@@ -636,10 +800,10 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             )
             return
 
-        result = self._import_into_sourceimages(path, src, mode=mode)
-        if result is None:
+        imported = self._import_into_sourceimages(path, src, mode=mode)
+        if imported is None:
             return  # cancelled or failed (footer already set)
-        final_path, did_io = result
+        final_path, did_io = imported
 
         self._refresh_combo()
         idx = self.ui.cmb000.findData(final_path)
@@ -720,17 +884,6 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _browse_for_hdr(self, title: str) -> Optional[str]:
-        """Run a file-open dialog rooted at sourceimages; return the picked path."""
-        QtWidgets = self.sb.QtWidgets
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self.ui,
-            title,
-            EnvUtils.get_env_info("sourceimages") or "",
-            self.HDR_FILTER,
-        )
-        return path or None
-
     def _add_mode(self) -> str:
         """Return the active Add-HDR mode token: ``copy`` / ``move`` / ``link``.
 
@@ -738,7 +891,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         attached yet (e.g. during early init or tests).
         """
         try:
-            idx = self.ui.b001.option_box.menu.cmb_add_mode.currentIndex()
+            idx = self.ui.cmb000.option_box.menu.cmb_add_mode.currentIndex()
         except AttributeError:
             return "copy"
         if 0 <= idx < len(self._ADD_MODES):

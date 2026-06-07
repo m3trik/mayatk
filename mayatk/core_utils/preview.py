@@ -27,8 +27,9 @@ Constraints on ``perform_operation`` authors:
     auto-created orig-shape is deleted, or Curve to Tube resampling its source
     curve in place), set ``PRESERVE_GEOMETRY = True`` on the operation instance.
     The contract then snapshots the operated objects and, on rollback, restores
-    any mesh or curve that survived but diverged from the snapshot (identity/UUID
-    preserved).
+    any mesh or curve that survived but diverged from the snapshot -- geometry,
+    identity/UUID, and per-face (multi-material) shading, which the geometry pipe
+    alone doesn't carry.
   - Do not delete pre-existing nodes inside ``perform_operation`` (diff is
     one-way; deletions cannot be reversed).
   - Mutating an attribute on a pre-existing node requires
@@ -539,6 +540,14 @@ class Preview:
         self.operation_instance.operated_objects = self.operated_objects
         self._contract: Optional[CleanupContract] = None
         self._captured_objects: List[str] = []
+        # {transform_uuid: shading-assignments} captured pristine at enable.
+        # Per-face (multi-material) shading is dropped by the hermetic preview's
+        # in-place geometry rollback and CANNOT be reliably restored in place
+        # (Maya leaves malformed shading groups that the next poly op collapses),
+        # so it is reasserted from this snapshot AFTER each clean op -- the
+        # forward preview op and the commit replay -- where assignment sticks.
+        # See _reassert_shading_snapshot.
+        self._shading_snapshot: dict = {}
         self.is_enabled: bool = False
         # Global re-entry guard: if perform_operation emits a signal that
         # fires refresh() (e.g. cmds.select -> SelectionChanged ->
@@ -614,6 +623,52 @@ class Preview:
         else:
             self.disable()
 
+    @staticmethod
+    def _capture_shading_snapshot(objects) -> dict:
+        """Snapshot the operated meshes' per-face shading as data, keyed by the
+        owning transform's UUID. Captured pristine at enable and reasserted after
+        each clean op because the hermetic preview's in-place rollback drops
+        per-face (multi-material) shading. Only multi-material meshes are stored
+        -- object-level shading survives the preview on its own, so single-
+        material tools pay nothing. Lazy import: mat_utils -> core."""
+        snap: dict = {}
+        try:
+            from mayatk.mat_utils._mat_utils import MatUtils
+
+            resolved = NodeUtils.get_transform_node(objects, returned_type="str")
+            tfs = resolved if isinstance(resolved, (list, tuple)) else [resolved]
+            for tf in tfs:
+                if not tf:
+                    continue
+                assigns = MatUtils.get_shading_assignments(tf)
+                if not any(faces is not None for faces in assigns.values()):
+                    continue
+                uuid = (cmds.ls(tf, uuid=True) or [None])[0]
+                if uuid:
+                    snap[uuid] = assigns
+        except Exception:
+            pass
+        return snap
+
+    def _reassert_shading_snapshot(self) -> None:
+        """Reapply the pristine enable-time shading snapshot to its meshes (by
+        UUID). MUST run on a freshly-built mesh -- right after the forward
+        preview op or the commit replay, both of which leave clean shading
+        groups -- never on a bare in-place-rolled-back mesh, where the per-face
+        assignment doesn't stick (Maya collapses the malformed groups on the
+        next op)."""
+        if not self._shading_snapshot:
+            return
+        try:
+            from mayatk.mat_utils._mat_utils import MatUtils
+
+            for uuid, assigns in self._shading_snapshot.items():
+                tf = (cmds.ls(uuid, long=True) or [None])[0]
+                if tf:
+                    MatUtils.apply_shading_assignments(tf, assigns)
+        except Exception:
+            pass
+
     def validate_operation(self, objects: List[Any]) -> bool:
         if self.validation_func:
             try:
@@ -644,6 +699,7 @@ class Preview:
             return
 
         self._captured_objects = list(sel)
+        self._shading_snapshot = self._capture_shading_snapshot(sel)
         self.operated_objects.clear()
         self.operated_objects.update(str(s) for s in sel)
 
@@ -709,6 +765,11 @@ class Preview:
                 self.operation_instance.perform_operation(
                     self._captured_objects, self._contract
                 )
+                # Reassert per-face shading on the freshly-built preview mesh so
+                # a multi-material object doesn't flash bright green. Must run
+                # here (after the op, clean groups) not in rollback (bare mesh
+                # rebuild leaves malformed groups the next op would collapse).
+                self._reassert_shading_snapshot()
                 # Isolation-set membership is a `cmds.sets` connection,
                 # which Maya records on the undo queue. It MUST run inside
                 # the contract (under suppressed undo) -- otherwise every
@@ -782,6 +843,11 @@ class Preview:
             if self._contract is not None:
                 self._contract.rollback()
                 self._contract = None
+            # Restore per-face material the geometry rollback dropped. No op
+            # follows a cancel, so the restored (in-place) shading is what the
+            # user is left looking at; it renders correctly even though a future
+            # op could collapse it -- acceptable for a cancelled preview.
+            self._reassert_shading_snapshot()
             self.operated_objects.clear()
             self._set_checkbox(False)
             self.create_button.setEnabled(False)
@@ -813,6 +879,10 @@ class Preview:
                 self.operation_instance.perform_operation(
                     self._captured_objects, None
                 )
+                # Reassert per-face material on the freshly-replayed (clean) mesh
+                # so the COMMITTED result keeps every material -- inside the chunk
+                # so it commits/undoes atomically with the operation.
+                self._reassert_shading_snapshot()
             finally:
                 cmds.undoInfo(closeChunk=True)
 

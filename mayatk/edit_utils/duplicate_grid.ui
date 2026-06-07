@@ -208,40 +208,6 @@
            </property>
           </widget>
          </item>
-         <item row="3" column="1">
-          <widget class="QCheckBox" name="chk002">
-           <property name="minimumSize">
-            <size>
-             <width>36</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>999</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Duplicate: rotate axis X</string>
-           </property>
-           <property name="text">
-            <string>Group</string>
-           </property>
-           <property name="iconSize">
-            <size>
-             <width>18</width>
-             <height>18</height>
-            </size>
-           </property>
-           <property name="checkable">
-            <bool>true</bool>
-           </property>
-           <property name="checked">
-            <bool>true</bool>
-           </property>
-          </widget>
-         </item>
          <item row="4" column="0" colspan="2">
           <widget class="QDoubleSpinBox" name="s003">
            <property name="minimumSize">
@@ -313,37 +279,22 @@
            </property>
           </widget>
          </item>
-         <item row="3" column="0">
-          <widget class="QCheckBox" name="chk001">
+         <item row="3" column="0" colspan="2">
+          <widget class="ComboBox" name="cmb000">
            <property name="minimumSize">
             <size>
-             <width>36</width>
+             <width>0</width>
              <height>19</height>
             </size>
            </property>
            <property name="maximumSize">
             <size>
-             <width>999</width>
+             <width>16777215</width>
              <height>19</height>
             </size>
            </property>
            <property name="toolTip">
-            <string>Duplicate: rotate axis X</string>
-           </property>
-           <property name="text">
-            <string>Instance</string>
-           </property>
-           <property name="iconSize">
-            <size>
-             <width>18</width>
-             <height>18</height>
-            </size>
-           </property>
-           <property name="checkable">
-            <bool>true</bool>
-           </property>
-           <property name="checked">
-            <bool>true</bool>
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;How the grid copies are produced — all three name the result after the source object:&lt;/p&gt;&lt;p&gt;&lt;span style=&quot; font-weight:600;&quot;&gt;Combine&lt;/span&gt; — merge every copy into a single mesh.&lt;/p&gt;&lt;p&gt;&lt;span style=&quot; font-weight:600;&quot;&gt;Instance&lt;/span&gt; — instanced copies (shared shape), grouped.&lt;/p&gt;&lt;p&gt;&lt;span style=&quot; font-weight:600;&quot;&gt;Unique&lt;/span&gt; — independent copies, grouped.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
           </widget>
          </item>
@@ -454,6 +405,11 @@
   </widget>
  </widget>
  <customwidgets>
+  <customwidget>
+   <class>ComboBox</class>
+   <extends>QComboBox</extends>
+   <header>uitk.widgets.combobox.ComboBox.h</header>
+  </customwidget>
   <customwidget>
    <class>Footer</class>
    <extends>QWidget</extends>

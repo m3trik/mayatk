@@ -351,15 +351,23 @@ class DisplayMacros:
 
     @staticmethod
     def m_isolate_selected() -> None:
-        """Isolate the current selection."""
-        currentPanel = UiUtils.get_panel(withFocus=1)
-        state = cmds.isolateSelect(currentPanel, query=1, state=1)
+        """Isolate the current selection in the active 3D viewport."""
+        panel = UiUtils.get_model_panel(with_focus=True)
+        if not panel:
+            cmds.inViewMessage(
+                statusMessage="Isolate Select requires an active <hl>3D viewport</hl>.",
+                pos="topCenter",
+                fade=True,
+            )
+            return
+
+        state = cmds.isolateSelect(panel, query=1, state=1)
         if state:
-            cmds.isolateSelect(currentPanel, state=0)
-            cmds.isolateSelect(currentPanel, removeSelected=1)
+            cmds.isolateSelect(panel, state=0)
+            cmds.isolateSelect(panel, removeSelected=1)
         else:
-            cmds.isolateSelect(currentPanel, state=1)
-            cmds.isolateSelect(currentPanel, addSelected=1)
+            cmds.isolateSelect(panel, state=1)
+            cmds.isolateSelect(panel, addSelected=1)
 
     @staticmethod
     @CoreUtils.selected
@@ -558,12 +566,9 @@ class DisplayMacros:
         """Toggles the wireframe display state.
         Possible states include: none, shaded, full
         """
-        focused_panel = UiUtils.get_panel(withFocus=True)
-        # Check if focused_panel is a modelPanel to avoid errors when it's not
-        if not focused_panel or not cmds.modelEditor(
-            focused_panel, query=True, exists=True
-        ):
-            print("No focused model panel found.")
+        panel = UiUtils.get_model_panel(with_focus=True)
+        if not panel:
+            print("No model panel found.")
             return
 
         # Query the current wireframe on shaded setting
@@ -571,15 +576,15 @@ class DisplayMacros:
 
         if state == "none":  # Full Wireframe
             cmds.displayPref(wireframeOnShadedActive="full")
-            cmds.modelEditor(focused_panel, e=True, wireframeOnShaded=True)
+            cmds.modelEditor(panel, e=True, wireframeOnShaded=True)
             message = "Wireframe <hl>Full</hl>."
         elif state == "full":  # Wireframe Selected
             cmds.displayPref(wireframeOnShadedActive="reduced")
-            cmds.modelEditor(focused_panel, e=True, wireframeOnShaded=False)
+            cmds.modelEditor(panel, e=True, wireframeOnShaded=False)
             message = "Wireframe <hl>Reduced</hl>."
         elif state == "reduced":  # Wireframe Off
             cmds.displayPref(wireframeOnShadedActive="none")
-            cmds.modelEditor(focused_panel, e=True, wireframeOnShaded=False)
+            cmds.modelEditor(panel, e=True, wireframeOnShaded=False)
             message = "Wireframe <hl>None</hl>."
         else:  # Fallback or error condition, you might want to log an error or set a default state
             print(f"Unexpected wireframe state encountered: {state}")
@@ -591,22 +596,20 @@ class DisplayMacros:
     @staticmethod
     def m_material_override():
         """Toggle Material Override"""
-        currentPanel = cmds.playblast(
-            activeEditor=True
-        )  # Use playblast to get the active panel with focus
-        if not currentPanel:
+        panel = UiUtils.get_model_panel(with_focus=True)
+        if not panel:
             cmds.inViewMessage(
-                statusMessage="No active panel with focus found.",
+                statusMessage="Material Override requires an active <hl>3D viewport</hl>.",
                 pos="topCenter",
                 fade=True,
             )
             return
 
         # Query the current state of default material usage
-        state = cmds.modelEditor(currentPanel, q=True, useDefaultMaterial=True)
+        state = cmds.modelEditor(panel, q=True, useDefaultMaterial=True)
 
         # Toggle the state of the default material
-        cmds.modelEditor(currentPanel, edit=True, useDefaultMaterial=not state)
+        cmds.modelEditor(panel, edit=True, useDefaultMaterial=not state)
 
         # Display the toggle state in the viewport
         cmds.inViewMessage(
@@ -620,85 +623,89 @@ class DisplayMacros:
         """Toggles viewport display mode between wireframe, smooth shaded with textures off,
         and smooth shaded with textures on. The transitions occur in the order mentioned.
         """
-        currentPanel = UiUtils.get_panel(withFocus=True)
-        displayAppearance = cmds.modelEditor(currentPanel, q=True, displayAppearance=True)
-        displayTextures = cmds.modelEditor(currentPanel, q=True, displayTextures=True)
+        panel = UiUtils.get_model_panel(with_focus=True)
+        if not panel:
+            return
 
-        if cmds.modelEditor(currentPanel, exists=1):
-            if displayAppearance == "wireframe":
-                cmds.modelEditor(
-                    currentPanel,
-                    edit=True,
-                    displayAppearance="smoothShaded",
-                    displayTextures=False,
-                )
-                cmds.inViewMessage(
-                    statusMessage="smoothShaded <hl>True</hl>\ndisplayTextures <hl>False</hl>.",
-                    fade=True,
-                    position="topCenter",
-                )
-            elif displayAppearance == "smoothShaded" and not displayTextures:
-                cmds.modelEditor(
-                    currentPanel,
-                    edit=True,
-                    displayAppearance="smoothShaded",
-                    displayTextures=True,
-                )
-                cmds.inViewMessage(
-                    statusMessage="smoothShaded <hl>True</hl>\ndisplayTextures <hl>True</hl>.",
-                    fade=True,
-                    position="topCenter",
-                )
-            else:
-                cmds.modelEditor(
-                    currentPanel,
-                    edit=True,
-                    displayAppearance="wireframe",
-                    displayTextures=False,
-                )
-                cmds.inViewMessage(
-                    statusMessage="wireframe <hl>True</hl>.",
-                    fade=True,
-                    position="topCenter",
-                )
+        displayAppearance = cmds.modelEditor(panel, q=True, displayAppearance=True)
+        displayTextures = cmds.modelEditor(panel, q=True, displayTextures=True)
+
+        if displayAppearance == "wireframe":
+            cmds.modelEditor(
+                panel,
+                edit=True,
+                displayAppearance="smoothShaded",
+                displayTextures=False,
+            )
+            cmds.inViewMessage(
+                statusMessage="smoothShaded <hl>True</hl>\ndisplayTextures <hl>False</hl>.",
+                fade=True,
+                position="topCenter",
+            )
+        elif displayAppearance == "smoothShaded" and not displayTextures:
+            cmds.modelEditor(
+                panel,
+                edit=True,
+                displayAppearance="smoothShaded",
+                displayTextures=True,
+            )
+            cmds.inViewMessage(
+                statusMessage="smoothShaded <hl>True</hl>\ndisplayTextures <hl>True</hl>.",
+                fade=True,
+                position="topCenter",
+            )
+        else:
+            cmds.modelEditor(
+                panel,
+                edit=True,
+                displayAppearance="wireframe",
+                displayTextures=False,
+            )
+            cmds.inViewMessage(
+                statusMessage="wireframe <hl>True</hl>.",
+                fade=True,
+                position="topCenter",
+            )
 
     @classmethod
     def m_lighting(cls) -> None:
         """Toggles viewport lighting between different states: default, all lights, active lights,
         and flat lighting. If the lighting mode is not one of these states, it resets to the default state.
         """
-        currentPanel = UiUtils.get_panel(withFocus=True)
-        displayLights = cmds.modelEditor(currentPanel, query=1, displayLights=1)
+        panel = UiUtils.get_model_panel(with_focus=True)
+        if not panel:
+            return
 
-        if cmds.modelEditor(currentPanel, exists=1):
-            if displayLights == "default":
-                cmds.modelEditor(currentPanel, edit=1, displayLights="all")
-                cmds.inViewMessage(
-                    statusMessage="displayLights <hl>all</hl>.",
-                    fade=True,
-                    position="topCenter",
-                )
-            elif displayLights == "all":
-                cmds.modelEditor(currentPanel, edit=1, displayLights="active")
-                cmds.inViewMessage(
-                    statusMessage="displayLights <hl>active</hl>.",
-                    fade=True,
-                    position="topCenter",
-                )
-            elif displayLights == "active":
-                cmds.modelEditor(currentPanel, edit=1, displayLights="flat")
-                cmds.inViewMessage(
-                    statusMessage="displayLights <hl>flat</hl>.",
-                    fade=True,
-                    position="topCenter",
-                )
-            else:
-                cmds.modelEditor(currentPanel, edit=1, displayLights="default")
-                cmds.inViewMessage(
-                    statusMessage="displayLights <hl>default</hl>.",
-                    fade=True,
-                    position="topCenter",
-                )
+        displayLights = cmds.modelEditor(panel, query=1, displayLights=1)
+
+        if displayLights == "default":
+            cmds.modelEditor(panel, edit=1, displayLights="all")
+            cmds.inViewMessage(
+                statusMessage="displayLights <hl>all</hl>.",
+                fade=True,
+                position="topCenter",
+            )
+        elif displayLights == "all":
+            cmds.modelEditor(panel, edit=1, displayLights="active")
+            cmds.inViewMessage(
+                statusMessage="displayLights <hl>active</hl>.",
+                fade=True,
+                position="topCenter",
+            )
+        elif displayLights == "active":
+            cmds.modelEditor(panel, edit=1, displayLights="flat")
+            cmds.inViewMessage(
+                statusMessage="displayLights <hl>flat</hl>.",
+                fade=True,
+                position="topCenter",
+            )
+        else:
+            cmds.modelEditor(panel, edit=1, displayLights="default")
+            cmds.inViewMessage(
+                statusMessage="displayLights <hl>default</hl>.",
+                fade=True,
+                position="topCenter",
+            )
 
 
 class EditMacros:

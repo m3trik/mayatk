@@ -90,6 +90,50 @@ class TestHdrManager(MayaTkTestCase):
         self.assertIsInstance(transform, str)
         self.assertTrue(cmds.objExists(transform))
 
+    def test_quality_defaults_without_skydome(self):
+        """Quality/contribution getters return Arnold defaults with no skydome."""
+        self.assertIsNone(self.mgr.hdr_env)
+        self.assertEqual(self.mgr.resolution, 1000)
+        self.assertEqual(self.mgr.samples, 1)
+        self.assertEqual(self.mgr.diffuse, 1.0)
+        self.assertEqual(self.mgr.specular, 1.0)
+
+    def test_quality_and_contribution_attrs_roundtrip(self):
+        """resolution/samples/diffuse/specular must drive the matching attrs."""
+        self.mgr.hdr_env = "C:/tmp/x.exr"
+        skydome = self.mgr.hdr_env
+
+        self.mgr.resolution = 2048
+        self.assertEqual(cmds.getAttr(f"{skydome}.resolution"), 2048)
+        self.assertEqual(self.mgr.resolution, 2048)
+
+        self.mgr.samples = 3
+        self.assertEqual(cmds.getAttr(f"{skydome}.aiSamples"), 3)
+        self.assertEqual(self.mgr.samples, 3)
+
+        self.mgr.diffuse = 0.5
+        self.assertAlmostEqual(cmds.getAttr(f"{skydome}.aiDiffuse"), 0.5)
+        self.assertAlmostEqual(self.mgr.diffuse, 0.5)
+
+        self.mgr.specular = 0.0
+        self.assertAlmostEqual(cmds.getAttr(f"{skydome}.aiSpecular"), 0.0)
+        self.assertAlmostEqual(self.mgr.specular, 0.0)
+
+    def test_create_network_applies_quality_knobs(self):
+        """create_network forwards the new quality/contribution knobs."""
+        node = self.mgr.create_network(
+            hdrMap="C:/tmp/x.exr",
+            resolution=4096,
+            samples=2,
+            diffuse=0.25,
+            specular=0.75,
+        )
+        self.assertIsNotNone(node)
+        self.assertEqual(cmds.getAttr(f"{node}.resolution"), 4096)
+        self.assertEqual(cmds.getAttr(f"{node}.aiSamples"), 2)
+        self.assertAlmostEqual(cmds.getAttr(f"{node}.aiDiffuse"), 0.25)
+        self.assertAlmostEqual(cmds.getAttr(f"{node}.aiSpecular"), 0.75)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
