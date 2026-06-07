@@ -410,11 +410,27 @@ class UvUtils(ptk.HelpMixin):
         return uv_border_edges
 
     # --------------------------------------------------------- cylinder unwrap
+    @staticmethod
+    def _comp_ids(components):
+        """Set of integer indices parsed from component strings (``name.e[12]``).
+
+        Flattens first, so range components (``e[0:5]``) expand; empty / ``None``
+        input yields an empty set.
+        """
+        return {
+            int(c.split("[")[1].rstrip("]"))
+            for c in (cmds.ls(components or [], flatten=True) or [])
+        }
+
     @classmethod
     def get_cylinder_seam_edges(
         cls, mesh, sections=None, invert_seam: bool = False, cap_faces=None
     ):
-        """Identify the UV seam edges for unwrapping a cylinder / tube.
+        """Identify the UV seam edges for unwrapping a smooth cylinder / tube.
+
+        Lower-level seamer for a *single, smooth* swept tube (used by Curve to
+        Tube). For turned / stepped hard-surface shapes use
+        :meth:`get_auto_seam_edges` instead.
 
         Returns ``(length_loop, cap_rings)`` -- two lists of edge component
         strings:
@@ -471,12 +487,6 @@ class UvUtils(ptk.HelpMixin):
             ]
         cap_faces = list(cap_faces)
 
-        def _ids(components):
-            return {
-                int(c.split("[")[1].rstrip("]"))
-                for c in (cmds.ls(components or [], flatten=True) or [])
-            }
-
         cap_ring_comps = []
         if cap_faces:
             cap_face_comps = [f"{mesh}.f[{i}]" for i in cap_faces]
@@ -503,7 +513,7 @@ class UvUtils(ptk.HelpMixin):
             first_b = next(iter(boundary_ids))
             border = cmds.polySelect(mesh, edgeBorder=first_b, ass=True) or []
             ring_vids = list(
-                _ids(
+                cls._comp_ids(
                     cmds.polyListComponentConversion(
                         border, fromEdge=True, toVertex=True
                     )
@@ -522,16 +532,162 @@ class UvUtils(ptk.HelpMixin):
 
         # The lengthwise edge at v0 is the one that is neither a boundary edge
         # nor a cap-ring edge (those run *around* the cylinder).
-        v0_edge_ids = _ids(
+        v0_edge_ids = cls._comp_ids(
             cmds.polyListComponentConversion(
                 f"{mesh}.vtx[{v0}]", fromVertex=True, toEdge=True
             )
         )
-        lengthwise = sorted(v0_edge_ids - boundary_ids - _ids(cap_ring_comps))
+        lengthwise = sorted(v0_edge_ids - boundary_ids - cls._comp_ids(cap_ring_comps))
         if not lengthwise:
             return [], cap_ring_comps
         length_loop = cmds.polySelect(mesh, edgeLoop=lengthwise[0], ass=True) or []
         return length_loop, cap_ring_comps
+
+    @staticmethod
+    def _revolution_axis(points):
+        """Axis of a body of revolution from its vertex positions.
+
+        A revolved shape's vertex covariance has two near-equal (radial)
+        eigenvalues and one distinct (axial) one; the axis is the eigenvector of
+        that odd-one-out eigenvalue -- robust whether the tube is taller than it
+        is wide (a column) or wider than tall (a flat flange).
+        """
+        import maya.api.OpenMaya as om
+        import numpy as np
+
+        pts = np.array([[p.x, p.y, p.z] for p in points], dtype=float)
+        centered = pts - pts.mean(axis=0)
+        evals, evecs = np.linalg.eigh(centered.T @ centered)  # ascending
+        # The lone outlier eigenvalue is the axial one (the other two are radial).
+        odd = 2 if (evals[2] - evals[1]) >= (evals[1] - evals[0]) else 0
+        axis = evecs[:, odd]
+        return om.MVector(float(axis[0]), float(axis[1]), float(axis[2])).normal()
+
+    @classmethod
+    def get_auto_seam_edges(cls, mesh, angle: float = 45.0, invert_seam: bool = False):
+        """Seam edges that auto-unwrap a turned / stepped cylinder or tube.
+
+        Two complementary cuts peel the mesh into clean per-section UV shells:
+
+        - **Hard creases** -- every edge whose two faces meet at >= ``angle``
+          degrees. On a turned profile these are the cap rims and the ~90 degree
+          step rings, so each smooth section (and each flat step / cap) becomes
+          its own shell while shallow chamfers stay merged with their neighbour.
+        - **One lengthwise column** -- a single column of axial edges at one
+          angular position about the tube axis, which opens every tubular
+          section into a flat strip. Flat steps and caps are already planar, so
+          they need no opening cut and keep their shape.
+
+        3D boundary edges (an open tube's rims) are already UV borders and are
+        left uncut. Returns a flat list of edge component strings.
+
+        Parameters:
+            mesh (str): A polygon cylinder / tube / turned-profile transform or
+                shape (a body of revolution -- a roughly straight axis).
+            angle (float): Crease threshold in degrees. Edges whose dihedral
+                angle meets or exceeds it are cut. Default 45 cuts ~90 degree
+                steps while keeping shallow chamfers.
+            invert_seam (bool): Land the lengthwise column on the opposite side.
+        """
+        import math
+        import maya.api.OpenMaya as om
+        from collections import defaultdict
+
+        name = str(mesh)
+        sel = om.MSelectionList()
+        sel.add(name)
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        fn = om.MFnMesh(dag)
+        pts = fn.getPoints(om.MSpace.kWorld)
+        if not pts:
+            return []
+
+        center = om.MVector(
+            sum(p.x for p in pts) / len(pts),
+            sum(p.y for p in pts) / len(pts),
+            sum(p.z for p in pts) / len(pts),
+        )
+        axis = cls._revolution_axis(pts)
+        # An orthonormal frame perpendicular to the axis, for angular position.
+        ref = (
+            om.MVector(0, 1, 0)
+            if abs(axis * om.MVector(1, 0, 0)) > 0.9
+            else om.MVector(1, 0, 0)
+        )
+        u = (ref ^ axis).normal()
+        w = (axis ^ u).normal()
+
+        # One face pass: collect each edge's adjacent face normals (a boundary
+        # edge ends up with a single normal).
+        edge_normals = defaultdict(list)
+        pit = om.MItMeshPolygon(dag)
+        while not pit.isDone():
+            normal = fn.getPolygonNormal(pit.index(), om.MSpace.kWorld).normal()
+            for e in pit.getEdges():
+                edge_normals[e].append(normal)
+            pit.next()
+
+        thresh = math.radians(angle)
+        hard, axial = [], []
+        for i in range(fn.numEdges):
+            a, b = fn.getEdgeVertices(i)
+            pa, pb = pts[a], pts[b]
+            edge = pb - pa
+            length = edge.length()
+            if length < 1e-9:
+                continue
+            normals = edge_normals.get(i, [])
+            if len(normals) < 2:
+                continue  # a 3D boundary is already a UV seam -- nothing to cut
+            # An edge running lengthwise (parallel to the axis) is part of the
+            # polygon faceting, not a real crease: on a low-poly tube the facet
+            # dihedral can meet the crease threshold (an 8-sided tube facets at
+            # exactly 45 deg). Route such edges to the single lengthwise column;
+            # only a circumferential (ring) edge with a sharp dihedral is a
+            # genuine step / cap crease. Test axial-ness first so the threshold
+            # collision can't shatter the tube into per-facet shells.
+            if abs(edge * axis) / length > 0.5:  # lengthwise (axial) edge
+                mid = om.MVector(
+                    (pa.x + pb.x) / 2, (pa.y + pb.y) / 2, (pa.z + pb.z) / 2
+                )
+                rel = mid - center
+                axial.append((i, math.atan2(rel * w, rel * u)))
+                continue
+            dot = max(-1.0, min(1.0, normals[0] * normals[1]))
+            if math.acos(dot) >= thresh:  # ring edge, sharp bend = step / cap
+                hard.append(i)
+
+        column = cls._pick_axial_column(axial, invert_seam)
+        return [f"{name}.e[{i}]" for i in sorted(set(hard) | column)]
+
+    @staticmethod
+    def _pick_axial_column(axial, invert_seam):
+        """Choose one angular column from ``[(edge_id, theta), ...]``.
+
+        Opening one column of axial edges flattens every tubular section (the
+        column crosses each band once). ``invert_seam`` lands it on the far side.
+        """
+        import math
+
+        if not axial:
+            return set()
+
+        def circ(x, y):  # shortest angular distance
+            return abs(((x - y + math.pi) % (2 * math.pi)) - math.pi)
+
+        target = min(t for _, t in axial)
+        if invert_seam:
+            target += math.pi
+        columns = sorted({round(t, 4) for _, t in axial})
+        if len(columns) > 1:
+            gaps = [columns[k + 1] - columns[k] for k in range(len(columns) - 1)]
+            gaps.append(2 * math.pi - (columns[-1] - columns[0]))  # wrap-around gap
+            window = 0.4 * min(g for g in gaps if g > 1e-6)
+        else:
+            window = math.radians(5)
+        center = min(columns, key=lambda c: circ(c, target))
+        return {i for i, t in axial if circ(t, center) <= window}
 
     @staticmethod
     def _torus_length_loop(mesh, sections):
@@ -555,76 +711,263 @@ class UvUtils(ptk.HelpMixin):
         return max(loops, key=len) if any(loops) else []
 
     @classmethod
-    def _seam_cut_one(cls, mesh, invert_seam=False, sections=None, history=True):
-        """Cut the cylinder UV seams on one mesh; return whether anything was cut."""
-        length_loop, cap_rings = cls.get_cylinder_seam_edges(
-            mesh, sections=sections, invert_seam=invert_seam
-        )
-        cut = False
-        for seam in (length_loop, cap_rings):
-            if seam:
-                cmds.polyMapCut(seam, constructionHistory=history)
-                cut = True
-        return cut
+    def _seam_cut_one(
+        cls, mesh, angle=45.0, invert_seam=False, history=True, sew=True
+    ):
+        """Cut the auto seams on one mesh; return whether anything was cut.
+
+        With ``sew`` (default) any pre-existing UV cuts are sewn shut first, so
+        the result's shells come only from this operation's seams rather than
+        stray borders left by an earlier unwrap / manual edit.
+        """
+        seam = cls.get_auto_seam_edges(mesh, angle=angle, invert_seam=invert_seam)
+        if not seam:
+            return False
+        if sew:
+            cmds.polyMapSew(f"{mesh}.e[*]", constructionHistory=history)
+        cmds.polyMapCut(seam, constructionHistory=history)
+        return True
 
     @classmethod
     @CoreUtils.undoable
-    def cut_cylinder_seams(cls, objects=None, invert_seam=False, history=True):
-        """Cut UV seams for cylinder / tube unwrapping on each selected mesh.
+    def cut_cylinder_seams(
+        cls, objects=None, angle=45.0, invert_seam=False, history=True, sew=True
+    ):
+        """Cut auto UV seams for cylinder / tube unwrapping on each mesh.
 
-        Adds one lengthwise seam plus the ring(s) where any end cap meets the
-        body, so the body unwraps to a strip and the caps peel into their own
-        UV shells. Returns the list of mesh transforms that were seamed.
+        Cuts the hard creases (cap rims + ~90 degree step rings) plus one
+        lengthwise column, so each smooth section, flat step, and cap peels into
+        its own UV shell. Returns the list of mesh transforms that were seamed.
 
         Parameters:
             objects (str/obj/list): Cylinder / tube mesh(es). If None, uses the
                 current selection.
-            invert_seam (bool): Land the lengthwise seam on the opposite side.
+            angle (float): Crease threshold in degrees (see
+                :meth:`get_auto_seam_edges`).
+            invert_seam (bool): Land the lengthwise column on the opposite side.
             history (bool): Keep the ``polyMapCut`` construction history.
+            sew (bool): Sew any pre-existing UV cuts shut first (default) so the
+                result's shells come only from this operation's seams.
         """
         meshes = cls._cylinder_meshes(objects)
-        return [m for m in meshes if cls._seam_cut_one(m, invert_seam, history=history)]
+        return [
+            m
+            for m in meshes
+            if cls._seam_cut_one(
+                m, angle=angle, invert_seam=invert_seam, history=history, sew=sew
+            )
+        ]
+
+    @classmethod
+    def _seed_shell_uvs(cls, mesh):
+        """Give every UV shell a non-degenerate seed before unfolding.
+
+        ``u3dUnfold`` collapses a shell to a point when its incoming UVs have
+        zero area (e.g. a tube carrying an axis-aligned planar projection,
+        where each lengthwise band projects to a line). The seed is chosen by
+        the shell's 3D character relative to the revolution axis:
+
+        - **Tubular band** (faces wrap the axis -- normals point radially):
+          a *cylindrical* projection about the axis unrolls it into a flat,
+          non-folded strip. A planar projection would fold the band's front and
+          back onto each other -- a single-row ring degenerates completely --
+          which is exactly what u3dUnfold then collapses.
+        - **Cap / flat step** (faces face along the axis): a *planar*
+          projection from the world axis of its thinnest 3D extent keeps the
+          full area.
+
+        The shells must already be cut open (the lengthwise column is a UV
+        border) so the cylindrical seed lands its seam on the existing cut.
+        """
+        import maya.api.OpenMaya as om
+        from collections import defaultdict
+
+        sel = om.MSelectionList()
+        sel.add(str(mesh))
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        fn = om.MFnMesh(dag)
+        pts = fn.getPoints(om.MSpace.kWorld)
+        axis = cls._revolution_axis(pts)
+        _, shell_ids = fn.getUvShellsIds()
+
+        faces_by_shell = defaultdict(list)
+        it = om.MItMeshPolygon(dag)
+        while not it.isDone():
+            faces_by_shell[shell_ids[it.getUVIndex(0)]].append(it.index())
+            it.next()
+
+        axes = ("x", "y", "z")
+        components = (abs(axis.x), abs(axis.y), abs(axis.z))
+        axis_dir = axes[components.index(max(components))]  # dominant axis
+        for faces in faces_by_shell.values():
+            comps = [f"{mesh}.f[{i}]" for i in faces]
+            radial = (
+                sum(
+                    abs(fn.getPolygonNormal(f, om.MSpace.kWorld).normal() * axis)
+                    for f in faces
+                )
+                / len(faces)
+            )
+            if radial < 0.5:  # band wraps the axis -> unroll cylindrically
+                cmds.polyProjection(
+                    comps,
+                    type="Cylindrical",
+                    mapDirection=axis_dir,
+                    insertBeforeDeformers=False,
+                )
+                continue
+            vids = set()
+            for f in faces:
+                vids.update(fn.getPolygonVertices(f))
+            xs = [pts[v].x for v in vids]
+            ys = [pts[v].y for v in vids]
+            zs = [pts[v].z for v in vids]
+            extents = (max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
+            cmds.polyProjection(
+                comps,
+                type="Planar",
+                mapDirection=axes[extents.index(min(extents))],
+                insertBeforeDeformers=False,
+            )
+
+    @staticmethod
+    def _unflip_reversed_shells(mesh):
+        """Mirror any reversed (negative-winding) UV shell back in place.
+
+        ``u3dLayout`` mirrors shells to pack them tighter, which leaves the
+        texture mirrored on those sections (the hand-authored target has none).
+        Flip each reversed shell about its own UV center so its winding matches
+        the rest -- in place, so the packing and 0-1 fit are preserved.
+        """
+        import maya.api.OpenMaya as om
+        from collections import defaultdict
+
+        sel = om.MSelectionList()
+        sel.add(str(mesh))
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        fn = om.MFnMesh(dag)
+        us, vs = fn.getUVs()
+        _, shell_ids = fn.getUvShellsIds()
+
+        signed = defaultdict(float)
+        for f in range(fn.numPolygons):
+            verts = fn.getPolygonVertices(f)
+            uvid = [fn.getPolygonUVid(f, i) for i in range(len(verts))]
+            for i in range(len(uvid)):
+                j, k = uvid[i], uvid[(i + 1) % len(uvid)]
+                signed[shell_ids[uvid[0]]] += us[j] * vs[k] - us[k] * vs[j]
+
+        shell_uvs = defaultdict(list)
+        for i in range(len(us)):
+            shell_uvs[shell_ids[i]].append(i)
+
+        for shell, area in signed.items():
+            if area >= 0:
+                continue
+            idx = shell_uvs[shell]
+            center_u = (min(us[i] for i in idx) + max(us[i] for i in idx)) / 2
+            cmds.polyFlipUV(
+                [f"{mesh}.map[{i}]" for i in idx],
+                flipType=0,  # mirror U about the shell's own center
+                local=True,
+                usePivot=True,
+                pivotU=center_u,
+                pivotV=0,
+            )
 
     @classmethod
     @CoreUtils.undoable
     def unwrap_cylinder(
-        cls, objects=None, invert_seam=False, unfold=True, orient=True, map_size=4096
+        cls,
+        objects=None,
+        angle=45.0,
+        invert_seam=False,
+        unfold=True,
+        orient=True,
+        map_size=4096,
+        sew=True,
     ):
-        """Auto-unwrap cylinder / tube meshes: seam, then unfold them flat.
+        """Auto-unwrap cylinder / tube / turned meshes: seam, then unfold flat.
 
-        Cuts the cylinder seams (lengthwise + cap rings) on each mesh, then
-        unfolds the result so the body lays out as a clean rectangular strip
-        and each cap as its own shell. Returns the seamed mesh transforms.
+        Cuts the auto seams (hard creases + one lengthwise column) on each mesh,
+        then unfolds so every smooth section lays out as a clean strip and each
+        flat step / cap as its own shell. Returns the seamed mesh transforms.
 
         Parameters:
             objects (str/obj/list): Cylinder / tube mesh(es). If None, uses the
                 current selection.
-            invert_seam (bool): Land the lengthwise seam on the opposite side,
-                giving control over where the seam runs.
-            unfold (bool): Unfold (flatten) the UVs after seaming (Unfold3D).
-            orient (bool): Orient each shell to its nearest U/V axis after the
-                unfold.
+            angle (float): Crease threshold in degrees (see
+                :meth:`get_auto_seam_edges`). Default 45 cuts ~90 degree steps
+                while keeping shallow chamfers merged with their neighbour.
+            invert_seam (bool): Land the lengthwise column on the opposite side.
+            unfold (bool): Unfold (flatten) the UVs after seaming (Unfold3D),
+                then pack the shells into the 0-1 square.
+            orient (bool): Orient each shell to its nearest U/V axis while
+                packing.
             map_size (int): Texture size the unfold optimizes spacing against.
+            sew (bool): Sew any pre-existing UV cuts shut first (default) so the
+                result's shells come only from this operation's seams.
         """
         meshes = cls._cylinder_meshes(objects)
-        seamed = [m for m in meshes if cls._seam_cut_one(m, invert_seam)]
+        seamed = [
+            m
+            for m in meshes
+            if cls._seam_cut_one(m, angle=angle, invert_seam=invert_seam, sew=sew)
+        ]
         if unfold and seamed:
-            uvs = cmds.polyListComponentConversion(seamed, toUV=True) or []
-            try:
-                cmds.loadPlugin("Unfold3D.mll", quiet=True)
-                cmds.u3dUnfold(
-                    uvs,
-                    iterations=1,
-                    pack=0,
-                    borderintersection=1,
-                    triangleflip=1,
-                    mapsize=map_size,
-                    roomspace=0,
-                )
-                if orient:
-                    cls.orient_shells(seamed)
-            except Exception as error:  # plugin missing / non-unfoldable
-                cmds.warning(f"unwrap_cylinder: unfold skipped ({error}).")
+            cmds.loadPlugin("Unfold3D.mll", quiet=True)
+            pad = cls.calculate_uv_padding(map_size, normalize=True)
+            # u3dLayout's cost is ~quadratic in resolution (4096 -> ~1.2s,
+            # 8192 -> ~4.7s) yet the packing is pixel-identical from ~256 up --
+            # shellSpacing is already normalized, so resolution only sets pack
+            # precision, not the gap. Cap it well below map_size to stay fast.
+            pack_res = min(map_size, 1024)
+            # Unfold each mesh on its own: a mesh u3dUnfold rejects (e.g. one
+            # with "non-manifold UVs") then only skips itself -- a single batched
+            # unfold would abort the whole selection on the first bad mesh.
+            for m in seamed:
+                try:
+                    # Seed each cut shell with a non-degenerate projection (bands
+                    # cylindrical, caps planar) so u3dUnfold neither collapses a
+                    # zero-area shell nor folds a tubular band onto itself.
+                    cls._seed_shell_uvs(m)
+                    muvs = cmds.polyListComponentConversion(m, toUV=True) or []
+                    cmds.u3dUnfold(
+                        muvs,
+                        iterations=1,
+                        pack=0,
+                        borderintersection=1,
+                        triangleflip=1,
+                        mapsize=map_size,
+                        roomspace=0,
+                    )
+                    # Pack the shells into 0-1 without overlap. u3dLayout (not
+                    # polyLayoutUV, which collapses cylindrically-seeded shells)
+                    # packs; scaling by 3D area can overrun the square, so
+                    # polyNormalizeUV collectively fits it back; then any shell
+                    # u3dLayout mirrored to pack tighter is flipped back. The UV
+                    # pipeline stays construction history (a consistent chain --
+                    # u3dUnfold emits a polyTweakUV), so the caller's modeling /
+                    # deformer history is left intact rather than baked away.
+                    cmds.u3dLayout(
+                        muvs,
+                        resolution=pack_res,
+                        shellSpacing=pad,
+                        tileMargin=pad / 2,
+                        preScaleMode=1,
+                        preRotateMode=1 if orient else 0,
+                        packBox=[0, 1, 0, 1],
+                    )
+                    cmds.polyNormalizeUV(
+                        muvs, normalizeType=1, preserveAspectRatio=True
+                    )
+                    cls._unflip_reversed_shells(m)
+                except Exception as error:  # plugin missing / non-unfoldable mesh
+                    cmds.warning(
+                        f"unwrap_cylinder: unfold skipped for {m} ({error})."
+                    )
         return seamed
 
     @staticmethod

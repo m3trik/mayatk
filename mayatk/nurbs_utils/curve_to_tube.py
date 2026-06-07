@@ -667,15 +667,22 @@ class CurveToTubeSlots(ptk.LoggingMixin):
         # Output-type combo (NURBS / Polygon) drives which options apply.
         self.ui.cmb000.add(list(CurveToTube.OUTPUT_TYPES))
 
-        # No finalize_func: the result selection is applied inside
-        # perform_operation on the commit replay (contract is None) so it is the
-        # operation's final action and can't be lost to a separate callback.
+        # Per-field reset buttons (uitk option-box): click resets a field to its
+        # default; Alt/Ctrl+click bypasses it to default (greyed, restorable).
+        # Must precede connect_multi/Preview — wrapping reparents the widgets and
+        # invalidates any already-deferred wrapper (see add_reset_buttons docstring).
+        self.sb.add_reset_buttons(self.ui)
+
+        # Select Result is first-class in Preview: it (de)selects the tube(s)
+        # on every preview build and on commit, and wires chk004 live.
         self.preview = Preview(
             self,
             self.ui.chk000,
             self.ui.b000,
             message_func=self.sb.message_box,
             validation_func=self._validate,
+            select_result_checkbox=self.ui.chk004,
+            result_provider=lambda: self.last_tubes,
         )
         # Re-sweep live as any numeric field changes.
         self.sb.connect_multi(self.ui, "s000-3", "valueChanged", self.preview.refresh)
@@ -686,10 +693,6 @@ class CurveToTubeSlots(ptk.LoggingMixin):
         self.ui.chk001.toggled.connect(self.preview.refresh)
         self.ui.chk002.toggled.connect(self.preview.refresh)
         self.ui.chk003.toggled.connect(self.preview.refresh)  # Live (keep history)
-        # Select Result is applied at commit AND live — toggling it immediately
-        # (de)selects the current result. It must NOT trigger a re-sweep, so it
-        # is wired to the selection apply, not to refresh.
-        self.ui.chk004.toggled.connect(self._apply_result_selection)
 
         self._toggle_output_options()
 
@@ -757,17 +760,9 @@ class CurveToTubeSlots(ptk.LoggingMixin):
         """Build the tube(s) from the selected curves (Preview entry point).
 
         ``contract`` is the hermetic ``CleanupContract`` during the live preview
-        and ``None`` on the commit replay. The Select Result choice is applied
-        as the final action of **every** build — preview AND commit — so the
-        toggle governs the live preview selection too, not only the committed
-        result (``create`` always leaves its result selected to clear the seam
-        components, which would otherwise ignore the toggle during preview). On
-        commit it is also the last thing in the committed chunk, immune to the
-        operation's own leftover selection (NURBS extrude leaves the surface
-        selected; a baked polygon leaves nothing). The idle re-assert is needed
-        only on commit (see ``_apply_result_selection``); Curve to Tube installs
-        no selection scriptJob, so a preview-time (de)select can't trigger a
-        rebuild.
+        and ``None`` on the commit replay. Select Result is applied by Preview
+        itself (it owns the checkbox + ``result_provider``) after this build and
+        on commit, so the toggle governs the live preview selection too.
         """
         self.last_tubes = CurveToTube.create(
             objects,
@@ -781,7 +776,6 @@ class CurveToTubeSlots(ptk.LoggingMixin):
             live=self.ui.chk003.isChecked(),
         )
         self._update_footer()
-        self._apply_result_selection(defer=contract is None)
 
     def _update_footer(self):
         """Show stats for the last build in the footer (triangle count for a
@@ -808,71 +802,6 @@ class CurveToTubeSlots(ptk.LoggingMixin):
                         f"{cmds.getAttr(shp + '.spansU')}×{cmds.getAttr(shp + '.spansV')}"
                     )
             footer.setStatusText(f"{prefix}NURBS surface · {', '.join(spans)} spans")
-
-    def _apply_result_selection(self, *args, defer=False):
-        """Select the last-created tube(s) — or explicitly deselect them.
-
-        With *Select Result* (``chk004``) on, the tube(s) are selected so the
-        user can see the resulting tessellation; with it off, they are
-        explicitly **deselected** (the build can leave the new mesh selected, so
-        "off" must actively clear it). The ``chk004`` read is defensive so a UI
-        without the widget falls back to selecting (the prior behavior).
-
-        Called three ways: on every preview build and on commit (both from
-        ``perform_operation`` — ``defer=True`` only on commit) and live from
-        ``chk004.toggled`` so toggling the option immediately (de)selects the
-        current result. ``*args`` absorbs the signal's ``bool``.
-
-        The ``chk004`` value is re-read inside ``_apply`` on every invocation
-        (not snapshotted once up front). On the commit path the immediate apply
-        runs synchronously inside the undo chunk, but in interactive Maya the
-        marking-menu panel's state restore can leave ``chk004`` still reporting
-        its ``.ui`` default at that instant and only settle to the saved value
-        slightly later — so the FIRST commit from a saved "off" wrongly
-        selected. Re-reading on the deferred idle re-assert lets the settled
-        value govern the final selection (the deferred read wins).
-
-        Parameters:
-            defer (bool): Re-assert the choice on idle (``evalDeferred``). Only
-                the commit path needs it — committing can leave Maya restoring
-                the pre-op selection or switching to a component mode *after*
-                this returns, and (per above) the toggle's logical value may not
-                have settled yet. A live toggle is a direct user action with
-                nothing to clobber it, and deferring there would let an idle
-                ``SelectionChanged -> refresh`` rebuild undo the toggle.
-        """
-        tubes = list(self.last_tubes)
-
-        def _apply():
-            alive = [t for t in tubes if t and cmds.objExists(t)]
-            if not alive:
-                return
-            # Read the toggle at apply time so the deferred idle re-assert
-            # reflects the settled UI value, not a possibly-stale commit-time
-            # snapshot. Defensive so a UI without the widget falls back to
-            # selecting (the prior behavior).
-            try:
-                select = self.ui.chk004.isChecked()
-            except Exception:
-                select = True
-            # The build leaves the result selected in object mode (create's
-            # _reset_object_selection); force object mode defensively so the
-            # deselect operates on the object, not lingering seam components.
-            try:
-                cmds.selectMode(object=True)
-            except Exception:
-                pass
-            if select:
-                cmds.select(alive, replace=True)
-            else:
-                cmds.select(alive, deselect=True)
-
-        _apply()  # immediate
-        if defer:
-            try:
-                cmds.evalDeferred(_apply, lowestPriority=True)
-            except Exception:
-                pass
 
 
 # -----------------------------------------------------------------------------

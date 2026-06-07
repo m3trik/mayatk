@@ -188,6 +188,30 @@ class TestGroupCombine(MayaTkTestCase):
         # The untouched child should still be there
         self.assertTrue(cmds.objExists("keep_me"))
 
+    def test_materials_by_object_matches_get_mats(self):
+        """Batched material resolver must agree with per-object get_mats.
+
+        group_objects_by_material was optimized from one get_mats() call per
+        object (O(N) cmds bursts) to a single scene pass via
+        _materials_by_object. This pins the two to the same result so the
+        speedup can't silently drift from the grouping semantics.
+        """
+        # cube1, cube2 -> mat1 ; cube3 -> mat2
+        objs = cmds.ls([self.cube1, self.cube2, self.cube3], long=True)
+
+        batched = MatUtils._materials_by_object(objs)
+        for obj in objs:
+            per = set(MatUtils.get_mats([obj], as_strings=True))
+            self.assertEqual(
+                set(batched.get(obj, [])),
+                per,
+                f"Material set mismatch for {obj}",
+            )
+
+        # And the grouping keys must split mat1 vs mat2.
+        groups = MatUtils.group_objects_by_material(objs)
+        self.assertEqual(len(groups), 2)
+
 
 if __name__ == "__main__":
     import sys

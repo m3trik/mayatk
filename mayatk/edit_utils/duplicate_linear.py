@@ -167,6 +167,12 @@ class DuplicateLinearSlots:
         # Set default state for instance checkbox
         self.ui.chk001.setChecked(True)
 
+        # Per-field reset buttons (uitk option-box): click resets a field to its
+        # default; Alt/Ctrl+click bypasses it to default (greyed, restorable).
+        # Must precede connect_multi/Preview — wrapping reparents the widgets and
+        # invalidates any already-deferred wrapper (see add_reset_buttons docstring).
+        self.sb.add_reset_buttons(self.ui)
+
         self.preview = Preview(
             self,
             self.ui.chk000,

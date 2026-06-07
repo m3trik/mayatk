@@ -15,7 +15,7 @@ import unittest
 
 import maya.cmds as cmds
 
-from mayatk.edit_utils.bevel import Bevel
+from mayatk.edit_utils.bevel import Bevel, BevelSlots
 from mayatk.edit_utils.bridge import Bridge
 from mayatk.edit_utils.snap import Snap
 from mayatk.edit_utils.cut_on_axis import CutOnAxis, CutOnAxisSlots
@@ -535,6 +535,227 @@ class TestCutOnAxisPreviewRollback(MayaTkTestCase):
             poly_creators(),
             "Rollback stripped the mesh's construction history (false-positive "
             "divergence baked the mesh instead of skipping the restore)",
+        )
+
+
+class _BevelPreviewOp:
+    """Stand-in for BevelSlots' preview contract: holds the mutable width/
+    segments params (like the UI spinboxes) and forwards to Bevel.bevel.
+
+    Mirrors the real slots class' PRESERVE_GEOMETRY opt-in so the Preview
+    contract snapshots geometry for in-place-mutation rollback.
+    """
+
+    PRESERVE_GEOMETRY = True
+
+    def __init__(self, **params):
+        self.params = dict(width=0.2, segments=1)
+        self.params.update(params)
+
+    def perform_operation(self, objects, contract):
+        Bevel.bevel(objects, **self.params)
+
+
+class TestBevelPreviewRollback(MayaTkTestCase):
+    """Regression: the Bevel preview must roll back the previous bevel before
+    producing a new one on a value change, restoring the mesh topology AND its
+    material.
+
+    Bug (exposed once the panel stopped crashing on open): polyBevel3 mutates
+    the mesh in place with construction history. Without a geometry snapshot the
+    node-diff rollback baked the bevel in and dropped the material, so each
+    value change stacked another bevel; and because beveling renumbers edges,
+    the captured edge index (e[0]) pointed at a *different* physical edge on the
+    next refresh. Fixed by BevelSlots.PRESERVE_GEOMETRY = True (mirrors Bridge /
+    Cut On Axis).
+    """
+
+    @staticmethod
+    def _counts(node):
+        return (
+            cmds.polyEvaluate(node, vertex=True),
+            cmds.polyEvaluate(node, edge=True),
+            cmds.polyEvaluate(node, face=True),
+        )
+
+    @staticmethod
+    def _shading_engines(node):
+        shape = cmds.listRelatives(node, shapes=True, noIntermediate=True)[0]
+        return set(cmds.listConnections(shape, type="shadingEngine") or [])
+
+    @staticmethod
+    def _green_face_count(node):
+        """Number of faces not assigned to any shading group — Maya renders
+        these bright green (the 'lost material' symptom)."""
+        shape = cmds.listRelatives(node, shapes=True, noIntermediate=True)[0]
+        total = cmds.polyEvaluate(shape, face=True)
+        owners = set(cmds.ls(node, long=True) or []) | set(cmds.ls(shape, long=True) or [])
+        covered = set()
+        for sg in cmds.ls(type="shadingEngine"):
+            for m in cmds.ls(cmds.sets(sg, q=True) or [], long=True, flatten=True) or []:
+                if m.split(".f[")[0] in owners:
+                    if ".f[" in m:
+                        covered.add(int(m.split(".f[")[1].rstrip("]")))
+                    else:
+                        covered.update(range(total))
+        return total - len(covered)
+
+    @staticmethod
+    def _e0_midpoint(node):
+        """World midpoint of edge 0 — identifies *which physical edge* e[0] is.
+        Cube counts are symmetric, so this is what catches a baked rollback that
+        renumbered the edges (the "bevels a different edge" symptom)."""
+        vtx = cmds.polyListComponentConversion(
+            f"{node}.e[0]", fromEdge=True, toVertex=True
+        )
+        pts = cmds.xform(vtx, q=True, ws=True, t=True)
+        n = len(pts) // 3
+        return tuple(round(sum(pts[i::3]) / n, 4) for i in range(3))
+
+    def _make_preview(self, op):
+        chk, btn = _MockWidget(), _MockWidget()
+        pv = Preview(op, chk, btn, message_func=lambda *a: None)
+        self._previews.append(pv)
+        return pv
+
+    def setUp(self):
+        super().setUp()
+        self._previews = []
+
+    def tearDown(self):
+        for pv in self._previews:
+            try:
+                pv.cleanup()
+            except Exception:
+                pass
+        Preview.cleanup_all_instances()
+        super().tearDown()
+
+    def _assign_material(self, node, name="bvlMat"):
+        shader = cmds.shadingNode("lambert", asShader=True, name=name)
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(node, edit=True, forceElement=sg)
+        return sg
+
+    @staticmethod
+    def _historyless_cube(name):
+        """A cube with its upstream construction history dropped (as a frozen /
+        imported / combined production mesh would be). This is the condition
+        that exposes the rollback bug: polyBevel3's auto-created orig-shape
+        holds the only pristine copy, so node-diff rollback bakes the bevel in."""
+        cube = cmds.polyCube(name=name)[0]
+        cmds.delete(cube, constructionHistory=True)
+        return cube
+
+    def _clean_bevel_counts(self, width, name):
+        """Counts from a single fresh preview-enable of a `width` bevel on
+        e[0] of a fresh historyless cube — the reference a refresh must match."""
+        ref = self._historyless_cube(name)
+        pv = self._make_preview(_BevelPreviewOp(width=width))
+        cmds.select(f"{ref}.e[0]")
+        pv.enable()
+        result = self._counts(ref)
+        pv.disable()
+        return result
+
+    def test_slots_class_opts_into_geometry_preservation(self):
+        """BevelSlots must declare PRESERVE_GEOMETRY so the preview snapshots
+        geometry for robust rollback."""
+        self.assertTrue(
+            getattr(BevelSlots, "PRESERVE_GEOMETRY", False),
+            "BevelSlots must set PRESERVE_GEOMETRY = True",
+        )
+
+    def test_refresh_reverts_topology_and_preserves_material(self):
+        cube = self._historyless_cube("bvl_preview")
+        sg = self._assign_material(cube)
+        original = self._counts(cube)
+        original_e0 = self._e0_midpoint(cube)
+
+        # Reference: a clean single 0.4 bevel of e[0] on a fresh cube.
+        clean = self._clean_bevel_counts(0.4, "bvl_ref")
+
+        # Live tool: enable at 0.2, then "change the value" -> refresh at 0.4.
+        # The result must match the clean reference, i.e. the 0.2 bevel was
+        # rolled back (topology + edge numbering restored) rather than stacked
+        # and re-beveled on a shifted edge.
+        op = _BevelPreviewOp(width=0.2)
+        pv = self._make_preview(op)
+        cmds.select(f"{cube}.e[0]")
+        pv.enable()
+        self.assertNotEqual(self._counts(cube), original, "0.2 bevel did nothing")
+
+        op.params["width"] = 0.4
+        pv.refresh()
+
+        self.assertEqual(
+            self._counts(cube), clean,
+            f"Bevel accumulated / re-beveled a shifted edge across refresh: "
+            f"got {self._counts(cube)}, expected clean {clean}",
+        )
+        # Material must survive the in-place rollback.
+        self.assertIn(
+            sg, self._shading_engines(cube),
+            "Bevel preview lost the mesh material on rollback",
+        )
+
+        # Disabling restores the original mesh topology (including edge
+        # numbering, so e[0] is the same physical edge) and its material.
+        pv.disable()
+        self.assertEqual(self._counts(cube), original, "disable did not restore mesh")
+        self.assertEqual(
+            self._e0_midpoint(cube), original_e0,
+            "rollback renumbered edges — e[0] moved, so a refresh would bevel a "
+            "different edge",
+        )
+        self.assertIn(sg, self._shading_engines(cube), "disable lost the material")
+
+    def test_preview_preserves_multi_material_through_commit(self):
+        """A multi-material (per-face) mesh must keep ALL its shading through the
+        live preview, a value change, and the commit. The hermetic preview's
+        in-place geometry rollback drops per-face (multi-material) shading, and
+        it can't be restored in place -- reasserting per-face shading on the
+        bare rebuilt mesh leaves malformed shading groups that the next poly op
+        collapses (the whole mesh renders bright green, 'lost the material on
+        the object'). Preview snapshots the shading at enable and reasserts it
+        AFTER each clean op -- the forward preview op and the commit replay --
+        where the assignment sticks; the dominant material base-coats so the
+        bevel's new faces are shaded too."""
+        cube = self._historyless_cube("bvl_multimat")
+        sg_a = self._assign_material(cube, "bvlMatA")            # whole object
+        sg_b = self._assign_material(f"{cube}.f[1]", "bvlMatB")  # one face -> 2nd mat
+        self.assertEqual(self._green_face_count(cube), 0, "fixture should be fully shaded")
+
+        op = _BevelPreviewOp(width=0.2)
+        pv = self._make_preview(op)
+        cmds.select(f"{cube}.e[0]")
+
+        # Live preview (forward op on the shaded mesh) must not green out.
+        pv.enable()
+        self.assertEqual(
+            self._green_face_count(cube), 0, "live preview greened a multi-material mesh"
+        )
+
+        # Value change -> rollback (in-place restore) + re-preview. The rollback
+        # is where the shading was being dropped; the restored mesh must stay
+        # fully shaded for the new preview to display correctly.
+        op.params["width"] = 0.4
+        pv.refresh()
+        self.assertEqual(
+            self._green_face_count(cube), 0, "rollback dropped per-face shading on refresh"
+        )
+
+        pv.finalize_changes()  # commit
+
+        sgs = set(self._shading_engines(cube))
+        self.assertIn(sg_a, sgs, "committed mesh lost the primary material")
+        self.assertIn(sg_b, sgs, "committed mesh lost the per-face (second) material")
+        self.assertEqual(
+            self._green_face_count(cube), 0,
+            "committed mesh has unshaded (bright green) faces",
         )
 
 

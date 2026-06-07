@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-06-05_
+_Generated: 2026-06-07_
 
 ## Index
 
@@ -155,6 +155,7 @@ _Generated: 2026-06-05_
 - [`node_utils/attributes/channels/channels_slots.py`](#node_utils--attributes--channels--channels_slots) — UI slots for the Channels UI.
 - [`node_utils/data_nodes.py`](#node_utils--data_nodes)
 - [`nurbs_utils/_nurbs_utils.py`](#nurbs_utils--_nurbs_utils)
+- [`nurbs_utils/curve_to_tube.py`](#nurbs_utils--curve_to_tube) — Sweep a circular profile along NURBS curve(s) to build a tube.
 - [`nurbs_utils/image_tracer.py`](#nurbs_utils--image_tracer)
 - [`rig_utils/_rig_utils.py`](#rig_utils--_rig_utils)
 - [`rig_utils/controls.py`](#rig_utils--controls)
@@ -961,8 +962,9 @@ Segment discovery from the per-track keyed canonical store.
 - [`leaf_name(node) -> str`](mayatk/mayatk/core_utils/_core_utils.py#L42) — Leaf name with namespace preserved: ``"|grp|ns:obj"`` -> ``"ns:obj"``.
 - [`get_bounding_box(node, world: bool = True) -> BoundingBox`](mayatk/mayatk/core_utils/_core_utils.py#L70) — Return a :class:`BoundingBox` for *node*.
 - **[`class BoundingBox`](mayatk/mayatk/core_utils/_core_utils.py#L47)** — Plain-data bounding box with ``MVector`` extents.
-- **[`class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal)`](mayatk/mayatk/core_utils/_core_utils.py#L195)**
+- **[`class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal)`](mayatk/mayatk/core_utils/_core_utils.py#L203)**
   - `CoreUtils.undo_chunk(name: str = '')` *(static)* — Group operations into a single Maya undo chunk.
+  - `CoreUtils.suspended_refresh()` *(static)* — Suspend viewport refresh for the duration of a bulk operation.
   - `CoreUtils.temporarily_unlock_attributes(objects, attributes=None)` *(static)* — ..
   - `CoreUtils.selected(func: Callable) -> Callable` — A decorator to pass the current selection to the first parameter if None is given.
   - `CoreUtils.undoable(fn)` — A decorator to place a function into Maya's undo chunk.
@@ -1180,13 +1182,14 @@ Instancing strategy logic for AutoInstancer.
 
 Hermetic preview with replay-on-commit (H1 design).
 
-- [`cleanup_all_previews() -> None`](mayatk/mayatk/core_utils/preview.py#L809)
-- **[`class OperationError(Exception)`](mayatk/mayatk/core_utils/preview.py#L57)** — User-facing operation failure for the Preview message box.
-- **[`class CleanupContract`](mayatk/mayatk/core_utils/preview.py#L105)** — Captures and reverses side effects of a previewed operation.
+- [`cleanup_all_previews() -> None`](mayatk/mayatk/core_utils/preview.py#L971)
+- [`apply_result_selection(widget, results, *, object_mode: bool = False, defer: bool = False) -> None`](mayatk/mayatk/core_utils/preview.py#L975) — Select the operation's result(s) — or explicitly deselect them — per a
+- **[`class OperationError(Exception)`](mayatk/mayatk/core_utils/preview.py#L59)** — User-facing operation failure for the Preview message box.
+- **[`class CleanupContract`](mayatk/mayatk/core_utils/preview.py#L107)** — Captures and reverses side effects of a previewed operation.
   - `CleanupContract.add_file(self, path) -> None`
   - `CleanupContract.record_modification(self, node: str, attr: str) -> None`
   - `CleanupContract.rollback(self) -> None`
-- **[`class Preview`](mayatk/mayatk/core_utils/preview.py#L444)** — Hermetic preview orchestrator (H1).
+- **[`class Preview`](mayatk/mayatk/core_utils/preview.py#L472)** — Hermetic preview orchestrator (H1).
   - `Preview.cleanup_all_instances(cls) -> None` *(class)*
   - `Preview.init_show_hide_behavior(self, enable_on_show: bool, disable_on_hide: bool) -> None`
   - `Preview.conditionally_enable(self) -> None`
@@ -1357,22 +1360,23 @@ Centralized Maya event subscription manager.
 
 Procedural draped-cloth (curtain) generator for Maya.
 
-- **[`class Rail`](mayatk/mayatk/edit_utils/curtain.py#L95)** — Pure rail-polyline geometry — the line a curtain hangs from.
-  - `Rail.make(width: float = 6.0, curvature: float = 0.0, segments: int = 24, closed: bool = False, y: float = 0.0) -> Tuple[List[Vec], bool]` *(static)* — Build a default rail: a straight line of ``width`` (``curvature == 0``).
+- **[`class Rail`](mayatk/mayatk/edit_utils/curtain.py#L97)** — Pure rail-polyline geometry — the line a curtain hangs from.
+  - `Rail.make(width: float = 6.0, curvature: float = 0.0, segments: int = 24, closed: bool = False, center: Vec = (0.0, 0.0, 0.0)) -> Tuple[List[Vec], bool]` *(static)* — Build a default rail: a straight line of ``width`` (``curvature == 0``).
   - `Rail.from_selection(objects) -> Optional[Tuple[List[Vec], bool]]` *(static)* — Resolve a rail polyline from a Maya selection.
   - `Rail.sample_curve(shape: str, count: int = 200) -> Tuple[List[Vec], bool]` *(static)* — Sample a NURBS curve into a dense polyline (resampled later by length).
   - `Rail.length(points: Sequence[Vec], closed: bool) -> float` *(static)* — Total arc length of the polyline (wrapping last->first if closed).
   - `Rail.resample(points: Sequence[Vec], count: int) -> List[Vec]` *(static)* — Resample to *count* evenly-spaced points (ecosystem SSoT helper).
   - `Rail.frames(points: Sequence[Vec], u_segs: int, closed: bool) -> List[Tuple[Vec, Vec, Vec]]` *(static)* — Resample the rail to ``u_segs + 1`` even points with local frames.
-- **[`class CurtainMesh(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/curtain.py#L269)** — Generate a pleated, gravity-draped curtain mesh from a rail polyline.
+- **[`class CurtainMesh(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/curtain.py#L280)** — Generate a pleated, gravity-draped curtain mesh from a rail polyline.
   - `CurtainMesh.create(cls, rail: Sequence[Vec], **opts) -> str` *(class)*
   - `CurtainMesh.build(self) -> str` — Create the curtain mesh and return its transform name.
-- **[`class CurtainRig`](mayatk/mayatk/edit_utils/curtain.py#L694)** — Make a curve drive a finished curtain.
+- **[`class CurtainRig`](mayatk/mayatk/edit_utils/curtain.py#L854)** — Make a curve drive a finished curtain.
   - `CurtainRig.attach(curtain: str, curve: str, dropoff: float, cluster: bool = True) -> str` *(static)* — Wire-deform *curtain* with *curve* and add per-CV cluster controls.
-- **[`class CurtainSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/curtain.py#L756)** — Switchboard slot wiring for the curtain UI (hermetic preview + presets).
+- **[`class CurtainSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/curtain.py#L916)** — Switchboard slot wiring for the curtain UI (hermetic preview + presets).
   - `CurtainSlots.header_init(self, widget)` — Configure header help text (the preset combo lives in the panel).
   - `CurtainSlots.cmb000_init(self, widget)` — Wire the in-panel preset selector (built-in + user tiers).
   - `CurtainSlots.b001(self)` — Reset to Defaults.
+  - `CurtainSlots.b002(self)` — Set Position to the bounding-box center of the selected object(s).
   - `CurtainSlots.perform_operation(self, objects, contract)` — Build the curtain from the resolved rail (Preview entry point).
 
 <a id="edit_utils--cut_on_axis"></a>
@@ -1387,9 +1391,9 @@ Procedural draped-cloth (curtain) generator for Maya.
 <a id="edit_utils--duplicate_grid"></a>
 ### `edit_utils/duplicate_grid.py`
 
-- **[`class DuplicateGrid(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_grid.py#L17)**
-  - `DuplicateGrid.duplicate_grid(cls, objects: List[str], dimensions: Tuple[int, int, int], spacing: float = 0, instance: bool = True, group: bool = True) -> Union[str, List[str]]` *(class)* — Duplicate objects in a grid pattern.
-- **[`class DuplicateGridSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_grid.py#L177)**
+- **[`class DuplicateGrid(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_grid.py#L19)**
+  - `DuplicateGrid.duplicate_grid(cls, objects: List[str], dimensions: Tuple[int, int, int], spacing: float = 0, mode: str = 'instance') -> Union[str, List[str]]` *(class)* — Duplicate objects in a grid pattern.
+- **[`class DuplicateGridSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_grid.py#L187)**
   - `DuplicateGridSlots.header_init(self, widget)` — Configure header help text.
   - `DuplicateGridSlots.b001(self)` — Reset to Defaults: Resets all UI widgets to their default values.
   - `DuplicateGridSlots.perform_operation(self, objects, contract)`
@@ -1410,7 +1414,7 @@ Procedural draped-cloth (curtain) generator for Maya.
 
 - **[`class DuplicateRadial(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_radial.py#L23)**
   - `DuplicateRadial.duplicate_radial(objects: List[str], num_copies: int, start_angle: float = 0, end_angle: float = 360, weight_bias: float = 0.5, weight_curve: float = 0.5, rotate_axis: str = 'y', offset: Tuple[float, float, float] = (0, 0, 0), translate: Tuple[float, float, float] = (0, 0, 0), rotate: Tuple[float, float, float] = (0, 0, 0), scale: Tuple[float, float, float] = (1, 1, 1), pivot: Union[str, Tuple[float, float, float]] = 'object', keep_original: bool = False, instance: bool = False, combine: bool = False, suffix: bool = True) -> Dict[str, List[str]]` *(static)* — Duplicate objects in a radial pattern.
-- **[`class DuplicateRadialSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_radial.py#L273)**
+- **[`class DuplicateRadialSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_radial.py#L285)**
   - `DuplicateRadialSlots.header_init(self, widget)` — Configure header help text.
   - `DuplicateRadialSlots.b001(self)` — Reset to Defaults: Resets all UI widgets to their default values.
   - `DuplicateRadialSlots.perform_operation(self, objects, contract)` — Perform the radial duplication operation.
@@ -1439,7 +1443,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `DisplayMacros.m_toggle_visibility()` *(static)* — Toggle Visibility
   - `DisplayMacros.m_toggle_uv_border_edges(objects)` *(static)* — Toggle the display of UV border edges for the given objects.
   - `DisplayMacros.m_back_face_culling(objects) -> None` *(static)* — Toggle Back-Face Culling on selected objects, or on all objects if none are selected.
-  - `DisplayMacros.m_isolate_selected() -> None` *(static)* — Isolate the current selection.
+  - `DisplayMacros.m_isolate_selected() -> None` *(static)* — Isolate the current selection in the active 3D viewport.
   - `DisplayMacros.m_cycle_display_state(objects) -> None` *(static)* — Cycle the display state of all selected objects based on the first object's state.
   - `DisplayMacros.m_wireframe_toggle(objects) -> None` *(static)* — Toggle Wireframe Display on selected objects, or on all objects if none are selected.
   - `DisplayMacros.m_grid_and_image_planes() -> None` *(static)* — Toggle grid and image plane visibility.
@@ -1449,7 +1453,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `DisplayMacros.m_material_override()` *(static)* — Toggle Material Override
   - `DisplayMacros.m_shading(cls) -> None` *(class)* — Toggles viewport display mode between wireframe, smooth shaded with textures off,
   - `DisplayMacros.m_lighting(cls) -> None` *(class)* — Toggles viewport lighting between different states: default, all lights, active lights,
-- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L704)**
+- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L711)**
   - `EditMacros.m_group(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditMacros.m_combine(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)` *(static)* — Combine multiple meshes.
   - `EditMacros.m_boolean(objects, repair_mesh=True, keep_boolean=True, **kwargs)` *(static)* — Perform a boolean operation on two meshes using cmds, managing shorthand and full parameter names d…
@@ -1457,7 +1461,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `EditMacros.m_paste_and_rename() -> None` *(static)* — Paste and rename by removing 'pasted__' prefix and reference file names,
   - `EditMacros.m_multi_component() -> None` *(static)* — Multi-Component Selection.
   - `EditMacros.m_merge_vertices(objects, tolerance=0.001) -> None` *(static)* — Merge Vertices.
-- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L951)**
+- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L958)**
   - `SelectionMacros.m_object_selection() -> None` *(static)* — Set object selection mask.
   - `SelectionMacros.m_vertex_selection() -> None` *(static)* — Set vertex selection mask.
   - `SelectionMacros.m_edge_selection() -> None` *(static)* — Set edge selection mask.
@@ -1466,12 +1470,12 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `SelectionMacros.m_toggle_selectability(objects)` *(static)* — Toggle selectability of the given objects.
   - `SelectionMacros.m_toggle_UV_select_type() -> None` *(static)* — Toggles between UV shell and UV component selection.
   - `SelectionMacros.m_invert_component_selection() -> None` *(static)* — Invert the component selection on the currently selected objects.
-- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1112)**
+- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1119)**
   - `UiMacros.m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None` *(static)* — Toggle UI toolbars and menu bar in sync.
-- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L1148)**
+- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L1155)**
   - `AnimationMacros.m_set_selected_keys(objects) -> None` *(static)* — Set keys for any attributes (channels) that are selected in the channel box.
   - `AnimationMacros.m_unset_selected_keys(objects) -> None` *(static)* — Un-set keys for any attributes (channels) that are selected in the channel box.
-- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L1175)**
+- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L1182)**
 
 <a id="edit_utils--mesh_graph"></a>
 ### `edit_utils/mesh_graph.py`
@@ -2029,7 +2033,8 @@ Bake Maya scene lighting into per-object texture files.
 
 Arnold HDR environment manager.
 
-- **[`class HdrManager(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L44)** — Manage a single ``aiSkyDomeLight`` + connected ``file`` texture.
+- **[`class HdrManager(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L55)** — Manage a single ``aiSkyDomeLight`` + connected ``file`` texture.
+  - `HdrManager.arnold_loaded() -> bool` *(static)* — True if ``mtoa`` is *already* loaded — cheap, side-effect-free query.
   - `HdrManager.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin can be loaded right now.
   - `HdrManager.ensure_plugin_loaded(cls) -> bool` *(class)* — Backward-compat alias for :meth:`arnold_available`.
   - `HdrManager.hdr_env(self) -> Optional[str]` *(property)* — The skydome shape node, or ``None`` if not present.
@@ -2046,12 +2051,19 @@ Arnold HDR environment manager.
   - `HdrManager.intensity(self, value: float) -> None`
   - `HdrManager.exposure(self) -> float` *(property)* — Photographic stops (log2) on the skydome's ``aiExposure``.
   - `HdrManager.exposure(self, stops: float) -> None`
-  - `HdrManager.create_network(self, hdrMap: str = '', hdrMapVisibility: bool = False, intensity: Optional[float] = None, exposure: Optional[float] = None, rotation: Optional[float] = None) -> Optional[str]` — Apply settings to the (lazily-created) skydome network.
+  - `HdrManager.resolution(self) -> int` *(property)* — Importance-sampling resolution of the HDR (``resolution``);
+  - `HdrManager.resolution(self, value: int) -> None`
+  - `HdrManager.samples(self) -> int` *(property)* — Light samples (``aiSamples``) — soft-IBL noise control;
+  - `HdrManager.samples(self, value: int) -> None`
+  - `HdrManager.diffuse(self) -> float` *(property)* — Diffuse contribution scale (``aiDiffuse``);
+  - `HdrManager.diffuse(self, value: float) -> None`
+  - `HdrManager.specular(self) -> float` *(property)* — Specular contribution scale (``aiSpecular``);
+  - `HdrManager.specular(self, value: float) -> None`
+  - `HdrManager.create_network(self, hdrMap: str = '', hdrMapVisibility: bool = False, intensity: Optional[float] = None, exposure: Optional[float] = None, rotation: Optional[float] = None, resolution: Optional[int] = None, samples: Optional[int] = None, diffuse: Optional[float] = None, specular: Optional[float] = None) -> Optional[str]` — Apply settings to the (lazily-created) skydome network.
   - `HdrManager.clear(self) -> None` — Remove the skydome and its connected file/place2d nodes.
-- **[`class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L316)** — Switchboard slots for the HDR Manager UI.
+- **[`class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L414)** — Switchboard slots for the HDR Manager UI.
   - `HdrManagerSlots.header_init(self, widget) -> None` — Configure header menu and refresh button.
-  - `HdrManagerSlots.b001_init(self, widget) -> None` — Attach the Add-HDR mode selector to the button's option box.
-  - `HdrManagerSlots.cmb000_init(self, widget) -> None` — Wire right-click context menu + auto-refresh on dropdown.
+  - `HdrManagerSlots.cmb000_init(self, widget) -> None` — Wire the HDR dropdown: option-box plugins, context menu, auto-refresh.
   - `HdrManagerSlots.hdr_map(self) -> Optional[str]` *(property)* — Selected HDR file path from the combobox.
   - `HdrManagerSlots.hdr_map_visibility(self) -> bool` *(property)*
   - `HdrManagerSlots.cmb000(self, index, widget) -> None` — HDR map selection — apply immediately.
@@ -2059,8 +2071,11 @@ Arnold HDR environment manager.
   - `HdrManagerSlots.slider000(self, value, widget) -> None` — Rotate the HDR around Y.
   - `HdrManagerSlots.spn_intensity(self, value) -> None`
   - `HdrManagerSlots.spn_exposure(self, value) -> None`
+  - `HdrManagerSlots.spn_resolution(self, value) -> None`
+  - `HdrManagerSlots.spn_samples(self, value) -> None`
+  - `HdrManagerSlots.spn_diffuse(self, value) -> None`
+  - `HdrManagerSlots.spn_specular(self, value) -> None`
   - `HdrManagerSlots.b000(self) -> None` — Create / refresh the skydome network from current UI state.
-  - `HdrManagerSlots.b001(self) -> None` — Add an HDR using the mode selected in the option box.
   - `HdrManagerSlots.open_sourceimages(self) -> None` — Open the workspace's sourceimages folder in Explorer.
   - `HdrManagerSlots.clear_network(self) -> None` — Delete the skydome network and reset the UI to defaults.
   - `HdrManagerSlots.ctx_select_skydome(self) -> None`
@@ -2101,6 +2116,8 @@ Shared affix-mode option-box helper for mat_utils slot files.
   - `MatUtils.is_connected(mat: object, delete: bool = False) -> bool` *(static)* — Checks if a given material is assigned and optionally deletes it.
   - `MatUtils.create_mat(mat_type, prefix='', name='')` *(static)* — Creates a material based on the provided type or a random material if 'mat_type' is 'random'.
   - `MatUtils.assign_mat(objects, mat_name)` *(static)* — Assigns a material to a list of objects or components.
+  - `MatUtils.get_shading_assignments(obj) -> Dict[str, Optional[List[int]]]` *(static)* — Snapshot a mesh's shading-group membership as plain data.
+  - `MatUtils.apply_shading_assignments(obj, assignments: Dict[str, Optional[List[int]]])` *(static)* — Apply a :meth:`get_shading_assignments` snapshot onto *obj*.
   - `MatUtils.create_file_node(image_path, name=None, color_space=None)` *(static)* — Create a ``file`` texture node with a wired ``place2dTexture``.
   - `MatUtils.create_shading_group(shader, name=None, assign_to=None)` *(static)* — Create a shading group for *shader* and optionally assign objects.
   - `MatUtils.create_stingray_shader(name, opacity=False, opacity_mode=None)` *(static)* — Create a StingrayPBS shader by loading a ShaderFX preset graph.
@@ -2757,6 +2774,18 @@ UI slots for the Channels UI.
   - `NurbsUtils.get_cv_info(cls, c, returned_type='cv', filter_=[])` *(class)* — Get a dict containing CV's of the given curve(s) and their corresponding point positions (based on…
   - `NurbsUtils.getCrossProductOfCurves(cls, curves, normalize=1, values=False)` *(class)* — Get the cross product of two vectors using points derived from the given curves.
 
+<a id="nurbs_utils--curve_to_tube"></a>
+### `nurbs_utils/curve_to_tube.py`
+
+Sweep a circular profile along NURBS curve(s) to build a tube.
+
+- **[`class CurveToTube(ptk.LoggingMixin)`](mayatk/mayatk/nurbs_utils/curve_to_tube.py#L53)** — Extrude a circular profile along NURBS curve(s) to build a tube.
+  - `CurveToTube.create(cls, curves, output_type: str = 'nurbs', radius: float = 1.0, sections: int = 8, path_divisions: int = 1, degree: int = 3, caps: bool = True, quads: bool = True, live: bool = False, cleanup: bool = True, name: str = 'tube') -> List[str]` *(class)* — Build a tube along each selected curve.
+- **[`class CurveToTubeSlots(ptk.LoggingMixin)`](mayatk/mayatk/nurbs_utils/curve_to_tube.py#L655)** — Switchboard slot wiring for the Curve to Tube UI (hermetic preview).
+  - `CurveToTubeSlots.header_init(self, widget)` — Configure header help text.
+  - `CurveToTubeSlots.b001(self)` — Reset to Defaults.
+  - `CurveToTubeSlots.perform_operation(self, objects, contract)` — Build the tube(s) from the selected curves (Preview entry point).
+
 <a id="nurbs_utils--image_tracer"></a>
 ### `nurbs_utils/image_tracer.py`
 
@@ -2911,6 +2940,7 @@ UI slots for the Channels UI.
   - `UiUtils.get_main_window()` *(static)* — Get the main Maya window as a QMainWindow instance.
   - `UiUtils.get_menu_name(qt_object_name: str) -> Optional[str]` *(static)* — Retrieve the internal Maya name of a menu given its Qt object name.
   - `UiUtils.get_panel(*args, **kwargs)` *(static)* — Returns panel and panel configuration information.
+  - `UiUtils.get_model_panel(with_focus: bool = True) -> Optional[str]` *(static)* — Return a 3D model panel (viewport), suitable for commands like isolateSelect.
   - `UiUtils.main_progress_bar(size, name='progressBar#', step_amount=1)` *(static)* — # add esc key pressed return False
   - `UiUtils.list_ui_objects()` *(static)* — List all UI objects.
   - `UiUtils.clear_scrollfield_reporters()` *(static)* — Clears the contents of all cmdScrollFieldReporter UI objects in the current Maya session.
@@ -3030,6 +3060,10 @@ Reusable helper for resolving Maya node icons at runtime.
   - `UvUtils.flip_uvs(cls, objects, axis: str = 'u', pivot: tuple | None = None, per_shell: bool = True, preserve_position: bool = True)` *(class)* — Backward-compatible alias for :meth:`mirror_uvs`.
   - `UvUtils.get_uv_shell_sets(objects=None, returned_type='shell')` *(static)* — Get UV shells and their corresponding sets of faces.
   - `UvUtils.get_uv_shell_border_edges(objects)` *(static)* — Get the edges that make up any UV islands of the given objects.
+  - `UvUtils.get_cylinder_seam_edges(cls, mesh, sections=None, invert_seam: bool = False, cap_faces=None)` *(class)* — Identify the UV seam edges for unwrapping a smooth cylinder / tube.
+  - `UvUtils.get_auto_seam_edges(cls, mesh, angle: float = 45.0, invert_seam: bool = False)` *(class)* — Seam edges that auto-unwrap a turned / stepped cylinder or tube.
+  - `UvUtils.cut_cylinder_seams(cls, objects=None, angle=45.0, invert_seam=False, history=True, sew=True)` *(class)* — Cut auto UV seams for cylinder / tube unwrapping on each mesh.
+  - `UvUtils.unwrap_cylinder(cls, objects=None, angle=45.0, invert_seam=False, unfold=True, orient=True, map_size=4096, sew=True)` *(class)* — Auto-unwrap cylinder / tube / turned meshes: seam, then unfold flat.
   - `UvUtils.get_texel_density(objects, map_size)` *(static)* — Calculate the texel density for the given objects' faces.
   - `UvUtils.set_texel_density(cls, objects=None, density=1.0, map_size=4096)` *(class)* — Set the texel density for the given objects.
   - `UvUtils.snapshot_uv_sets(objects: Sequence[Union[str, object]], prefix: str = '_uv_snap') -> List[UvSnapshot]` *(static)* — Copy each object's active UV set into a uniquely-named backup set.

@@ -6,16 +6,25 @@ Separation of concerns mirrors the module: :class:`Rail` (rail geometry),
 :class:`CurtainMesh` (the drape/deformation), and :class:`CurtainRig` (the
 wire deformer + cluster rig) are exercised independently.
 """
+import statistics
+import types
+import unittest
 from pathlib import Path
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
+
+try:
+    from qtpy import QtWidgets
+except ImportError:
+    QtWidgets = None
 
 from base_test import MayaTkTestCase
 from mayatk.edit_utils.curtain import (
     CurtainMesh,
     Rail,
     CurtainRig,
+    CurtainSlots,
     catenary_shape,
     sag_profile,
     _PRESETS_DIR,
@@ -101,6 +110,21 @@ class MakeRailTest(MayaTkTestCase):
     def test_resample_hits_requested_count(self):
         rail, _ = Rail.make(width=6.0)
         self.assertEqual(len(Rail.resample(rail, 8)), 8)
+
+    def test_center_offsets_straight_rail(self):
+        pts, _ = Rail.make(width=4.0, center=(5.0, 2.0, 3.0))
+        xs = [p[0] for p in pts]
+        self.assertAlmostEqual((min(xs) + max(xs)) * 0.5, 5.0, places=6)  # x-centered
+        self.assertTrue(all(abs(p[1] - 2.0) < 1e-9 for p in pts), "y = center y")
+        self.assertAlmostEqual(min(p[2] for p in pts), 3.0, places=6)  # flat at center z
+
+    def test_center_offsets_closed_ring(self):
+        pts, _ = Rail.make(width=4.0, closed=True, center=(5.0, 2.0, 3.0))
+        xs = [p[0] for p in pts]
+        zs = [p[2] for p in pts]
+        self.assertAlmostEqual((min(xs) + max(xs)) * 0.5, 5.0, places=6)
+        self.assertAlmostEqual((min(zs) + max(zs)) * 0.5, 3.0, places=6)
+        self.assertTrue(all(abs(p[1] - 2.0) < 1e-9 for p in pts), "ring level at center y")
 
 
 class CurtainBuildTest(MayaTkTestCase):
@@ -216,13 +240,24 @@ class CurtainBuildTest(MayaTkTestCase):
         self.assertEqual(m._make_midfolds(), [])
 
     def test_midfolds_pin_top_edge(self):
-        # The forks fade in below the rail, so the pinned top edge (v = 1) is
-        # untouched no matter how strong the mid-folds are.
+        # The forks ramp in just below the rail, so the pinned rail row itself
+        # (v = 1, the hook line) is untouched no matter how strong the folds are.
         m = CurtainMesh(self.rail, hanging_points=12, mid_folds=3.0, mid_fold_seed=7)
         m._midfolds = m._make_midfolds()
         self.assertTrue(m._midfolds, "expected some forks for this seed")
         for u in (0.0, 0.25, 0.5, 0.75, 1.0):
             self.assertAlmostEqual(m._midfold_offset(u, 1.0), 0.0, places=9)
+
+    def test_midfolds_run_to_near_the_top(self):
+        # The small top fade means a fork reaches near-full strength just below
+        # the rail (it "runs to the top"), not faded to a sliver as before.
+        m = CurtainMesh(self.rail, hanging_points=12, mid_folds=3.0, mid_fold_seed=7)
+        m._midfolds = m._make_midfolds()
+        u0, length, *_ = max(m._midfolds, key=lambda f: f[1])  # the longest fork
+        near_top = abs(m._midfold_offset(u0, 0.96))             # depth 0.04
+        mid = abs(m._midfold_offset(u0, 1.0 - min(0.3, length * 0.5)))
+        self.assertGreater(mid, 1e-4, "expected relief inside the fork")
+        self.assertGreater(near_top, 0.7 * mid, "fork should run nearly to the top")
 
     def test_midfolds_push_both_ways(self):
         # Material conservation: each ricker crease pushes the cloth out at its
@@ -269,10 +304,128 @@ class CurtainBuildTest(MayaTkTestCase):
         self.assertLess(self._z_range(flat), 1e-3)
         self.assertGreater(self._z_range(bent), 0.5)
 
+    # ---------------------------------------------------------------- sway
+    def test_sway_off_is_empty(self):
+        self.assertEqual(CurtainMesh(self.rail, sway=0.0)._make_sway(), [])
+
+    def test_sway_leans_random_subset(self):
+        # Only ~half the spans lean (the rest sit at 0), each a signed factor
+        # in [0.4, 1.0] — "certain areas" drift, not a uniform shear.
+        m = CurtainMesh(self.rail, hanging_points=20, sway=1.0, sway_seed=3)
+        leans = m._make_sway()
+        self.assertEqual(len(leans), m.spans)
+        nonzero = [x for x in leans if x != 0.0]
+        self.assertGreaterEqual(len(nonzero), 1)
+        self.assertLess(len(nonzero), m.spans, "some spans must stay un-swayed")
+        for x in nonzero:
+            self.assertTrue(0.4 <= abs(x) <= 1.0, f"lean magnitude out of range: {x}")
+
+    def test_sway_seed_changes_pattern(self):
+        a = CurtainMesh(self.rail, hanging_points=20, sway=1.0, sway_seed=1)._make_sway()
+        b = CurtainMesh(self.rail, hanging_points=20, sway=1.0, sway_seed=2)._make_sway()
+        self.assertNotEqual(a, b)
+
+    def test_sway_pinned_at_hang_points(self):
+        # The lateral lean rides |sin(pi*phase)|, which is zero at every hang
+        # point, so adjacent (oppositely-leaning) spans can't tear at the pin.
+        m = CurtainMesh(self.rail, hanging_points=12, sway=3.0, sway_seed=5)
+        m._sway = m._make_sway()
+        for k in range(m.spans + 1):
+            for vv in (0.0, 0.5, 1.0):
+                self.assertAlmostEqual(m._sway_offset(k / m.spans, vv), 0.0, places=9)
+
+    def test_sway_displaces_along_the_rail(self):
+        # Straight rail along X: sway leans folds along X (the tangent), not in/
+        # out (Z). Compare per-vertex (same topology) against a no-sway build.
+        rail = [(x, 0.0, 0.0) for x in (0.0, 2.5, 5.0, 7.5, 10.0)]
+        base = self._verts(
+            CurtainMesh(rail, fullness=1.0, gravity=0.0, irregularity=0.0).build()
+        )
+        swayed = self._verts(
+            CurtainMesh(rail, fullness=1.0, gravity=0.0, irregularity=0.0,
+                        sway=3.0, sway_seed=1).build()
+        )
+        self.assertEqual(len(base), len(swayed))
+        max_dx = max(abs(a.x - b.x) for a, b in zip(base, swayed))
+        max_dz = max(abs(a.z - b.z) for a, b in zip(base, swayed))
+        self.assertGreater(max_dx, 0.02, "sway shifts vertices sideways along the rail")
+        self.assertAlmostEqual(
+            max_dz, 0.0, places=6, msg="sway must not change in/out depth"
+        )
+
+    @staticmethod
+    def _verts(transform):
+        sel = om.MSelectionList()
+        sel.add(transform)
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        return om.MFnMesh(dag).getPoints(om.MSpace.kWorld)
+
+    def test_hang_jitter_off_is_uniform(self):
+        m = CurtainMesh(self.rail, hanging_points=9)  # spans = 8
+        self.assertEqual(len(m._hang_points), m.spans + 1)
+        for i, u in enumerate(m._hang_points):
+            self.assertAlmostEqual(u, i / m.spans, places=9)
+
+    def test_hang_jitter_perturbs_interior_but_pins_the_ends(self):
+        m = CurtainMesh(self.rail, hanging_points=12, hang_jitter=1.0, hang_seed=4)
+        hp = m._hang_points
+        self.assertAlmostEqual(hp[0], 0.0, places=9)   # outer ends pinned
+        self.assertAlmostEqual(hp[-1], 1.0, places=9)
+        # strictly increasing -> no crossed / zero-width spans at any jitter
+        self.assertTrue(all(b > a for a, b in zip(hp, hp[1:])))
+        moved = any(abs(hp[i] - i / m.spans) > 1e-3 for i in range(1, m.spans))
+        self.assertTrue(moved, "hang_jitter must perturb the interior spacing")
+
+    def test_hang_jitter_seed_changes_pattern(self):
+        a = CurtainMesh(self.rail, hanging_points=12, hang_jitter=1.0, hang_seed=1)
+        b = CurtainMesh(self.rail, hanging_points=12, hang_jitter=1.0, hang_seed=2)
+        self.assertNotEqual(a._hang_points, b._hang_points)
+
+    def test_hang_jitter_changes_the_drape(self):
+        # Same topology, jittered spacing -> the cloth gathers/sags at different
+        # places, so the vertices move.
+        opts = dict(hanging_points=10, fullness=2.5, irregularity=0.0)
+        base = self._verts(CurtainMesh(self.rail, **opts).build())
+        jit = self._verts(
+            CurtainMesh(self.rail, hang_jitter=1.0, hang_seed=7, **opts).build()
+        )
+        self.assertEqual(len(base), len(jit))
+        maxd = max(
+            max(abs(a.x - b.x), abs(a.y - b.y), abs(a.z - b.z))
+            for a, b in zip(base, jit)
+        )
+        self.assertGreater(maxd, 0.02, "jittered hang spacing should shift the drape")
+
+    def test_span_at_uniform_matches_phase(self):
+        # With jitter off, _span_at reproduces the old uniform phase (k + t ==
+        # u * spans), so the belly / sway half-sines are unchanged.
+        m = CurtainMesh(self.rail, hanging_points=9)  # spans = 8
+        for u in (0.0, 0.1, 0.37, 0.5, 0.99, 1.0):
+            k, t = m._span_at(u)
+            self.assertAlmostEqual(k + t, u * m.spans, places=9)
+
     def test_round_points_builds(self):
         t = CurtainMesh(self.rail, round_points=1.0, irregularity=0.0).build()
         self.assertNodeExists(t)
         self.assertGreater(cmds.polyEvaluate(t, vertex=True), 100)
+
+    def test_gather_puckers_up_at_pins_and_dips_inside(self):
+        # Push-pull gather: vs a no-gather build (same topology), the fabric
+        # lifts UP near the hang points (push) and sags lower just inside them
+        # (pull), while leaving in/out (x, z) untouched.
+        rail = [(x, 0.0, 0.0) for x in (0.0, 2.5, 5.0, 7.5, 10.0)]
+        opts = dict(hanging_points=6, gravity=0.5, fullness=1.0, irregularity=0.0)
+        base = self._verts(CurtainMesh(rail, **opts).build())
+        gathered = self._verts(CurtainMesh(rail, round_gather=1.0, **opts).build())
+        self.assertEqual(len(base), len(gathered))
+        dys = [g.y - b.y for g, b in zip(base, gathered)]
+        self.assertGreater(max(dys), 0.02, "gather lifts the fabric up at the pins")
+        self.assertLess(min(dys), -0.01, "gather dips the fabric lower just inside")
+        max_dxz = max(max(abs(g.x - b.x), abs(g.z - b.z)) for g, b in zip(base, gathered))
+        self.assertAlmostEqual(
+            max_dxz, 0.0, places=6, msg="gather only changes vertical sag"
+        )
 
     def test_invert_reverses_normals(self):
         plain = CurtainMesh(self.rail, irregularity=0.0, soften=False).build()
@@ -306,6 +459,108 @@ class CurtainBuildTest(MayaTkTestCase):
         self.assertGreater(
             cmds.polyEvaluate(hi, vertex=True), cmds.polyEvaluate(lo, vertex=True)
         )
+
+
+class TestFoldsPerPleat(MayaTkTestCase):
+    """Hanging Points map ~1:1 to folds.
+
+    The catenary sag + push-pull gather fire once per hang point (one clean
+    pleat/cusp at the rail), while the belly runs ``_BELLY_HUMPS_PER_SPAN``
+    humps (one full fold) per pleat-span — so the body fold density is decoupled
+    from (and double) the top cusp frequency, and the sag depth is normalized so
+    halving the dial reproduces the old depth instead of ballooning.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Straight rail along X (length 6, y = 0): the drape rides the in-plane
+        # normal (-Z) and the rail tangent (X), so every vertex in a column
+        # shares one X — letting us read the top edge and belly per column.
+        self.rail, self.closed = Rail.make()
+
+    @staticmethod
+    def _columns(transform):
+        """Bucket draped verts into rail columns sorted by X.
+
+        Returns ``(bellies, top_ys)``: per column the in/out belly (``-z``, taper
+        is 0 in these tests so it's constant down the column) and the rail-row
+        height (``max y`` = ``-sag`` at that point, since lower rows drop by the
+        height term).
+        """
+        sel = om.MSelectionList()
+        sel.add(transform)
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        pts = om.MFnMesh(dag).getPoints(om.MSpace.kWorld)
+        cols = {}
+        for p in pts:
+            cols.setdefault(round(p.x, 4), []).append((p.y, p.z))
+        xs = sorted(cols)
+        bellies = [-statistics.median([z for _, z in cols[x]]) for x in xs]
+        top_ys = [max(y for y, _ in cols[x]) for x in xs]
+        return bellies, top_ys
+
+    @staticmethod
+    def _count_peaks(vals):
+        """Local maxima (endpoints count when above their one neighbor)."""
+        n = len(vals)
+        return sum(
+            1
+            for i in range(n)
+            if (i == 0 or vals[i] > vals[i - 1])
+            and (i == n - 1 or vals[i] > vals[i + 1])
+        )
+
+    @staticmethod
+    def _count_positive_runs(vals, tol=0.01):
+        """Number of contiguous runs above ``tol`` (one per out-ridge)."""
+        runs, inside = 0, False
+        for v in vals:
+            if v > tol and not inside:
+                runs, inside = runs + 1, True
+            elif v <= tol:
+                inside = False
+        return runs
+
+    def test_pinch_count_equals_hanging_points(self):
+        # The catenary returns the rail row to its peak height (sag -> 0) once
+        # per hang point: one clean cusp/pleat at the rail, not two per fold.
+        hp = 6
+        t = CurtainMesh(
+            self.rail, hanging_points=hp, gravity=0.5, fullness=4.0, taper=0.0,
+            round_points=0.0, irregularity=0.0, density=16.0,
+        ).build()
+        _, top_ys = self._columns(t)
+        self.assertEqual(self._count_peaks(top_ys), hp)
+
+    def test_fold_density_is_doubled_vs_pinches(self):
+        # The belly runs _BELLY_HUMPS_PER_SPAN (2) humps = one full fold per
+        # span, so out-ridges number ~ spans (= hanging_points - 1) -- DOUBLE the
+        # old half-hump-per-span (which gave ceil(spans/2) = 3 here).
+        hp = 6
+        t = CurtainMesh(
+            self.rail, hanging_points=hp, gravity=0.0, fullness=4.0, taper=0.0,
+            irregularity=0.0, density=16.0,
+        ).build()
+        bellies, _ = self._columns(t)
+        self.assertEqual(CurtainMesh._BELLY_HUMPS_PER_SPAN, 2)
+        self.assertEqual(self._count_positive_runs(bellies), hp - 1)
+
+    def test_sag_depth_normalized_to_per_fold_width(self):
+        # Halving the dial doubles each span's width; normalizing the sag by
+        # _BELLY_HUMPS_PER_SPAN keeps the depth at the per-hump scale (the
+        # previous look). Deepest dip == gravity * (L / spans) / HUMPS, NOT the
+        # un-normalized gravity * (L / spans) (which would be twice as deep).
+        hp, gravity = 6, 0.5
+        t = CurtainMesh(
+            self.rail, hanging_points=hp, gravity=gravity, fullness=1.0,
+            taper=0.0, round_points=0.0, irregularity=0.0, density=24.0,
+        ).build()
+        _, top_ys = self._columns(t)
+        length = Rail.length(self.rail, self.closed)
+        spans = hp - 1
+        expected = gravity * (length / spans) / CurtainMesh._BELLY_HUMPS_PER_SPAN
+        self.assertAlmostEqual(min(top_ys), -expected, delta=0.02)
 
 
 class RailResolutionTest(MayaTkTestCase):
@@ -384,7 +639,30 @@ class PresetTest(MayaTkTestCase):
             self.assertIn("s004", data)  # gravity
 
 
-if __name__ == "__main__":
-    import unittest
+class FooterTest(MayaTkTestCase):
+    """The footer reports the result's triangle count, and clears when empty."""
 
+    class _Footer:
+        def __init__(self):
+            self._t = ""
+
+        def setStatusText(self, t):
+            self._t = t
+
+    def test_update_footer_reports_tris(self):
+        curtain = cmds.polyPlane(name="curt_footer", subdivisionsX=4, subdivisionsY=4)[0]
+        tris = cmds.polyEvaluate(curtain, triangle=True)
+        fake = types.SimpleNamespace(
+            ui=types.SimpleNamespace(footer=self._Footer()), last_curtain=curtain
+        )
+        CurtainSlots._update_footer(fake)
+        self.assertEqual(fake.ui.footer._t, f"{tris:,} tris")
+
+        # No result -> cleared (falls back to the default hint).
+        fake.last_curtain = None
+        CurtainSlots._update_footer(fake)
+        self.assertEqual(fake.ui.footer._t, "")
+
+
+if __name__ == "__main__":
     unittest.main()

@@ -100,6 +100,14 @@ class _CoreUtilsInternal(object):
         all children of a group, causing Maya to auto-delete the group).
         """
         node_strs = [str(n) for n in nodes]
+
+        # Fast path: if no node has a parent (all world-rooted) then no parent
+        # transform can be orphaned by the operation, so no temp null is needed.
+        # A single batched query avoids one ``listRelatives`` per node, which in
+        # interactive Maya is the dominant cost on large selections.
+        if not (cmds.listRelatives(node_strs, parent=True, fullPath=True) or []):
+            return None, None
+
         first_parent_list = (
             cmds.listRelatives(node_strs[0], parent=True, fullPath=True) or None
         )
@@ -209,6 +217,25 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
             yield
         finally:
             cmds.undoInfo(closeChunk=True)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def suspended_refresh():
+        """Suspend viewport refresh for the duration of a bulk operation.
+
+        In interactive Maya, per-command idle redraws dominate the wall-clock
+        time of operations that issue many ``cmds`` calls (e.g. combining a
+        large selection). Suspending refresh collapses that cost; the viewport
+        is always re-enabled on exit, even if the body raises.
+
+        No-op outside an interactive session (``cmds.refresh`` is a noop in
+        batch/standalone), so it is safe to wrap any code path with it.
+        """
+        cmds.refresh(suspend=True)
+        try:
+            yield
+        finally:
+            cmds.refresh(suspend=False)
 
     @staticmethod
     @contextlib.contextmanager

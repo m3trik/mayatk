@@ -266,6 +266,241 @@ class TestUvCylinderUnwrap(MayaTkTestCase):
         self.assertTrue(default_ids and inverted_ids)
         self.assertEqual(default_ids & inverted_ids, set())  # opposite sides
 
+    @staticmethod
+    def _face_center_y(face):
+        verts = cmds.ls(
+            cmds.polyListComponentConversion(face, toVertex=True), flatten=True
+        )
+        ys = [cmds.pointPosition(v, world=True)[1] for v in verts]
+        return sum(ys) / len(ys)
+
+    @classmethod
+    def _cap_ngon(cls, mesh, top=True):
+        """Index of the top- or bottom-most n-gon cap face."""
+        ngons = [
+            i
+            for i in range(cmds.polyEvaluate(mesh, face=True))
+            if len(
+                cmds.ls(
+                    cmds.polyListComponentConversion(f"{mesh}.f[{i}]", toVertex=True),
+                    flatten=True,
+                )
+            )
+            > 4
+        ]
+        key = lambda i: cls._face_center_y(f"{mesh}.f[{i}]")
+        return max(ngons, key=key) if top else min(ngons, key=key)
+
+    @classmethod
+    def _stepped_cylinder(cls, name):
+        """A two-diameter turned column: wide body -> hard horizontal step ->
+        narrow body, with n-gon caps. Its hard creases (2 cap rims + the step's
+        inner & outer rings) frame five sections: bottom cap, wide body, step
+        annulus, narrow body, top cap. Auto-unwrap should yield five shells."""
+        cyl = cmds.polyCylinder(
+            name=name, radius=2, height=2, subdivisionsAxis=12, subdivisionsHeight=1
+        )[0]
+        # Inset the top cap (r2 -> r1) into a horizontal step, then extrude it up
+        # along its normal into the narrow body.
+        cmds.polyExtrudeFacet(f"{cyl}.f[{cls._cap_ngon(cyl)}]", ch=True, offset=1.0)
+        cmds.polyExtrudeFacet(
+            f"{cyl}.f[{cls._cap_ngon(cyl)}]", ch=True, localTranslate=(0, 0, 2)
+        )
+        return cyl
+
+    def test_auto_seam_smooth_cylinder_three_shells(self):
+        """A plain capped cylinder auto-unwraps to body + 2 caps (no spurious
+        cuts on the smooth body), topology preserved."""
+        cyl = cmds.polyCylinder(
+            name="auto_smooth", radius=1, height=4, subdivisionsAxis=12
+        )[0]
+        self._flatten_uvs_to_one_shell(cyl)
+        UvUtils.unwrap_cylinder(cyl, unfold=False)
+        self.assertEqual(self._uv_shells(cyl), 3)
+        v = cmds.polyEvaluate(cyl, vertex=True)
+        e = cmds.polyEvaluate(cyl, edge=True)
+        f = cmds.polyEvaluate(cyl, face=True)
+        self.assertEqual(v - e + f, 2)
+
+    def test_auto_seam_stepped_cylinder_five_shells(self):
+        """A turned step profile peels into one shell per section: 2 caps,
+        2 cylindrical bands, and the flat step annulus."""
+        cyl = self._stepped_cylinder("auto_stepped")
+        self._flatten_uvs_to_one_shell(cyl)
+        UvUtils.unwrap_cylinder(cyl, unfold=False)
+        self.assertEqual(self._uv_shells(cyl), 5)
+        v = cmds.polyEvaluate(cyl, vertex=True)
+        e = cmds.polyEvaluate(cyl, edge=True)
+        f = cmds.polyEvaluate(cyl, face=True)
+        self.assertEqual(v - e + f, 2)  # cuts don't change topology
+
+    def test_angle_threshold_controls_creases(self):
+        """A high threshold treats the ~90 degree steps as soft, so far fewer
+        edges are cut than at the default 45 degrees."""
+        cyl = self._stepped_cylinder("auto_thresh")
+        sharp = cmds.ls(UvUtils.get_auto_seam_edges(cyl, angle=45), flatten=True)
+        loose = cmds.ls(UvUtils.get_auto_seam_edges(cyl, angle=120), flatten=True)
+        self.assertGreater(len(sharp), len(loose))
+
+    def test_auto_seam_invert_opposite_column(self):
+        """The hard creases are unchanged by invert; only the lengthwise column
+        moves to a disjoint set of edges on the opposite side."""
+        cyl = self._stepped_cylinder("auto_invert")
+        default = set(cmds.ls(UvUtils.get_auto_seam_edges(cyl), flatten=True))
+        inverted = set(
+            cmds.ls(UvUtils.get_auto_seam_edges(cyl, invert_seam=True), flatten=True)
+        )
+        default_only = default - inverted
+        inverted_only = inverted - default
+        self.assertTrue(default_only and inverted_only)  # the axial columns differ
+        self.assertEqual(default_only & inverted_only, set())
+
+    def test_unwrap_unfold_does_not_collapse(self):
+        """unfold=True must flatten shells (non-zero UV area), not collapse them
+        to points -- even from a degenerate axis-aligned source projection."""
+        cmds.loadPlugin("Unfold3D.mll", quiet=True)
+        if not cmds.pluginInfo("Unfold3D", query=True, loaded=True):
+            self.skipTest("Unfold3D plugin unavailable")
+        cyl = cmds.polyCylinder(
+            name="unfold_collapse", radius=1, height=4, subdivisionsAxis=12
+        )[0]
+        # A planar projection along the cylinder axis makes each lengthwise band
+        # zero-area -- the degenerate seed that used to collapse u3dUnfold.
+        cmds.polyProjection(f"{cyl}.f[*]", type="Planar", md="y")
+        self.assertTrue(UvUtils.unwrap_cylinder(cyl, unfold=True))
+
+        import maya.api.OpenMaya as om
+
+        sel = om.MSelectionList()
+        sel.add(cyl)
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        fn = om.MFnMesh(dag)
+        us, vs = fn.getUVs()
+        _, ids = fn.getUvShellsIds()
+        boxes = {}
+        for i in range(len(us)):
+            bb = boxes.setdefault(ids[i], [9, 9, -9, -9])
+            bb[0] = min(bb[0], us[i]); bb[1] = min(bb[1], vs[i])
+            bb[2] = max(bb[2], us[i]); bb[3] = max(bb[3], vs[i])
+        self.assertTrue(boxes)
+        for b in boxes.values():
+            self.assertGreater((b[2] - b[0]) * (b[3] - b[1]), 1e-6)  # not collapsed
+            self.assertLessEqual(b[2], 1.02)  # packed into 0-1
+            self.assertGreaterEqual(b[0], -0.02)
+
+    @staticmethod
+    def _shell_quality(mesh):
+        """Per-shell UV report: (count, degenerate, flipped, inside_0_1)."""
+        import maya.api.OpenMaya as om
+        from collections import defaultdict
+
+        sel = om.MSelectionList()
+        sel.add(mesh)
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        fn = om.MFnMesh(dag)
+        us, vs = fn.getUVs()
+        _, ids = fn.getUvShellsIds()
+        signed = defaultdict(float)
+        for f in range(fn.numPolygons):
+            verts = fn.getPolygonVertices(f)
+            uvid = [fn.getPolygonUVid(f, i) for i in range(len(verts))]
+            for i in range(len(uvid)):
+                j, k = uvid[i], uvid[(i + 1) % len(uvid)]
+                signed[ids[uvid[0]]] += us[j] * vs[k] - us[k] * vs[j]
+        boxes = defaultdict(lambda: [9, 9, -9, -9])
+        for i in range(len(us)):
+            b = boxes[ids[i]]
+            b[0] = min(b[0], us[i]); b[1] = min(b[1], vs[i])
+            b[2] = max(b[2], us[i]); b[3] = max(b[3], vs[i])
+        degen = sum(
+            1 for b in boxes.values() if (b[2] - b[0]) < 1e-4 or (b[3] - b[1]) < 1e-4
+        )
+        flipped = sum(1 for a in signed.values() if a < 0)
+        inside = all(-0.02 <= v <= 1.02 for b in boxes.values() for v in b)
+        return len(boxes), degen, flipped, inside
+
+    def test_low_poly_cylinder_seam_ignores_faceting(self):
+        """An 8-sided cylinder facets at exactly the 45 deg default threshold;
+        that faceting must not be cut as hard creases (which would shatter the
+        tube into per-facet shells). The single-row body stays one band, so a
+        capped cylinder peels into body + 2 caps = 3 shells."""
+        cyl = cmds.polyCylinder(
+            name="lowpoly_seam", radius=1, height=4,
+            subdivisionsAxis=8, subdivisionsHeight=1,
+        )[0]
+        self._flatten_uvs_to_one_shell(cyl)
+        UvUtils.unwrap_cylinder(cyl, unfold=False)
+        self.assertEqual(self._uv_shells(cyl), 3)
+
+    def test_low_poly_unfold_clean_shells(self):
+        """Unfolding a low-poly cylinder (45 deg facets + a single-row band)
+        gives non-degenerate, non-mirrored shells packed in 0-1: the band is
+        seeded cylindrically (a planar seed folds a single-row ring flat and
+        u3dUnfold then collapses it) and u3dLayout's packing mirrors are
+        flipped back."""
+        cmds.loadPlugin("Unfold3D.mll", quiet=True)
+        if not cmds.pluginInfo("Unfold3D", query=True, loaded=True):
+            self.skipTest("Unfold3D plugin unavailable")
+        cyl = cmds.polyCylinder(
+            name="lowpoly_unfold", radius=1, height=4,
+            subdivisionsAxis=8, subdivisionsHeight=1,
+        )[0]
+        # A planar projection along the axis is the degenerate seed that, with a
+        # planar re-seed, would collapse the single-row band.
+        cmds.polyProjection(f"{cyl}.f[*]", type="Planar", md="y")
+        self.assertTrue(UvUtils.unwrap_cylinder(cyl, unfold=True))
+        count, degen, flipped, inside = self._shell_quality(cyl)
+        self.assertEqual(count, 3)  # body + 2 caps
+        self.assertEqual(degen, 0)  # cylindrical seed keeps the band non-degenerate
+        self.assertEqual(flipped, 0)  # u3dLayout mirrors are flipped back
+        self.assertTrue(inside)  # packed into 0-1
+
+    def test_sew_clears_preexisting_uv_cuts(self):
+        """By default the cut sews pre-existing UV borders shut first, so the
+        result's shells come only from the cylinder seams -- not stray shells
+        left by an earlier projection. sew=False leaves them, polluting it."""
+
+        def shells_after(sew):
+            c = cmds.polyCylinder(r=1, h=4, sx=12, sy=3, name=f"sew_{sew}")[0]
+            cmds.polyAutoProjection(f"{c}.f[*]", layoutMethod=0)  # messy: 6 shells
+            UvUtils.unwrap_cylinder(c, unfold=False, sew=sew)
+            n = cmds.polyEvaluate(c, uvShell=True)
+            cmds.delete(c)
+            return n
+
+        self.assertEqual(shells_after(True), 3)  # body + 2 caps, clean
+        self.assertGreater(shells_after(False), 3)  # stray shells survive
+
+    def test_multi_mesh_skips_non_manifold_keeps_good(self):
+        """A non-manifold mesh in a multi-mesh selection must only skip itself --
+        the good cylinders still unfold. u3dUnfold rejects a non-manifold mesh
+        ('Mesh has non-manifold UVs…'); a single batched unfold would abort the
+        whole selection on it, so each mesh is unfolded independently."""
+        cmds.loadPlugin("Unfold3D.mll", quiet=True)
+        if not cmds.pluginInfo("Unfold3D", query=True, loaded=True):
+            self.skipTest("Unfold3D plugin unavailable")
+        g1 = cmds.polyCylinder(r=1, h=4, sx=12, name="good_a")[0]
+        cmds.polyProjection(f"{g1}.f[*]", type="Planar", md="y")
+        g2 = cmds.polyCylinder(r=1, h=6, sx=8, name="good_b")[0]
+        cmds.polyProjection(f"{g2}.f[*]", type="Planar", md="y")
+        # Non-manifold mesh: two cubes welded along their shared face plane.
+        a = cmds.polyCube(name="nm_a")[0]
+        b = cmds.polyCube(name="nm_b")[0]
+        cmds.move(1, 0, 0, b)
+        nm = cmds.polyUnite([a, b], ch=False, name="nonmanifold")[0]
+        cmds.polyMergeVertex(nm, distance=0.001)  # weld -> non-manifold edge
+
+        # Must not raise even though u3dUnfold rejects the non-manifold mesh.
+        UvUtils.unwrap_cylinder([g1, nm, g2], unfold=True, orient=True)
+
+        for good in (g1, g2):
+            count, degen, _flipped, inside = self._shell_quality(good)
+            self.assertEqual(count, 3)  # body + 2 caps -> actually unfolded
+            self.assertEqual(degen, 0)
+            self.assertTrue(inside)
+
 
 class TestUvUtilsEdgeCases(MayaTkTestCase):
     """Edge case tests for UvUtils."""

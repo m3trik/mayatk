@@ -124,22 +124,14 @@ class CamUtils(ptk.HelpMixin):
     def create_camera_from_view(name="camera#"):
         """Create a new camera based on the current view."""
         # Find the current modelPanel (viewport)
-        current_panel = None
-        panels = UiUtils.get_panel(all=True)
-        if panels:
-            for panel in panels:
-                if UiUtils.get_panel(typeOf=panel) == "modelPanel":
-                    current_panel = panel
-                    break
-
+        current_panel = UiUtils.get_model_panel(with_focus=True)
         if current_panel:
-            if UiUtils.get_panel(typeOf=current_panel) == "modelPanel":
-                camera = cmds.modelPanel(current_panel, q=1, cam=1)
-                new_camera = cmds.duplicate(camera)[0]
-                cmds.showHidden(new_camera)
-                new_camera = cmds.rename(new_camera, name)
-                print(f"# Result: {new_camera} #")
-                return new_camera
+            camera = cmds.modelPanel(current_panel, q=1, cam=1)
+            new_camera = cmds.duplicate(camera)[0]
+            cmds.showHidden(new_camera)
+            new_camera = cmds.rename(new_camera, name)
+            print(f"# Result: {new_camera} #")
+            return new_camera
         else:
             print("No modelPanel found")
 

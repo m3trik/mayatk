@@ -51,6 +51,61 @@ class TestMatUtils(MayaTkTestCase):
         super().tearDown()
 
     # -------------------------------------------------------------------------
+    # Shading-assignment snapshot / copy (used by Preview's geometry restore)
+    # -------------------------------------------------------------------------
+
+    def test_get_shading_assignments_whole_object(self):
+        """A single (object-level) material reads back as {sg: None}."""
+        cmds.sets(self.cube, edit=True, forceElement=self.sg1)
+        self.assertEqual(
+            MatUtils.get_shading_assignments(self.cube), {self.sg1: None}
+        )
+
+    def test_get_shading_assignments_per_face(self):
+        """A per-face (multi-material) mesh reads back as {sg: [indices]}."""
+        cmds.sets(self.cube, edit=True, forceElement=self.sg1)
+        cmds.sets(f"{self.cube}.f[1]", edit=True, forceElement=self.sg2)
+        data = MatUtils.get_shading_assignments(self.cube)
+        self.assertEqual(data.get(self.sg2), [1])
+        self.assertCountEqual(data.get(self.sg1), [0, 2, 3, 4, 5])
+
+    def test_get_apply_round_trip(self):
+        """Per-face assignments survive a get -> apply onto an identical mesh."""
+        cmds.sets(self.cube, edit=True, forceElement=self.sg1)
+        cmds.sets(f"{self.cube}.f[1]", edit=True, forceElement=self.sg2)
+        snap = MatUtils.get_shading_assignments(self.cube)
+        target = cmds.polyCube(name="copy_target")[0]
+        MatUtils.apply_shading_assignments(target, snap)
+        self.assertEqual(MatUtils.get_shading_assignments(target), snap)
+
+    def test_apply_base_coats_uncovered_faces(self):
+        """Faces beyond the snapshot (e.g. a bevel's new faces) are base-coated
+        with the dominant material rather than left unshaded."""
+        # Snapshot from a 6-face cube, applied to a 12-face target: the extra
+        # faces must still land on a shading group (no unshaded/green faces).
+        cmds.sets(self.cube, edit=True, forceElement=self.sg1)
+        cmds.sets(f"{self.cube}.f[1]", edit=True, forceElement=self.sg2)
+        snap = MatUtils.get_shading_assignments(self.cube)
+
+        target = cmds.polyCube(name="base_target", sx=2, sy=2)[0]  # >6 faces
+        total = cmds.polyEvaluate(target, face=True)
+        MatUtils.apply_shading_assignments(target, snap)
+
+        tshape = cmds.listRelatives(target, shapes=True, noIntermediate=True)[0]
+        owners = {target, tshape} | set(cmds.ls(target, long=True) or []) | set(
+            cmds.ls(tshape, long=True) or []
+        )
+        covered = set()
+        for sg in cmds.ls(type="shadingEngine"):
+            for m in cmds.ls(cmds.sets(sg, q=True) or [], long=True, flatten=True) or []:
+                if m.split(".f[")[0] in owners:
+                    if ".f[" in m:
+                        covered.add(int(m.split(".f[")[1].rstrip("]")))
+                    else:
+                        covered.update(range(total))
+        self.assertEqual(len(covered), total, "apply left faces unshaded")
+
+    # -------------------------------------------------------------------------
     # Material Query Tests
     # -------------------------------------------------------------------------
 

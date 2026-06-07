@@ -75,6 +75,46 @@ class UiUtils:
         return result
 
     @staticmethod
+    def get_model_panel(with_focus: bool = True) -> Optional[str]:
+        """Return a 3D model panel (viewport), suitable for commands like isolateSelect.
+
+        Resolves to an actual `modelPanel`, so it never returns the outliner,
+        Hypershade, Attribute Editor, etc. — which would otherwise raise
+        `model panel '<name>' does not exist`.
+
+        Parameters:
+            with_focus (bool): Prefer the focused panel, then the one under the
+                pointer, before falling back to the active/any visible model panel.
+
+        Returns:
+            (str/None) A model panel name, or None if no model panel is visible.
+        """
+        model_panels = cmds.getPanel(type="modelPanel") or []
+        if not model_panels:
+            return None
+
+        if with_focus:
+            for panel in (
+                cmds.getPanel(withFocus=True),
+                cmds.getPanel(underPointer=True),
+            ):
+                if panel in model_panels:
+                    return panel
+            # The active model editor maps to its panel for standard viewports.
+            try:
+                active = cmds.playblast(activeEditor=True)
+            except RuntimeError:
+                active = None
+            if active in model_panels:
+                return active
+
+        # Fall back to the first visible model panel, then any model panel.
+        visible = [
+            p for p in (cmds.getPanel(visiblePanels=True) or []) if p in model_panels
+        ]
+        return visible[0] if visible else model_panels[0]
+
+    @staticmethod
     def main_progress_bar(size, name="progressBar#", step_amount=1):
         """# add esc key pressed return False
 

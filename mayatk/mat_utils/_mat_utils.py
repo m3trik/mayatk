@@ -438,14 +438,21 @@ class MatUtils(MatUtilsInternals):
 
     @staticmethod
     def _cluster_objects_by_distance(objects, threshold):
-        """Clusters objects based on spatial proximity using a flood-fill approach."""
-        if not objects:
+        """Clusters objects by spatial proximity (flood-fill, threshold-linked).
+
+        Uses a spatial hash grid sized to ``threshold`` so each object only
+        compares against neighbours in the 27 surrounding cells instead of the
+        whole set. This keeps the result identical to the naive O(N^2) pairwise
+        scan while making it ~O(N) for selections that actually spread out.
+        """
+        obj_list = list(objects)
+        if not obj_list:
             return []
-        if len(objects) == 1:
-            return [objects]
+        if len(obj_list) == 1:
+            return [obj_list]
 
         positions = {}
-        for obj in objects:
+        for obj in obj_list:
             xmin, ymin, zmin, xmax, ymax, zmax = cmds.xform(
                 obj, q=True, ws=True, bb=True
             )
@@ -455,13 +462,29 @@ class MatUtils(MatUtilsInternals):
                 (zmin + zmax) * 0.5,
             )
 
+        threshold_sq = threshold * threshold
+        # Cell size == threshold guarantees any two points within threshold land
+        # in the same or an adjacent cell, so the 3x3x3 neighbourhood is exact.
+        cell = threshold if threshold > 0 else 1.0
+
+        def cell_of(p):
+            return (int(p[0] // cell), int(p[1] // cell), int(p[2] // cell))
+
+        grid = {}
+        for obj in obj_list:
+            grid.setdefault(cell_of(positions[obj]), []).append(obj)
+
+        neighbour_offsets = [
+            (dx, dy, dz)
+            for dx in (-1, 0, 1)
+            for dy in (-1, 0, 1)
+            for dz in (-1, 0, 1)
+        ]
+
         clusters = []
         processed = set()
-        threshold_sq = threshold * threshold
 
-        obj_list = list(objects)
-
-        for i, obj in enumerate(obj_list):
+        for obj in obj_list:
             if obj in processed:
                 continue
 
@@ -470,28 +493,93 @@ class MatUtils(MatUtilsInternals):
             queue = [obj]
 
             while queue:
-                current = queue.pop(0)
+                current = queue.pop()
                 p1 = positions[current]
+                cx, cy, cz = cell_of(p1)
 
-                for candidate in obj_list:
-                    if candidate in processed:
-                        continue
+                for dx, dy, dz in neighbour_offsets:
+                    for candidate in grid.get((cx + dx, cy + dy, cz + dz), ()):
+                        if candidate in processed:
+                            continue
 
-                    p2 = positions[candidate]
-                    dist_sq = (
-                        (p1[0] - p2[0]) ** 2
-                        + (p1[1] - p2[1]) ** 2
-                        + (p1[2] - p2[2]) ** 2
-                    )
+                        p2 = positions[candidate]
+                        dist_sq = (
+                            (p1[0] - p2[0]) ** 2
+                            + (p1[1] - p2[1]) ** 2
+                            + (p1[2] - p2[2]) ** 2
+                        )
 
-                    if dist_sq <= threshold_sq:
-                        processed.add(candidate)
-                        current_cluster.append(candidate)
-                        queue.append(candidate)
+                        if dist_sq <= threshold_sq:
+                            processed.add(candidate)
+                            current_cluster.append(candidate)
+                            queue.append(candidate)
 
             clusters.append(current_cluster)
 
         return clusters
+
+    @staticmethod
+    def _materials_by_object(objects: List[str]) -> Dict[str, List[str]]:
+        """Map each object to its assigned material(s) in a single scene pass.
+
+        Batched equivalent of calling :meth:`get_mats` once per object: resolves
+        shading-engine membership for the whole scene once (a handful of cmds
+        calls) instead of issuing ~5 calls per object. Returns
+        ``{obj_long_name: [material, ...]}`` for every input object.
+        """
+        objects = cmds.ls(objects, long=True) or []
+        if not objects:
+            return {}
+
+        # Resolve each input transform to its shape(s) and build a reverse map.
+        shape_to_obj: Dict[str, str] = {}
+        for obj in objects:
+            if cmds.nodeType(obj) in ("mesh", "nurbsSurface", "subdiv"):
+                shapes = [obj]
+            else:
+                shapes = (
+                    cmds.listRelatives(
+                        obj, shapes=True, fullPath=True, noIntermediate=True
+                    )
+                    or []
+                )
+            for shape in shapes:
+                shape_to_obj[shape] = obj
+
+        result: Dict[str, set] = {obj: set() for obj in objects}
+        obj_set = set(objects)
+        if not shape_to_obj:
+            return {obj: [] for obj in objects}
+
+        # One pass over the scene's shading engines: for each, find which of our
+        # shapes it touches (whole-object or per-face), then attribute its
+        # surface shader to those objects.
+        for sg in cmds.ls(type="shadingEngine") or []:
+            members = cmds.sets(sg, q=True) or []
+            if not members:
+                continue
+
+            touched = set()
+            for member in cmds.ls(members, long=True) or []:
+                base = member.split(".")[0]  # strip any .f[...] component
+                if base in shape_to_obj:
+                    touched.add(shape_to_obj[base])
+                elif base in obj_set:  # member is a transform we were given
+                    touched.add(base)
+
+            if not touched:
+                continue
+
+            mats = (
+                cmds.listConnections(
+                    f"{sg}.surfaceShader", source=True, destination=False
+                )
+                or []
+            )
+            for obj in touched:
+                result[obj].update(mats)
+
+        return {obj: list(mats) for obj, mats in result.items()}
 
     @staticmethod
     def group_objects_by_material(
@@ -501,15 +589,15 @@ class MatUtils(MatUtilsInternals):
         groups = {}
 
         objects = cmds.ls(_to_strs(objects), long=True) or []
+        mats_by_obj = MatUtils._materials_by_object(objects)
 
         for obj in objects:
-            mats = MatUtils.get_mats([obj], as_strings=True)
+            mats = mats_by_obj.get(obj, [])
 
             if not mats:
                 key = "None"
             elif len(mats) > 1:
-                mats.sort()
-                key = tuple(mats)
+                key = tuple(sorted(mats))
             else:
                 key = mats[0]
 
@@ -1282,6 +1370,126 @@ class MatUtils(MatUtilsInternals):
         valid_objects = cmds.ls(objects, flatten=True) or []
         if valid_objects:
             cmds.sets(valid_objects, edit=True, forceElement=shading_group)
+
+    @staticmethod
+    def get_shading_assignments(obj) -> Dict[str, Optional[List[int]]]:
+        """Snapshot a mesh's shading-group membership as plain data.
+
+        Returns a mapping ``{shading_group: faces}`` where *faces* is ``None``
+        for a whole-object (single-material) assignment or a list of int face
+        indices for a per-face (multi-material) assignment. The data form is
+        decoupled from the live node graph, so it survives operations that
+        corrupt or strip the in-scene component groups (see
+        :meth:`apply_shading_assignments`).
+        """
+        shape = NodeUtils.get_shape(obj, no_intermediate=True)
+        if not shape:
+            return {}
+        # Long paths the set members may be expressed under: component sets
+        # reference the transform, whole-object sets the shape.
+        owners = set(cmds.ls(shape, long=True) or [])
+        owners.update(cmds.listRelatives(shape, parent=True, fullPath=True) or [])
+
+        result: Dict[str, Optional[List[int]]] = {}
+        for sg in set(cmds.listConnections(shape, type="shadingEngine") or []):
+            whole = False
+            faces: List[int] = []
+            for m in cmds.ls(cmds.sets(sg, q=True) or [], long=True, flatten=True) or []:
+                if m.split(".f[")[0] not in owners:
+                    continue  # a different object that shares this shading group
+                if ".f[" in m:
+                    faces.append(int(m.split(".f[", 1)[1].rstrip("]")))
+                else:
+                    whole = True
+            if whole and not faces:
+                result[sg] = None
+            elif faces:
+                result[sg] = faces
+        return result
+
+    @staticmethod
+    def apply_shading_assignments(obj, assignments: Dict[str, Optional[List[int]]]):
+        """Apply a :meth:`get_shading_assignments` snapshot onto *obj*.
+
+        *obj* must share the snapshot's face indexing (same topology, or an op
+        like ``polyBevel3`` that keeps the original faces' indices and only
+        appends new ones — those new faces are base-coated with the dominant
+        material). Restores per-face material after an in-place rebuild (e.g.
+        ``delete(ch=True)``) or a hermetic-preview op drops it, which otherwise
+        leaves a multi-material mesh unshaded (renders bright green).
+
+        Single-material snapshots are applied as a whole-object assignment;
+        multi-material snapshots are applied entirely through face components
+        (see the body for why a whole-object base coat corrupts the result).
+        """
+        if not assignments:
+            return
+        shape = NodeUtils.get_shape(obj, no_intermediate=True)
+        if not shape:
+            return
+        tf = (cmds.listRelatives(shape, parent=True, fullPath=True) or [None])[0]
+
+        per_face = {sg: f for sg, f in assignments.items() if f and cmds.objExists(sg)}
+        whole = [sg for sg, f in assignments.items() if f is None and cmds.objExists(sg)]
+
+        # Pure single-material (no per-face overrides): a whole-object assignment
+        # is the natural, cleanest form -- set it directly and return.
+        if not per_face:
+            for sg in whole:
+                try:
+                    cmds.sets(shape, edit=True, forceElement=sg)
+                except Exception:
+                    pass
+            return
+
+        if not tf:
+            return
+
+        # Multi-material: assign EVERY material as face components, never as a
+        # whole-object set. After an in-place geometry rebuild (outMesh->inMesh +
+        # delete(ch=True)) a whole-object forceElement followed by a per-face
+        # split does NOT convert the whole assignment to a remainder -- it leaves
+        # the object in BOTH the whole-object set AND the component sets at once.
+        # That overlap is silently tolerated until the next poly op, which
+        # resolves it to the whole-object material and drops every other one (a
+        # multi-material mesh loses its extra materials -- the "neon green"
+        # regression). Driving everything through components keeps the assignment
+        # unambiguous so it survives the op.
+        try:
+            total = cmds.polyEvaluate(shape, face=True)
+        except Exception:
+            total = 0
+        # The base material covers faces the snapshot doesn't (e.g. a bevel's new
+        # chamfer faces, indexed past the originals): the whole-object SG if the
+        # snapshot had one, else the per-face SG covering the most faces.
+        base = whole[0] if whole else max(per_face, key=lambda s: len(per_face[s]))
+        covered = set().union(*per_face.values())
+        uncovered = [i for i in range(total) if i not in covered]
+
+        def _force(faces, sg):
+            try:
+                cmds.sets([f"{tf}.f[{i}]" for i in faces], edit=True, forceElement=sg)
+            except Exception:
+                pass
+
+        # Clean slate: park ALL faces on a neutral SG (as components) first, so
+        # any stale/overlapping groups left by the rebuild are collapsed before
+        # the real assignments land. A single range expression keeps this O(1) in
+        # command size -- this runs on every preview refresh, so building one
+        # string per face would lag a value-drag on a dense mesh.
+        if total:
+            try:
+                cmds.sets(
+                    f"{tf}.f[0:{total - 1}]",
+                    edit=True,
+                    forceElement="initialShadingGroup",
+                )
+            except Exception:
+                pass
+        for sg, faces in per_face.items():
+            _force(faces, sg)
+        if uncovered:
+            _force(uncovered, base)
 
     # ------------------------------------------------------------------
     # Shared material-graph helpers

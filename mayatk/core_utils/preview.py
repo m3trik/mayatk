@@ -27,8 +27,9 @@ Constraints on ``perform_operation`` authors:
     auto-created orig-shape is deleted, or Curve to Tube resampling its source
     curve in place), set ``PRESERVE_GEOMETRY = True`` on the operation instance.
     The contract then snapshots the operated objects and, on rollback, restores
-    any mesh or curve that survived but diverged from the snapshot (identity/UUID
-    preserved).
+    any mesh or curve that survived but diverged from the snapshot -- geometry,
+    identity/UUID, and per-face (multi-material) shading, which the geometry pipe
+    alone doesn't carry.
   - Do not delete pre-existing nodes inside ``perform_operation`` (diff is
     one-way; deletions cannot be reversed).
   - Mutating an attribute on a pre-existing node requires
@@ -474,6 +475,13 @@ class Preview:
     The constructor signature matches the legacy :class:`preview_old.Preview`
     for drop-in instantiation, but ``perform_operation`` on the operation
     instance must now accept ``(objects, contract)``.
+
+    Optional **Select Result**: pass ``select_result_checkbox`` plus a
+    ``result_provider`` callable (returning the operation's current result
+    node name(s)) and Preview handles the whole feature itself -- (de)selecting
+    the result on every preview build and on commit per the toggle, and wiring
+    the toggle live -- so a panel gets it for free, like the Preview/Create
+    buttons, instead of hand-wiring :func:`apply_result_selection`.
     """
 
     _instances: Set["Preview"] = set()
@@ -498,6 +506,8 @@ class Preview:
         disable_on_hide: bool = True,
         validation_func: Optional[Callable] = None,
         progress_callback: Optional[Callable] = None,
+        select_result_checkbox=None,
+        result_provider: Optional[Callable] = None,
     ):
         if not hasattr(operation_instance, "perform_operation"):
             raise ValueError(
@@ -518,11 +528,26 @@ class Preview:
         self.message_func = message_func or self.logger.info
         self.validation_func = validation_func
         self.progress_callback = progress_callback
+        # Optional first-class "Select Result": when a panel supplies both the
+        # checkbox and a callable returning the operation's result node(s),
+        # Preview (de)selects that result on every preview build and on commit
+        # (per the toggle) and wires the toggle live -- no per-panel plumbing.
+        # See _apply_select_result.
+        self.select_result_checkbox = select_result_checkbox
+        self.result_provider = result_provider
 
         self.operated_objects: Set[str] = set()
         self.operation_instance.operated_objects = self.operated_objects
         self._contract: Optional[CleanupContract] = None
         self._captured_objects: List[str] = []
+        # {transform_uuid: shading-assignments} captured pristine at enable.
+        # Per-face (multi-material) shading is dropped by the hermetic preview's
+        # in-place geometry rollback and CANNOT be reliably restored in place
+        # (Maya leaves malformed shading groups that the next poly op collapses),
+        # so it is reasserted from this snapshot AFTER each clean op -- the
+        # forward preview op and the commit replay -- where assignment sticks.
+        # See _reassert_shading_snapshot.
+        self._shading_snapshot: dict = {}
         self.is_enabled: bool = False
         # Global re-entry guard: if perform_operation emits a signal that
         # fires refresh() (e.g. cmds.select -> SelectionChanged ->
@@ -555,6 +580,15 @@ class Preview:
         try:
             self.preview_checkbox.toggled.connect(self.toggle)
             self.create_button.clicked.connect(self.finalize_changes)
+            if (
+                self.select_result_checkbox is not None
+                and self.result_provider is not None
+            ):
+                # Live: toggling Select Result immediately (de)selects the
+                # current result -- it must NOT re-run the operation.
+                self.select_result_checkbox.toggled.connect(
+                    self._on_select_result_toggled
+                )
         except Exception as e:
             self.logger.error(f"Failed to setup UI connections: {e}")
             raise
@@ -589,6 +623,52 @@ class Preview:
         else:
             self.disable()
 
+    @staticmethod
+    def _capture_shading_snapshot(objects) -> dict:
+        """Snapshot the operated meshes' per-face shading as data, keyed by the
+        owning transform's UUID. Captured pristine at enable and reasserted after
+        each clean op because the hermetic preview's in-place rollback drops
+        per-face (multi-material) shading. Only multi-material meshes are stored
+        -- object-level shading survives the preview on its own, so single-
+        material tools pay nothing. Lazy import: mat_utils -> core."""
+        snap: dict = {}
+        try:
+            from mayatk.mat_utils._mat_utils import MatUtils
+
+            resolved = NodeUtils.get_transform_node(objects, returned_type="str")
+            tfs = resolved if isinstance(resolved, (list, tuple)) else [resolved]
+            for tf in tfs:
+                if not tf:
+                    continue
+                assigns = MatUtils.get_shading_assignments(tf)
+                if not any(faces is not None for faces in assigns.values()):
+                    continue
+                uuid = (cmds.ls(tf, uuid=True) or [None])[0]
+                if uuid:
+                    snap[uuid] = assigns
+        except Exception:
+            pass
+        return snap
+
+    def _reassert_shading_snapshot(self) -> None:
+        """Reapply the pristine enable-time shading snapshot to its meshes (by
+        UUID). MUST run on a freshly-built mesh -- right after the forward
+        preview op or the commit replay, both of which leave clean shading
+        groups -- never on a bare in-place-rolled-back mesh, where the per-face
+        assignment doesn't stick (Maya collapses the malformed groups on the
+        next op)."""
+        if not self._shading_snapshot:
+            return
+        try:
+            from mayatk.mat_utils._mat_utils import MatUtils
+
+            for uuid, assigns in self._shading_snapshot.items():
+                tf = (cmds.ls(uuid, long=True) or [None])[0]
+                if tf:
+                    MatUtils.apply_shading_assignments(tf, assigns)
+        except Exception:
+            pass
+
     def validate_operation(self, objects: List[Any]) -> bool:
         if self.validation_func:
             try:
@@ -619,6 +699,7 @@ class Preview:
             return
 
         self._captured_objects = list(sel)
+        self._shading_snapshot = self._capture_shading_snapshot(sel)
         self.operated_objects.clear()
         self.operated_objects.update(str(s) for s in sel)
 
@@ -684,6 +765,11 @@ class Preview:
                 self.operation_instance.perform_operation(
                     self._captured_objects, self._contract
                 )
+                # Reassert per-face shading on the freshly-built preview mesh so
+                # a multi-material object doesn't flash bright green. Must run
+                # here (after the op, clean groups) not in rollback (bare mesh
+                # rebuild leaves malformed groups the next op would collapse).
+                self._reassert_shading_snapshot()
                 # Isolation-set membership is a `cmds.sets` connection,
                 # which Maya records on the undo queue. It MUST run inside
                 # the contract (under suppressed undo) -- otherwise every
@@ -709,6 +795,10 @@ class Preview:
                     DisplayUtils.add_to_isolation_set(iso_targets)
                 except Exception:
                     pass
+            # Select Result (first-class): apply after the operation, outside
+            # the contract -- a selection isn't node-diff-tracked either way.
+            # Inside the try so a failure surfaces via message_func.
+            self._apply_select_result(defer=False)
         except Exception as e:
             self.logger.exception(f"perform_operation raised: {e}")
             self.message_func(_format_op_error(e))
@@ -753,6 +843,11 @@ class Preview:
             if self._contract is not None:
                 self._contract.rollback()
                 self._contract = None
+            # Restore per-face material the geometry rollback dropped. No op
+            # follows a cancel, so the restored (in-place) shading is what the
+            # user is left looking at; it renders correctly even though a future
+            # op could collapse it -- acceptable for a cancelled preview.
+            self._reassert_shading_snapshot()
             self.operated_objects.clear()
             self._set_checkbox(False)
             self.create_button.setEnabled(False)
@@ -784,6 +879,10 @@ class Preview:
                 self.operation_instance.perform_operation(
                     self._captured_objects, None
                 )
+                # Reassert per-face material on the freshly-replayed (clean) mesh
+                # so the COMMITTED result keeps every material -- inside the chunk
+                # so it commits/undoes atomically with the operation.
+                self._reassert_shading_snapshot()
             finally:
                 cmds.undoInfo(closeChunk=True)
 
@@ -799,6 +898,42 @@ class Preview:
                 self.finalize_func()
             except Exception as e:
                 self.logger.exception(f"finalize_func raised: {e}")
+
+        # Select Result on commit: AFTER finalize_func (which can change the
+        # selection -- e.g. discarding Curtain's auto-rail), so the result wins.
+        # Deferred so a post-commit selection restore can't clobber it.
+        self._apply_select_result(defer=True)
+
+    # --------------------------------------------------------- select result
+    def _on_select_result_toggled(self, *args) -> None:
+        """Slot for the Select Result checkbox: (de)select the current result
+        now (a direct user action -- applied immediately, never a re-run)."""
+        self._apply_select_result(defer=False)
+
+    def _apply_select_result(self, defer: bool) -> None:
+        """Apply the *Select Result* toggle to the operation's current result.
+
+        First-class replacement for the per-panel hand-wiring: when the panel
+        passed ``select_result_checkbox`` + ``result_provider``, Preview
+        (de)selects the result on every preview build (``defer=False``) and on
+        commit (``defer=True``), per the toggle. No-op when the feature isn't
+        configured. ``object_mode=True`` is always safe here -- a result is
+        selected as an object, and it also clears any component selection the
+        op left behind (e.g. ``polySoftEdge``'s edges).
+        """
+        if self.select_result_checkbox is None or self.result_provider is None:
+            return
+        try:
+            apply_result_selection(
+                self.select_result_checkbox,
+                self.result_provider(),
+                object_mode=True,
+                defer=defer,
+            )
+        except Exception:
+            # Select Result is a cosmetic post-op convenience -- never let a
+            # provider or selection hiccup abort the operation or alarm the user.
+            self.logger.exception("Select Result apply failed")
 
     # ------------------------------------------------------------- internals
     def _set_checkbox(self, checked: bool) -> None:
@@ -835,3 +970,65 @@ class Preview:
 
 def cleanup_all_previews() -> None:
     Preview.cleanup_all_instances()
+
+
+def apply_result_selection(widget, results, *, object_mode: bool = False, defer: bool = False) -> None:
+    """Select the operation's result(s) — or explicitly deselect them — per a
+    "Select Result" checkbox, the way a Preview panel wants it on preview/commit.
+
+    With *widget* checked the results are selected so the user can see them; with
+    it unchecked they are explicitly **deselected** (an op can leave its result
+    selected, so "off" must actively clear it). The widget read is defensive: a
+    missing/dead checkbox falls back to selecting (the prior behavior). The
+    checked state is re-read on each (immediate and deferred) pass so the settled
+    UI value wins — interactive state-restore can settle the toggle just after a
+    commit returns.
+
+    Parameters:
+        widget: the "Select Result" QCheckBox (queried for its checked state).
+        results (str | Iterable[str]): the result node name(s).
+        object_mode (bool): for ops that can leave the result in a component
+            selection (e.g. a UV cut's map components, polySoftEdge's edges)
+            that a transform-only deselect can't clear — switches to object
+            mode and collapses any such selection onto the objects (replace)
+            before (de)selecting.
+        defer (bool): also re-assert the choice on idle (``evalDeferred``,
+            lowest priority). Only the commit path needs it — committing can
+            leave Maya restoring the pre-op selection (or settling the toggle)
+            *after* this returns; the idle re-read then wins. A live toggle is a
+            direct user action with nothing to clobber it, so it passes False.
+    """
+    nodes = [results] if isinstance(results, str) else list(results or [])
+
+    def _apply():
+        alive = [n for n in nodes if n and cmds.objExists(n)]
+        if not alive:
+            return
+        try:
+            select = widget.isChecked()
+        except Exception:
+            select = True
+        if object_mode:
+            try:
+                cmds.selectMode(object=True)
+            except Exception:
+                pass
+        if select:
+            cmds.select(alive, replace=True)
+        else:
+            # An op can leave the result in COMPONENT selection (e.g.
+            # polySoftEdge leaves the mesh's edges selected, a UV cut its map
+            # components); a transform-only deselect won't clear those, so under
+            # object_mode collapse any such selection onto the objects (replace)
+            # before deselecting. (selectMode alone doesn't collapse an existing
+            # component selection.)
+            if object_mode:
+                cmds.select(alive, replace=True)
+            cmds.select(alive, deselect=True)
+
+    _apply()  # immediate
+    if defer:
+        try:
+            cmds.evalDeferred(_apply, lowestPriority=True)
+        except Exception:
+            pass

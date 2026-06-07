@@ -223,6 +223,18 @@ class DuplicateRadial(ptk.LoggingMixin):
         rotation_index = {"x": 0, "y": 1, "z": 2}[rotate_axis]
         total_rotation = end_angle - start_angle
         weight_factor = 2 * abs(weight_bias - 0.5)
+
+        # Spacing divisor: an arc keeps both endpoints (num_copies - 1), but a
+        # whole revolution makes the end angle coincide with the start, so the
+        # inclusive endpoint stacks the last copy on the first. Drop the shared
+        # endpoint (num_copies) when the sweep is a multiple of 360. The min()
+        # is the distance to the nearest multiple of 360 (handles a span that
+        # falls just shy of one from float error, e.g. 359.9999999).
+        remainder = abs(total_rotation) % 360.0
+        is_full_revolution = (
+            abs(total_rotation) > 1e-6 and min(remainder, 360.0 - remainder) < 1e-6
+        )
+        span_divisor = num_copies if is_full_revolution else num_copies - 1
         copies = []
 
         for i in range(num_copies):
@@ -237,7 +249,7 @@ class DuplicateRadial(ptk.LoggingMixin):
                 f"Creating {'instance' if instance else 'duplicate'} {i}: {copy}"
             )
 
-            x = i / (num_copies - 1) if num_copies > 1 else 0.0
+            x = i / span_divisor if num_copies > 1 else 0.0
             curve_value = (
                 x ** (1 / (1 - weight_curve))
                 if weight_bias >= 0.5
@@ -283,6 +295,12 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
 
         self.logger.setLevel(log_level)
         self.logger.set_log_prefix(f"[duplicate radial] ")
+
+        # Per-field reset buttons (uitk option-box): click resets a field to its
+        # default; Alt/Ctrl+click bypasses it to default (greyed, restorable).
+        # Must precede connect_multi/Preview — wrapping reparents the widgets and
+        # invalidates any already-deferred wrapper (see add_reset_buttons docstring).
+        self.sb.add_reset_buttons(self.ui)
 
         self.preview = Preview(
             self,
