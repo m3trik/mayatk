@@ -291,6 +291,46 @@ class ShotBlock:
 
 
 # ---------------------------------------------------------------------------
+# Export-view helpers (shot → FBX takes + Unity metadata)
+# ---------------------------------------------------------------------------
+
+CLIP_NAME_STRATEGIES: Dict[str, Callable[[int, "ShotBlock"], str]] = {
+    "name": lambda i, shot: shot.name,
+    "sequence": lambda i, shot: f"{(i + 1) * 10:03d}_{shot.name}",
+}
+
+
+def _sanitize_clip_name(name: str) -> str:
+    """Return a Unity/FBX-legal clip name (alphanumeric + ``_``, case preserved)."""
+    import pythontk as ptk
+
+    clean = ptk.StrUtils.sanitize(name or "", preserve_case=True)
+    return clean or "shot"
+
+
+def resolve_clip_specs(
+    shots: List["ShotBlock"], strategy: str = "name"
+) -> List[Tuple[str, int, int]]:
+    """Resolve ``[(clip_name, start, end), …]`` — the single source of truth for
+    clip naming.  Names are sanitized and made unique *in the given order*, so
+    callers pass ``sorted_shots()`` for deterministic, stable results.
+    """
+    fn = CLIP_NAME_STRATEGIES.get(strategy, CLIP_NAME_STRATEGIES["name"])
+    seen: set = set()
+    specs: List[Tuple[str, int, int]] = []
+    for i, shot in enumerate(shots):
+        clip = _sanitize_clip_name(fn(i, shot))
+        if clip in seen:
+            n = 1
+            while f"{clip}_{n}" in seen:
+                n += 1
+            clip = f"{clip}_{n}"
+        seen.add(clip)
+        specs.append((clip, int(round(shot.start)), int(round(shot.end))))
+    return specs
+
+
+# ---------------------------------------------------------------------------
 # Store events
 # ---------------------------------------------------------------------------
 
@@ -415,6 +455,12 @@ class ShotStore:
         # Source CSV path (when the store was populated from a manifest CSV).
         # Purely informational — lets the user retrace provenance on reopen.
         self.source_csv: str = ""
+        # Export-view projection (opt-in).  When True, every save publishes the
+        # FBX-takes + Unity-metadata channels onto the shared data_export node so
+        # any FBX export carries them.  Off by default — keeps scenes clean and
+        # avoids materialising the export node on mere shot edits.
+        self.auto_publish_export: bool = False
+        self.clip_name_strategy: str = "name"
         self._active_shot_id: Optional[int] = None  # session-only, not persisted
         self._listeners: List[Callable[[StoreEvent], None]] = []
         self._batch_depth: int = 0
@@ -1007,7 +1053,94 @@ class ShotStore:
             "locked_gaps": [list(pair) for pair in sorted(self.locked_gaps)],
             "scene_fps": self.scene_fps,
             "source_csv": self.source_csv,
+            "auto_publish_export": self.auto_publish_export,
+            "clip_name_strategy": self.clip_name_strategy,
         }
+
+    def to_export_view(self, strategy: str = "name") -> Dict[str, Any]:
+        """Build the FBX/Unity export view from the current shots.
+
+        Returns ``{"fbx_takes": [...], "shot_metadata": {...}}``.  Both payloads
+        derive from a single :func:`resolve_clip_specs` pass, so the FBX take
+        name and the metadata ``clip`` join-key cannot drift.  Minimal overlap:
+        ranges live only in ``fbx_takes``; ``shot_metadata`` carries the extras
+        a clip can't (description, objects, section), keyed by clip.
+        """
+        sorted_s = self.sorted_shots()
+        specs = resolve_clip_specs(sorted_s, strategy=strategy)
+        fbx_takes = [{"name": c, "start": s, "end": e} for c, s, e in specs]
+        shots_meta = [
+            {
+                "clip": clip,
+                "description": shot.description or "",
+                "objects": [o.rsplit("|", 1)[-1] for o in shot.objects],
+                "section": (shot.metadata or {}).get("section", ""),
+            }
+            for (clip, _s, _e), shot in zip(specs, sorted_s)
+        ]
+        return {
+            "fbx_takes": fbx_takes,
+            "shot_metadata": {"version": 1, "shots": shots_meta},
+        }
+
+    def publish_export_view(self, strategy: Optional[str] = None) -> Optional[str]:
+        """Project the export view onto the shared ``data_export`` node.
+
+        Writes the ``fbx_takes`` and ``shot_metadata`` channels as plain string
+        attrs (JSON).  Idempotent; regenerated from the live store so it can't go
+        stale.  Returns the export node name, or ``None`` outside Maya / on error.
+        """
+        try:
+            import json
+            from mayatk.node_utils.data_nodes import DataNodes
+        except ImportError:
+            return None
+
+        view = self.to_export_view(strategy=strategy or self.clip_name_strategy)
+        DataNodes.set_export_string(
+            DataNodes.FBX_TAKES, json.dumps(view["fbx_takes"], ensure_ascii=True)
+        )
+        return DataNodes.set_export_string(
+            DataNodes.SHOT_METADATA,
+            json.dumps(view["shot_metadata"], ensure_ascii=True),
+        )
+
+    @classmethod
+    def refresh_export_view(cls) -> None:
+        """Republish the active store's export view when it has shots.
+
+        The canonical, no-arg pre-export refresh for the Shots system — shared by
+        :meth:`enable_auto_export` (the session hook) and the Scene Exporter, so
+        the "publish the live view" logic has one definition.  A no-op when no
+        store is active or it has no shots, leaving no empty carrier behind.
+        """
+        store = cls.active()
+        if store is not None and store.shots:
+            store.publish_export_view()
+
+    @classmethod
+    def enable_auto_export(cls) -> None:
+        """Make **every** FBX export this session carry the active store's shots.
+
+        Registers a before-export hook that republishes the export view fresh
+        from whatever store is active, then realizes the FBX takes — so File ▸
+        Export, the Game Exporter, or a raw ``cmds.file`` export all emit one
+        named clip per shot plus the embedded ``shot_metadata``, with no Scene
+        Exporter and no staleness window.  Clip naming follows the active store's
+        ``clip_name_strategy``.  Opt-in and session-global; an export of unrelated
+        sub-assets in the same scene will also receive the take state.  Idempotent.
+        Call :func:`disable_auto_export` to remove it.
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        FbxUtils.register_export_preparer("shots", cls.refresh_export_view)
+
+    @staticmethod
+    def disable_auto_export() -> None:
+        """Remove the before-export preparer installed by :func:`enable_auto_export`."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        FbxUtils.unregister_export_preparer("shots")
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ShotStore":
@@ -1067,6 +1200,10 @@ class ShotStore:
         if stored_fps is not None:
             store.scene_fps = float(stored_fps)
         store.source_csv = str(data.get("source_csv", "") or "")
+        store.auto_publish_export = bool(data.get("auto_publish_export", False))
+        strat = data.get("clip_name_strategy")
+        if strat in CLIP_NAME_STRATEGIES:
+            store.clip_name_strategy = str(strat)
         return store
 
     # ---- persistence convenience -----------------------------------------
@@ -1126,6 +1263,11 @@ class ShotStore:
         self._dirty = False
         if self._persistence is not None:
             self._persistence.save(self.to_dict())
+        if self.auto_publish_export:
+            try:
+                self.publish_export_view()
+            except Exception:  # never let export projection break a save
+                pass
         self._save_user_prefs()
 
     # ---- detection convenience -------------------------------------------

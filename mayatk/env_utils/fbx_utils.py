@@ -2,7 +2,7 @@
 # coding=utf-8
 import os
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Iterable, Callable
 
 try:
     import maya.cmds as cmds
@@ -23,6 +23,11 @@ class FbxUtils(ptk.HelpMixin):
     orchestration (task management, UI, logging to files) belongs in
     ``SceneExporter`` or calling code.
     """
+
+    _AUTO_TAKES_OWNER = "fbx.auto_takes"  # stable owner key for SJM teardown
+    _auto_takes_ids = None  # (before_id, after_id) when the hook is active
+    _export_preparers = {}  # name -> callable, run before each auto FBX export
+    _explicit_auto_takes = False  # enable_auto_takes() called with no preparers
 
     @staticmethod
     def load_plugin():
@@ -135,3 +140,196 @@ class FbxUtils(ptk.HelpMixin):
         cmds.file(file_path, **kwargs)
         logger.info(f"Exported FBX: {file_path}")
         return file_path
+
+    # ------------------------------------------------------------------
+    # Animation takes (generic — any tool can declare takes on a node)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def reset_takes() -> None:
+        """Clear all FBX export take definitions (global, sticky exporter state)."""
+        FbxUtils.load_plugin()
+        mel.eval("FBXExportSplitAnimationIntoTakes -c")
+
+    @staticmethod
+    def apply_takes(takes: Iterable[Any]) -> int:
+        """Configure FBX export to emit one AnimStack (Unity clip) per take.
+
+        Enables bake-complex, sets the **union** bake range over all takes (safe
+        regardless of whether Maya bakes per-take or clips from the global
+        range), clears prior take state, then declares each take.
+
+        Parameters:
+            takes: Sequence of ``{"name","start","end"}`` mappings (the
+                ``fbx_takes`` channel shape) or ``(name, start, end)`` tuples.
+
+        Returns:
+            int: Number of takes defined.  Empty input only clears state.
+        """
+        FbxUtils.reset_takes()  # also ensures the fbxmaya plugin is loaded
+
+        norm = []
+        for t in takes or []:
+            if isinstance(t, dict):
+                name, start, end = t["name"], t["start"], t["end"]
+            else:
+                name, start, end = t
+            norm.append((str(name), int(round(start)), int(round(end))))
+
+        if not norm:
+            return 0
+
+        union_start = min(s for _, s, _ in norm)
+        union_end = max(e for _, _, e in norm)
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        mel.eval(f"FBXExportBakeComplexStart -v {union_start}")
+        mel.eval(f"FBXExportBakeComplexEnd -v {union_end}")
+
+        for name, start, end in norm:
+            safe = name.replace('"', "")  # MEL string guard
+            mel.eval(f'FBXExportSplitAnimationIntoTakes -v "{safe}" {start} {end}')
+
+        logger.info(
+            f"Configured {len(norm)} FBX take(s); bake range {union_start}-{union_end}."
+        )
+        return len(norm)
+
+    @staticmethod
+    def apply_takes_from_node(
+        node: Optional[str] = None, attr: Optional[str] = None
+    ) -> int:
+        """Read take defs from a JSON string channel on *node* and apply them.
+
+        Defaults to the shared ``data_export`` node's ``fbx_takes`` channel, so
+        this is shot-agnostic — it realizes whatever takes the scene declares.
+
+        Returns:
+            int: Number of takes defined (0 if the channel is absent/empty).
+        """
+        import json
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        node = node or DataNodes.EXPORT
+        attr = attr or DataNodes.FBX_TAKES
+
+        if not cmds.objExists(node) or not cmds.attributeQuery(
+            attr, node=node, exists=True
+        ):
+            return 0
+        raw = cmds.getAttr(f"{node}.{attr}")
+        if not raw:
+            return 0
+        try:
+            defs = json.loads(raw)
+        except (ValueError, TypeError):
+            logger.warning(f"Could not parse take defs from {node}.{attr}")
+            return 0
+        return FbxUtils.apply_takes(defs)
+
+    # ------------------------------------------------------------------
+    # Auto-prepare + apply declared takes on ANY FBX export (Phase 2)
+    # ------------------------------------------------------------------
+    #
+    # One shared kBeforeExport hook runs every registered *export preparer*
+    # (each stamps a subsystem's data onto the shared ``data_export`` node —
+    # Shots' ``publish_export_view``, Audio's ``prepare_for_export``, …) and
+    # then realizes whatever takes the scene declares.  A kAfterExport hook
+    # clears take state so nothing leaks into a later export.  Subsystems
+    # compose: each registers once, and the hook lifecycle is reference-counted
+    # off the registry (installed on the first preparer / explicit enable,
+    # removed when the last is gone).
+
+    @staticmethod
+    def register_export_preparer(name: str, prepare: Callable[[], Any]) -> None:
+        """Run *prepare* before every FBX export this session (installs the hook).
+
+        A preparer stamps a subsystem's data onto the shared ``data_export``
+        node so it rides into **any** FBX export (File ▸ Export, Game Exporter,
+        scripts).  Multiple subsystems compose — each preparer runs once per
+        export, in registration order, then declared takes are realized.
+        Re-registering the same *name* replaces it.  Use
+        :func:`unregister_export_preparer` to remove it.
+        """
+        FbxUtils._export_preparers[name] = prepare
+        FbxUtils._sync_auto_export_hook()
+
+    @staticmethod
+    def unregister_export_preparer(name: str) -> None:
+        """Remove a preparer; the hook is torn down when the last one is gone."""
+        FbxUtils._export_preparers.pop(name, None)
+        FbxUtils._sync_auto_export_hook()
+
+    @staticmethod
+    def enable_auto_takes() -> None:
+        """Realize declared takes on **every** FBX export — shot-agnostic, no preparer.
+
+        Installs the shared before-export hook directly: it applies whatever is
+        already on the ``data_export`` ``fbx_takes`` channel.  For a producer that
+        must regenerate the channel fresh at export time, register a preparer via
+        :func:`register_export_preparer` instead (e.g.
+        ``ShotStore.enable_auto_export``).  Idempotent.
+        """
+        FbxUtils._explicit_auto_takes = True
+        FbxUtils._sync_auto_export_hook()
+
+    @staticmethod
+    def disable_auto_takes() -> None:
+        """Clear the explicit enable; removes the hook if no preparers remain."""
+        FbxUtils._explicit_auto_takes = False
+        FbxUtils._sync_auto_export_hook()
+
+    @staticmethod
+    def _sync_auto_export_hook() -> None:
+        """Install/remove the shared hook to match the registry + explicit flag."""
+        want = FbxUtils._explicit_auto_takes or bool(FbxUtils._export_preparers)
+        if want and not FbxUtils._auto_takes_ids:
+            FbxUtils._install_auto_export_hook()
+        elif not want and FbxUtils._auto_takes_ids:
+            FbxUtils._remove_auto_export_hook()
+
+    @staticmethod
+    def _on_before_export(*_):
+        """Run every registered preparer (isolated), then realize declared takes."""
+        for name, prepare in list(FbxUtils._export_preparers.items()):
+            try:
+                prepare()
+            except Exception:  # one subsystem's failure must not abort the export
+                logger.warning("Export preparer %r failed.", name, exc_info=True)
+        FbxUtils.apply_takes_from_node()
+
+    @staticmethod
+    def _install_auto_export_hook() -> None:
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+        import maya.api.OpenMaya as om
+
+        mgr = ScriptJobManager.instance()
+        before = mgr.add_om_callback(
+            om.MSceneMessage.addCallback,
+            om.MSceneMessage.kBeforeExport,
+            FbxUtils._on_before_export,
+            owner=FbxUtils._AUTO_TAKES_OWNER,
+        )
+        after = mgr.add_om_callback(
+            om.MSceneMessage.addCallback,
+            om.MSceneMessage.kAfterExport,
+            lambda *_: FbxUtils.reset_takes(),
+            owner=FbxUtils._AUTO_TAKES_OWNER,
+        )
+        FbxUtils._auto_takes_ids = (before, after)
+        logger.info(
+            "Auto-export hook enabled (%d preparer(s)).",
+            len(FbxUtils._export_preparers),
+        )
+
+    @staticmethod
+    def _remove_auto_export_hook() -> None:
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        ScriptJobManager.instance().unsubscribe_all(FbxUtils._AUTO_TAKES_OWNER)
+        FbxUtils._auto_takes_ids = None
+        logger.info("Auto-export hook disabled.")
+
+    @staticmethod
+    def is_auto_takes_enabled() -> bool:
+        """Return whether the auto-takes export hook is currently registered."""
+        return bool(FbxUtils._auto_takes_ids)

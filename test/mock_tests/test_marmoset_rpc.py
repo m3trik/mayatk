@@ -157,6 +157,59 @@ class TestRegistry(unittest.TestCase):
 
 
 # ======================================================================
+# Autostart host gate. Importing the plugin outside Toolbag must NOT bind
+# a port. Regression: tentacle/mayatk slot discovery imports every *.py
+# under mayatk to read its classes, executing this package's load-time
+# autostart and binding 8765 inside Maya -- the spurious "[marmoset_rpc]
+# listening on http://127.0.0.1:8765" line at every Maya launch.
+# ======================================================================
+class TestAutostartHostGate(unittest.TestCase):
+    """``server.autostart`` only starts when hosted by Toolbag (``mset``)."""
+
+    def setUp(self):
+        # Begin from a known-stopped state and guarantee teardown leaves
+        # nothing bound / no fake host module behind for sibling tests.
+        plugin_server.stop_server()
+        self.addCleanup(plugin_server.stop_server)
+        self.addCleanup(lambda: sys.modules.pop("mset", None))
+
+    def test_no_autostart_outside_toolbag(self):
+        """No ``mset`` in the interpreter -> autostart is a silent no-op."""
+        self.assertNotIn("mset", sys.modules)  # sanity: not inside Toolbag
+        with unittest.mock.patch.dict(
+            os.environ, {"MARMOSET_RPC_AUTOSTART": "1"}
+        ):
+            self.assertIsNone(plugin_server.autostart())
+        self.assertFalse(plugin_server.is_running())
+
+    def test_autostart_when_hosted_by_toolbag(self):
+        """A present ``mset`` module (Toolbag) -> autostart binds a server."""
+        import types
+
+        port = _free_port()
+        sys.modules["mset"] = types.ModuleType("mset")
+        with unittest.mock.patch.dict(
+            os.environ,
+            {"MARMOSET_RPC_AUTOSTART": "1", "MARMOSET_RPC_PORT": str(port)},
+        ):
+            addr = plugin_server.autostart()
+        self.assertIsNotNone(addr)
+        self.assertEqual(addr[1], port)
+        self.assertTrue(plugin_server.is_running())
+
+    def test_env_optout_beats_host(self):
+        """``MARMOSET_RPC_AUTOSTART=0`` forces off even inside Toolbag."""
+        import types
+
+        sys.modules["mset"] = types.ModuleType("mset")
+        with unittest.mock.patch.dict(
+            os.environ, {"MARMOSET_RPC_AUTOSTART": "0"}
+        ):
+            self.assertIsNone(plugin_server.autostart())
+        self.assertFalse(plugin_server.is_running())
+
+
+# ======================================================================
 # HTTP server <-> client integration. Real server on a real port, but
 # all-localhost so it doesn't hit the network.
 # ======================================================================

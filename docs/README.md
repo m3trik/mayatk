@@ -2,7 +2,7 @@
 [![Version](https://img.shields.io/badge/Version-0.11.51-blue.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-417%20passed-brightgreen.svg)](test/)
+[![Tests](https://img.shields.io/badge/Tests-264%20passed-brightgreen.svg)](test/)
 
 # mayatk
 
@@ -35,7 +35,7 @@ mayatk also ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-pack
 | `env_utils` | `MayaConnection`, workspace, namespace sandbox, references, hierarchy manager, FBX, scene exporter |
 | `light_utils` | Lighting helpers |
 | `mat_utils` | `GameShader`, `RenderOpacity`, `ImageToPlane`, `MatUpdater`, shader templates, Marmoset bridge |
-| `node_utils` | `NodeUtils`, `Attributes`, event triggers, data nodes |
+| `node_utils` | `NodeUtils`, `Attributes`, event triggers, [shared scene data nodes](data_nodes.md) |
 | `nurbs_utils` | NURBS surfaces, `ImageTracer` |
 | `rig_utils` | `Controls`, `ShadowRig` |
 | `ui_utils` | `MayaUiHandler`, channel box, native menus, hotkey collision check, node icons |
@@ -89,6 +89,13 @@ it bootstraps one with a fresh `Switchboard`. The editor window is cached per-ha
 ## Session safety
 
 `MayaConnection.connect()` defaults to `launch=True, force_new_instance=True` — every call launches a fresh Maya on an unused port. The user's open session is never touched. The test runner (`test/run_tests.py`) defaults the same way; only `--reuse` overrides, and you should not pass it. See [CLAUDE.md](../CLAUDE.md) for the full rule.
+
+---
+
+## Guides
+
+- **[Scene data nodes](data_nodes.md)** — the shared `data_internal` / `data_export` two-node model that every tool uses to stash scene-wide metadata and (optionally) embed it in an FBX.
+- **[Shot data in the FBX → Unity](shot_export_unity.md)** — exporting Shots as named Unity AnimationClips plus embedded shot metadata, and side-by-side coexistence with Audio events.
 
 ---
 

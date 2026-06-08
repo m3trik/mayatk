@@ -285,6 +285,29 @@ class AudioClips(ptk.LoggingMixin):
         return manifest
 
     @classmethod
+    def enable_auto_export(cls) -> None:
+        """Bake the audio manifest onto ``data_export`` before **every** FBX export.
+
+        Registers :meth:`prepare_for_export` as a shared before-export preparer
+        (:meth:`mayatk.env_utils.fbx_utils.FbxUtils.register_export_preparer`), so
+        the manifest rides into **any** FBX export — File ▸ Export, the Game
+        Exporter, a script — with no Scene Exporter and no staleness window.
+        Opt-in and session-global; composes with the Shots auto-export (both
+        stamp distinct attrs on the shared ``data_export`` node).  Call
+        :func:`disable_auto_export` to remove it.
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        FbxUtils.register_export_preparer("audio", cls.prepare_for_export)
+
+    @staticmethod
+    def disable_auto_export() -> None:
+        """Remove the before-export preparer installed by :func:`enable_auto_export`."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        FbxUtils.unregister_export_preparer("audio")
+
+    @classmethod
     def list_nodes(cls) -> List[str]:
         """Return names of every managed DG audio node plus the composite."""
         if cmds is None:

@@ -386,6 +386,49 @@ class TestCurveToTube(MayaTkTestCase):
         cmds.move(0, 8, 0, f"{crv}.cv[1]", relative=True)  # editing the SOURCE curve...
         self.assertNotEqual(cmds.exactWorldBoundingBox(tube), before)  # ...drives the tube
 
+    def test_live_polygon_resample_keeps_transformed_curve_in_place(self):
+        """A live polygon tube resamples its source curve in place; on a curve
+        whose TRANSFORM carries TRS (the common case — curves are rarely frozen)
+        the resample must not offset it.
+
+        Regression: the RDP points came from ``pointOnCurve`` (WORLD space) but
+        ``cmds.curve(replace=True, point=...)`` writes CVs in OBJECT space, so a
+        transformed curve was shoved by its own transform (tens of units in the
+        repro). The only drift allowed now is the inherent RDP resample (its
+        shape genuinely simplifies) — which must equal an untransformed curve's,
+        and the transform matrix itself must not change at all."""
+        pts = [(0, 0, 0), (3, 4, 0), (6, -2, 0), (9, 3, 0), (12, 0, 0)]
+
+        def resample_drift(transformed):
+            cmds.file(new=True, force=True)
+            crv = cmds.curve(d=3, p=pts)
+            if transformed:
+                cmds.move(50, 20, -10, crv)
+                cmds.rotate(0, 30, 0, crv)
+            m_before = cmds.xform(crv, q=True, matrix=True, ws=True)
+            before = cmds.exactWorldBoundingBox(crv)
+            CurveToTube.create(crv, output_type="polygon", sections=8, live=True, caps=False)
+            after = cmds.exactWorldBoundingBox(crv)
+            m_after = cmds.xform(crv, q=True, matrix=True, ws=True)
+
+            def center(b):
+                return [(b[i] + b[i + 3]) / 2 for i in range(3)]
+
+            drift = sum(
+                (a - c) ** 2 for a, c in zip(center(before), center(after))
+            ) ** 0.5
+            matrix_moved = max(abs(a - b) for a, b in zip(m_before, m_after))
+            return drift, matrix_moved
+
+        identity_drift, _ = resample_drift(transformed=False)
+        xform_drift, matrix_moved = resample_drift(transformed=True)
+        # The transform is untouched and the only drift is the resample itself.
+        self.assertLess(matrix_moved, 1e-6, "the curve's transform must not move")
+        self.assertAlmostEqual(
+            xform_drift, identity_drift, delta=0.05,
+            msg="transformed curve drifted more than the bare resample",
+        )
+
     def test_live_polygon_normals_stable_on_curve_edit(self):
         """A LIVE polygon tube must keep its normals OUTWARD when the control
         curve is edited — including the large end-CV moves that used to invert it.

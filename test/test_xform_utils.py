@@ -742,6 +742,47 @@ class TestXformUtils(MayaTkTestCase):
         pass
 
     # -------------------------------------------------------------------------
+    # World-Aligned Pivot Tests
+    # -------------------------------------------------------------------------
+
+    def test_world_align_pivot_skips_non_dag_in_selection(self):
+        """World-align pivot must ignore non-DAG nodes in the active selection.
+
+        Bug: ``world_align_pivot`` fed the raw ``cmds.ls(selection=True)``
+        straight to ``cmds.xform``. With a material / construction-history
+        node selected (alone or mixed with a real object), ``xform`` raised
+        ``RuntimeError: No valid objects supplied to 'xform' command.`` —
+        crashing the Pivot panel's ``tb003`` slot.
+        Fixed: 2026-06-08
+        """
+        cmds.move(7, 0, 0, self.cube1)
+        cmds.xform(self.cube1, rotateAxis=(0, 30, 0))  # dirty the rotate axis
+        mat = cmds.shadingNode("lambert", asShader=True, name="test_lambert")
+
+        # Real object mixed with a non-DAG material — the reported crash case.
+        cmds.select([self.cube1, mat], replace=True)
+        result = XformUtils.world_align_pivot(mode="set", pivot_type="object")
+
+        self.assertTrue(result)
+        # Proves cube1 was processed (object path zeroes the rotate axis) and
+        # the material was skipped rather than raising.
+        ra = cmds.xform(self.cube1, q=True, rotateAxis=True)
+        self.assertEqual([round(v, 4) for v in ra], [0.0, 0.0, 0.0])
+
+    def test_world_align_pivot_only_non_dag_returns_false(self):
+        """A selection with no transform-able object returns False, not a crash."""
+        mat = cmds.shadingNode("lambert", asShader=True, name="test_lambert2")
+        cmds.select(mat, replace=True)
+        result = XformUtils.world_align_pivot(mode="set", pivot_type="object")
+        self.assertFalse(result)
+
+    def test_world_align_pivot_component_selection(self):
+        """A component selection resolves to its transform and aligns the pivot."""
+        cmds.select(f"{self.cube1}.f[1]", replace=True)
+        result = XformUtils.world_align_pivot(mode="set", pivot_type="object")
+        self.assertTrue(result)
+
+    # -------------------------------------------------------------------------
     # Orientation Tests
     # -------------------------------------------------------------------------
 

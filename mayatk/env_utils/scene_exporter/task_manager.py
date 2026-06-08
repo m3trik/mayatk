@@ -348,6 +348,122 @@ class _TaskActionsMixin(_TaskDataMixin):
 
         self.logger.success(f"GLB created: {glb_path}")
 
+    def export_data_node(self):
+        """Include the shared ``data_export`` carrier in the export (default on).
+
+        ``data_export`` is the single hidden node every metadata system stamps
+        (Shots → ``shot_metadata`` + ``fbx_takes``; Audio → ``audio_manifest``;
+        …).  Because it's hidden, the ``visible`` / ``selected`` export modes
+        omit it and the metadata silently wouldn't ship.  This refreshes the
+        carrier from the live producers, then appends it to the export set so the
+        data rides into the FBX regardless of export mode — independent of any
+        one subsystem, so a scene with only audio still carries its manifest.
+        """
+        self._refresh_scene_data_node()
+        self._include_data_export_node()
+        self._log_data_node_summary()
+
+    def _log_data_node_summary(self):
+        """Log what metadata actually shipped on ``data_export``.
+
+        Makes a silently-empty export distinguishable from a populated one — the
+        single most useful signal that the carrier reached the FBX with content.
+        Reads the channels generically; no-ops when the carrier is absent.  Pure
+        logging convenience — fully best-effort so it can never abort the export.
+        """
+        try:
+            import json
+            from mayatk.node_utils.data_nodes import DataNodes
+
+            if not cmds.objExists(DataNodes.EXPORT):
+                return
+
+            parts = []
+            meta_raw = DataNodes.get_export_string(DataNodes.SHOT_METADATA)
+            if meta_raw:
+                n_shots = len(json.loads(meta_raw).get("shots", []))
+                if n_shots:
+                    parts.append(f"{n_shots} shot(s)")
+
+            # ``audio_manifest`` is the Audio channel's wire name (whitespace-
+            # joined ``frame:label`` events); read directly to stay decoupled.
+            if cmds.attributeQuery("audio_manifest", node=DataNodes.EXPORT, exists=True):
+                manifest = cmds.getAttr(f"{DataNodes.EXPORT}.audio_manifest") or ""
+                n_audio = len(manifest.split())
+                if n_audio:
+                    parts.append(f"{n_audio} audio event(s)")
+
+            if parts:
+                self.logger.info("Embedded on data_export: " + ", ".join(parts) + ".")
+        except Exception:  # a summary must never break the export it describes
+            self.logger.debug("data_export summary skipped.", exc_info=True)
+
+    def _include_data_export_node(self):
+        """Append the ``data_export`` carrier to the export set.
+
+        Idempotent: a no-op when the node is absent (nothing to ship) or already
+        in the set.  Shared by :meth:`export_data_node` and
+        :meth:`apply_declared_takes`.
+        """
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        if not cmds.objExists(DataNodes.EXPORT):
+            self.logger.debug("No data_export node in scene — nothing to include.")
+            return
+        export_node = cmds.ls(DataNodes.EXPORT, long=True)[0]
+        if export_node not in (self.objects or []):
+            self.objects = list(self.objects or []) + [export_node]
+            self.logger.info("data_export carrier added to the export set.")
+
+    def _refresh_scene_data_node(self):
+        """Refresh ``data_export`` channels from the live metadata producers.
+
+        Each producer no-ops when it has nothing to write (no shots / no audio
+        carrier), so a metadata-free scene leaves no node behind.  Guarded per
+        producer so an absent or erroring subsystem never blocks the export.
+        """
+        try:
+            from mayatk.anim_utils.shots._shots import ShotStore
+
+            ShotStore.refresh_export_view()
+        except Exception:
+            self.logger.debug("Shots data-node refresh skipped.", exc_info=True)
+        try:
+            from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
+
+            AudioClips.prepare_for_export()
+        except Exception:
+            self.logger.debug("Audio data-node refresh skipped.", exc_info=True)
+
+    def apply_declared_takes(self):
+        """Export each shot as a named Unity clip, plus embed shot metadata.
+
+        Publishes the active shot store's export view onto the shared
+        ``data_export`` node, ensures that node is in the export selection (so
+        the metadata rides along inside the FBX), then realizes the declared
+        takes into FBX export state.  The apply step is shot-agnostic — it acts
+        on whatever takes the scene declares.  Runs after
+        ``set_bake_animation_range`` so its union range wins.
+        """
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        store = ShotStore.active()
+        if not store.shots:
+            self.logger.debug("No shots defined. Skipping animation takes.")
+            return
+
+        # Republish so the channels reflect the live store, then make sure the
+        # carrier node travels with the selection.
+        store.publish_export_view()
+        self._include_data_export_node()
+
+        count = FbxUtils.apply_takes_from_node()
+        self.logger.info(
+            f"Animation takes: {count} clip(s) from {len(store.shots)} shot(s); "
+            "shot metadata embedded on data_export."
+        )
+
 
 class _TaskChecksMixin(_TaskDataMixin):
     """ """
@@ -1080,6 +1196,8 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         "snap_keys_to_frame",
         "tie_all_keyframes",
         "set_bake_animation_range",
+        "export_data_node",
+        "apply_declared_takes",
     ]
 
     _frame_rate_options: Dict[str, Any] = {
@@ -1138,6 +1256,19 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setToolTip": "Choose what objects to export:\n- All Visible Objects: Export all visible geometry in the scene\n- Selected Objects Only: Export only currently selected objects\n- All Scene Objects: Export all objects regardless of visibility or selection",
                 "add": self._export_mode_options,
                 "value_method": "currentData",
+            },
+            "export_data_node": {
+                "widget_type": "QCheckBox",
+                "setText": "Export Scene Data Node",
+                "setToolTip": (
+                    "Include the shared data_export carrier in the export so its "
+                    "embedded metadata (Shots' shot_metadata, Audio's "
+                    "audio_manifest, …) ships in the FBX.\nThe carrier is a hidden "
+                    "node, so the 'Visible'/'Selected' export modes would "
+                    "otherwise omit it.  Refreshed from the live scene at export; "
+                    "no-ops when there's no metadata to carry."
+                ),
+                "setChecked": True,
             },
             "set_linear_unit": {
                 "widget_type": "ComboBox",
@@ -1205,6 +1336,17 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setText": "Auto Set Bake Animation Range",
                 "setToolTip": "Set the animation export range to the first and last keyframes of the specified objects.\nThis will override the preset value, and is only applicable if baking is enabled.",
                 "setChecked": True,
+            },
+            "apply_declared_takes": {
+                "widget_type": "QCheckBox",
+                "setText": "Export Shots as Animation Takes",
+                "setToolTip": (
+                    "Split the timeline into one named Unity AnimationClip per "
+                    "shot (via FBX takes), and embed shot metadata (description, "
+                    "objects, section) on the data_export node for engine-side "
+                    "scripts.\nRequires shots defined in the Shots system."
+                ),
+                "setChecked": False,
             },
             "sep_hierarchy": {
                 "widget_type": "Separator",
