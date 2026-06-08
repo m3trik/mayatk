@@ -364,7 +364,14 @@ class CurveToTube(ptk.LoggingMixin):
                 cmds.listRelatives(curve_shape, parent=True, fullPath=True)
                 or [curve_shape]
             )[0]
-            cmds.curve(path, replace=True, degree=degree, point=rdp_pts)
+            # rdp_pts are WORLD-space samples, but curve(replace=True, point=...)
+            # writes CVs in the transform's OBJECT space. On a curve whose
+            # transform carries any TRS (the common case — curves are rarely
+            # frozen) feeding world points as object CVs offsets the whole curve
+            # by its own transform. Map them back through the world-inverse first
+            # so the resampled curve lands exactly where it was.
+            obj_pts = cls._to_object_space(path, rdp_pts)
+            cmds.curve(path, replace=True, degree=degree, point=obj_pts)
             throwaway = []
         else:
             # Baked: a throwaway path through the points; source curve untouched.
@@ -528,6 +535,19 @@ class CurveToTube(ptk.LoggingMixin):
             for node in throwaway:
                 cls._safe_delete(node)
         return mesh
+
+    @staticmethod
+    def _to_object_space(transform, world_pts):
+        """Map ``world_pts`` into ``transform``'s object space.
+
+        ``pointOnCurve`` returns world coordinates, but ``cmds.curve`` writes
+        CVs in the transform's local space; converting through the world-inverse
+        keeps an in-place resample from offsetting a transformed curve.
+        """
+        inv = om.MMatrix(
+            cmds.xform(transform, query=True, matrix=True, worldSpace=True)
+        ).inverse()
+        return [tuple(om.MPoint(*p) * inv)[:3] for p in world_pts]
 
     @staticmethod
     def _sample_centerline(curve_shape, n=24):

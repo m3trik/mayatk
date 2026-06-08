@@ -183,11 +183,26 @@ class SceneExporter(ptk.LoggingMixin):
 
             # Select objects to export
             if export_visible:
-                # Use cmds.select for performance (avoids node overhead)
+                # "visible"/"all": the task pipeline's object set is authoritative.
+                # Use cmds.select for performance (avoids node overhead).
                 cmds.select(self.task_manager.objects, replace=True)
                 self.logger.info(
                     f"Selected {len(self.task_manager.objects)} objects for export."
                 )
+            else:
+                # "selected": export the user's live selection, but fold in any
+                # nodes the task pipeline added to the export set (e.g. the hidden
+                # data_export carrier) — otherwise they'd silently never ship in
+                # this mode, since it never re-selects from self.objects.
+                current = set(cmds.ls(selection=True, long=True) or [])
+                extras = [
+                    o for o in (self.task_manager.objects or []) if o not in current
+                ]
+                if extras:
+                    cmds.select(extras, add=True)
+                    self.logger.info(
+                        f"Added {len(extras)} pipeline object(s) to the export selection."
+                    )
 
             if not cmds.ls(selection=True):
                 self.logger.error("No objects to export.")

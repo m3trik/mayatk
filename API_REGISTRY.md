@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-06-07_
+_Generated: 2026-06-08_
 
 ## Index
 
@@ -423,6 +423,7 @@ Pure planning layer for multi-shot topology transformations.
 
 Shared shot data model and persistent store.
 
+- [`resolve_clip_specs(shots: List['ShotBlock'], strategy: str = 'name') -> List[Tuple[str, int, int]]`](mayatk/mayatk/anim_utils/shots/_shots.py#L311) — Resolve ``[(clip_name, start, end), …]`` — the single source of truth for
 - **[`class ScenePersistence(Protocol)`](mayatk/mayatk/anim_utils/shots/_shots.py#L86)** — Interface for saving / loading ShotStore data.
   - `ScenePersistence.save(self, data: Dict[str, Any]) -> None`
   - `ScenePersistence.load(self) -> Optional[Dict[str, Any]]`
@@ -433,15 +434,15 @@ Shared shot data model and persistent store.
 - **[`class ShotBlock`](mayatk/mayatk/anim_utils/shots/_shots.py#L236)** — Represents a single shot (contiguous animation range).
   - `ShotBlock.duration(self) -> float` *(property)*
   - `ShotBlock.classify_objects(self) -> Dict[str, str]` — Return ``{obj_name: status_key}`` using stored metadata.
-- **[`class StoreEvent`](mayatk/mayatk/anim_utils/shots/_shots.py#L299)** — Base class for typed :class:`ShotStore` events.
-- **[`class ShotDefined(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L311)** — A new shot was created and added to the store.
-- **[`class ShotUpdated(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L319)** — An existing shot's fields were modified.
-- **[`class ShotRemoved(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L327)** — A shot was removed from the store.
-- **[`class ActiveShotChanged(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L335)** — The active (selected) shot changed.
-- **[`class SettingsChanged(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L343)** — Detection-relevant settings were modified.
-- **[`class BatchComplete(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L350)** — A :meth:`ShotStore.batch_update` context has exited.
-- **[`class StoreInvalidated(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L357)** — The active store was discarded (scene change / new scene).
-- **[`class ShotStore`](mayatk/mayatk/anim_utils/shots/_shots.py#L373)** — Central store for shot data with pluggable persistence.
+- **[`class StoreEvent`](mayatk/mayatk/anim_utils/shots/_shots.py#L339)** — Base class for typed :class:`ShotStore` events.
+- **[`class ShotDefined(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L351)** — A new shot was created and added to the store.
+- **[`class ShotUpdated(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L359)** — An existing shot's fields were modified.
+- **[`class ShotRemoved(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L367)** — A shot was removed from the store.
+- **[`class ActiveShotChanged(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L375)** — The active (selected) shot changed.
+- **[`class SettingsChanged(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L383)** — Detection-relevant settings were modified.
+- **[`class BatchComplete(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L390)** — A :meth:`ShotStore.batch_update` context has exited.
+- **[`class StoreInvalidated(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L397)** — The active store was discarded (scene change / new scene).
+- **[`class ShotStore`](mayatk/mayatk/anim_utils/shots/_shots.py#L413)** — Central store for shot data with pluggable persistence.
   - `ShotStore.active_shot_id(self) -> Optional[int]` *(property)* — The currently selected shot, or ``None``.
   - `ShotStore.set_active_shot(self, shot_id: Optional[int]) -> None` — Set the active shot and notify listeners.
   - `ShotStore.notify_settings_changed(self) -> None` — Fire a ``"settings_changed"`` event.
@@ -476,6 +477,11 @@ Shared shot data model and persistent store.
   - `ShotStore.set_object_pinned(self, obj_name: str, pinned: bool = True) -> None` — Pin or unpin *obj_name*.
   - `ShotStore.remove_object_from_shots(self, obj_name: str) -> None` — Remove *obj_name* from every shot's object list.
   - `ShotStore.to_dict(self) -> Dict[str, Any]` — Serialise shots and settings to a plain dict.
+  - `ShotStore.to_export_view(self, strategy: str = 'name') -> Dict[str, Any]` — Build the FBX/Unity export view from the current shots.
+  - `ShotStore.publish_export_view(self, strategy: Optional[str] = None) -> Optional[str]` — Project the export view onto the shared ``data_export`` node.
+  - `ShotStore.refresh_export_view(cls) -> None` *(class)* — Republish the active store's export view when it has shots.
+  - `ShotStore.enable_auto_export(cls) -> None` *(class)* — Make **every** FBX export this session carry the active store's shots.
+  - `ShotStore.disable_auto_export() -> None` *(static)* — Remove the before-export preparer installed by :func:`enable_auto_export`.
   - `ShotStore.from_dict(cls, data: Dict[str, Any]) -> 'ShotStore'` *(class)* — Restore from serialised data.
   - `ShotStore.rescale_to_fps(self, new_fps: float) -> None` — Scale all shot timings from the current ``scene_fps`` to *new_fps*.
   - `ShotStore.mark_dirty(self) -> None` — Flag the store as needing a save.
@@ -863,6 +869,8 @@ Scene-wide audio event manager — thin facade over ``audio_utils``.
   - `AudioClips.remove(cls) -> int` *(class)* — Delete every managed DG node, the composite, and all tracks.
   - `AudioClips.load_tracks(cls, audio_files: List[str]) -> List[str]` *(class)* — Register audio files as tracks (no keys authored).
   - `AudioClips.prepare_for_export(cls) -> str` *(class)* — Bake the scene-wide audio manifest for FBX export.
+  - `AudioClips.enable_auto_export(cls) -> None` *(class)* — Bake the audio manifest onto ``data_export`` before **every** FBX export.
+  - `AudioClips.disable_auto_export() -> None` *(static)* — Remove the before-export preparer installed by :func:`enable_auto_export`.
   - `AudioClips.list_nodes(cls) -> List[str]` *(class)* — Return names of every managed DG audio node plus the composite.
   - `AudioClips.set_active(cls, node_name: str, time_slider: bool = True) -> None` *(class)* — Set an audio node as the active Time Slider sound.
 
@@ -1494,7 +1502,7 @@ Procedural draped-cloth (curtain) generator for Maya.
 <a id="edit_utils--mirror"></a>
 ### `edit_utils/mirror.py`
 
-- **[`class MirrorSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/mirror.py#L12)**
+- **[`class MirrorSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/mirror.py#L13)**
   - `MirrorSlots.header_init(self, widget)` — Configure header help text.
   - `MirrorSlots.perform_operation(self, objects, contract)`
 
@@ -1638,6 +1646,14 @@ Primitive creation utilities for Maya.
   - `FbxUtils.set_fbx_options(options: Dict[str, Any])` *(static)* — Apply FBX export options via MEL commands.
   - `FbxUtils.load_preset(preset_path: str)` *(static)* — Load an FBX export preset file.
   - `FbxUtils.export(cls, file_path: str, objects: Optional[List] = None, preset_file: Optional[str] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True) -> str` *(class)* — Export geometry to an FBX file.
+  - `FbxUtils.reset_takes() -> None` *(static)* — Clear all FBX export take definitions (global, sticky exporter state).
+  - `FbxUtils.apply_takes(takes: Iterable[Any]) -> int` *(static)* — Configure FBX export to emit one AnimStack (Unity clip) per take.
+  - `FbxUtils.apply_takes_from_node(node: Optional[str] = None, attr: Optional[str] = None) -> int` *(static)* — Read take defs from a JSON string channel on *node* and apply them.
+  - `FbxUtils.register_export_preparer(name: str, prepare: Callable[[], Any]) -> None` *(static)* — Run *prepare* before every FBX export this session (installs the hook).
+  - `FbxUtils.unregister_export_preparer(name: str) -> None` *(static)* — Remove a preparer;
+  - `FbxUtils.enable_auto_takes() -> None` *(static)* — Realize declared takes on **every** FBX export — shot-agnostic, no preparer.
+  - `FbxUtils.disable_auto_takes() -> None` *(static)* — Clear the explicit enable;
+  - `FbxUtils.is_auto_takes_enabled() -> bool` *(static)* — Return whether the auto-takes export hook is currently registered.
 
 <a id="env_utils--hierarchy_manager--_hierarchy_manager"></a>
 ### `env_utils/hierarchy_manager/_hierarchy_manager.py`
@@ -1915,7 +1931,7 @@ Maya Connection Module
   - `SceneExporter.close_file_handlers(self)` — Close and remove file handlers after logging is complete.
   - `SceneExporter.load_fbx_export_preset(self, preset_file: str = None, verify: bool = False) -> Optional[dict]` — Load an FBX export preset and optionally verify it.
   - `SceneExporter.verify_fbx_preset(self) -> dict` — Verify a set of predefined FBX export settings and log their values.
-- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L566)**
+- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L581)**
   - `SceneExporterSlots.workspace(self) -> Optional[str]` *(property)*
   - `SceneExporterSlots.presets(self) -> Dict[str, Optional[str]]` *(property)* — Return available presets, using cached values if the preset directory has not changed.
   - `SceneExporterSlots.header_init(self, widget)` — Initialize the header widget.
@@ -1944,7 +1960,7 @@ Maya Connection Module
 <a id="env_utils--scene_exporter--task_manager"></a>
 ### `env_utils/scene_exporter/task_manager.py`
 
-- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L1059)** — Contains all task-related UI definitions for the Scene Exporter.
+- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L1175)** — Contains all task-related UI definitions for the Scene Exporter.
   - `TaskManager.objects(self)` *(property)*
   - `TaskManager.objects(self, value)` — Invalidate the materials cache whenever objects change.
   - `TaskManager.task_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the task definitions for the UI.
@@ -2308,9 +2324,10 @@ Op registry for the marmoset_rpc plugin.
 
 HTTP JSON-RPC server for the marmoset_rpc plugin.
 
-- [`start_server(port=None, host='127.0.0.1')`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py#L96) — Start the HTTP server in a daemon thread.
-- [`stop_server()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py#L116) — Shut down the server (mostly useful for tests / hot-reload).
-- [`is_running()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py#L129)
+- [`start_server(port=None, host='127.0.0.1')`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py#L97) — Start the HTTP server in a daemon thread.
+- [`stop_server()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py#L117) — Shut down the server (mostly useful for tests / hot-reload).
+- [`is_running()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py#L130)
+- [`autostart()`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/server.py#L154) — Start the server on plugin load, gated to the Toolbag host.
 
 <a id="mat_utils--marmoset_bridge--parameters"></a>
 ### `mat_utils/marmoset_bridge/parameters.py`
@@ -2756,10 +2773,12 @@ UI slots for the Channels UI.
 <a id="node_utils--data_nodes"></a>
 ### `node_utils/data_nodes.py`
 
-- **[`class DataNodes`](mayatk/mayatk/node_utils/data_nodes.py#L14)** — Manages the two shared scene data nodes.
+- **[`class DataNodes`](mayatk/mayatk/node_utils/data_nodes.py#L15)** — Manages the two shared scene data nodes.
   - `DataNodes.ensure_internal()` *(static)* — Get or create the shared network node.
   - `DataNodes.ensure_export()` *(static)* — Get or create the shared FBX export transform.
   - `DataNodes.mirror_attr(attr_name, **add_attr_kwargs)` *(static)* — Ensure *attr_name* on ``data_internal`` with a proxy on ``data_export``.
+  - `DataNodes.set_export_string(attr: str, value: str) -> str` *(static)* — Write *value* to a plain string attr on the export node (create if needed).
+  - `DataNodes.get_export_string(attr: str) -> Optional[str]` *(static)* — Return the string value of an export-node channel, or ``None``.
   - `DataNodes.migrate_legacy_carriers()` *(static)* — Migrate old ``audio_events*`` carrier transforms to the new nodes.
 
 <a id="nurbs_utils--_nurbs_utils"></a>
@@ -2781,7 +2800,7 @@ Sweep a circular profile along NURBS curve(s) to build a tube.
 
 - **[`class CurveToTube(ptk.LoggingMixin)`](mayatk/mayatk/nurbs_utils/curve_to_tube.py#L53)** — Extrude a circular profile along NURBS curve(s) to build a tube.
   - `CurveToTube.create(cls, curves, output_type: str = 'nurbs', radius: float = 1.0, sections: int = 8, path_divisions: int = 1, degree: int = 3, caps: bool = True, quads: bool = True, live: bool = False, cleanup: bool = True, name: str = 'tube') -> List[str]` *(class)* — Build a tube along each selected curve.
-- **[`class CurveToTubeSlots(ptk.LoggingMixin)`](mayatk/mayatk/nurbs_utils/curve_to_tube.py#L655)** — Switchboard slot wiring for the Curve to Tube UI (hermetic preview).
+- **[`class CurveToTubeSlots(ptk.LoggingMixin)`](mayatk/mayatk/nurbs_utils/curve_to_tube.py#L675)** — Switchboard slot wiring for the Curve to Tube UI (hermetic preview).
   - `CurveToTubeSlots.header_init(self, widget)` — Configure header help text.
   - `CurveToTubeSlots.b001(self)` — Reset to Defaults.
   - `CurveToTubeSlots.perform_operation(self, objects, contract)` — Build the tube(s) from the selected curves (Preview entry point).
@@ -3117,8 +3136,8 @@ Slots for the RizomUV bridge panel.
 - [`get_translation(node, world: bool = False)`](mayatk/mayatk/xform_utils/_xform_utils.py#L28) — Translation as ``om.MVector``.
 - [`get_object_matrix(node, world: bool = False)`](mayatk/mayatk/xform_utils/_xform_utils.py#L39) — Local or world matrix as ``om.MMatrix``.
 - [`set_object_matrix(node, value, world: bool = False) -> None`](mayatk/mayatk/xform_utils/_xform_utils.py#L46) — Apply *value* to *node*'s local or world transformation matrix.
-- **[`class XformUtilsInternals`](mayatk/mayatk/xform_utils/_xform_utils.py#L327)** — Internal helper methods for XformUtils.
-- **[`class XformUtils(XformUtilsInternals, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L377)** — Transform utilities for Maya objects.
+- **[`class XformUtilsInternals`](mayatk/mayatk/xform_utils/_xform_utils.py#L349)** — Internal helper methods for XformUtils.
+- **[`class XformUtils(XformUtilsInternals, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L399)** — Transform utilities for Maya objects.
   - `XformUtils.convert_axis(value, invert=False, ortho=False, to_integer=False)` *(static)* — Converts between axis representations and optionally inverts the axis or returns an orthogonal axis.
   - `XformUtils.move_to(cls, source, target, pivot='center', group_move=False)` *(class)* — Move source object(s) to align with the target object(s).
   - `XformUtils.drop_to_grid(objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)` *(static)* — Align objects to Y origin on the grid using a helper plane.

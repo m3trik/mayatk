@@ -13,6 +13,7 @@ is exposed for tests and hot-reload.
 """
 import json
 import os
+import sys
 import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -128,3 +129,39 @@ def stop_server():
 
 def is_running():
     return _server is not None
+
+
+def _hosted_by_toolbag():
+    """True only inside Marmoset Toolbag's interpreter.
+
+    Toolbag provides the ``mset`` module and nothing else does, so its
+    availability is the reliable signal that Toolbag's plugin loader
+    imported this package rather than an incidental import elsewhere (the
+    gate's purpose -- see :func:`autostart`). Checks ``sys.modules`` first
+    (Toolbag pre-injects ``mset``), then falls back to ``find_spec`` for
+    the importable-but-not-yet-loaded case -- neither path executes it.
+    """
+    if "mset" in sys.modules:
+        return True
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec("mset") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def autostart():
+    """Start the server on plugin load, gated to the Toolbag host.
+
+    Returns the bound ``(host, port)`` when started, else ``None``. A
+    no-op return outside Toolbag is the whole point: importing this file
+    must stay free of side effects everywhere except its actual host (see
+    :func:`_hosted_by_toolbag`). ``MARMOSET_RPC_AUTOSTART=0`` is honoured
+    as an explicit opt-out even inside Toolbag (used by tests).
+    """
+    if os.environ.get("MARMOSET_RPC_AUTOSTART", "1") != "1":
+        return None
+    if not _hosted_by_toolbag():
+        return None
+    return start_server()

@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import logging
+from typing import Optional
 
 
 try:
@@ -35,6 +36,11 @@ class DataNodes:
 
     INTERNAL = "data_internal"
     EXPORT = "data_export"
+
+    # Well-known export channels — plain string attrs on the export node, read
+    # downstream (e.g. FbxUtils realizes `fbx_takes`; Unity reads `shot_metadata`).
+    FBX_TAKES = "fbx_takes"
+    SHOT_METADATA = "shot_metadata"
 
     _LOCATOR_ATTR = "data_export_locator"
 
@@ -160,6 +166,39 @@ class DataNodes:
                 longName=attr_name,
                 proxy=f"{internal_str}.{attr_name}",
             )
+
+    # ------------------------------------------------------------------
+    # Export string channels (plain attrs on the export node)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def set_export_string(attr: str, value: str) -> str:
+        """Write *value* to a plain string attr on the export node (create if needed).
+
+        Generic carrier for export-time data (e.g. ``fbx_takes``,
+        ``shot_metadata``).  Unlike :meth:`mirror_attr`, this is a plain attr on
+        ``data_export`` — these channels are regenerated export artifacts, not
+        tool-authored state, so they don't belong on the ``data_internal`` SSoT.
+        The value rides into the FBX as a user property.
+
+        Returns:
+            str: Name of the ``data_export`` node.
+        """
+        export = str(DataNodes.ensure_export())
+        if not cmds.attributeQuery(attr, node=export, exists=True):
+            cmds.addAttr(export, longName=attr, dataType="string")
+        cmds.setAttr(f"{export}.{attr}", value, type="string")
+        return export
+
+    @staticmethod
+    def get_export_string(attr: str) -> Optional[str]:
+        """Return the string value of an export-node channel, or ``None``."""
+        if cmds is None or not cmds.objExists(DataNodes.EXPORT):
+            return None
+        node = DataNodes.EXPORT
+        if not cmds.attributeQuery(attr, node=node, exists=True):
+            return None
+        return cmds.getAttr(f"{node}.{attr}") or None
 
     # ------------------------------------------------------------------
     # Legacy migration

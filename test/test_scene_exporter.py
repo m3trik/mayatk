@@ -949,5 +949,159 @@ class TestSceneExporter(MayaTkTestCase):
         )
 
 
+class TestExportDataNodeOption(MayaTkTestCase):
+    """The global default-on 'Export Scene Data Node' exporter option.
+
+    Ensures the shared ``data_export`` carrier ships regardless of export mode,
+    for ANY metadata producer (shots or audio) — not gated on shots like the
+    older takes task was.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        FbxUtils.reset_takes()
+        ShotStore.clear_active()
+        self.tm = TaskManager(logging.getLogger("test_export_data_node"))
+        self.cube = self.create_test_cube("dnCube")
+        self.tm.objects = cmds.ls(self.cube, long=True)
+
+    def tearDown(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        ShotStore.clear_active()
+        super().tearDown()
+
+    def test_option_is_default_on(self):
+        defs = self.tm.task_definitions
+        self.assertIn("export_data_node", defs)
+        self.assertEqual(defs["export_data_node"]["widget_type"], "QCheckBox")
+        self.assertTrue(defs["export_data_node"]["setChecked"])
+
+    def test_option_runs_before_takes_in_order(self):
+        order = self.tm.TASK_ORDER
+        self.assertIn("export_data_node", order)
+        self.assertLess(
+            order.index("export_data_node"), order.index("apply_declared_takes")
+        )
+
+    def test_includes_carrier_and_publishes_with_shots(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        store = ShotStore()
+        ShotStore.set_active(store)
+        store.define_shot("Intro", 1, 50, description="opening")
+
+        self.tm.export_data_node()
+
+        self.assertNodeExists(DataNodes.EXPORT)
+        self.assertTrue(any(o.endswith(DataNodes.EXPORT) for o in self.tm.objects))
+        self.assertIn("opening", DataNodes.get_export_string(DataNodes.SHOT_METADATA))
+
+    def test_includes_carrier_with_audio_and_no_shots(self):
+        # Audio but NO shots — the old shots-gated takes task skipped this case
+        # entirely, so the audio manifest never shipped.
+        from mayatk.audio_utils._audio_utils import AudioUtils
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        AudioUtils.write_key("footstep", frame=10, value=1)
+        AudioUtils.write_key("footstep", frame=15, value=0)
+
+        self.tm.export_data_node()
+
+        self.assertNodeExists(DataNodes.EXPORT)
+        self.assertTrue(any(o.endswith(DataNodes.EXPORT) for o in self.tm.objects))
+        attrs = cmds.listAttr(DataNodes.EXPORT, userDefined=True) or []
+        self.assertIn("audio_manifest", attrs)
+        self.assertIn(
+            "footstep", cmds.getAttr(f"{DataNodes.EXPORT}.audio_manifest")
+        )
+
+    def test_noop_without_metadata(self):
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        before = list(self.tm.objects)
+        self.tm.export_data_node()
+        # No producer wrote anything → carrier never created, selection untouched.
+        self.assertFalse(cmds.objExists(DataNodes.EXPORT))
+        self.assertEqual(self.tm.objects, before)
+
+    def test_summary_logs_embedded_shot_count(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        store = ShotStore()
+        ShotStore.set_active(store)
+        store.define_shot("Intro", 1, 50, description="opening")
+        store.define_shot("Outro", 51, 100)
+
+        with self.assertLogs("test_export_data_node", level="INFO") as cm:
+            self.tm.export_data_node()
+        self.assertTrue(
+            any("2 shot(s)" in m for m in cm.output),
+            f"post-export summary missing shot count: {cm.output}",
+        )
+
+    def test_summary_logs_audio_event_count(self):
+        from mayatk.audio_utils._audio_utils import AudioUtils
+
+        AudioUtils.write_key("footstep", frame=10, value=1)
+        AudioUtils.write_key("footstep", frame=15, value=0)
+        AudioUtils.write_key("jump", frame=30, value=1)
+
+        with self.assertLogs("test_export_data_node", level="INFO") as cm:
+            self.tm.export_data_node()
+        self.assertTrue(
+            any("audio event(s)" in m for m in cm.output),
+            f"post-export summary missing audio count: {cm.output}",
+        )
+
+    def test_carrier_ships_in_selected_mode_real_export(self):
+        """Regression: the hidden carrier must reach the FBX even in 'selected'
+        export mode.  That mode exports the live selection and never re-selects
+        from self.objects, so appending the carrier there is not enough — it has
+        to join the actual export selection or it silently never ships.
+        """
+        try:
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
+        except Exception:
+            self.skipTest("FBX plugin not available")
+
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        store = ShotStore()
+        ShotStore.set_active(store)
+        store.define_shot("Intro", 1, 50, objects=[self.cube], description="opening")
+
+        temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, temp_dir, ignore_errors=True)
+
+        exporter = SceneExporter(log_level="DEBUG")
+        cmds.select(self.cube, replace=True)  # carrier is hidden, NOT selected
+        result = exporter.perform_export(
+            export_dir=temp_dir,
+            objects=lambda: cmds.ls(selection=True, long=True),
+            file_format="FBX export",
+            export_visible=False,  # 'selected' mode
+            output_name="selmode_carrier",
+            tasks={"export_data_node": True},
+        )
+        self.assertTrue(result)
+
+        # Re-import into a fresh scene and confirm the carrier traveled along.
+        out = exporter.export_path
+        cmds.file(new=True, force=True)
+        cmds.file(out, i=True, type="FBX", ignoreVersion=True)
+        self.assertTrue(
+            cmds.ls(f"*{DataNodes.EXPORT}*"),
+            "data_export carrier missing from FBX exported in 'selected' mode",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

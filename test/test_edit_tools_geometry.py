@@ -769,16 +769,29 @@ class TestMirrorResolvePivot(QuickTestCase):
         self.assertEqual(MirrorSlots._resolve_pivot(3, "x"), "center")
 
     def test_axis_aware_index_4(self):
+        # Border pivot: +axis -> max face, -axis -> min face. The sign FLIPS the
+        # side the geometry doubles toward (was always xmax — the '-' was a no-op).
         self.assertEqual(MirrorSlots._resolve_pivot(4, "x"), "xmax")
-        self.assertEqual(MirrorSlots._resolve_pivot(4, "-x"), "xmax")
+        self.assertEqual(MirrorSlots._resolve_pivot(4, "-x"), "xmin")
         self.assertEqual(MirrorSlots._resolve_pivot(4, "y"), "ymax")
+        self.assertEqual(MirrorSlots._resolve_pivot(4, "-y"), "ymin")
         self.assertEqual(MirrorSlots._resolve_pivot(4, "z"), "zmax")
+        self.assertEqual(MirrorSlots._resolve_pivot(4, "-z"), "zmin")
 
     def test_index_4_unknown_axis_falls_back(self):
         self.assertEqual(MirrorSlots._resolve_pivot(4, "bogus"), "xmax")
 
     def test_unknown_index_defaults_manip(self):
         self.assertEqual(MirrorSlots._resolve_pivot(99, "x"), "manip")
+
+    def test_axis_sign_relevant_only_for_bbox_pivots(self):
+        # The '-' toggle is enabled only for the bounding-box pivots (Center 3,
+        # Border 4); Manip/Object/World reflect across a fixed plane (no-op sign).
+        self.assertFalse(MirrorSlots._axis_sign_relevant(0))  # manip
+        self.assertFalse(MirrorSlots._axis_sign_relevant(1))  # object
+        self.assertFalse(MirrorSlots._axis_sign_relevant(2))  # world
+        self.assertTrue(MirrorSlots._axis_sign_relevant(3))  # bbox center
+        self.assertTrue(MirrorSlots._axis_sign_relevant(4))  # bbox border
 
 
 class TestEditUtilsMirror(MayaTkTestCase):
@@ -847,6 +860,69 @@ class TestEditUtilsMirror(MayaTkTestCase):
         # Both should have been mirrored — vertex count should increase
         # significantly (not just one cube's worth).
         self.assertGreater(self._total_vertices(), before_verts)
+
+    def test_border_pivot_sign_flips_side(self):
+        """Border pivot: the axis sign must reflect to opposite sides.
+
+        Regression: _resolve_pivot used to map both 'x' and '-x' to 'xmax', so
+        the '-' toggle was a no-op for the bounding-box border pivot. With the
+        fix, +X doubles toward +X (across the max face) and -X toward -X (min
+        face), via the same _resolve_pivot the slot uses.
+        """
+        cube_pos = cmds.polyCube(name="border_pos")[0]
+        cmds.move(2, 0, 0, cube_pos)  # x in [1, 3]
+        EditUtils.mirror(
+            [cube_pos], axis="x", pivot=MirrorSlots._resolve_pivot(4, "x"), mergeMode=1
+        )
+        pos_bb = cmds.exactWorldBoundingBox(cube_pos)
+
+        cube_neg = cmds.polyCube(name="border_neg")[0]
+        cmds.move(2, 0, 0, cube_neg)  # x in [1, 3]
+        EditUtils.mirror(
+            [cube_neg], axis="-x", pivot=MirrorSlots._resolve_pivot(4, "-x"), mergeMode=1
+        )
+        neg_bb = cmds.exactWorldBoundingBox(cube_neg)
+
+        # +X reflects across xmax -> reaches farther in +X; -X across xmin ->
+        # farther in -X. Distinct footprints prove the sign is honored.
+        self.assertGreater(pos_bb[3], neg_bb[3])
+        self.assertLess(neg_bb[0], pos_bb[0])
+
+    def test_center_symmetrize_sign_convention(self):
+        """Pin the cut_along_axis convention the center symmetrize relies on.
+
+        MirrorSlots routes the 'Bounding Box (center)' pivot through
+        cut_along_axis(delete=True, mirror=True) and INVERTS the UI sign because
+        cut_along_axis's 'x' keeps the -X half while '-x' keeps the +X half. If
+        that convention ever changes, this fails — update the inversion in
+        MirrorSlots.perform_operation to match.
+        """
+
+        def tall_plus_x(name):
+            t = cmds.polyCube(w=4, h=2, d=2, name=name)[0]
+            cmds.move(2, 0, 0, t)  # x in [0, 4], center x=2
+            for v in cmds.ls(f"{t}.vtx[*]", flatten=True):
+                p = cmds.pointPosition(v, world=True)
+                if p[0] > 3.5 and p[1] > 0:  # +X face, top corners
+                    cmds.move(0, 6, 0, v, relative=True, worldSpace=True)
+            return t
+
+        # The cut at center x=2 crosses the sloped top edge at y=4, so the short
+        # (-X) half tops out at y~4 and the tall (+X) half at y~7 — distinct
+        # halves, threshold at the midpoint (5.5).
+        a = tall_plus_x("sym_x")
+        EditUtils.cut_along_axis(
+            a, axis="x", pivot="center", amount=1, delete=True, mirror=True
+        )
+        # 'x' keeps the short -X half -> tall corners discarded -> low y-max.
+        self.assertLess(cmds.exactWorldBoundingBox(a)[4], 5.5)
+
+        b = tall_plus_x("sym_negx")
+        EditUtils.cut_along_axis(
+            b, axis="-x", pivot="center", amount=1, delete=True, mirror=True
+        )
+        # '-x' keeps the tall +X half -> tall corners survive -> high y-max.
+        self.assertGreater(cmds.exactWorldBoundingBox(b)[4], 5.5)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 {
   "name": "mayatk",
   "source_root": "mayatk/mayatk",
-  "generated_at": "2026-06-07",
+  "generated_at": "2026-06-08",
   "modules": [
     {
       "relpath": "anim_utils/_anim_utils.py",
@@ -1380,7 +1380,17 @@
     {
       "relpath": "anim_utils/shots/_shots.py",
       "summary": "Shared shot data model and persistent store.",
-      "functions": [],
+      "functions": [
+        {
+          "name": "resolve_clip_specs",
+          "qualname": "resolve_clip_specs",
+          "kind": "function",
+          "signature": "(shots: List['ShotBlock'], strategy: str = 'name') -> List[Tuple[str, int, int]]",
+          "summary": "Resolve ``[(clip_name, start, end), …]`` — the single source of truth for",
+          "line": 311,
+          "deprecated": false
+        }
+      ],
       "classes": [
         {
           "name": "ScenePersistence",
@@ -1474,14 +1484,14 @@
         {
           "name": "StoreEvent",
           "summary": "Base class for typed :class:`ShotStore` events.",
-          "line": 299,
+          "line": 339,
           "bases": [],
           "members": []
         },
         {
           "name": "ShotDefined",
           "summary": "A new shot was created and added to the store.",
-          "line": 311,
+          "line": 351,
           "bases": [
             "StoreEvent"
           ],
@@ -1490,7 +1500,7 @@
         {
           "name": "ShotUpdated",
           "summary": "An existing shot's fields were modified.",
-          "line": 319,
+          "line": 359,
           "bases": [
             "StoreEvent"
           ],
@@ -1499,7 +1509,7 @@
         {
           "name": "ShotRemoved",
           "summary": "A shot was removed from the store.",
-          "line": 327,
+          "line": 367,
           "bases": [
             "StoreEvent"
           ],
@@ -1508,7 +1518,7 @@
         {
           "name": "ActiveShotChanged",
           "summary": "The active (selected) shot changed.",
-          "line": 335,
+          "line": 375,
           "bases": [
             "StoreEvent"
           ],
@@ -1517,7 +1527,7 @@
         {
           "name": "SettingsChanged",
           "summary": "Detection-relevant settings were modified.",
-          "line": 343,
+          "line": 383,
           "bases": [
             "StoreEvent"
           ],
@@ -1526,7 +1536,7 @@
         {
           "name": "BatchComplete",
           "summary": "A :meth:`ShotStore.batch_update` context has exited.",
-          "line": 350,
+          "line": 390,
           "bases": [
             "StoreEvent"
           ],
@@ -1535,7 +1545,7 @@
         {
           "name": "StoreInvalidated",
           "summary": "The active store was discarded (scene change / new scene).",
-          "line": 357,
+          "line": 397,
           "bases": [
             "StoreEvent"
           ],
@@ -1544,7 +1554,7 @@
         {
           "name": "ShotStore",
           "summary": "Central store for shot data with pluggable persistence.",
-          "line": 373,
+          "line": 413,
           "bases": [],
           "members": [
             {
@@ -1553,7 +1563,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[int]",
               "summary": "The currently selected shot, or ``None``.",
-              "line": 427,
+              "line": 473,
               "deprecated": false
             },
             {
@@ -1562,7 +1572,7 @@
               "kind": "method",
               "signature": "(self, shot_id: Optional[int]) -> None",
               "summary": "Set the active shot and notify listeners.",
-              "line": 431,
+              "line": 477,
               "deprecated": false
             },
             {
@@ -1571,7 +1581,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Fire a ``\"settings_changed\"`` event.",
-              "line": 440,
+              "line": 486,
               "deprecated": false
             },
             {
@@ -1580,7 +1590,7 @@
               "kind": "method",
               "signature": "(self, callback: Callable[[StoreEvent], None]) -> None",
               "summary": "Register a listener called on store mutations.",
-              "line": 450,
+              "line": 496,
               "deprecated": false
             },
             {
@@ -1589,7 +1599,7 @@
               "kind": "method",
               "signature": "(self, callback: Callable[[StoreEvent], None]) -> None",
               "summary": "Remove a previously registered listener.",
-              "line": 467,
+              "line": 513,
               "deprecated": false
             },
             {
@@ -1598,7 +1608,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Defer listener notifications until the block exits.",
-              "line": 486,
+              "line": 532,
               "deprecated": false
             },
             {
@@ -1607,7 +1617,7 @@
               "kind": "method",
               "signature": "(self, left_id: str, right_id: str) -> bool",
               "summary": "Return whether the gap between two adjacent shots is locked.",
-              "line": 510,
+              "line": 556,
               "deprecated": false
             },
             {
@@ -1616,7 +1626,7 @@
               "kind": "method",
               "signature": "(self, left_id: str, right_id: str) -> None",
               "summary": "Lock a gap so its width is preserved during global respace.",
-              "line": 514,
+              "line": 560,
               "deprecated": false
             },
             {
@@ -1625,7 +1635,7 @@
               "kind": "method",
               "signature": "(self, left_id: str, right_id: str) -> None",
               "summary": "Unlock a gap so it follows the global gap value.",
-              "line": 518,
+              "line": 564,
               "deprecated": false
             },
             {
@@ -1634,7 +1644,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Lock every adjacent gap.",
-              "line": 522,
+              "line": 568,
               "deprecated": false
             },
             {
@@ -1643,7 +1653,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Unlock every gap.",
-              "line": 528,
+              "line": 574,
               "deprecated": false
             },
             {
@@ -1652,7 +1662,7 @@
               "kind": "classmethod",
               "signature": "(cls, backend: Optional[ScenePersistence]) -> None",
               "summary": "Set the persistence backend used by :meth:`active` and :meth:`save`.",
-              "line": 535,
+              "line": 581,
               "deprecated": false
             },
             {
@@ -1661,7 +1671,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> 'ShotStore'",
               "summary": "Return the current active store, creating one if needed.",
-              "line": 544,
+              "line": 590,
               "deprecated": false
             },
             {
@@ -1670,7 +1680,7 @@
               "kind": "classmethod",
               "signature": "(cls, store: 'ShotStore') -> None",
               "summary": "Replace the active store instance.",
-              "line": 576,
+              "line": 622,
               "deprecated": false
             },
             {
@@ -1679,7 +1689,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Reset the active store and persistence backend.",
-              "line": 581,
+              "line": 627,
               "deprecated": false
             },
             {
@@ -1688,7 +1698,7 @@
               "kind": "classmethod",
               "signature": "(cls, callback: Callable[['StoreInvalidated'], None]) -> None",
               "summary": "Register a callback fired when the active store is discarded.",
-              "line": 589,
+              "line": 635,
               "deprecated": false
             },
             {
@@ -1697,7 +1707,7 @@
               "kind": "classmethod",
               "signature": "(cls, callback: Callable[['StoreInvalidated'], None]) -> None",
               "summary": "Remove a previously registered invalidation listener.",
-              "line": 602,
+              "line": 648,
               "deprecated": false
             },
             {
@@ -1706,7 +1716,7 @@
               "kind": "method",
               "signature": "(self, frame: float) -> float",
               "summary": "Return *frame* rounded to the nearest integer when snapping is on.",
-              "line": 706,
+              "line": 752,
               "deprecated": false
             },
             {
@@ -1715,7 +1725,7 @@
               "kind": "method",
               "signature": "(self) -> float",
               "summary": "Derive the predominant inter-shot gap from current shot positions.",
-              "line": 719,
+              "line": 765,
               "deprecated": false
             },
             {
@@ -1724,7 +1734,7 @@
               "kind": "method",
               "signature": "(self) -> List[ShotBlock]",
               "summary": "Return shots ordered by start time.",
-              "line": 740,
+              "line": 786,
               "deprecated": false
             },
             {
@@ -1733,7 +1743,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int) -> Optional[ShotBlock]",
               "summary": "",
-              "line": 744,
+              "line": 790,
               "deprecated": false
             },
             {
@@ -1742,7 +1752,7 @@
               "kind": "method",
               "signature": "(self, name: str) -> Optional[ShotBlock]",
               "summary": "Return the first shot whose name matches *name*, or ``None``.",
-              "line": 750,
+              "line": 796,
               "deprecated": false
             },
             {
@@ -1751,7 +1761,7 @@
               "kind": "method",
               "signature": "(self, name: str, start: float, end: float, objects: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, locked: bool = False, description: str = '') -> ShotBlock",
               "summary": "Create a new shot and add it to the store.",
-              "line": 757,
+              "line": 803,
               "deprecated": false
             },
             {
@@ -1760,7 +1770,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, *, start: Optional[float] = None, end: Optional[float] = None, name: Optional[str] = None, objects: Optional[List[str]] = None, description: Optional[str] = None, locked: Optional[bool] = None, metadata: Optional[Dict[str, Any]] = None) -> Optional[ShotBlock]",
               "summary": "Update fields on an existing shot.",
-              "line": 803,
+              "line": 849,
               "deprecated": false
             },
             {
@@ -1769,7 +1779,7 @@
               "kind": "method",
               "signature": "(self, after_frame: float, delta: float, exclude_id: Optional[int] = None) -> None",
               "summary": "Shift all shots starting at or after *after_frame* by *delta*.",
-              "line": 838,
+              "line": 884,
               "deprecated": false
             },
             {
@@ -1778,7 +1788,7 @@
               "kind": "method",
               "signature": "(self, before_frame: float, delta: float, exclude_id: Optional[int] = None) -> None",
               "summary": "Shift all shots ending at or before *before_frame* by *delta*.",
-              "line": 862,
+              "line": 908,
               "deprecated": false
             },
             {
@@ -1787,7 +1797,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int) -> bool",
               "summary": "Remove a shot by ID.",
-              "line": 888,
+              "line": 934,
               "deprecated": false
             },
             {
@@ -1796,7 +1806,7 @@
               "kind": "method",
               "signature": "(self, name: str, duration: float, gap: float = 0, start_frame: Optional[float] = None, objects: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, locked: bool = False, description: str = '') -> ShotBlock",
               "summary": "Append a shot after the last existing shot, with gap-aware placement.",
-              "line": 898,
+              "line": 944,
               "deprecated": false
             },
             {
@@ -1805,7 +1815,7 @@
               "kind": "method",
               "signature": "(self, obj_name: str) -> bool",
               "summary": "Return True if *obj_name* is hidden in the sequencer UI.",
-              "line": 939,
+              "line": 985,
               "deprecated": false
             },
             {
@@ -1814,7 +1824,7 @@
               "kind": "method",
               "signature": "(self, obj_name: str, hidden: bool = True) -> None",
               "summary": "Show or hide *obj_name* in the sequencer UI.",
-              "line": 943,
+              "line": 989,
               "deprecated": false
             },
             {
@@ -1823,7 +1833,7 @@
               "kind": "method",
               "signature": "(self, obj_name: str) -> bool",
               "summary": "Return True if *obj_name* is pinned (kept even when missing).",
-              "line": 952,
+              "line": 998,
               "deprecated": false
             },
             {
@@ -1832,7 +1842,7 @@
               "kind": "method",
               "signature": "(self, obj_name: str, pinned: bool = True) -> None",
               "summary": "Pin or unpin *obj_name*.",
-              "line": 956,
+              "line": 1002,
               "deprecated": false
             },
             {
@@ -1841,7 +1851,7 @@
               "kind": "method",
               "signature": "(self, obj_name: str) -> None",
               "summary": "Remove *obj_name* from every shot's object list.",
-              "line": 970,
+              "line": 1016,
               "deprecated": false
             },
             {
@@ -1850,7 +1860,52 @@
               "kind": "method",
               "signature": "(self) -> Dict[str, Any]",
               "summary": "Serialise shots and settings to a plain dict.",
-              "line": 980,
+              "line": 1026,
+              "deprecated": false
+            },
+            {
+              "name": "to_export_view",
+              "qualname": "ShotStore.to_export_view",
+              "kind": "method",
+              "signature": "(self, strategy: str = 'name') -> Dict[str, Any]",
+              "summary": "Build the FBX/Unity export view from the current shots.",
+              "line": 1060,
+              "deprecated": false
+            },
+            {
+              "name": "publish_export_view",
+              "qualname": "ShotStore.publish_export_view",
+              "kind": "method",
+              "signature": "(self, strategy: Optional[str] = None) -> Optional[str]",
+              "summary": "Project the export view onto the shared ``data_export`` node.",
+              "line": 1086,
+              "deprecated": false
+            },
+            {
+              "name": "refresh_export_view",
+              "qualname": "ShotStore.refresh_export_view",
+              "kind": "classmethod",
+              "signature": "(cls) -> None",
+              "summary": "Republish the active store's export view when it has shots.",
+              "line": 1109,
+              "deprecated": false
+            },
+            {
+              "name": "enable_auto_export",
+              "qualname": "ShotStore.enable_auto_export",
+              "kind": "classmethod",
+              "signature": "(cls) -> None",
+              "summary": "Make **every** FBX export this session carry the active store's shots.",
+              "line": 1122,
+              "deprecated": false
+            },
+            {
+              "name": "disable_auto_export",
+              "qualname": "ShotStore.disable_auto_export",
+              "kind": "staticmethod",
+              "signature": "() -> None",
+              "summary": "Remove the before-export preparer installed by :func:`enable_auto_export`.",
+              "line": 1139,
               "deprecated": false
             },
             {
@@ -1859,7 +1914,7 @@
               "kind": "classmethod",
               "signature": "(cls, data: Dict[str, Any]) -> 'ShotStore'",
               "summary": "Restore from serialised data.",
-              "line": 1013,
+              "line": 1146,
               "deprecated": false
             },
             {
@@ -1868,7 +1923,7 @@
               "kind": "method",
               "signature": "(self, new_fps: float) -> None",
               "summary": "Scale all shot timings from the current ``scene_fps`` to *new_fps*.",
-              "line": 1074,
+              "line": 1211,
               "deprecated": false
             },
             {
@@ -1877,7 +1932,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Flag the store as needing a save.",
-              "line": 1096,
+              "line": 1233,
               "deprecated": false
             },
             {
@@ -1886,7 +1941,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Persist via the configured backend (no-op if none set).",
-              "line": 1120,
+              "line": 1257,
               "deprecated": false
             },
             {
@@ -1895,7 +1950,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "True if the scene contains animCurves driving transforms.",
-              "line": 1134,
+              "line": 1276,
               "deprecated": false
             },
             {
@@ -1904,7 +1959,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "True when detection settings are actionable.",
-              "line": 1165,
+              "line": 1307,
               "deprecated": false
             },
             {
@@ -1913,7 +1968,7 @@
               "kind": "method",
               "signature": "(self) -> List[Dict[str, Any]]",
               "summary": "Detect shot candidates using the store's detection settings.",
-              "line": 1173,
+              "line": 1315,
               "deprecated": false
             },
             {
@@ -1922,7 +1977,7 @@
               "kind": "method",
               "signature": "(self, overwrite: bool = False) -> List[ShotBlock]",
               "summary": "Detect shot regions and define them in the store.",
-              "line": 1200,
+              "line": 1342,
               "deprecated": false
             },
             {
@@ -1931,7 +1986,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[int, str]",
               "summary": "Lightweight assessment: check if shot objects exist in the scene.",
-              "line": 1229,
+              "line": 1371,
               "deprecated": false
             }
           ]
@@ -4401,12 +4456,30 @@
               "deprecated": false
             },
             {
+              "name": "enable_auto_export",
+              "qualname": "AudioClips.enable_auto_export",
+              "kind": "classmethod",
+              "signature": "(cls) -> None",
+              "summary": "Bake the audio manifest onto ``data_export`` before **every** FBX export.",
+              "line": 288,
+              "deprecated": false
+            },
+            {
+              "name": "disable_auto_export",
+              "qualname": "AudioClips.disable_auto_export",
+              "kind": "staticmethod",
+              "signature": "() -> None",
+              "summary": "Remove the before-export preparer installed by :func:`enable_auto_export`.",
+              "line": 304,
+              "deprecated": false
+            },
+            {
               "name": "list_nodes",
               "qualname": "AudioClips.list_nodes",
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Return names of every managed DG audio node plus the composite.",
-              "line": 288,
+              "line": 311,
               "deprecated": false
             },
             {
@@ -4415,7 +4488,7 @@
               "kind": "classmethod",
               "signature": "(cls, node_name: str, time_slider: bool = True) -> None",
               "summary": "Set an audio node as the active Time Slider sound.",
-              "line": 303,
+              "line": 326,
               "deprecated": false
             }
           ]
@@ -8551,7 +8624,7 @@
         {
           "name": "MirrorSlots",
           "summary": "",
-          "line": 12,
+          "line": 13,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -8562,7 +8635,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text.",
-              "line": 56,
+              "line": 69,
               "deprecated": false
             },
             {
@@ -8571,7 +8644,7 @@
               "kind": "method",
               "signature": "(self, objects, contract)",
               "summary": "",
-              "line": 83,
+              "line": 104,
               "deprecated": false
             }
           ]
@@ -9571,7 +9644,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Ensure the fbxmaya plugin is loaded.",
-              "line": 28,
+              "line": 33,
               "deprecated": false
             },
             {
@@ -9580,7 +9653,7 @@
               "kind": "staticmethod",
               "signature": "(options: Dict[str, Any])",
               "summary": "Apply FBX export options via MEL commands.",
-              "line": 34,
+              "line": 39,
               "deprecated": false
             },
             {
@@ -9589,7 +9662,7 @@
               "kind": "staticmethod",
               "signature": "(preset_path: str)",
               "summary": "Load an FBX export preset file.",
-              "line": 65,
+              "line": 70,
               "deprecated": false
             },
             {
@@ -9598,7 +9671,79 @@
               "kind": "classmethod",
               "signature": "(cls, file_path: str, objects: Optional[List] = None, preset_file: Optional[str] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True) -> str",
               "summary": "Export geometry to an FBX file.",
-              "line": 82,
+              "line": 87,
+              "deprecated": false
+            },
+            {
+              "name": "reset_takes",
+              "qualname": "FbxUtils.reset_takes",
+              "kind": "staticmethod",
+              "signature": "() -> None",
+              "summary": "Clear all FBX export take definitions (global, sticky exporter state).",
+              "line": 149,
+              "deprecated": false
+            },
+            {
+              "name": "apply_takes",
+              "qualname": "FbxUtils.apply_takes",
+              "kind": "staticmethod",
+              "signature": "(takes: Iterable[Any]) -> int",
+              "summary": "Configure FBX export to emit one AnimStack (Unity clip) per take.",
+              "line": 155,
+              "deprecated": false
+            },
+            {
+              "name": "apply_takes_from_node",
+              "qualname": "FbxUtils.apply_takes_from_node",
+              "kind": "staticmethod",
+              "signature": "(node: Optional[str] = None, attr: Optional[str] = None) -> int",
+              "summary": "Read take defs from a JSON string channel on *node* and apply them.",
+              "line": 198,
+              "deprecated": false
+            },
+            {
+              "name": "register_export_preparer",
+              "qualname": "FbxUtils.register_export_preparer",
+              "kind": "staticmethod",
+              "signature": "(name: str, prepare: Callable[[], Any]) -> None",
+              "summary": "Run *prepare* before every FBX export this session (installs the hook).",
+              "line": 243,
+              "deprecated": false
+            },
+            {
+              "name": "unregister_export_preparer",
+              "qualname": "FbxUtils.unregister_export_preparer",
+              "kind": "staticmethod",
+              "signature": "(name: str) -> None",
+              "summary": "Remove a preparer;",
+              "line": 257,
+              "deprecated": false
+            },
+            {
+              "name": "enable_auto_takes",
+              "qualname": "FbxUtils.enable_auto_takes",
+              "kind": "staticmethod",
+              "signature": "() -> None",
+              "summary": "Realize declared takes on **every** FBX export — shot-agnostic, no preparer.",
+              "line": 263,
+              "deprecated": false
+            },
+            {
+              "name": "disable_auto_takes",
+              "qualname": "FbxUtils.disable_auto_takes",
+              "kind": "staticmethod",
+              "signature": "() -> None",
+              "summary": "Clear the explicit enable;",
+              "line": 276,
+              "deprecated": false
+            },
+            {
+              "name": "is_auto_takes_enabled",
+              "qualname": "FbxUtils.is_auto_takes_enabled",
+              "kind": "staticmethod",
+              "signature": "() -> bool",
+              "summary": "Return whether the auto-takes export hook is currently registered.",
+              "line": 333,
               "deprecated": false
             }
           ]
@@ -11718,7 +11863,7 @@
               "kind": "method",
               "signature": "(self, version_format: str = '') -> str",
               "summary": "Generate the full export file path.",
-              "line": 289,
+              "line": 304,
               "deprecated": false
             },
             {
@@ -11727,7 +11872,7 @@
               "kind": "method",
               "signature": "(self, name: str) -> str",
               "summary": "Format the export name using a regex pattern and replacement (e.g.",
-              "line": 436,
+              "line": 451,
               "deprecated": false
             },
             {
@@ -11736,7 +11881,7 @@
               "kind": "method",
               "signature": "(self, export_path: str) -> str",
               "summary": "Generate the log file path based on the export path.",
-              "line": 456,
+              "line": 471,
               "deprecated": false
             },
             {
@@ -11745,7 +11890,7 @@
               "kind": "method",
               "signature": "(self, log_file_path: str)",
               "summary": "Setup file logging to log actions during export.",
-              "line": 461,
+              "line": 476,
               "deprecated": false
             },
             {
@@ -11754,7 +11899,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Close and remove file handlers after logging is complete.",
-              "line": 475,
+              "line": 490,
               "deprecated": false
             },
             {
@@ -11763,7 +11908,7 @@
               "kind": "method",
               "signature": "(self, preset_file: str = None, verify: bool = False) -> Optional[dict]",
               "summary": "Load an FBX export preset and optionally verify it.",
-              "line": 485,
+              "line": 500,
               "deprecated": false
             },
             {
@@ -11772,7 +11917,7 @@
               "kind": "method",
               "signature": "(self) -> dict",
               "summary": "Verify a set of predefined FBX export settings and log their values.",
-              "line": 523,
+              "line": 538,
               "deprecated": false
             }
           ]
@@ -11780,7 +11925,7 @@
         {
           "name": "SceneExporterSlots",
           "summary": "",
-          "line": 566,
+          "line": 581,
           "bases": [
             "SceneExporter"
           ],
@@ -11791,7 +11936,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "",
-              "line": 606,
+              "line": 621,
               "deprecated": false
             },
             {
@@ -11800,7 +11945,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Optional[str]]",
               "summary": "Return available presets, using cached values if the preset directory has not changed.",
-              "line": 625,
+              "line": 640,
               "deprecated": false
             },
             {
@@ -11809,7 +11954,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the header widget.",
-              "line": 661,
+              "line": 676,
               "deprecated": false
             },
             {
@@ -11818,7 +11963,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Preset",
-              "line": 705,
+              "line": 720,
               "deprecated": false
             },
             {
@@ -11827,7 +11972,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Output Directory",
-              "line": 808,
+              "line": 823,
               "deprecated": false
             },
             {
@@ -11836,7 +11981,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Output Name",
-              "line": 846,
+              "line": 861,
               "deprecated": false
             },
             {
@@ -11845,7 +11990,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Auto-generate Export Settings UI from task definitions using WidgetComboBox.",
-              "line": 871,
+              "line": 886,
               "deprecated": false
             },
             {
@@ -11854,7 +11999,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Auto-generate Check Settings UI from check definitions using WidgetComboBox.",
-              "line": 898,
+              "line": 913,
               "deprecated": false
             },
             {
@@ -11863,7 +12008,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Export.",
-              "line": 932,
+              "line": 947,
               "deprecated": false
             },
             {
@@ -11872,7 +12017,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Set Output Directory",
-              "line": 1032,
+              "line": 1047,
               "deprecated": false
             },
             {
@@ -11881,7 +12026,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Add Preset.",
-              "line": 1040,
+              "line": 1055,
               "deprecated": false
             },
             {
@@ -11890,7 +12035,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Remove Preset.",
-              "line": 1058,
+              "line": 1073,
               "deprecated": false
             },
             {
@@ -11899,7 +12044,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Set Preset Directory.",
-              "line": 1074,
+              "line": 1089,
               "deprecated": false
             },
             {
@@ -11908,7 +12053,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open Output Directory",
-              "line": 1084,
+              "line": 1099,
               "deprecated": false
             },
             {
@@ -11917,7 +12062,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open Preset Directory.",
-              "line": 1090,
+              "line": 1105,
               "deprecated": false
             },
             {
@@ -11926,7 +12071,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Edit Preset",
-              "line": 1100,
+              "line": 1115,
               "deprecated": false
             },
             {
@@ -11935,7 +12080,7 @@
               "kind": "method",
               "signature": "(self, output_dir: str) -> None",
               "summary": "Record the output directory into the recent values plugin.",
-              "line": 1131,
+              "line": 1146,
               "deprecated": false
             }
           ]
@@ -11983,7 +12128,7 @@
         {
           "name": "TaskManager",
           "summary": "Contains all task-related UI definitions for the Scene Exporter.",
-          "line": 1059,
+          "line": 1175,
           "bases": [
             "TaskFactory",
             "_TaskActionsMixin",
@@ -11996,7 +12141,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 1113,
+              "line": 1231,
               "deprecated": false
             },
             {
@@ -12005,7 +12150,7 @@
               "kind": "method",
               "signature": "(self, value)",
               "summary": "Invalidate the materials cache whenever objects change.",
-              "line": 1117,
+              "line": 1235,
               "deprecated": false
             },
             {
@@ -12014,7 +12159,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return the task definitions for the UI.",
-              "line": 1129,
+              "line": 1247,
               "deprecated": false
             },
             {
@@ -12023,7 +12168,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return the check definitions for the UI.",
-              "line": 1257,
+              "line": 1399,
               "deprecated": false
             },
             {
@@ -12032,7 +12177,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return all definitions combined for backward compatibility.",
-              "line": 1375,
+              "line": 1517,
               "deprecated": false
             }
           ]
@@ -14316,7 +14461,7 @@
           "kind": "function",
           "signature": "(port=None, host='127.0.0.1')",
           "summary": "Start the HTTP server in a daemon thread.",
-          "line": 96,
+          "line": 97,
           "deprecated": false
         },
         {
@@ -14325,7 +14470,7 @@
           "kind": "function",
           "signature": "()",
           "summary": "Shut down the server (mostly useful for tests / hot-reload).",
-          "line": 116,
+          "line": 117,
           "deprecated": false
         },
         {
@@ -14334,7 +14479,16 @@
           "kind": "function",
           "signature": "()",
           "summary": "",
-          "line": 129,
+          "line": 130,
+          "deprecated": false
+        },
+        {
+          "name": "autostart",
+          "qualname": "autostart",
+          "kind": "function",
+          "signature": "()",
+          "summary": "Start the server on plugin load, gated to the Toolbag host.",
+          "line": 154,
           "deprecated": false
         }
       ],
@@ -17203,7 +17357,7 @@
         {
           "name": "DataNodes",
           "summary": "Manages the two shared scene data nodes.",
-          "line": 14,
+          "line": 15,
           "bases": [],
           "members": [
             {
@@ -17212,7 +17366,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Get or create the shared network node.",
-              "line": 46,
+              "line": 52,
               "deprecated": false
             },
             {
@@ -17221,7 +17375,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Get or create the shared FBX export transform.",
-              "line": 73,
+              "line": 79,
               "deprecated": false
             },
             {
@@ -17230,7 +17384,25 @@
               "kind": "staticmethod",
               "signature": "(attr_name, **add_attr_kwargs)",
               "summary": "Ensure *attr_name* on ``data_internal`` with a proxy on ``data_export``.",
-              "line": 135,
+              "line": 141,
+              "deprecated": false
+            },
+            {
+              "name": "set_export_string",
+              "qualname": "DataNodes.set_export_string",
+              "kind": "staticmethod",
+              "signature": "(attr: str, value: str) -> str",
+              "summary": "Write *value* to a plain string attr on the export node (create if needed).",
+              "line": 175,
+              "deprecated": false
+            },
+            {
+              "name": "get_export_string",
+              "qualname": "DataNodes.get_export_string",
+              "kind": "staticmethod",
+              "signature": "(attr: str) -> Optional[str]",
+              "summary": "Return the string value of an export-node channel, or ``None``.",
+              "line": 194,
               "deprecated": false
             },
             {
@@ -17239,7 +17411,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Migrate old ``audio_events*`` carrier transforms to the new nodes.",
-              "line": 169,
+              "line": 208,
               "deprecated": false
             }
           ]
@@ -17353,7 +17525,7 @@
         {
           "name": "CurveToTubeSlots",
           "summary": "Switchboard slot wiring for the Curve to Tube UI (hermetic preview).",
-          "line": 655,
+          "line": 675,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -17364,7 +17536,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text.",
-              "line": 706,
+              "line": 726,
               "deprecated": false
             },
             {
@@ -17373,7 +17545,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Reset to Defaults.",
-              "line": 755,
+              "line": 775,
               "deprecated": false
             },
             {
@@ -17382,7 +17554,7 @@
               "kind": "method",
               "signature": "(self, objects, contract)",
               "summary": "Build the tube(s) from the selected curves (Preview entry point).",
-              "line": 759,
+              "line": 779,
               "deprecated": false
             }
           ]
@@ -19696,14 +19868,14 @@
         {
           "name": "XformUtilsInternals",
           "summary": "Internal helper methods for XformUtils.",
-          "line": 327,
+          "line": 349,
           "bases": [],
           "members": []
         },
         {
           "name": "XformUtils",
           "summary": "Transform utilities for Maya objects.",
-          "line": 377,
+          "line": 399,
           "bases": [
             "XformUtilsInternals",
             "ptk.HelpMixin"
@@ -19715,7 +19887,7 @@
               "kind": "staticmethod",
               "signature": "(value, invert=False, ortho=False, to_integer=False)",
               "summary": "Converts between axis representations and optionally inverts the axis or returns an orthogonal axis.",
-              "line": 381,
+              "line": 403,
               "deprecated": false
             },
             {
@@ -19724,7 +19896,7 @@
               "kind": "classmethod",
               "signature": "(cls, source, target, pivot='center', group_move=False)",
               "summary": "Move source object(s) to align with the target object(s).",
-              "line": 441,
+              "line": 463,
               "deprecated": false
             },
             {
@@ -19733,7 +19905,7 @@
               "kind": "staticmethod",
               "signature": "(objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)",
               "summary": "Align objects to Y origin on the grid using a helper plane.",
-              "line": 519,
+              "line": 541,
               "deprecated": false
             },
             {
@@ -19742,7 +19914,7 @@
               "kind": "classmethod",
               "signature": "(cls, a, b, scale=True, average=False)",
               "summary": "Scale each of the given objects in 'a' to the combined bounding box of the objects in 'b'.",
-              "line": 553,
+              "line": 575,
               "deprecated": false
             },
             {
@@ -19751,7 +19923,7 @@
               "kind": "staticmethod",
               "signature": "(objects, scale_factor=1.1) -> None",
               "summary": "Scales each set of connected edges separately, either uniformly or non-uniformly.",
-              "line": 593,
+              "line": 615,
               "deprecated": false
             },
             {
@@ -19760,7 +19932,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original', accumulate=True, traverse=False, channels=None)",
               "summary": "Capture the current local TRS as a cumulative per-channel bake history.",
-              "line": 639,
+              "line": 661,
               "deprecated": false
             },
             {
@@ -19769,7 +19941,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, center_pivot=0, force=True, delete_history=False, freeze_children=False, unlock_children=True, connection_strategy='preserve', from_channel_box=False, **kwargs)",
               "summary": "Freezes transformations on the given objects.",
-              "line": 714,
+              "line": 736,
               "deprecated": false
             },
             {
@@ -19778,7 +19950,7 @@
               "kind": "staticmethod",
               "signature": "(objects, reset_rotate_axis: bool = False, reset_joint_orient: bool = False) -> None",
               "summary": "Freeze transforms into offsetParentMatrix while preserving pivot placement.",
-              "line": 978,
+              "line": 1000,
               "deprecated": false
             },
             {
@@ -19787,7 +19959,7 @@
               "kind": "staticmethod",
               "signature": "(objects, traverse: bool = False, preserve_root: bool = True) -> List[str]",
               "summary": "Push a child transform's local matrix up into its parent and zero the child.",
-              "line": 1073,
+              "line": 1095,
               "deprecated": false
             },
             {
@@ -19796,7 +19968,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original', delete_attrs=True, channels=None)",
               "summary": "Compose stored bake history with current local TRS, per channel.",
-              "line": 1191,
+              "line": 1213,
               "deprecated": false
             },
             {
@@ -19805,7 +19977,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original') -> List[str]",
               "summary": "Delete the per-channel bake attrs without restoring.",
-              "line": 1356,
+              "line": 1378,
               "deprecated": false
             },
             {
@@ -19814,7 +19986,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original')",
               "summary": "Check if objects have any stored bake history.",
-              "line": 1392,
+              "line": 1414,
               "deprecated": false
             },
             {
@@ -19823,7 +19995,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects)",
               "summary": "Reset the translation transformations on the given object(s).",
-              "line": 1412,
+              "line": 1434,
               "deprecated": false
             },
             {
@@ -19832,7 +20004,7 @@
               "kind": "staticmethod",
               "signature": "(node)",
               "summary": "Set an object's translation value from its pivot location.",
-              "line": 1421,
+              "line": 1443,
               "deprecated": false
             },
             {
@@ -19841,7 +20013,7 @@
               "kind": "staticmethod",
               "signature": "(obj, **kwargs)",
               "summary": "Return the object's transform matrix using xform, allowing kwargs override.",
-              "line": 1430,
+              "line": 1452,
               "deprecated": false
             },
             {
@@ -19850,7 +20022,7 @@
               "kind": "staticmethod",
               "signature": "(obj, matrix, **kwargs) -> None",
               "summary": "Apply a transformation matrix's position and orientation to the manip pivot.",
-              "line": 1440,
+              "line": 1462,
               "deprecated": false
             },
             {
@@ -19859,7 +20031,7 @@
               "kind": "classmethod",
               "signature": "(cls)",
               "summary": "Returns a list of supported pivot options.",
-              "line": 1454,
+              "line": 1476,
               "deprecated": false
             },
             {
@@ -19868,7 +20040,7 @@
               "kind": "classmethod",
               "signature": "(cls)",
               "summary": "Clears the cached manipulator pivot data.",
-              "line": 1473,
+              "line": 1495,
               "deprecated": false
             },
             {
@@ -19877,7 +20049,7 @@
               "kind": "classmethod",
               "signature": "(cls, node)",
               "summary": "Snapshot the current manipulator pivot state for the given node into the cache.",
-              "line": 1478,
+              "line": 1500,
               "deprecated": false
             },
             {
@@ -19886,7 +20058,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, pivot: str)",
               "summary": "Determines the pivot matrix (orientation + position) for transformations.",
-              "line": 1514,
+              "line": 1536,
               "deprecated": false
             },
             {
@@ -19895,7 +20067,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, pivot, axis_index=None)",
               "summary": "Determines the pivot position for mirroring/cutting along a specified axis or all axes.",
-              "line": 1582,
+              "line": 1604,
               "deprecated": false
             },
             {
@@ -19904,7 +20076,7 @@
               "kind": "staticmethod",
               "signature": "(align_from=None, align_to=None, translate=True)",
               "summary": "Align one object's pivot point to another using 3-point alignment.",
-              "line": 1704,
+              "line": 1726,
               "deprecated": false
             },
             {
@@ -19913,7 +20085,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None) -> None",
               "summary": "Reset Pivot Transforms for the specified objects or selected objects.",
-              "line": 1752,
+              "line": 1774,
               "deprecated": false
             },
             {
@@ -19922,7 +20094,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, pivot_type: str = 'object', mode: str = 'set')",
               "summary": "Get or set a world-aligned pivot for the specified objects.",
-              "line": 1773,
+              "line": 1795,
               "deprecated": false
             },
             {
@@ -19931,7 +20103,7 @@
               "kind": "staticmethod",
               "signature": "(objects, position=False, orientation=False)",
               "summary": "Bake the pivot orientation and position of the given object(s).",
-              "line": 1845,
+              "line": 1862,
               "deprecated": false
             },
             {
@@ -19940,7 +20112,7 @@
               "kind": "staticmethod",
               "signature": "(objects, translate: bool = False, rotate: bool = False, scale: bool = False, bake: bool = False, world_space: bool = True, select_targets_after_transfer: bool = False)",
               "summary": "Transfer the pivot orientation from the first given object to the remaining given objects.",
-              "line": 1926,
+              "line": 1938,
               "deprecated": false
             },
             {
@@ -19949,7 +20121,7 @@
               "kind": "staticmethod",
               "signature": "(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0))",
               "summary": "Aim the given object(s) at the given world space position.",
-              "line": 2043,
+              "line": 2055,
               "deprecated": false
             },
             {
@@ -19958,7 +20130,7 @@
               "kind": "staticmethod",
               "signature": "(transform, aim_vector=(1, 0, 0), up_vector=(0, 1, 0))",
               "summary": "Orients a transform so its local +X aims along the given world-space vector.",
-              "line": 2073,
+              "line": 2085,
               "deprecated": false
             },
             {
@@ -19967,7 +20139,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, target_pos)",
               "summary": "Aim the given object at the given world space position.",
-              "line": 2114,
+              "line": 2126,
               "deprecated": false
             },
             {
@@ -19976,7 +20148,7 @@
               "kind": "staticmethod",
               "signature": "(objects, returned_type='point')",
               "summary": "Get an objects orientation as a point or vector.",
-              "line": 2143,
+              "line": 2155,
               "deprecated": false
             },
             {
@@ -19985,7 +20157,7 @@
               "kind": "staticmethod",
               "signature": "(a, b)",
               "summary": "Get the magnatude of a vector using the center points of two given objects.",
-              "line": 2176,
+              "line": 2188,
               "deprecated": false
             },
             {
@@ -19994,7 +20166,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Get the bounding box center point of any given object(s).",
-              "line": 2190,
+              "line": 2202,
               "deprecated": false
             },
             {
@@ -20003,7 +20175,7 @@
               "kind": "staticmethod",
               "signature": "(objects, value='', world_space=True, return_valid_keys=False)",
               "summary": "Calculate and retrieve specific properties of the bounding box for the given object(s) or component…",
-              "line": 2215,
+              "line": 2227,
               "deprecated": false
             },
             {
@@ -20012,7 +20184,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, value='volume', descending=True, also_return_value=False)",
               "summary": "Sort the given objects by their bounding box value.",
-              "line": 2289,
+              "line": 2301,
               "deprecated": false
             },
             {
@@ -20021,7 +20193,7 @@
               "kind": "staticmethod",
               "signature": "(vertices)",
               "summary": "Move and align the object defined by the first 3 points to the last 3 points.",
-              "line": 2305,
+              "line": 2317,
               "deprecated": false
             },
             {
@@ -20030,7 +20202,7 @@
               "kind": "staticmethod",
               "signature": "(a, b, tolerance=0.001)",
               "summary": "Check if the vertices in a and b are overlapping within the given tolerance.",
-              "line": 2371,
+              "line": 2383,
               "deprecated": false
             },
             {
@@ -20039,7 +20211,7 @@
               "kind": "staticmethod",
               "signature": "(objects, plane_point, plane_normal, return_type: str = 'bool')",
               "summary": "General method to check if any object's geometry is below a defined plane.",
-              "line": 2387,
+              "line": 2399,
               "deprecated": false
             },
             {
@@ -20048,7 +20220,7 @@
               "kind": "staticmethod",
               "signature": "(objects, worldSpace=True)",
               "summary": "Get all vertex positions for the given objects.",
-              "line": 2463,
+              "line": 2475,
               "deprecated": false
             },
             {
@@ -20057,7 +20229,7 @@
               "kind": "classmethod",
               "signature": "(cls, a, b, world_space=False)",
               "summary": "Find any vertices which point locations match between two given mesh.",
-              "line": 2487,
+              "line": 2499,
               "deprecated": false
             },
             {
@@ -20066,7 +20238,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, reference_point=None, reverse=False)",
               "summary": "Order the given objects by their distance from the given reference point.",
-              "line": 2504,
+              "line": 2516,
               "deprecated": false
             },
             {
@@ -20075,7 +20247,7 @@
               "kind": "staticmethod",
               "signature": "(mode, average=False, edgeloop=False)",
               "summary": "Align selected vertices along one or more axes.",
-              "line": 2530,
+              "line": 2542,
               "deprecated": false
             }
           ]

@@ -324,6 +324,28 @@ def _shift_shape_points(shape: str, transform_matrix) -> None:
         fn.updateSurface()
 
 
+def _resolve_transforms(objects) -> List[str]:
+    """Resolve *objects* to their owning transform nodes (de-duped long paths).
+
+    Components and shapes collapse to their parent transform; non-DAG nodes
+    (materials, construction history, object sets) are dropped so ``xform``
+    never sees a node it would reject with "No valid objects supplied". Unlike
+    ``NodeUtils.get_transform_node`` this does NOT walk connections — a selected
+    material won't drag in every mesh that uses it — which is the behaviour the
+    pivot ops require.
+    """
+    objects = as_strings(objects)
+    if not objects:  # an empty list would turn the filtered ``ls`` scene-wide
+        return []
+    resolved = cmds.ls(objects, objectsOnly=True, long=True) or []
+    transforms = cmds.ls(resolved, transforms=True, long=True) or []
+    shapes = cmds.ls(resolved, shapes=True, long=True) or []
+    transforms += (
+        cmds.listRelatives(shapes, path=True, parent=True, type="transform") or []
+    )
+    return list(dict.fromkeys(transforms))  # de-dupe, preserve order
+
+
 class XformUtilsInternals:
     """Internal helper methods for XformUtils.
 
@@ -1777,16 +1799,11 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     ):
         """Get or set a world-aligned pivot for the specified objects."""
         if objects is None:
-            selected = cmds.ls(selection=True) or []
-            if not selected:
-                cmds.warning("No objects specified and nothing is selected.")
-                return False if mode == "set" else None
-            objects = selected
-        else:
-            objects = cmds.ls(as_strings(objects), flatten=True) or []
+            objects = cmds.ls(selection=True) or []
+        objects = _resolve_transforms(objects)
 
         if not objects:
-            cmds.warning("No valid objects found.")
+            cmds.warning("No valid transform objects to align pivot.")
             return False if mode == "set" else None
 
         original_selection = cmds.ls(selection=True) or []
@@ -1844,12 +1861,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     @CoreUtils.undoable
     def bake_pivot(objects, position=False, orientation=False):
         """Bake the pivot orientation and position of the given object(s)."""
-        objects = as_strings(objects)
-        transforms = cmds.ls(objects, transforms=True) or []
-        shapes = cmds.ls(objects, shapes=True) or []
-        objects = transforms + (
-            cmds.listRelatives(shapes, path=True, parent=True, type="transform") or []
-        )
+        objects = _resolve_transforms(objects)
 
         ctx = cmds.currentCtx()
         pivotModeActive = 0
