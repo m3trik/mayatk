@@ -15035,7 +15035,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects) -> None",
               "summary": "Ensure opacity → visibility mirroring for objects that already",
-              "line": 275,
+              "line": 273,
               "deprecated": false
             },
             {
@@ -15044,7 +15044,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects)",
               "summary": "",
-              "line": 287,
+              "line": 285,
               "deprecated": false
             }
           ]
