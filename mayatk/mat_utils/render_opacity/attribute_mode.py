@@ -249,12 +249,6 @@ class OpacityAttributeMode(ptk.LoggingMixin):
                 continue
 
             values = cmds.keyframe(obj, attribute=cls.ATTR_NAME, q=True, vc=True)
-            in_tans = cmds.keyTangent(
-                obj, attribute=cls.ATTR_NAME, q=True, inTangentType=True
-            )
-            out_tans = cmds.keyTangent(
-                obj, attribute=cls.ATTR_NAME, q=True, outTangentType=True
-            )
 
             # Clear existing visibility keys so repeated calls don't
             # accumulate duplicates.  Use full DAG path to target the
@@ -262,12 +256,16 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             vis_attr = f"{(cmds.ls(obj, long=True) or [obj])[0]}.visibility"
             cmds.cutKey(vis_attr, clear=True)
 
-            for t, v, it, ot in zip(times, values, in_tans, out_tans):
+            # Visibility is a binary stepped channel — it mirrors the opacity
+            # key TIMES but always uses stepped tangents (not the opacity
+            # curve's tangents). Maya rejects "step" for IN-tangents (wants
+            # "stepnext"); matches key_fade.
+            for t, v in zip(times, values):
                 cmds.setKeyframe(
                     vis_attr,
                     time=t,
                     value=1.0 if v > 0 else 0.0,
-                    inTangentType="step",
+                    inTangentType="stepnext",
                     outTangentType="step",
                 )
 
