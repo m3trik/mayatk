@@ -530,6 +530,17 @@ class TestEditUtils(MayaTkTestCase):
         # delete_history (default) removes the polyReduce node.
         self.assertNotIn("polyReduce", str(cmds.listHistory(sphere) or []))
 
+    def test_decimate_handles_multiple_objects(self):
+        # polyReduce raises "Doesn't work with multiple objects selected" when
+        # handed more than one mesh, so decimate must reduce each independently.
+        sphere = cmds.polySphere(subdivisionsX=40, subdivisionsY=40, ch=False)[0]
+        cube = cmds.polyCube(sx=20, sy=20, sz=20, ch=False)[0]
+        before = {o: cmds.polyEvaluate(o, face=True) for o in (sphere, cube)}
+        result = EditUtils.decimate([sphere, cube], percentage=50.0)
+        self.assertEqual(result, [sphere, cube])
+        for o in (sphere, cube):
+            self.assertLess(cmds.polyEvaluate(o, face=True), before[o])
+
     def test_decimate_no_objects_is_noop(self):
         cmds.select(clear=True)
         self.assertEqual(EditUtils.decimate([]), [])

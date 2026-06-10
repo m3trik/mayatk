@@ -665,7 +665,7 @@ class MatUpdaterSlots(MatUpdater):
             setToolTip="Convert texture file formats.",
         )
         cmb_format.addItem("Convert Format: None", None)
-        for ext in ptk.ImgUtils.texture_file_types:
+        for ext in ptk.ImgUtils.writable:
             cmb_format.addItem(f"Convert Format: {ext}", ext)
 
         # Max Size

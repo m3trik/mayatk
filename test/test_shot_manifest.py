@@ -52,7 +52,7 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     detect_behaviors,
     detect_shot_regions,
 )
-from mayatk.anim_utils.shots.shot_manifest.mapping import (
+from mayatk.anim_utils.shots.shot_manifest.mapping._mapping import (
     _audio_prefix,
     _audio_regex,
     _audio_map,
@@ -3458,7 +3458,7 @@ class TestSetClipBehavior(unittest.TestCase):
         from unittest.mock import patch as _p
 
         with _p(
-            "mayatk.anim_utils.shots.shot_manifest.behaviors._verify_audio_clip",
+            "mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors._verify_audio_clip",
             return_value=True,
         ) as mock_v:
             result = verify_behavior("node", "set_clip", 1, 30)
@@ -3471,7 +3471,7 @@ class TestSetClipBehavior(unittest.TestCase):
         from unittest.mock import patch as _p
 
         with _p(
-            "mayatk.anim_utils.shots.shot_manifest.behaviors._verify_audio_clip",
+            "mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors._verify_audio_clip",
             return_value=False,
         ):
             self.assertFalse(verify_behavior("node", "set_clip", 1, 30))
@@ -3535,7 +3535,7 @@ class TestSetClipBehavior(unittest.TestCase):
         from unittest.mock import patch as _p
 
         with _p(
-            "mayatk.anim_utils.shots.shot_manifest.behaviors.apply_audio_clip",
+            "mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors.apply_audio_clip",
         ) as mock_apply:
             apply_behavior("my_node", "set_clip", 1, 30, source_path="/audio/clip.wav")
         # apply_audio_clip now requires both start AND end.
@@ -3548,7 +3548,7 @@ class TestSetClipBehavior(unittest.TestCase):
         from unittest.mock import patch as _p
 
         with _p(
-            "mayatk.anim_utils.shots.shot_manifest.behaviors.apply_audio_clip",
+            "mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors.apply_audio_clip",
         ) as mock_apply:
             apply_behavior("my_node", "set_clip", 1, 30)
         # apply_audio_clip now requires both start AND end (end is the

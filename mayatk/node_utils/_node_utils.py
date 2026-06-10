@@ -374,23 +374,36 @@ class NodeUtils(ptk.HelpMixin):
             kwargs["type"] = type
         return cmds.listRelatives(str(node), **kwargs) or []
 
-    @staticmethod
-    def get_shapes(node, no_intermediate=True, full_path=True):
-        """Return the shape children of a transform.
+    @classmethod
+    def get_shapes(cls, node, no_intermediate=True, full_path=True):
+        """Return the shape(s) associated with *node* -- flexible about input.
+
+        Accepts whatever you have:
+          * a **transform** -> its shape children,
+          * a **shape** -> itself (so callers never have to pre-resolve),
+          * a **component** (e.g. ``pCube1.f[0]``) -> the owning node's shapes.
 
         Always returns a list (never ``None``).
         """
-        return cmds.listRelatives(
-            str(node),
+        node = str(node).split(".")[0]  # tolerate a component/attribute suffix
+        shapes = cmds.listRelatives(
+            node,
             shapes=True,
             noIntermediate=no_intermediate,
             fullPath=full_path,
             path=not full_path,
         ) or []
+        if shapes:
+            return shapes
+        # listRelatives finds nothing when *node* is already a shape -- return it.
+        own = cmds.ls(node, shapes=True, long=full_path) or []
+        if no_intermediate:
+            own = [s for s in own if not cls.is_intermediate(s)]
+        return own
 
     @classmethod
     def get_shape(cls, node, no_intermediate=True, full_path=True):
-        """Return the first shape of a transform, or ``None``."""
+        """Return the first shape for a transform / shape / component, or ``None``."""
         shapes = cls.get_shapes(
             node, no_intermediate=no_intermediate, full_path=full_path
         )
