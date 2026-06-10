@@ -108,6 +108,7 @@ DEFAULT_INCLUDE = {
     "env_utils.fbx_utils": "FbxUtils",
     # Material utils
     "mat_utils.game_shader": "GameShader",
+    "mat_utils.arnold_bridge": "ArnoldBridge",
     "mat_utils.render_opacity._render_opacity": "RenderOpacity",
     "mat_utils.image_to_plane._image_to_plane": "ImageToPlane",
     "mat_utils.mat_updater": "MatUpdater",
@@ -119,8 +120,10 @@ DEFAULT_INCLUDE = {
     "mat_utils.marmoset_bridge._marmoset_bridge": "MarmosetBridge",
     # Substance Bridge
     "mat_utils.substance_bridge._substance_bridge": "SubstanceBridge",
+    # Texture baking (bake an object's shaded surface to a texture)
+    "mat_utils.texture_baker": "TextureBaker",
     # Light utils
-    "light_utils.bake_lighting": "BakeLighting",
+    "light_utils.lightmap_baker.lightmap_baker": "LightmapBaker",
     # UI utils
     "ui_utils.channel_box": "ChannelBox",
     "ui_utils.hotkey_collisions": ["maya_collision_checker", "parse_qt_sequence"],

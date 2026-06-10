@@ -2,7 +2,7 @@
 # coding=utf-8
 import os
 import logging
-from typing import List, Optional, Tuple, Callable, Union, Dict, Any
+from typing import List, Optional, Callable, Union, Dict, Any
 from qtpy import QtCore
 
 try:
@@ -21,7 +21,6 @@ def _plug(node, attr: str) -> str:
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.mat_utils._affix_mode import (
     add_affix_mode_menu,
@@ -282,10 +281,6 @@ class GameShader(ptk.LoggingMixin):
                 f"Shader '{name}' has Opacity but no Base Color. Object may appear invisible or black."
             )
 
-        # Optional: Arnold shader creation
-        if create_arnold:
-            ai_node, aiMult_node, bump_node = self.setup_arnold_nodes(name, shader_node)
-
         base_dir = EnvUtils.get_env_info("sourceimages")
 
         # Per-map outcome rows: [status, type, file, note]
@@ -330,14 +325,16 @@ class GameShader(ptk.LoggingMixin):
                 failed_count += 1
                 rows.append(["✗", texture_type, texture_name, "shader has no matching slot"])
 
-            # Conditional Arnold nodes connection
-            if create_arnold and success:
-                self.connect_arnold_nodes(
-                    texture, texture_type, ai_node, aiMult_node, bump_node
-                )
-
         # Per-map connection table
         self.log_table(rows, headers=["", "Map", "Source", "Conversion"])
+
+        # Optional Arnold render bridge — delegated to ArnoldBridge, which
+        # introspects the now-wired base shader's file nodes (no texture list
+        # needed). Same module powers add/remove after creation.
+        if create_arnold:
+            from mayatk.mat_utils.arnold_bridge import ArnoldBridge
+
+            ArnoldBridge().add(materials=shader_node)
 
         # Resolve created shading engine
         shading_groups = cmds.listConnections(shader_node, type="shadingEngine")
@@ -408,52 +405,6 @@ class GameShader(ptk.LoggingMixin):
                 cmds.shaderfx(sfxnode=str(sr_node), loadGraph=graph)
 
         return sr_node
-
-    def setup_arnold_nodes(
-        self, name: str, shader_node: object
-    ) -> Tuple[object, object, object]:
-        """Sets up a basic Arnold shader network for use with a Stingray PBS or Standard Surface shader.
-
-        This method loads the MtoA plugin if not already loaded, creates an aiStandardSurface
-        shader, an aiMultiply utility node, and a bump2d node for normal mapping. It connects
-        these nodes together and to the shader node's shading engine to integrate Arnold
-        rendering with the base material.
-
-        Parameters:
-            name (str): Base name for the created Arnold nodes. The names will have suffixes
-                        '_ai', '_multiply', and '_bump' respectively.
-            shader_node (object): The Stingray PBS or Standard Surface shader node that the
-                                 Arnold shader network is being set up for. This is used to
-                                 find the connected shading engine.
-
-        Returns:
-            Tuple[str, str, str]: A tuple containing
-            the created aiStandardSurface node, aiMultiply node, and bump2d node, in that order.
-        """
-        EnvUtils.load_plugin("mtoa")  # Load Arnold plugin
-
-        ai_node = NodeUtils.create_render_node(
-            "aiStandardSurface", name=name + "_ai" if name else ""
-        )
-        aiMult_node = cmds.shadingNode("aiMultiply", asShader=True)
-        bump_node = cmds.shadingNode("bump2d", asShader=True)
-        cmds.setAttr(f"{bump_node}.bumpInterp", 1)  # Set to tangent space normals
-
-        # Get shading engine from either Stingray PBS or Standard Surface
-        shading_engine = NodeUtils.get_connected_nodes(
-            shader_node,
-            node_type="shadingEngine",
-            direction="outgoing",
-            first_match=True,
-        )
-
-        # Connect Arnold nodes to the shading engine
-        Attributes.connect_multi(
-            (f"{ai_node}.outColor", f"{shading_engine}.aiSurfaceShader"),
-            (f"{aiMult_node}.outColor", f"{ai_node}.baseColor"),
-            (f"{bump_node}.outNormal", f"{ai_node}.normalCamera"),
-        )
-        return ai_node, aiMult_node, bump_node
 
     def setup_standard_surface_node(self, name: str, opacity: bool) -> object:
         """Creates and sets up a Maya Standard Surface shader node.
@@ -809,194 +760,6 @@ class GameShader(ptk.LoggingMixin):
         else:  # Unsupported texture type
             return False
 
-        return True
-
-    def connect_arnold_nodes(
-        self,
-        texture: str,
-        texture_type: str,
-        ai_node: object,
-        aiMult_node: object,
-        bump_node: object,
-    ) -> bool:
-        """Connects texture files to the corresponding slots in the Arnold shader nodes based on the texture type.
-
-        Parameters:
-            texture (str): The file path of the texture image to be connected.
-            texture_type (str): The type of the texture (e.g., "Base_Color", "Roughness", "Metallic").
-            ai_node (str): The Arnold shader node to which the base color and metallic textures will be connected.
-            aiMult_node (str): The Arnold multiply node used for blending textures.
-            bump_node (str): The Arnold bump node to which normal maps will be connected.
-
-        Returns:
-            bool: True if the connection is successful, False otherwise.
-        """
-        if texture_type in ["Base_Color", "Diffuse"]:
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(f"{texture_node}.outColor", f"{aiMult_node}.input1", force=True)
-
-        elif texture_type == "Albedo_Transparency":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            # Connect base color
-            cmds.connectAttr(f"{texture_node}.outColor", f"{aiMult_node}.input1", force=True)
-            # Handle transparency by connecting alpha to Arnold's standard surface opacity
-            cmds.connectAttr(f"{texture_node}.outAlpha", f"{ai_node}.opacityR", force=True)
-            cmds.connectAttr(f"{texture_node}.outAlpha", f"{ai_node}.opacityG", force=True)
-            cmds.connectAttr(f"{texture_node}.outAlpha", f"{ai_node}.opacityB", force=True)
-            return True
-
-        elif texture_type == "Roughness":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                alphaIsLuminance=1,
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(f"{texture_node}.outAlpha", f"{ai_node}.specularRoughness", force=True)
-            # Opacity: same roughness map used in Specular Roughness to provide additional blurriness of refraction.
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{ai_node}.transmissionExtraRoughness", force=True
-            )
-
-        elif texture_type == "Metallic":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                alphaIsLuminance=1,
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(f"{texture_node}.outAlpha", f"{ai_node}.metalness", force=True)
-
-        elif texture_type == "Metallic_Smoothness":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                alphaIsLuminance=1,
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            # Create a reverse node to invert the alpha channel
-            reverse_node = NodeUtils.create_render_node(
-                "reverse", name="invertSmoothness"
-            )
-            cmds.connectAttr(f"{texture_node}.outAlpha", f"{reverse_node}.inputX", force=True)
-            cmds.connectAttr(f"{reverse_node}.outputX", f"{ai_node}.specularRoughness", force=True)
-            cmds.connectAttr(
-                f"{reverse_node}.outputX", f"{ai_node}.transmissionExtraRoughness", force=True
-            )
-            cmds.connectAttr(f"{texture_node}.outColorR", f"{ai_node}.metalness", force=True)
-
-        elif texture_type == "ORM":
-            # Unreal/glTF ORM Map: R=AO, G=Roughness, B=Metallic
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                alphaIsLuminance=0,
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            # Metallic (B)
-            cmds.connectAttr(f"{texture_node}.outColorB", f"{ai_node}.metalness", force=True)
-            # Roughness (G)
-            cmds.connectAttr(
-                f"{texture_node}.outColorG", f"{ai_node}.specularRoughness", force=True
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outColorG", f"{ai_node}.transmissionExtraRoughness", force=True
-            )
-            # AO (R) -> Multiply with Base Color (using aiMultiply)
-            # Connect R channel to all RGB inputs of input2 to multiply uniformly
-            cmds.connectAttr(f"{texture_node}.outColorR", f"{aiMult_node}.input2R", force=True)
-            cmds.connectAttr(f"{texture_node}.outColorR", f"{aiMult_node}.input2G", force=True)
-            cmds.connectAttr(f"{texture_node}.outColorR", f"{aiMult_node}.input2B", force=True)
-
-        elif texture_type == "MSAO":
-            # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                alphaIsLuminance=1,
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            # Metallic from red channel
-            cmds.connectAttr(f"{texture_node}.outColorR", f"{ai_node}.metalness", force=True)
-            # Smoothness in alpha needs to be inverted to roughness
-            reverse_node = NodeUtils.create_render_node(
-                "reverse", name="invertSmoothness"
-            )
-            cmds.connectAttr(f"{texture_node}.outAlpha", f"{reverse_node}.inputX", force=True)
-            cmds.connectAttr(f"{reverse_node}.outputX", f"{ai_node}.specularRoughness", force=True)
-            cmds.connectAttr(
-                f"{reverse_node}.outputX", f"{ai_node}.transmissionExtraRoughness", force=True
-            )
-            # AO from green channel - multiply with base color using aiMultiply
-            # Connect green channel as grayscale to all RGB channels of input2
-            cmds.connectAttr(f"{texture_node}.outColor", f"{aiMult_node}.input2", force=True)
-
-        elif texture_type == "Emissive":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(f"{texture_node}.outAlpha", f"{ai_node}.emission", force=True)
-            cmds.connectAttr(f"{texture_node}.outColor", f"{ai_node}.emissionColor", force=True)
-
-        elif "Normal" in texture_type:
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                alphaIsLuminance=1,
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(f"{texture_node}.outAlpha", f"{bump_node}.bumpValue", force=True)
-
-        elif texture_type == "Ambient_Occlusion":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(f"{texture_node}.outColor", f"{aiMult_node}.input2", force=True)
-
-        elif texture_type == "Opacity":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                alphaIsLuminance=1,
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(f"{texture_node}.outColor", f"{ai_node}.opacity", force=True)
-        else:
-            return False
         return True
 
     def connect_standard_surface_nodes(
@@ -1510,8 +1273,8 @@ class GameShader(ptk.LoggingMixin):
                     out_dir, f"{base_name}_Metallic.{output_extension}"
                 )
 
-                created_roughness_map.save(rough_path)
-                created_metallic_map.save(metal_path)
+                ptk.ImgUtils.save_image(created_roughness_map, rough_path)
+                ptk.ImgUtils.save_image(created_metallic_map, metal_path)
 
                 # Now you can combine using file paths:
                 combined_map_name = f"{base_name}_MetallicSmoothness.{output_extension}"
@@ -1850,13 +1613,16 @@ class GameShaderSlots(GameShader):
 
     @property
     def output_extension(self) -> str:
-        """Get the output map extension from the comboBox current text.
+        """Selected output extension, or '' when 'Profile default' is chosen.
+
+        An empty string signals the caller to defer per-map format to the selected
+        workflow profile's template rather than forcing one container for all maps.
 
         Returns:
-            (str) The file extension in lowercase (e.g., 'png', 'jpg')
+            (str) The file extension in lowercase (e.g., 'png', 'jpg'), or ''.
         """
-        text = self.ui.cmb003.currentText()
-        return text.lower()
+        text = self.ui.cmb003.currentText().lower()
+        return "" if text.startswith("profile") else text
 
     @property
     def shader_type(self) -> str:
@@ -1888,11 +1654,17 @@ class GameShaderSlots(GameShader):
                     )
 
     def cmb003_init(self, widget):
-        """Initialize Output Extension"""
+        """Initialize Output Format.
+
+        Selecting 'Profile default' defers each map's container/bit-depth to the
+        selected workflow profile's output template; a concrete format forces that
+        container for all maps.
+        """
         if not widget.is_initialized:
-            # Populate with common image file extensions
-            file_types = ptk.ImgUtils.texture_file_types
-            widget.add(file_types)
+            # Append 'Profile default' LAST so the existing format indices are
+            # preserved — combobox state is persisted by index, so inserting it at
+            # the front would silently shift every saved selection by one.
+            widget.add([*ptk.ImgUtils.writable, "Profile default"])
 
     def txt002_init(self, widget):
         """Add a prefix/suffix/auto-mode combobox to the affix field's option menu."""
@@ -1945,6 +1717,11 @@ class GameShaderSlots(GameShader):
         # Get template configuration using combo box text
         template_name = self.ui.cmb002.currentText()
 
+        # 'Profile default' (empty ext) → let the workflow profile drive per-map
+        # format; a concrete ext overrides it for all maps.
+        ext = self.output_extension
+        output_profile = template_name if not ext else None
+
         def progress_adapter(p, m):
             if hasattr(self.ui, "progressBar"):
                 self.ui.progressBar.setValue(int(p))
@@ -1960,7 +1737,8 @@ class GameShaderSlots(GameShader):
             normal_type=self.normal_map_type,
             create_arnold=create_arnold,
             cleanup_base_color=False,  # Can be exposed in UI later if needed
-            output_extension=self.output_extension,
+            output_extension=ext or None,
+            output_profile=output_profile,
             progress_callback=progress_adapter,
         )
 

@@ -1,0 +1,5 @@
+{
+    "description": "Fast iteration / preview — low resolution, few samples.",
+    "resolution": 256,
+    "samples": 2
+}

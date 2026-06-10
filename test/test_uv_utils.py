@@ -18,6 +18,68 @@ from mayatk.uv_utils._uv_utils import UvUtils
 from base_test import MayaTkTestCase
 import maya.cmds as cmds
 
+from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
+
+
+class TestLightmapUvs(MayaTkTestCase):
+    """UvUtils.create_lightmap_uvs + UvDiagnostics.is_bakeable_lightmap (Phase 1b)."""
+
+    def _shape(self, transform):
+        return (cmds.listRelatives(str(transform), shapes=True, ni=True) or [None])[0]
+
+    def test_create_makes_valid_tagged_indexed_set(self):
+        cube = cmds.polyCube(name="lmCube")[0]
+        shape = self._shape(cube)
+        UvUtils.create_lightmap_uvs([cube], map_size=256)
+        sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+        self.assertIn("lightmap", sets)
+        self.assertEqual(sets[0], "map1", f"texture set at index 0; sets={sets}")
+        self.assertEqual(sets[1], "lightmap", f"lightmap at index 1; sets={sets}")
+        self.assertTrue(cmds.attributeQuery("lightmapUVSet", node=shape, exists=True))
+        self.assertEqual(cmds.getAttr(shape + ".lightmapUVSet"), "lightmap")
+        # Current set must be restored to the texture primary -- check BEFORE
+        # is_bakeable_lightmap, which sets the current set as a side effect.
+        cur = (cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None])[0]
+        self.assertEqual(cur, "map1", "current set restored to texture primary")
+        self.assertTrue(UvDiagnostics.is_bakeable_lightmap(shape, "lightmap"))
+
+    def test_create_freeze_history_bakes_and_orders(self):
+        cube = cmds.polyCube(name="lmCubeF")[0]
+        shape = self._shape(cube)
+        UvUtils.create_lightmap_uvs([cube], map_size=256, freeze_history=True)
+        sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+        self.assertEqual(sets[0], "map1", f"texture set at index 0; sets={sets}")
+        self.assertEqual(sets[1], "lightmap", f"lightmap at index 1; sets={sets}")
+        # history frozen -> no creator/projection node left upstream
+        hist = [cmds.nodeType(h) for h in (cmds.listHistory(shape) or [])]
+        self.assertNotIn("polyCube", hist, f"history not frozen: {hist}")
+        self.assertNotIn("polyAutoProj", hist, f"history not frozen: {hist}")
+        self.assertTrue(UvDiagnostics.is_bakeable_lightmap(shape, "lightmap"))
+
+    def test_create_reuses_valid_existing(self):
+        cube = cmds.polyCube(name="lmCube2")[0]
+        shape = self._shape(cube)
+        UvUtils.create_lightmap_uvs([cube], map_size=256)
+        res = UvUtils.create_lightmap_uvs([cube], map_size=256)
+        self.assertTrue(res[shape]["reused"])
+        self.assertFalse(res[shape]["created"])
+
+    def test_generated_lightmap_survives_cleanup(self):
+        # Phase 0a + 1b integration: the tag makes cleanup protect it.
+        cube = cmds.polyCube(name="lmCube3")[0]
+        shape = self._shape(cube)
+        UvUtils.create_lightmap_uvs([cube], map_size=256)
+        UvDiagnostics.cleanup_uv_sets([cube], keep_only_primary=True)
+        sets = set(cmds.polyUVSet(shape, query=True, allUVSets=True) or [])
+        self.assertIn("lightmap", sets)
+        self.assertIn("map1", sets)
+
+    def test_is_bakeable_rejects_out_of_bounds(self):
+        cube = cmds.polyCube(name="lmCube4")[0]
+        shape = self._shape(cube)
+        cmds.polyEditUV(shape + ".map[*]", scaleU=5, scaleV=5)  # push outside 0-1
+        self.assertFalse(UvDiagnostics.is_bakeable_lightmap(shape, "map1"))
+
 
 class TestUvUtils(MayaTkTestCase):
     """Comprehensive tests for UvUtils class."""

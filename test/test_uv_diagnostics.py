@@ -362,6 +362,75 @@ class TestRealWorldScenarios(MayaTkTestCase):
         self.assertIn("map1", remaining, "Should keep map1")
 
 
+class TestLightmapProtection(MayaTkTestCase):
+    """cleanup_uv_sets must never delete a lightmap UV set (Phase 0a)."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = self.create_test_cube()
+        self.shape = (
+            cmds.listRelatives(str(self.cube), shapes=True, ni=True) or [None]
+        )[0]
+
+    def _make_uv_set(self, name):
+        """Create a populated, in-bounds UV set; leaves map1 as current."""
+        cmds.polyUVSet(self.shape, create=True, uvSet=name)
+        cmds.polyUVSet(self.shape, currentUVSet=True, uvSet=name)
+        cmds.polyProjection(self.shape + ".f[*]", type="Planar", md="z")
+        cmds.polyUVSet(self.shape, currentUVSet=True, uvSet="map1")
+
+    def test_find_lightmap_by_name(self):
+        self._make_uv_set("lightmap")
+        self.assertEqual(UvDiagnostics.find_lightmap_uv_set(self.shape), "lightmap")
+
+    def test_find_lightmap_by_tag(self):
+        self._make_uv_set("bake_uv")  # non-standard name -> only the tag finds it
+        cmds.addAttr(self.shape, longName="lightmapUVSet", dataType="string")
+        cmds.setAttr(self.shape + ".lightmapUVSet", "bake_uv", type="string")
+        self.assertEqual(UvDiagnostics.find_lightmap_uv_set(self.shape), "bake_uv")
+
+    def test_find_lightmap_none_when_absent(self):
+        cmds.polyUVSet(self.shape, create=True, uvSet="extra1")
+        self.assertIsNone(UvDiagnostics.find_lightmap_uv_set(self.shape))
+
+    def test_cleanup_preserves_lightmap_by_name(self):
+        """The core bug: keep_only_primary cleanup must keep a 'lightmap' set."""
+        self._make_uv_set("lightmap")
+        UvDiagnostics.cleanup_uv_sets([self.cube], keep_only_primary=True)
+        remaining = set(cmds.polyUVSet(self.shape, query=True, allUVSets=True) or [])
+        self.assertIn("lightmap", remaining)  # protected
+        self.assertIn("map1", remaining)  # texture primary preserved
+
+    def test_primary_selection_never_picks_lightmap(self):
+        self._make_uv_set("lightmap")
+        primary = UvDiagnostics._find_primary_uv_set(self.shape, exclude={"lightmap"})
+        self.assertEqual(primary, "map1")
+
+    def test_explicit_protect_list(self):
+        self._make_uv_set("decalUV")  # not a lightmap name; only protect= saves it
+        UvDiagnostics.cleanup_uv_sets(
+            [self.cube], keep_only_primary=True, protect=("decalUV",)
+        )
+        remaining = set(cmds.polyUVSet(self.shape, query=True, allUVSets=True) or [])
+        self.assertIn("decalUV", remaining)
+
+    def test_explicit_protect_accepts_str(self):
+        """A bare string name must protect one set, not splatter into chars."""
+        self._make_uv_set("decalUV")
+        UvDiagnostics.cleanup_uv_sets(
+            [self.cube], keep_only_primary=True, protect="decalUV"
+        )
+        remaining = set(cmds.polyUVSet(self.shape, query=True, allUVSets=True) or [])
+        self.assertIn("decalUV", remaining)
+
+    def test_unprotected_secondary_still_removed(self):
+        """Protection must not turn cleanup into a no-op for junk sets."""
+        cmds.polyUVSet(self.shape, create=True, uvSet="extra1")
+        UvDiagnostics.cleanup_uv_sets([self.cube], keep_only_primary=True)
+        remaining = set(cmds.polyUVSet(self.shape, query=True, allUVSets=True) or [])
+        self.assertNotIn("extra1", remaining)
+
+
 def run_tests():
     """Run all tests and print results."""
     loader = unittest.TestLoader()
@@ -373,6 +442,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestCleanupExecution))
     suite.addTests(loader.loadTestsFromTestCase(TestEdgeCases))
     suite.addTests(loader.loadTestsFromTestCase(TestRealWorldScenarios))
+    suite.addTests(loader.loadTestsFromTestCase(TestLightmapProtection))
 
     # Run with verbosity
     runner = unittest.TextTestRunner(verbosity=2)

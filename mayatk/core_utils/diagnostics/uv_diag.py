@@ -24,6 +24,7 @@ class UvSetCleanupResult:
     initial_sets: list[str] = field(default_factory=list)
     primary_set: Optional[str] = None
     sets_to_delete: list[str] = field(default_factory=list)
+    protected: list[str] = field(default_factory=list)
     final_name: str = "map1"
     success: bool = False
     error: Optional[str] = None
@@ -41,6 +42,74 @@ class UvSetCleanupResult:
 class UvDiagnostics:
     """Operations for inspecting and fixing common UV issues."""
 
+    # Lightmap UV identification. Our bake pipeline stamps LIGHTMAP_UV_TAG on
+    # a shape (a string attr naming the lightmap set) and names the set
+    # LIGHTMAP_UV_SET; incoming third-party scenes are matched by name.
+    LIGHTMAP_UV_SET = "lightmap"
+    LIGHTMAP_UV_TAG = "lightmapUVSet"
+    DEFAULT_LIGHTMAP_NAMES = ("lightmap", "lightmapUV", "UV2", "UVChannel_2")
+
+    @classmethod
+    def find_lightmap_uv_set(cls, shape, all_sets=None, names=None):
+        """Detect a lightmap UV set on *shape*, or ``None``.
+
+        Layered, most-authoritative first:
+          1. an explicit tag attr (``LIGHTMAP_UV_TAG``) naming the set -- what
+             our own pipeline stamps;
+          2. a set whose name matches *names* (case-insensitive).
+
+        Index/geometry are deliberately NOT used for auto-detection: a clean
+        texture UV is indistinguishable from a lightmap by geometry alone, and
+        treating any 2nd set as a lightmap would defeat cleanup's purpose. Use
+        the ``protect=`` arg of :meth:`cleanup_uv_sets` for a lightmap that is
+        neither tagged nor conventionally named.
+
+        Parameters:
+            shape: Mesh shape to inspect.
+            all_sets: Pre-queried UV set list (re-queried if omitted).
+            names: Override the recognized lightmap names.
+
+        Returns:
+            The lightmap UV set name, or None.
+        """
+        shape = str(shape)
+        if all_sets is None:
+            all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+        unique = list(dict.fromkeys(all_sets))
+
+        # Tier 1: explicit tag (authoritative -- our pipeline owns it).
+        if cmds.attributeQuery(cls.LIGHTMAP_UV_TAG, node=shape, exists=True):
+            tagged = cmds.getAttr(f"{shape}.{cls.LIGHTMAP_UV_TAG}")
+            if tagged and tagged in unique:
+                return tagged
+
+        # Tier 2: name convention (case-insensitive). Coerce a bare string so
+        # names="lightmap" isn't splattered into single characters.
+        if isinstance(names, str):
+            names = (names,)
+        wanted = {n.lower() for n in (names or cls.DEFAULT_LIGHTMAP_NAMES)}
+        for uv_set in unique:
+            if uv_set.lower() in wanted:
+                return uv_set
+        return None
+
+    @classmethod
+    def is_bakeable_lightmap(cls, shape, uv_set) -> bool:
+        """True if *uv_set* is usable as a lightmap: has UVs, non-overlapping,
+        and packed within the 0-1 unit square (a single tile).
+
+        Used by the UV2 stage to decide reuse-vs-regenerate. Delegates to
+        :meth:`_analyze_uv_set`, which sets the queried set as current as a
+        side effect -- callers that care should restore it.
+        """
+        m = cls._analyze_uv_set(str(shape), uv_set)
+        return bool(
+            m.get("uv_count", 0) > 0
+            and m.get("overlap_count", 0) == 0
+            and m.get("area_outside", 1.0) < 1e-3
+            and m.get("in_bounds", False)
+        )
+
     @classmethod
     def cleanup_uv_sets(
         cls,
@@ -50,6 +119,8 @@ class UvDiagnostics:
         rename_to_map1: bool = True,
         force_rename: bool = False,
         prefer_largest_area: bool = False,
+        protect: Sequence[str] = (),
+        protect_lightmaps: bool = True,
         dry_run: bool = False,
         quiet: bool = False,
     ) -> list[UvSetCleanupResult]:
@@ -67,6 +138,10 @@ class UvDiagnostics:
             rename_to_map1: If True, rename the primary UV set to 'map1'.
             force_rename: If True, force rename even if another 'map1' already exists.
             prefer_largest_area: If True, choose UV set with largest area coverage as primary.
+            protect: UV set names that must never be deleted, renamed over, or
+                chosen as the texture primary (e.g. a lightmap or decal channel).
+            protect_lightmaps: If True (default), auto-detect a lightmap UV set
+                (see :meth:`find_lightmap_uv_set`) and protect it.
             dry_run: If True, only report what would be done without making changes.
             quiet: If True, suppress output messages.
 
@@ -74,6 +149,9 @@ class UvDiagnostics:
             List of UvSetCleanupResult objects describing the cleanup for each mesh.
         """
         from mayatk.node_utils._node_utils import NodeUtils
+
+        if isinstance(protect, str):  # a bare name -> one-element sequence
+            protect = (protect,)
 
         objects = NodeUtils.get_transform_node(objects)
         results: list[UvSetCleanupResult] = []
@@ -120,8 +198,20 @@ class UvDiagnostics:
                     except Exception:
                         pass  # History deletion failed, continue anyway
 
-                # Step 1: Identify the primary UV set
-                primary_uv_set = cls._find_primary_uv_set(shape, prefer_largest_area)
+                # Resolve protected sets (explicit + auto-detected lightmap) so
+                # neither the primary picker nor the delete pass can clobber a
+                # lightmap (or other declared) channel.
+                protected = set(protect or ())
+                if protect_lightmaps:
+                    lightmap_set = cls.find_lightmap_uv_set(shape, all_sets)
+                    if lightmap_set:
+                        protected.add(lightmap_set)
+                result.protected = sorted(protected)
+
+                # Step 1: Identify the primary UV set (never a protected set)
+                primary_uv_set = cls._find_primary_uv_set(
+                    shape, prefer_largest_area, exclude=protected
+                )
                 result.primary_set = primary_uv_set
 
                 if not primary_uv_set:
@@ -129,13 +219,19 @@ class UvDiagnostics:
                     results.append(result)
                     continue
 
-                # Determine which sets to delete
+                # Determine which sets to delete (never a protected set)
                 if keep_only_primary:
-                    result.sets_to_delete = [s for s in all_sets if s != primary_uv_set]
+                    result.sets_to_delete = [
+                        s
+                        for s in all_sets
+                        if s != primary_uv_set and s not in protected
+                    ]
                 elif remove_empty:
-                    result.sets_to_delete = cls._get_empty_uv_sets(
-                        shape, primary_uv_set
-                    )
+                    result.sets_to_delete = [
+                        s
+                        for s in cls._get_empty_uv_sets(shape, primary_uv_set)
+                        if s not in protected
+                    ]
 
                 # Final name logic
                 if rename_to_map1:
@@ -152,6 +248,7 @@ class UvDiagnostics:
                         result.final_name,
                         force_rename,
                         quiet,
+                        protect=protected,
                     )
                     result.success = cleanup_ok
                     if not cleanup_ok:
@@ -313,7 +410,9 @@ class UvDiagnostics:
         return result
 
     @staticmethod
-    def _find_primary_uv_set(shape, prefer_largest_area: bool = True) -> Optional[str]:
+    def _find_primary_uv_set(
+        shape, prefer_largest_area: bool = True, exclude=()
+    ) -> Optional[str]:
         """Find the best UV set to keep based on UV data quality.
 
         Selection is based on DATA QUALITY, not naming conventions. Names are
@@ -341,6 +440,7 @@ class UvDiagnostics:
         DELETE_MARKER = "___delete___"
         # Standard names used ONLY as tiebreaker for equal-quality sets
         STANDARD_NAMES = ("map1", "UVChannel_1", "UVMap", "Default", "uvSet")
+        exclude = set(exclude or ())
 
         shape = str(shape)
         all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
@@ -362,6 +462,10 @@ class UvDiagnostics:
             # EXCLUDE delete-marked sets entirely - explicit user directive
             if uv_set.startswith(DELETE_MARKER):
                 continue
+            # EXCLUDE protected sets (e.g. lightmap) -- the primary must be the
+            # texture set, never the lightmap channel.
+            if uv_set in exclude:
+                continue
 
             is_real = uv_set in real_sets
             metrics = UvDiagnostics._analyze_uv_set(shape, uv_set)
@@ -370,6 +474,8 @@ class UvDiagnostics:
         if not candidates:
             # No non-delete-marked sets found - fall back to any set with data
             for uv_set in dict.fromkeys(all_sets):
+                if uv_set in exclude:
+                    continue
                 is_real = uv_set in real_sets
                 metrics = UvDiagnostics._analyze_uv_set(shape, uv_set)
                 if metrics["uv_count"] > 0:
@@ -453,6 +559,7 @@ class UvDiagnostics:
         final_name: str,
         force_rename: bool,
         quiet: bool,
+        protect=(),
     ) -> bool:
         """Execute the actual UV set cleanup operations.
 
@@ -496,10 +603,15 @@ class UvDiagnostics:
 
         # Delete duplicate UV sets (same name appearing multiple times)
         # But NEVER delete the primary set, and only delete "real" sets
+        protect = set(protect or ())
         seen_names = set()
         for uv_set in all_sets:
             if uv_set == primary_uv_set:
                 # Skip deleting primary, but mark it as seen
+                seen_names.add(uv_set)
+                continue
+            if uv_set in protect:
+                # Never delete a protected (e.g. lightmap) set
                 seen_names.add(uv_set)
                 continue
             if uv_set not in real_sets:

@@ -25,9 +25,9 @@ _Generated: 2026-06-10_
 - [`anim_utils/shots/_shot_plan.py`](#anim_utils--shots--_shot_plan) — Pure planning layer for multi-shot topology transformations.
 - [`anim_utils/shots/_shots.py`](#anim_utils--shots--_shots) — Shared shot data model and persistent store.
 - [`anim_utils/shots/shot_manifest/_shot_manifest.py`](#anim_utils--shots--shot_manifest--_shot_manifest) — Shot Manifest â€” parse structured CSVs and populate a ShotStore.
-- [`anim_utils/shots/shot_manifest/behaviors/__init__.py`](#anim_utils--shots--shot_manifest--behaviors--__init__) — Behaviors — load and apply YAML keying recipes.
+- [`anim_utils/shots/shot_manifest/behaviors/_behaviors.py`](#anim_utils--shots--shot_manifest--behaviors--_behaviors) — Behaviors — load and apply YAML keying recipes.
 - [`anim_utils/shots/shot_manifest/manifest_data.py`](#anim_utils--shots--shot_manifest--manifest_data) — Constants, column layout, and pure helper functions for the Shot Manifest UI.
-- [`anim_utils/shots/shot_manifest/mapping/__init__.py`](#anim_utils--shots--shot_manifest--mapping--__init__) — CSV mapping resolver — interprets JSON mapping files.
+- [`anim_utils/shots/shot_manifest/mapping/_mapping.py`](#anim_utils--shots--shot_manifest--mapping--_mapping) — CSV mapping resolver — interprets JSON mapping files.
 - [`anim_utils/shots/shot_manifest/range_resolver.py`](#anim_utils--shots--shot_manifest--range_resolver) — Range resolution algorithm for the Shot Manifest.
 - [`anim_utils/shots/shot_manifest/shot_manifest_slots.py`](#anim_utils--shots--shot_manifest--shot_manifest_slots) — Switchboard slots for the Shot Manifest UI.
 - [`anim_utils/shots/shot_manifest/table_presenter.py`](#anim_utils--shots--shot_manifest--table_presenter) — Tree-widget presentation mixin for the Shot Manifest controller.
@@ -106,10 +106,11 @@ _Generated: 2026-06-10_
 - [`env_utils/workspace_manager.py`](#env_utils--workspace_manager)
 - [`env_utils/workspace_map.py`](#env_utils--workspace_map)
 - [`light_utils/_light_utils.py`](#light_utils--_light_utils)
-- [`light_utils/bake_lighting.py`](#light_utils--bake_lighting) — Bake Maya scene lighting into per-object texture files.
 - [`light_utils/hdr_manager.py`](#light_utils--hdr_manager) — Arnold HDR environment manager.
+- [`light_utils/lightmap_baker/lightmap_baker.py`](#light_utils--lightmap_baker--lightmap_baker) — High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 - [`mat_utils/_affix_mode.py`](#mat_utils--_affix_mode) — Shared affix-mode option-box helper for mat_utils slot files.
 - [`mat_utils/_mat_utils.py`](#mat_utils--_mat_utils)
+- [`mat_utils/arnold_bridge.py`](#mat_utils--arnold_bridge) — Arnold render-bridge management.
 - [`mat_utils/game_shader.py`](#mat_utils--game_shader)
 - [`mat_utils/image_to_plane/_image_to_plane.py`](#mat_utils--image_to_plane--_image_to_plane) — Map image files to textured polygon planes in Maya.
 - [`mat_utils/image_to_plane/image_to_plane_slots.py`](#mat_utils--image_to_plane--image_to_plane_slots) — Switchboard slots for the Image to Plane UI.
@@ -147,6 +148,7 @@ _Generated: 2026-06-10_
 - [`mat_utils/substance_bridge/parameters.py`](#mat_utils--substance_bridge--parameters) — Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
 - [`mat_utils/substance_bridge/substance_bridge_slots.py`](#mat_utils--substance_bridge--substance_bridge_slots) — Slots for the Substance Painter bridge panel.
 - [`mat_utils/substance_bridge/substance_rpc/client.py`](#mat_utils--substance_bridge--substance_rpc--client) — JSON-RPC 2.0 client for a Painter-side Python plugin.
+- [`mat_utils/texture_baker.py`](#mat_utils--texture_baker) — Bake an object's shaded surface (material under scene lighting) to a texture.
 - [`mat_utils/texture_path_editor.py`](#mat_utils--texture_path_editor)
 - [`node_utils/_node_utils.py`](#node_utils--_node_utils)
 - [`node_utils/attributes/_attributes.py`](#node_utils--attributes--_attributes) — Consolidated attribute utilities for Maya.
@@ -525,19 +527,19 @@ Shot Manifest â€” parse structured CSVs and populate a ShotStore.
   - `ShotManifest.assess(self, steps: List[BuilderStep], exists_fn: Optional[Callable[[str], bool]] = None, verify_fn: Optional[Callable] = None, keyframe_range_fn: Optional[Callable[[str], Optional[Tuple[float, float]]]] = None, audio_exists_fn: Optional[Callable[[str], bool]] = None, skip_scene_discovery: bool = False) -> List[StepStatus]` — Compare parsed steps against the current store state.
   - `ShotManifest.from_csv(filepath: str, store: Optional[ShotStore] = None, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> Tuple['ShotManifest', List[BuilderStep]]` *(static)* — Convenience: parse a CSV and return a ready-to-build engine.
 
-<a id="anim_utils--shots--shot_manifest--behaviors--__init__"></a>
-### `anim_utils/shots/shot_manifest/behaviors/__init__.py`
+<a id="anim_utils--shots--shot_manifest--behaviors--_behaviors"></a>
+### `anim_utils/shots/shot_manifest/behaviors/_behaviors.py`
 
 Behaviors — load and apply YAML keying recipes.
 
-- [`load_behavior(name: str, search_path: Optional[Path] = None) -> Dict[str, Any]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/__init__.py#L28) — Load a YAML behavior template by stem name.
-- [`list_behaviors(search_path: Optional[Path] = None, kind: Optional[str] = None) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/__init__.py#L63) — Return stem names of all available behavior templates.
-- [`resolve_keys(block_def: Dict, start: float, end: float) -> List[Dict[str, Any]]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/__init__.py#L98) — Resolve an ``in`` or ``out`` block to absolute keyframe dicts.
-- [`apply_behavior(obj: str, behavior_name: str, start: float, end: float, attrs: Optional[List[str]] = None, search_path: Optional[Path] = None, source_path: str = '', anchor_override: Optional[str] = None) -> None`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/__init__.py#L149) — Apply a named behavior template to an object over a time range.
-- [`verify_behavior(obj: str, behavior_name: str, start: float, end: float, search_path: Optional[Path] = None, keyframe_fn: Optional[Any] = None) -> bool`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/__init__.py#L291) — Check whether expected behavior keyframes exist on an object.
-- [`apply_audio_clip(obj: str, start: float, end: float, source_path: str = '') -> None`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/__init__.py#L443) — Author start/stop keys for an audio track over *(start, end)*.
-- [`compute_duration(behavior_entries: List[Dict[str, str]], fallback: float = 30, fps: Optional[float] = None) -> float`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/__init__.py#L524) — Derive duration from the behavior templates referenced in *behavior_entries*.
-- [`apply_to_shots(shots: list, apply_fn, exists_fn=None, has_keys_fn=None, store=None) -> Dict[str, list]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/__init__.py#L652) — Apply declared behaviors from shot metadata to Maya objects.
+- [`load_behavior(name: str, search_path: Optional[Path] = None) -> Dict[str, Any]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L31) — Load a YAML behavior template by stem name.
+- [`list_behaviors(search_path: Optional[Path] = None, kind: Optional[str] = None) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L66) — Return stem names of all available behavior templates.
+- [`resolve_keys(block_def: Dict, start: float, end: float) -> List[Dict[str, Any]]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L101) — Resolve an ``in`` or ``out`` block to absolute keyframe dicts.
+- [`apply_behavior(obj: str, behavior_name: str, start: float, end: float, attrs: Optional[List[str]] = None, search_path: Optional[Path] = None, source_path: str = '', anchor_override: Optional[str] = None) -> None`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L152) — Apply a named behavior template to an object over a time range.
+- [`verify_behavior(obj: str, behavior_name: str, start: float, end: float, search_path: Optional[Path] = None, keyframe_fn: Optional[Any] = None) -> bool`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L294) — Check whether expected behavior keyframes exist on an object.
+- [`apply_audio_clip(obj: str, start: float, end: float, source_path: str = '') -> None`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L438) — Author start/stop keys for an audio track over *(start, end)*.
+- [`compute_duration(behavior_entries: List[Dict[str, str]], fallback: float = 30, fps: Optional[float] = None) -> float`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L519) — Derive duration from the behavior templates referenced in *behavior_entries*.
+- [`apply_to_shots(shots: list, apply_fn, exists_fn=None, has_keys_fn=None, store=None) -> Dict[str, list]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L647) — Apply declared behaviors from shot metadata to Maya objects.
 
 <a id="anim_utils--shots--shot_manifest--manifest_data"></a>
 ### `anim_utils/shots/shot_manifest/manifest_data.py`
@@ -552,14 +554,14 @@ Constants, column layout, and pure helper functions for the Shot Manifest UI.
 - [`try_load_maya_icons()`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L109) — Return the :class:`NodeIcons` class if Maya is available, else ``None``.
 - [`prune_to_top_boundaries(region_starts: List[float], n_steps: int) -> List[float]`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L119) — Keep only *n_steps* region starts by selecting the largest gaps.
 
-<a id="anim_utils--shots--shot_manifest--mapping--__init__"></a>
-### `anim_utils/shots/shot_manifest/mapping/__init__.py`
+<a id="anim_utils--shots--shot_manifest--mapping--_mapping"></a>
+### `anim_utils/shots/shot_manifest/mapping/_mapping.py`
 
 CSV mapping resolver — interprets JSON mapping files.
 
-- [`discover(directory: Optional[str] = None) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/__init__.py#L77) — List available mapping names (without ``.json``) in *directory*.
-- [`load_mapping(name: str, directory: Optional[str] = None) -> Dict[str, Any]`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/__init__.py#L93) — Read a mapping JSON by *name* and return the parsed dict.
-- [`resolve(csv_path: str, mapping: Optional[Dict[str, Any]] = None, *, name: Optional[str] = None, directory: Optional[str] = None) -> List[BuilderStep]`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/__init__.py#L126) — Parse a CSV through a mapping and return fully resolved steps.
+- [`discover(directory: Optional[str] = None) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_mapping.py#L79) — List available mapping names (without ``.json``) in *directory*.
+- [`load_mapping(name: str, directory: Optional[str] = None) -> Dict[str, Any]`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_mapping.py#L95) — Read a mapping JSON by *name* and return the parsed dict.
+- [`resolve(csv_path: str, mapping: Optional[Dict[str, Any]] = None, *, name: Optional[str] = None, directory: Optional[str] = None) -> List[BuilderStep]`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_mapping.py#L128) — Parse a CSV through a mapping and return fully resolved steps.
 
 <a id="anim_utils--shots--shot_manifest--range_resolver"></a>
 ### `anim_utils/shots/shot_manifest/range_resolver.py`
@@ -1107,8 +1109,10 @@ Scene diagnostics and repair helpers.
 UV diagnostics and repair helpers.
 
 - **[`class UvSetCleanupResult`](mayatk/mayatk/core_utils/diagnostics/uv_diag.py#L20)** — Result of a UV set cleanup operation for a single mesh.
-- **[`class UvDiagnostics`](mayatk/mayatk/core_utils/diagnostics/uv_diag.py#L41)** — Operations for inspecting and fixing common UV issues.
-  - `UvDiagnostics.cleanup_uv_sets(cls, objects: NodeSeq, remove_empty: bool = True, keep_only_primary: bool = True, rename_to_map1: bool = True, force_rename: bool = False, prefer_largest_area: bool = False, dry_run: bool = False, quiet: bool = False) -> list[UvSetCleanupResult]` *(class)* — Cleanup UV sets by removing empty/secondary sets and renaming the primary to 'map1'.
+- **[`class UvDiagnostics`](mayatk/mayatk/core_utils/diagnostics/uv_diag.py#L42)** — Operations for inspecting and fixing common UV issues.
+  - `UvDiagnostics.find_lightmap_uv_set(cls, shape, all_sets=None, names=None)` *(class)* — Detect a lightmap UV set on *shape*, or ``None``.
+  - `UvDiagnostics.is_bakeable_lightmap(cls, shape, uv_set) -> bool` *(class)* — True if *uv_set* is usable as a lightmap: has UVs, non-overlapping,
+  - `UvDiagnostics.cleanup_uv_sets(cls, objects: NodeSeq, remove_empty: bool = True, keep_only_primary: bool = True, rename_to_map1: bool = True, force_rename: bool = False, prefer_largest_area: bool = False, protect: Sequence[str] = (), protect_lightmaps: bool = True, dry_run: bool = False, quiet: bool = False) -> list[UvSetCleanupResult]` *(class)* — Cleanup UV sets by removing empty/secondary sets and renaming the primary to 'map1'.
 
 <a id="core_utils--instancing--assembly_reconstructor"></a>
 ### `core_utils/instancing/assembly_reconstructor.py`
@@ -2033,17 +2037,6 @@ Maya Connection Module
 
 - **[`class LightUtils(ptk.HelpMixin)`](mayatk/mayatk/light_utils/_light_utils.py#L12)**
 
-<a id="light_utils--bake_lighting"></a>
-### `light_utils/bake_lighting.py`
-
-Bake Maya scene lighting into per-object texture files.
-
-- **[`class BakeLighting(ptk.LoggingMixin)`](mayatk/mayatk/light_utils/bake_lighting.py#L51)** — Bakes scene lighting per object to PNG textures.
-  - `BakeLighting.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin is loaded AND its bake cmd is registered.
-  - `BakeLighting.bake(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'bake_', backend: str = 'auto') -> Dict[str, str]` — Bake lighting per object to PNG files.
-  - `BakeLighting.assign_to_diffuse(self, mapping: Dict[str, str]) -> None` — Wire each baked PNG into the object's material color slot.
-  - `BakeLighting.restore_diffuse_connections(self) -> None` — Undo :meth:`assign_to_diffuse` -- reconnects previous drivers.
-
 <a id="light_utils--hdr_manager"></a>
 ### `light_utils/hdr_manager.py`
 
@@ -2098,6 +2091,33 @@ Arnold HDR environment manager.
   - `HdrManagerSlots.ctx_select_transform(self) -> None`
   - `HdrManagerSlots.ctx_select_file_node(self) -> None`
   - `HdrManagerSlots.ctx_reveal_in_explorer(self) -> None`
+
+<a id="light_utils--lightmap_baker--lightmap_baker"></a>
+### `light_utils/lightmap_baker/lightmap_baker.py`
+
+High-level lightmap baking workflow for Maya -> game engines (Unity-first).
+
+- **[`class LightmapBaker(ptk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L63)** — Orchestrate the lightmap workflow: bake -> dilate -> engine export prep.
+  - `LightmapBaker.preset_store() -> 'ptk.PresetStore'` *(static)* — Shared store of lightmap quality presets (built-in + user tiers).
+  - `LightmapBaker.from_preset(cls, name: str, **overrides) -> 'LightmapBaker'` *(class)* — Construct a baker from a named quality preset.
+  - `LightmapBaker.bake_fused(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, uv_set: Optional[str] = None, map_size: Optional[int] = None, create_uvs: bool = True, dilate: bool = True, dilate_iterations: Optional[int] = None, alpha_threshold: float = 0.001, prefix: str = 'lightmap_', suffix: str = '', backend: str = 'arnold', on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Any] = None) -> Dict[str, str]` — Bake a fused HDR lightmap per object into the UV2 channel.
+  - `LightmapBaker.bake_separated(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'lightmap_irr_', **kwargs) -> Dict[str, str]` — Bake a **lighting-only** (white-card) irradiance lightmap per object.
+  - `LightmapBaker.commit_unlit(self, mapping: Dict[str, str]) -> Dict[str, str]` — Make the fused bake each object's live appearance (non-destructive).
+  - `LightmapBaker.revert_unlit(self, objects: Optional[List[str]] = None) -> List[str]` — Undo :meth:`commit_unlit` -- restore the source material + UV order.
+  - `LightmapBaker.pack_atlas(self, mapping: Dict[str, str], output_dir: Optional[str] = None, prefix: str = '', suffix: str = '_Lightmap') -> Dict[str, Tuple[str, List[float]]]` — Consolidate per-object lightmaps into one atlas EXR per primary material.
+  - `LightmapBaker.commit_lightmap(self, mapping: Dict[str, str], intensity: float = 1.0, scale_offsets: Optional[Dict[str, List[float]]] = None) -> Dict[str, str]` — Record a lighting-only bake for the engine (fully non-destructive).
+  - `LightmapBaker.revert_lightmap(self, objects: Optional[List[str]] = None) -> List[str]` — Undo :meth:`commit_lightmap` -- drop the markers + republish.
+  - `LightmapBaker.revert(self, objects: Optional[List[str]] = None) -> List[str]` — Undo any lightmap wiring -- fused commit and/or lighting-only marker.
+- **[`class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L889)** — Switchboard slots for the ``lightmap_baker.ui`` panel.
+  - `LightmapBakerSlots.header_init(self, widget) -> None` — Configure the header menu and help text.
+  - `LightmapBakerSlots.cmb000_init(self, widget) -> None` — Populate the Quality combobox from the shared preset store.
+  - `LightmapBakerSlots.cmb000(self, index, widget) -> None` — Apply the selected preset's dials to the Resolution / Samples fields.
+  - `LightmapBakerSlots.cmb001_init(self, widget) -> None` — Populate the bake-level (Mode) combobox;
+  - `LightmapBakerSlots.cmb002_init(self, widget) -> None` — Populate the Packing combobox;
+  - `LightmapBakerSlots.txt000_init(self, widget) -> None` — Add the Prefix / Suffix / Auto picker to the name-affix field.
+  - `LightmapBakerSlots.b000(self) -> None` — Bake lightmaps for the selection in the chosen Mode (revert → bake → commit).
+  - `LightmapBakerSlots.revert_to_source(self) -> None` — Undo the bake wiring on the selected objects (or all baked ones).
+  - `LightmapBakerSlots.open_sourceimages(self) -> None` — Open the project's sourceimages folder (where bakes go) in Explorer.
 
 <a id="mat_utils--_affix_mode"></a>
 ### `mat_utils/_affix_mode.py`
@@ -2155,34 +2175,51 @@ Shared affix-mode option-box helper for mat_utils slot files.
   - `MatUtils.validate_normal_map_setup(normal_file_node, material=None) -> Dict[str, Any]` *(static)* — Validate normal map file node setup and provide recommendations.
   - `MatUtils.graph_materials(materials: Union[str, List[str], object], mode: str = 'showUpAndDownstream') -> None` *(static)* — Open the Hypershade and graph the specified materials.
 
+<a id="mat_utils--arnold_bridge"></a>
+### `mat_utils/arnold_bridge.py`
+
+Arnold render-bridge management.
+
+- **[`class ArnoldBridge(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/arnold_bridge.py#L60)** — Add, remove, query, and rebuild Arnold ``aiStandardSurface`` bridges.
+  - `ArnoldBridge.add(self, materials: Optional[Union[str, List[str]]] = None, objects: Optional[Union[str, List[str]]] = None, force: bool = False) -> List[str]` — Attach an Arnold bridge to every base material in scope.
+  - `ArnoldBridge.remove(self, materials: Optional[Union[str, List[str]]] = None, objects: Optional[Union[str, List[str]]] = None) -> List[str]` — Delete the Arnold bridge from every base material in scope.
+  - `ArnoldBridge.rebuild(self, materials: Optional[Union[str, List[str]]] = None, objects: Optional[Union[str, List[str]]] = None) -> List[str]` — Remove and re-add the bridge — resyncs it to the base material's
+  - `ArnoldBridge.get_bridge(self, material: str) -> Optional[str]` — Return the ``aiStandardSurface`` bridging *material*, or None.
+  - `ArnoldBridge.has_bridge(self, material: str) -> bool` — True if *material*'s shading engine already has an Arnold bridge.
+- **[`class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/mat_utils/arnold_bridge.py#L567)** — Switchboard slots for the ``arnold_bridge.ui`` panel.
+  - `ArnoldBridgeSlots.header_init(self, widget) -> None` — Configure the header menu and help text.
+  - `ArnoldBridgeSlots.cmb000_init(self, widget) -> None` — Populate the Scope combobox (Selected Objects is the default).
+  - `ArnoldBridgeSlots.b000(self) -> None` — Add Bridge.
+  - `ArnoldBridgeSlots.b001(self) -> None` — Remove Bridge.
+  - `ArnoldBridgeSlots.b002(self) -> None` — Rebuild Bridge.
+  - `ArnoldBridgeSlots.select_bridged(self) -> None` — Header action: select every base material that has a bridge.
+
 <a id="mat_utils--game_shader"></a>
 ### `mat_utils/game_shader.py`
 
-- **[`class GameShader(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/game_shader.py#L34)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
+- **[`class GameShader(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/game_shader.py#L33)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
   - `GameShader.create_network(self, textures: List[str], name: str = '', prefix: str = '', suffix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]` — Create a PBR shader network with textures.
   - `GameShader.setup_stringray_node(self, name: str, opacity: bool) -> object` — Initializes and sets up a StingrayPBS shader node in Maya.
-  - `GameShader.setup_arnold_nodes(self, name: str, shader_node: object) -> Tuple[object, object, object]` — Sets up a basic Arnold shader network for use with a Stingray PBS or Standard Surface shader.
   - `GameShader.setup_standard_surface_node(self, name: str, opacity: bool) -> object` — Creates and sets up a Maya Standard Surface shader node.
   - `GameShader.setup_open_pbr_node(self, name: str, opacity: bool) -> object` — Creates and sets up a Maya OpenPBR Surface shader node.
   - `GameShader.connect_stingray_nodes(self, texture: str, texture_type: str, sr_node: object) -> bool` — Connects texture files to the corresponding slots in the StingrayPBS shader node
-  - `GameShader.connect_arnold_nodes(self, texture: str, texture_type: str, ai_node: object, aiMult_node: object, bump_node: object) -> bool` — Connects texture files to the corresponding slots in the Arnold shader nodes based on the texture t…
   - `GameShader.connect_standard_surface_nodes(self, texture: str, texture_type: str, std_node: object) -> bool` — Connects texture files to Maya Standard Surface shader slots.
   - `GameShader.connect_open_pbr_nodes(self, texture: str, texture_type: str, op_node: object) -> bool` — Connects texture files to Maya OpenPBR Surface shader slots.
   - `GameShader.filter_for_correct_normal_map(self, textures: List[str], desired_normal_type: str) -> List[str]` — Filters and ensures only the desired type of normal map is in the textures list.
   - `GameShader.filter_for_correct_metallic_map(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]` — Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…
   - `GameShader.filter_for_mask_map(self, textures: List[str], output_extension: str = 'png') -> List[str]` — Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
   - `GameShader.filter_for_correct_base_color_map(self, textures: List[str], use_albedo_transparency: bool) -> List[str]` — Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…
-- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1729)**
+- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1492)**
   - `GameShaderSlots.header_init(self, widget)` — Initialize the header widget.
   - `GameShaderSlots.lbl_graph_material(self)` — Graph the material in the Hypershade.
   - `GameShaderSlots.mat_name(self) -> str` *(property)* — Get the mat name from the user input text field.
   - `GameShaderSlots.mat_prefix(self) -> str` *(property)* — Return the affix text when it resolves as a prefix, else empty string.
   - `GameShaderSlots.mat_suffix(self) -> str` *(property)* — Return the affix text when it resolves as a suffix, else empty string.
   - `GameShaderSlots.normal_map_type(self) -> str` *(property)* — Get the normal map type from the comboBoxes current text.
-  - `GameShaderSlots.output_extension(self) -> str` *(property)* — Get the output map extension from the comboBox current text.
+  - `GameShaderSlots.output_extension(self) -> str` *(property)* — Selected output extension, or '' when 'Profile default' is chosen.
   - `GameShaderSlots.shader_type(self) -> str` *(property)* — Get the shader type selection.
   - `GameShaderSlots.cmb002_init(self, widget)` — Initialize Presets
-  - `GameShaderSlots.cmb003_init(self, widget)` — Initialize Output Extension
+  - `GameShaderSlots.cmb003_init(self, widget)` — Initialize Output Format.
   - `GameShaderSlots.txt002_init(self, widget)` — Add a prefix/suffix/auto-mode combobox to the affix field's option menu.
   - `GameShaderSlots.b000(self)` — Create network.
 
@@ -2583,6 +2620,17 @@ JSON-RPC 2.0 client for a Painter-side Python plugin.
   - `PainterRpcClient.call(self, method: str, params: Optional[dict] = None) -> dict` — Send a JSON-RPC method call.
   - `PainterRpcClient.eval_js(self, script: str) -> dict` — Convenience: execute a JavaScript snippet via ``eval``.
 
+<a id="mat_utils--texture_baker"></a>
+### `mat_utils/texture_baker.py`
+
+Bake an object's shaded surface (material under scene lighting) to a texture.
+
+- **[`class TextureBaker(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/texture_baker.py#L61)** — Bake scene lighting per object to a texture file (PNG, EXR, ...).
+  - `TextureBaker.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin is loaded AND its bake cmd is registered.
+  - `TextureBaker.bake(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'bake_', suffix: str = '', backend: str = 'auto', uv_set: Optional[Union[str, Dict[str, str]]] = None, on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Union[Callable[[str], str], Dict[str, str]]] = None) -> Dict[str, str]` — Bake lighting per object to PNG files.
+  - `TextureBaker.assign_to_diffuse(self, mapping: Dict[str, str]) -> None` — Wire each baked PNG into the object's material color slot.
+  - `TextureBaker.restore_diffuse_connections(self) -> None` — Undo :meth:`assign_to_diffuse` -- reconnects previous drivers.
+
 <a id="mat_utils--texture_path_editor"></a>
 ### `mat_utils/texture_path_editor.py`
 
@@ -2633,8 +2681,8 @@ JSON-RPC 2.0 client for a Painter-side Python plugin.
   - `NodeUtils.get_groups(cls, empty=False)` *(class)* — Get all groups in the scene.
   - `NodeUtils.get_parent(node, all=False, full_path=False, type='transform')` *(static)* — Return the parent of *node*.
   - `NodeUtils.get_children(node, type='transform', full_path=False)` *(static)* — List the children of *node*.
-  - `NodeUtils.get_shapes(node, no_intermediate=True, full_path=True)` *(static)* — Return the shape children of a transform.
-  - `NodeUtils.get_shape(cls, node, no_intermediate=True, full_path=True)` *(class)* — Return the first shape of a transform, or ``None``.
+  - `NodeUtils.get_shapes(cls, node, no_intermediate=True, full_path=True)` *(class)* — Return the shape(s) associated with *node* -- flexible about input.
+  - `NodeUtils.get_shape(cls, node, no_intermediate=True, full_path=True)` *(class)* — Return the first shape for a transform / shape / component, or ``None``.
   - `NodeUtils.is_intermediate(shape)` *(static)* — Return True if *shape* is an intermediate (orig) shape.
   - `NodeUtils.node_is(node, type_name)` *(static)* — Return True if ``cmds.objectType(node)`` matches *type_name* exactly.
   - `NodeUtils.list_transforms(objects=None, **ls_kwargs)` *(static)* — Transforms whose shapes match the given ``cmds.ls`` criteria.
@@ -3090,6 +3138,7 @@ Reusable helper for resolving Maya node icons at runtime.
   - `UvUtils.discard_uv_snapshot(snapshots: Sequence[UvSnapshot]) -> None` *(static)* — Delete the snapshot UV sets without restoring them.
   - `UvUtils.transfer_uvs(source: Union[str, object, List[Union[str, object]]], target: Union[str, object, List[Union[str, object]]], tolerance: float = 0.1) -> None` *(static)* — Transfers UVs from source meshes to target meshes based on geometric similarity.
   - `UvUtils.reorder_uv_sets(obj: str, new_order: list[str]) -> None` *(static)* — Reorder UV sets of the given object to match the specified new order.
+  - `UvUtils.create_lightmap_uvs(cls, objects, uv_set: str = None, map_size: int = 1024, planes: int = 6, force: bool = False, freeze_history: bool = False, quiet: bool = False) -> dict` *(class)* — Ensure each mesh has a packed, non-overlapping lightmap UV set.
   - `UvUtils.remove_empty_uv_sets(objects, quiet: bool = False) -> None` *(static)* — Remove empty UV sets from the given objects.
 
 <a id="uv_utils--rizom_bridge--_rizom_bridge"></a>

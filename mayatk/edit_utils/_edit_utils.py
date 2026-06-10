@@ -548,24 +548,27 @@ class EditUtils(ptk.HelpMixin):
         pct = max(0.0, min(99.0, float(percentage)))
         if pct <= 0.0:  # nothing to remove — skip the no-op polyReduce node
             return objects
-        cmds.polyReduce(
-            objects,
-            version=1,
-            percentage=pct,
-            keepBorder=preserve_borders,
-            keepFaceGroupBorder=preserve_borders,
-            keepHardEdge=preserve_hard_edges,
-            keepCreaseEdge=preserve_hard_edges,
-            keepMapBorder=preserve_uv_borders,
-            keepColorBorder=preserve_uv_borders,
-            keepQuadsWeight=1.0 if preserve_quads else 0.0,
-            preserveTopology=True,
-            useVirtualSymmetry=1 if symmetry else 0,
-            symmetryTolerance=symmetry_tolerance,
-            replaceOriginal=True,
-            cachingReduce=True,
-            constructionHistory=not delete_history,
-        )
+        # polyReduce rejects multi-object selections ("Doesn't work with multiple
+        # objects selected"), so reduce each mesh independently.
+        for obj in objects:
+            cmds.polyReduce(
+                obj,
+                version=1,
+                percentage=pct,
+                keepBorder=preserve_borders,
+                keepFaceGroupBorder=preserve_borders,
+                keepHardEdge=preserve_hard_edges,
+                keepCreaseEdge=preserve_hard_edges,
+                keepMapBorder=preserve_uv_borders,
+                keepColorBorder=preserve_uv_borders,
+                keepQuadsWeight=1.0 if preserve_quads else 0.0,
+                preserveTopology=True,
+                useVirtualSymmetry=1 if symmetry else 0,
+                symmetryTolerance=symmetry_tolerance,
+                replaceOriginal=True,
+                cachingReduce=True,
+                constructionHistory=not delete_history,
+            )
         if delete_history:
             cmds.delete(objects, constructionHistory=True)
         return objects

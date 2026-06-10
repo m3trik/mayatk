@@ -180,6 +180,25 @@ class GameShaderLogicTest(QuickTestCase):
         )
         self.assertTrue(os.path.isfile(combined), "Combined map not on disk")
 
+    def test_output_profile_drives_per_map_format(self):
+        """A workflow profile drives per-map output format through prepare_maps —
+        the call create_network makes when cmb003 is 'Profile default'."""
+        import pythontk as ptk
+        from pythontk.img_utils.map_registry import WF
+
+        src = _write_test_image(
+            os.path.join(self._tmp_dir, "rock_Base_Color.png"), (200, 100, 50)
+        )
+        out = os.path.join(self._tmp_dir, "out")
+        os.makedirs(out, exist_ok=True)
+        res = ptk.MapFactory.prepare_maps(
+            [src], output_dir=out, output_profile=WF.UE, optimize=False, convert=True
+        )
+        files = res if isinstance(res, list) else [f for v in res.values() for f in v]
+        bc = next((f for f in files if "Base_Color" in f), None)
+        self.assertIsNotNone(bc, f"Base_Color not emitted: {files}")
+        self.assertTrue(bc.lower().endswith(".tga"), f"UE profile must emit TGA: {bc}")
+
     def test_filter_remove_smoothness_maps(self):
         """Test removal of smoothness maps when not using metallic smoothness."""
         textures = [
@@ -364,25 +383,9 @@ class GameShaderTest(unittest.TestCase):
         self.assertTrue(cmds.objExists(result))
         self.assertEqual(cmds.nodeType(result), "StingrayPBS")
 
-    def test_setup_arnold_nodes(self):
-        """Test Arnold shader nodes creation."""
-        sr_node = self.shader.setup_stringray_node("test_arnold", opacity=False)
-        ai_node, mult_node, bump_node = self.shader.setup_arnold_nodes(
-            "test_arnold", sr_node
-        )
-
-        self.assertIsNotNone(ai_node)
-        self.assertIsNotNone(mult_node)
-        self.assertIsNotNone(bump_node)
-
-        self.assertTrue(cmds.objExists(ai_node))
-        self.assertTrue(cmds.objExists(mult_node))
-        self.assertTrue(cmds.objExists(bump_node))
-
-        # Check node types
-        self.assertEqual(cmds.nodeType(ai_node), "aiStandardSurface")
-        self.assertEqual(cmds.nodeType(mult_node), "aiMultiply")  # Arnold uses aiMultiply
-        self.assertEqual(cmds.nodeType(bump_node), "bump2d")
+    # NOTE: Arnold bridge node creation moved to ArnoldBridge — see
+    # test_arnold_bridge.py. GameShader's Arnold coverage is the end-to-end
+    # create_network(create_arnold=True) delegation tests below.
 
     # -------------------------------------------------------------------------
     # Test Connection Methods
@@ -972,38 +975,8 @@ class GameShaderTest(unittest.TestCase):
             len(reverse_nodes) > 0, "Reverse node for smoothness inversion missing"
         )
 
-    def test_connect_arnold_msao(self):
-        """Test connecting MSAO mask map to Arnold shader."""
-        # Create Arnold nodes
-        ai_node = cmds.shadingNode("aiStandardSurface", asShader=True)
-        aiMult_node = cmds.shadingNode("aiMultiply", asShader=True)
-        bump_node = cmds.shadingNode("bump2d", asShader=True)
-
-        texture_path = os.path.join(self.test_assets, "model_MaskMap.png")
-
-        success = self.shader.connect_arnold_nodes(
-            texture_path, "MSAO", ai_node, aiMult_node, bump_node
-        )
-
-        self.assertTrue(success)
-        # Verify metallic connection (from red channel)
-        metallic_conn = cmds.listConnections(f"{ai_node}.metalness")
-        self.assertIsNotNone(metallic_conn, "Arnold metallic connection missing")
-
-        # Verify roughness connection (smoothness inverted)
-        roughness_conn = cmds.listConnections(f"{ai_node}.specularRoughness")
-        self.assertIsNotNone(roughness_conn, "Arnold roughness connection missing")
-
-        # Verify AO multiplication (texture color to aiMultiply input2)
-        ao_conn = cmds.listConnections(f"{aiMult_node}.input2")
-        self.assertIsNotNone(ao_conn, "Arnold AO multiply connection missing")
-
-        # Should have a reverse node for smoothness->roughness conversion
-        reverse_nodes = cmds.ls(type="reverse")
-        self.assertTrue(
-            len(reverse_nodes) > 0,
-            "Arnold reverse node for smoothness inversion missing",
-        )
+    # NOTE: Arnold MSAO channel routing moved to ArnoldBridge —
+    # see test_arnold_bridge.py::test_msao_channel_routing.
 
     # -------------------------------------------------------------------------
     # Test MapFactory Integration
@@ -1405,32 +1378,8 @@ class GameShaderTest(unittest.TestCase):
         arnold_shaders = cmds.ls(type="aiStandardSurface")
         self.assertGreater(len(arnold_shaders), 0)
 
-    def test_setup_arnold_nodes_parameter_name(self):
-        """Test setup_arnold_nodes accepts shader_node parameter (renamed from sr_node)."""
-        # Test with Stingray
-        stingray_node = self.shader.setup_stringray_node(
-            "test_arnold_param", opacity=False
-        )
-        ai_node, mult_node, bump_node = self.shader.setup_arnold_nodes(
-            "test_arnold_param", stingray_node
-        )
-
-        self.assertIsNotNone(ai_node)
-        self.assertTrue(cmds.objExists(ai_node))
-
-        # Clean up
-        cmds.file(new=True, force=True)
-
-        # Test with Standard Surface
-        std_node = self.shader.setup_standard_surface_node(
-            "test_arnold_std", opacity=False
-        )
-        ai_node2, mult_node2, bump_node2 = self.shader.setup_arnold_nodes(
-            "test_arnold_std", std_node
-        )
-
-        self.assertIsNotNone(ai_node2)
-        self.assertTrue(cmds.objExists(ai_node2))
+    # NOTE: Arnold bridge setup (Stingray + Standard Surface) moved to
+    # ArnoldBridge — see test_arnold_bridge.py.
 
     # -------------------------------------------------------------------------
     # MapFactory Integration Edge Cases

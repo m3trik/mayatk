@@ -173,6 +173,25 @@ class TestNodeUtils(MayaTkTestCase):
         grp = cmds.group(empty=True, name="empty_grp2")
         self.assertIsNone(NodeUtils.get_shape(grp))
 
+    def test_get_shape_input_flexibility(self):
+        """get_shape(s) accepts a transform, a shape, or a component."""
+        cube = cmds.polyCube(name="flexCube")[0]
+        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+        want = cmds.ls(shape, long=True)
+
+        norm = lambda r: cmds.ls(r, long=True)
+        self.assertEqual(norm(NodeUtils.get_shape(cube)), want)  # transform (regression)
+        self.assertEqual(norm(NodeUtils.get_shape(shape)), want)  # shape -> itself
+        self.assertEqual(norm(NodeUtils.get_shape(f"{cube}.f[0]")), want)  # component
+        self.assertEqual(
+            [cmds.ls(s, long=True)[0] for s in NodeUtils.get_shapes(shape)], want
+        )
+
+        # A direct shape respects no_intermediate just like the transform path.
+        cmds.setAttr(f"{shape}.intermediateObject", 1)
+        self.assertIsNone(NodeUtils.get_shape(shape))
+        self.assertEqual(norm(NodeUtils.get_shape(shape, no_intermediate=False)), want)
+
     def test_is_intermediate(self):
         """is_intermediate flips with the intermediateObject attr."""
         shape = NodeUtils.get_shape("cyl")

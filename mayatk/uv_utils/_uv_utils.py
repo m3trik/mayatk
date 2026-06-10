@@ -1246,6 +1246,134 @@ class UvUtils(ptk.HelpMixin):
                 cmds.polyUVSet(shape, reorder=True, uvSet=current, newUVSet=insert_after)
                 existing = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
 
+    @classmethod
+    @CoreUtils.undoable
+    def create_lightmap_uvs(
+        cls,
+        objects,
+        uv_set: str = None,
+        map_size: int = 1024,
+        planes: int = 6,
+        force: bool = False,
+        freeze_history: bool = False,
+        quiet: bool = False,
+    ) -> dict:
+        """Ensure each mesh has a packed, non-overlapping lightmap UV set.
+
+        Native (``polyAutoProjection``) -- no RizomUV dependency. For each mesh:
+        a *valid* existing lightmap (non-overlapping, within 0-1) is reused
+        unless ``force``; otherwise a new set is auto-projected and packed into
+        the unit square with gutter padding (:meth:`calculate_uv_padding`),
+        placed at UV channel index 1 (the lightmap channel engines bind), and
+        tagged on the shape (``UvDiagnostics.LIGHTMAP_UV_TAG``) so downstream
+        tools detect it unambiguously and cleanup never deletes it.
+
+        Parameters:
+            objects (str/obj/list): Meshes / transforms to process.
+            uv_set (str): Lightmap set name. Default ``LIGHTMAP_UV_SET``.
+            map_size (int): Target lightmap resolution (drives gutter padding).
+            planes (int): ``polyAutoProjection`` planes (6 = axis-aligned box).
+            force (bool): Regenerate even if a valid lightmap set is present.
+            freeze_history (bool): If True, bake the projection and delete
+                construction history (final baked lightmap UVs, no live unwrap
+                history) -- appropriate for export-bound meshes. Default False
+                preserves modeling history.
+            quiet (bool): Suppress logging.
+
+        Returns:
+            dict: ``{shape: {"uv_set": str, "created": bool, "reused": bool}}``.
+        """
+        from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
+
+        uv_set = uv_set or UvDiagnostics.LIGHTMAP_UV_SET
+        # Normalized padding is map-size-independent (~0.39%); as a percentage
+        # for polyAutoProjection's percentageSpace gutter.
+        pct = cls.calculate_uv_padding(map_size, normalize=True) * 100.0
+
+        results: dict = {}
+        for obj in NodeUtils.get_transform_node(objects):
+            obj = str(obj)
+            shape = NodeUtils.get_shape_node(obj, returned_type="obj")
+            if isinstance(shape, list):
+                shape = shape[0] if shape else None
+            if not shape:
+                continue
+            shape = str(shape)
+            if not cmds.attributeQuery("uvSet", node=shape, exists=True):
+                continue
+
+            prev_current = (
+                cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None]
+            )[0]
+
+            # Reuse an existing, valid lightmap unless forced.
+            existing_lm = UvDiagnostics.find_lightmap_uv_set(shape)
+            if (
+                existing_lm
+                and not force
+                and UvDiagnostics.is_bakeable_lightmap(shape, existing_lm)
+            ):
+                if prev_current:
+                    cmds.polyUVSet(shape, currentUVSet=True, uvSet=prev_current)
+                results[shape] = {
+                    "uv_set": existing_lm,
+                    "created": False,
+                    "reused": True,
+                }
+                continue
+
+            pre = list(
+                dict.fromkeys(cmds.polyUVSet(shape, query=True, allUVSets=True) or [])
+            )
+            primary = pre[0] if pre else "map1"
+
+            if uv_set not in pre:
+                cmds.polyUVSet(shape, create=True, uvSet=uv_set)
+            cmds.polyUVSet(shape, currentUVSet=True, uvSet=uv_set)
+            cmds.polyAutoProjection(
+                f"{shape}.f[*]",
+                layoutMethod=0,
+                layout=2,  # pack into the unit (0-1) square
+                optimize=1,
+                planes=planes,
+                percentageSpace=pct,
+                createNewMap=False,
+            )
+
+            if freeze_history:
+                # Bake the projection into the mesh and drop its construction
+                # history -- final baked lightmap UVs with no live unwrap node,
+                # for export-bound static meshes.
+                cmds.delete(obj, constructionHistory=True)
+
+            # Place the texture set at channel 0 and the lightmap at channel 1
+            # (the index engines bind), keeping any other sets after it;
+            # polyAutoProjection can leave the projected set at index 0.
+            order = [primary, uv_set] + [s for s in pre if s not in (primary, uv_set)]
+            cls.reorder_uv_sets(shape, order)
+
+            # Tag the shape so downstream detection is unambiguous.
+            if not cmds.attributeQuery(
+                UvDiagnostics.LIGHTMAP_UV_TAG, node=shape, exists=True
+            ):
+                cmds.addAttr(
+                    shape, longName=UvDiagnostics.LIGHTMAP_UV_TAG, dataType="string"
+                )
+            cmds.setAttr(
+                f"{shape}.{UvDiagnostics.LIGHTMAP_UV_TAG}", uv_set, type="string"
+            )
+
+            # Restore the previously-current set (default to the texture primary).
+            all_now = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+            restore = prev_current if prev_current in all_now else primary
+            if restore in all_now:
+                cmds.polyUVSet(shape, currentUVSet=True, uvSet=restore)
+
+            results[shape] = {"uv_set": uv_set, "created": True, "reused": False}
+            if not quiet:
+                print(f"[lightmap-uv] {shape}: {results[shape]}")
+        return results
+
     @staticmethod
     @CoreUtils.undoable
     def remove_empty_uv_sets(objects, quiet: bool = False) -> None:
