@@ -172,30 +172,30 @@ class TestComponents(MayaTkTestCase):
     # Geometric Operations
     # -------------------------------------------------------------------------
 
-    def test_get_contigious_edges(self):
+    def test_get_contiguous_edges(self):
         """Test getting contiguous edges."""
         # Select two edges that share a vertex
         vtx = f"{self.plane}.vtx[0]"
         edges = cmds.polyListComponentConversion(vtx, toEdge=True)
         edges = cmds.ls(edges, flatten=True)
 
-        groups = Components.get_contigious_edges(edges)
+        groups = Components.get_contiguous_edges(edges)
         self.assertEqual(
             len(groups), 1
         )  # Should be one group since they share a vertex
 
-    def test_get_contigious_islands(self):
+    def test_get_contiguous_islands(self):
         """Test getting contiguous face islands."""
         # Select two disjoint faces
         f1 = f"{self.plane}.f[0]"
         f2 = f"{self.plane}.f[24]"  # Far corner
 
-        islands = Components.get_contigious_islands([f1, f2])
+        islands = Components.get_contiguous_islands([f1, f2])
         self.assertEqual(len(islands), 2)
 
         # Select two adjacent faces
         f3 = f"{self.plane}.f[1]"
-        islands = Components.get_contigious_islands([f1, f3])
+        islands = Components.get_contiguous_islands([f1, f3])
         self.assertEqual(len(islands), 1)
 
     def test_get_components_preserves_namespace(self):

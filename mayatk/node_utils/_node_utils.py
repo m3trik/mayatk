@@ -61,7 +61,6 @@ class NodeUtils(ptk.HelpMixin):
             if not typ:
                 typ = cmds.objectType(obj)
             types.append(typ)
-            print(short_name(obj), typ)
 
         return ptk.format_return(types, objects)
 

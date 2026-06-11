@@ -660,7 +660,17 @@ class EnvUtils(ptk.HelpMixin):
             "FBXExportShapes": False,  # Export shape deformers
             "FBXExportSmoothingGroups": True,  # Export smoothing groups
             "FBXExportSmoothMesh": True,  # Export smooth mesh
-            "FBXExportHardEdges": True,  # Export hard edges
+            # "Split per-vertex Normals": splits a vertex at every hard edge.
+            # On a fully-faceted (all-hard) dense mesh — e.g. a photogrammetry
+            # scan — this splits nearly every vertex, and the FBX SDK's
+            # algorithm for it is pathologically super-linear: a ~15M-tri mesh
+            # hangs for 90+ minutes (measured: a 2M-tri faceted mesh already
+            # exceeds 200s with this on, ~3s with it off). Hard-edge shading is
+            # already carried by the exported normals, so default it off
+            # (Autodesk likewise flags it "not recommended"). Pass
+            # FBXExportHardEdges=True explicitly to force split-normal output.
+            "FBXExportHardEdges": False,
+
             "FBXExportTangents": True,  # Export tangent information
             "FBXExportInstances": True,  # Export instance information
             "FBXExportReferencedAssetsContent": False,  # Export referenced assets
@@ -707,8 +717,13 @@ class EnvUtils(ptk.HelpMixin):
             file_path = scene_name.replace(".mb", ".fbx").replace(".ma", ".fbx")
 
         flag_s = " -s" if selection_only else ""
-        mel.eval(f'FBXExport -f "{file_path}"{flag_s}')
-        print(f"Scene successfully exported as FBX to {file_path}")
+        # MEL treats backslashes in a string as escapes (a Windows path like
+        # C:\Users\... becomes \U, \d, ... and the command errors), so feed
+        # the FBXExport string forward-slashes only. Maya reads them fine on
+        # Windows. Callers that build paths via os.path.join hit this.
+        mel_path = file_path.replace("\\", "/")
+        mel.eval(f'FBXExport -f "{mel_path}"{flag_s}')
+        print(f"Scene successfully exported as FBX to {mel_path}")
 
     @staticmethod
     def sanitize_namespace(namespace: str) -> str:

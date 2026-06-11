@@ -1148,7 +1148,7 @@ class MayaImporter:
                     try:
                         objects = cmds.ls(f"{ns}:*")
                         namespace_object_counts[ns] = len(objects)
-                    except:
+                    except Exception:
                         namespace_object_counts[ns] = 0
 
                 if namespace_object_counts:
@@ -1340,7 +1340,7 @@ class CameraTracker(ptk.LoggingMixin):
                     transform = _get_parent(cam)
                     if transform:
                         camera_transforms.append(_node_name(transform))
-                except:
+                except Exception:
                     # If we can't get the parent, use the camera name directly
                     camera_transforms.append(_node_name(cam))
             return set(camera_transforms)

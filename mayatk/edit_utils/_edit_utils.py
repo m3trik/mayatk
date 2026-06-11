@@ -357,37 +357,40 @@ class EditUtils(ptk.HelpMixin):
         Parameters:
             objects (str/obj/list): The object(s) to merge vertices on.
             tolerance (float) = The maximum merge distance.
-            selected_only (bool): Merge only the currently selected components.
+            selected_only (bool): Merge only the currently selected components
+                (operates on the live selection; ``objects`` is not used).
         """
+        if selected_only:  # Merge only selected components (selection-based;
+            # runs once — this used to sit inside the per-object loop and
+            # re-merged the same selection N times).
+            if cmds.filterExpand(selectionMask=31):  # selectionMask=vertices
+                sel = cmds.ls(selection=True)
+                cmds.polyMergeVertex(
+                    sel,
+                    distance=tolerance,
+                    alwaysMergeTwoVertices=True,
+                    constructionHistory=True,
+                )
+            else:  # If selection type is edges or facets:
+                mel.eval("MergeToCenter")
+            return
+
         objects_str = [str(o) for o in ptk.make_iterable(objects)]
         for obj in NodeUtils.get_shape_node(objects_str):
             obj = str(obj)
             if cmds.objectType(obj) != "mesh":  # Ensure obj is a Mesh
-                print(f"Merge Vertices: Skipping non-mesh object: {obj}")
+                cmds.warning(f"Merge Vertices: Skipping non-mesh object: {obj}")
                 continue  # Skip locators, cameras, etc.
 
-            if selected_only:  # Merge only selected components
-                if cmds.filterExpand(selectionMask=31):  # selectionMask=vertices
-                    sel = cmds.ls(selection=True, )
-                    cmds.polyMergeVertex(
-                        sel,
-                        distance=tolerance,
-                        alwaysMergeTwoVertices=True,
-                        constructionHistory=True,
-                    )
-                else:  # If selection type is edges or facets:
-                    mel.eval("MergeToCenter")
+            cmds.polyMergeVertex(
+                f"{obj}.vtx[*]",
+                distance=tolerance,
+                alwaysMergeTwoVertices=False,
+                constructionHistory=False,
+            )
 
-            else:  # Merge all vertices
-                vertices = f"{obj}.vtx[*]"
-                cmds.polyMergeVertex(
-                    vertices,
-                    distance=tolerance,
-                    alwaysMergeTwoVertices=False,
-                    constructionHistory=False,
-                )
-                cmds.select(clear=True)
-                cmds.select(objects_str)
+        cmds.select(clear=True)
+        cmds.select(objects_str)
 
     @staticmethod
     @CoreUtils.undoable

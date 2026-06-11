@@ -238,14 +238,6 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
             cmds.refresh(suspend=False)
 
     @staticmethod
-    @contextlib.contextmanager
-    def temporarily_unlock_attributes(objects, attributes=None):
-        """.. deprecated:: Use ``Attributes.temporarily_unlock`` instead."""
-        from mayatk.node_utils.attributes._attributes import Attributes
-
-        with Attributes.temporarily_unlock(objects, attributes) as ctx:
-            yield ctx
-
     def selected(func: Callable) -> Callable:
         """A decorator to pass the current selection to the first parameter if None is given."""
 
@@ -268,6 +260,7 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
 
         return wrapped
 
+    @staticmethod
     def undoable(fn):
         """A decorator to place a function into Maya's undo chunk."""
 
@@ -282,6 +275,7 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
 
         return wrapper
 
+    @staticmethod
     def reparent(func: Callable) -> Callable:
         """A decorator to manage reparenting of Maya nodes before and after an operation."""
 

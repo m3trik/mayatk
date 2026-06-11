@@ -472,9 +472,8 @@ def _safe(func):
 class Preview:
     """Hermetic preview orchestrator (H1).
 
-    The constructor signature matches the legacy :class:`preview_old.Preview`
-    for drop-in instantiation, but ``perform_operation`` on the operation
-    instance must now accept ``(objects, contract)``.
+    ``perform_operation`` on the operation instance must accept
+    ``(objects, contract)``.
 
     Optional **Select Result**: pass ``select_result_checkbox`` plus a
     ``result_provider`` callable (returning the operation's current result

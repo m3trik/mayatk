@@ -384,10 +384,10 @@ class UvDiagnostics:
                             # This metric is independent of global scale.
                             result["fill_rate"] = result["area"] / safe_total_area
 
-                        except:
+                        except Exception:
                             result["area"] = 0.0
                             result["fill_rate"] = 0.0
-                except:
+                except Exception:
                     pass
 
                 # Get Overlap Count
@@ -769,7 +769,7 @@ class UvDiagnostics:
         if current_name:
             try:
                 cmds.polyUVSet(shape, currentUVSet=True, uvSet=current_name)
-            except:
+            except Exception:
                 pass
 
         return True

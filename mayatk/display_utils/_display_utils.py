@@ -163,18 +163,27 @@ class DisplayUtils(ptk.HelpMixin):
             return True
 
         result = []
+        _RENDERABLE = ("mesh", "nurbsSurface", "subdiv")
 
-        for node in cmds.ls(type="transform" if not shapes else "geometry") or []:
+        if shapes:
+            # List the concrete renderable types — "geometry" is not a
+            # queryable ls type (it silently returns []), which is why the
+            # shapes branch always came back empty. Intermediate (Orig)
+            # shapes are construction data, never visible geometry.
+            nodes = cmds.ls(type=_RENDERABLE, noIntermediate=True) or []
+        else:
+            nodes = cmds.ls(type="transform") or []
+
+        for node in nodes:
             if not consider_templated_visible and cls.is_templated(node):
                 continue
 
             if inherit_parent_visibility and not is_node_visible(node):
                 continue
 
-            if shapes and cmds.nodeType(node) == "geometry":
+            if shapes:
                 result.append(node)
-            elif not shapes:
-                _RENDERABLE = {"mesh", "nurbsSurface", "subdiv"}
+            else:
                 for s in cmds.listRelatives(node, shapes=True, fullPath=True) or []:
                     if cmds.nodeType(s) in _RENDERABLE:
                         result.append(node)

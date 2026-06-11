@@ -52,6 +52,21 @@ class TestEditUtils(MayaTkTestCase):
 
         self.assertLess(final_count, initial_count)
 
+    def test_merge_vertices_selected_only(self):
+        """selected_only operates on the live vertex selection (once —
+        regression: it used to re-run the selection merge per shape in
+        the objects loop)."""
+        cube2 = cmds.duplicate(self.cube)[0]
+        cmds.move(0.0001, 0, 0, cube2, r=True)
+        combined = cmds.polyUnite(self.cube, cube2, ch=False)[0]
+
+        initial_count = cmds.polyEvaluate(combined, v=True)
+        cmds.select(f"{combined}.vtx[*]")
+        EditUtils.merge_vertices(combined, tolerance=0.001, selected_only=True)
+        final_count = cmds.polyEvaluate(combined, v=True)
+
+        self.assertLess(final_count, initial_count)
+
     def test_merge_vertex_pairs(self):
         """Test merging specific vertex pairs."""
         # Select two vertices
