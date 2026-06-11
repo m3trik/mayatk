@@ -66,7 +66,6 @@ _Generated: 2026-06-11_
 - [`core_utils/instancing/instancing_strategy.py`](#core_utils--instancing--instancing_strategy) — Instancing strategy logic for AutoInstancer.
 - [`core_utils/mash.py`](#core_utils--mash)
 - [`core_utils/preview.py`](#core_utils--preview) — Hermetic preview with replay-on-commit (H1 design).
-- [`core_utils/preview_old.py`](#core_utils--preview_old)
 - [`core_utils/script_job_manager.py`](#core_utils--script_job_manager) — Centralized Maya event subscription manager.
 - [`display_utils/_display_utils.py`](#display_utils--_display_utils)
 - [`display_utils/color_manager.py`](#display_utils--color_manager)
@@ -975,10 +974,9 @@ Segment discovery from the per-track keyed canonical store.
 - **[`class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal)`](mayatk/mayatk/core_utils/_core_utils.py#L203)**
   - `CoreUtils.undo_chunk(name: str = '')` *(static)* — Group operations into a single Maya undo chunk.
   - `CoreUtils.suspended_refresh()` *(static)* — Suspend viewport refresh for the duration of a bulk operation.
-  - `CoreUtils.temporarily_unlock_attributes(objects, attributes=None)` *(static)* — ..
-  - `CoreUtils.selected(func: Callable) -> Callable` — A decorator to pass the current selection to the first parameter if None is given.
-  - `CoreUtils.undoable(fn)` — A decorator to place a function into Maya's undo chunk.
-  - `CoreUtils.reparent(func: Callable) -> Callable` — A decorator to manage reparenting of Maya nodes before and after an operation.
+  - `CoreUtils.selected(func: Callable) -> Callable` *(static)* — A decorator to pass the current selection to the first parameter if None is given.
+  - `CoreUtils.undoable(fn)` *(static)* — A decorator to place a function into Maya's undo chunk.
+  - `CoreUtils.reparent(func: Callable) -> Callable` *(static)* — A decorator to manage reparenting of Maya nodes before and after an operation.
   - `CoreUtils.wrap_control(control_name, container)` *(static)* — Embed a Maya Native UI Object.
   - `CoreUtils.confirm_existence(objects: List[str]) -> Tuple[List[str], List[str]]` *(static)* — Confirms the existence of each object in the provided list in Maya.
   - `CoreUtils.get_mfn_mesh(objects, api_version: int = 2)` *(static)* — Get MFnMesh function set(s) from transform or shape node(s).
@@ -1003,8 +1001,8 @@ Segment discovery from the per-track keyed canonical store.
   - `GetComponentsMixin.get_components(cls, objects, component_type, returned_type='str', inc=[], exc=[], randomize=0, flatten=False)` *(class)* — Get the components of the given type from the given object(s).
 - **[`class Components(GetComponentsMixin, ptk.HelpMixin)`](mayatk/mayatk/core_utils/components.py#L258)**
   - `Components.map_components_to_objects(components_list)` *(static)* — Map a list of components to their respective objects.
-  - `Components.get_contigious_edges(cls, components)` *(class)* — Get a list containing sets of adjacent edges.
-  - `Components.get_contigious_islands(cls, faces)` *(class)* — Get a list containing sets of adjacent polygon faces grouped by islands.
+  - `Components.get_contiguous_edges(cls, components)` *(class)* — Get a list containing sets of adjacent edges.
+  - `Components.get_contiguous_islands(cls, faces)` *(class)* — Get a list containing sets of adjacent polygon faces grouped by islands.
   - `Components.get_islands(obj, returned_type='str', flatten=False)` *(static)* — Get the group of components in each separate island of a combined mesh.
   - `Components.get_border_components(cls, components, returned_type='str', component_border=False)` *(class)* — Get border components from given component(s) or a polygon object based on connectivity.
   - `Components.get_furthest_vertices(vertices_a, vertices_b)` *(static)* — Determine the two furthest apart vertices, one from each of the two provided lists.
@@ -1194,8 +1192,8 @@ Instancing strategy logic for AutoInstancer.
 
 Hermetic preview with replay-on-commit (H1 design).
 
-- [`cleanup_all_previews() -> None`](mayatk/mayatk/core_utils/preview.py#L971)
-- [`apply_result_selection(widget, results, *, object_mode: bool = False, defer: bool = False) -> None`](mayatk/mayatk/core_utils/preview.py#L975) — Select the operation's result(s) — or explicitly deselect them — per a
+- [`cleanup_all_previews() -> None`](mayatk/mayatk/core_utils/preview.py#L970)
+- [`apply_result_selection(widget, results, *, object_mode: bool = False, defer: bool = False) -> None`](mayatk/mayatk/core_utils/preview.py#L974) — Select the operation's result(s) — or explicitly deselect them — per a
 - **[`class OperationError(Exception)`](mayatk/mayatk/core_utils/preview.py#L59)** — User-facing operation failure for the Preview message box.
 - **[`class CleanupContract`](mayatk/mayatk/core_utils/preview.py#L107)** — Captures and reverses side effects of a previewed operation.
   - `CleanupContract.add_file(self, path) -> None`
@@ -1216,32 +1214,6 @@ Hermetic preview with replay-on-commit (H1 design).
   - `Preview.enabled(self) -> bool` *(property)*
   - `Preview.operated_object_count(self) -> int` *(property)*
   - `Preview.get_operated_objects(self) -> List[str]`
-
-<a id="core_utils--preview_old"></a>
-### `core_utils/preview_old.py`
-
-- [`cleanup_all_previews() -> None`](mayatk/mayatk/core_utils/preview_old.py#L505) — Clean up all Preview instances - useful for Maya session cleanup.
-- **[`class Preview`](mayatk/mayatk/core_utils/preview_old.py#L13)** — Provides an interactive layer for previewing and finalizing operations in a 3D editing environment.
-  - `Preview.cleanup_all_instances(cls) -> None` *(class)* — Clean up all Preview instances - useful for Maya session cleanup.
-  - `Preview.safe_operation(func: Callable) -> Callable` — Decorator to safely execute operations with proper error handling.
-  - `Preview.cleanup(self) -> None` — Clean up resources and remove from tracking.
-  - `Preview.disable_on_external_undo(self) -> None` — Disables the preview functionality on external undo operations only.
-  - `Preview.disable_on_selection_change(self) -> None` — Disable preview when the user changes selection mid-preview.
-  - `Preview.init_show_hide_behavior(self, enable_on_show: bool, disable_on_hide: bool) -> None` — Initialize window show/hide behavior with improved error handling.
-  - `Preview.eventFilter(self, obj, event)` — Handle window show/hide events when custom signals aren't available.
-  - `Preview.conditionally_enable(self) -> None` — Enable preview if configured to do so on window show.
-  - `Preview.conditionally_disable(self) -> None` — Disable preview if configured to do so on window hide.
-  - `Preview.toggle(self, state: bool) -> None` — Toggles the preview on or off.
-  - `Preview.validate_operation(self, objects: List[Any]) -> bool` — Validate that the operation can be performed on the given objects.
-  - `Preview.enable(self) -> None` — Enables the preview and sets up the initial state.
-  - `Preview.disable(self) -> None` — Disables the preview and reverts to the initial state.
-  - `Preview.undo_if_needed(self) -> None` — Executes undo operation if required.
-  - `Preview.refresh(self, *args)` — Refreshes the preview to reflect any changes.
-  - `Preview.finalize_changes(self)` — Finalizes the preview changes and calls the finalize_func if provided.
-  - `Preview.enabled(self) -> bool` *(property)* — Check if preview is currently enabled.
-  - `Preview.has_changes(self) -> bool` *(property)* — Check if there are changes that need to be undone.
-  - `Preview.operated_object_count(self) -> int` *(property)* — Get the number of objects being operated on.
-  - `Preview.get_operated_objects(self) -> List[str]` — Get a copy of the list of operated objects.
 
 <a id="core_utils--script_job_manager"></a>
 ### `core_utils/script_job_manager.py`
@@ -2171,7 +2143,7 @@ Shared affix-mode option-box helper for mat_utils slot files.
   - `MatUtils.migrate_textures(cls, materials: Optional[List[str]] = None, old_dir: Optional[str] = None, new_dir: Optional[str] = None, silent: bool = False, delete_old: bool = False, objects: Optional[List[str]] = None, file_nodes: Optional[List[str]] = None, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> None` *(class)* — Copies texture files from an old directory to a new one.
   - `MatUtils.move_unused_textures(source_dir: str = None, output_dir: str = None) -> None` *(static)* — Move unused textures to a specified directory.
   - `MatUtils.get_mat_swatch_icon(mat: Union[str, object], size: List[int] = [20, 20], fallback_to_blank: bool = True) -> object` *(static)* — Get an icon with a color fill matching the given material's RGB value.
-  - `MatUtils.convert_bump_to_normal(bump_file_node, output_path: Optional[str] = None, intensity: float = 1.0, format_type: str = 'opengl', filter_type: str = '3x3', wrap_mode: str = 'black', create_file_node: bool = True, node_name: Optional[str] = None) -> Optional[str]` *(static)* — Convert a bump/height map to a normal map using Maya's bump2d node.
+  - `MatUtils.convert_bump_to_normal(bump_file_node, output_path: Optional[str] = None, intensity: float = 1.0, format_type: str = 'opengl', create_file_node: bool = True, node_name: Optional[str] = None) -> Optional[str]` *(static)* — Convert a bump/height file node's texture to a normal map on disk.
   - `MatUtils.validate_normal_map_setup(normal_file_node, material=None) -> Dict[str, Any]` *(static)* — Validate normal map file node setup and provide recommendations.
   - `MatUtils.graph_materials(materials: Union[str, List[str], object], mode: str = 'showUpAndDownstream') -> None` *(static)* — Open the Hypershade and graph the specified materials.
 

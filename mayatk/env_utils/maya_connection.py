@@ -568,7 +568,7 @@ class MayaConnection:
                 result = sock.connect_ex(("localhost", port))
                 sock.close()
                 return result == 0
-            except:
+            except Exception:
                 return False
 
         # Wait for port to be actually listening
@@ -674,7 +674,7 @@ class MayaConnection:
                 if s.connect_ex(("localhost", port)) != 0:
                     is_tcp_free = True
                 s.close()
-            except:
+            except Exception:
                 pass
 
             if not is_tcp_free:
@@ -720,7 +720,7 @@ class MayaConnection:
             sock.close()
             if result == 0:
                 return "port"
-        except:
+        except Exception:
             pass
 
         # 3. Fall back to standalone (mayapy / batch execution)
@@ -1201,7 +1201,7 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
                 import maya.standalone
 
                 maya.standalone.uninitialize()
-            except:
+            except Exception:
                 pass
 
         self.is_connected = False

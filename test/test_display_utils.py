@@ -58,6 +58,19 @@ class TestDisplayUtils(MayaTkTestCase):
         self.assertIsInstance(result, list)
         self.assertIn(self.cube, result)
 
+    def test_get_visible_geometry_shapes_mode(self):
+        """Regression: shapes=True compared nodeType (concrete: 'mesh') to
+        the abstract type 'geometry', so it ALWAYS returned []."""
+        result = mtk.get_visible_geometry(shapes=True)
+        self.assertIn("test_display_cubeShape", result)
+        self.assertIn("test_display_sphereShape", result)
+        # Intermediate (Orig) shapes must not appear.
+        for s in result:
+            self.assertFalse(
+                cmds.getAttr(f"{s}.intermediateObject"),
+                f"intermediate shape leaked into result: {s}",
+            )
+
 
 class TestExplodedView(MayaTkTestCase):
     """Regression: ExplodedView must operate on cmds-style string node names.

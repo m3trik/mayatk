@@ -225,12 +225,12 @@ class TestCoreUtils(MayaTkTestCase):
     # -------------------------------------------------------------------------
 
     def test_temporarily_unlock_attributes(self):
-        """Test temporarily unlocking attributes."""
+        """Test temporarily unlocking attributes via Attributes.temporarily_unlock."""
         # Lock an attribute
         cmds.setAttr(f"{self.cyl}.translateX", lock=True)
         self.assertTrue(cmds.getAttr(f"{self.cyl}.translateX", lock=True))
 
-        with CoreUtils.temporarily_unlock_attributes(self.cyl, ["translateX"]):
+        with Attributes.temporarily_unlock(self.cyl, ["translateX"]):
             self.assertFalse(cmds.getAttr(f"{self.cyl}.translateX", lock=True))
 
         # Should be locked again

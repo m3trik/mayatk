@@ -231,24 +231,40 @@ class TestMatUtilsExtended(MayaTkTestCase):
     # -------------------------------------------------------------------------
 
     def test_convert_bump_to_normal(self):
-        """Test converting a bump map setup to a normal map setup."""
-        # Create a bump setup
-        bump_file = cmds.shadingNode("file", asTexture=True, name="bump_file")
-        cmds.setAttr(f"{bump_file}.fileTextureName", self.tex1, type="string")
+        """convert_bump_to_normal must write a REAL normal map and wire a
+        Raw-colorspace file node to it. (The old implementation built a
+        bump2d/reverse network that never produced a file — and inverted
+        all three channels for 'directx'.)"""
+        from PIL import Image
 
-        # Convert
+        bump_path = os.path.join(self.temp_dir, "test_Bump.png").replace("\\", "/")
+        Image.new("L", (32, 32), 128).save(bump_path)
+
+        bump_file = cmds.shadingNode("file", asTexture=True, name="bump_file")
+        cmds.setAttr(f"{bump_file}.fileTextureName", bump_path, type="string")
+
+        out_path = os.path.join(self.temp_dir, "test_Normal_OpenGL.png").replace(
+            "\\", "/"
+        )
         normal_node = MatUtils.convert_bump_to_normal(
-            bump_file,
-            create_file_node=False,  # Just return the bump2d node for testing logic
+            bump_file, output_path=out_path, create_file_node=True
         )
 
         self.assertTrue(cmds.objExists(normal_node))
-        self.assertEqual(cmds.getAttr(f"{normal_node}.bumpInterp"), 1)  # 1 = Tangent Space Normal
+        self.assertTrue(os.path.exists(out_path), "normal map was not written")
+        self.assertEqual(
+            cmds.getAttr(f"{normal_node}.fileTextureName"), out_path
+        )
+        self.assertEqual(cmds.getAttr(f"{normal_node}.colorSpace"), "Raw")
+        # Flat bump -> neutral normal (128, 128, 255).
+        px = Image.open(out_path).convert("RGB").getpixel((16, 16))
+        self.assertEqual(px, (127, 127, 255))
 
-        # Check connection
-        inputs = cmds.listConnections(f"{normal_node}.bumpValue") or []
-        self.assertTrue(inputs)
-        self.assertEqual(inputs[0], str(bump_file).split("|")[-1].split(":")[-1])
+        # create_file_node=False returns the written path instead.
+        out2 = MatUtils.convert_bump_to_normal(
+            bump_file, create_file_node=False
+        )
+        self.assertTrue(os.path.exists(out2))
 
     def test_validate_normal_map_setup(self):
         """Test validation of normal map nodes."""

@@ -217,5 +217,57 @@ class TestEnvUtils(MayaTkTestCase):
         self.assertEqual(EnvUtils.SCENE_UNIT_VALUES["centimeter"], "cm")
 
 
+class TestExportSceneAsFbxDefaults(MayaTkTestCase):
+    """export_scene_as_fbx default FBX options.
+
+    Regression: ``FBXExportHardEdges`` ("Split per-vertex Normals") used to
+    default ``True``, which hangs for 90+ minutes on a fully-faceted dense
+    mesh (e.g. a photogrammetry scan) — the FBX SDK's vertex-split pass is
+    pathologically super-linear when nearly every edge is hard. It must
+    default OFF, while still honoring an explicit override for the rare
+    caller that genuinely needs split-normal output.
+    """
+
+    def setUp(self):
+        super().setUp()
+        import tempfile
+
+        cmds.loadPlugin("fbxmaya", quiet=True)
+        self.tmp = tempfile.mkdtemp(prefix="fbx_env_test_")
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        super().tearDown()
+
+    def test_hard_edges_default_off(self):
+        """No override ⇒ the applied FBXExportHardEdges is False."""
+        import maya.mel as mel
+
+        cube = cmds.polyCube(name="hard_edges_cube")[0]
+        cmds.select(cube)
+        # os.path.join → backslashes on Windows; keep it that way so this also
+        # guards the MEL path-normalize fix (a raw backslash path errors the
+        # FBXExport MEL string). Don't "simplify" to a forward-slash literal.
+        out = os.path.join(self.tmp, "default.fbx")
+        EnvUtils.export_scene_as_fbx(file_path=out, selection_only=True)
+        self.assertTrue(os.path.isfile(out))
+        self.assertFalse(bool(mel.eval("FBXExportHardEdges -q")))
+
+    def test_hard_edges_override_honored(self):
+        """An explicit FBXExportHardEdges=True still wins."""
+        import maya.mel as mel
+
+        cube = cmds.polyCube(name="hard_edges_cube2")[0]
+        cmds.select(cube)
+        out = os.path.join(self.tmp, "override.fbx")
+        EnvUtils.export_scene_as_fbx(
+            file_path=out, selection_only=True, FBXExportHardEdges=True
+        )
+        self.assertTrue(os.path.isfile(out))
+        self.assertTrue(bool(mel.eval("FBXExportHardEdges -q")))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -623,7 +623,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             cmds.warning("No edges selected.")
             return
 
-        connected_edges_sets = Components.get_contigious_edges(objects)
+        connected_edges_sets = Components.get_contiguous_edges(objects)
 
         for edge_set in connected_edges_sets:
             vertices = cmds.polyListComponentConversion(

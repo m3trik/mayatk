@@ -278,7 +278,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return dict(result)
 
     @classmethod
-    def get_contigious_edges(cls, components):
+    def get_contiguous_edges(cls, components):
         """Get a list containing sets of adjacent edges."""
         # Use cmds.ls directly to get a consistent transform-prefixed form;
         # convert_component_type would shape-prefix, breaking the set lookup
@@ -329,7 +329,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         return result
 
     @classmethod
-    def get_contigious_islands(cls, faces):
+    def get_contiguous_islands(cls, faces):
         """Get a list containing sets of adjacent polygon faces grouped by islands."""
         face_islands = []
         sets = []

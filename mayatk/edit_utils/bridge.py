@@ -70,7 +70,7 @@ class Bridge:
                     title=title,
                 )
 
-            loops = Components.get_contigious_edges(flat) or []
+            loops = Components.get_contiguous_edges(flat) or []
             sizes = sorted(len(loop) for loop in loops)
             if len(loops) < 2:
                 return OperationError(

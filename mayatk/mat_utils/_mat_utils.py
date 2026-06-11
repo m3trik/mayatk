@@ -2496,113 +2496,70 @@ class MatUtils(MatUtilsInternals):
         output_path: Optional[str] = None,
         intensity: float = 1.0,
         format_type: str = "opengl",
-        filter_type: str = "3x3",
-        wrap_mode: str = "black",
         create_file_node: bool = True,
         node_name: Optional[str] = None,
     ) -> Optional[str]:
-        """Convert a bump/height map to a normal map using Maya's bump2d node.
+        """Convert a bump/height file node's texture to a normal map on disk.
+
+        The image conversion is delegated to
+        :meth:`pythontk.MapFactory.convert_bump_to_normal` (Sobel-based,
+        writes a real normal map next to the source unless ``output_path``
+        is given). The previous implementation built a bump2d/reverse
+        shading network that never produced a file and inverted all three
+        channels for "directx" — it was unused and has been replaced.
+
+        Parameters:
+            bump_file_node: A ``file`` node whose ``fileTextureName`` points
+                at the bump/height texture.
+            output_path: Explicit output file path. Defaults to a
+                ``_Normal_<Format>`` sibling of the source.
+            intensity: Height depth multiplier passed to the converter.
+            format_type: ``"opengl"`` or ``"directx"``.
+            create_file_node: When True (default), also create a wired
+                ``file``/``place2dTexture`` pair for the result with
+                colorSpace ``Raw``.
 
         Returns:
-            Optional[str]: The created file-node name (or bump2d node when
-            ``create_file_node=False``); ``None`` on failure.
+            Optional[str]: The created file-node name, or the written image
+            path when ``create_file_node=False``; ``None`` on failure.
         """
         bump_node = str(bump_file_node)
         if not cmds.objExists(bump_node):
             raise ValueError(f"Bump file node {bump_file_node} does not exist")
         if cmds.nodeType(bump_node) != "file":
             raise ValueError(f"Node {bump_file_node} is not a file node")
-
-        if format_type not in ["opengl", "directx"]:
+        if format_type not in ("opengl", "directx"):
             raise ValueError("format_type must be 'opengl' or 'directx'")
 
-        if filter_type not in ["3x3", "5x5"]:
-            raise ValueError("filter_type must be '3x3' or '5x5'")
-
-        if wrap_mode not in ["black", "clamp", "repeat"]:
-            raise ValueError("wrap_mode must be 'black', 'clamp', or 'repeat'")
-
-        if not 0.1 <= intensity <= 10.0:
-            cmds.warning(
-                f"Intensity {intensity} is outside recommended range (0.1-10.0)"
+        source = cmds.getAttr(f"{bump_node}.fileTextureName") or ""
+        if not source or not os.path.exists(source):
+            raise ValueError(
+                f"Bump file node {bump_node} has no existing texture file "
+                f"(fileTextureName={source!r})"
             )
-
-        base_name = node_name or f"{_short_name(bump_node)}_normal"
-        bump2d_name = f"{base_name}_bump2d"
 
         try:
-            bump2d_node = cmds.shadingNode("bump2d", asUtility=True, name=bump2d_name)
-
-            cmds.setAttr(f"{bump2d_node}.bumpInterp", 1)
-            cmds.setAttr(f"{bump2d_node}.bumpDepth", intensity)
-
-            if filter_type == "5x5":
-                if cmds.attributeQuery("bumpFilter", node=bump2d_node, exists=True):
-                    cmds.setAttr(f"{bump2d_node}.bumpFilter", 1)
-
-            wrap_value = {"black": 0, "clamp": 1, "repeat": 2}.get(wrap_mode, 0)
-
-            cmds.connectAttr(
-                f"{bump_node}.outAlpha", f"{bump2d_node}.bumpValue"
+            written = ptk.MapFactory.convert_bump_to_normal(
+                source,
+                output_path=output_path,
+                intensity=intensity,
+                output_format=format_type,
+                save=True,
             )
-
-            if format_type == "directx":
-                reverse_name = f"{base_name}_reverse"
-                reverse_node = cmds.shadingNode(
-                    "reverse", asUtility=True, name=reverse_name
-                )
-                if cmds.attributeQuery("normalCamera", node=bump2d_node, exists=True):
-                    cmds.connectAttr(
-                        f"{bump2d_node}.outNormal",
-                        f"{reverse_node}.input",
-                    )
-                    output_attr = f"{reverse_node}.output"
-                else:
-                    output_attr = f"{bump2d_node}.outNormal"
-            else:
-                output_attr = f"{bump2d_node}.outNormal"
-
-            if create_file_node:
-                if output_path:
-                    output_dir = os.path.dirname(output_path)
-                    if output_dir and not os.path.exists(output_dir):
-                        try:
-                            os.makedirs(output_dir)
-                        except OSError as e:
-                            raise RuntimeError(
-                                f"Cannot create output directory {output_dir}: {e}"
-                            )
-
-                normal_file_name = f"{base_name}_file"
-                normal_file_node = cmds.shadingNode(
-                    "file", asTexture=True, name=normal_file_name
-                )
-
-                cmds.setAttr(f"{normal_file_node}.colorSpace", "Raw", type="string")
-                cmds.setAttr(f"{normal_file_node}.alphaIsLuminance", False)
-
-                if output_path:
-                    cmds.setAttr(
-                        f"{normal_file_node}.fileTextureName",
-                        output_path,
-                        type="string",
-                    )
-
-                    print(f"// Normal map conversion network created.")
-                    print(
-                        f"// To bake the normal map, use Maya's Render > Batch Render"
-                    )
-                    print(
-                        f"// or Hypershade > Utilities > Surface Sampler Info"
-                    )
-
-                return normal_file_node
-            else:
-                return bump2d_node
-
         except Exception as e:
-            cmds.warning(f"Failed to create bump-to-normal conversion: {e}")
+            cmds.warning(f"Bump-to-normal conversion failed for {source}: {e}")
             return None
+
+        if not create_file_node:
+            return written
+
+        base_name = node_name or f"{_short_name(bump_node)}_normal"
+        normal_file_node, _place2d = MatUtils.create_file_node(
+            written, name=base_name, color_space="Raw"
+        )
+        # Normal data is non-color; never treat its alpha as luminance.
+        cmds.setAttr(f"{normal_file_node}.alphaIsLuminance", False)
+        return normal_file_node
 
     @staticmethod
     def validate_normal_map_setup(
