@@ -90,7 +90,7 @@ class TestTubeRigCleanExport(unittest.TestCase):
 
 class TestGetCenterlineUsingEdges(unittest.TestCase):
     """Regression: get_centerline_using_edges feeds plain ``[x, y, z]``
-    lists from ``cmds.pointPosition`` into ``ptk.arrange_points_as_path``.
+    lists from ``cmds.pointPosition`` into ``ptk.Polyline.order_points``.
 
     Bug fixed 2026-05-07: the default ``distance_metric`` did
     ``(p1 - p2).length()`` — only valid for ``om.MPoint`` / PyMEL
@@ -108,7 +108,7 @@ class TestGetCenterlineUsingEdges(unittest.TestCase):
         # Sample a handful of edges around the tube.
         edges = [f"{self.tube}.e[{i}]" for i in (0, 12, 24, 36, 48)]
 
-        # Should not raise — exercises the list-input arrange_points_as_path path.
+        # Should not raise — exercises the list-input order_points path.
         result = TubePath.get_centerline_using_edges(edges)
 
         self.assertIsInstance(result, list)

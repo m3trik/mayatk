@@ -80,6 +80,25 @@ class MatUpdater(ptk.LoggingMixin):
                 except Exception as e:
                     cls.logger.warning(f"Could not resolve sourceimages path: {e}")
 
+            # Resolve opt-in sibling discovery into a concrete directory for the
+            # factory. The mayatk-level flag ``discover_sourceimages`` maps to the
+            # generic ``discover_dir`` param understood by MapFactory.prepare_maps.
+            if cfg_kwargs.pop("discover_sourceimages", False) and not cfg_kwargs.get(
+                "discover_dir"
+            ):
+                try:
+                    source_images = EnvUtils.get_env_info("sourceimages")
+                    if source_images:
+                        cfg_kwargs["discover_dir"] = source_images
+                    else:
+                        cls.logger.warning(
+                            "Discovery enabled but no sourceimages folder was found."
+                        )
+                except Exception as e:
+                    cls.logger.warning(
+                        f"Could not resolve sourceimages for discovery: {e}"
+                    )
+
             # Create Config Object
             config_obj = cfg_kwargs
 
@@ -331,13 +350,18 @@ class MatUpdater(ptk.LoggingMixin):
                     import shutil
 
                     target_folder = move_to_folder
-                    transfer_mode = config_obj.get("transfer_mode", "move")
+                    # ``copy_all`` is the legacy spelling of transfer_mode="copy"
+                    # (pre-combo configs/presets may still carry it); explicit
+                    # transfer_mode wins.
+                    transfer_mode = config_obj.get(
+                        "transfer_mode",
+                        "copy" if config_obj.get("copy_all") else "move",
+                    )
 
                     files_to_move = []
                     files_to_copy = []
                     files_to_keep = []
 
-                    copy_all = config_obj.get("copy_all", False)
                     target_folder_norm = (
                         os.path.normpath(target_folder) if target_folder else None
                     )
@@ -713,6 +737,19 @@ class MatUpdaterSlots(MatUpdater):
         widget.menu.chk_force_packed.toggled.connect(
             lambda state: widget.menu.chk_output_fallbacks.setDisabled(state)
         )
+        # Discover Maps in sourceimages
+        widget.menu.add(
+            "QCheckBox",
+            setObjectName="chk_discover_sourceimages",
+            setText="Discover Maps in sourceimages",
+            setToolTip=(
+                "Pull in same-base-name textures found in the project's "
+                "sourceimages folder that aren't wired into the material "
+                "(e.g. a Normal sitting on disk but never connected).\n"
+                "Only map types missing from the material are added; "
+                "connected textures are never replaced."
+            ),
+        )
         # Dry Run
         widget.menu.add(
             "QCheckBox",
@@ -780,6 +817,10 @@ class MatUpdaterSlots(MatUpdater):
                         "<b>Use Output Fallbacks</b> — substitute missing "
                         "outputs (e.g. AO alone for Mask Map). Disabled when "
                         "Force Packed Maps is on.",
+                        "<b>Discover Maps in sourceimages</b> — gap-fill each "
+                        "material with same-base-name textures sitting in "
+                        "sourceimages that were never connected. Only missing "
+                        "map types are added; connected textures are kept.",
                         "<b>Dry Run</b> — preview the plan without writing files.",
                     ]),
                     ("File management", [
@@ -878,6 +919,7 @@ class MatUpdaterSlots(MatUpdater):
         force_packed = menu.chk_force_packed.isChecked()
         use_input_fallbacks = menu.chk_input_fallbacks.isChecked()
         use_output_fallbacks = menu.chk_output_fallbacks.isChecked()
+        discover_sourceimages = menu.chk_discover_sourceimages.isChecked()
 
         max_size = self.max_size
 
@@ -939,6 +981,7 @@ class MatUpdaterSlots(MatUpdater):
                 "force_packed_maps": force_packed,
                 "use_input_fallbacks": use_input_fallbacks,
                 "use_output_fallbacks": use_output_fallbacks,
+                "discover_sourceimages": discover_sourceimages,
                 "dry_run": dry_run,
             }
 

@@ -181,7 +181,6 @@ class OpacityMaterialMode(ptk.LoggingMixin):
             # 3. Establish Proxy Connections (Transform.opacity -> Material.opacity)
             # This requires 1-to-1 mapping if we want independent control.
 
-            current_mat = final_mat
             for i, target_obj in enumerate(targets):
                 # 3a. Ensure Attribute Exists on Transform
                 OpacityAttributeMode.create([target_obj])

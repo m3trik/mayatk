@@ -2,11 +2,13 @@
 # coding=utf-8
 """Maya-side glue for the Marmoset Toolbag engine.
 
-:class:`MarmosetBridge` is the Maya half of the split: it exports the
-current selection to FBX, builds a :class:`MatManifest` material sidecar
-and a Maya-DAG-classified high/low bake-pairs sidecar, then delegates the
-Toolbag-side work (template render, launch, roundtrip) to its
-DCC-agnostic base, :class:`._marmoset_engine.MarmosetEngine`.
+:class:`MarmosetBridge` is the Maya half of the split: a
+:class:`pythontk.HandoffBridge` whose ``_produce`` exports the current
+selection to FBX, builds a :class:`MatManifest` material sidecar and a
+Maya-DAG-classified high/low bake-pairs sidecar, and whose **deliverer** is the
+DCC-agnostic :class:`._marmoset_engine.MarmosetEngine` (a
+:class:`pythontk.Deliverer`) that renders the Toolbag template and launches /
+round-trips Toolbag.
 
 Everything Marmoset-specific but DCC-agnostic (Toolbag discovery/launch,
 log handling, template rendering, the in-Toolbag helpers, the RPC client)
@@ -28,6 +30,8 @@ try:
     from maya import cmds
 except ImportError:
     pass
+
+import pythontk as ptk
 
 # DCC-agnostic engine (bundled in this subpackage) + the names the slots
 # import from this module.
@@ -135,14 +139,15 @@ def build_bake_pairs_manifest(
     return out
 
 
-class MarmosetBridge(MarmosetEngine):
+class MarmosetBridge(ptk.HandoffBridge):
     """Export the Maya selection to Marmoset Toolbag with templated automation.
 
-    A :class:`MarmosetEngine` that prepends a Maya export step:
-    :meth:`send` takes Maya *objects* (defaulting to the current
-    selection), exports them to FBX with a :class:`MatManifest` sidecar
-    and a bake-pairs sidecar, then delegates to
-    :meth:`MarmosetEngine.send` with the produced file paths.
+    A :class:`pythontk.HandoffBridge` whose ``_produce`` exports the selection to
+    FBX with a :class:`MatManifest` sidecar and a bake-pairs sidecar, and whose
+    deliverer is the DCC-agnostic :class:`MarmosetEngine` (renders the Toolbag
+    template + launches / round-trips). The public ``send()`` is the shared
+    skeleton; its app-specific knobs (``output_dir`` / ``output_name`` /
+    ``toolbag_exe`` / ``fbx_options`` / ``preset_file``) ride as keyword extras.
 
     Usage::
 
@@ -150,54 +155,66 @@ class MarmosetBridge(MarmosetEngine):
         MarmosetBridge().send(template="lookdev")  # mode defaults to send_to
     """
 
-    def send(
-        self,
-        objects: Optional[List[str]] = None,
-        output_dir: Optional[str] = None,
-        output_name: Optional[str] = None,
-        toolbag_exe: Optional[str] = None,
-        fbx_options: Optional[Dict[str, Any]] = None,
-        preset_file: Optional[str] = None,
-        template: str = "import",
-        mode: str = SEND_TO,
-        params: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Export *objects*, build sidecars, and hand the FBX to the engine.
+    def __init__(self, toolbag_path: Optional[str] = None):
+        super().__init__()
+        # The Toolbag-side launch/roundtrip Strategy (also usable standalone).
+        self.deliverer = MarmosetEngine(toolbag_path)
+        # The panel redirects only the bridge's logger (`BridgeSlotsBase`); route
+        # the engine's delivery-phase output (Toolbag launch, output links,
+        # roundtrip results) through the SAME logger so it reaches the log panel.
+        # `LoggingMixin.logger` is a non-data ClassProperty, so this instance
+        # attribute shadows it for this engine only (standalone engines keep
+        # their own logger).
+        self.deliverer.logger = self.logger
 
-        Parameters mirror the previous bridge API. *objects* defaults to
-        the current selection; the FBX, material manifest, and (when a
-        high/low suffix matches) bake-pairs sidecar are written into
-        *output_dir*, then :meth:`MarmosetEngine.send` renders the
-        template and launches Toolbag.
-        """
-        # Fail fast on a bad template/mode before doing an expensive export.
-        template_path = _TEMPLATE_DIR / f"{template}.py"
-        allowed_modes = template_modes(template_path) if template_path.is_file() else ()
-        if mode not in allowed_modes:
-            self.logger.error(
-                f"Template '{template}' does not support mode '{mode}'. "
-                f"Declared modes: {allowed_modes}"
-            )
-            return None
+    # Back-compat: expose the engine's resolved Toolbag path on the bridge.
+    @property
+    def toolbag_path(self) -> Optional[str]:
+        return self.deliverer.toolbag_path
 
+    @toolbag_path.setter
+    def toolbag_path(self, value: Optional[str]) -> None:
+        self.deliverer.toolbag_path = value
+
+    def params_defaults(self) -> Dict[str, Any]:
+        from mayatk.mat_utils.marmoset_bridge import parameters as _params
+
+        return _params.defaults()
+
+    def render_template(self, *args, **kwargs) -> Optional[str]:
+        """Render a Toolbag script body (delegates to the engine deliverer)."""
+        return self.deliverer.render_template(*args, **kwargs)
+
+    # ------------------------------------------------------------------ hooks
+    def _resolve_objects(self, objects):
+        """Return the objects to export; ``None`` -> current selection."""
         if not objects:
             objects = cmds.ls(selection=True, long=True)
-        if not objects:
-            self.logger.warning("Nothing selected to export.")
-            return None
+        return objects or []
 
-        if not output_dir:
-            output_dir = os.path.join(tempfile.gettempdir(), "maya_marmoset_bridge")
+    def _produce(self, objects, request) -> Optional[ptk.Payload]:
+        """Export the FBX + material manifest (+ bake-pairs sidecar) into ``output_dir``.
+
+        Resolves ``output_dir`` / ``output_name`` (stamping them back into
+        ``request.extras`` so the engine deliverer writes its script alongside),
+        then returns a :class:`pythontk.Payload` carrying the FBX + sidecar paths.
+        """
+        output_dir = request.get("output_dir") or os.path.join(
+            tempfile.gettempdir(), "maya_marmoset_bridge"
+        )
         os.makedirs(output_dir, exist_ok=True)
+        base = request.get("output_name") or self._scene_base_name()
+        # Keep produce + deliver on the same dir/name.
+        request.extras["output_dir"] = output_dir
+        request.extras["output_name"] = base
 
-        base = output_name or self._scene_base_name()
         fbx_path = os.path.join(output_dir, f"{base}.fbx")
         manifest_path = os.path.join(output_dir, f"{base}.materials.json")
         pairs_path = os.path.join(output_dir, f"{base}.bake_pairs.json")
 
         merged_options = dict(_DEFAULT_FBX_OPTIONS)
-        if fbx_options:
-            merged_options.update(fbx_options)
+        if request.get("fbx_options"):
+            merged_options.update(request.get("fbx_options"))
 
         # Live Maya doesn't always pre-load fbxmaya -- load before exporting
         # so we get a clear FBX-export error instead of "Invalid file type".
@@ -208,7 +225,7 @@ class MarmosetBridge(MarmosetEngine):
             FbxUtils.export(
                 file_path=fbx_path,
                 objects=objects,
-                preset_file=preset_file,
+                preset_file=request.get("preset_file"),
                 options=merged_options,
                 selection_only=True,
             )
@@ -232,11 +249,8 @@ class MarmosetBridge(MarmosetEngine):
         # while we still have the full DAG (Toolbag's FBX importer flattens
         # empty parent transforms). The bake template reads this back to
         # classify meshes regardless of what survived the round trip.
-        from mayatk.mat_utils.marmoset_bridge import parameters as _params
-        _merged_params = _params.defaults()
-        _merged_params.update(params or {})
-        _high_suffix = _merged_params.get("HIGH_SUFFIX", "_high") or ""
-        _low_suffix = _merged_params.get("LOW_SUFFIX", "_low") or ""
+        _high_suffix = request.params.get("HIGH_SUFFIX", "_high") or ""
+        _low_suffix = request.params.get("LOW_SUFFIX", "_low") or ""
         bake_pairs = build_bake_pairs_manifest(objects, _high_suffix, _low_suffix)
         actual_pairs_path: Optional[str] = None
         if bake_pairs:
@@ -249,18 +263,9 @@ class MarmosetBridge(MarmosetEngine):
             )
             actual_pairs_path = pairs_path
 
-        # Delegate Toolbag-side work to the DCC-agnostic engine.
-        return MarmosetEngine.send(
-            self,
-            model_path=fbx_path,
-            manifest_path=manifest_path,
-            pairs_path=actual_pairs_path,
-            output_dir=output_dir,
-            output_name=base,
-            toolbag_exe=toolbag_exe,
-            template=template,
-            mode=mode,
-            params=params,
+        return ptk.Payload(
+            primary=fbx_path,
+            extras={"manifest": manifest_path, "pairs": actual_pairs_path},
         )
 
     @staticmethod

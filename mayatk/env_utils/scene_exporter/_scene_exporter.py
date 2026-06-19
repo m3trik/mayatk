@@ -118,10 +118,22 @@ class SceneExporter(ptk.LoggingMixin):
         start_time = time.time()  # Track export duration
         self.logger.info("Starting export process ...")
 
-        # Validate export directory is provided
+        # Default to the open scene's directory when none is given — export
+        # the FBX alongside the current scene file.
         if not export_dir:
-            self.logger.error("Export directory not set.")
-            return False
+            scene_path = cmds.file(query=True, sceneName=True)
+            if scene_path:
+                export_dir = os.path.dirname(scene_path)
+                self.logger.info(
+                    f"No export directory given; exporting alongside the scene "
+                    f"file: {export_dir}"
+                )
+            else:
+                self.logger.error(
+                    "Export directory not set and the scene is unsaved — save "
+                    "the scene or specify an output directory."
+                )
+                return False
 
         # Set export configuration
         self.export_dir = os.path.abspath(os.path.expandvars(export_dir))

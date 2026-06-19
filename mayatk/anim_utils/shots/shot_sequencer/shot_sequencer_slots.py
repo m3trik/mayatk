@@ -441,8 +441,6 @@ class ShotSequencerController(
 
     def _show_shot_lane_context_menu(self, time: float, global_pos) -> None:
         """Context menu for the shots track: selection, editing, creation."""
-        from qtpy import QtWidgets
-
         widget = self._get_sequencer_widget()
         if widget is None or self.sequencer is None:
             return
@@ -2295,8 +2293,6 @@ class ShotEditDialog:
         title: str = "Shot",
     ):
         """Show a modal dialog and return the result tuple or ``None``."""
-        from qtpy import QtWidgets, QtCore
-
         dlg = QtWidgets.QDialog(parent)
         dlg.setWindowTitle(title)
         dlg.setMinimumWidth(280)
@@ -2608,8 +2604,6 @@ class ShotSequencerSlots(ptk.LoggingMixin):
 
     def _delete_shot(self) -> None:
         """Delete the currently selected shot after confirmation."""
-        from qtpy import QtWidgets
-
         if self.controller.sequencer is None:
             return
         sid = self.controller.active_shot_id
@@ -2667,8 +2661,6 @@ class ShotSequencerSlots(ptk.LoggingMixin):
 
     def _cmb_context_menu(self, pos) -> None:
         """Right-click context menu on the shot combobox."""
-        from qtpy import QtWidgets
-
         if self.controller._cmb_mode != "shots":
             return
 
@@ -2840,7 +2832,6 @@ class ShotSequencerSlots(ptk.LoggingMixin):
 
     def btn_colors(self):
         """Open the attribute color configuration dialog."""
-        from qtpy import QtWidgets
         from uitk.widgets.mixins.settings_manager import SettingsManager
 
         widget = self.controller._get_sequencer_widget()

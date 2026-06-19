@@ -232,8 +232,15 @@ def resolve_painter_log_path(painter_exe: Optional[str] = None) -> Optional[str]
 # -- Bridge ----------------------------------------------------------------
 
 
-class SubstanceBridge(ptk.LoggingMixin):
+class SubstanceBridge(ptk.HandoffBridge):
     """Export Maya selection to Substance Painter via a chosen template.
+
+    A :class:`pythontk.HandoffBridge`: the shared skeleton (``resolve -> preflight
+    -> produce -> deliver``) drives the flow, with this class supplying all four
+    steps. Unlike the simpler bridges its delivery (Painter launch/attach + JSON-RPC
+    round-trip + managed-instance registry) is deeply stateful and unique, so the
+    bridge is its own deliverer (it overrides :meth:`_deliver`/:meth:`_preflight`
+    rather than plugging in a shared :class:`pythontk.Deliverer`).
 
     Two operating modes per template (declared via ``BRIDGE_MODES``):
 
@@ -254,7 +261,12 @@ class SubstanceBridge(ptk.LoggingMixin):
     # Default ceiling for roundtrip RPC calls.
     ROUNDTRIP_TIMEOUT = 1800  # 30 minutes
 
+    # Some templates (e.g. render-current-view) operate on an already-loaded
+    # Painter project and export nothing -- so an empty selection is allowed.
+    requires_objects = False
+
     def __init__(self, painter_path: Optional[str] = None):
+        super().__init__()
         self._painter_path = painter_path
         # Managed Painter instances launched by this bridge, in insertion
         # order (oldest -> newest). Pruned of dead entries on each lookup.
@@ -462,34 +474,70 @@ class SubstanceBridge(ptk.LoggingMixin):
         if legacy_kwargs:
             self.logger.warning("Unknown send() kwargs ignored: %s", list(legacy_kwargs))
 
-        template_path = _TEMPLATE_DIR / f"{template}.py"
+        # Pack the Painter-specific knobs into the request extras and run the
+        # shared skeleton (resolve -> preflight -> produce -> deliver).
+        request = ptk.HandoffRequest(
+            template=template,
+            mode=mode,
+            params=params or {},
+            extras={
+                "output_dir": output_dir,
+                "output_name": output_name,
+                "painter_exe": painter_exe,
+                "fbx_options": fbx_options,
+                "preset_file": preset_file,
+                "target": target,
+            },
+        )
+        return self._run(objects, request)
+
+    # -- HandoffBridge hooks ----------------------------------------------
+
+    def _resolve_objects(self, objects):
+        """Pass the selection through unchanged (lazy ``cmds.ls`` happens in produce)."""
+        return objects
+
+    def _preflight(self, objects, request) -> bool:
+        """Validate the template / mode / target before exporting."""
+        template_path = _TEMPLATE_DIR / f"{request.template}.py"
         if not template_path.is_file():
             available = sorted(p.stem for p in list_templates())
             self.logger.error(
-                f"Template '{template}' not found at {template_path}. "
+                f"Template '{request.template}' not found at {template_path}. "
                 f"Available: {available}"
             )
-            return None
+            return False
 
         meta = parse_template(template_path)
-        if mode not in meta["BRIDGE_MODES"]:
+        if request.mode not in meta["BRIDGE_MODES"]:
             self.logger.error(
-                f"Template '{template}' does not support mode '{mode}'. "
-                f"Declared modes: {meta['BRIDGE_MODES']}"
+                f"Template '{request.template}' does not support mode "
+                f"'{request.mode}'. Declared modes: {meta['BRIDGE_MODES']}"
             )
-            return None
+            return False
 
         try:
-            self._validate_target(meta["TARGET_INSTANCE"], target)
+            self._validate_target(meta["TARGET_INSTANCE"], request.get("target"))
         except ValueError as e:
             self.logger.error(str(e))
-            return None
+            return False
 
-        if not output_dir:
-            output_dir = os.path.join(tempfile.gettempdir(), "maya_substance_bridge")
+        # Carry the parsed metadata + path forward (parsed once).
+        request.extras["_meta"] = meta
+        request.extras["_template_path"] = template_path
+        return True
+
+    def _produce(self, objects, request) -> Optional[ptk.Payload]:
+        """Export the FBX, stage textures, and build the material manifest."""
+        meta = request.extras["_meta"]
+        template_path = request.extras["_template_path"]
+
+        output_dir = request.get("output_dir") or os.path.join(
+            tempfile.gettempdir(), "maya_substance_bridge"
+        )
         os.makedirs(output_dir, exist_ok=True)
 
-        base = output_name or self._scene_base_name()
+        base = request.get("output_name") or self._scene_base_name()
         base = StrUtils.sanitize(base, preserve_case=True)
         fbx_path = os.path.join(output_dir, f"{base}.fbx")
         manifest_path = os.path.join(output_dir, f"{base}.materials.json")
@@ -502,8 +550,8 @@ class SubstanceBridge(ptk.LoggingMixin):
             # Precedence: defaults < template FBX_OPTIONS < caller's fbx_options.
             merged_options = dict(_DEFAULT_FBX_OPTIONS)
             merged_options.update(meta.get("FBX_OPTIONS", {}))
-            if fbx_options:
-                merged_options.update(fbx_options)
+            if request.get("fbx_options"):
+                merged_options.update(request.get("fbx_options"))
 
             FbxUtils.load_plugin()
             self.logger.info("Exporting FBX ...")
@@ -511,7 +559,7 @@ class SubstanceBridge(ptk.LoggingMixin):
                 FbxUtils.export(
                     file_path=fbx_path,
                     objects=objects,
-                    preset_file=preset_file,
+                    preset_file=request.get("preset_file"),
                     options=merged_options,
                     selection_only=True,
                 )
@@ -535,7 +583,7 @@ class SubstanceBridge(ptk.LoggingMixin):
             template_path.read_text(encoding="utf-8")
         )
         merged_params = _params.defaults()
-        merged_params.update(params or {})
+        merged_params.update(request.params or {})
         include_textures = (
             "PAINTER_INCLUDE_TEXTURES" in referenced
             and bool(merged_params.get("PAINTER_INCLUDE_TEXTURES", True))
@@ -567,12 +615,35 @@ class SubstanceBridge(ptk.LoggingMixin):
                 f'<a href="action://open?path={manifest_path}">{manifest_path}</a>'
             )
 
+        return ptk.Payload(
+            primary=fbx_path,
+            extras={
+                "meta": meta,
+                "manifest_path": manifest_path,
+                "output_dir": output_dir,
+                "staged_textures": staged_textures,
+                "referenced": referenced,
+            },
+        )
+
+    def _deliver(self, payload, request) -> Optional[Dict[str, Any]]:
+        """Render the launch args, resolve the Painter connection, dispatch RPC."""
+        from mayatk.mat_utils.substance_bridge import parameters as _params
+
+        meta = payload.extras["meta"]
+        fbx_path = payload.primary
+        manifest_path = payload.extras["manifest_path"]
+        output_dir = payload.extras["output_dir"]
+        staged_textures = payload.extras["staged_textures"]
+        referenced = payload.extras["referenced"]
+        mode = request.mode
+
         # -- Render placeholders ------------------------------------------
         cli_ctx, js_ctx = self._build_contexts(
             fbx_path=fbx_path,
             manifest_path=manifest_path,
             output_dir=output_dir,
-            params=params,
+            params=request.params,
         )
         launch_args = self._render_launch_args(meta["LAUNCH_ARGS"], cli_ctx)
         # Dynamic argv extensions that don't fit the static __KEY__ shape:
@@ -581,6 +652,8 @@ class SubstanceBridge(ptk.LoggingMixin):
         if "--mesh" in launch_args:
             for tex_path in staged_textures:
                 launch_args.extend(["--mesh-map", tex_path])
+            merged_params = _params.defaults()
+            merged_params.update(request.params or {})
             if (
                 "PAINTER_SPLIT_BY_UDIM" in referenced
                 and bool(merged_params.get("PAINTER_SPLIT_BY_UDIM", False))
@@ -592,12 +665,13 @@ class SubstanceBridge(ptk.LoggingMixin):
         # The template's LAUNCH_ARGS is authoritative for any fresh launch.
         # ``_resolve_connection`` decides between attach / reuse / launch
         # based on *target* (and the template's TARGET_INSTANCE constraint
-        # already validated above). The per-call ``painter_exe`` overrides
-        # the bridge default only for fresh launches; reused/attached
+        # already validated in preflight). The per-call ``painter_exe``
+        # overrides the bridge default only for fresh launches; reused/attached
         # instances use whatever Painter is already running.
         wants_rpc = mode == ROUNDTRIP or bool(rpc_script.strip())
         connection = self._resolve_connection(
-            target, launch_args, wants_rpc, painter_exe=painter_exe
+            request.get("target"), launch_args, wants_rpc,
+            painter_exe=request.get("painter_exe"),
         )
         if connection is None:
             return None
@@ -630,7 +704,7 @@ class SubstanceBridge(ptk.LoggingMixin):
                         connection.close()
                         return None
 
-        self._announce_handoff(template, mode, fbx_path, output_dir)
+        self._announce_handoff(request.template, mode, fbx_path, output_dir)
         return result
 
     # -- Helpers ----------------------------------------------------------

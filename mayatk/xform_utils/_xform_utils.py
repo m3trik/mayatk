@@ -2503,7 +2503,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             (list) nested tuples with int values representing matching vertex pairs.
         """
         vert_pos_a, vert_pos_b = cls.get_vertex_positions([a, b], world_space)
-        hash_a, hash_b = ptk.hash_points([vert_pos_a, vert_pos_b])
+        hash_a, hash_b = ptk.PointCloud.hash_points([vert_pos_a, vert_pos_b])
 
         matching = set(hash_a).intersection(hash_b)
         return [

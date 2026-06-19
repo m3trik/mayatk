@@ -225,7 +225,7 @@ class TubePath:
         # Sort centers to form a continuous path along the tube
         if loop_centers:
             # 1. Arrange points
-            loop_centers = ptk.arrange_points_as_path(loop_centers)
+            loop_centers = ptk.Polyline.order_points(loop_centers)
 
             # 2. Filter duplicates/near-coincident points
             # Edge loops on high-res geometry or bevels can result in points that are virtually identical.
@@ -269,7 +269,7 @@ class TubePath:
             centerline_points.append(point2)
 
         # Sort the centerline points to form a continuous path
-        centerline_points = ptk.arrange_points_as_path(centerline_points)
+        centerline_points = ptk.Polyline.order_points(centerline_points)
 
         return centerline_points
 
@@ -377,7 +377,7 @@ class TubePath:
                 centers = refined
 
             # Order as a continuous path
-            centers = ptk.arrange_points_as_path(centers)
+            centers = ptk.Polyline.order_points(centers)
             return centers
 
         finally:
@@ -451,7 +451,7 @@ class TubePath:
 
         # Apply smoothing if requested
         if smooth and centerline_points:
-            centerline_points = ptk.smooth_points(centerline_points, window_size)
+            centerline_points = ptk.Polyline.smooth(centerline_points, window_size)
 
         return centerline_points
 
@@ -1060,7 +1060,7 @@ class TubeRig(ptk.LoggingMixin):
             if reverse:
                 joint_positions = joint_positions[::-1]
         else:
-            joint_positions = ptk.dist_points_along_centerline(
+            joint_positions = ptk.Polyline.resample(
                 centerline, num_joints, reverse
             )
         joints = []
@@ -1282,7 +1282,7 @@ class TubeRig(ptk.LoggingMixin):
             # ------------------------------------------------------------------
             # Distributed N-Point System
             # ------------------------------------------------------------------
-            positions = ptk.dist_points_along_centerline(centerline, num_controls)
+            positions = ptk.Polyline.resample(centerline, num_controls)
 
             for i, pos in enumerate(positions):
                 name = f"{self.rig_name}_ctrl_{i+1}"

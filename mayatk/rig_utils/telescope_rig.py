@@ -112,7 +112,7 @@ class TelescopeRig(ptk.LoggingMixin):
                         upVector=(0, 1, 0),
                         worldUpType="scene",
                     )
-            self.logger.info("Segments constrained.", "result")
+            self.logger.info("Segments constrained.")
 
         def set_driven_keys(distance_node, initial_distance):
             for segment in segments[1:-1]:
@@ -128,7 +128,7 @@ class TelescopeRig(ptk.LoggingMixin):
                     driverValue=collapsed_distance,
                     value=collapsed_distance / initial_distance,
                 )
-            self.logger.info("Driven keys set.", "result")
+            self.logger.info("Driven keys set.")
 
         def lock_segment_attributes():
             for segment in segments:
@@ -153,7 +153,7 @@ class TelescopeRig(ptk.LoggingMixin):
                 upVector=(0, 1, 0),
                 worldUpType="scene",
             )
-            self.logger.info("Locators constrained.", "result")
+            self.logger.info("Locators constrained.")
 
         distance_node = create_distance_node()
         constrain_locators()

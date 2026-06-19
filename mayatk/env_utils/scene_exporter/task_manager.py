@@ -70,6 +70,21 @@ class _TaskDataMixin:
             )
         return self._cached_materials
 
+    def _get_export_file_nodes(self) -> List[str]:
+        """Return the deduplicated ``file`` nodes feeding the export materials.
+
+        Walks the shading history of the materials assigned to ``self.objects``
+        (filtering any an earlier task may have deleted) and collects the
+        connected ``file`` texture nodes.  Shared by the texture-oriented tasks
+        and checks so they all scope to exactly the textures that will ship,
+        rather than every ``file`` node in the scene.
+        """
+        materials = [m for m in self._get_all_materials() if cmds.objExists(m)]
+        if not materials:
+            return []
+        history = cmds.listHistory(materials, pruneDagObjects=True) or []
+        return list(set(cmds.ls(history, type="file") or []))
+
 
 class _TaskActionsMixin(_TaskDataMixin):
     """ """
@@ -120,9 +135,31 @@ class _TaskActionsMixin(_TaskDataMixin):
         self.logger.debug(f"Reverted linear unit to: {original_linear_unit}")
 
     def convert_to_relative_paths(self):
-        """Convert absolute material paths to relative paths."""
+        """Copy external textures into sourceimages, then convert paths to relative.
+
+        A project-relative texture path only resolves if the file physically
+        lives under ``sourceimages``.  Any texture stored elsewhere is first
+        copied in (via ``MatUtils.copy_textures_to_sourceimages``); without
+        that step, remapping it to a relative path would point at a file that
+        isn't there and silently break the material on import.  Textures
+        already under sourceimages are left in place.
+
+        The copy is a real, persistent asset consolidation — it intentionally
+        survives the post-export scene restore (the perform_export undo chunk
+        only rolls back the node *path* edits below, not the files on disk).
+        """
         self.logger.debug("Converting absolute paths to relative")
         materials = self._get_all_materials()
+
+        # Stage the actual files under sourceimages before remapping so the
+        # resulting relative paths resolve instead of breaking the links.
+        copied = MatUtils.copy_textures_to_sourceimages(materials=materials)
+        if copied:
+            self.logger.info(
+                f"Copied {len(copied)} external texture(s) into sourceimages "
+                "before relative-path conversion."
+            )
+
         # Pass silent=True and as_strings=True to avoid om.MGlobal.displayInfo
         # and cmds.node overhead.  Do NOT disable undo here — the
         # perform_export undo chunk needs to capture these changes so
@@ -147,28 +184,11 @@ class _TaskActionsMixin(_TaskDataMixin):
         workspace-relative resolution, sourceimages directory, and
         basename-in-sourceimages as fallbacks.
         """
-        import os
-
-        materials = self._get_all_materials()
-        if not materials:
-            self.logger.debug("No materials found. Skipping texture path resolution.")
-            return
-
-        # Filter out materials that may have been deleted by earlier tasks
-        materials = [m for m in materials if cmds.objExists(m)]
-        if not materials:
-            self.logger.debug(
-                "No valid materials remain. Skipping texture path resolution."
-            )
-            return
-
-        # Traverse shading history to find file nodes for export materials
-        history = cmds.listHistory(materials, pruneDagObjects=True) or []
-        file_nodes = cmds.ls(history, type="file") or []
-        file_nodes = list(set(file_nodes))  # deduplicate
-
+        file_nodes = self._get_export_file_nodes()
         if not file_nodes:
-            self.logger.debug("No file nodes found. Skipping texture path resolution.")
+            self.logger.debug(
+                "No export texture file nodes found. Skipping texture path resolution."
+            )
             return
 
         resolved_count = 0
@@ -470,6 +490,7 @@ class _TaskChecksMixin(_TaskDataMixin):
 
     _LOD_SUFFIX_REGEX = re.compile(r"_lod\d*$", re.IGNORECASE)
     _MAX_LISTED_OBJECTS = 25
+    _DEFAULT_FLOOR_TOLERANCE = 0.5
 
     def _obj_link(self, node: str, action: str = "reveal") -> str:
         """Return a clickable log link for a Maya scene node.
@@ -572,6 +593,51 @@ class _TaskChecksMixin(_TaskDataMixin):
         self.logger.info(
             f"Excluded {removed} object(s) under {len(matched_roots)} group(s) from export."
         )
+
+    def exclude_hdr(self) -> None:
+        """Remove Arnold HDR environment lights (``aiSkyDomeLight``) from the export set.
+
+        The HDR skydome is image-based scene lighting, not deliverable
+        geometry, so it should not ride into a game-engine FBX. In the
+        'All Scene Objects' mode the skydome transform is otherwise picked up
+        by ``cmds.ls(transforms=True)``; this strips the skydome transform(s)
+        and their shapes back out of ``self.objects``.
+
+        A no-op when mtoa is unloaded (no skydome can exist) or the export set
+        contains none.
+        """
+        if not self.objects:
+            return
+
+        # Guard the plugin first: querying ``cmds.ls(type="aiSkyDomeLight")``
+        # for an unregistered type emits an "Unknown object type" warning, and
+        # without mtoa loaded no skydome can exist anyway.
+        try:
+            if not cmds.pluginInfo("mtoa", query=True, loaded=True):
+                return
+        except Exception:
+            return
+
+        skydomes = cmds.ls(type="aiSkyDomeLight", long=True) or []
+        if not skydomes:
+            return
+
+        exclude = set()
+        for shape in skydomes:
+            exclude.add(shape)
+            exclude.update(
+                cmds.listRelatives(shape, parent=True, fullPath=True) or []
+            )
+
+        original_count = len(self.objects)
+        self.objects = [obj for obj in self.objects if obj not in exclude]
+        removed = original_count - len(self.objects)
+        if removed:
+            self.logger.info(
+                f"Excluded {removed} HDR environment node(s) (aiSkyDomeLight) from export."
+            )
+        else:
+            self.logger.debug("No HDR skydome in the export set — nothing to exclude.")
 
     def check_root_default_transforms(self) -> tuple:
         """Check if all root group nodes have default transforms."""
@@ -717,6 +783,80 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return all_valid, log_messages
 
+    def check_texture_file_size(self, max_size_mb: Optional[float] = 16.0) -> tuple:
+        """Check that no export texture exceeds a maximum on-disk file size.
+
+        Oversized source textures bloat the exported asset and usually signal an
+        un-downsized authoring map (e.g. an 8K master) that shouldn't ship to a
+        game engine.  Scoped to the textures feeding the export materials, so it
+        only flags maps that will actually travel with the FBX.
+
+        Parameters:
+            max_size_mb: Maximum allowed texture size in megabytes.  ``None``,
+                ``0``, or ``"OFF"`` disables the check (returns pass).  Defaults
+                to 16 MB.
+
+        Returns:
+            tuple: (status: bool, messages: list)
+        """
+        if not max_size_mb or str(max_size_mb).upper() == "OFF":
+            return True, []
+
+        try:
+            limit_mb = float(max_size_mb)
+        except (TypeError, ValueError):
+            self.logger.warning(
+                f"Invalid max texture size '{max_size_mb}'. Skipping size check."
+            )
+            return True, []
+        limit_bytes = limit_mb * 1024 * 1024
+
+        offenders: List[str] = []
+        seen_paths = set()
+
+        for node in self._get_export_file_nodes():
+            if not cmds.attributeQuery("fileTextureName", node=node, exists=True):
+                continue
+
+            path = cmds.getAttr(f"{node}.fileTextureName")
+            if not path:
+                continue
+
+            # Resolve to the on-disk file via MatUtils.resolve_path so
+            # project-relative paths still resolve — the default-on
+            # convert_to_relative_paths task runs before checks and rewrites
+            # texture paths to workspace-relative form.  Missing files are the
+            # domain of check_valid_paths, so an unresolved path is skipped.
+            resolved = MatUtils.resolve_path(path)
+            if not resolved:
+                continue
+
+            # Collapse the UDIM token to the first tile for the size probe
+            # (resolve_path may return a path that still carries it).
+            probe = (
+                resolved.replace("<UDIM>", "1001") if "<UDIM>" in resolved else resolved
+            )
+            if probe in seen_paths:
+                continue
+            seen_paths.add(probe)
+
+            if not os.path.isfile(probe):
+                continue
+
+            size = os.path.getsize(probe)
+            if size > limit_bytes:
+                link = self._obj_link(node, "select")
+                offenders.append(
+                    f"  - {link} -> {os.path.basename(probe)} "
+                    f"({size / (1024 * 1024):.2f} MB)"
+                )
+
+        if offenders:
+            header = [f"{len(offenders)} texture(s) exceed the {limit_mb:g} MB limit:"]
+            return False, header + self._truncate_obj_entries(offenders)
+
+        return True, []
+
     def check_duplicate_locator_names(self) -> tuple:
         """Check for duplicate locator short names among the specified objects.
 
@@ -803,14 +943,24 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return True, []
 
-    def check_objects_below_floor(self, tolerance: float = 0.5) -> tuple:
+    def check_objects_below_floor(
+        self, tolerance: float = _DEFAULT_FLOOR_TOLERANCE
+    ) -> tuple:
         """Check if any object's geometry is below the floor plane (Y=0).
 
         Args:
-            tolerance: Allowable distance (in scene units) beneath the plane before failing.
+            tolerance: Allowable distance (in scene units) beneath the plane
+                before failing.  The UI exposes this as a checkbox, so enabling
+                the check passes ``True``; that is treated as "use the default
+                tolerance" rather than coerced to ``1.0``.  An explicit ``None``
+                still means a strict ``0.0``.
         """
         offenders: List[str] = []
 
+        # ``True`` (checkbox enabled) is a bool, not a real distance — honor the
+        # documented default instead of float(True) == 1.0.
+        if tolerance is True:
+            tolerance = self._DEFAULT_FLOOR_TOLERANCE
         tolerance = 0.0 if tolerance is None else max(0.0, float(tolerance))
         limit = -tolerance
 
@@ -1186,6 +1336,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         "set_linear_unit",
         # Phase 2 — Object filtering
         "ignore_groups",
+        "exclude_hdr",
         # Phase 3 — Material cleanup (reassign THEN resolve THEN convert)
         "reassign_duplicate_materials",
         "resolve_invalid_texture_paths",
@@ -1218,6 +1369,19 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         for k, v in ptk.insert_into_dict(
             EnvUtils.SCENE_UNIT_VALUES, "OFF", None
         ).items()
+    }
+
+    # Max texture file-size thresholds (MB). OFF disables the check; the
+    # remaining entries map a label to the megabyte limit passed to
+    # check_texture_file_size.  Default selection is set in check_definitions.
+    _texture_size_options: Dict[str, Any] = {
+        "Check Max Texture Size: OFF": None,
+        "Check Max Texture Size: 4 MB": 4,
+        "Check Max Texture Size: 8 MB": 8,
+        "Check Max Texture Size: 16 MB": 16,
+        "Check Max Texture Size: 32 MB": 32,
+        "Check Max Texture Size: 64 MB": 64,
+        "Check Max Texture Size: 128 MB": 128,
     }
 
     def __init__(self, logger):
@@ -1281,6 +1445,18 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setToolTip": "Determine the workspace directory from the scene path.",
                 "setChecked": True,
             },
+            "exclude_hdr": {
+                "widget_type": "QCheckBox",
+                "setText": "Exclude HDR Environment",
+                "setToolTip": (
+                    "Exclude the Arnold HDR environment light (aiSkyDomeLight) "
+                    "from the export.\nThe skydome is image-based scene lighting, "
+                    "not deliverable geometry — in 'All Scene Objects' mode it "
+                    "would otherwise ride into the FBX.\nNo-op when the scene has "
+                    "no skydome."
+                ),
+                "setChecked": True,
+            },
             "sep_materials": {
                 "widget_type": "Separator",
                 "title": "Materials",
@@ -1294,7 +1470,12 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "convert_to_relative_paths": {
                 "widget_type": "QCheckBox",
                 "setText": "Convert To Relative Paths",
-                "setToolTip": "Convert absolute paths to relative paths.",
+                "setToolTip": (
+                    "Convert absolute texture paths to project-relative paths.\n"
+                    "External textures are first copied into sourceimages (if "
+                    "not already there) so the relative paths still resolve — "
+                    "otherwise converting to relative would break the links."
+                ),
                 "setChecked": True,
             },
             "resolve_invalid_texture_paths": {
@@ -1494,6 +1675,18 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "setText": "Check For Valid Paths.",
                 "setToolTip": "Check if all file paths (textures, references) exist on disk.",
                 "setChecked": True,
+            },
+            "check_texture_file_size": {
+                "widget_type": "ComboBox",
+                "add": self._texture_size_options,
+                "setCurrentIndex": 3,  # Default to 16 MB
+                "setToolTip": (
+                    "Fail the export when any texture feeding the export "
+                    "materials exceeds the selected size on disk.\nFlags "
+                    "un-downsized authoring maps (e.g. an 8K master) that would "
+                    "bloat the shipped asset.\nSet to OFF to disable."
+                ),
+                "value_method": "currentData",
             },
             "sep_anim": {
                 "widget_type": "Separator",

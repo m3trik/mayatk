@@ -26,6 +26,14 @@ _SCRIPT_DIR = _PKG_DIR / "scripts"
 
 # Candidate names AppLauncher will try when no explicit path is given.
 _RIZOM_APP_NAMES = ["Rizomuv_VS", "rizomuv", "RizomUV"]
+# Install-dir fallback: the Rizom installer doesn't register the exe with the
+# Windows App-Paths key, so PATH/registry lookup misses a normal install. Newest
+# ``Rizom Lab\<version>`` folder wins (shared scan via ``AppLauncher.resolve_app_path``).
+_RIZOM_SCAN_GLOBS = (
+    r"{program_files}\Rizom Lab\*\Rizomuv_VS.exe",
+    r"{program_files}\Rizom Lab\*\rizomuv_RS.exe",
+    r"{program_files}\Rizom Lab\*\rizomuv.exe",
+)
 
 
 class RizomUVBridge(ptk.LoggingMixin):
@@ -53,48 +61,23 @@ class RizomUVBridge(ptk.LoggingMixin):
         """Resolve the RizomUV executable path.
 
         If an explicit path was provided at init it is returned directly.
-        Otherwise ``AppLauncher.find_app`` is queried for each candidate;
-        as a final fallback we walk the standard Rizom Lab install dirs
-        because the Rizom installer doesn't register the exe with the
-        Windows ``App Paths`` registry key (so PATH/registry lookup fails
-        even on a normal install).
+        Otherwise discovery runs through the shared
+        :meth:`pythontk.AppLauncher.resolve_app_path`: ``AppLauncher.find_app``
+        for each candidate name, then a scan of the standard Rizom Lab install
+        dirs (the installer doesn't register the exe with the Windows ``App
+        Paths`` registry key, so PATH/registry lookup misses a normal install;
+        newest ``Rizom Lab\\<version>`` folder wins).
         """
         if self._rizom_path:
             return self._rizom_path
 
-        for name in _RIZOM_APP_NAMES:
-            found = AppLauncher.find_app(name)
-            if found:
-                self._rizom_path = found  # cache for next call
-                return found
-
-        for found in self._scan_rizom_install_dirs():
-            self._rizom_path = found
-            return found
-        return None
-
-    @staticmethod
-    def _scan_rizom_install_dirs():
-        """Yield candidate Rizomuv_VS.exe paths under the standard install roots.
-
-        Newest install (lexicographically last folder name -- e.g. "RizomUV
-        2024.1" beats "RizomUV 2020.1") wins.
-        """
-        roots = [
-            os.environ.get("ProgramFiles", r"C:\Program Files"),
-            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
-        ]
-        for root in roots:
-            rizom_lab = Path(root) / "Rizom Lab"
-            if not rizom_lab.is_dir():
-                continue
-            for sub in sorted(rizom_lab.iterdir(), reverse=True):
-                if not sub.is_dir():
-                    continue
-                for exe_name in ("Rizomuv_VS.exe", "rizomuv_RS.exe", "rizomuv.exe"):
-                    candidate = sub / exe_name
-                    if candidate.is_file():
-                        yield str(candidate)
+        found = AppLauncher.resolve_app_path(
+            app_names=_RIZOM_APP_NAMES,
+            scan_globs=_RIZOM_SCAN_GLOBS,
+        )
+        if found:
+            self._rizom_path = found  # cache for next call
+        return found
 
     @rizom_path.setter
     def rizom_path(self, value):

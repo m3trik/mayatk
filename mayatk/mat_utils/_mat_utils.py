@@ -1,21 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
-import html as _html
 import os
 import re
-import urllib.parse as _urlparse
 from typing import List, Tuple, Union, Dict, Any, Optional, Callable
-
-# Directory names pruned during recursive texture searches. Keeps the walk
-# off Dropbox/OneDrive sync caches, Windows system folders, version control
-# noise, and Python bytecode caches — all of which can hold stale duplicates
-# of legitimate textures that would otherwise pollute the candidate set.
-_TEXTURE_WALK_SKIP_DIRS = frozenset({
-    ".dropbox.cache", ".dropbox",
-    "$RECYCLE.BIN", "System Volume Information",
-    ".git", ".svn", ".hg",
-    "node_modules", "__pycache__",
-})
 
 try:
     import maya.cmds as cmds
@@ -27,9 +14,20 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils._core_utils import CoreUtils, as_strings, short_name as _short_name
+from mayatk.core_utils._core_utils import CoreUtils, short_name as _short_name
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.env_utils._env_utils import EnvUtils
+
+# Directory names pruned during recursive texture searches. Keeps the walk
+# off Dropbox/OneDrive sync caches, Windows system folders, version control
+# noise, and Python bytecode caches — all of which can hold stale duplicates
+# of legitimate textures that would otherwise pollute the candidate set.
+_TEXTURE_WALK_SKIP_DIRS = frozenset({
+    ".dropbox.cache", ".dropbox",
+    "$RECYCLE.BIN", "System Volume Information",
+    ".git", ".svn", ".hg",
+    "node_modules", "__pycache__",
+})
 
 
 def _to_strs(nodes) -> List[str]:
@@ -440,10 +438,10 @@ class MatUtils(MatUtilsInternals):
     def _cluster_objects_by_distance(objects, threshold):
         """Clusters objects by spatial proximity (flood-fill, threshold-linked).
 
-        Uses a spatial hash grid sized to ``threshold`` so each object only
-        compares against neighbours in the 27 surrounding cells instead of the
-        whole set. This keeps the result identical to the naive O(N^2) pairwise
-        scan while making it ~O(N) for selections that actually spread out.
+        Delegates the proximity flood-fill to the DCC-agnostic
+        ``ptk.PointCloud.cluster_by_distance`` (shared with the Blender port);
+        this only supplies each object's bounding-box centre and maps the
+        returned index-clusters back to objects.
         """
         obj_list = list(objects)
         if not obj_list:
@@ -451,72 +449,17 @@ class MatUtils(MatUtilsInternals):
         if len(obj_list) == 1:
             return [obj_list]
 
-        positions = {}
+        positions = []
         for obj in obj_list:
             xmin, ymin, zmin, xmax, ymax, zmax = cmds.xform(
                 obj, q=True, ws=True, bb=True
             )
-            positions[obj] = (
-                (xmin + xmax) * 0.5,
-                (ymin + ymax) * 0.5,
-                (zmin + zmax) * 0.5,
+            positions.append(
+                ((xmin + xmax) * 0.5, (ymin + ymax) * 0.5, (zmin + zmax) * 0.5)
             )
 
-        threshold_sq = threshold * threshold
-        # Cell size == threshold guarantees any two points within threshold land
-        # in the same or an adjacent cell, so the 3x3x3 neighbourhood is exact.
-        cell = threshold if threshold > 0 else 1.0
-
-        def cell_of(p):
-            return (int(p[0] // cell), int(p[1] // cell), int(p[2] // cell))
-
-        grid = {}
-        for obj in obj_list:
-            grid.setdefault(cell_of(positions[obj]), []).append(obj)
-
-        neighbour_offsets = [
-            (dx, dy, dz)
-            for dx in (-1, 0, 1)
-            for dy in (-1, 0, 1)
-            for dz in (-1, 0, 1)
-        ]
-
-        clusters = []
-        processed = set()
-
-        for obj in obj_list:
-            if obj in processed:
-                continue
-
-            current_cluster = [obj]
-            processed.add(obj)
-            queue = [obj]
-
-            while queue:
-                current = queue.pop()
-                p1 = positions[current]
-                cx, cy, cz = cell_of(p1)
-
-                for dx, dy, dz in neighbour_offsets:
-                    for candidate in grid.get((cx + dx, cy + dy, cz + dz), ()):
-                        if candidate in processed:
-                            continue
-
-                        p2 = positions[candidate]
-                        dist_sq = (
-                            (p1[0] - p2[0]) ** 2
-                            + (p1[1] - p2[1]) ** 2
-                            + (p1[2] - p2[2]) ** 2
-                        )
-
-                        if dist_sq <= threshold_sq:
-                            processed.add(candidate)
-                            current_cluster.append(candidate)
-                            queue.append(candidate)
-
-            clusters.append(current_cluster)
-
-        return clusters
+        index_clusters = ptk.PointCloud.cluster_by_distance(positions, threshold)
+        return [[obj_list[i] for i in cluster] for cluster in index_clusters]
 
     @staticmethod
     def _materials_by_object(objects: List[str]) -> Dict[str, List[str]]:
@@ -858,215 +801,27 @@ class MatUtils(MatUtilsInternals):
 
     # ---- Formatters ---------------------------------------------------
 
-    @staticmethod
-    def _fmt_size_auto(size_bytes) -> str:
-        """Render a byte count using the largest unit that keeps the
-        number in single/triple digits — GB for >=1 GB, MB for >=1 MB,
-        KB for >=1 KB, otherwise raw bytes. Texture reports span six
-        orders of magnitude (cube faces / LUTs to 4K diffuse) so a
-        fixed unit always looks wrong for half the table."""
-        if size_bytes is None:
-            return "(unknown)"
-        try:
-            n = float(size_bytes)
-        except (TypeError, ValueError):
-            return str(size_bytes)
-        if n >= 1024**3:
-            return f"{n / 1024**3:,.2f} GB"
-        if n >= 1024**2:
-            return f"{n / 1024**2:,.2f} MB"
-        if n >= 1024:
-            return f"{n / 1024:,.1f} KB"
-        return f"{int(n):,} bytes"
-
+    # The pure record→text/HTML formatting lives in ``pythontk.MatReport`` (DCC-agnostic SSoT,
+    # shared with blendertk); these classmethods stay for back-compat and delegate to it.
     @classmethod
     def format_texture_info_text(cls, info_list: List[Dict[str, Any]]) -> str:
-        """Render :meth:`get_texture_info` output as a plain-text report."""
-        lines: List[str] = []
-        sep = "=" * 60
-        lines.append(sep)
-        lines.append(f"Found {len(info_list)} valid texture(s) in scene.")
-        lines.append(sep)
-        for info in info_list:
-            lines.append(f"Name: {info.get('name')}")
-            lines.append(f"  Path:   {info.get('path')}")
-            lines.append(f"  Size:   {cls._fmt_size_auto(info.get('size'))}")
-            lines.append(f"  Res:    {info.get('width')}x{info.get('height')}")
-            lines.append(f"  Mode:   {info.get('mode')}")
-            lines.append(f"  Format: {info.get('format')}")
-            lines.append("-" * 40)
-        return "\n".join(lines)
+        """Render :meth:`get_texture_info` output as a plain-text report (``pythontk.MatReport``)."""
+        return ptk.MatReport.format_texture_info_text(info_list)
 
     @classmethod
     def format_texture_info_html(cls, info_list: List[Dict[str, Any]]) -> str:
-        """Render :meth:`get_texture_info` output as styled HTML.
-
-        Scene-derived values (names, paths) are HTML-escaped — Maya node
-        names and file paths can legitimately contain ``& < >`` which
-        would otherwise break the rendering.
-        """
-        head = (
-            f"<h2 style='color:#9cf; margin:0 0 6px 0;'>Texture Info</h2>"
-            f"<p style='color:#bbb; margin:0 0 8px 0;'>"
-            f"Found <b>{len(info_list)}</b> valid texture(s) in scene.</p>"
-        )
-        # Build the body via the text formatter then escape the whole
-        # thing once — content inside <pre> still parses as HTML.
-        body = _html.escape(cls.format_texture_info_text(info_list))
-        return (
-            head
-            + "<pre style='font-family:monospace; color:#ddd;'>"
-            + body
-            + "</pre>"
-        )
+        """Render :meth:`get_texture_info` output as styled HTML (``pythontk.MatReport``)."""
+        return ptk.MatReport.format_texture_info_html(info_list)
 
     @classmethod
     def format_mat_info_text(cls, records: List[Dict[str, Any]]) -> str:
-        """Render :meth:`get_mat_info` output as a plain-text report."""
-        lines: List[str] = []
-        sep = "=" * 60
-        lines.append(sep)
-        lines.append(f"Material Info — {len(records)} material(s)")
-        lines.append(sep)
-        for rec in records:
-            lines.append("")
-            lines.append(f"[{rec.get('type')}] {rec.get('material')}")
-            textures = rec.get("textures") or []
-            if not textures:
-                lines.append("  (no textures)")
-                continue
-            for t in textures:
-                lines.append(f"  - {t.get('name')}  ({t.get('file_node')})")
-                lines.append(f"      Path:      {t.get('path')}")
-                if "error" in t:
-                    lines.append(f"      Error:     {t['error']}")
-                    continue
-                if "width" in t or "mode" in t or "format" in t:
-                    lines.append(
-                        f"      Res:       {t.get('width')}x{t.get('height')}  "
-                        f"Mode: {t.get('mode')}  BitDepth: {t.get('bit_depth')}  "
-                        f"Format: {t.get('format')}"
-                    )
-                lines.append(f"      File size: {cls._fmt_size_auto(t.get('size'))}")
-                opt = t.get("optimization")
-                if opt is None:
-                    continue
-                if "error" in opt:
-                    lines.append(f"      Optimize:  (error: {opt['error']})")
-                elif opt.get("recommended"):
-                    lines.append("      Optimize:  YES")
-                    for r in opt.get("reasons", []):
-                        lines.append(f"                 - {r}")
-                else:
-                    lines.append("      Optimize:  no change recommended")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _path_as_link(path: str) -> str:
-        """Wrap *path* in an ``<a href='file:///...'>`` anchor.
-
-        Display text is the original path (HTML-escaped); the href is a
-        URL-encoded ``file://`` URI so spaces, ``&``, and parentheses in
-        paths like ``O:\\Dropbox (Moth+Flame)\\…`` survive the round-trip
-        through Qt's link handler. Returns the escaped path verbatim when
-        no anchor target is resolvable (empty input)."""
-        if not path:
-            return ""
-        display = _html.escape(path)
-        # Forward slashes are valid on Windows file:// URLs and avoid the
-        # backslash-as-escape pitfall in Qt's URL parser.
-        href_path = path.replace("\\", "/")
-        # quote() preserves '/' and ':' which we want in file URLs.
-        href = "file:///" + _urlparse.quote(href_path.lstrip("/"), safe="/:")
-        return f"<a href='{href}' style='color:#9cf; text-decoration:none;'>{display}</a>"
+        """Render :meth:`get_mat_info` output as a plain-text report (``pythontk.MatReport``)."""
+        return ptk.MatReport.format_mat_info_text(records)
 
     @classmethod
     def format_mat_info_html(cls, records: List[Dict[str, Any]]) -> str:
-        """Render :meth:`get_mat_info` output as styled HTML.
-
-        Inline colours flag optimization status so the viewer is
-        scannable: yellow = recommended, red = error, dim = no change.
-        Scene-derived strings are HTML-escaped so names containing
-        ``& < >`` render literally rather than as broken markup. Paths
-        are wrapped as ``file://`` links so the host viewer can open the
-        containing folder on click.
-        """
-        esc = _html.escape
-
-        head = (
-            f"<h2 style='color:#9cf; margin:0 0 6px 0;'>Material Info</h2>"
-            f"<p style='color:#bbb; margin:0 0 8px 0;'>"
-            f"<b>{len(records)}</b> material(s)</p>"
-        )
-
-        chunks: List[str] = [head]
-        for idx, rec in enumerate(records):
-            # Visual separator between materials. Skip before the first
-            # entry so the head paragraph hugs the title.
-            if idx > 0:
-                chunks.append(
-                    "<hr style='border:none; border-top:1px solid #444; margin:10px 0 0 0;'/>"
-                )
-            chunks.append(
-                f"<p style='margin:8px 0 2px 0;'>"
-                f"<span style='color:#888;'>[{esc(str(rec.get('type', '')))}]</span> "
-                f"<b style='color:#fff;'>{esc(str(rec.get('material', '')))}</b></p>"
-            )
-            textures = rec.get("textures") or []
-            if not textures:
-                chunks.append(
-                    "<pre style='color:#888; margin:0 0 0 16px;'>(no textures)</pre>"
-                )
-                continue
-
-            body_lines: List[str] = []
-            for t in textures:
-                body_lines.append(
-                    f"<span style='color:#ddd;'>- {esc(str(t.get('name', '')))}</span>  "
-                    f"<span style='color:#888;'>({esc(str(t.get('file_node', '')))})</span>"
-                )
-                body_lines.append(
-                    f"    Path:      {cls._path_as_link(str(t.get('path', '')))}"
-                )
-                if "error" in t:
-                    body_lines.append(
-                        f"    <span style='color:#e58;'>Error:     {esc(str(t['error']))}</span>"
-                    )
-                    continue
-                if "width" in t or "mode" in t or "format" in t:
-                    body_lines.append(
-                        f"    Res:       {t.get('width')}x{t.get('height')}  "
-                        f"Mode: {esc(str(t.get('mode', '')))}  "
-                        f"BitDepth: {esc(str(t.get('bit_depth', '')))}  "
-                        f"Format: {esc(str(t.get('format', '')))}"
-                    )
-                body_lines.append(f"    File size: {cls._fmt_size_auto(t.get('size'))}")
-                opt = t.get("optimization")
-                if opt is None:
-                    continue
-                if "error" in opt:
-                    body_lines.append(
-                        f"    <span style='color:#e58;'>Optimize:  (error: {esc(str(opt['error']))})</span>"
-                    )
-                elif opt.get("recommended"):
-                    body_lines.append(
-                        "    <span style='color:#ec5;'>Optimize:  YES</span>"
-                    )
-                    for r in opt.get("reasons", []):
-                        body_lines.append(
-                            f"               <span style='color:#ec5;'>- {esc(str(r))}</span>"
-                        )
-                else:
-                    body_lines.append(
-                        "    <span style='color:#888;'>Optimize:  no change recommended</span>"
-                    )
-            chunks.append(
-                "<pre style='font-family:monospace; margin:0 0 0 16px;'>"
-                + "\n".join(body_lines)
-                + "</pre>"
-            )
-
-        return "".join(chunks)
+        """Render :meth:`get_mat_info` output as styled HTML (``pythontk.MatReport``)."""
+        return ptk.MatReport.format_mat_info_html(records)
 
     @staticmethod
     def get_scene_mats(
@@ -1819,7 +1574,7 @@ class MatUtils(MatUtilsInternals):
                     current_val = cmds.getAttr(f"{fn_name}.fileTextureName")
                     if current_val != maya_path:
                         if not silent:
-                            print(f"\n[Remap Attempt]")
+                            print("\n[Remap Attempt]")
                             print(f"  original path: {new_full_path}")
                             print(f"  lookup key:    {key}")
                             print(f"  maya path:     {maya_path}")
@@ -2278,6 +2033,111 @@ class MatUtils(MatUtilsInternals):
             f"{', cancelled' if cancelled and not timed_out else ''})."
         )
         return copied
+
+    @classmethod
+    def copy_textures_to_sourceimages(
+        cls,
+        objects: Optional[List[str]] = None,
+        materials: Optional[List[str]] = None,
+        file_nodes: Optional[List[str]] = None,
+        sourceimages_dir: Optional[str] = None,
+        delete_old: bool = False,
+    ) -> List[Tuple[str, str]]:
+        """Copy referenced textures that live outside ``sourceimages`` into it.
+
+        This is the prerequisite for converting texture paths to relative: a
+        project-relative path only resolves if the file physically lives under
+        ``sourceimages``.  Remapping an external texture to a relative path
+        *without* first copying the file in silently breaks the link — the
+        exported asset then points at a texture that isn't there.  Use this
+        before :meth:`remap_texture_paths` whenever the destination is
+        ``sourceimages`` and inputs may be stored elsewhere.
+
+        Only files that exist on disk and are not already under
+        ``sourceimages`` are copied.  A file whose basename already exists in
+        ``sourceimages`` is left untouched: identical size is treated as the
+        same asset (the relative path will resolve to it), while a different
+        size is a name collision — skipped with a warning rather than
+        clobbering a different texture or silently rebinding to the wrong one.
+        UDIM/sequence tokens (``<udim>``/``<f>``) are skipped (no single file
+        to copy); the token is preserved by the subsequent remap.
+
+        Parameters:
+            objects/materials/file_nodes: Scope to resolve textures from. When
+                all are None, every ``file`` node in the scene is considered.
+            sourceimages_dir: Destination; defaults to the project's
+                ``sourceimages`` directory.
+            delete_old: Forwarded to :meth:`move_texture_files` — True moves
+                the external file in instead of copying it.
+
+        Returns:
+            The (src, dst) pairs that were copied/moved (empty when nothing
+            needed copying).
+        """
+        sourceimages_dir = sourceimages_dir or EnvUtils.get_env_info("sourceimages")
+        if not sourceimages_dir:
+            cmds.warning("sourceimages directory is not set; cannot copy textures.")
+            return []
+        si_abs = os.path.abspath(sourceimages_dir).replace("\\", "/")
+
+        scope = cls._resolve_texture_targets(
+            objects=objects,
+            materials=materials,
+            file_nodes=file_nodes,
+            fallback_to_scene=True,
+            as_strings=True,
+        )
+        resolved_nodes = scope["file_nodes"]
+        if not resolved_nodes:
+            return []
+
+        # Absolute on-disk paths for the resolved file nodes.
+        paths = cls._paths_from_file_nodes(resolved_nodes, absolute=True)
+
+        to_copy: List[str] = []
+        claimed: Dict[str, str] = {}  # dst basename (lower) -> the source chosen for it
+        for path in paths:
+            norm = os.path.normpath(path).replace("\\", "/")
+            lower = norm.lower()
+            if "<udim>" in lower or "<f>" in lower:
+                continue  # multi-tile token — no single file to copy
+            if not os.path.isfile(norm):
+                continue  # missing on disk — resolve_invalid_texture_paths handles this
+            if lower.startswith(si_abs.lower() + "/"):
+                continue  # already under sourceimages
+
+            base = os.path.basename(norm)
+            base_key = base.lower()
+            dst = os.path.join(si_abs, base).replace("\\", "/")
+
+            # Same-basename collision — against a file already in sourceimages
+            # OR against another external already queued for the same basename
+            # (the copy is flat, so both would land on one destination). Size
+            # is a cheap proxy for "same file" (matches the texture-path
+            # editor's policy): same size → the relative path resolves to the
+            # single copy, nothing more to do; different size → refuse to
+            # clobber / rebind to the wrong texture.
+            rival = dst if os.path.exists(dst) else claimed.get(base_key)
+            if rival:
+                try:
+                    same = os.path.getsize(norm) == os.path.getsize(rival)
+                except OSError:
+                    same = False
+                if not same:
+                    cmds.warning(
+                        f"'{base}' resolves to more than one texture of differing "
+                        f"size; keeping the first and skipping '{norm}' to avoid a "
+                        f"wrong-file rebind."
+                    )
+                continue
+
+            claimed[base_key] = norm
+            to_copy.append(norm)
+
+        if not to_copy:
+            return []
+
+        return cls.move_texture_files(to_copy, si_abs, delete_old=delete_old)
 
     @classmethod
     def find_texture_files(

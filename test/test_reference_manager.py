@@ -80,7 +80,17 @@ class QtWidgets:
             self._sorting = False
             self._cell_widgets = {}
             self._hidden_rows = set()
+            self._hidden_cols = set()
             self.actions = type("Actions", (), {"set": lambda *a, **kw: None})()
+
+        def setColumnHidden(self, col, hidden):
+            if hidden:
+                self._hidden_cols.add(col)
+            else:
+                self._hidden_cols.discard(col)
+
+        def isColumnHidden(self, col):
+            return col in self._hidden_cols
 
         def setRowCount(self, count):
             current = len(self._rows)
@@ -534,6 +544,52 @@ class TestMatchesNotesFilter(unittest.TestCase):
         self.assertFalse(
             ref_mgr.ReferenceManager._matches_notes_filter("CXAL, Speedrun", "")
         )
+
+
+class TestNotesColumnVisibility(unittest.TestCase):
+    """Tests for the Notes (metadata) column show/hide toggle.
+
+    Feature: the Notes column (index 4) is hidden by default and shown only
+    when the ``chk_show_notes_column`` header checkbox is checked.
+    Added: 2026-06-16
+    """
+
+    def _make_slots(self, checked):
+        """Build a ReferenceManagerSlots with mocked ui wired for the toggle.
+
+        ``checked`` is the checkbox state, or ``None`` to omit the checkbox
+        entirely (exercising the safe-default-hidden path).
+        """
+        slots = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slots.logger = MockLogger()
+        ui = MockUI()
+        ui.tbl000 = QtWidgets.QTableWidget()
+        ui.header = type("Hdr", (), {})()
+        if checked is None:
+            ui.header.menu = type("Menu", (), {})()  # no chk_show_notes_column
+        else:
+            chk = type("Chk", (), {"isChecked": lambda self: checked})()
+            ui.header.menu = type("Menu", (), {"chk_show_notes_column": chk})()
+        slots.ui = ui
+        return slots
+
+    def test_column_hidden_when_unchecked(self):
+        """Unchecked toggle (the default) hides the Notes column."""
+        slots = self._make_slots(checked=False)
+        slots._apply_notes_column_visibility()
+        self.assertTrue(slots.ui.tbl000.isColumnHidden(4))
+
+    def test_column_shown_when_checked(self):
+        """Checked toggle shows the Notes column."""
+        slots = self._make_slots(checked=True)
+        slots._apply_notes_column_visibility()
+        self.assertFalse(slots.ui.tbl000.isColumnHidden(4))
+
+    def test_missing_checkbox_defaults_to_hidden(self):
+        """If the checkbox is absent, the column stays hidden (safe default)."""
+        slots = self._make_slots(checked=None)
+        slots._apply_notes_column_visibility()
+        self.assertTrue(slots.ui.tbl000.isColumnHidden(4))
 
 
 class TestWorkspaceHistory(unittest.TestCase):

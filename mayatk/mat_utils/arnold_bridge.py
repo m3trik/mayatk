@@ -261,7 +261,18 @@ class ArnoldBridge(ptk.LoggingMixin):
 
     @staticmethod
     def _get_shading_engine(material: str) -> Optional[str]:
-        """The shading engine fed by *material*'s ``outColor``."""
+        """The shading engine fed by *material*'s ``outColor``.
+
+        Returns None for a node that no longer exists — an earlier
+        force-rebuild in the same ``add``/``remove`` pass can delete a bridge
+        helper (e.g. ``aiMultiply1``) that's still referenced later in the
+        resolved scope, and ``cmds.listConnections`` would otherwise raise
+        ``ValueError: No object matches name`` instead of letting the caller
+        skip it cleanly.
+        """
+        material = str(material)
+        if not cmds.objExists(material):
+            return None
         return NodeUtils.get_connected_nodes(
             material,
             node_type="shadingEngine",
