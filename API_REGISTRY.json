@@ -9117,7 +9117,7 @@
           "kind": "function",
           "signature": "() -> List[Path]",
           "summary": "User-visible templates in ``templates/`` (skips underscore-prefixed).",
-          "line": 61,
+          "line": 63,
           "deprecated": false
         },
         {
@@ -9126,7 +9126,7 @@
           "kind": "function",
           "signature": "(template_path: Path) -> Tuple[str, ...]",
           "summary": "Modes a template declares via ``BRIDGE_MODES``;",
-          "line": 66,
+          "line": 68,
           "deprecated": false
         },
         {
@@ -9135,7 +9135,7 @@
           "kind": "function",
           "signature": "() -> List[Tuple[str, str]]",
           "summary": "``[(stem, mode), ...]`` for every (template, mode) pairing.",
-          "line": 71,
+          "line": 73,
           "deprecated": false
         }
       ],
@@ -9143,7 +9143,7 @@
         {
           "name": "BlenderBridge",
           "summary": "Export the Maya selection and run a chosen Blender import template.",
-          "line": 76,
+          "line": 78,
           "bases": [
             "MayaExportMixin",
             "ptk.ScriptLaunchBridge"
@@ -9155,7 +9155,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "",
-              "line": 91,
+              "line": 93,
               "deprecated": false
             },
             {
@@ -9164,7 +9164,7 @@
               "kind": "method",
               "signature": "(self, value: Optional[str]) -> None",
               "summary": "",
-              "line": 95,
+              "line": 97,
               "deprecated": false
             },
             {
@@ -9173,7 +9173,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[str, Any]",
               "summary": "",
-              "line": 99,
+              "line": 101,
               "deprecated": false
             },
             {
@@ -9182,7 +9182,7 @@
               "kind": "method",
               "signature": "(self, params: Dict[str, Any]) -> Dict[str, str]",
               "summary": "",
-              "line": 104,
+              "line": 106,
               "deprecated": false
             }
           ]
@@ -9208,7 +9208,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 78,
+              "line": 79,
               "deprecated": false
             },
             {
@@ -9217,7 +9217,7 @@
               "kind": "property",
               "signature": "(self) -> Path",
               "summary": "",
-              "line": 82,
+              "line": 83,
               "deprecated": false
             },
             {
@@ -9226,7 +9226,7 @@
               "kind": "method",
               "signature": "(self) -> BlenderBridge",
               "summary": "",
-              "line": 85,
+              "line": 86,
               "deprecated": false
             },
             {
@@ -9235,7 +9235,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 88,
+              "line": 89,
               "deprecated": false
             },
             {
@@ -9244,7 +9244,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Send the selected objects to Blender with the chosen template.",
-              "line": 92,
+              "line": 93,
               "deprecated": false
             }
           ]
@@ -9261,7 +9261,7 @@
           "kind": "function",
           "signature": "(script_text: str) -> 'set[str]'",
           "summary": "Registered keys present in *script_text* (delegates to uitk.bridge).",
-          "line": 88,
+          "line": 105,
           "deprecated": false
         },
         {
@@ -9270,7 +9270,7 @@
           "kind": "function",
           "signature": "() -> 'dict[str, Any]'",
           "summary": "Return ``{key: default}`` for every registered parameter.",
-          "line": 93,
+          "line": 110,
           "deprecated": false
         },
         {
@@ -9279,7 +9279,7 @@
           "kind": "function",
           "signature": "(values: 'dict[str, Any]') -> 'dict[str, str]'",
           "summary": "Format *values* for ``StrUtils.replace_delimited`` using Python literals.",
-          "line": 98,
+          "line": 115,
           "deprecated": false
         }
       ],
@@ -9287,7 +9287,7 @@
     },
     {
       "relpath": "env_utils/blender_bridge/templates/import.py",
-      "summary": "Import the bridged FBX into the current Blender scene.",
+      "summary": "Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.",
       "functions": [
         {
           "name": "main",
@@ -9295,39 +9295,7 @@
           "kind": "function",
           "signature": "()",
           "summary": "",
-          "line": 17,
-          "deprecated": false
-        }
-      ],
-      "classes": []
-    },
-    {
-      "relpath": "env_utils/blender_bridge/templates/import_and_frame.py",
-      "summary": "Import the bridged FBX, select the new objects, frame them in the viewport, and switch to",
-      "functions": [
-        {
-          "name": "main",
-          "qualname": "main",
-          "kind": "function",
-          "signature": "()",
-          "summary": "",
-          "line": 19,
-          "deprecated": false
-        }
-      ],
-      "classes": []
-    },
-    {
-      "relpath": "env_utils/blender_bridge/templates/replace_scene.py",
-      "summary": "Delete the current scene's objects, then import the bridged FBX -- a clean-slate hand-off when",
-      "functions": [
-        {
-          "name": "main",
-          "qualname": "main",
-          "kind": "function",
-          "signature": "()",
-          "summary": "",
-          "line": 18,
+          "line": 28,
           "deprecated": false
         }
       ],

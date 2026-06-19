@@ -91,9 +91,7 @@ _Generated: 2026-06-19_
 - [`env_utils/blender_bridge/_blender_bridge.py`](#env_utils--blender_bridge--_blender_bridge) — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - [`env_utils/blender_bridge/blender_bridge_slots.py`](#env_utils--blender_bridge--blender_bridge_slots) — Slots for the Blender bridge panel.
 - [`env_utils/blender_bridge/parameters.py`](#env_utils--blender_bridge--parameters) — Registry of user-tunable Blender-bridge parameters exposed to the panel.
-- [`env_utils/blender_bridge/templates/import.py`](#env_utils--blender_bridge--templates--import) — Import the bridged FBX into the current Blender scene.
-- [`env_utils/blender_bridge/templates/import_and_frame.py`](#env_utils--blender_bridge--templates--import_and_frame) — Import the bridged FBX, select the new objects, frame them in the viewport, and switch to
-- [`env_utils/blender_bridge/templates/replace_scene.py`](#env_utils--blender_bridge--templates--replace_scene) — Delete the current scene's objects, then import the bridged FBX -- a clean-slate hand-off when
+- [`env_utils/blender_bridge/templates/import.py`](#env_utils--blender_bridge--templates--import) — Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.
 - [`env_utils/devtools.py`](#env_utils--devtools)
 - [`env_utils/fbx_utils.py`](#env_utils--fbx_utils)
 - [`env_utils/handoff_export.py`](#env_utils--handoff_export) — Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
@@ -1590,10 +1588,10 @@ Primitive creation utilities for Maya.
 
 Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 
-- [`list_templates() -> List[Path]`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L61) — User-visible templates in ``templates/`` (skips underscore-prefixed).
-- [`template_modes(template_path: Path) -> Tuple[str, ...]`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L66) — Modes a template declares via ``BRIDGE_MODES``;
-- [`list_template_modes() -> List[Tuple[str, str]]`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L71) — ``[(stem, mode), ...]`` for every (template, mode) pairing.
-- **[`class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L76)** — Export the Maya selection and run a chosen Blender import template.
+- [`list_templates() -> List[Path]`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L63) — User-visible templates in ``templates/`` (skips underscore-prefixed).
+- [`template_modes(template_path: Path) -> Tuple[str, ...]`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L68) — Modes a template declares via ``BRIDGE_MODES``;
+- [`list_template_modes() -> List[Tuple[str, str]]`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L73) — ``[(stem, mode), ...]`` for every (template, mode) pairing.
+- **[`class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L78)** — Export the Maya selection and run a chosen Blender import template.
   - `BlenderBridge.blender_path(self) -> Optional[str]` *(property)*
   - `BlenderBridge.blender_path(self, value: Optional[str]) -> None`
   - `BlenderBridge.params_defaults(self) -> Dict[str, Any]`
@@ -1616,30 +1614,16 @@ Slots for the Blender bridge panel.
 
 Registry of user-tunable Blender-bridge parameters exposed to the panel.
 
-- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L88) — Registered keys present in *script_text* (delegates to uitk.bridge).
-- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L93) — Return ``{key: default}`` for every registered parameter.
-- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L98) — Format *values* for ``StrUtils.replace_delimited`` using Python literals.
+- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L105) — Registered keys present in *script_text* (delegates to uitk.bridge).
+- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L110) — Return ``{key: default}`` for every registered parameter.
+- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L115) — Format *values* for ``StrUtils.replace_delimited`` using Python literals.
 
 <a id="env_utils--blender_bridge--templates--import"></a>
 ### `env_utils/blender_bridge/templates/import.py`
 
-Import the bridged FBX into the current Blender scene.
+Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.
 
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L17)
-
-<a id="env_utils--blender_bridge--templates--import_and_frame"></a>
-### `env_utils/blender_bridge/templates/import_and_frame.py`
-
-Import the bridged FBX, select the new objects, frame them in the viewport, and switch to
-
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/import_and_frame.py#L19)
-
-<a id="env_utils--blender_bridge--templates--replace_scene"></a>
-### `env_utils/blender_bridge/templates/replace_scene.py`
-
-Delete the current scene's objects, then import the bridged FBX -- a clean-slate hand-off when
-
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/replace_scene.py#L18)
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/import.py#L28)
 
 <a id="env_utils--devtools"></a>
 ### `env_utils/devtools.py`
