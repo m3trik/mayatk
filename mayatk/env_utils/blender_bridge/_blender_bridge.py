@@ -11,8 +11,10 @@ substitution machinery, and the render-script-then-launch-a-fresh-app deliverer 
 owns only the Blender-specific bits, declared as a :class:`pythontk.ScriptLaunchSpec` dataclass
 (executable discovery + the ``--python`` launch args) plus the parameter bindings.
 
-Picking a different template is the "dynamic script selection" -- each ``templates/*.py`` is a
-distinct import recipe (plain import / import + frame / replace scene). Co-located with its panel
+Picking a different template is the "dynamic script selection". One ``import`` recipe ships -- a
+single options-driven script whose ``CLEAR_SCENE`` / ``FRAME_VIEW`` booleans cover what used to be
+three near-identical templates -- and any extra ``templates/*.py`` the user drops in is discovered
+the same way. Co-located with its panel
 (``blender_bridge_slots.BlenderBridgeSlots`` + ``blender_bridge.ui``) under ``env_utils``;
 discovered by :class:`mayatk.ui_utils.MayaUiHandler`. ``import maya.cmds`` is deferred so resolving
 the package surface never needs a running Maya.

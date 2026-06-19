@@ -54,20 +54,21 @@ class BlenderBridgeSlots(MayaBridgeSlotsBase):
         "substituted in.",
         "steps": [
             "Select one or more objects.",
-            "Pick an <b>import template</b> from the dropdown.",
-            "Tweak the template's exposed parameters.",
+            "Toggle the import options (clear scene, frame in view, materials, …).",
             "Click <b>Send to Blender</b>.",
         ],
         "sections": [
-            ("Templates", [
-                "<b>import</b> — import the FBX into the current scene.",
-                "<b>import_and_frame</b> — import, frame the objects, material-preview shading.",
-                "<b>replace_scene</b> — clear the scene's objects, then import (clean slate).",
+            ("Options", [
+                "<b>Clear Scene First</b> — delete the current scene's objects before importing "
+                "(clean slate). Off imports additively.",
+                "<b>Frame in View</b> — after import, select &amp; frame the new objects with "
+                "material-preview shading.",
             ]),
         ],
         "notes": [
-            "Add custom templates by dropping new <code>.py</code> files into the templates "
-            "folder (use <code>__KEY__</code> tokens from <i>parameters.py</i>), then click "
+            "One <b>import</b> template ships, exposing every option above; the dropdown also "
+            "picks up custom templates you drop into the templates folder (use "
+            "<code>__KEY__</code> tokens from <i>parameters.py</i>), then click "
             "<b>Refresh Templates</b>.",
             "A fresh Blender is launched every time; your running Blender is never touched.",
         ],
