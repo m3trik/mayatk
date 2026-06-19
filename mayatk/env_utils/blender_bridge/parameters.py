@@ -8,8 +8,9 @@ user values into the template before launching Blender (via :func:`StrUtils.repl
 
 Export-affecting knobs (``INCLUDE_MATERIALS`` / ``EMBED_TEXTURES`` / ``TRIANGULATE`` /
 ``INCLUDE_ANIMATION``) are read by :class:`BlenderBridge` to configure the Maya-side FBX export;
-import-affecting knobs (``APPLY_UNIT_SCALE`` / ``INCLUDE_ANIMATION`` / ``FRAME_VIEW``) are
-substituted into the Blender import template. Each template references the subset it exposes.
+import-affecting knobs (``APPLY_UNIT_SCALE`` / ``INCLUDE_ANIMATION`` / ``CLEAR_SCENE`` /
+``FRAME_VIEW``) are substituted into the Blender import template. Each template references the
+subset it exposes.
 
 To expose a new knob: add an entry below, then reference ``__YOUR_KEY__`` in any ``templates/*.py``.
 Mirrors :mod:`mayatk.mat_utils.marmoset_bridge.parameters` so the slots class stays identical in
