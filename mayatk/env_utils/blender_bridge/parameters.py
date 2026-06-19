@@ -75,12 +75,25 @@ PARAMS: "dict[str, AttributeSpec]" = {
         default=False,
         tooltip="Triangulate meshes on export.",
     ),
+    "CLEAR_SCENE": AttributeSpec(
+        key="CLEAR_SCENE",
+        label="Clear Scene First",
+        kind="bool",
+        default=False,
+        tooltip=(
+            "Delete the existing scene objects before importing (clean-slate / replace-scene\n"
+            "hand-off). Off imports additively into the current scene."
+        ),
+    ),
     "FRAME_VIEW": AttributeSpec(
         key="FRAME_VIEW",
         label="Frame in View",
         kind="bool",
         default=True,
-        tooltip="After import, frame the imported objects in the 3D viewport.",
+        tooltip=(
+            "After import, select the new objects, frame them in the 3D viewport, and switch to\n"
+            "material-preview shading."
+        ),
     ),
 }
 
