@@ -19,8 +19,6 @@ be applied.
 import traceback
 from pathlib import Path
 
-from uitk.widgets.mixins.tooltip_mixin import fmt
-
 try:
     import maya.cmds as cmds
 except ImportError:
@@ -58,6 +56,39 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
     UI_NAME = "substance_bridge"
     PRESETS_ROOT = _PRESETS_ROOT
     LOG_TAG = "substance_bridge"
+
+    # Uses the base's default header menu (Open Templates / Refresh / Clear
+    # Log); only the help differs, so it's declared as data.
+    HELP_SPEC = {
+        "title": "Substance Bridge",
+        "body": "Send selected meshes to Substance Painter. Maya exports "
+        "the selection as FBX; the template's metadata constants "
+        "(<i>BRIDGE_MODES</i>, <i>LAUNCH_ARGS</i>, <i>RPC_SCRIPT</i>, "
+        "<i>BUILD_MANIFEST</i>, <i>FBX_OPTIONS</i>) drive the launch "
+        "line and optional RPC step.",
+        "steps": [
+            "Set the <b>Output Dir</b> (or leave blank to use the "
+            "scene directory).",
+            "Select one or more polygon transforms.",
+            "Pick a <b>Template + Mode</b> from the dropdown.",
+            "Tweak the template's exposed parameters.",
+            "Click <b>Send to Painter</b>.",
+        ],
+        "sections": [
+            ("Modes", [
+                "<b>send_to</b> — launches Painter for interactive work.",
+                "<b>roundtrip</b> — launches Painter with remote "
+                "scripting, sends the template's JS body via "
+                "JSON-RPC, and waits for completion.",
+            ]),
+        ],
+        "notes": [
+            "Add custom templates by dropping new files into the "
+            "templates folder (use <code>__KEY__</code> tokens from "
+            "<i>parameters.py</i> for tunable values), then click "
+            "<b>Refresh Templates</b> in the header menu.",
+        ],
+    }
 
     def __init__(self, switchboard):
         super().__init__(switchboard)
@@ -103,70 +134,6 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
         """Default the panel to ``import (send_to)`` when it's available."""
         pref = ("import", "send_to")
         return pairs.index(pref) if pref in pairs else 0
-
-    # ------------------------------------------------------------------
-    # Header menu
-    # ------------------------------------------------------------------
-
-    def header_init(self, widget):
-        """Configure the header menu with template / log utilities."""
-        widget.menu.add("Separator", setTitle="Utilities")
-        widget.menu.add(
-            "QPushButton",
-            setText="Open Templates Folder",
-            setObjectName="btn_open_templates",
-            setToolTip="Reveal the bundled Painter template folder in Explorer.",
-        )
-        widget.menu.btn_open_templates.clicked.connect(self.open_templates_folder)
-
-        widget.menu.add(
-            "QPushButton",
-            setText="Refresh Templates",
-            setObjectName="btn_refresh_templates",
-            setToolTip="Re-scan the templates folder and rebuild the combo.",
-        )
-        widget.menu.btn_refresh_templates.clicked.connect(self.refresh_templates)
-
-        widget.menu.add(
-            "QPushButton",
-            setText="Clear Log",
-            setObjectName="btn_clear_log",
-            setToolTip="Clear the log panel below.",
-        )
-        widget.menu.btn_clear_log.clicked.connect(self.clear_log)
-
-        widget.set_help_text(
-            fmt(
-                title="Substance Bridge",
-                body="Send selected meshes to Substance Painter. Maya exports "
-                "the selection as FBX; the template's metadata constants "
-                "(<i>BRIDGE_MODES</i>, <i>LAUNCH_ARGS</i>, <i>RPC_SCRIPT</i>, "
-                "<i>BUILD_MANIFEST</i>, <i>FBX_OPTIONS</i>) drive the launch "
-                "line and optional RPC step.",
-                steps=[
-                    "Set the <b>Output Dir</b> (or leave blank to use the "
-                    "scene directory).",
-                    "Select one or more polygon transforms.",
-                    "Pick a <b>Template + Mode</b> from the dropdown.",
-                    "Tweak the template's exposed parameters.",
-                    "Click <b>Send to Painter</b>.",
-                ],
-                sections=[
-                    ("Modes", [
-                        "<b>send_to</b> — launches Painter for interactive work.",
-                        "<b>roundtrip</b> — launches Painter with remote "
-                        "scripting, sends the template's JS body via "
-                        "JSON-RPC, and waits for completion.",
-                    ]),
-                ],
-                notes=[
-                    "Add custom templates by dropping new files into the "
-                    "templates folder (use <code>__KEY__</code> tokens from "
-                    "<i>parameters.py</i> for tunable values), then click "
-                    "<b>Refresh Templates</b> in the header menu.",
-                ],
-            )
-        )
 
     # ------------------------------------------------------------------
     # b000 -- the per-bridge send action

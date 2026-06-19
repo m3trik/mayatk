@@ -65,10 +65,22 @@ class GraphCollector:
     def _create_node_entry(self, graph_info, placeholder_name, node, node_type):
         attributes = Attributes.get_attributes(node, exc_defaults=True)
 
+        map_type = None
         if node_type == "file":
-            image_name = cmds.getAttr(f"{node}.fileTextureName")
-            if image_name:
+            image_name = cmds.getAttr(f"{node}.fileTextureName") or ""
+            map_type = MapFactory.resolve_map_type(image_name)
+            # A file node whose texture resolves to a known map_type is a
+            # user-supplied slot: the path is provided by the caller and
+            # re-resolved at restore time from ``texture_paths``. Persisting it
+            # would bake a machine-specific (often project-relative
+            # ``.../foo/../../../bar``) absolute path into the shared template.
+            # Only keep the path for nodes with no resolved map_type — e.g. the
+            # StingrayPBS environment cube maps, which are fixed Maya-install
+            # defaults that every machine shares.
+            if image_name and not map_type:
                 attributes["fileTextureName"] = str(image_name)
+            else:
+                attributes.pop("fileTextureName", None)
 
         # Dynamic filtering: Remove attributes that are connected or are message types
         filtered_attributes = {}
@@ -102,8 +114,6 @@ class GraphCollector:
         }
 
         if node_type == "file":
-            image_name = attributes.get("fileTextureName", "")
-            map_type = MapFactory.resolve_map_type(image_name)
             graph_info[placeholder_name]["metadata"]["map_type"] = map_type
 
     def _is_connected_to_shading_engine(self, node):
@@ -299,6 +309,14 @@ class GraphRestorer:
                 f"Node '{placeholder}': Assigned '{os.path.basename(file_path)}' to '{required_map_type}'"
             )
         elif required_map_type:
+            # A map_type node is a texture slot meant to be filled from the
+            # caller's textures. With nothing resolved, drop any path the
+            # template still carries: for a slot it is stale, machine-specific
+            # data (legacy templates baked absolute, project-relative paths
+            # here) that would otherwise be applied and trigger a spurious
+            # "texture doesn't exist" warning. Leaving it empty lets Maya show
+            # its missing-texture placeholder instead.
+            attributes.pop("fileTextureName", None)
             logger.warning(
                 f"Node '{placeholder}': Missing texture for '{required_map_type}'"
             )

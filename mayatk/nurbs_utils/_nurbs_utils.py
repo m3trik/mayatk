@@ -147,11 +147,17 @@ class NurbsUtils(ptk.HelpMixin):
         a2 = ptk.get_angle_from_two_vectors(
             v2, v3b, degree=1
         )  # SlotsMaya.get_angle_from_three_points(v2, p1, p2, degree=1)
-        a3 = ptk.get_angle_from_two_vectors(v1, v2, degree=1)
 
-        d1, d2 = ptk.get_two_sides_of_asa_triangle(
-            a2, a1, hypotenuse
-        )  # get length of sides 1 and 2.
+        try:
+            d1, d2 = ptk.get_two_sides_of_asa_triangle(
+                a2, a1, hypotenuse
+            )  # get length of sides 1 and 2.
+        except ValueError:
+            # Parallel construction rays (a1 + a2 == 180°, e.g. two curves
+            # with identical normals): no triangle apex exists. Place the
+            # apex construction points at half the span instead, which
+            # degrades the result to a gentle symmetric arc.
+            d1 = d2 = hypotenuse / 2.0
 
         p_from_v1 = ptk.move_point_relative_along_vector(p1, p2, v1, d1)
         p_from_v2 = ptk.move_point_relative_along_vector(p2, p1, v2, d2)

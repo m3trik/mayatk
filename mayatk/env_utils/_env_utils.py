@@ -79,7 +79,6 @@ class EnvUtils(ptk.HelpMixin):
             "build_path": lambda: cmds.about(buildDirectory=True),
             "build_version": lambda: cmds.about(version=True),
             "build_varient": lambda: cmds.about(buildVariant=True),
-            "api_version": lambda: cmds.about(apiVersion=True),
             "application": lambda: cmds.about(application=True),
             "current_frame": lambda: cmds.currentTime(q=True),
             "frame_range": lambda: (

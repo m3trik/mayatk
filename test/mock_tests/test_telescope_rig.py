@@ -2,11 +2,20 @@ import unittest
 from unittest.mock import MagicMock, patch
 import sys
 
+# Detect whether the real maya.cmds is already loaded (run_tests.py path).
+# If so, do NOT mock — replacing sys.modules["maya.cmds"] in a live Maya
+# session corrupts every later import of it (and made the skip guard below
+# unsatisfiable, so these mock tests ran — and errored — against real Maya).
+# Same pattern as test_marmoset_bridge.py.
+_REAL_MAYA_AVAILABLE = "maya.cmds" in sys.modules and not isinstance(
+    sys.modules.get("maya.cmds"), MagicMock
+)
+
 # conftest.py auto-loads under pytest and injects sys.modules["maya.cmds"].
 # Reuse that mock so production code paths (which call cmds.*) and the test
 # expectations (which configure mock_cmds.*) share the same MagicMock object.
 mock_cmds = sys.modules.get("maya.cmds")
-if not isinstance(mock_cmds, MagicMock):
+if not _REAL_MAYA_AVAILABLE and not isinstance(mock_cmds, MagicMock):
     mock_cmds = MagicMock()
     sys.modules["maya.cmds"] = mock_cmds
 
@@ -48,8 +57,8 @@ except ImportError as e:
 
 # Skip when the real Maya runtime is loaded — these tests configure MagicMock
 # return values that real Maya would never honour.
-_CMDS_IS_MOCKED = isinstance(mock_cmds, MagicMock)
-_REAL_MAYA_LOADED = not _CMDS_IS_MOCKED
+_REAL_MAYA_LOADED = _REAL_MAYA_AVAILABLE
+_CMDS_IS_MOCKED = not _REAL_MAYA_LOADED
 
 
 def setUpModule():

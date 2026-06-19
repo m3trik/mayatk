@@ -58,7 +58,6 @@
   type: file
 '{{NODE_file_4}}':
   attributes:
-    fileTextureName: O:/Dropbox (Moth+Flame)/Moth+Flame Dropbox/Moth+Flame Team Folder/PRODUCTION/AF/Asset_Library/PRODUCTION/Maya/Aircraft_Alphas/../../../../../../../../../Cloud/Code/_scripts/mayatk/test/temp_textures/Test_Base_Color.png
     outAlpha: 1.0
     outSizeX: 4096.0
     outSizeY: 4096.0
@@ -73,7 +72,6 @@
 '{{NODE_file_5}}':
   attributes:
     fileHasAlpha: true
-    fileTextureName: O:/Dropbox (Moth+Flame)/Moth+Flame Dropbox/Moth+Flame Team Folder/PRODUCTION/AF/Asset_Library/PRODUCTION/Maya/Aircraft_Alphas/../../../../../../../../../Cloud/Code/_scripts/mayatk/test/temp_textures/Test_Normal.png
     outAlpha: 1.0
     outSizeX: 4096.0
     outSizeY: 4096.0
@@ -87,7 +85,6 @@
   type: file
 '{{NODE_file_6}}':
   attributes:
-    fileTextureName: O:/Dropbox (Moth+Flame)/Moth+Flame Dropbox/Moth+Flame Team Folder/PRODUCTION/AF/Asset_Library/PRODUCTION/Maya/Aircraft_Alphas/../../../../../../../../../Cloud/Code/_scripts/mayatk/test/temp_textures/Test_Metallic.png
     outAlpha: 1.0
     outSizeX: 4096.0
     outSizeY: 4096.0
@@ -101,7 +98,6 @@
   type: file
 '{{NODE_file_7}}':
   attributes:
-    fileTextureName: O:/Dropbox (Moth+Flame)/Moth+Flame Dropbox/Moth+Flame Team Folder/PRODUCTION/AF/Asset_Library/PRODUCTION/Maya/Aircraft_Alphas/../../../../../../../../../Cloud/Code/_scripts/mayatk/test/temp_textures/Test_Roughness.png
     outAlpha: 1.0
     outSizeX: 4096.0
     outSizeY: 4096.0
@@ -115,7 +111,6 @@
   type: file
 '{{NODE_file_8}}':
   attributes:
-    fileTextureName: O:/Dropbox (Moth+Flame)/Moth+Flame Dropbox/Moth+Flame Team Folder/PRODUCTION/AF/Asset_Library/PRODUCTION/Maya/Aircraft_Alphas/../../../../../../../../../Cloud/Code/_scripts/mayatk/test/temp_textures/Test_AmbientOcclusion.png
     outAlpha: 1.0
     outSizeX: 4096.0
     outSizeY: 4096.0

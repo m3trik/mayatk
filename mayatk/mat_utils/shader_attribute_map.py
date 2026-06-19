@@ -1,9 +1,5 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import Optional, Dict
-from collections import namedtuple
-
-
 from typing import Optional, Tuple, Dict, Any
 from collections import namedtuple
 

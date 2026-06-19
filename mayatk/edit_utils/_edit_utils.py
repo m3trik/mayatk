@@ -1738,7 +1738,7 @@ class EditUtils(ptk.HelpMixin):
     @staticmethod
     def invert_components(
         objects: Optional[List] = None, select: bool = False
-    ) -> List[Union["pm.MeshVertex", "pm.MeshEdge", "pm.MeshFace"]]:
+    ) -> List[str]:
         """Invert selection of mesh components (verts, edges, or faces).
 
         Parameters:

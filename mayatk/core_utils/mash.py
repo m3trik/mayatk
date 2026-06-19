@@ -367,7 +367,7 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
     ):
         # Extract simple name from full path (remove namespace and pipes)
         simple_name = dag_path.partialPathName().rsplit(":", 1)[-1].rsplit("|", 1)[-1]
-        name = "{}_{}_".format(instancer.split("|")[-1].split(":")[-1], simple_name, particle_index)
+        name = "{}_{}_{}".format(instancer.split("|")[-1].split(":")[-1], simple_name, particle_index)
         if bakeToIntances:
             return cmds.instance(dag_path.fullPathName(), leaf=1, name=name)[0]
         return cmds.duplicate(

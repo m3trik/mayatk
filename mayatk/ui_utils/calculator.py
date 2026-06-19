@@ -2,8 +2,8 @@
 # coding=utf-8
 import maya.cmds as cmds
 import maya.mel as mel
-import math
 
+import pythontk as ptk
 from uitk.widgets.mixins.tooltip_mixin import fmt
 
 
@@ -13,28 +13,8 @@ from qtpy import QtWidgets, QtCore
 class CalculatorController:
     @staticmethod
     def calculate(expression):
-        if not expression:
-            return ""
-        try:
-            # Safe eval with math module available
-            allowed_names = {"__builtins__": None}
-            for name in dir(math):
-                if not name.startswith("__"):
-                    allowed_names[name] = getattr(math, name)
-
-            allowed_names.update(
-                {"abs": abs, "round": round, "min": min, "max": max, "pow": pow}
-            )
-
-            result = eval(expression, allowed_names)
-
-            # Format result to avoid excessive decimals if integer
-            if isinstance(result, float) and result.is_integer():
-                result = int(result)
-
-            return str(result)
-        except Exception:
-            return "Error"
+        """Safely evaluate a math expression (delegates to the shared engine)."""
+        return ptk.MathUtils.eval_expression(expression)
 
     @staticmethod
     def get_fps_value():
@@ -86,29 +66,8 @@ class CalculatorController:
 
     @staticmethod
     def convert_unit(value, from_unit, to_unit):
-        try:
-            factors = {
-                "mm": 0.1,
-                "cm": 1.0,
-                "m": 100.0,
-                "km": 100000.0,
-                "in": 2.54,
-                "ft": 30.48,
-                "yd": 91.44,
-                "mi": 160934.4,
-            }
-
-            if from_unit not in factors or to_unit not in factors:
-                return "Error"
-
-            # Convert to cm first
-            cm_value = value * factors[from_unit]
-            # Convert to target
-            result = cm_value / factors[to_unit]
-
-            return str(round(result, 6))
-        except Exception:
-            return "Error"
+        """Convert a length value between units (delegates to the shared engine)."""
+        return ptk.MathUtils.convert_length_unit(value, from_unit, to_unit)
 
 
 class CalculatorSlots:

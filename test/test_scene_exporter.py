@@ -180,6 +180,50 @@ class TestSceneExporter(MayaTkTestCase):
         )
         self.assertIsNotNone(result)
 
+    def test_perform_export_defaults_to_scene_dir(self):
+        """No export_dir → export the FBX alongside the current scene file.
+
+        Added: 2026-06-16
+        """
+        try:
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
+        except Exception:
+            self.skipTest("FBX plugin not available")
+
+        scene_path = os.path.join(self.temp_dir, "fallback_scene.ma")
+        _pm_rename_file(scene_path)
+
+        result = self.exporter.perform_export(
+            export_dir="",
+            objects=[self.cube],
+            file_format="FBX export",
+        )
+        self.assertTrue(result)
+        self.assertEqual(
+            os.path.normpath(self.exporter.export_dir),
+            os.path.normpath(self.temp_dir),
+        )
+        self.assertTrue(
+            os.path.exists(os.path.join(self.temp_dir, "fallback_scene.fbx")),
+            "FBX should be written next to the scene file when no dir is given",
+        )
+
+    def test_perform_export_no_dir_unsaved_scene_aborts(self):
+        """No export_dir + unsaved scene → abort (no directory to fall back to).
+
+        Added: 2026-06-16
+        """
+        # setUp opens a fresh untitled scene, so sceneName is empty here.
+        self.assertEqual(cmds.file(query=True, sceneName=True), "")
+
+        result = self.exporter.perform_export(
+            export_dir="",
+            objects=[self.cube],
+            file_format="FBX export",
+        )
+        self.assertFalse(result)
+
     # ------------------------------------------------------------------
     # Task / check running
     # ------------------------------------------------------------------
@@ -464,6 +508,319 @@ class TestSceneExporter(MayaTkTestCase):
         all_msgs = " ".join(r.getMessage() for r in warnings)
         self.assertIn("missing_texture", all_msgs)
         self.exporter.logger.removeHandler(handler)
+
+    # ------------------------------------------------------------------
+    # convert_to_relative_paths — copy externals into sourceimages first
+    # ------------------------------------------------------------------
+
+    def _set_project(self, root):
+        """Point the Maya project at ``root`` and restore it on teardown."""
+        original_ws = cmds.workspace(q=True, rd=True)
+        self.addCleanup(lambda: cmds.workspace(original_ws, openWorkspace=True))
+        cmds.workspace(root, openWorkspace=True)
+        sourceimages = os.path.join(root, "sourceimages")
+        os.makedirs(sourceimages, exist_ok=True)
+        return sourceimages
+
+    def _assign_texture(self, node_path, tex_path):
+        """Create a lambert+file driven by ``tex_path`` and assign to ``node``."""
+        shader = cmds.shadingNode("lambert", asShader=True)
+        file_node = cmds.shadingNode("file", asTexture=True)
+        cmds.connectAttr(f"{file_node}.outColor", f"{shader}.color")
+        cmds.setAttr(
+            f"{file_node}.fileTextureName", tex_path.replace("\\", "/"), type="string"
+        )
+        cmds.select(node_path)
+        cmds.hyperShade(assign=shader)
+        return file_node
+
+    def test_convert_to_relative_copies_external_textures(self):
+        """External textures must be copied into sourceimages before remap.
+
+        Bug: convert_to_relative_paths rewrote an absolute external path to a
+        project-relative one without first copying the file in, so the
+        relative path pointed at a file that wasn't there — breaking the link.
+        Added: 2026-06-16
+        """
+        sourceimages = self._set_project(self.temp_dir)
+
+        external_dir = os.path.join(self.temp_dir, "external")
+        os.makedirs(external_dir, exist_ok=True)
+        external_tex = os.path.join(external_dir, "wood_ext.png")
+        with open(external_tex, "wb") as f:
+            f.write(b"PNGDATA")
+
+        file_node = self._assign_texture(self.cube, external_tex)
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        self.exporter.task_manager.convert_to_relative_paths()
+
+        # File was copied into sourceimages ...
+        copied = os.path.join(sourceimages, "wood_ext.png")
+        self.assertTrue(
+            os.path.isfile(copied),
+            "external texture should be copied into sourceimages",
+        )
+        # ... and the node's (now relative) path resolves to a real file.
+        new_path = cmds.getAttr(f"{file_node}.fileTextureName")
+        resolved = (
+            new_path
+            if os.path.isabs(new_path)
+            else os.path.join(self.temp_dir, new_path)
+        )
+        self.assertTrue(
+            os.path.isfile(resolved),
+            f"converted path '{new_path}' must resolve to an existing file",
+        )
+
+    def test_convert_to_relative_does_not_clobber_name_collision(self):
+        """A different texture with the same basename in sourceimages is kept.
+
+        Same-name + different-size is a collision: copying would overwrite a
+        different texture (and silently rebind other materials to the wrong
+        file).  The existing sourceimages file must be left untouched.
+        Added: 2026-06-16
+        """
+        sourceimages = self._set_project(self.temp_dir)
+
+        # Pre-existing, DIFFERENT texture already in sourceimages.
+        existing = os.path.join(sourceimages, "shared.png")
+        with open(existing, "wb") as f:
+            f.write(b"ORIGINAL-SOURCEIMAGES-CONTENT")
+
+        external_dir = os.path.join(self.temp_dir, "external")
+        os.makedirs(external_dir, exist_ok=True)
+        external_tex = os.path.join(external_dir, "shared.png")
+        with open(external_tex, "wb") as f:
+            f.write(b"DIFFERENT")  # different size → collision
+
+        self._assign_texture(self.cube, external_tex)
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        self.exporter.task_manager.convert_to_relative_paths()
+
+        with open(existing, "rb") as f:
+            self.assertEqual(
+                f.read(),
+                b"ORIGINAL-SOURCEIMAGES-CONTENT",
+                "name collision must not overwrite the existing sourceimages texture",
+            )
+
+    def test_copy_textures_skips_file_already_in_sourceimages_subfolder(self):
+        """A texture already in a sourceimages SUBFOLDER is left in place, not
+        copied to the root.
+
+        Guards the "already under sourceimages" check (must be any-depth, not
+        root-only) — the same duplicate-copy bug fixed in the HDR Manager add
+        flow.  Added: 2026-06-16
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        sourceimages = self._set_project(self.temp_dir)
+        sub = os.path.join(sourceimages, "textures")
+        os.makedirs(sub, exist_ok=True)
+        tex = os.path.join(sub, "wood.png")
+        with open(tex, "wb") as f:
+            f.write(b"SUBFOLDER-TEX")
+
+        node = self._assign_texture(self.cube, tex)
+        result = MatUtils.copy_textures_to_sourceimages(file_nodes=[node])
+
+        # Nothing copied — the file is already under sourceimages.
+        self.assertEqual(result, [])
+        # Not duplicated into the root.
+        self.assertFalse(os.path.isfile(os.path.join(sourceimages, "wood.png")))
+        # Original subfolder file untouched.
+        self.assertTrue(os.path.isfile(tex))
+
+    def test_copy_textures_skips_within_batch_basename_collision(self):
+        """Two different externals sharing a basename must not both be copied.
+
+        The copy into sourceimages is flat (by basename), so queuing both would
+        land them on one destination — a silent (threaded) clobber and
+        wrong-file rebind.  Only the first is copied; the other is skipped.
+        Added: 2026-06-16
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        sourceimages = self._set_project(self.temp_dir)
+
+        ext_a = os.path.join(self.temp_dir, "a")
+        ext_b = os.path.join(self.temp_dir, "b")
+        os.makedirs(ext_a, exist_ok=True)
+        os.makedirs(ext_b, exist_ok=True)
+        tex_a = os.path.join(ext_a, "tex.png")
+        tex_b = os.path.join(ext_b, "tex.png")
+        with open(tex_a, "wb") as f:
+            f.write(b"AAAA")  # size 4
+        with open(tex_b, "wb") as f:
+            f.write(b"BBBBBBBB")  # size 8 → different, a real collision
+
+        node_a = self._assign_texture(self.cube, tex_a)
+        node_b = self._assign_texture(self.sphere, tex_b)
+
+        result = MatUtils.copy_textures_to_sourceimages(file_nodes=[node_a, node_b])
+
+        # Only one of the colliding basenames was copied ...
+        self.assertEqual(
+            len(result), 1, "only one same-basename texture should be copied"
+        )
+        self.assertTrue(os.path.isfile(os.path.join(sourceimages, "tex.png")))
+        # ... and both originals are intact (copy, not move; no clobber).
+        self.assertTrue(os.path.isfile(tex_a))
+        self.assertTrue(os.path.isfile(tex_b))
+
+    # ------------------------------------------------------------------
+    # Texture file-size check
+    # ------------------------------------------------------------------
+
+    def test_check_texture_file_size_in_definitions(self):
+        """check_texture_file_size is a ComboBox check defaulting to 16 MB.
+
+        Added: 2026-06-19
+        """
+        defs = self.exporter.task_manager.check_definitions
+        self.assertIn("check_texture_file_size", defs)
+        entry = defs["check_texture_file_size"]
+        self.assertEqual(entry["widget_type"], "ComboBox")
+        # setCurrentIndex must point at the 16 MB option.
+        options = list(self.exporter.task_manager._texture_size_options.values())
+        self.assertEqual(options[entry["setCurrentIndex"]], 16)
+
+    def test_check_texture_file_size_off_passes(self):
+        """OFF (None / 0) disables the check.
+
+        Added: 2026-06-19
+        """
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        self.assertEqual(tm.check_texture_file_size(None), (True, []))
+        self.assertEqual(tm.check_texture_file_size(0), (True, []))
+
+    def test_check_texture_file_size_fails_on_oversized(self):
+        """A texture larger than the limit fails the check.
+
+        Added: 2026-06-19
+        """
+        tex_path = os.path.join(self.temp_dir, "big.png")
+        with open(tex_path, "wb") as f:
+            f.write(b"\0" * (2 * 1024 * 1024))  # 2 MB
+
+        self._assign_texture(self.cube, tex_path)
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        # 1 MB limit → the 2 MB texture is an offender.
+        passed, messages = tm.check_texture_file_size(1)
+        self.assertFalse(passed)
+        self.assertTrue(any("big.png" in m for m in messages))
+
+    def test_check_texture_file_size_passes_under_limit(self):
+        """A texture under the limit passes the check with no messages.
+
+        Added: 2026-06-19
+        """
+        tex_path = os.path.join(self.temp_dir, "small.png")
+        with open(tex_path, "wb") as f:
+            f.write(b"\0" * (512 * 1024))  # 0.5 MB
+
+        self._assign_texture(self.cube, tex_path)
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        passed, messages = tm.check_texture_file_size(16)
+        self.assertTrue(passed)
+        self.assertEqual(messages, [])
+
+    def test_check_texture_file_size_ignores_missing_files(self):
+        """Missing texture files are left to check_valid_paths, not failed here.
+
+        Added: 2026-06-19
+        """
+        self._assign_texture(self.cube, "/nonexistent/huge_texture.png")
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        passed, _ = tm.check_texture_file_size(1)
+        self.assertTrue(passed)
+
+    def test_check_texture_file_size_resolves_relative_paths(self):
+        """Project-relative texture paths must be resolved, not skipped.
+
+        The default-on convert_to_relative_paths task rewrites texture paths to
+        workspace-relative form before checks run; a bare os.path.isfile would
+        miss them (resolving against the CWD) and silently pass every texture.
+        Added: 2026-06-19
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        # 2 MB texture in sourceimages, referenced by a RELATIVE path.
+        big = os.path.join(sourceimages, "rel_big.png")
+        with open(big, "wb") as f:
+            f.write(b"\0" * (2 * 1024 * 1024))
+
+        self._assign_texture(self.cube, "sourceimages/rel_big.png")
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        passed, messages = tm.check_texture_file_size(1)
+        self.assertFalse(passed, "relative path must be resolved and size-checked")
+        self.assertTrue(any("rel_big.png" in m for m in messages))
+
+    # ------------------------------------------------------------------
+    # Objects-below-floor tolerance
+    # ------------------------------------------------------------------
+
+    def test_below_floor_checkbox_true_uses_default_tolerance(self):
+        """Enabling the check (checkbox → True) applies the documented 0.5
+        default, not float(True) == 1.0.
+
+        The UI registers this check as a QCheckBox, so b000 passes True when
+        enabled; coercing that to 1.0 silently doubled the advertised tolerance.
+        Added: 2026-06-19
+        """
+        # Sink the cube 0.75 below the floor: inside a 1.0 tolerance (old, would
+        # pass) but outside the documented 0.5 (should fail).
+        cube_long = cmds.ls(str(self.cube), l=True)[0]
+        ymin = cmds.xform(cube_long, query=True, ws=True, bb=True)[1]
+        cmds.setAttr(f"{cube_long}.translateY", -0.75 - ymin)
+
+        tm = self.exporter.task_manager
+        tm.objects = [cube_long]
+
+        passed, messages = tm.check_objects_below_floor(True)
+        self.assertFalse(
+            passed, "checkbox-True must use 0.5 tolerance, so -0.75 fails"
+        )
+        # The header reports the effective tolerance used.
+        self.assertTrue(any("0.500" in m for m in messages))
+
+    def test_below_floor_none_is_strict_zero(self):
+        """An explicit None means a strict 0.0 tolerance (preserved contract).
+
+        Added: 2026-06-19
+        """
+        cube_long = cmds.ls(str(self.cube), l=True)[0]
+        ymin = cmds.xform(cube_long, query=True, ws=True, bb=True)[1]
+        cmds.setAttr(f"{cube_long}.translateY", -0.1 - ymin)
+
+        tm = self.exporter.task_manager
+        tm.objects = [cube_long]
+
+        passed, _ = tm.check_objects_below_floor(None)
+        self.assertFalse(passed, "None → 0.0 tolerance, so any dip fails")
+
+    def test_below_floor_numeric_tolerance_respected(self):
+        """A real numeric tolerance still passes things within it.
+
+        Added: 2026-06-19
+        """
+        cube_long = cmds.ls(str(self.cube), l=True)[0]
+        ymin = cmds.xform(cube_long, query=True, ws=True, bb=True)[1]
+        cmds.setAttr(f"{cube_long}.translateY", -0.75 - ymin)
+
+        tm = self.exporter.task_manager
+        tm.objects = [cube_long]
+
+        passed, _ = tm.check_objects_below_floor(2.0)
+        self.assertTrue(passed, "-0.75 is within a 2.0 tolerance")
 
     # ------------------------------------------------------------------
     # set_workspace warning
@@ -1101,6 +1458,74 @@ class TestExportDataNodeOption(MayaTkTestCase):
             cmds.ls(f"*{DataNodes.EXPORT}*"),
             "data_export carrier missing from FBX exported in 'selected' mode",
         )
+
+
+def _arnold_available() -> bool:
+    """Return True if mtoa can be loaded (plugin installed and loadable)."""
+    try:
+        if cmds.pluginInfo("mtoa", query=True, loaded=True):
+            return True
+        cmds.loadPlugin("mtoa")
+        return True
+    except Exception:
+        return False
+
+
+class TestExcludeHdrOption(MayaTkTestCase):
+    """The 'Exclude HDR Environment' exporter task strips aiSkyDomeLight nodes.
+
+    Feature (2026-06-18): the HDR skydome is image-based scene lighting, not
+    deliverable geometry, so it should not ride into a game-engine FBX — in
+    'All Scene Objects' mode it is otherwise picked up by cmds.ls(transforms=).
+    """
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        self.tm = TaskManager(logging.getLogger("test_exclude_hdr"))
+        self.cube = self.create_test_cube("hdrCube")
+        self.tm.objects = cmds.ls(self.cube, long=True)
+
+    def test_option_is_default_on(self):
+        defs = self.tm.task_definitions
+        self.assertIn("exclude_hdr", defs)
+        self.assertEqual(defs["exclude_hdr"]["widget_type"], "QCheckBox")
+        self.assertTrue(defs["exclude_hdr"]["setChecked"])
+
+    def test_in_task_order_after_ignore_groups(self):
+        order = self.tm.TASK_ORDER
+        self.assertIn("exclude_hdr", order)
+        self.assertGreater(order.index("exclude_hdr"), order.index("ignore_groups"))
+
+    def test_noop_without_skydome(self):
+        before = list(self.tm.objects)
+        self.tm.exclude_hdr()
+        self.assertEqual(self.tm.objects, before)
+
+    def test_noop_with_empty_objects(self):
+        self.tm.objects = []
+        self.tm.exclude_hdr()  # must not raise
+        self.assertEqual(self.tm.objects, [])
+
+    @unittest.skipUnless(_arnold_available(), "Arnold (mtoa) plugin not available")
+    def test_removes_skydome_keeps_geometry(self):
+        from mayatk.light_utils.hdr_manager import HdrManager
+
+        mgr = HdrManager()
+        skydome = mgr.create_network(hdrMap="C:/tmp/x.exr")
+        self.assertIsNotNone(skydome)
+        self.addCleanup(mgr.clear)
+
+        # Use the same full-path transform the task computes internally.
+        skydome_transform = cmds.listRelatives(skydome, parent=True, fullPath=True)[0]
+        cube_long = cmds.ls(self.cube, long=True)[0]
+        self.tm.objects = [cube_long, skydome_transform]
+
+        self.tm.exclude_hdr()
+
+        self.assertIn(cube_long, self.tm.objects)
+        self.assertNotIn(skydome_transform, self.tm.objects)
 
 
 if __name__ == "__main__":

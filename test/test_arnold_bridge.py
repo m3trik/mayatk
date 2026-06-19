@@ -192,6 +192,29 @@ class ArnoldBridgeTest(unittest.TestCase):
         self.assertNotEqual(first_uuid, second_uuid)
         self.assertEqual(_ai_count(), 1)  # old bridge fully replaced
 
+    # ----------------------------------------------------- robustness (scope)
+    def test_get_shading_engine_nonexistent_returns_none(self):
+        """A vanished node must not raise (regression: ValueError
+        'No object matches name: aiMultiply1' from cmds.listConnections)."""
+        self.assertIsNone(self.bridge._get_shading_engine("aiMultiply1"))
+        self.assertIsNone(self.bridge.get_bridge("aiMultiply1"))
+        self.assertFalse(self.bridge.has_bridge("aiMultiply1"))
+
+    def test_add_force_with_helper_in_scope_skips_not_crashes(self):
+        """A force-rebuild that deletes a bridge helper still listed later in
+        scope must skip the vanished node, not crash on listConnections."""
+        shader, _, _ = self._make_base_material("matA", ["model_BaseColor.png"])
+        self.bridge.add(materials=shader)  # creates the aiMultiply helper
+        helper = (cmds.ls(cmds.listHistory(self.bridge.get_bridge(shader)) or [],
+                          type="aiMultiply") or [None])[0]
+        self.assertIsNotNone(helper, "expected an aiMultiply helper in the bridge")
+        # Both the material and its own helper in scope: processing the material
+        # removes the bridge (deleting `helper`); the later `helper` target is
+        # then a vanished node — it must be skipped cleanly, not raise.
+        result = self.bridge.add(materials=[shader, helper], force=True)
+        self.assertIn(self.bridge.get_bridge(shader), result)  # rebuilt
+        self.assertEqual(_ai_count(), 1)  # only the material's bridge, helper skipped
+
     # --------------------------------------------------------------- remove
     def test_remove_restores_base(self):
         maps = ["model_BaseColor.png", "model_Roughness.png"]

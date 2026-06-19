@@ -105,6 +105,137 @@ class TestShaderTemplates(MayaTkTestCase):
         saver.save_graph([shader, file_node], self.template_path)
         self.assertTrue(os.path.exists(self.template_path))
 
+    def test_save_omits_map_type_texture_paths(self):
+        """A file node whose texture resolves to a map_type is a user-supplied
+        slot resolved at restore time, so its path must NOT be baked into the
+        template. A file node with no resolvable map_type (e.g. a fixed
+        Maya-install default like the StingrayPBS cube maps) keeps its path.
+
+        Regression: templates shipped with machine-specific, project-relative
+        '../../..' absolute paths captured from a test run.
+        """
+        map_file = cmds.shadingNode("file", asTexture=True, name="rgs_map_file")
+        default_file = cmds.shadingNode(
+            "file", asTexture=True, name="rgs_default_file"
+        )
+        self.nodes_to_delete.extend([map_file, default_file])
+
+        # Resolves to Base_Color -> path must be dropped on save.
+        cmds.setAttr(
+            f"{map_file}.fileTextureName",
+            "C:/some/machine/path/MyAsset_Base_Color.png",
+            type="string",
+        )
+        # No resolvable map_type -> path must be preserved.
+        default_path = (
+            "C:/Program Files/Autodesk/Maya2025/presets/ShaderFX/Images/"
+            "PBS/ibl_brdf_lut.png"
+        )
+        cmds.setAttr(f"{default_file}.fileTextureName", default_path, type="string")
+
+        graph = GraphCollector().collect_graph([map_file, default_file])
+
+        map_slots = {
+            info["metadata"].get("map_type"): info["attributes"].get(
+                "fileTextureName"
+            )
+            for info in graph.values()
+            if info["type"] == "file" and info["metadata"].get("map_type")
+        }
+        self.assertIn("Base_Color", map_slots)
+        self.assertIsNone(
+            map_slots["Base_Color"],
+            "map_type file node must not bake a fileTextureName into the template",
+        )
+
+        kept = [
+            info["attributes"].get("fileTextureName")
+            for info in graph.values()
+            if info["type"] == "file" and not info["metadata"].get("map_type")
+        ]
+        self.assertIn(
+            default_path, kept, "file node with no map_type should retain its path"
+        )
+
+    def test_restore_drops_stale_map_path_when_no_texture(self):
+        """Restoring a (legacy) template whose map_type slot still carries a
+        baked path, with no matching texture supplied, must leave the file node
+        empty rather than applying the stale machine-specific path.
+
+        Regression hardening for the '../../..' mashup warning: this guards
+        templates produced before the saver fix (or hand-edited) that the data
+        scrub of the shipped set can't reach.
+        """
+        import yaml
+
+        stale = (
+            "O:/some/project/scenes/../../../../elsewhere/repo/test/"
+            "temp_textures/Legacy_Base_Color.png"
+        )
+        legacy = {
+            "{{NODE_file_1}}": {
+                "type": "file",
+                "attributes": {"fileTextureName": stale},
+                "connections": [],
+                "metadata": {
+                    "connected_to_shading_engine": False,
+                    "map_type": "Base_Color",
+                },
+            }
+        }
+        legacy_path = os.path.join(self.temp_dir, "legacy_template.yaml")
+        with open(legacy_path, "w") as fh:
+            yaml.dump(legacy, fh, default_flow_style=False)
+
+        # No texture_paths -> nothing can resolve for the Base_Color slot.
+        restored = ShaderTemplates.restore_template(legacy_path, texture_paths=[])
+        self.nodes_to_delete.extend(restored.values())
+
+        file_node = restored["{{NODE_file_1}}"]
+        self.assertTrue(cmds.objExists(file_node))
+        self.assertEqual(
+            cmds.getAttr(f"{file_node}.fileTextureName") or "",
+            "",
+            "stale baked map_type path must not be applied when unresolved",
+        )
+
+    def test_shipped_templates_have_no_baked_map_paths(self):
+        """Guard the committed templates: no file node with a resolved map_type
+        may carry a fileTextureName, and no path may contain a relative '..'
+        mashup (machine/project-specific leakage)."""
+        import glob
+        import yaml
+        from mayatk.mat_utils.shader_templates import _shader_templates as st_mod
+
+        templates_dir = os.path.join(os.path.dirname(st_mod.__file__), "templates")
+        template_files = glob.glob(os.path.join(templates_dir, "*.yaml"))
+        self.assertTrue(template_files, "No shipped templates found.")
+
+        offenders = []
+        for path in template_files:
+            base = os.path.basename(path)
+            with open(path, encoding="utf-8") as fh:
+                data = yaml.safe_load(fh) or {}
+            for node_name, info in data.items():
+                if not isinstance(info, dict) or info.get("type") != "file":
+                    continue
+                attrs = info.get("attributes", {}) or {}
+                ftn = attrs.get("fileTextureName")
+                map_type = (info.get("metadata", {}) or {}).get("map_type")
+                if map_type and ftn is not None:
+                    offenders.append(
+                        f"{base}:{node_name} map_type={map_type} baked path: {ftn}"
+                    )
+                if ftn and ".." in ftn.replace("\\", "/").split("/"):
+                    offenders.append(f"{base}:{node_name} '..' mashup: {ftn}")
+
+        self.assertEqual(
+            offenders,
+            [],
+            "Stale baked texture paths in shipped templates:\n"
+            + "\n".join(offenders),
+        )
+
     def test_restore_graph(self):
         """Test restoring a saved graph."""
         # Create a template file manually or via save

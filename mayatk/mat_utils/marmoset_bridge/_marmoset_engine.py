@@ -13,7 +13,6 @@ mayatk, the standalone Switchboard panel in extapps, a CLI, a test).
 from __future__ import annotations
 
 import os
-import re
 import tempfile
 import time
 from pathlib import Path
@@ -21,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pythontk as ptk
 from pythontk.core_utils.app_launcher import AppLauncher
+from pythontk.core_utils import script_template
 from pythontk.str_utils._str_utils import StrUtils
 
 from . import template_params
@@ -39,51 +39,35 @@ _PKG_DIR = Path(__file__).resolve().parent
 _TEMPLATE_DIR = _PKG_DIR / "templates"
 
 # Candidate names AppLauncher will try when no explicit path is given.
-_TOOLBAG_APP_NAMES = ["toolbag", "Marmoset Toolbag 4", "Marmoset Toolbag 5"]
+_TOOLBAG_APP_NAMES = ("toolbag", "Marmoset Toolbag 4", "Marmoset Toolbag 5")
+# Install-dir fallback: Toolbag's installer doesn't register the exe under
+# ``App Paths`` on every version. Newest ``Marmoset\<version>`` folder wins.
+_TOOLBAG_SCAN_GLOBS = (r"{program_files}\Marmoset\*\toolbag.exe",)
 
 # Allowed values for a template's ``BRIDGE_MODES`` tuple.
 SEND_TO = "send_to"
 ROUNDTRIP = "roundtrip"
 _MODES = (SEND_TO, ROUNDTRIP)
 
-# ``BRIDGE_MODES = (...,)`` literal -- parsed without importing the template.
-_BRIDGE_MODES_RE = re.compile(r"^\s*BRIDGE_MODES\s*=\s*\(([^)]*)\)", re.MULTILINE)
-
 
 # ---------------------------------------------------------------------------
 # Template discovery (module-level so UI layers can list templates without a
-# live engine instance).
+# live engine instance). Thin wrappers over the shared
+# :mod:`pythontk.core_utils.script_template` helpers (``_MODES`` allowed).
 # ---------------------------------------------------------------------------
 
 def list_templates() -> List[Path]:
     """Return user-visible templates in ``templates/`` (skips underscore-prefixed)."""
-    return sorted(
-        p for p in _TEMPLATE_DIR.glob("*.py") if not p.stem.startswith("_")
-    )
+    return script_template.list_templates(_TEMPLATE_DIR, ".py")
 
 
 def template_modes(template_path: Path) -> Tuple[str, ...]:
     """Return the modes declared by *template_path*'s ``BRIDGE_MODES`` constant.
 
     Falls back to ``("send_to",)`` if the constant is absent so legacy templates
-    keep working. We parse with a regex rather than importing because templates
-    contain raw ``__KEY__`` placeholders that aren't valid Python before
-    substitution.
+    keep working.
     """
-    try:
-        text = template_path.read_text(encoding="utf-8")
-    except OSError:
-        return (SEND_TO,)
-    m = _BRIDGE_MODES_RE.search(text)
-    if not m:
-        return (SEND_TO,)
-    modes = tuple(
-        item.strip().strip("'\"")
-        for item in m.group(1).split(",")
-        if item.strip()
-    )
-    valid = tuple(mode for mode in modes if mode in _MODES)
-    return valid or (SEND_TO,)
+    return script_template.template_modes(template_path, _MODES)
 
 
 def list_template_modes() -> List[Tuple[str, str]]:
@@ -93,18 +77,18 @@ def list_template_modes() -> List[Tuple[str, str]]:
     one combo entry per (template, mode) pair without baking mode-awareness
     into the combo itself.
     """
-    out: List[Tuple[str, str]] = []
-    for path in list_templates():
-        for mode in template_modes(path):
-            out.append((path.stem, mode))
-    return out
+    return script_template.list_template_modes(_TEMPLATE_DIR, ".py", _MODES)
 
 
-class MarmosetEngine(ptk.LoggingMixin):
-    """Export-agnostic Marmoset Toolbag automation.
+class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
+    """Export-agnostic Marmoset Toolbag automation -- a hand-off :class:`pythontk.Deliverer`.
 
-    Two operating modes per template (declared via ``BRIDGE_MODES`` in each
-    ``templates/*.py``):
+    The launch-or-roundtrip delivery Strategy for the Maya hand-off bridge (and,
+    via its standalone :meth:`send`, any host that already has an exported model):
+    discover/launch Toolbag, render a bundled template with substituted params, and
+    either hand off interactively (``send_to``) or run headless and post-process the
+    outputs (``roundtrip``). Two operating modes per template (declared via
+    ``BRIDGE_MODES`` in each ``templates/*.py``):
 
     * ``send_to`` -- launch Toolbag interactively, fire-and-forget. The user
       drives the rest of the workflow inside Toolbag.
@@ -112,7 +96,8 @@ class MarmosetEngine(ptk.LoggingMixin):
       it exits, then post-process the outputs (e.g. re-collect baked maps).
       Always headless; the headless flag is ignored.
 
-    Usage::
+    As a deliverer it is plugged into :class:`mayatk.mat_utils.MarmosetBridge`
+    (which produces the FBX + manifests); standalone it composes directly::
 
         MarmosetEngine().send(model_path="C:/scan/welding.obj", template="lookdev")
         MarmosetEngine().send(model_path=fbx, manifest_path=man, template="bake",
@@ -144,37 +129,17 @@ class MarmosetEngine(ptk.LoggingMixin):
         """
         if self._toolbag_path:
             return self._toolbag_path
-        for name in _TOOLBAG_APP_NAMES:
-            found = AppLauncher.find_app(name)
-            if found:
-                self._toolbag_path = found
-                return found
-        for found in self._scan_install_dirs():
+        found = AppLauncher.resolve_app_path(
+            app_names=_TOOLBAG_APP_NAMES,
+            scan_globs=_TOOLBAG_SCAN_GLOBS,
+        )
+        if found:
             self._toolbag_path = found
-            return found
-        return None
+        return found
 
     @toolbag_path.setter
     def toolbag_path(self, value: Optional[str]) -> None:
         self._toolbag_path = value
-
-    @staticmethod
-    def _scan_install_dirs():
-        """Yield candidate ``toolbag.exe`` paths under standard install roots."""
-        roots = [
-            os.environ.get("ProgramFiles", r"C:\Program Files"),
-            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
-        ]
-        for root in roots:
-            marm = Path(root) / "Marmoset"
-            if not marm.is_dir():
-                continue
-            for sub in sorted(marm.iterdir(), reverse=True):
-                if not sub.is_dir():
-                    continue
-                candidate = sub / "toolbag.exe"
-                if candidate.is_file():
-                    yield str(candidate)
 
     @property
     def toolbag_log_path(self) -> Optional[str]:
@@ -185,6 +150,40 @@ class MarmosetEngine(ptk.LoggingMixin):
         :func:`.toolbag_log.resolve_toolbag_log_path`.
         """
         return resolve_toolbag_log_path(self.toolbag_path)
+
+    # -- Deliverer Strategy hooks ------------------------------------------
+
+    def preflight(self, bridge, request) -> bool:
+        """Validate the (template, mode) before the bridge produces its payload."""
+        template_path = _TEMPLATE_DIR / f"{request.template}.py"
+        allowed = template_modes(template_path) if template_path.is_file() else ()
+        if request.mode not in allowed:
+            bridge.logger.error(
+                f"Template '{request.template}' does not support mode "
+                f"'{request.mode}'. Declared modes: {allowed}"
+            )
+            return False
+        return True
+
+    def deliver(self, bridge, payload, request) -> Optional[Dict[str, Any]]:
+        """Hand the produced model + manifests to Toolbag via :meth:`send`.
+
+        The :class:`pythontk.Payload` carries the FBX (``primary``) and the
+        ``manifest`` / ``pairs`` sidecar paths in ``extras``; the orchestration
+        knobs (``output_dir`` / ``output_name`` / ``toolbag_exe``) ride in
+        :attr:`request.extras`.
+        """
+        return self.send(
+            model_path=payload.primary,
+            manifest_path=payload.extras.get("manifest"),
+            pairs_path=payload.extras.get("pairs"),
+            output_dir=request.get("output_dir"),
+            output_name=request.get("output_name"),
+            toolbag_exe=request.get("toolbag_exe"),
+            template=request.template,
+            mode=request.mode,
+            params=request.params,
+        )
 
     # -- Public API --------------------------------------------------------
 

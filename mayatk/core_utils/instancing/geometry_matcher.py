@@ -461,7 +461,7 @@ class GeometryMatcher:
         pts2_array = centered2
 
         # Robust PCA Alignment (handles baked rotations and symmetry)
-        matrix_list = ptk.MathUtils.get_pca_transform(
+        matrix_list = ptk.PointCloud.pca_transform(
             pts1_array, pts2_array, tolerance=self.tolerance, robust=True
         )
 

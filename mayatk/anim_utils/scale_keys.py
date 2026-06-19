@@ -450,8 +450,6 @@ class ScaleKeys:
         """Execute speed-based scaling."""
         keys_scaled = 0
         processed_objects = 0
-        min_target_start: Optional[float] = None
-        max_target_end: Optional[float] = None
 
         try:
             factor_val = float(self.factor)

@@ -27,8 +27,6 @@ needed here.
 import traceback
 from pathlib import Path
 
-from uitk.widgets.mixins.tooltip_mixin import fmt
-
 try:
     import maya.cmds as cmds
     import maya.mel as mel
@@ -107,6 +105,66 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
     # tighter column hugs the values more cleanly on a 220px-wide panel.
     LABEL_MIN_WIDTH = 80
 
+    # Rizom's header menu adds a UV-Editor shortcut and renames "Templates"
+    # to "Scripts"; the base builds it from this data (handlers resolve to
+    # open_uv_editor + the base's open_templates_folder / refresh_templates).
+    HEADER_MENU_ITEMS = (
+        (
+            "Open UV Editor", "btnopen_uv_editor",
+            "Open Maya's UV Editor for inspecting the result.", "open_uv_editor",
+        ),
+        (
+            "Open Scripts Folder", "btn_open_scripts",
+            "Reveal the bundled Lua preset folder in Explorer.",
+            "open_templates_folder",
+        ),
+        (
+            "Refresh Scripts", "btn_refresh_scripts",
+            "Re-scan the scripts folder and rebuild the script combo.",
+            "refresh_templates",
+        ),
+        ("Clear Log", "btn_clear_log", "Clear the log panel below.", "clear_log"),
+    )
+    HELP_SPEC = {
+        "title": "RizomUV Bridge",
+        "body": "Round-trip selected meshes through RizomUV using a "
+        "Lua preset, or one-way send them and continue working in "
+        "RizomUV directly.",
+        "steps": [
+            "Select one or more polygon transforms.",
+            "Pick a <b>Lua preset</b> from the dropdown.",
+            "Tweak the parameters that the preset exposes.",
+            "Click <b>Process Selected</b>.",
+        ],
+        "sections": [
+            ("Presets", [
+                "<b>pack / unwrap_hard / unwrap_organic / optimize</b> "
+                "— round-trip: Maya exports duplicates with "
+                "<code>__RZTMP</code> suffix, RizomUV runs the script "
+                "headlessly, UVs are transferred back onto originals.",
+                "<b>send</b> — one-way: exports the selection directly "
+                "(no rename), optionally collects diffuse textures "
+                "from the shading networks, then launches RizomUV "
+                "detached. Save manually inside RizomUV when done.",
+            ]),
+            ("Header menu", [
+                "<b>Open UV Editor</b> — open Maya's UV Editor to "
+                "inspect the result.",
+                "<b>Open Scripts Folder</b> — reveal the bundled "
+                "Lua preset folder in Explorer.",
+                "<b>Refresh Scripts</b> — re-scan the scripts folder "
+                "and rebuild the script combo.",
+                "<b>Clear Log</b> — clear the log panel below.",
+            ]),
+        ],
+        "notes": [
+            "Add custom presets by dropping new <code>.lua</code> "
+            "files into the scripts folder (use <code>__KEY__</code> "
+            "tokens from <i>parameters.py</i> for tunable values), "
+            "then click <b>Refresh Scripts</b>.",
+        ],
+    }
+
     # ------------------------------------------------------------------
     # Required base-class hooks
     # ------------------------------------------------------------------
@@ -134,87 +192,6 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
             (p.stem, "")
             for p in sorted(_SCRIPT_DIR.glob("*.lua"))
         ]
-
-    # ------------------------------------------------------------------
-    # Header menu
-    # ------------------------------------------------------------------
-
-    def header_init(self, widget):
-        """Configure header menu with Rizom-specific utilities."""
-        widget.menu.add("Separator", setTitle="Utilities")
-        widget.menu.add(
-            "QPushButton",
-            setText="Open UV Editor",
-            setObjectName="btnopen_uv_editor",
-            setToolTip="Open Maya's UV Editor for inspecting the result.",
-        )
-        widget.menu.btnopen_uv_editor.clicked.connect(self.open_uv_editor)
-
-        widget.menu.add(
-            "QPushButton",
-            setText="Open Scripts Folder",
-            setObjectName="btn_open_scripts",
-            setToolTip="Reveal the bundled Lua preset folder in Explorer.",
-        )
-        widget.menu.btn_open_scripts.clicked.connect(self.open_templates_folder)
-
-        widget.menu.add(
-            "QPushButton",
-            setText="Refresh Scripts",
-            setObjectName="btn_refresh_scripts",
-            setToolTip="Re-scan the scripts folder and rebuild the script combo.",
-        )
-        widget.menu.btn_refresh_scripts.clicked.connect(self.refresh_templates)
-
-        widget.menu.add(
-            "QPushButton",
-            setText="Clear Log",
-            setObjectName="btn_clear_log",
-            setToolTip="Clear the log panel below.",
-        )
-        widget.menu.btn_clear_log.clicked.connect(self.clear_log)
-
-        widget.set_help_text(
-            fmt(
-                title="RizomUV Bridge",
-                body="Round-trip selected meshes through RizomUV using a "
-                "Lua preset, or one-way send them and continue working in "
-                "RizomUV directly.",
-                steps=[
-                    "Select one or more polygon transforms.",
-                    "Pick a <b>Lua preset</b> from the dropdown.",
-                    "Tweak the parameters that the preset exposes.",
-                    "Click <b>Process Selected</b>.",
-                ],
-                sections=[
-                    ("Presets", [
-                        "<b>pack / unwrap_hard / unwrap_organic / optimize</b> "
-                        "— round-trip: Maya exports duplicates with "
-                        "<code>__RZTMP</code> suffix, RizomUV runs the script "
-                        "headlessly, UVs are transferred back onto originals.",
-                        "<b>send</b> — one-way: exports the selection directly "
-                        "(no rename), optionally collects diffuse textures "
-                        "from the shading networks, then launches RizomUV "
-                        "detached. Save manually inside RizomUV when done.",
-                    ]),
-                    ("Header menu", [
-                        "<b>Open UV Editor</b> — open Maya's UV Editor to "
-                        "inspect the result.",
-                        "<b>Open Scripts Folder</b> — reveal the bundled "
-                        "Lua preset folder in Explorer.",
-                        "<b>Refresh Scripts</b> — re-scan the scripts folder "
-                        "and rebuild the script combo.",
-                        "<b>Clear Log</b> — clear the log panel below.",
-                    ]),
-                ],
-                notes=[
-                    "Add custom presets by dropping new <code>.lua</code> "
-                    "files into the scripts folder (use <code>__KEY__</code> "
-                    "tokens from <i>parameters.py</i> for tunable values), "
-                    "then click <b>Refresh Scripts</b>.",
-                ],
-            )
-        )
 
     # ------------------------------------------------------------------
     # b000 -- the per-bridge send action

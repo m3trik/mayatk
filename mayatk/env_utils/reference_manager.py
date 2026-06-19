@@ -1215,7 +1215,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             cmb_filter_target.currentText() if cmb_filter_target else "Filter: All"
         )
         include_files = filter_target in ("Filter: All", "Filter: Files")
-        include_notes = filter_target in ("Filter: All", "Filter: Comments")
+        include_notes = filter_target in ("Filter: All", "Filter: Notes")
 
         # Store filter state for post-population row visibility in update_table
         self._active_filter_text = filter_text if filter_enabled else ""
@@ -1912,11 +1912,17 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         # Initialization complete
         self._initializing = False
 
-        # Initial sync of selection to existing references
-        # Use a timer to ensure UI is fully initialized first
-        self.sb.defer_with_timer(
-            lambda: self.controller.sync_selection_to_references(), ms=100
-        )
+        # Initial sync of selection to existing references, and apply the
+        # Notes-column visibility once persisted checkbox state is restored.
+        # Use a timer to ensure UI is fully initialized first.
+        def _post_init():
+            # Selection sync is the critical existing behavior — run it first
+            # so the cosmetic column-visibility apply can't preempt it if it
+            # ever raises (defer_with_timer swallows+logs the exception).
+            self.controller.sync_selection_to_references()
+            self._apply_notes_column_visibility()
+
+        self.sb.defer_with_timer(_post_init, ms=100)
 
         self.logger.debug("ReferenceManagerSlots initialized.")
 
@@ -2015,6 +2021,14 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             setChecked=False,
             setToolTip="If checked, hide Maya Binary (.mb) files.",
         )
+        widget.menu.add(
+            "QCheckBox",
+            setText="Show Notes Column",
+            setObjectName="chk_show_notes_column",
+            setChecked=False,
+            setToolTip="Show the Notes column (per-file comments / metadata).\n"
+            "Hidden by default.",
+        )
         widget.menu.add("Separator", setTitle="Operations:")
         widget.menu.add(
             "QPushButton",
@@ -2043,7 +2057,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                     ("File discovery", [
                         "Workspace files are discovered and filtered by "
                         "folder structure, file suffix, and extension.",
-                        "The table shows comments / metadata for each file.",
+                        "The optional <b>Notes</b> column shows per-file "
+                        "comments / metadata (toggle it from the header menu).",
                     ]),
                     ("Save & naming", [
                         "<b>Save</b> uses configurable naming conventions: "
@@ -2060,7 +2075,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 ],
                 notes=[
                     "<b>Right-click</b> a file row for per-reference actions "
-                    "(open, edit comment, repath, etc.).",
+                    "(open, edit note, repath, etc.).",
                 ],
             )
         )
@@ -2068,7 +2083,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def tbl000_init(self, widget):
         if not widget.is_initialized:
             widget.setColumnCount(5)
-            widget.setHorizontalHeaderLabels(["FILES:", "", "", "", "COMMENTS:"])
+            widget.setHorizontalHeaderLabels(["FILES:", "", "", "", "NOTES:"])
             # Use NoEditTriggers and handle editing manually to prevent conflicts with double-click
             widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.NoEditTriggers)
             widget.setSelectionBehavior(self.sb.QtWidgets.QAbstractItemView.SelectRows)
@@ -2613,7 +2628,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 addItems=[
                     "Filter: All",
                     "Filter: Files",
-                    "Filter: Comments",
+                    "Filter: Notes",
                 ],
             )
 
@@ -2766,6 +2781,23 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         """Handle the hide extension checkbox."""
         self.logger.debug(f"chk_hide_extension changed: {checked}")
         self.controller.refresh_file_list(invalidate=False)
+
+    def chk_show_notes_column(self, checked):
+        """Toggle visibility of the Notes (metadata) column."""
+        self.logger.debug(f"chk_show_notes_column changed: {checked}")
+        self._apply_notes_column_visibility()
+
+    def _apply_notes_column_visibility(self):
+        """Show/hide the Notes column (index 4) per the header toggle.
+
+        Hidden by default — the column is shown only when the
+        ``chk_show_notes_column`` header checkbox is checked. Toggling
+        visibility is a view-only operation; the notes data is still fetched
+        and remains available for filtering even while the column is hidden.
+        """
+        chk = getattr(self.ui.header.menu, "chk_show_notes_column", None)
+        show = chk.isChecked() if chk else False
+        self.ui.tbl000.setColumnHidden(4, not show)
 
     def txt_suffix(self, text):
         """Handle suffix text changes."""

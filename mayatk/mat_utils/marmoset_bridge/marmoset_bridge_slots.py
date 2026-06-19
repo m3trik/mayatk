@@ -15,8 +15,6 @@ upstream. This file owns only Marmoset-specific bits:
 import traceback
 from pathlib import Path
 
-from uitk.widgets.mixins.tooltip_mixin import fmt
-
 try:
     import maya.cmds as cmds
 except ImportError:
@@ -50,6 +48,38 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
     PRESETS_ROOT = _PRESETS_ROOT
     LOG_TAG = "marmoset_bridge"
 
+    # Uses the base's default header menu (Open Templates / Refresh / Clear
+    # Log); only the help differs, so it's declared as data. Headless mode is
+    # not surfaced -- it's derived from the chosen template's mode.
+    HELP_SPEC = {
+        "title": "Marmoset Bridge",
+        "body": "Send selected meshes to Marmoset Toolbag. Maya exports "
+        "the selection as FBX with a <i>MatManifest</i> JSON sidecar; "
+        "Toolbag runs the rendered template with your parameter values "
+        "substituted in.",
+        "steps": [
+            "Set the <b>Output Dir</b> (required).",
+            "Select one or more polygon transforms.",
+            "Pick a <b>Template + Mode</b> from the dropdown.",
+            "Tweak the template's exposed parameters.",
+            "Click <b>Send to Marmoset</b>.",
+        ],
+        "sections": [
+            ("Modes", [
+                "<b>send_to</b> — opens Toolbag for interactive work.",
+                "<b>roundtrip</b> — runs Toolbag headless, then "
+                "re-surfaces generated maps as clickable links in the "
+                "log panel below. Maya scene is left untouched.",
+            ]),
+        ],
+        "notes": [
+            "Add custom templates by dropping new files into the "
+            "templates folder (use <code>__KEY__</code> tokens from "
+            "<i>parameters.py</i> for tunable values), then click "
+            "<b>Refresh Templates</b> in the header menu.",
+        ],
+    }
+
     # ------------------------------------------------------------------
     # Required base-class hooks
     # ------------------------------------------------------------------
@@ -74,73 +104,6 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
             if pref in pairs:
                 return pairs.index(pref)
         return 0
-
-    # ------------------------------------------------------------------
-    # Header menu
-    # ------------------------------------------------------------------
-
-    def header_init(self, widget):
-        """Configure header menu with utilities (no per-call options).
-
-        Headless mode is no longer surfaced -- it's derived from the
-        chosen template's mode (``roundtrip`` always headless,
-        ``send_to`` never).
-        """
-        widget.menu.add("Separator", setTitle="Utilities")
-        widget.menu.add(
-            "QPushButton",
-            setText="Open Templates Folder",
-            setObjectName="btn_open_templates",
-            setToolTip="Reveal the bundled Toolbag template folder in Explorer.",
-        )
-        widget.menu.btn_open_templates.clicked.connect(self.open_templates_folder)
-
-        widget.menu.add(
-            "QPushButton",
-            setText="Refresh Templates",
-            setObjectName="btn_refresh_templates",
-            setToolTip="Re-scan the templates folder and rebuild the template combo.",
-        )
-        widget.menu.btn_refresh_templates.clicked.connect(self.refresh_templates)
-
-        widget.menu.add(
-            "QPushButton",
-            setText="Clear Log",
-            setObjectName="btn_clear_log",
-            setToolTip="Clear the log panel below.",
-        )
-        widget.menu.btn_clear_log.clicked.connect(self.clear_log)
-
-        widget.set_help_text(
-            fmt(
-                title="Marmoset Bridge",
-                body="Send selected meshes to Marmoset Toolbag. Maya exports "
-                "the selection as FBX with a <i>MatManifest</i> JSON sidecar; "
-                "Toolbag runs the rendered template with your parameter values "
-                "substituted in.",
-                steps=[
-                    "Set the <b>Output Dir</b> (required).",
-                    "Select one or more polygon transforms.",
-                    "Pick a <b>Template + Mode</b> from the dropdown.",
-                    "Tweak the template's exposed parameters.",
-                    "Click <b>Send to Marmoset</b>.",
-                ],
-                sections=[
-                    ("Modes", [
-                        "<b>send_to</b> — opens Toolbag for interactive work.",
-                        "<b>roundtrip</b> — runs Toolbag headless, then "
-                        "re-surfaces generated maps as clickable links in the "
-                        "log panel below. Maya scene is left untouched.",
-                    ]),
-                ],
-                notes=[
-                    "Add custom templates by dropping new files into the "
-                    "templates folder (use <code>__KEY__</code> tokens from "
-                    "<i>parameters.py</i> for tunable values), then click "
-                    "<b>Refresh Templates</b> in the header menu.",
-                ],
-            )
-        )
 
     # ------------------------------------------------------------------
     # b000 -- the per-bridge send action

@@ -36,6 +36,7 @@ import tempfile
 from mayatk.mat_utils.mat_manifest import MatManifest
 from mayatk.mat_utils.marmoset_bridge._marmoset_bridge import (
     MarmosetBridge,
+    MarmosetEngine,
     SEND_TO,
     ROUNDTRIP,
     _TEMPLATE_DIR,
@@ -401,7 +402,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             ):
                 open(os.path.join(tmp, name), "wb").close()
 
-            snap = MarmosetBridge._snapshot_outputs(tmp)
+            snap = MarmosetEngine._snapshot_outputs(tmp)
             self.assertEqual(
                 {os.path.basename(p) for p in snap},
                 {"bake_Normal.psd", "bake_AO.psd", "bake_matid.psd"},
@@ -437,7 +438,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             now = time.time()
             os.utime(stale_path, (now, now))
 
-            snap = MarmosetBridge._snapshot_outputs(tmp, since=cutoff)
+            snap = MarmosetEngine._snapshot_outputs(tmp, since=cutoff)
             self.assertEqual(
                 {os.path.basename(p) for p in snap},
                 {"bake_Normal.psd"},
@@ -446,7 +447,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             )
 
             # Sanity: the unfiltered call still returns both.
-            full = MarmosetBridge._snapshot_outputs(tmp)
+            full = MarmosetEngine._snapshot_outputs(tmp)
             self.assertEqual(
                 {os.path.basename(p) for p in full},
                 {"bake_Normal.psd", "irrelevant_unchanged.psd"},

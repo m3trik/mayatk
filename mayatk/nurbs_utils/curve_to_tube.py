@@ -17,7 +17,7 @@ Both output types share one node chain, so toggling *Keep History* never
 changes the topology — it only decides whether the history is kept (the curve
 keeps driving the tube) or collapsed (baked). NURBS extrudes a circle along the
 curve. Polygon places rings by a **Ramer-Douglas-Peucker** simplification of the
-curve (:func:`pythontk.MathUtils.simplify_rdp`): the path is taken *through* the
+curve (:func:`pythontk.Polyline.simplify`): the path is taken *through* the
 kept points and the circle is extruded along it, then ``nurbsToPoly`` converts
 the surface (exactly ``sections`` sides around, one ring per span). Because the
 rings land only at the kept points, they concentrate on the tight bends and thin
@@ -317,7 +317,7 @@ class CurveToTube(ptk.LoggingMixin):
         placed by an **RDP simplification** of the curve.
 
         The curve is densely sampled and run through
-        :func:`pythontk.MathUtils.simplify_rdp`, which keeps points where the
+        :func:`pythontk.Polyline.simplify`, which keeps points where the
         curve bends and drops near-collinear runs. The path is then defined
         *through* those points (so its spans — and the tube's rings — land only
         at the curvature-selected positions, dense on tight bends, sparse on
@@ -344,7 +344,7 @@ class CurveToTube(ptk.LoggingMixin):
         dense = cls._sample_centerline(curve_shape, cls._DENSE_SAMPLES)
         length = cmds.arclen(curve_shape) or 1.0
         tol = length * cls._RDP_TOLERANCE / path_divisions
-        keep = set(ptk.MathUtils.simplify_rdp(dense, tol))
+        keep = set(ptk.Polyline.simplify(dense, tol))
         # Pin the end tangents so the end rings don't tilt/rotate as Path Res
         # changes: RDP keeps a closer first-interior point at finer tolerances,
         # which swings the endpoint tangent (the end ring is perpendicular to

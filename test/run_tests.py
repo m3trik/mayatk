@@ -17,6 +17,8 @@ Usage:
     python run_tests.py --list                   # List available test modules
     python run_tests.py --no-badge               # Skip README badge update
     python run_tests.py --no-wait                # Fire-and-forget (don't poll for results)
+    python run_tests.py --timeout 7200           # Override the results-wait timeout (seconds;
+                                                 #   default scales with module count)
     python run_tests.py --keep-maya              # Keep Maya open after tests (default: close)
     python run_tests.py --reuse                  # Reuse existing Maya (CAUTION: resets scene)
 
@@ -28,6 +30,7 @@ import re
 import sys
 import textwrap
 from pathlib import Path
+from typing import Optional
 
 # Ensure mayatk is in path
 scripts_dir = r"O:\Cloud\Code\_scripts"
@@ -304,6 +307,10 @@ except Exception as e:
             test_modules = [
                 m if m.startswith("test_") else f"test_{m}" for m in modules
             ]
+
+        # Recorded so wait_for_results can scale its default timeout —
+        # a fixed wait can never cover both a 1-module and a 120-module run.
+        self.last_module_count = len(test_modules)
 
         # Resolve each module name to its on-disk path so the in-Maya runner
         # can load tests from extended/ and mock_tests/ subdirs.
@@ -644,7 +651,9 @@ finally:
             print("[ERROR] Failed to send test code")
             return False
 
-    def wait_for_results(self, timeout: int = 600, poll_interval: float = 2.0) -> bool:
+    def wait_for_results(
+        self, timeout: Optional[int] = None, poll_interval: float = 2.0
+    ) -> bool:
         """Poll Maya for test completion, with file-based fallback.
 
         Primary: asks Maya directly via socket whether the
@@ -652,13 +661,18 @@ finally:
         Fallback: watches the results file for the ``SUMMARY`` marker.
 
         Parameters:
-            timeout: Maximum seconds to wait (default 10 minutes).
+            timeout: Maximum seconds to wait. None (default) scales with the
+                last run's module count (30s per module, 600s floor) so a
+                full ``--all`` run isn't cut off by a fixed wait.
             poll_interval: Seconds between checks.
 
         Returns:
             True if results were found before timeout, False otherwise.
         """
         import time as _time
+
+        if timeout is None:
+            timeout = max(600, 30 * getattr(self, "last_module_count", 0))
 
         start = _time.monotonic()
         last_size = 0
@@ -667,6 +681,7 @@ finally:
             and self.connection.is_connected
             and self.connection.mode == "port"
         )
+        socket_failures = 0
 
         print(f"\nWaiting for tests to complete (timeout: {timeout}s) ...")
 
@@ -675,13 +690,29 @@ finally:
 
             # ---- primary: socket-based sentinel check ----
             if use_socket:
+                done = None
                 try:
                     done = self.connection.execute(
                         "getattr(__import__('__main__'), '_mayatk_test_complete', False)",
                         wait_for_response=True,
                         timeout=5,
                     )
-                    if done and str(done).strip().lower() == "true":
+                except Exception:
+                    pass  # fall through to file check
+                if done is None:
+                    # The command port refuses connections while Maya's main
+                    # thread runs the suite; stop hammering it after a few
+                    # tries (each attempt prints a connection error).
+                    socket_failures += 1
+                    if socket_failures >= 5:
+                        use_socket = False
+                        print(
+                            "\n  [INFO] Command port busy/unavailable; "
+                            "polling results file only."
+                        )
+                else:
+                    socket_failures = 0
+                    if str(done).strip().lower() == "true":
                         print(f"\r  Tests completed in {elapsed}s.{' ' * 30}")
                         # Retrieve summary directly from Maya
                         summary = self.connection.execute(
@@ -692,8 +723,6 @@ finally:
                         if summary and summary.strip():
                             print(f"  Maya reports: {summary.strip()}")
                         return True
-                except Exception:
-                    pass  # fall through to file check
 
             # ---- fallback: file-based polling ----
             if self.results_file.exists():
@@ -837,8 +866,8 @@ finally:
         return (0, 0)
 
 
-def main():
-    """Main entry point."""
+def main() -> int:
+    """Main entry point. Returns a process exit code (0 = success)."""
     # Parse command line arguments
     args = sys.argv[1:]
 
@@ -854,7 +883,20 @@ def main():
                 args.pop(p_idx)
         except (ValueError, IndexError):
             print("Invalid port specified")
-            return
+            return 2
+
+    # Optional results-wait timeout override (seconds). Default (None) lets
+    # wait_for_results scale with the module count.
+    wait_timeout = None
+    if "--timeout" in args:
+        try:
+            t_idx = args.index("--timeout")
+            wait_timeout = int(args[t_idx + 1])
+            args.pop(t_idx)
+            args.pop(t_idx)
+        except (ValueError, IndexError):
+            print("Invalid timeout specified")
+            return 2
 
     # --reuse: connect to an existing Maya session (DANGEROUS: will reset the scene)
     reuse_instance = "--reuse" in args
@@ -886,10 +928,10 @@ def main():
 
     if "--list" in args or "-l" in args:
         runner.list_tests()
-        return
+        return 0
     elif "--help" in args or "-h" in args:
         print(__doc__)
-        return
+        return 0
 
     # Everything below may launch Maya — wrap in try/finally for cleanup
     try:
@@ -900,7 +942,7 @@ def main():
         elif "--quick" in args or "-q" in args:
             success = runner.run_quick_test()
             # Quick test is fire-and-forget (no results file to poll)
-            return
+            return 0 if success else 1
         elif "--all" in args or "-a" in args:
             all_modules = runner.discover_tests(
                 include_extended=extended, include_mocks=mocks
@@ -914,30 +956,34 @@ def main():
                 args, dry_run=dry_run, extended=extended, mocks=mocks
             )
 
-        if not success or dry_run:
-            return
+        if not success:
+            return 1
+        if dry_run:
+            return 0
 
         # Wait for results (default) or fire-and-forget (--no-wait)
         if no_wait:
             print(f"\n--no-wait: results will be written to {runner.results_file}")
             print(f'  Get-Content "{runner.results_file}" -Wait')
-            return  # finally block handles Maya cleanup
+            return 0  # finally block handles Maya cleanup
 
-        if runner.wait_for_results():
+        if runner.wait_for_results(timeout=wait_timeout):
             runner.print_results()
 
+            passed, failed = runner.parse_test_results()
             # Update README badge with test results (unless disabled)
-            if not no_badge:
-                passed, failed = runner.parse_test_results()
-                if passed > 0 or failed > 0:
-                    runner.update_readme_badge(passed, failed)
+            if not no_badge and (passed > 0 or failed > 0):
+                runner.update_readme_badge(passed, failed)
+            return 1 if failed > 0 else 0
         else:
             # Timed out — still try to show partial results
             if runner.results_file.exists():
                 print("\n[PARTIAL RESULTS]")
                 runner.print_results()
+            return 1
     except KeyboardInterrupt:
         print("\n[INTERRUPTED] Cleaning up ...")
+        return 130
     finally:
         if not keep_maya and runner.connection and runner.connection.is_connected:
             print("\nClosing Maya instance ...")
@@ -956,4 +1002,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

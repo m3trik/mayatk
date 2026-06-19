@@ -136,6 +136,25 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
             return
 
         tex = str(tex)
+        # Hard guard: an incomplete/corrupt image (a truncated or partially
+        # synced cloud HDR, an interrupted export) loads as a null texture in
+        # Viewport 2.0, which then crashes computing the skydome light's IBL
+        # intensity (AtilImageHandler::GetIBLIntensity → access violation).
+        # Refuse it here so every caller — slots, create_network, external
+        # code — is safe. A merely *missing* file is allowed through: Maya
+        # shows a checker for it and never reaches the IBL crash path.
+        if os.path.isfile(tex):
+            ok, reason = ptk.ImgUtils.validate_image_integrity(tex)
+            if not ok:
+                self.logger.warning(
+                    "HDR rejected (%s); refusing to wire it into the skydome — "
+                    "Viewport 2.0 would crash loading the incomplete image for "
+                    "IBL: %s",
+                    reason,
+                    tex,
+                )
+                return
+
         node = self.hdr_env or self._create_skydome()
         file_node = self._connected_file_node(node)
         if file_node is None:
@@ -205,16 +224,23 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
     @rotation.setter
     def rotation(self, degrees: float) -> None:
         transform = self.hdr_env_transform
-        if not transform:
+        # Guard a stale / partly-deleted network: a transform name that no
+        # longer exists makes cmds.rotate treat the angle as the object
+        # ("Object 140.0 is invalid"). No-op cleanly rather than throwing up
+        # into the UI slot — a slider drag must never error.
+        if not transform or not cmds.objExists(transform):
             return
-        cmds.rotate(
-            transform,
-            float(degrees),
-            rotateY=True,
-            forceOrderXYZ=True,
-            objectSpace=True,
-            absolute=True,
-        )
+        try:
+            cmds.rotate(
+                transform,
+                float(degrees),
+                rotateY=True,
+                forceOrderXYZ=True,
+                objectSpace=True,
+                absolute=True,
+            )
+        except Exception as e:  # a slider drag must never crash Maya
+            self.logger.debug("rotation set skipped (%s): %s", transform, e)
 
     @property
     def intensity(self) -> float:
@@ -423,6 +449,13 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     # File-dialog filter for the browse button.
     HDR_FILTER: str = "HDR Images (*.exr *.hdr);;All Files (*.*)"
 
+    # Sentinel userData for the dropdown's explicit "None" entry — selecting it
+    # removes the scene's HDR environment. Distinct from "nothing picked yet"
+    # (the placeholder / an unset combo, which carry no userData / None) so the
+    # slot can tell an intentional clear from an empty selection.
+    NONE_TOKEN: str = "<none>"
+    NONE_LABEL: str = "None"
+
     # Add-HDR mode picker — index → (label, token). Index is the source of
     # truth so reordering the labels can't silently rename the dispatch token.
     _ADD_MODES: tuple = (
@@ -430,6 +463,10 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         ("Move to sourceimages", "move"),
         ("Link to original location", "link"),
     )
+
+    # Filesystem op per import mode (single source for both the single-file
+    # and folder-batch import paths).
+    _IO_OPS = {"copy": shutil.copy2, "move": shutil.move}
 
     def __init__(self, switchboard, log_level: str = "WARNING"):
         super().__init__()
@@ -471,6 +508,64 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             self.ui.footer.setText("Arnold (mtoa) not loaded — loads on first use.")
 
     # ------------------------------------------------------------------
+    # Feedback
+    # ------------------------------------------------------------------
+
+    def _notify(
+        self,
+        message: str,
+        *,
+        level: str = "info",
+        detail: Optional[str] = None,
+        dialog: bool = False,
+        dialog_text: Optional[str] = None,
+    ) -> None:
+        """Surface feedback consistently across the panel.
+
+        Routes a single call to three places so the user sees the right
+        amount of detail in the right place:
+
+          * the **footer** — short, colour-coded by *level*
+            (``info``/``success``/``warning``/``error``);
+          * the **console** (Maya Script Editor) — the full *detail* at the
+            matching log level, so errors carry the path/reason, not just the
+            elided one-liner;
+          * a modal **MessageBox** — only when *dialog* is True, for failures
+            that need the user to act before retrying. The dialog stays
+            *digestible*: it shows *dialog_text* (or the short *message*),
+            never the full *detail* — long raw paths belong in the console,
+            not in a popup.
+
+        Parameters:
+            message: Short footer text.
+            level: Severity — drives footer colour, log level, and dialog prefix.
+            detail: Full text for the console only; defaults to *message*.
+            dialog: Also raise a blocking MessageBox (auto-coloured prefix).
+            dialog_text: Digestible body for the dialog; defaults to *message*.
+        """
+        self.ui.footer.setText(message, level=level)
+
+        full = detail or message
+        logger = self.logger
+        {
+            "error": logger.error,
+            "warning": logger.warning,
+        }.get(level, logger.info)(full)
+
+        if dialog:
+            prefix = {
+                "error": "Error:",
+                "warning": "Warning:",
+                "success": "Result:",
+            }.get(level, "Note:")
+            # Keep the popup digestible — the short message / explicit
+            # dialog_text, not the full console detail (which can carry a long
+            # raw path). MessageBox.setText auto-colours these level prefixes
+            # (see uitk _html_style.PREFIX_STYLES). "Ok" makes the box modal.
+            body = dialog_text or message
+            self.sb.message_box(f"{prefix} {body}", "Ok")
+
+    # ------------------------------------------------------------------
     # Header
     # ------------------------------------------------------------------
 
@@ -498,15 +593,16 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                 body="Manage the scene's Arnold HDR environment lighting "
                 "(aiSkyDomeLight + file + place2dTexture network).",
                 steps=[
-                    "Pick an HDR / EXR from the dropdown (lists files in "
-                    "<i>sourceimages</i>).",
-                    "Use the folder button on the dropdown to add a new HDR; "
-                    "the option-box menu (▸) beside it picks the import mode.",
+                    "Pick an HDR / EXR from the dropdown to light the scene "
+                    "(lists files in <i>sourceimages</i>); pick <b>None</b> to "
+                    "remove the HDR environment.",
+                    "Open the dropdown's option menu (▸) → <b>Add HDR(s)…</b> to "
+                    "add images — one dialog picks loose files and/or a whole "
+                    "folder; the import mode is set just below it.",
                     "Adjust <b>Intensity</b> (linear), <b>Exposure</b> (stops), "
                     "and <b>Resolution</b> (HDR importance-sampling res).",
                     "Drag the rotation slider to spin the environment around Y.",
                     "Toggle <b>Visible</b> to show the HDR as a viewport backdrop.",
-                    "Press <b>Set HDR</b> to create or refresh the skydome network.",
                 ],
                 sections=[
                     ("Advanced Options (collapsible)", [
@@ -516,11 +612,17 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                         "diffuse vs specular contribution independently "
                         "(<i>aiDiffuse</i> / <i>aiSpecular</i>).",
                     ]),
-                    ("Add HDR modes (option-box menu ▸)", [
-                        "<b>Copy</b> — duplicate the file into sourceimages "
-                        "(default; keeps scenes portable).",
-                        "<b>Move</b> — relocate into sourceimages.",
-                        "<b>Link</b> — wire the file in at its original path.",
+                    ("Add HDR(s)… (option-box menu ▸)", [
+                        "One dialog picks <b>loose files and/or a whole folder</b>; "
+                        "folders are expanded to their .hdr/.exr contents. "
+                        "Incomplete/corrupt files are skipped.",
+                        "Files already inside <i>sourceimages</i> (any subfolder) "
+                        "are used in place — never duplicated; the dropdown lists "
+                        "them automatically.",
+                        "<b>Copy</b> — duplicate an <i>external</i> file into "
+                        "sourceimages (default; keeps scenes portable).",
+                        "<b>Move</b> — relocate an external file into sourceimages.",
+                        "<b>Link</b> — wire each in at its original path.",
                     ]),
                     ("Dropdown right-click", [
                         "Select skydome / file / transform nodes.",
@@ -574,33 +676,33 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             setToolTip="Open the HDR file's containing folder in Explorer.",
         )
 
-        # Option-box icon buttons on the combobox (replace the old standalone
-        # "…" button): a folder/browse button that launches the Add-HDR file
-        # dialog, and an option-box menu button that picks the import mode.
-        widget.option_box.browse(
-            file_types=self.HDR_FILTER,
-            title="Add HDR / EXR",
-            start_dir=lambda: EnvUtils.get_env_info("sourceimages") or "",
-            icon="folder",
-            tooltip=(
-                "Add an HDR/EXR — runs the mode picked in the option menu (▸):\n"
-                "  • Copy — duplicate it into sourceimages (default, scenes stay portable).\n"
-                "  • Move — relocate it into sourceimages (original is removed).\n"
-                "  • Link — leave it in place and wire the original path directly\n"
-                "    (the file won't appear in the dropdown afterward)."
+        # Option-box menu (▸) on the combobox — the panel's sole add affordance.
+        # The "Add HDR(s)…" button sits ABOVE the import-mode combo: one dialog
+        # picks loose files and/or a whole folder, imported per the mode below.
+        # (Non-slot objectName + explicit connect avoids a double-fire if the
+        # menu auto-wires buttons to slots by objectName.)
+        widget.option_box.menu.setTitle("Add HDR")
+        add_btn = widget.option_box.menu.add(
+            "QPushButton",
+            setText="Add HDR(s)…",
+            setObjectName="add_hdr_btn",
+            setToolTip=(
+                "Add HDR/EXR images — opens one dialog where you can pick loose "
+                "files and/or a whole folder.\nEach is imported using the mode "
+                "below. Incomplete/corrupt files are skipped."
             ),
-            callback=self._add_hdr,
         )
-        widget.option_box.menu.setTitle("Add HDR Mode")
+        add_btn.clicked.connect(self.add_hdr)
+        widget.option_box.menu.add("Separator")
         widget.option_box.menu.add(
             "QComboBox",
             setObjectName="cmb_add_mode",
             setToolTip=(
-                "Choose what the folder (browse) button does with the picked file:\n"
-                "  • Copy — duplicate it into sourceimages (default, scenes stay portable).\n"
-                "  • Move — relocate it into sourceimages (original is removed).\n"
-                "  • Link — leave it in place and wire the original path directly\n"
-                "    (the file won't appear in the dropdown afterward)."
+                "What 'Add HDR(s)…' does with the picked file(s):\n"
+                "  • Copy — duplicate into sourceimages (default, scenes stay portable).\n"
+                "  • Move — relocate into sourceimages (originals are removed).\n"
+                "  • Link — leave in place and wire the original path directly\n"
+                "    (won't appear in the dropdown afterward)."
             ),
             addItems=[label for label, _token in self._ADD_MODES],
         )
@@ -630,12 +732,22 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             if not src or not os.path.isdir(src):
                 self.ui.cmb000.clear()
                 self.ui.cmb000.addItem("<HDR Map>")
-                self.ui.footer.setText("No sourceimages directory in workspace.")
+                self._prepend_none_item()
+                # High-frequency path (fires on every dropdown open); colour the
+                # footer but skip _notify so we don't spam the console log.
+                self.ui.footer.setText(
+                    "No sourceimages directory in workspace.", level="warning"
+                )
                 return
 
+            # Recursive so HDRs kept in a sourceimages *subfolder* (e.g.
+            # ``sourceimages/hdr/``) list in the dropdown — they're already in
+            # the project, so the add flow leaves them in place rather than
+            # duplicating them into the root.
             hdr_info = ptk.get_dir_contents(
                 src,
                 ["filename", "filepath"],
+                recursive=True,
                 inc_files=["*.exr", "*.hdr"],
                 group_by_type=True,
             )
@@ -645,6 +757,9 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                 ascending=False,
                 clear=True,
             )
+            # Explicit "None" entry at the top so the user can clear the HDR
+            # environment from the same dropdown that sets it.
+            self._prepend_none_item()
 
             # Restore prior selection by data, not index.
             if previous_data:
@@ -658,6 +773,42 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             )
         finally:
             self.ui.cmb000.blockSignals(False)
+
+    def _prepend_none_item(self) -> None:
+        """Insert the explicit 'None' entry at the top of the HDR dropdown.
+
+        Selecting it removes the scene's HDR environment (see :meth:`cmb000` /
+        :meth:`_apply_selection`). Carries :attr:`NONE_TOKEN` as userData so it's
+        distinguishable from a real HDR path and from the unset placeholder.
+        Callers run with the combo's signals blocked, so the implicit
+        index shift from inserting at row 0 fires no slot.
+        """
+        self.ui.cmb000.insertItem(0, self.NONE_LABEL, self.NONE_TOKEN)
+
+    def _select_combo_path(self, path: str) -> bool:
+        """Select the dropdown entry whose file matches *path*.
+
+        The combo stores the raw ``get_dir_contents`` filepaths, which can mix
+        slash styles — ``os.path.join`` on Maya's forward-slash workspace path
+        yields e.g. ``C:/proj/sourceimages\\x.hdr`` — while callers pass an
+        ``os.path.normpath`` result (all backslashes). A plain ``findData`` then
+        misses, leaving the just-added map unselected in the dropdown. Compare
+        path-normalized + case-folded so those still match. Returns True on a
+        hit (and selects it, signals blocked); False if no entry matches (e.g.
+        a Link-mode file that lives outside sourceimages).
+        """
+        target = os.path.normcase(os.path.normpath(str(path)))
+        combo = self.ui.cmb000
+        for i in range(combo.count()):
+            data = combo.itemData(i)
+            if data and os.path.normcase(os.path.normpath(str(data))) == target:
+                combo.blockSignals(True)
+                try:
+                    combo.setCurrentIndex(i)
+                finally:
+                    combo.blockSignals(False)
+                return True
+        return False
 
     def _sync_ui_to_scene(self) -> None:
         """Pull live scene state into the UI widgets.
@@ -710,13 +861,46 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     # ------------------------------------------------------------------
 
     def cmb000(self, index, widget) -> None:
-        """HDR map selection — apply immediately."""
+        """HDR map selection — the panel's sole apply action.
+
+        Picking a map applies it: if a skydome network is already live, its
+        file texture is swapped in place (a cheap ``setAttr``); if none exists
+        yet, the network is built — but **deferred** to the next event-loop
+        tick (:meth:`_apply_selection` via ``singleShot``). The build must not
+        run synchronously from here: ``loadPlugin("mtoa")`` boots the whole
+        renderer and creating render nodes mutates the scene, and doing either
+        inside a combobox ``currentIndexChanged`` callback (mid popup-teardown,
+        with event-loop re-entrancy) crashes Maya. The deferral runs it after
+        the popup has fully torn down (same pattern as :meth:`__init__`).
+        """
         path = widget.currentData()
+        if path == self.NONE_TOKEN:
+            # Explicit "None" — symmetric with the in-place texture swap below:
+            # if a skydome is live, remove the HDR environment now.
+            self._clear_environment("HDR set to None.")
+            return
         if not path:
             return
-        self.manager.hdr_env = path
-        self._sync_ui_to_scene()
-        self.ui.footer.setText(f"HDR: {os.path.basename(path)}")
+        name = os.path.basename(path)
+        # ``hdr_env`` getter short-circuits to None unless mtoa is already
+        # loaded, so this never triggers a plugin load. A truthy result means
+        # a live skydome exists → swap its texture (no creation, no load) and
+        # pull any drifted live values back into the widgets — but only after
+        # confirming the image is complete (a truncated HDR crashes VP2.0).
+        if self.manager.hdr_env:
+            # Live network — swap the texture in place. Surface a bad file in
+            # the footer/console but don't interrupt with a modal.
+            if not self._validate_or_warn(path, dialog=False):
+                return
+            self.manager.hdr_env = path
+            self._sync_ui_to_scene()
+            self.ui.footer.setText(f"HDR: {name}", level="success")
+        else:
+            # No network yet — build it, but DEFER off this combo signal (see
+            # the docstring: a synchronous mtoa load + node creation here
+            # crashes Maya). The next-tick apply runs after popup teardown.
+            self.ui.footer.setText(f"Applying {name}…", level="info")
+            self.sb.QtCore.QTimer.singleShot(0, self._apply_selection)
 
     def chk000(self, state, widget) -> None:
         """Toggle skydome primary-ray visibility."""
@@ -744,14 +928,90 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     def spn_specular(self, value) -> None:
         self.manager.specular = value
 
-    def b000(self) -> None:
-        """Create / refresh the skydome network from current UI state."""
-        if not self.manager.arnold_available():
-            self.ui.footer.setText("Arnold (mtoa) plugin not loaded.")
-            return
+    def _validate_or_warn(self, path: str, *, dialog: bool = True) -> bool:
+        """True if *path* is safe to wire into the skydome.
+
+        A missing file is allowed through (Maya shows a checker, no crash); an
+        existing but incomplete/corrupt image — e.g. a truncated or partially
+        synced cloud HDR — is refused, because wiring it crashes Viewport 2.0
+        when it loads the image to compute the light's IBL intensity (null
+        AtilImage → access violation). On refusal the failure is surfaced via
+        :meth:`_notify` (colour-coded footer + full console detail, and a
+        modal dialog when *dialog* is True).
+        """
+        if not os.path.isfile(path):
+            return True
+        ok, reason = ptk.ImgUtils.validate_image_integrity(path)
+        if ok:
+            return True
+        name = os.path.basename(path)
+        self._notify(
+            f"{name} isn't fully downloaded ({reason})",
+            level="error",
+            detail=(
+                f"HDR not loaded — only part of the file is on disk ({reason}):\n"
+                f"{path}\n\n"
+                "This is almost always an online-only cloud file (Dropbox / "
+                "OneDrive) that hasn't finished syncing — Maya's viewport would "
+                "crash trying to load it. In Explorer, right-click it → 'Make "
+                "available offline' / 'Always keep on this device', wait for the "
+                "download to finish, then retry. If the file is already fully "
+                "local, it's truncated/corrupt — re-export or re-download it."
+            ),
+            dialog=dialog,
+            # Digestible popup — filename + the fix, no raw path (that's logged
+            # to the console for anyone who needs it).
+            dialog_text=(
+                f"{name} isn't fully downloaded ({reason}).\n\n"
+                "It's almost certainly an online-only cloud file (Dropbox / "
+                "OneDrive) that hasn't finished syncing. In Explorer, "
+                "right-click it → 'Make available offline', wait for it to "
+                "download, then retry.\n\n(Full path in the Script Editor.)"
+            ),
+        )
+        return False
+
+    def _clear_environment(self, absent_msg: str, *, absent_level: str = "info") -> bool:
+        """Remove the skydome network, resync the UI, and report.
+
+        Single owner of the clear path — shared by the dropdown's "None"
+        selection (:meth:`cmb000`), the deferred apply (:meth:`_apply_selection`),
+        and the header's Clear Network action (:meth:`clear_network`). Returns True when
+        a network was cleared; when none is present, reports *absent_msg* at
+        *absent_level* and returns False. The ``hdr_env`` getter is None unless
+        mtoa is already loaded, so this never forces a plugin load (and
+        :meth:`HdrManager.clear` only touches existing nodes) — no
+        ``arnold_available`` gate needed.
+        """
+        if not self.manager.hdr_env:
+            self._notify(absent_msg, level=absent_level)
+            return False
+        self.manager.clear()
+        self._sync_ui_to_scene()
+        self._notify("HDR environment cleared.", level="success")
+        return True
+
+    def _apply_selection(self) -> None:
+        """Build / refresh the skydome network from current UI state.
+
+        Cold-start apply, invoked **deferred** from :meth:`cmb000` when an HDR
+        is picked with no live network yet (the next-tick deferral keeps the
+        mtoa load + render-node creation off the combobox signal — see
+        :meth:`cmb000`). Re-reads the dropdown so it always applies the current
+        selection.
+        """
         path = self.hdr_map
+        if path == self.NONE_TOKEN:
+            # Explicit "None" — clear the environment instead of applying one.
+            self._clear_environment("HDR is set to None — no environment to clear.")
+            return
+        if not self.manager.arnold_available():
+            self._notify("Arnold (mtoa) plugin not loaded.", level="warning")
+            return
         if not path:
-            self.ui.footer.setText("Pick or browse for an HDR first.")
+            self._notify("Pick or browse for an HDR first.", level="warning")
+            return
+        if not self._validate_or_warn(path):
             return
         self.manager.create_network(
             hdrMap=path,
@@ -764,59 +1024,191 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             diffuse=self.ui.spn_diffuse.value(),
             specular=self.ui.spn_specular.value(),
         )
-        self.ui.footer.setText(f"Applied: {os.path.basename(path)}")
+        self._notify(f"Applied: {os.path.basename(path)}", level="success")
 
-    def _add_hdr(self, result) -> None:
-        """Browse-plugin callback — import the picked HDR per the option mode.
+    def add_hdr(self) -> None:
+        """Add HDR(s) from one dialog — pick loose files and/or a whole folder.
 
-        Wired as the ``cmb000`` option-box ``browse`` callback; *result* is
-        the path the file dialog returned. Three modes (set via the option-box
-        menu button next to the dropdown):
-          - **Copy** — duplicate into sourceimages, wire it up.
-          - **Move** — relocate into sourceimages, wire it up.
-          - **Link** — wire the original path directly; file stays put
-            and won't appear in the combobox dropdown (combo lists
-            sourceimages only).
-
-        Copy / Move require a workspace sourceimages directory. Link
-        works anywhere.
+        Option-box menu action (the panel's sole add affordance). Selected
+        directories are expanded to their ``.hdr`` / ``.exr`` contents; loose
+        files are taken as-is. Everything is imported per the current mode.
+        Picking a *single* loose file gets the careful UX (modal on a bad file,
+        overwrite prompt); a folder or several files is a bulk add (skip+count).
         """
-        path = result if isinstance(result, str) else (result[0] if result else None)
-        if not path:
+        start = EnvUtils.get_env_info("sourceimages") or ""
+        selected = self._pick_hdr_paths(start)
+        if not selected:
+            return
+
+        dirs = [p for p in selected if os.path.isdir(p)]
+        files = [p for p in selected if os.path.isfile(p)]
+        paths = list(files)
+        for d in dirs:
+            paths.extend(
+                ptk.get_dir_contents(d, "filepath", inc_files=["*.exr", "*.hdr"]) or []
+            )
+
+        # One explicit loose file → careful; a folder or multiple → bulk.
+        careful = len(files) == 1 and not dirs
+        if dirs and not files:
+            where = os.path.basename(dirs[0].rstrip("/\\")) or dirs[0]
+        else:
+            where = "selection"
+        self._add_hdrs(paths, where=where, careful=careful)
+
+    def _pick_hdr_paths(self, start: str) -> list:
+        """Open one dialog that selects HDR/EXR files *and/or* folders.
+
+        Qt has no native "files or directories" mode, so this drives a
+        non-native ``QFileDialog`` with the internal item views switched to
+        extended (multi) selection — letting the user pick loose files, a
+        folder, or a mix, all returned by ``selectedFiles()``. Returns ``[]``
+        on cancel.
+        """
+        QtW = self.sb.QtWidgets
+        dialog = QtW.QFileDialog(
+            self.ui, "Add HDR(s) — pick files and/or a folder", start
+        )
+        dialog.setFileMode(QtW.QFileDialog.ExistingFiles)
+        dialog.setOption(QtW.QFileDialog.DontUseNativeDialog, True)
+        dialog.setNameFilters(self.HDR_FILTER.split(";;"))
+        # ``findChildren`` with a tuple of types isn't portable across bindings;
+        # collect the list + tree views separately.
+        views = dialog.findChildren(QtW.QListView) + dialog.findChildren(
+            QtW.QTreeView
+        )
+        for view in views:
+            view.setSelectionMode(QtW.QAbstractItemView.ExtendedSelection)
+        if dialog.exec_():
+            return dialog.selectedFiles() or []
+        return []
+
+    def _add_hdrs(self, paths: list, *, where: str, careful: bool) -> None:
+        """Import HDR/EXR *paths* (loose files and/or folder contents) per mode.
+
+        Single importer behind every add flow. *careful* selects the UX:
+
+          * ``True`` — an explicit single-file pick: a bad file raises the
+            actionable modal, and a real same-named collision in sourceimages
+            prompts before overwrite.
+          * ``False`` — a bulk add (a folder or several files): incomplete /
+            corrupt files are skipped into a count (no per-file dialog), and an
+            existing same-named file is reused rather than clobbered.
+
+        Copy / Move bring each file into the ``sourceimages`` root (so it lists
+        in the dropdown); Link wires it in place. Wires the last good HDR into
+        the skydome and reports a summary. *where* is a short label for it.
+        """
+        if not paths:
+            self._notify(f"No HDR/EXR files in {where}.", level="warning")
             return
 
         mode = self._add_mode()
-        if mode == "link":
-            self.manager.hdr_env = path
-            self._sync_ui_to_scene()
-            self.ui.footer.setText(f"Linked: {path}")
-            return
-
-        # Copy / Move both require sourceimages.
-        src = EnvUtils.get_env_info("sourceimages")
-        if not src or not os.path.isdir(src):
-            self.ui.footer.setText(
-                "No sourceimages directory — set a Maya project first."
+        # Only Copy/Move need a destination; Link wires files in place.
+        src = EnvUtils.get_env_info("sourceimages") if mode != "link" else None
+        if mode != "link" and (not src or not os.path.isdir(src)):
+            self._notify(
+                "No sourceimages directory — set a Maya project first.",
+                level="error",
+                dialog=True,
             )
             return
 
-        imported = self._import_into_sourceimages(path, src, mode=mode)
-        if imported is None:
-            return  # cancelled or failed (footer already set)
-        final_path, did_io = imported
+        added, skipped, last, did_io = 0, 0, None, False
+        for path in paths:
+            if careful:
+                # Explicit pick — surface a bad file with the modal guidance.
+                if not self._validate_or_warn(path):
+                    return
+            elif not ptk.ImgUtils.validate_image_integrity(path)[0]:
+                skipped += 1
+                continue
+
+            if mode == "link":
+                last, added = path, added + 1
+                continue
+
+            # A file already inside sourceimages (root OR any subfolder) is used
+            # in place — never duplicated into the root. The recursive dropdown
+            # lists it regardless of depth, so Copy/Move on an already-project
+            # file is a no-op rather than a duplicate.
+            if self._is_under_dir(path, src):
+                last, added = os.path.normpath(path), added + 1
+                continue
+
+            final = os.path.normpath(os.path.join(src, os.path.basename(path)))
+            if os.path.exists(final):
+                if careful:
+                    if not self._confirm_overwrite(final):
+                        self._notify(f"{mode.capitalize()} cancelled.", level="info")
+                        return
+                    # confirmed → fall through and overwrite
+                elif ptk.ImgUtils.validate_image_integrity(final)[0]:
+                    last, added = final, added + 1  # reuse a usable existing file
+                    continue
+                else:
+                    skipped += 1  # existing is corrupt; never clobber in bulk
+                    continue
+            try:
+                self._IO_OPS[mode](path, final)
+            except OSError as e:
+                self.logger.error("Add — %s of %s failed: %s", mode, path, e)
+                if careful:
+                    self._notify(
+                        f"{mode.capitalize()} failed: {e}",
+                        level="error",
+                        detail=f"{mode} of {path} → {final} failed: {e}",
+                        dialog=True,
+                    )
+                    return
+                skipped += 1
+                continue
+            last, added, did_io = final, added + 1, True
 
         self._refresh_combo()
-        idx = self.ui.cmb000.findData(final_path)
-        if idx >= 0:
-            self.ui.cmb000.setCurrentIndex(idx)
-        self.manager.hdr_env = final_path
-        self._sync_ui_to_scene()
-        name = os.path.basename(final_path)
-        if did_io:
-            verb = {"copy": "Copied", "move": "Moved"}[mode]
-            self.ui.footer.setText(f"{verb} & set: {name}")
+        if last:
+            # Normalized match — combo data may be mixed-slash (os.path.join on
+            # Maya's forward-slash workspace path) vs. last's normpath.
+            self._select_combo_path(last)
+            self.manager.hdr_env = last
+            self._sync_ui_to_scene()
+
+        self._notify_add_result(
+            added, skipped, last, where=where, careful=careful, mode=mode, did_io=did_io
+        )
+
+    def _add_hdrs_from_folder(self, directory: str) -> None:
+        """Bulk-add every ``.hdr`` / ``.exr`` in *directory* (per current mode)."""
+        paths = (
+            ptk.get_dir_contents(directory, "filepath", inc_files=["*.exr", "*.hdr"])
+            or []
+        )
+        where = os.path.basename(directory.rstrip("/\\")) or directory
+        self._add_hdrs(paths, where=where, careful=False)
+
+    def _notify_add_result(
+        self, added, skipped, last, *, where, careful, mode, did_io
+    ) -> None:
+        """Footer summary for an add — single rich line vs. bulk count."""
+        if careful and added:
+            name = os.path.basename(last)
+            if mode == "link":
+                verb = "Linked"
+            elif did_io:
+                verb = {"copy": "Copied & set", "move": "Moved & set"}[mode]
+            else:
+                verb = "Set"  # reused an existing sourceimages copy
+            self._notify(f"{verb}: {name}", level="success")
+        elif added:
+            msg = f"Added {added} HDR{'s' if added != 1 else ''} from {where}"
+            if skipped:
+                msg += f" ({skipped} skipped — incomplete/corrupt)"
+            self._notify(msg, level="success")
         else:
-            self.ui.footer.setText(f"Set: {name}")
+            self._notify(
+                f"No usable HDRs in {where} ({skipped} incomplete/corrupt).",
+                level="warning",
+            )
 
     # ------------------------------------------------------------------
     # Header-menu actions
@@ -826,18 +1218,13 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         """Open the workspace's sourceimages folder in Explorer."""
         src = EnvUtils.get_env_info("sourceimages")
         if not src or not os.path.isdir(src):
-            self.ui.footer.setText("No sourceimages directory in workspace.")
+            self._notify("No sourceimages directory in workspace.", level="warning")
             return
         os.startfile(src)
 
     def clear_network(self) -> None:
         """Delete the skydome network and reset the UI to defaults."""
-        if not self.manager.hdr_env:
-            self.ui.footer.setText("No HDR network in scene.")
-            return
-        self.manager.clear()
-        self._sync_ui_to_scene()
-        self.ui.footer.setText("HDR network cleared.")
+        self._clear_environment("No HDR network in scene.")
 
     # ------------------------------------------------------------------
     # Context-menu actions (right-click on cmb000)
@@ -846,26 +1233,26 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     def ctx_select_skydome(self) -> None:
         node = self.manager.hdr_env
         if not node:
-            self.ui.footer.setText("No skydome in scene.")
+            self._notify("No skydome in scene.", level="warning")
             return
         cmds.select(node, replace=True)
-        self.ui.footer.setText(f"Selected: {node}")
+        self._notify(f"Selected: {node}", level="success")
 
     def ctx_select_transform(self) -> None:
         node = self.manager.hdr_env_transform
         if not node:
-            self.ui.footer.setText("No skydome transform in scene.")
+            self._notify("No skydome transform in scene.", level="warning")
             return
         cmds.select(node, replace=True)
-        self.ui.footer.setText(f"Selected: {node}")
+        self._notify(f"Selected: {node}", level="success")
 
     def ctx_select_file_node(self) -> None:
         node = self.manager.hdr_file_node
         if not node:
-            self.ui.footer.setText("No file node connected to the skydome.")
+            self._notify("No file node connected to the skydome.", level="warning")
             return
         cmds.select(node, replace=True)
-        self.ui.footer.setText(f"Selected: {node}")
+        self._notify(f"Selected: {node}", level="success")
 
     def ctx_reveal_in_explorer(self) -> None:
         path = self.manager.hdr_file_path
@@ -878,11 +1265,20 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         if src and os.path.isdir(src):
             os.startfile(src)
         else:
-            self.ui.footer.setText("HDR file not found and no sourceimages folder.")
+            self._notify(
+                "HDR file not found and no sourceimages folder.", level="warning"
+            )
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_under_dir(path: str, directory: str) -> bool:
+        """True if *path* lies inside *directory* (root or any depth)."""
+        p = os.path.normcase(os.path.normpath(str(path)))
+        d = os.path.normcase(os.path.normpath(str(directory)))
+        return p == d or p.startswith(d + os.sep)
 
     def _add_mode(self) -> str:
         """Return the active Add-HDR mode token: ``copy`` / ``move`` / ``link``.
@@ -897,36 +1293,6 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         if 0 <= idx < len(self._ADD_MODES):
             return self._ADD_MODES[idx][1]
         return "copy"
-
-    def _import_into_sourceimages(
-        self, path: str, src: str, mode: str
-    ) -> Optional[tuple]:
-        """Copy or move *path* into sourceimages.
-
-        Returns ``(final_path, did_io)`` — ``did_io`` is ``True`` when an
-        actual copy/move ran, ``False`` when *path* was already inside
-        *src* and we short-circuited. Returns ``None`` if the user
-        cancelled the overwrite prompt or the I/O failed (footer already
-        set in that case).
-        """
-        src_norm = os.path.normpath(src).lower()
-        path_norm = os.path.normpath(path).lower()
-        if path_norm.startswith(src_norm + os.sep):
-            return os.path.normpath(path), False
-
-        final_path = os.path.normpath(os.path.join(src, os.path.basename(path)))
-        if os.path.exists(final_path):
-            if not self._confirm_overwrite(final_path):
-                self.ui.footer.setText(f"{mode.capitalize()} cancelled.")
-                return None
-        op = {"copy": shutil.copy2, "move": shutil.move}[mode]
-        try:
-            op(path, final_path)
-        except OSError as e:
-            self.logger.error("%s failed: %s", mode, e)
-            self.ui.footer.setText(f"{mode.capitalize()} failed: {e}")
-            return None
-        return final_path, True
 
     def _confirm_overwrite(self, target_path: str) -> bool:
         """Ask the user before overwriting an existing file in sourceimages."""

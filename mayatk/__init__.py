@@ -106,6 +106,10 @@ DEFAULT_INCLUDE = {
         "ObjectSwapper",
     ],
     "env_utils.fbx_utils": "FbxUtils",
+    # Blender bridge engine — one-way send of the selection to a fresh Blender (the
+    # ``BlenderBridgeSlots`` panel class is discovered by MayaUiHandler, not registered).
+    # Counterpart of blendertk's ``MayaBridge``.
+    "env_utils.blender_bridge._blender_bridge": "BlenderBridge",
     # Material utils
     "mat_utils.game_shader": "GameShader",
     "mat_utils.arnold_bridge": "ArnoldBridge",

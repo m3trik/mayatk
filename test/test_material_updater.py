@@ -315,6 +315,52 @@ class TestMatUpdater(MayaTkTestCase):
             kwargs.get("rename"), "rename=False should be passed to factory"
         )
 
+    @patch("mayatk.mat_utils.mat_updater.EnvUtils.get_env_info")
+    @patch("pythontk.MapFactory.prepare_maps")
+    def test_discover_sourceimages_resolves_to_discover_dir(
+        self, mock_prepare, mock_env
+    ):
+        """The mayatk flag resolves sourceimages and forwards discover_dir."""
+        mock_prepare.return_value = [self.temp_tex]
+        fake_sourceimages = os.path.dirname(self.temp_tex)
+        mock_env.return_value = fake_sourceimages
+
+        self.updater.update_materials(
+            materials=[self.mat],
+            config={"discover_sourceimages": True},
+            verbose=False,
+        )
+
+        discover_dirs = [
+            c.kwargs.get("discover_dir") for c in mock_prepare.call_args_list
+        ]
+        self.assertTrue(
+            any(
+                d
+                and os.path.normcase(d) == os.path.normcase(fake_sourceimages)
+                for d in discover_dirs
+            ),
+            f"discover_dir not forwarded to factory; saw: {discover_dirs}",
+        )
+        # The mayatk-level flag must not leak through as a factory kwarg.
+        for c in mock_prepare.call_args_list:
+            self.assertNotIn("discover_sourceimages", c.kwargs)
+
+    @patch("mayatk.mat_utils.mat_updater.EnvUtils.get_env_info")
+    @patch("pythontk.MapFactory.prepare_maps")
+    def test_discover_disabled_no_discover_dir(self, mock_prepare, mock_env):
+        """With discovery off, discover_dir is never passed to the factory."""
+        mock_prepare.return_value = [self.temp_tex]
+
+        self.updater.update_materials(
+            materials=[self.mat],
+            config={"discover_sourceimages": False},
+            verbose=False,
+        )
+
+        for c in mock_prepare.call_args_list:
+            self.assertIsNone(c.kwargs.get("discover_dir"))
+
 
 class TestMaterialUpdaterStingray(MayaTkTestCase):
     """Tests for MaterialUpdater with StingrayPBS shader."""

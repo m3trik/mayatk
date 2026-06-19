@@ -4,7 +4,6 @@
 Test Suite for Grouping and Combining operations in EditUtils.
 """
 import unittest
-import mayatk as mtk
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 
@@ -22,15 +21,14 @@ class TestGroupCombine(MayaTkTestCase):
         self.cube2 = cmds.polyCube(n="cube2")[0]
         self.cube3 = cmds.polyCube(n="cube3")[0]
 
-        # Assign materials
+        # Assign materials. Use MatUtils.assign_mat (shading-group connection) rather than
+        # cmds.hyperShade(assign=) — hyperShade is a GUI command that silently no-ops under
+        # mayapy standalone, so the material grouping would otherwise see one material headless.
         self.mat1 = cmds.shadingNode("lambert", asShader=True, n="mat1")
         self.mat2 = cmds.shadingNode("lambert", asShader=True, n="mat2")
 
-        cmds.select(self.cube1, self.cube2)
-        cmds.hyperShade(assign=self.mat1)
-
-        cmds.select(self.cube3)
-        cmds.hyperShade(assign=self.mat2)
+        MatUtils.assign_mat([self.cube1, self.cube2], self.mat1)
+        MatUtils.assign_mat([self.cube3], self.mat2)
 
     def test_group_objects(self):
         """Test EditUtils.group_objects."""
@@ -74,8 +72,7 @@ class TestGroupCombine(MayaTkTestCase):
 
         # Let's add another object to mat2 to ensure it combines
         cube4 = cmds.polyCube(n="cube4")[0]
-        cmds.select(cube4)
-        cmds.hyperShade(assign=self.mat2)
+        MatUtils.assign_mat([cube4], self.mat2)
 
         objects = [self.cube1, self.cube2, self.cube3, cube4]
 
@@ -90,11 +87,7 @@ class TestGroupCombine(MayaTkTestCase):
         # We can't easily predict order, so check both
         mats_found = []
         for res in results:
-            shapes = cmds.listRelatives(str(res), shapes=True, ni=True) or []
-            # Get assigned shader
-            # Simple check: select and graph? or use MatUtils
-            mats = MatUtils.get_mats(res)
-            mats_found.extend(mats)
+            mats_found.extend(MatUtils.get_mats(res))
 
         self.assertIn(self.mat1, mats_found)
         self.assertIn(self.mat2, mats_found)
@@ -115,8 +108,7 @@ class TestGroupCombine(MayaTkTestCase):
         cmds.move(102, 0, 0, c4)
 
         # Assign same material to all
-        cmds.select(c1, c2, c3, c4)
-        cmds.hyperShade(assign=self.mat1)
+        MatUtils.assign_mat([c1, c2, c3, c4], self.mat1)
 
         # Threshold 10. c1-c3 are close. c2-c4 are close. (c1/c3) far from (c2/c4).
         # Should result in 2 clusters -> 2 combined meshes.
@@ -214,8 +206,6 @@ class TestGroupCombine(MayaTkTestCase):
 
 
 if __name__ == "__main__":
-    import sys
-
     # Manually run the test runner if executed directly
     # But we'll use the run_tests.py wrapper usually
     unittest.main()
