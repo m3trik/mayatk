@@ -119,7 +119,8 @@ if __name__ == "__main__":
         sel = cmds.ls(selection=True) or []
     except ModuleNotFoundError:
         sel = []
-    # bridge.send(sel)                                  # default: import template
-    # bridge.send(sel, template="import_and_frame")
-    # bridge.send(sel, params={"INCLUDE_MATERIALS": False})
+    # bridge.send(sel)                                       # additive import
+    # bridge.send(sel, params={"CLEAR_SCENE": True})         # clean-slate / replace scene
+    # bridge.send(sel, params={"FRAME_VIEW": True})          # import + frame in view
+    # bridge.send(sel, params={"INCLUDE_MATERIALS": False})  # geometry only
     bridge.send(sel)

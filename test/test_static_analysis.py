@@ -32,6 +32,7 @@ UNDEFINED_RE = re.compile(
 # they're handed to a host interpreter (e.g., Marmoset Toolbag's ``mset``).
 EXCLUDED_DIRS = (
     "mat_utils/marmoset_bridge/templates",
+    "env_utils/blender_bridge/templates",
 )
 
 

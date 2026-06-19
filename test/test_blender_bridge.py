@@ -62,7 +62,8 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
     def test_list_template_modes(self):
         pairs = list_template_modes()
         stems = {t for t, _ in pairs}
-        self.assertEqual(stems, {"import", "import_and_frame", "replace_scene"})
+        # The three near-identical recipes collapsed into one options-driven template.
+        self.assertEqual(stems, {"import"})
         self.assertTrue(all(mode == "send_to" for _, mode in pairs))
 
     def test_template_modes_parsed(self):
@@ -79,11 +80,11 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
         # The export-options comment was substituted too (panel-visibility echo).
         self.assertIn("materials=True", rendered)
 
-    def test_import_and_frame_exposes_frame_view(self):
-        used = params.referenced_keys((_TEMPLATE_DIR / "import_and_frame.py").read_text())
+    def test_import_exposes_scene_and_frame_options(self):
+        # The unified template exposes both scene-behavior knobs so the panel shows them.
+        used = params.referenced_keys((_TEMPLATE_DIR / "import.py").read_text())
         self.assertIn("FRAME_VIEW", used)
-        # plain import does not expose FRAME_VIEW (dynamic per-template visibility)
-        self.assertNotIn("FRAME_VIEW", params.referenced_keys((_TEMPLATE_DIR / "import.py").read_text()))
+        self.assertIn("CLEAR_SCENE", used)
 
 
 class TestBlenderBridgeSend(MayaTkTestCase):
