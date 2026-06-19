@@ -90,7 +90,10 @@ PARAMS: "dict[str, AttributeSpec]" = {
         key="FRAME_VIEW",
         label="Frame in View",
         kind="bool",
-        default=True,
+        # Off by default so the unified template's default behavior matches the old plain
+        # "import" template (no selection change / no viewport shading switch); opt in for the
+        # old "import_and_frame" behavior.
+        default=False,
         tooltip=(
             "After import, select the new objects, frame them in the 3D viewport, and switch to\n"
             "material-preview shading."
