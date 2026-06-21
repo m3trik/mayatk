@@ -5,7 +5,7 @@
 Maya-side coverage for the Unity hand-off: the engine resolves the selection, exports an FBX
 (shared MayaExportMixin), and copies it into a Unity project's ``Assets/`` (shared
 unitytk.CopyToAssetsDeliverer Strategy). No real Unity is needed -- the project is just a folder
-with an ``Assets/`` directory, and ``LAUNCH_EDITOR`` defaults off.
+with an ``Assets/`` directory, and ``LAUNCH_MODE`` defaults to no-launch.
 
 Run inside a live Maya session via ``run_tests.py`` (``run_tests.py unity_bridge``).
 """
@@ -36,8 +36,27 @@ class TestUnityBridgeUnit(unittest.TestCase):
     def test_params_defaults(self):
         d = UnityBridge().params_defaults()
         self.assertEqual(d["ASSETS_SUBDIR"], "Imported")
-        self.assertFalse(d["LAUNCH_EDITOR"])
+        self.assertEqual(d["LAUNCH_MODE"], "")  # no-launch default
         self.assertTrue(d["INCLUDE_MATERIALS"])
+        self.assertEqual(d["SCOPE"], "selected")
+        self.assertEqual(d["UNITY_VERSION"], "")  # auto/newest
+
+    def test_slot_single_delivery_mode_no_studio(self):
+        """The slot exposes one copy-to-Assets target; the 'Unity Studio' mode is gone.
+
+        Unity Studio is a separate paid, browser-based product (Unity Cloud Asset
+        Manager), not this desktop FBX hand-off, so it was removed.
+        """
+        from mayatk.env_utils.unity_bridge.unity_bridge_slots import UnityBridgeSlots as S
+
+        # One mode, friendly label over the internal stem (matches the deliverer's stem).
+        self.assertEqual(S.MODE_COPY, "copy_to_assets")
+        self.assertEqual(S.MODE_LABELS, {S.MODE_COPY: "Copy to Project"})
+        self.assertEqual(S.list_template_modes(S), [(S.MODE_COPY, "")])
+        # No leftover Unity Studio surface.
+        self.assertFalse(hasattr(S, "MODE_STUDIO"))
+        self.assertFalse(hasattr(S, "MODE_EXISTING"))
+        self.assertFalse(hasattr(S, "MODE_PARAM_KEYS"))
 
     def test_preflight_requires_project(self):
         br = UnityBridge()
@@ -70,7 +89,7 @@ class TestUnityBridgeSend(MayaTkTestCase):
         cube = cmds.polyCube(name="UnityHero")[0]
         result = self.bridge.send(
             [cube], template="copy_to_assets", mode="send_to",
-            params={"ASSETS_SUBDIR": "Models", "ASSET_NAME": "", "LAUNCH_EDITOR": False},
+            params={"ASSETS_SUBDIR": "Models", "ASSET_NAME": ""},
         )
         self.assertIsNotNone(result, "send returned None (delivery failed)")
         dest = Path(result["asset"])
@@ -84,7 +103,7 @@ class TestUnityBridgeSend(MayaTkTestCase):
         cube = cmds.polyCube(name="UnityCube")[0]
         result = self.bridge.send(
             [cube], template="copy_to_assets", mode="send_to",
-            params={"ASSET_NAME": "Custom/Name", "LAUNCH_EDITOR": False},
+            params={"ASSET_NAME": "Custom/Name"},
         )
         dest = Path(result["asset"])
         # Default subdir 'Imported'; name sanitized.
@@ -100,6 +119,44 @@ class TestUnityBridgeSend(MayaTkTestCase):
     def test_send_aborts_with_empty_selection(self):
         result = self.bridge.send([], template="copy_to_assets", mode="send_to")
         self.assertIsNone(result)
+
+
+class TestUnityScopeResolution(MayaTkTestCase):
+    """Scope resolution on the slot (``_resolve_scope_objects`` is self-free, so it
+    runs without building the Qt panel)."""
+
+    def _resolve(self, scope):
+        from mayatk.env_utils.unity_bridge.unity_bridge_slots import UnityBridgeSlots
+
+        # The method doesn't touch ``self``; a bare instance is enough.
+        return UnityBridgeSlots._resolve_scope_objects(object(), scope)
+
+    def _mesh_count(self, objs):
+        return len([o for o in objs if cmds.objectType(o) == "mesh"])
+
+    def test_scope_all_gathers_every_scene_mesh(self):
+        cmds.polyCube()
+        cmds.polySphere()
+        cmds.select(clear=True)  # 'all' ignores the selection
+        self.assertGreaterEqual(self._mesh_count(self._resolve("all")), 2)
+
+    def test_scope_selected_uses_selection_only(self):
+        cube = cmds.polyCube()[0]
+        cmds.polySphere()
+        cmds.select(cube, replace=True)
+        resolved = self._resolve("selected")
+        self.assertTrue(any(cube in str(o) for o in resolved))
+        # The unselected sphere transform must not be in the selected scope.
+        self.assertFalse(any("Sphere" in str(o) for o in resolved))
+
+    def test_scope_visible_excludes_hidden(self):
+        visible = cmds.polyCube(name="VisibleCube")[0]
+        hidden = cmds.polyCube(name="HiddenCube")[0]
+        cmds.setAttr(f"{hidden}.visibility", 0)
+        cmds.select(clear=True)
+        resolved = [str(o) for o in self._resolve("visible")]
+        self.assertTrue(any("VisibleCube" in o for o in resolved))
+        self.assertFalse(any("HiddenCube" in o for o in resolved))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 {
   "name": "mayatk",
   "source_root": "mayatk/mayatk",
-  "generated_at": "2026-06-19",
+  "generated_at": "2026-06-21",
   "modules": [
     {
       "relpath": "anim_utils/_anim_utils.py",
@@ -9117,7 +9117,7 @@
           "kind": "function",
           "signature": "() -> List[Path]",
           "summary": "User-visible templates in ``templates/`` (skips underscore-prefixed).",
-          "line": 61,
+          "line": 63,
           "deprecated": false
         },
         {
@@ -9126,7 +9126,7 @@
           "kind": "function",
           "signature": "(template_path: Path) -> Tuple[str, ...]",
           "summary": "Modes a template declares via ``BRIDGE_MODES``;",
-          "line": 66,
+          "line": 68,
           "deprecated": false
         },
         {
@@ -9135,7 +9135,7 @@
           "kind": "function",
           "signature": "() -> List[Tuple[str, str]]",
           "summary": "``[(stem, mode), ...]`` for every (template, mode) pairing.",
-          "line": 71,
+          "line": 73,
           "deprecated": false
         }
       ],
@@ -9143,7 +9143,7 @@
         {
           "name": "BlenderBridge",
           "summary": "Export the Maya selection and run a chosen Blender import template.",
-          "line": 76,
+          "line": 78,
           "bases": [
             "MayaExportMixin",
             "ptk.ScriptLaunchBridge"
@@ -9155,7 +9155,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "",
-              "line": 91,
+              "line": 93,
               "deprecated": false
             },
             {
@@ -9164,7 +9164,7 @@
               "kind": "method",
               "signature": "(self, value: Optional[str]) -> None",
               "summary": "",
-              "line": 95,
+              "line": 97,
               "deprecated": false
             },
             {
@@ -9173,7 +9173,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[str, Any]",
               "summary": "",
-              "line": 99,
+              "line": 101,
               "deprecated": false
             },
             {
@@ -9182,7 +9182,7 @@
               "kind": "method",
               "signature": "(self, params: Dict[str, Any]) -> Dict[str, str]",
               "summary": "",
-              "line": 104,
+              "line": 106,
               "deprecated": false
             }
           ]
@@ -9208,7 +9208,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 78,
+              "line": 79,
               "deprecated": false
             },
             {
@@ -9217,7 +9217,7 @@
               "kind": "property",
               "signature": "(self) -> Path",
               "summary": "",
-              "line": 82,
+              "line": 83,
               "deprecated": false
             },
             {
@@ -9226,7 +9226,7 @@
               "kind": "method",
               "signature": "(self) -> BlenderBridge",
               "summary": "",
-              "line": 85,
+              "line": 86,
               "deprecated": false
             },
             {
@@ -9235,7 +9235,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 88,
+              "line": 89,
               "deprecated": false
             },
             {
@@ -9244,7 +9244,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Send the selected objects to Blender with the chosen template.",
-              "line": 92,
+              "line": 93,
               "deprecated": false
             }
           ]
@@ -9261,7 +9261,7 @@
           "kind": "function",
           "signature": "(script_text: str) -> 'set[str]'",
           "summary": "Registered keys present in *script_text* (delegates to uitk.bridge).",
-          "line": 88,
+          "line": 105,
           "deprecated": false
         },
         {
@@ -9270,7 +9270,7 @@
           "kind": "function",
           "signature": "() -> 'dict[str, Any]'",
           "summary": "Return ``{key: default}`` for every registered parameter.",
-          "line": 93,
+          "line": 110,
           "deprecated": false
         },
         {
@@ -9279,7 +9279,7 @@
           "kind": "function",
           "signature": "(values: 'dict[str, Any]') -> 'dict[str, str]'",
           "summary": "Format *values* for ``StrUtils.replace_delimited`` using Python literals.",
-          "line": 98,
+          "line": 115,
           "deprecated": false
         }
       ],
@@ -9287,7 +9287,7 @@
     },
     {
       "relpath": "env_utils/blender_bridge/templates/import.py",
-      "summary": "Import the bridged FBX into the current Blender scene.",
+      "summary": "Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.",
       "functions": [
         {
           "name": "main",
@@ -9295,39 +9295,7 @@
           "kind": "function",
           "signature": "()",
           "summary": "",
-          "line": 17,
-          "deprecated": false
-        }
-      ],
-      "classes": []
-    },
-    {
-      "relpath": "env_utils/blender_bridge/templates/import_and_frame.py",
-      "summary": "Import the bridged FBX, select the new objects, frame them in the viewport, and switch to",
-      "functions": [
-        {
-          "name": "main",
-          "qualname": "main",
-          "kind": "function",
-          "signature": "()",
-          "summary": "",
-          "line": 19,
-          "deprecated": false
-        }
-      ],
-      "classes": []
-    },
-    {
-      "relpath": "env_utils/blender_bridge/templates/replace_scene.py",
-      "summary": "Delete the current scene's objects, then import the bridged FBX -- a clean-slate hand-off when",
-      "functions": [
-        {
-          "name": "main",
-          "qualname": "main",
-          "kind": "function",
-          "signature": "()",
-          "summary": "",
-          "line": 18,
+          "line": 28,
           "deprecated": false
         }
       ],
@@ -12377,7 +12345,7 @@
           "kind": "function",
           "signature": "(script_text: str) -> 'set[str]'",
           "summary": "Registered keys present in *script_text* (delegates to uitk.bridge).",
-          "line": 99,
+          "line": 142,
           "deprecated": false
         },
         {
@@ -12386,7 +12354,7 @@
           "kind": "function",
           "signature": "() -> 'dict[str, Any]'",
           "summary": "Return ``{key: default}`` for every registered parameter.",
-          "line": 104,
+          "line": 147,
           "deprecated": false
         },
         {
@@ -12395,7 +12363,7 @@
           "kind": "function",
           "signature": "(values: 'dict[str, Any]') -> 'dict[str, str]'",
           "summary": "Format *values* for substitution (kept for API parity;",
-          "line": 109,
+          "line": 152,
           "deprecated": false
         }
       ],
@@ -12409,7 +12377,7 @@
         {
           "name": "UnityBridgeSlots",
           "summary": "Slots wired to ``unity_bridge.ui`` via :class:`MayaBridgeSlotsBase`.",
-          "line": 33,
+          "line": 39,
           "bases": [
             "MayaBridgeSlotsBase"
           ],
@@ -12420,7 +12388,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 91,
+              "line": 107,
               "deprecated": false
             },
             {
@@ -12429,7 +12397,7 @@
               "kind": "property",
               "signature": "(self) -> Path",
               "summary": "",
-              "line": 95,
+              "line": 111,
               "deprecated": false
             },
             {
@@ -12438,7 +12406,7 @@
               "kind": "method",
               "signature": "(self) -> UnityBridge",
               "summary": "",
-              "line": 100,
+              "line": 116,
               "deprecated": false
             },
             {
@@ -12447,7 +12415,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 103,
+              "line": 119,
               "deprecated": false
             },
             {
@@ -12456,7 +12424,7 @@
               "kind": "method",
               "signature": "(self) -> str",
               "summary": "",
-              "line": 106,
+              "line": 126,
               "deprecated": false
             },
             {
@@ -12464,8 +12432,8 @@
               "qualname": "UnityBridgeSlots.b000",
               "kind": "method",
               "signature": "(self)",
-              "summary": "Export the selected objects and copy them into the Unity project.",
-              "line": 119,
+              "summary": "Export per the chosen Scope and copy the FBX into the Unity project.",
+              "line": 266,
               "deprecated": false
             }
           ]
@@ -13135,7 +13103,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "Selected HDR file path from the combobox.",
-              "line": 851,
+              "line": 876,
               "deprecated": false
             },
             {
@@ -13144,7 +13112,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "",
-              "line": 856,
+              "line": 881,
               "deprecated": false
             },
             {
@@ -13153,7 +13121,7 @@
               "kind": "method",
               "signature": "(self, index, widget) -> None",
               "summary": "HDR map selection — the panel's sole apply action.",
-              "line": 863,
+              "line": 888,
               "deprecated": false
             },
             {
@@ -13162,7 +13130,7 @@
               "kind": "method",
               "signature": "(self, state, widget) -> None",
               "summary": "Toggle skydome primary-ray visibility.",
-              "line": 905,
+              "line": 930,
               "deprecated": false
             },
             {
@@ -13171,7 +13139,7 @@
               "kind": "method",
               "signature": "(self, value, widget) -> None",
               "summary": "Rotate the HDR around Y.",
-              "line": 909,
+              "line": 934,
               "deprecated": false
             },
             {
@@ -13180,7 +13148,7 @@
               "kind": "method",
               "signature": "(self, value) -> None",
               "summary": "",
-              "line": 913,
+              "line": 938,
               "deprecated": false
             },
             {
@@ -13189,7 +13157,7 @@
               "kind": "method",
               "signature": "(self, value) -> None",
               "summary": "",
-              "line": 916,
+              "line": 941,
               "deprecated": false
             },
             {
@@ -13198,7 +13166,7 @@
               "kind": "method",
               "signature": "(self, value) -> None",
               "summary": "",
-              "line": 919,
+              "line": 944,
               "deprecated": false
             },
             {
@@ -13207,7 +13175,7 @@
               "kind": "method",
               "signature": "(self, value) -> None",
               "summary": "",
-              "line": 922,
+              "line": 947,
               "deprecated": false
             },
             {
@@ -13216,7 +13184,7 @@
               "kind": "method",
               "signature": "(self, value) -> None",
               "summary": "",
-              "line": 925,
+              "line": 950,
               "deprecated": false
             },
             {
@@ -13225,7 +13193,7 @@
               "kind": "method",
               "signature": "(self, value) -> None",
               "summary": "",
-              "line": 928,
+              "line": 953,
               "deprecated": false
             },
             {
@@ -13234,7 +13202,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Add HDR(s) from one dialog — pick loose files and/or a whole folder.",
-              "line": 1029,
+              "line": 1054,
               "deprecated": false
             },
             {
@@ -13243,7 +13211,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open the workspace's sourceimages folder in Explorer.",
-              "line": 1217,
+              "line": 1242,
               "deprecated": false
             },
             {
@@ -13252,7 +13220,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Delete the skydome network and reset the UI to defaults.",
-              "line": 1225,
+              "line": 1250,
               "deprecated": false
             },
             {
@@ -13261,7 +13229,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 1233,
+              "line": 1258,
               "deprecated": false
             },
             {
@@ -13270,7 +13238,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 1241,
+              "line": 1266,
               "deprecated": false
             },
             {
@@ -13279,7 +13247,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 1249,
+              "line": 1274,
               "deprecated": false
             },
             {
@@ -13288,7 +13256,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 1257,
+              "line": 1282,
               "deprecated": false
             }
           ]
@@ -19866,12 +19834,21 @@
               "deprecated": false
             },
             {
+              "name": "can_resolve",
+              "qualname": "MayaUiHandler.can_resolve",
+              "kind": "method",
+              "signature": "(self, name: str) -> bool",
+              "summary": "Recognise the native Maya menus this handler builds on demand.",
+              "line": 89,
+              "deprecated": false
+            },
+            {
               "name": "get",
               "qualname": "MayaUiHandler.get",
               "kind": "method",
               "signature": "(self, name: str, reload: bool = False, **kwargs) -> 'QtWidgets.QMainWindow'",
               "summary": "Retrieve a UI, checking Maya menus first.",
-              "line": 89,
+              "line": 102,
               "deprecated": false
             },
             {
@@ -19880,7 +19857,7 @@
               "kind": "method",
               "signature": "(self, ui, style=None)",
               "summary": "Override to give mayatk-sourced UIs a hide button instead of pin.",
-              "line": 97,
+              "line": 110,
               "deprecated": false
             }
           ]
