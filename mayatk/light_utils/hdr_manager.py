@@ -647,6 +647,15 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         # so newly-saved HDRs appear without hitting the header refresh.
         widget.before_popup_shown.connect(self._refresh_combo)
 
+        # The dropdown mirrors the LIVE scene HDR, never a persisted UI value —
+        # opt out of cross-session state restore. Otherwise the switchboard
+        # restores the last index on panel open and (signals unblocked) fires
+        # cmb000, auto-loading a stale HDR onto a fresh scene instead of showing
+        # the true state. _refresh_combo also gives the combo a header, which
+        # keeps this False across every repopulate (ComboBox.add resets
+        # restore_state = not has_header); this covers the pre-refresh window.
+        widget.restore_state = False
+
         # Right-click → context menu (MenuMixin on uitk ComboBox). Kept
         # separate from the option-box menu below (different Menu instance).
         widget.configure_menu(trigger_button="right")
@@ -730,8 +739,9 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self.ui.cmb000.blockSignals(True)
         try:
             if not src or not os.path.isdir(src):
-                self.ui.cmb000.clear()
-                self.ui.cmb000.addItem("<HDR Map>")
+                # The header doubles as the placeholder AND keeps the combo
+                # non-persistent (restore_state = not has_header).
+                self.ui.cmb000.add([], header="HDR Map:", clear=True)
                 self._prepend_none_item()
                 # High-frequency path (fires on every dropdown open); colour the
                 # footer but skip _notify so we don't spam the console log.
@@ -751,9 +761,12 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                 inc_files=["*.exr", "*.hdr"],
                 group_by_type=True,
             )
-            # ComboBox.add() drives both userData and visible text.
+            # ComboBox.add() drives both userData and visible text. The header
+            # ("HDR Map:", shown at index -1) is the no-selection state and
+            # makes the combo non-persistent (restore_state = not has_header).
             self.ui.cmb000.add(
                 zip(hdr_info["filename"], hdr_info["filepath"]),
+                header="HDR Map:",
                 ascending=False,
                 clear=True,
             )
@@ -842,6 +855,18 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                 getattr(widget, setter)(value)
             finally:
                 widget.blockSignals(False)
+
+        # Reflect the LIVE scene HDR in the dropdown (the combo is
+        # restore_state=False, so it never shows a persisted pick): select the
+        # row matching the wired file, else show no selection (the "HDR Map:"
+        # header at index -1) — so a fresh scene reads as None, not a stale HDR.
+        current_path = self.manager.hdr_file_path if has_env else None
+        if not (current_path and self._select_combo_path(current_path)):
+            self.ui.cmb000.blockSignals(True)
+            try:
+                self.ui.cmb000.setCurrentIndex(-1)
+            finally:
+                self.ui.cmb000.blockSignals(False)
 
     # ------------------------------------------------------------------
     # Read-only convenience

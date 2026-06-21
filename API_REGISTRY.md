@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-06-19_
+_Generated: 2026-06-21_
 
 ## Index
 
@@ -2028,22 +2028,22 @@ Unity bridge engine -- export the Maya selection into a Unity project's Assets/.
 
 User-tunable parameters for the Maya->Unity bridge panel.
 
-- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L99) — Registered keys present in *script_text* (delegates to uitk.bridge).
-- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L104) — Return ``{key: default}`` for every registered parameter.
-- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L109) — Format *values* for substitution (kept for API parity;
+- [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L142) — Registered keys present in *script_text* (delegates to uitk.bridge).
+- [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L147) — Return ``{key: default}`` for every registered parameter.
+- [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L152) — Format *values* for substitution (kept for API parity;
 
 <a id="env_utils--unity_bridge--unity_bridge_slots"></a>
 ### `env_utils/unity_bridge/unity_bridge_slots.py`
 
 Slots for the Unity bridge panel.
 
-- **[`class UnityBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/env_utils/unity_bridge/unity_bridge_slots.py#L33)** — Slots wired to ``unity_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
+- **[`class UnityBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/env_utils/unity_bridge/unity_bridge_slots.py#L39)** — Slots wired to ``unity_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
   - `UnityBridgeSlots.params_module(self)` *(property)*
   - `UnityBridgeSlots.template_dir(self) -> Path` *(property)*
   - `UnityBridgeSlots.make_bridge(self) -> UnityBridge`
   - `UnityBridgeSlots.list_template_modes(self)`
   - `UnityBridgeSlots.default_output_dir(self) -> str`
-  - `UnityBridgeSlots.b000(self)` — Export the selected objects and copy them into the Unity project.
+  - `UnityBridgeSlots.b000(self)` — Export per the chosen Scope and copy the FBX into the Unity project.
 
 <a id="env_utils--workspace_manager"></a>
 ### `env_utils/workspace_manager.py`
@@ -3164,6 +3164,7 @@ Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 
 - **[`class MayaUiHandler(UiHandler)`](mayatk/mayatk/ui_utils/maya_ui_handler.py#L18)** — UI Handler for Maya applications.
   - `MayaUiHandler.instance(cls, switchboard: Switchboard = None, **kwargs) -> 'MayaUiHandler'` *(class)* — Return the MayaUiHandler singleton, bootstrapping if needed.
+  - `MayaUiHandler.can_resolve(self, name: str) -> bool` — Recognise the native Maya menus this handler builds on demand.
   - `MayaUiHandler.get(self, name: str, reload: bool = False, **kwargs) -> 'QtWidgets.QMainWindow'` — Retrieve a UI, checking Maya menus first.
   - `MayaUiHandler.apply_styles(self, ui, style=None)` — Override to give mayatk-sourced UIs a hide button instead of pin.
 

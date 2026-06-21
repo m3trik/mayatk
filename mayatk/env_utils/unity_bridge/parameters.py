@@ -30,6 +30,24 @@ _FORMATTER = python_literal
 
 # Display order is iteration order over this dict.
 PARAMS: "dict[str, AttributeSpec]" = {
+    "SCOPE": AttributeSpec(
+        key="SCOPE",
+        label="Scope",
+        kind="choice",
+        default="selected",
+        choices=[
+            ("Selected", "selected"),
+            ("Entire Scene", "all"),
+            ("Visible Only", "visible"),
+        ],
+        section="Export",
+        tooltip=(
+            "Which objects to export:\n"
+            "• Selected — the current selection.\n"
+            "• Entire Scene — every mesh in the scene.\n"
+            "• Visible Only — every currently-visible mesh."
+        ),
+    ),
     "INCLUDE_MATERIALS": AttributeSpec(
         key="INCLUDE_MATERIALS",
         label="Include Materials",
@@ -82,15 +100,40 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "selected object's name. Invalid filename characters are sanitized."
         ),
     ),
-    "LAUNCH_EDITOR": AttributeSpec(
-        key="LAUNCH_EDITOR",
-        label="Launch Editor",
-        kind="bool",
-        default=False,
+    "LAUNCH_MODE": AttributeSpec(
+        key="LAUNCH_MODE",
+        label="Launch Unity",
+        kind="choice",
+        default="",
+        choices=[
+            ("Don't launch", ""),
+            ("Open Editor", "open"),
+            ("Headless (batch)", "headless"),
+        ],
         section="Unity",
         tooltip=(
-            "After copying, launch a Unity Editor on the project (auto-detected via\n"
-            "Unity Hub). Off = just copy; Unity imports on its next window focus."
+            "What to do after the FBX is copied:\n"
+            "• Don't launch — just copy; Unity imports on its next window focus\n"
+            "  (smoothest when the project is already open).\n"
+            "• Open Editor — launch a windowed Unity Editor on the project (the\n"
+            "  chosen Unity Version, else the newest install).\n"
+            "• Headless (batch) — run Unity '-batchmode -quit' to import then exit,\n"
+            "  no window. Needs a batch-capable Editor license."
+        ),
+    ),
+    "UNITY_VERSION": AttributeSpec(
+        key="UNITY_VERSION",
+        label="Unity Version",
+        kind="choice",
+        default="",
+        # Just the auto-default here; the panel appends installed versions
+        # discovered at runtime via unitytk.UnityFinder (dynamic).
+        choices=[("Auto (newest)", "")],
+        section="Unity",
+        tooltip=(
+            "Which installed Unity Editor to create/launch with (used by\n"
+            "'Launch Editor' and 'New Unity Project…'). Auto uses the newest\n"
+            "installed version."
         ),
     ),
 }

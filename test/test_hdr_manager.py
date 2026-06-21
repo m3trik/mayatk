@@ -222,6 +222,7 @@ class _StubCombo:
     def __init__(self, items=None):
         self.current_index = None
         self._items = list(items or [])  # userData per row
+        self.last_header = None  # records the header passed to add() (persistence opt-out)
 
     def count(self):
         return len(self._items)
@@ -257,7 +258,11 @@ class _StubCombo:
         if self.current_index is not None and index <= self.current_index:
             self.current_index += 1
 
-    def add(self, pairs, ascending=True, clear=False):
+    def add(self, pairs, ascending=True, clear=False, header=None, **kwargs):
+        # A header makes the real ComboBox set restore_state = not has_header
+        # → False (no cross-session persistence); record it so tests can assert
+        # the HDR combo opts out.
+        self.last_header = header
         if clear:
             self._items = []
         for _text, data in pairs:
@@ -771,6 +776,9 @@ class TestHdrNoneOption(unittest.TestCase):
         # None sits at the top (index 0), ahead of the listed HDR file.
         self.assertEqual(s.ui.cmb000.itemData(0), HdrManagerSlots.NONE_TOKEN)
         self.assertEqual(s.ui.cmb000.count(), 2)
+        # The combo is populated with a header → non-persistent across sessions
+        # (restore_state = not has_header), so it never restores a stale pick.
+        self.assertEqual(s.ui.cmb000.last_header, "HDR Map:")
 
     def test_refresh_combo_prepends_none_when_no_sourceimages(self):
         s = _make_slots(env=None)
@@ -781,6 +789,8 @@ class TestHdrNoneOption(unittest.TestCase):
         ):
             HdrManagerSlots._refresh_combo(s)
         self.assertEqual(s.ui.cmb000.itemData(0), HdrManagerSlots.NONE_TOKEN)
+        # Even the no-sourceimages path keeps the combo non-persistent.
+        self.assertEqual(s.ui.cmb000.last_header, "HDR Map:")
 
     def test_select_none_clears_live_network(self):
         s = _make_slots(env="aiSkyDomeLight_")

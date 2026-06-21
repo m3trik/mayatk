@@ -86,6 +86,19 @@ class MayaUiHandler(UiHandler):
                     return inst
         return super().instance(switchboard=switchboard, **kwargs)
 
+    def can_resolve(self, name: str) -> bool:
+        """Recognise the native Maya menus this handler builds on demand.
+
+        Without this, a nav button whose ``target`` is a native menu (``"key"``)
+        — built lazily from ``MENU_MAPPING``, not a ``.ui`` file — reads as
+        unresolvable, so the marking menu's click resolution falls back to the
+        ``key#submenu`` overlay instead of opening the native menu. Membership
+        only; no menu is built here.
+        """
+        if maya_native_menus and name in maya_native_menus.MayaNativeMenus.MENU_MAPPING:
+            return True
+        return super().can_resolve(name)
+
     def get(self, name: str, reload: bool = False, **kwargs) -> "QtWidgets.QMainWindow":
         """Retrieve a UI, checking Maya menus first."""
         # Check if name corresponds to a Maya menu
