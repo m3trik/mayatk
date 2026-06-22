@@ -173,8 +173,14 @@ class UiUtils:
         It iterates over all cmdScrollFieldReporter objects and clears them, ensuring a clean
         slate for viewing new script or command output.
         """
+        # ``lsUI`` is a GUI-only command — absent in mayapy standalone. No UI
+        # means no reporters to clear, so no-op cleanly (lets headless test
+        # runners import/exercise modules that call this).
+        if not hasattr(cmds, "lsUI"):
+            return
+
         # Get a list of all UI objects of type "cmdScrollFieldReporter"
-        reporters = cmds.lsUI(type="cmdScrollFieldReporter")
+        reporters = cmds.lsUI(type="cmdScrollFieldReporter") or []
 
         # If any reporters are found, clear them
         for reporter in reporters:

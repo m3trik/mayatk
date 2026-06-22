@@ -126,6 +126,8 @@ DEFAULT_INCLUDE = {
     "mat_utils.substance_bridge._substance_bridge": "SubstanceBridge",
     # Texture baking (bake an object's shaded surface to a texture)
     "mat_utils.texture_baker": "TextureBaker",
+    # Render utils
+    "render_utils._render_utils": "RenderUtils",
     # Light utils
     "light_utils.lightmap_baker.lightmap_baker": "LightmapBaker",
     # UI utils

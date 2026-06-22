@@ -21,13 +21,11 @@ No exceptions for convenience, speed, or retries. If a run is slow, **wait** —
 
 ## API surface
 
-Before writing a new helper, **check the registry first** — duplicates undermine the SSoT goal.
+**Before adding a helper, check the registry** (navigation rules: [root](../CLAUDE.md)):
 
-- This package: [`API_REGISTRY.md`](API_REGISTRY.md) · [`API_CHANGES.md`](API_CHANGES.md) (diff vs last refresh)
-- Upstream: [`pythontk` API](../pythontk/API_REGISTRY.md) · [`uitk` API](../uitk/API_REGISTRY.md)
-- Cross-package shadows: [`m3trik/docs/API_SHADOWS.md`](../m3trik/docs/API_SHADOWS.md) — `AudioUtils` / `CoreUtils` shadow pythontk by design (mayatk extends; do not duplicate logic).
-
-Refresh manually: `python m3trik/scripts/generate_api_registry.py mayatk` — otherwise auto-refreshed bi-weekly.
+- [`API_INDEX.md`](API_INDEX.md) (compact — read first) · [`API_REGISTRY.md`](API_REGISTRY.md) (grep, don't Read whole) · [`API_CHANGES.md`](API_CHANGES.md)
+- Upstream: [pythontk](../pythontk/API_INDEX.md) · [uitk](../uitk/API_INDEX.md)
+- Cross-package shadows: [`m3trik/docs/API_SHADOWS.md`](../m3trik/docs/API_SHADOWS.md) — `AudioUtils`/`CoreUtils` shadow pythontk by design (mayatk extends; don't duplicate logic).
 
 ## Imports
 
@@ -45,52 +43,24 @@ import maya.api.OpenMaya as om    # API 2.0 over 1.0; use for object refs and ma
 - Coerce inputs to strings at production entry points: `cmds.X(str(node), ...)` — Maya 2025 cmds reject some non-string node args.
 - Use type hints (essential for OpenMaya interop).
 
-## Test infrastructure
+## Tests
 
-Tests require Maya runtime (`maya.cmds`) — cannot run under plain `pytest` or workspace `.venv`.
+Tests need the Maya runtime (`maya.cmds`) — they can't run under plain `pytest` / the workspace `.venv`. Set once (from repo root):
 
-**Syntax-only check** (no Maya needed):
 ```powershell
-.\.venv\Scripts\python.exe -c "import ast, os; c=0; [((ast.parse(open(os.path.join(r,f),encoding='utf-8').read()), c:=c+1) if f.endswith('.py') else None) for r,_,fs in os.walk(r'mayatk\mayatk') for f in fs]; print(f'{c} files OK')"
+$MAYAPY = "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe"
+$env:PYTHONPATH = "$PWD\mayatk;$PWD\pythontk;$PWD\uitk;$PWD\tentacle"
 ```
 
-**maya.cmds / mel.eval command name check** (requires mayapy — validates names against the live Maya registry):
-```powershell
-& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" mayatk\test\check_cmds_syntax.py            # all ecosystem packages (default)
-& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" mayatk\test\check_cmds_syntax.py --report   # write report file
-& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" mayatk\test\check_cmds_syntax.py mayatk/mayatk tentacle/tentacle  # scope to subset
-```
+- **Pre-flight (no Maya)** — AST syntax sweep: `python -c "import ast,glob; [ast.parse(open(f,encoding='utf-8').read()) for f in glob.glob('mayatk/mayatk/**/*.py',recursive=True)]"`
+- **Command-name check (mayapy)** — `& $MAYAPY mayatk\test\check_cmds_syntax.py` validates every `cmds.*` / `mel.eval` name against the live registry. `--report` writes a file; append `mayatk/mayatk tentacle/tentacle` to scope to a subset.
+- **Base classes** `test/base_test.py` → `MayaTkTestCase` (full cleanup) / `QuickTestCase` (fast). **Runner** `test/run_tests.py`. **Connection** `test/maya_connection.py` (Port / Standalone / Interactive).
 
-**Test base classes**: `test/base_test.py` → `MayaTkTestCase` (full cleanup) or `QuickTestCase` (fast).
-**Runner**: `test/run_tests.py`. **Connection**: `test/maya_connection.py` (Port / Standalone / Interactive).
-
-## Running tests — decision tree
-
-| Scenario | How to tell | Method |
+| Test kind | How to tell | Run |
 |:---|:---|:---|
-| Standalone script (temp / repro) | File has `maya.standalone.initialize()` + `__main__` | **Direct mayapy** |
-| Production test module | Uses `MayaTkTestCase` / `QuickTestCase`, no standalone init | **run_tests.py** |
-| GUI-dependent test | Needs Qt widgets / viewport | **Maya Script Editor** / command port |
-
-### A. Direct mayapy
-```powershell
-$env:PYTHONPATH = "o:\Cloud\Code\_scripts\mayatk;o:\Cloud\Code\_scripts\pythontk;o:\Cloud\Code\_scripts\uitk;o:\Cloud\Code\_scripts\tentacle"
-& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" <script.py> 2>&1
-```
-
-### B. run_tests.py
-```powershell
-$env:PYTHONPATH = "o:\Cloud\Code\_scripts\mayatk;o:\Cloud\Code\_scripts\pythontk"
-& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --all
-& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py core_utils components
-& "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe" o:\Cloud\Code\_scripts\mayatk\test\run_tests.py --list
-```
-
-### C. Script Editor / command port
-```python
-import mayatk.test.run_tests as runner
-runner.MayaTestRunner().run_tests(['core_utils'])
-```
+| Standalone repro | has `maya.standalone.initialize()` + `__main__` | `& $MAYAPY <script.py>` |
+| Production module | uses `MayaTkTestCase` / `QuickTestCase` | `& $MAYAPY mayatk\test\run_tests.py --all` (or `… core_utils components`, `… --list`) |
+| GUI-dependent | needs Qt / viewport | Maya Script Editor → `import mayatk.test.run_tests as r; r.MayaTestRunner().run_tests(['core_utils'])` |
 
 ## Style
 

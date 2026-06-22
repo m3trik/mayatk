@@ -166,6 +166,7 @@ _Generated: 2026-06-22_
 - [`nurbs_utils/_nurbs_utils.py`](#nurbs_utils--_nurbs_utils)
 - [`nurbs_utils/curve_to_tube.py`](#nurbs_utils--curve_to_tube) — Sweep a circular profile along NURBS curve(s) to build a tube.
 - [`nurbs_utils/image_tracer.py`](#nurbs_utils--image_tracer)
+- [`render_utils/_render_utils.py`](#render_utils--_render_utils) — Render-control helpers.
 - [`rig_utils/_rig_utils.py`](#rig_utils--_rig_utils)
 - [`rig_utils/controls.py`](#rig_utils--controls)
 - [`rig_utils/shadow_rig.py`](#rig_utils--shadow_rig)
@@ -2104,7 +2105,7 @@ Arnold HDR environment manager.
   - `HdrManager.arnold_loaded() -> bool` *(static)* — True if ``mtoa`` is *already* loaded — cheap, side-effect-free query.
   - `HdrManager.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin can be loaded right now.
   - `HdrManager.ensure_plugin_loaded(cls) -> bool` *(class)* — Backward-compat alias for :meth:`arnold_available`.
-  - `HdrManager.hdr_env(self) -> Optional[str]` *(property)* — The skydome shape node, or ``None`` if not present.
+  - `HdrManager.hdr_env(self) -> Optional[str]` *(property)* — The active skydome shape node, or ``None`` if none exists.
   - `HdrManager.hdr_env(self, tex: Optional[str]) -> None` — Set (and lazily create) the skydome's HDR file texture.
   - `HdrManager.hdr_env_transform(self) -> Optional[str]` *(property)* — Transform parent of the skydome shape, or ``None``.
   - `HdrManager.hdr_file_node(self) -> Optional[str]` *(property)* — The ``file`` node currently driving ``color`` on the skydome.
@@ -2128,13 +2129,13 @@ Arnold HDR environment manager.
   - `HdrManager.specular(self, value: float) -> None`
   - `HdrManager.create_network(self, hdrMap: str = '', hdrMapVisibility: bool = False, intensity: Optional[float] = None, exposure: Optional[float] = None, rotation: Optional[float] = None, resolution: Optional[int] = None, samples: Optional[int] = None, diffuse: Optional[float] = None, specular: Optional[float] = None) -> Optional[str]` — Apply settings to the (lazily-created) skydome network.
   - `HdrManager.clear(self) -> None` — Remove the skydome and its connected file/place2d nodes.
-- **[`class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L440)** — Switchboard slots for the HDR Manager UI.
+- **[`class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L482)** — Switchboard slots for the HDR Manager UI.
   - `HdrManagerSlots.header_init(self, widget) -> None` — Configure header menu and refresh button.
   - `HdrManagerSlots.cmb000_init(self, widget) -> None` — Wire the HDR dropdown: option-box plugins, context menu, auto-refresh.
   - `HdrManagerSlots.hdr_map(self) -> Optional[str]` *(property)* — Selected HDR file path from the combobox.
   - `HdrManagerSlots.hdr_map_visibility(self) -> bool` *(property)*
-  - `HdrManagerSlots.cmb000(self, index, widget) -> None` — HDR map selection — the panel's sole apply action.
-  - `HdrManagerSlots.chk000(self, state, widget) -> None` — Toggle skydome primary-ray visibility.
+  - `HdrManagerSlots.cmb000(self, index, widget) -> None` — HDR map selection — the panel's sole apply action (always deferred).
+  - `HdrManagerSlots.chk000(self, state, widget) -> None` — Toggle skydome primary-ray visibility (the HDR-as-backdrop flag).
   - `HdrManagerSlots.slider000(self, value, widget) -> None` — Rotate the HDR around Y.
   - `HdrManagerSlots.spn_intensity(self, value) -> None`
   - `HdrManagerSlots.spn_exposure(self, value) -> None`
@@ -2245,12 +2246,11 @@ Arnold render-bridge management.
   - `ArnoldBridge.rebuild(self, materials: Optional[Union[str, List[str]]] = None, objects: Optional[Union[str, List[str]]] = None) -> List[str]` — Remove and re-add the bridge — resyncs it to the base material's
   - `ArnoldBridge.get_bridge(self, material: str) -> Optional[str]` — Return the ``aiStandardSurface`` bridging *material*, or None.
   - `ArnoldBridge.has_bridge(self, material: str) -> bool` — True if *material*'s shading engine already has an Arnold bridge.
-- **[`class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/mat_utils/arnold_bridge.py#L578)** — Switchboard slots for the ``arnold_bridge.ui`` panel.
+- **[`class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/mat_utils/arnold_bridge.py#L574)** — Switchboard slots for the ``arnold_bridge.ui`` panel.
   - `ArnoldBridgeSlots.header_init(self, widget) -> None` — Configure the header menu and help text.
   - `ArnoldBridgeSlots.cmb000_init(self, widget) -> None` — Populate the Scope combobox (Selected Objects is the default).
-  - `ArnoldBridgeSlots.b000(self) -> None` — Add Bridge.
-  - `ArnoldBridgeSlots.b001(self) -> None` — Remove Bridge.
-  - `ArnoldBridgeSlots.b002(self) -> None` — Rebuild Bridge.
+  - `ArnoldBridgeSlots.b000(self) -> None` — Add Network.
+  - `ArnoldBridgeSlots.b001(self) -> None` — Remove Network.
   - `ArnoldBridgeSlots.select_bridged(self) -> None` — Header action: select every base material that has a bridge.
 
 <a id="mat_utils--game_shader"></a>
@@ -2934,6 +2934,20 @@ Sweep a circular profile along NURBS curve(s) to build a tube.
   - `ImageTracerSlots.b003(self)`
   - `ImageTracerSlots.b004(self)`
   - `ImageTracerSlots.b005(self)`
+
+<a id="render_utils--_render_utils"></a>
+### `render_utils/_render_utils.py`
+
+Render-control helpers.
+
+- **[`class RenderUtils(ptk.HelpMixin)`](mayatk/mayatk/render_utils/_render_utils.py#L28)** — Renderer enumeration / selection and Render-View control.
+  - `RenderUtils.get_available_renderers(cls) -> List[Dict[str, object]]` *(class)* — Renderers the user can pick.
+  - `RenderUtils.current_renderer() -> str` *(static)* — The scene's active renderer (``defaultRenderGlobals.currentRenderer``).
+  - `RenderUtils.set_renderer(cls, name: str) -> None` *(class)* — Make *name* the active renderer, loading its plugin if required.
+  - `RenderUtils.render_camera(camera: str, editor: str = 'render') -> None` *(static)* — Render *camera* into the Render View, opening it if needed.
+  - `RenderUtils.redo_previous_render(editor: str = 'render') -> None` *(static)* — Re-render the last render with its previous settings (fast path).
+  - `RenderUtils.supports_ipr(cls, renderer: Optional[str] = None) -> bool` *(class)* — True if *renderer* can start an interactive (IPR) session.
+  - `RenderUtils.start_ipr(cls, camera: str, renderer: Optional[str] = None) -> bool` *(class)* — Launch interactive (IPR) realtime rendering for *renderer*.
 
 <a id="rig_utils--_rig_utils"></a>
 ### `rig_utils/_rig_utils.py`

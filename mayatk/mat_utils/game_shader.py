@@ -823,7 +823,7 @@ class GameShader(ptk.LoggingMixin):
                 "file",
                 fileTextureName=texture,
                 colorSpace="Raw",
-                alphaIsLuminance=1,
+                alphaIsLuminance=0,  # smoothness is the real alpha, not luminance
                 name=ptk.format_path(texture, section="name"),
             )
             # Metallic in RGB, smoothness in alpha (need to invert for roughness)
@@ -874,7 +874,7 @@ class GameShader(ptk.LoggingMixin):
                 "file",
                 fileTextureName=texture,
                 colorSpace="Raw",
-                alphaIsLuminance=1,
+                alphaIsLuminance=0,  # smoothness is the real alpha, not luminance
                 name=ptk.format_path(texture, section="name"),
             )
             # Connect red channel (metallic) to metalness
@@ -1030,7 +1030,7 @@ class GameShader(ptk.LoggingMixin):
                 "file",
                 fileTextureName=texture,
                 colorSpace="Raw",
-                alphaIsLuminance=1,
+                alphaIsLuminance=0,  # smoothness is the real alpha, not luminance
                 name=ptk.format_path(texture, section="name"),
             )
             # Metallic in RGB, smoothness in alpha (need to invert for roughness)
@@ -1078,7 +1078,7 @@ class GameShader(ptk.LoggingMixin):
                 "file",
                 fileTextureName=texture,
                 colorSpace="Raw",
-                alphaIsLuminance=1,
+                alphaIsLuminance=0,  # smoothness is the real alpha, not luminance
                 name=ptk.format_path(texture, section="name"),
             )
             cmds.connectAttr(f"{texture_node}.outColorR", f"{op_node}.baseMetalness", force=True)

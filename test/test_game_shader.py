@@ -975,6 +975,24 @@ class GameShaderTest(unittest.TestCase):
             len(reverse_nodes) > 0, "Reverse node for smoothness inversion missing"
         )
 
+        # Smoothness lives in the packed ALPHA channel, so the MSAO file node
+        # must read the real alpha (alphaIsLuminance=0). With aIL=1 Maya
+        # synthesizes outAlpha from RGB luminance, driving roughness from
+        # luminance(metallic, AO, detail) instead of smoothness.
+        rev = cmds.listConnections(
+            f"{std_node}.specularRoughness", source=True, destination=False,
+            type="reverse",
+        ) or []
+        self.assertTrue(rev, "smoothness-invert reverse not feeding roughness")
+        msao_file = cmds.listConnections(
+            f"{rev[0]}.inputX", source=True, destination=False, type="file"
+        ) or []
+        self.assertTrue(msao_file, "MSAO file feeding the reverse missing")
+        self.assertEqual(
+            cmds.getAttr(f"{msao_file[0]}.alphaIsLuminance"), 0,
+            "MSAO smoothness must read the real alpha (aIL=0), not luminance",
+        )
+
     # NOTE: Arnold MSAO channel routing moved to ArnoldBridge —
     # see test_arnold_bridge.py::test_msao_channel_routing.
 

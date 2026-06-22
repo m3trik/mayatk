@@ -683,7 +683,7 @@ _Generated: 2026-06-22_
 - `class ArnoldBridge(ptk.LoggingMixin)`
   - methods: add, remove, rebuild, get_bridge, has_bridge
 - `class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin)`
-  - methods: header_init, cmb000_init, b000, b001, b002, select_bridged
+  - methods: header_init, cmb000_init, b000, b001, select_bridged
 
 ### `mat_utils/game_shader.py`
 - `class GameShader(ptk.LoggingMixin)`
@@ -925,6 +925,10 @@ _Generated: 2026-06-22_
   - methods: trace_curves, create_mesh, create_negative_space_mesh, project_on_plane
 - `class ImageTracerSlots`
   - methods: header_init, txt000_init, browse_image, chk000, b002, b003, b004, b005
+
+### `render_utils/_render_utils.py` — Render-control helpers.
+- `class RenderUtils(ptk.HelpMixin)`
+  - methods: get_available_renderers, current_renderer, set_renderer, render_camera, redo_previous_render, supports_ipr, start_ipr
 
 ### `rig_utils/_rig_utils.py`
 - `class RigUtils(ptk.HelpMixin)`
