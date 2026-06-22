@@ -72,6 +72,36 @@ class ArnoldBridge(ptk.LoggingMixin):
     # that sits alongside the standard ``surfaceShader``).
     BRIDGE_SLOT = "aiSurfaceShader"
 
+    # Channel layout for packed masks — which ``outColor`` channel carries which
+    # property, so one routine wires them all. ``rough`` is ``(channel, invert)``
+    # (invert routes through a ``reverse`` node, e.g. smoothness → roughness);
+    # ``ao`` is the single grayscale channel ('R'/'G'/'B') broadcast into the
+    # baseColor multiply. ``A`` (in ``rough``) means the alpha plug.
+    #
+    # AO is ALWAYS a single channel broadcast to RGB — never the whole outColor.
+    # Feeding the full packed outColor into the baseColor multiply tints the
+    # surface by (metallic, ao, detail): for the common non-metal case R≈0 zeroes
+    # red and the AO green channel dominates, so every object renders green. The
+    # AO occlusion lives in exactly one channel; broadcast only that.
+    #
+    # ``aIL`` is the file node's ``alphaIsLuminance``. It MUST be 0 whenever a
+    # property is read from the real alpha plug ('A' in ``rough``): with aIL=1
+    # Maya synthesizes outAlpha from RGB luminance and IGNORES the packed alpha,
+    # so smoothness would silently become luminance(metallic, ao, detail). Layouts
+    # that read everything from colour channels can leave aIL at either value.
+    _PACKED_LAYOUTS = {
+        # Unreal/glTF ORM: R=AO, G=Roughness, B=Metallic.
+        "ORM": {"aIL": 0, "metal": "B", "rough": ("G", False), "ao": "R"},
+        # Metallic-Roughness-AO: R=Metallic, G=Roughness, B=AO.
+        "MRAO": {"aIL": 0, "metal": "R", "rough": ("G", False), "ao": "B"},
+        # Unity HDRP mask: R=Metallic, G=AO, B=Detail, A=Smoothness.
+        # aIL=0 so the smoothness in the real alpha channel is read, not luminance.
+        "MSAO": {"aIL": 0, "metal": "R", "rough": ("A", True), "ao": "G"},
+        # Unity URP: RGB=Metallic, A=Smoothness. aIL=0 to read the alpha smoothness
+        # (RGB are all metallic, so luminance would just re-read metalness).
+        "Metallic_Smoothness": {"aIL": 0, "metal": "R", "rough": ("A", True)},
+    }
+
     # ------------------------------------------------------------------ public
     @CoreUtils.undoable
     @_selection_neutral
@@ -305,13 +335,38 @@ class ArnoldBridge(ptk.LoggingMixin):
             seen_types.add(map_type)
             found.append((path, map_type))
 
+        # When several packed masks resolve for one material, keep only the
+        # highest-priority one (the order below) so a property isn't wired twice.
+        present = [
+            p
+            for p in ("ORM", "MRAO", "MSAO", "Metallic_Smoothness")
+            if p in {t for _, t in found}
+        ]
+        if len(present) > 1:
+            drop = set(present[1:])
+            found = [(p, t) for p, t in found if t not in drop]
+
+        # A primary map supersedes the fallback maps it substitutes for, so the
+        # two never fight over the same Arnold slot. (These fallbacks used to be
+        # dropped outright; keep the primary deterministically winning now that
+        # they're wired too.)
         types = {t for _, t in found}
-        if "ORM" in types:
-            found = [
-                (p, t) for p, t in found if t not in ("MSAO", "Metallic_Smoothness")
-            ]
-        elif "MSAO" in types:
-            found = [(p, t) for p, t in found if t != "Metallic_Smoothness"]
+        drop = set()
+        if "Roughness" in types:  # vs. inverted-smoothness fallbacks
+            drop |= {"Glossiness", "Smoothness"}
+        # Any map that drives metalness — plain Metallic or a packed mask —
+        # supersedes the Specular luminance proxy, so both never wire metalness.
+        if types & {"Metallic", "ORM", "MRAO", "MSAO", "Metallic_Smoothness"}:
+            drop |= {"Specular"}
+        if any(t.startswith("Normal") for t in types):  # vs. bump/height
+            drop |= {"Bump", "Height"}
+        # A packed mask carrying AO (ORM/MRAO/MSAO broadcast a single channel
+        # into the baseColor multiply) supersedes a standalone AO map (which
+        # drives the whole multiply input2), so the two don't fight over it.
+        if types & {"ORM", "MRAO", "MSAO"}:
+            drop |= {"Ambient_Occlusion"}
+        if drop:
+            found = [(p, t) for p, t in found if t not in drop]
         return found
 
     # --------------------------------------------------------------- network
@@ -338,6 +393,93 @@ class ArnoldBridge(ptk.LoggingMixin):
         )
         return ai_node, aiMult_node, bump_node
 
+    # ----------------------------------------------------------- wiring helpers
+    @staticmethod
+    def _make_file(
+        texture: str,
+        *,
+        alpha_is_luminance: Optional[int] = None,
+        color_space: str = "Raw",
+    ) -> str:
+        """Create a dedicated ``file`` node for the bridge.
+
+        The bridge never shares the base material's file nodes (Arnold and
+        Stingray need conflicting ``colorSpace`` / ``alphaIsLuminance``), so
+        every map gets its own node — created here so the per-map handlers don't
+        each repeat the boilerplate.
+
+        ``color_space`` defaults to ``Raw`` (correct for every data map —
+        normals, packed masks, roughness, etc.). Colour maps that are authored
+        sRGB (base colour, emissive) MUST pass ``color_space="sRGB"`` or the
+        Arnold preview renders too dark and no longer matches the game material.
+        """
+        kwargs = dict(
+            fileTextureName=texture,
+            colorSpace=color_space,
+            ignoreColorSpaceFileRules=1,
+            name=ptk.format_path(texture, section="name"),
+        )
+        if alpha_is_luminance is not None:
+            kwargs["alphaIsLuminance"] = alpha_is_luminance
+        return NodeUtils.create_render_node("file", **kwargs)
+
+    @staticmethod
+    def _chan_plug(file_node: str, channel: str) -> str:
+        """Output plug for a colour channel ('R'/'G'/'B') or 'A' (the alpha)."""
+        if channel == "A":
+            return f"{file_node}.outAlpha"
+        return f"{file_node}.outColor{channel}"
+
+    @staticmethod
+    def _wire_roughness(ai_node: str, source_plug: str, *, invert: bool = False) -> None:
+        """Drive ``specularRoughness`` (+ transmission blur) from a scalar plug.
+
+        Inserts a ``reverse`` node when the source is smoothness / glossiness
+        (the inverse of roughness).
+        """
+        if invert:
+            reverse_node = NodeUtils.create_render_node(
+                "reverse", name="invertSmoothness"
+            )
+            cmds.connectAttr(source_plug, f"{reverse_node}.inputX", force=True)
+            source_plug = f"{reverse_node}.outputX"
+        cmds.connectAttr(source_plug, f"{ai_node}.specularRoughness", force=True)
+        cmds.connectAttr(
+            source_plug, f"{ai_node}.transmissionExtraRoughness", force=True
+        )
+
+    @staticmethod
+    def _wire_bump(bump_node: str, source_plug: str, *, tangent: bool) -> None:
+        """Feed a scalar plug into the ``bump2d`` (tangent normals vs. bump/height)."""
+        cmds.setAttr(f"{bump_node}.bumpInterp", 1 if tangent else 0)
+        cmds.connectAttr(source_plug, f"{bump_node}.bumpValue", force=True)
+
+    def _connect_packed(
+        self, file_node: str, ai_node: str, aiMult_node: str, layout: dict
+    ) -> None:
+        """Route a packed mask (ORM / MRAO / MSAO / Metallic_Smoothness).
+
+        ``layout`` (see :attr:`_PACKED_LAYOUTS`) names the channel for each
+        property, so this one routine replaces four near-identical branches.
+        """
+        cmds.connectAttr(
+            self._chan_plug(file_node, layout["metal"]),
+            f"{ai_node}.metalness",
+            force=True,
+        )
+        rough_ch, invert = layout["rough"]
+        self._wire_roughness(
+            ai_node, self._chan_plug(file_node, rough_ch), invert=invert
+        )
+        ao_ch = layout.get("ao")
+        if ao_ch:
+            # Broadcast the single AO channel uniformly into the baseColor
+            # multiply (input2R/G/B) — never the whole packed outColor (see
+            # _PACKED_LAYOUTS: that greens every non-metal surface).
+            src = self._chan_plug(file_node, ao_ch)
+            for c in "RGB":
+                cmds.connectAttr(src, f"{aiMult_node}.input2{c}", force=True)
+
     def _connect_texture(
         self,
         texture: str,
@@ -358,236 +500,90 @@ class ArnoldBridge(ptk.LoggingMixin):
         Returns:
             True if a connection was made, False for an unsupported type.
         """
-        if texture_type in ["Base_Color", "Diffuse"]:
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{aiMult_node}.input1", force=True
-            )
-
-        elif texture_type == "Albedo_Transparency":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            # Base color
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{aiMult_node}.input1", force=True
-            )
-            # Transparency: alpha -> standard-surface opacity
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{ai_node}.opacityR", force=True
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{ai_node}.opacityG", force=True
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{ai_node}.opacityB", force=True
-            )
+        # Normals (Normal / Normal_OpenGL / Normal_DirectX) → tangent-space bump.
+        if texture_type.startswith("Normal"):
+            f = self._make_file(texture, alpha_is_luminance=1)
+            self._wire_bump(bump_node, f"{f}.outAlpha", tangent=True)
             return True
 
-        elif texture_type == "Roughness":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                alphaIsLuminance=1,
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{ai_node}.specularRoughness", force=True
-            )
-            # Reuse roughness for refraction blurriness.
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha",
-                f"{ai_node}.transmissionExtraRoughness",
-                force=True,
-            )
+        # Packed masks (ORM / MRAO / MSAO / Metallic_Smoothness).
+        layout = self._PACKED_LAYOUTS.get(texture_type)
+        if layout:
+            f = self._make_file(texture, alpha_is_luminance=layout["aIL"])
+            self._connect_packed(f, ai_node, aiMult_node, layout)
+            return True
 
-        elif texture_type == "Metallic":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                alphaIsLuminance=1,
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{ai_node}.metalness", force=True
-            )
+        # Colour → base color (via the AO multiply's input1). sRGB-authored, so
+        # read it as sRGB — Raw would render the albedo too dark and break parity
+        # with the game material.
+        if texture_type in ("Base_Color", "Diffuse", "Albedo_Transparency"):
+            f = self._make_file(texture, color_space="sRGB")
+            cmds.connectAttr(f"{f}.outColor", f"{aiMult_node}.input1", force=True)
+            if texture_type == "Albedo_Transparency":
+                # Alpha → standard-surface opacity (R/G/B).
+                for c in "RGB":
+                    cmds.connectAttr(
+                        f"{f}.outAlpha", f"{ai_node}.opacity{c}", force=True
+                    )
+            return True
 
-        elif texture_type == "Metallic_Smoothness":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                alphaIsLuminance=1,
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            # Invert smoothness (alpha) -> roughness.
-            reverse_node = NodeUtils.create_render_node(
-                "reverse", name="invertSmoothness"
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{reverse_node}.inputX", force=True
-            )
-            cmds.connectAttr(
-                f"{reverse_node}.outputX", f"{ai_node}.specularRoughness", force=True
-            )
-            cmds.connectAttr(
-                f"{reverse_node}.outputX",
-                f"{ai_node}.transmissionExtraRoughness",
-                force=True,
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outColorR", f"{ai_node}.metalness", force=True
-            )
+        if texture_type == "Roughness":
+            f = self._make_file(texture, alpha_is_luminance=1)
+            self._wire_roughness(ai_node, f"{f}.outAlpha")
+            return True
 
-        elif texture_type == "ORM":
-            # Unreal/glTF ORM: R=AO, G=Roughness, B=Metallic
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                alphaIsLuminance=0,
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outColorB", f"{ai_node}.metalness", force=True
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outColorG", f"{ai_node}.specularRoughness", force=True
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outColorG",
-                f"{ai_node}.transmissionExtraRoughness",
-                force=True,
-            )
-            # AO (R) -> multiply uniformly with base color.
-            cmds.connectAttr(
-                f"{texture_node}.outColorR", f"{aiMult_node}.input2R", force=True
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outColorR", f"{aiMult_node}.input2G", force=True
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outColorR", f"{aiMult_node}.input2B", force=True
-            )
+        # Glossiness / Smoothness are the inverse of roughness.
+        if texture_type in ("Glossiness", "Smoothness"):
+            f = self._make_file(texture, alpha_is_luminance=1)
+            self._wire_roughness(ai_node, f"{f}.outAlpha", invert=True)
+            return True
 
-        elif texture_type == "MSAO":
-            # Unity HDRP mask: R=Metallic, G=AO, B=Detail, A=Smoothness
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                alphaIsLuminance=1,
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outColorR", f"{ai_node}.metalness", force=True
-            )
-            reverse_node = NodeUtils.create_render_node(
-                "reverse", name="invertSmoothness"
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{reverse_node}.inputX", force=True
-            )
-            cmds.connectAttr(
-                f"{reverse_node}.outputX", f"{ai_node}.specularRoughness", force=True
-            )
-            cmds.connectAttr(
-                f"{reverse_node}.outputX",
-                f"{ai_node}.transmissionExtraRoughness",
-                force=True,
-            )
-            # AO (G) -> multiply with base color.
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{aiMult_node}.input2", force=True
-            )
+        # Specular has no aiStandardSurface analogue — use its luminance as a
+        # metalness proxy (the registry's own Metallic fallback).
+        if texture_type in ("Metallic", "Specular"):
+            f = self._make_file(texture, alpha_is_luminance=1)
+            cmds.connectAttr(f"{f}.outAlpha", f"{ai_node}.metalness", force=True)
+            return True
 
-        elif texture_type == "Emissive":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{ai_node}.emission", force=True
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{ai_node}.emissionColor", force=True
-            )
+        if texture_type == "Emissive":
+            # Emissive colour is sRGB-authored (see base colour).
+            f = self._make_file(texture, color_space="sRGB")
+            cmds.connectAttr(f"{f}.outAlpha", f"{ai_node}.emission", force=True)
+            cmds.connectAttr(f"{f}.outColor", f"{ai_node}.emissionColor", force=True)
+            return True
 
-        elif "Normal" in texture_type:
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                alphaIsLuminance=1,
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{bump_node}.bumpValue", force=True
-            )
+        # Bump / Height → object-space bump (not tangent normals).
+        if texture_type in ("Bump", "Height"):
+            f = self._make_file(texture, alpha_is_luminance=1)
+            self._wire_bump(bump_node, f"{f}.outAlpha", tangent=False)
+            return True
 
-        elif texture_type == "Ambient_Occlusion":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{aiMult_node}.input2", force=True
-            )
+        if texture_type == "Ambient_Occlusion":
+            f = self._make_file(texture)
+            cmds.connectAttr(f"{f}.outColor", f"{aiMult_node}.input2", force=True)
+            return True
 
-        elif texture_type == "Opacity":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                alphaIsLuminance=1,
-                ignoreColorSpaceFileRules=1,
-                name=ptk.format_path(texture, section="name"),
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{ai_node}.opacity", force=True
-            )
-        else:
-            return False
-        return True
+        if texture_type == "Opacity":
+            f = self._make_file(texture, alpha_is_luminance=1)
+            cmds.connectAttr(f"{f}.outColor", f"{ai_node}.opacity", force=True)
+            return True
+
+        return False
 
 
 class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin):
     """Switchboard slots for the ``arnold_bridge.ui`` panel.
 
     A thin driver over :class:`ArnoldBridge` — no bridge logic lives here.
-    Add / Remove / Rebuild operate on the scope picked in the combobox
-    (selected objects' materials, or every scene material). Force makes Add
-    rebuild a material that already has a bridge instead of skipping it.
+    Add / Remove operate on the scope picked in the combobox (selected objects'
+    materials, or every scene material). Force makes Add rebuild a material that
+    already has a network instead of skipping it.
     """
 
     # (label, op-kwarg-resolver-key). The combobox shows the labels; the action
     # methods map the current label to a scope via _scope_kwargs().
     _SCOPE_LABELS = ("Selected Objects", "All Scene Materials")
-    _VERB = {"add": "Added", "remove": "Removed", "rebuild": "Rebuilt"}
+    _VERB = {"add": "Added", "remove": "Removed"}
 
     def __init__(self, switchboard, log_level: str = "WARNING"):
         super().__init__()
@@ -618,12 +614,12 @@ class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin):
                     steps=[
                         "Pick a <b>Scope</b>: the selected objects' materials, or "
                         "every scene material.",
-                        "<b>Add Bridge</b> mirrors each material's textures onto a "
+                        "<b>Add Network</b> mirrors each material's textures onto a "
                         "new Arnold shader wired to the shading group's "
                         "<i>aiSurfaceShader</i> slot.",
-                        "<b>Remove Bridge</b> deletes the Arnold network (the "
-                        "exported material is untouched); <b>Rebuild</b> re-syncs it "
-                        "to the material's current textures.",
+                        "<b>Remove Network</b> deletes the Arnold network (the "
+                        "exported material is untouched). Enable <b>Force</b> to "
+                        "rebuild a material that already has a network.",
                     ],
                     sections=[
                         ("Scene-only by design", [
@@ -648,16 +644,12 @@ class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin):
 
     # ------------------------------------------------------------------ actions
     def b000(self) -> None:
-        """Add Bridge."""
+        """Add Network."""
         self._run("add", force=self.ui.chk000.isChecked())
 
     def b001(self) -> None:
-        """Remove Bridge."""
+        """Remove Network."""
         self._run("remove")
-
-    def b002(self) -> None:
-        """Rebuild Bridge."""
-        self._run("rebuild")
 
     def select_bridged(self) -> None:
         """Header action: select every base material that has a bridge.
@@ -670,11 +662,11 @@ class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin):
             m for m in self._scene_base_materials() if self._bridge.has_bridge(m)
         ]
         if not bridged:
-            self.ui.footer.setText("No materials have an Arnold bridge.")
+            self.ui.footer.setText("No materials have an Arnold network.")
             return
         cmds.select(bridged, replace=True)
         self.ui.footer.setText(
-            f"Selected {len(bridged)} bridged material(s)."
+            f"Selected {len(bridged)} material(s) with an Arnold network."
         )
 
     # ------------------------------------------------------------------ helpers
@@ -717,13 +709,13 @@ class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin):
             kwargs["force"] = force
 
         with self.ui.footer.progress(
-            text=f"{op.capitalize()} Arnold bridge ({desc})…"
+            text=f"{op.capitalize()} Arnold network ({desc})…"
         ):
             result = getattr(self._bridge, op)(**kwargs)
 
         n = len(result)
         self.ui.footer.setText(
-            f"{self._VERB[op]} {n} Arnold bridge{'' if n == 1 else 's'} ({desc})."
+            f"{self._VERB[op]} {n} Arnold network{'' if n == 1 else 's'} ({desc})."
         )
 
 

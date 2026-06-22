@@ -112,22 +112,42 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
 
     @property
     def hdr_env(self) -> Optional[str]:
-        """The skydome shape node, or ``None`` if not present."""
+        """The active skydome shape node, or ``None`` if none exists.
+
+        Prefers the canonically-named dome (this manager's, or an older scene's),
+        but **adopts any** ``aiSkyDomeLight`` in the scene so the panel mirrors a
+        skydome the user created another way — Arnold's own *Lights* menu, an
+        imported/referenced scene, or a renamed node — instead of reporting
+        ``None`` (and then silently building a *second* dome on the next pick).
+        Among non-canonical domes it prefers one already wired to a ``file``
+        texture (a real HDR environment) and is otherwise deterministic (first by
+        name).
+        """
         # Without mtoa loaded the aiSkyDomeLight type isn't registered and no
         # such node can exist — short-circuit to skip the ls (and the
         # "Unknown object type" warning it emits) on every UI sync. This keeps
         # panel open / refresh cheap now that Arnold is no longer force-loaded.
         if not self.arnold_loaded():
             return None
-        node = cmds.ls(self.hdr_env_name, exactType="aiSkyDomeLight") or []
-        return node[0] if node else None
+        domes = sorted(cmds.ls(exactType="aiSkyDomeLight") or [])
+        if not domes:
+            return None
+        if self.hdr_env_name in domes:
+            return self.hdr_env_name
+        for dome in domes:
+            if self._connected_file_node(dome):
+                return dome
+        return domes[0]
 
     @hdr_env.setter
     def hdr_env(self, tex: Optional[str]) -> None:
         """Set (and lazily create) the skydome's HDR file texture.
 
         Passing ``None`` or an empty string is a no-op — use
-        :meth:`clear` to remove the network.
+        :meth:`clear` to remove the network. As a side effect this makes Arnold
+        the active renderer (see :meth:`_ensure_arnold_renderer`): an
+        ``aiSkyDomeLight`` renders in no other renderer, so applying an HDR
+        implies "render with Arnold".
         """
         if not tex:
             return
@@ -154,6 +174,12 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
                     tex,
                 )
                 return
+
+        # Only once we're committed to wiring a valid texture: this is the single
+        # choke point for every apply path (create_network, the UI swap, the add
+        # flow), so making Arnold active here covers them all. (A refused
+        # incomplete image above returns before this, leaving the renderer alone.)
+        self._ensure_arnold_renderer()
 
         node = self.hdr_env or self._create_skydome()
         file_node = self._connected_file_node(node)
@@ -224,21 +250,18 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
     @rotation.setter
     def rotation(self, degrees: float) -> None:
         transform = self.hdr_env_transform
-        # Guard a stale / partly-deleted network: a transform name that no
-        # longer exists makes cmds.rotate treat the angle as the object
-        # ("Object 140.0 is invalid"). No-op cleanly rather than throwing up
+        # No-op on a stale / partly-deleted network rather than throwing up
         # into the UI slot — a slider drag must never error.
         if not transform or not cmds.objExists(transform):
             return
+        # Set rotateY directly. cmds.rotate's positionals are (angleX, angleY,
+        # angleZ, *objects) — the old call passed the transform *first*, so Maya
+        # parsed the angle as an object ("Object N is invalid") and raised on
+        # EVERY set (valid transform too); the try/except swallowed it, so the
+        # dome never actually rotated. setAttr is unambiguous, and the dome only
+        # ever spins around Y from a default pivot.
         try:
-            cmds.rotate(
-                transform,
-                float(degrees),
-                rotateY=True,
-                forceOrderXYZ=True,
-                objectSpace=True,
-                absolute=True,
-            )
+            cmds.setAttr(f"{transform}.rotateY", float(degrees))
         except Exception as e:  # a slider drag must never crash Maya
             self.logger.debug("rotation set skipped (%s): %s", transform, e)
 
@@ -368,6 +391,25 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _ensure_arnold_renderer(self) -> None:
+        """Make Arnold the active renderer if it isn't already.
+
+        ``aiSkyDomeLight`` renders in **no other renderer** — a skydome built
+        while Maya Software / Hardware (the fresh-scene default) is active renders
+        **black no matter the visibility flag**, which is the usual cause of a
+        "the HDR is set but the render is black" report. Applying an HDR therefore
+        implies "render with Arnold". Delegates to :class:`RenderUtils` (the
+        renderer-selection SSoT) and never raises — renderer bookkeeping must not
+        break wiring the texture. mtoa is already loaded by every caller.
+        """
+        try:
+            from mayatk.render_utils._render_utils import RenderUtils
+
+            if RenderUtils.current_renderer() != "arnold":
+                RenderUtils.set_renderer("arnold")
+        except Exception as e:
+            self.logger.debug("could not set Arnold as the active renderer: %s", e)
+
     def _get_light_attr(self, attr: str, default, cast=float):
         """Read numeric *attr* off the skydome shape.
 
@@ -441,9 +483,10 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     """Switchboard slots for the HDR Manager UI.
 
     Composition over inheritance: routes events through ``self.manager``
-    rather than carrying business logic. Combobox auto-refreshes when
-    the Maya scene changes (``SceneOpened``) so newly-opened projects
-    pick up their own sourceimages set.
+    rather than carrying business logic. The dropdown is a *live mirror* of
+    the scene's HDR environment — it always shows the active map (or ``None``
+    when no skydome is wired). Scene open / new / import and undo / redo all
+    re-sync it via :class:`ScriptJobManager`, so it never drifts from reality.
     """
 
     # File-dialog filter for the browse button.
@@ -476,12 +519,26 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self.ui = self.sb.loaded_ui.hdr_manager
         self.manager = HdrManager()
 
-        # Auto-refresh the HDR list when the user opens a new scene —
-        # otherwise the combo silently lists sourceimages from the
-        # previous workspace.
+        # Keep the dropdown a live mirror of the scene's HDR environment.
+        # Scene open / new / import swap the whole environment AND the
+        # sourceimages set the list is drawn from → re-scan disk + re-sync.
+        # Undo / Redo only flip which network is live (the files on disk are
+        # untouched) → re-sync widgets + selection, but skip the disk re-scan so
+        # a recursive sourceimages walk doesn't run on every undo of anything.
+        # All are valid Maya scriptJob events, but each subscribe is guarded so
+        # an event unavailable on some Maya build can't block the panel open.
         mgr = ScriptJobManager.instance()
-        mgr.subscribe("SceneOpened", self._on_scene_changed, owner=self)
-        mgr.subscribe("NewSceneOpened", self._on_scene_changed, owner=self)
+        for events, handler in (
+            (("SceneOpened", "NewSceneOpened", "SceneImported"), self._on_scene_changed),
+            (("Undo", "Redo"), self._sync_ui_to_scene),
+        ):
+            for event in events:
+                try:
+                    mgr.subscribe(event, handler, owner=self)
+                except Exception as e:
+                    self.logger.debug(
+                        "HDR Manager: scriptJob %r unavailable (%s)", event, e
+                    )
         mgr.connect_cleanup(self.ui, owner=self)
 
         # Initial population is deferred to the next event-loop tick. The
@@ -497,6 +554,14 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         Deferred from __init__ (see there) so the full UI is registered
         before any ``self.ui.<widget>`` access.
         """
+        # Per-field reset buttons (uitk option-box) on the Intensity / Exposure
+        # / Resolution / Samples / Diffuse / Specular spin boxes: click resets a
+        # field to its default; Alt/Ctrl+click bypasses it (greyed, restorable).
+        # Done here rather than __init__ because the spin boxes aren't wired onto
+        # self.ui until register_children runs (see __init__); wrap before the
+        # _sync_ui_to_scene reads below, since wrapping reparents the widgets.
+        self.sb.add_reset_buttons(self.ui)
+
         self._refresh_combo()
         self._sync_ui_to_scene()
 
@@ -572,7 +637,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     def header_init(self, widget) -> None:
         """Configure header menu and refresh button."""
         widget.config_buttons("refresh", "menu", "collapse", "hide")
-        widget.refresh_requested.connect(self._refresh_combo)
+        widget.refresh_requested.connect(self._refresh_and_sync_combo)
         widget.menu.add("Separator", setTitle="Sourceimages")
         widget.menu.add(
             "QPushButton",
@@ -637,23 +702,27 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                 notes=[
                     "Requires the Arnold (mtoa) plugin to be loaded — the "
                     "footer reports if it's missing.",
+                    "Applying an HDR switches the active renderer to <b>Arnold</b> "
+                    "— an aiSkyDomeLight renders in no other renderer (a Maya "
+                    "Software/Hardware render would be black regardless of Visible).",
                 ],
             )
         )
 
     def cmb000_init(self, widget) -> None:
         """Wire the HDR dropdown: option-box plugins, context menu, auto-refresh."""
-        # Auto-refresh from disk every time the user opens the dropdown,
-        # so newly-saved HDRs appear without hitting the header refresh.
-        widget.before_popup_shown.connect(self._refresh_combo)
+        # Re-scan disk AND re-point at the live scene HDR every time the user
+        # opens the dropdown, so newly-saved HDRs appear and the active map is
+        # highlighted without hitting the header refresh.
+        widget.before_popup_shown.connect(self._refresh_and_sync_combo)
 
         # The dropdown mirrors the LIVE scene HDR, never a persisted UI value —
         # opt out of cross-session state restore. Otherwise the switchboard
         # restores the last index on panel open and (signals unblocked) fires
         # cmb000, auto-loading a stale HDR onto a fresh scene instead of showing
-        # the true state. _refresh_combo also gives the combo a header, which
-        # keeps this False across every repopulate (ComboBox.add resets
-        # restore_state = not has_header); this covers the pre-refresh window.
+        # the true state. ComboBox.add() resets restore_state on every populate
+        # (= not has_header), so _refresh_combo re-asserts this False each time;
+        # this initial set covers the pre-refresh window.
         widget.restore_state = False
 
         # Right-click → context menu (MenuMixin on uitk ComboBox). Kept
@@ -734,42 +803,66 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         previous_data = self.ui.cmb000.currentData()
         src = EnvUtils.get_env_info("sourceimages")
 
+        if not src or not os.path.isdir(src):
+            # Block signals so the rebuild doesn't fire cmb000 → set hdr_env.
+            self.ui.cmb000.blockSignals(True)
+            try:
+                self.ui.cmb000.add([], clear=True)
+                # Mirror the LIVE scene, never a persisted pick — re-assert the
+                # opt-out (ComboBox.add resets restore_state on every populate).
+                self.ui.cmb000.restore_state = False
+                self._prepend_none_item()
+            finally:
+                self.ui.cmb000.blockSignals(False)
+            # High-frequency path (fires on every dropdown open); colour the
+            # footer but skip _notify so we don't spam the console log.
+            self.ui.footer.setText(
+                "No sourceimages directory in workspace.", level="warning"
+            )
+            return
+
+        # Recursive so HDRs kept in a sourceimages *subfolder* (e.g.
+        # ``sourceimages/hdr/``) list in the dropdown — they're already in
+        # the project, so the add flow leaves them in place rather than
+        # duplicating them into the root.
+        hdr_info = ptk.get_dir_contents(
+            src,
+            ["filename", "filepath"],
+            recursive=True,
+            inc_files=["*.exr", "*.hdr"],
+            group_by_type=True,
+        )
+        count = len(hdr_info["filename"])
+        self.ui.footer.setText(
+            f"{count} HDR{'s' if count != 1 else ''} in sourceimages."
+        )
+
+        # Skip the destructive clear+repopulate when the listed HDRs are
+        # unchanged. _refresh_combo runs on EVERY dropdown-open
+        # (before_popup_shown); rebuilding the item model right before the popup
+        # shows can leave the popup view's selection desynced so the first click
+        # is dropped (the "I have to reopen it to select" symptom). The disk
+        # listing is the only input, so an unchanged listing → leave it intact.
+        if self._listed_paths_match(hdr_info["filepath"]):
+            return
+
         # Block signals so the rebuild doesn't fire cmb000 → set hdr_env
         # → re-trigger refresh while we're still rebuilding.
         self.ui.cmb000.blockSignals(True)
         try:
-            if not src or not os.path.isdir(src):
-                # The header doubles as the placeholder AND keeps the combo
-                # non-persistent (restore_state = not has_header).
-                self.ui.cmb000.add([], header="HDR Map:", clear=True)
-                self._prepend_none_item()
-                # High-frequency path (fires on every dropdown open); colour the
-                # footer but skip _notify so we don't spam the console log.
-                self.ui.footer.setText(
-                    "No sourceimages directory in workspace.", level="warning"
-                )
-                return
-
-            # Recursive so HDRs kept in a sourceimages *subfolder* (e.g.
-            # ``sourceimages/hdr/``) list in the dropdown — they're already in
-            # the project, so the add flow leaves them in place rather than
-            # duplicating them into the root.
-            hdr_info = ptk.get_dir_contents(
-                src,
-                ["filename", "filepath"],
-                recursive=True,
-                inc_files=["*.exr", "*.hdr"],
-                group_by_type=True,
-            )
-            # ComboBox.add() drives both userData and visible text. The header
-            # ("HDR Map:", shown at index -1) is the no-selection state and
-            # makes the combo non-persistent (restore_state = not has_header).
+            # ComboBox.add() drives both userData and visible text. No header is
+            # used: a header would paint a fixed "HDR Map:" label at index -1 and
+            # (via ComboBox.check_index) snap the selection back to -1 after every
+            # pick — hiding the active map AND zeroing currentData() so the apply
+            # silently no-ops. The combo must instead display the live selection.
             self.ui.cmb000.add(
                 zip(hdr_info["filename"], hdr_info["filepath"]),
-                header="HDR Map:",
                 ascending=False,
                 clear=True,
             )
+            # Mirror the LIVE scene, never a persisted pick — re-assert the
+            # opt-out (ComboBox.add resets restore_state on every populate).
+            self.ui.cmb000.restore_state = False
             # Explicit "None" entry at the top so the user can clear the HDR
             # environment from the same dropdown that sets it.
             self._prepend_none_item()
@@ -779,13 +872,27 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                 idx = self.ui.cmb000.findData(previous_data)
                 if idx >= 0:
                     self.ui.cmb000.setCurrentIndex(idx)
-
-            count = len(hdr_info["filename"])
-            self.ui.footer.setText(
-                f"{count} HDR{'s' if count != 1 else ''} in sourceimages."
-            )
         finally:
             self.ui.cmb000.blockSignals(False)
+
+    def _listed_paths_match(self, new_paths) -> bool:
+        """True if the dropdown already lists exactly *new_paths*.
+
+        Compares the combo's real HDR entries (skipping the ``None`` sentinel)
+        against a fresh disk listing, normalized for slash/case, so an unchanged
+        ``sourceimages`` lets :meth:`_refresh_combo` skip the destructive
+        repopulate. Order-independent — only membership matters for "did the
+        available HDRs change". A transient unlisted-active row (a Link-mode HDR
+        outside sourceimages) won't be in the listing, so this returns False and
+        the rebuild still runs — correct, since that row is re-surfaced after.
+        """
+        combo = self.ui.cmb000
+        current = set()
+        for i in range(combo.count()):
+            data = combo.itemData(i)
+            if data and data != self.NONE_TOKEN:
+                current.add(self._norm_path(data))
+        return current == {self._norm_path(p) for p in new_paths}
 
     def _prepend_none_item(self) -> None:
         """Insert the explicit 'None' entry at the top of the HDR dropdown.
@@ -810,11 +917,11 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         hit (and selects it, signals blocked); False if no entry matches (e.g.
         a Link-mode file that lives outside sourceimages).
         """
-        target = os.path.normcase(os.path.normpath(str(path)))
+        target = self._norm_path(path)
         combo = self.ui.cmb000
         for i in range(combo.count()):
             data = combo.itemData(i)
-            if data and os.path.normcase(os.path.normpath(str(data))) == target:
+            if data and self._norm_path(data) == target:
                 combo.blockSignals(True)
                 try:
                     combo.setCurrentIndex(i)
@@ -856,17 +963,55 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             finally:
                 widget.blockSignals(False)
 
-        # Reflect the LIVE scene HDR in the dropdown (the combo is
-        # restore_state=False, so it never shows a persisted pick): select the
-        # row matching the wired file, else show no selection (the "HDR Map:"
-        # header at index -1) — so a fresh scene reads as None, not a stale HDR.
+        # Reflect the LIVE scene HDR in the dropdown so the combo always shows
+        # what's actually lighting the scene (it's restore_state=False, so it
+        # never shows a persisted pick).
+        self._select_active_in_combo(has_env=has_env)
+
+    def _select_active_in_combo(self, has_env: Optional[bool] = None) -> None:
+        """Point the dropdown at the scene's active HDR — or ``None`` if absent.
+
+        Keeps the combo a live mirror of the environment:
+
+        * skydome wired to a **listed** file → select that row;
+        * skydome wired to an **unlisted** file (e.g. a Link-mode HDR living
+          outside ``sourceimages``) → surface it as a transient row so the combo
+          still shows the *real* active map, not a misleading ``None``;
+        * **no** skydome → select the explicit ``None`` entry (a clear "no HDR",
+          not a blank box).
+
+        Signals are blocked throughout so re-pointing never re-fires
+        :meth:`cmb000`. Any transient row is rebuilt away by the next
+        :meth:`_refresh_combo` and re-added here if the link is still active.
+        """
+        if has_env is None:
+            has_env = bool(self.manager.hdr_env)
         current_path = self.manager.hdr_file_path if has_env else None
-        if not (current_path and self._select_combo_path(current_path)):
-            self.ui.cmb000.blockSignals(True)
-            try:
-                self.ui.cmb000.setCurrentIndex(-1)
-            finally:
-                self.ui.cmb000.blockSignals(False)
+        if current_path and self._select_combo_path(current_path):
+            return
+        combo = self.ui.cmb000
+        combo.blockSignals(True)
+        try:
+            if current_path:
+                combo.addItem(os.path.basename(current_path), current_path)
+                combo.setCurrentIndex(combo.count() - 1)
+            else:
+                idx = combo.findData(self.NONE_TOKEN)
+                combo.setCurrentIndex(idx if idx >= 0 else -1)
+        finally:
+            combo.blockSignals(False)
+
+    def _refresh_and_sync_combo(self) -> None:
+        """Repopulate the list from disk, then re-point at the active HDR.
+
+        Wired to the dropdown's pre-popup signal and the header Refresh action,
+        so opening or refreshing the list always lands on (and highlights) the
+        environment that's actually live in the scene. Only the combo is
+        touched — the level/rotation widgets are left alone so a mid-edit value
+        isn't clobbered just by opening the dropdown.
+        """
+        self._refresh_combo()
+        self._select_active_in_combo()
 
     # ------------------------------------------------------------------
     # Read-only convenience
@@ -886,49 +1031,45 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     # ------------------------------------------------------------------
 
     def cmb000(self, index, widget) -> None:
-        """HDR map selection — the panel's sole apply action.
+        """HDR map selection — the panel's sole apply action (always deferred).
 
-        Picking a map applies it: if a skydome network is already live, its
-        file texture is swapped in place (a cheap ``setAttr``); if none exists
-        yet, the network is built — but **deferred** to the next event-loop
-        tick (:meth:`_apply_selection` via ``singleShot``). The build must not
-        run synchronously from here: ``loadPlugin("mtoa")`` boots the whole
-        renderer and creating render nodes mutates the scene, and doing either
-        inside a combobox ``currentIndexChanged`` callback (mid popup-teardown,
-        with event-loop re-entrancy) crashes Maya. The deferral runs it after
-        the popup has fully torn down (same pattern as :meth:`__init__`).
+        Every apply is pushed to Maya idle via :meth:`_defer_to_idle`:
+        selecting a map (swap the live texture or build a new network) and
+        selecting **None** (delete the network) all **mutate the scene**, and
+        doing that *synchronously* inside the combobox ``currentIndexChanged``
+        callback is unsafe. Mid popup-teardown the Qt event loop is re-entrant,
+        and a live Arnold IPR re-translates the skydome from inside that
+        re-entrancy — which leaves the render **black and stuck black even
+        after reopening the RenderView** (and cold-start ``loadPlugin("mtoa")``
+        + render-node creation there can crash Maya). Deferring to Maya idle
+        (not a Qt tick — see :meth:`_defer_to_idle`) runs the mutation only
+        once the popup has fully torn down; the idle read picks up the final
+        pick if several arrive at once.
         """
         path = widget.currentData()
+        if not path:  # placeholder / nothing picked
+            return
         if path == self.NONE_TOKEN:
-            # Explicit "None" — symmetric with the in-place texture swap below:
-            # if a skydome is live, remove the HDR environment now.
-            self._clear_environment("HDR set to None.")
-            return
-        if not path:
-            return
-        name = os.path.basename(path)
-        # ``hdr_env`` getter short-circuits to None unless mtoa is already
-        # loaded, so this never triggers a plugin load. A truthy result means
-        # a live skydome exists → swap its texture (no creation, no load) and
-        # pull any drifted live values back into the widgets — but only after
-        # confirming the image is complete (a truncated HDR crashes VP2.0).
-        if self.manager.hdr_env:
-            # Live network — swap the texture in place. Surface a bad file in
-            # the footer/console but don't interrupt with a modal.
-            if not self._validate_or_warn(path, dialog=False):
-                return
-            self.manager.hdr_env = path
-            self._sync_ui_to_scene()
-            self.ui.footer.setText(f"HDR: {name}", level="success")
+            self.ui.footer.setText("Removing HDR…", level="info")
         else:
-            # No network yet — build it, but DEFER off this combo signal (see
-            # the docstring: a synchronous mtoa load + node creation here
-            # crashes Maya). The next-tick apply runs after popup teardown.
-            self.ui.footer.setText(f"Applying {name}…", level="info")
-            self.sb.QtCore.QTimer.singleShot(0, self._apply_selection)
+            self.ui.footer.setText(f"Applying {os.path.basename(path)}…", level="info")
+        self._defer_to_idle(self._apply_selection)
 
     def chk000(self, state, widget) -> None:
-        """Toggle skydome primary-ray visibility."""
+        """Toggle skydome primary-ray visibility (the HDR-as-backdrop flag).
+
+        Applied **synchronously**, exactly like the other live controls
+        (intensity / exposure / rotation below), so an active Arnold IPR picks up
+        the ``camera``-flag change immediately through its normal attribute-edit
+        callback — the same way dragging the Intensity field updates the render.
+
+        Deliberately NOT deferred. Unlike the map swap (:meth:`cmb000`), a
+        checkbox toggle has no combobox-popup-teardown re-entrancy to escape, so
+        the IPR-safety deferral doesn't apply here; worse, deferring it to
+        ``evalDeferred(lowestPriority=True)`` let an active IPR (which keeps the
+        idle queue busy) starve the ``setAttr``, so toggling Visible appeared to
+        do nothing in the RenderView.
+        """
         self.manager.set_hdr_map_visibility(bool(state))
 
     def slider000(self, value, widget) -> None:
@@ -999,9 +1140,9 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     def _clear_environment(self, absent_msg: str, *, absent_level: str = "info") -> bool:
         """Remove the skydome network, resync the UI, and report.
 
-        Single owner of the clear path — shared by the dropdown's "None"
-        selection (:meth:`cmb000`), the deferred apply (:meth:`_apply_selection`),
-        and the header's Clear Network action (:meth:`clear_network`). Returns True when
+        Single owner of the clear path — shared by the deferred apply's "None"
+        selection (:meth:`_apply_selection`) and the header's Clear Network
+        action (:meth:`clear_network`). Returns True when
         a network was cleared; when none is present, reports *absent_msg* at
         *absent_level* and returns False. The ``hdr_env`` getter is None unless
         mtoa is already loaded, so this never forces a plugin load (and
@@ -1016,27 +1157,80 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self._notify("HDR environment cleared.", level="success")
         return True
 
-    def _apply_selection(self) -> None:
-        """Build / refresh the skydome network from current UI state.
+    def _defer_to_idle(self, callback) -> None:
+        """Run *callback* on Maya's idle queue, escaping any nested Qt event loop.
 
-        Cold-start apply, invoked **deferred** from :meth:`cmb000` when an HDR
-        is picked with no live network yet (the next-tick deferral keeps the
-        mtoa load + render-node creation off the combobox signal — see
-        :meth:`cmb000`). Re-reads the dropdown so it always applies the current
-        selection.
+        Scene mutations driven off the combo signal must not run inside the
+        combo popup's teardown: that is a *re-entrant* Qt event loop, and a
+        live Arnold IPR re-translating from within it leaves the RenderView
+        stuck. ``QTimer.singleShot(0)`` is serviced by whatever event loop is
+        currently spinning — the nested popup loop included — so it does **not**
+        escape the re-entrancy. ``cmds.evalDeferred`` defers to Maya's idle
+        queue, which the nested Qt loop never services, so the mutation runs
+        only once the popup has fully torn down.
+
+        Normal priority — **not** ``lowestPriority``. Both ride Maya's idle
+        queue, so both need the event loop to *tick*; the difference is how
+        starved they get. Verified live in a fresh Maya: a ``lowestPriority``
+        callback stayed unrun for 7 s+ even with some activity, whereas a
+        normal-priority one fires as soon as the loop has any activity to process
+        — which an interacting user (the panel has focus, the cursor moves, the
+        viewport repaints) or a running IPR always provides. So the prior
+        ``lowestPriority`` starved the map-apply: the user picked a map and
+        nothing happened ("the dropdown doesn't change the HDR") — an unverified
+        "let Arnold settle first" precaution that traded the black-render for a
+        dead dropdown. Normal priority still escapes the popup-teardown
+        re-entrancy (same idle queue the nested Qt loop never services) but runs
+        under real use. (A *totally* dead session can still delay it — that's
+        inherent to idle deferral, but doesn't occur while a user is actually
+        driving the panel.)
+        """
+        cmds.evalDeferred(callback)
+
+    def _apply_selection(self) -> None:
+        """Apply the current dropdown selection — clear / swap / build.
+
+        The single, **deferred** apply for every dropdown action (see
+        :meth:`cmb000` for why it must run off the combo signal). Re-reads the
+        dropdown so it always applies the latest pick:
+
+        * **None** → remove the skydome network;
+        * **live network + a map** → swap the file texture in place (cheap
+          ``setAttr``), preserving the live light settings;
+        * **no network + a map** → build the network from the current UI state.
         """
         path = self.hdr_map
         if path == self.NONE_TOKEN:
-            # Explicit "None" — clear the environment instead of applying one.
             self._clear_environment("HDR is set to None — no environment to clear.")
-            return
-        if not self.manager.arnold_available():
-            self._notify("Arnold (mtoa) plugin not loaded.", level="warning")
             return
         if not path:
             self._notify("Pick or browse for an HDR first.", level="warning")
+            self._select_active_in_combo()  # re-mirror the scene (see below)
             return
-        if not self._validate_or_warn(path):
+        # Casual dropdown selection → surface a bad file in the footer/console,
+        # but don't interrupt with a modal (applying is a single click). On
+        # rejection re-point the dropdown at the live scene HDR: the click
+        # already moved the combo's display (and the popup's current-item
+        # marker) to the rejected pick, so leaving it there makes the combo lie —
+        # field shows the new map while the marker (= currentIndex) snaps back to
+        # the still-active old map on the next open. Re-mirroring keeps the
+        # dropdown an honest reflection of what's actually lighting the scene
+        # (e.g. an online-only cloud HDR that can't be wired in is refused here).
+        if not self._validate_or_warn(path, dialog=False):
+            self._select_active_in_combo()
+            return
+        # ``hdr_env`` is truthy only when mtoa is already loaded (the getter
+        # short-circuits otherwise), so a live network means a cheap in-place
+        # swap with no plugin load and the live light settings preserved.
+        if self.manager.hdr_env:
+            self.manager.hdr_env = path
+            self._sync_ui_to_scene()
+            self._notify(f"HDR: {os.path.basename(path)}", level="success")
+            return
+        # No network yet → build it from the current UI state.
+        if not self.manager.arnold_available():
+            self._notify("Arnold (mtoa) plugin not loaded.", level="warning")
+            self._select_active_in_combo()
             return
         self.manager.create_network(
             hdrMap=path,
@@ -1299,10 +1493,21 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _norm_path(path) -> str:
+        """Case-folded, separator-normalized path for robust comparison.
+
+        The combo stores raw ``get_dir_contents`` filepaths, which can mix slash
+        styles (``os.path.join`` on Maya's forward-slash workspace →
+        ``C:/proj/sourceimages\\x.hdr``) while callers pass ``os.path.normpath``
+        results — so equality must go through this, not a raw string compare.
+        """
+        return os.path.normcase(os.path.normpath(str(path)))
+
+    @staticmethod
     def _is_under_dir(path: str, directory: str) -> bool:
         """True if *path* lies inside *directory* (root or any depth)."""
-        p = os.path.normcase(os.path.normpath(str(path)))
-        d = os.path.normcase(os.path.normpath(str(directory)))
+        p = HdrManagerSlots._norm_path(path)
+        d = HdrManagerSlots._norm_path(directory)
         return p == d or p.startswith(d + os.sep)
 
     def _add_mode(self) -> str:

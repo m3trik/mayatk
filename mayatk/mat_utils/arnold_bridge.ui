@@ -127,7 +127,7 @@
          </size>
         </property>
         <property name="toolTip">
-         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;When &lt;b&gt;Add Bridge&lt;/b&gt; finds a material that already has a bridge, rebuild it (re-sync to the material's current textures) instead of skipping it.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;When &lt;b&gt;Add Network&lt;/b&gt; finds a material that already has a network, rebuild it (re-sync to the material's current textures) instead of skipping it.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
         </property>
         <property name="text">
          <string>Force (rebuild if exists)</string>
@@ -155,10 +155,10 @@
          </size>
         </property>
         <property name="toolTip">
-         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Attach an Arnold &lt;b&gt;aiStandardSurface&lt;/b&gt; bridge to each material in scope. The material's textures are mirrored onto the Arnold shader, wired to the shading group's &lt;b&gt;aiSurfaceShader&lt;/b&gt; slot — so the asset renders in Arnold while the exported Stingray / Standard Surface material is untouched. Skips materials that already have a bridge (unless &lt;b&gt;Force&lt;/b&gt; is on).&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Attach an Arnold &lt;b&gt;aiStandardSurface&lt;/b&gt; network to each material in scope. The material's textures are mirrored onto the Arnold shader, wired to the shading group's &lt;b&gt;aiSurfaceShader&lt;/b&gt; slot — so the asset renders in Arnold while the exported Stingray / Standard Surface material is untouched. Skips materials that already have a network (unless &lt;b&gt;Force&lt;/b&gt; is on).&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
         </property>
         <property name="text">
-         <string>Add Bridge</string>
+         <string>Add Network</string>
         </property>
        </widget>
       </item>
@@ -183,38 +183,10 @@
          </size>
         </property>
         <property name="toolTip">
-         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Delete the Arnold bridge from each material in scope. Only the Arnold network is removed — the exported base material and its textures are left intact.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Delete the Arnold network from each material in scope. Only the Arnold network is removed — the exported base material and its textures are left intact.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
         </property>
         <property name="text">
-         <string>Remove Bridge</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QPushButton" name="b002">
-        <property name="sizePolicy">
-         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-          <horstretch>0</horstretch>
-          <verstretch>0</verstretch>
-         </sizepolicy>
-        </property>
-        <property name="minimumSize">
-         <size>
-          <width>0</width>
-          <height>30</height>
-         </size>
-        </property>
-        <property name="maximumSize">
-         <size>
-          <width>16777215</width>
-          <height>30</height>
-         </size>
-        </property>
-        <property name="toolTip">
-         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Remove and re-add the bridge on each material in scope — re-syncs it to the material's &lt;b&gt;current&lt;/b&gt; textures (e.g. after re-pathing or swapping maps).&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-        </property>
-        <property name="text">
-         <string>Rebuild Bridge</string>
+         <string>Remove Network</string>
         </property>
        </widget>
       </item>

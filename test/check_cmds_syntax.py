@@ -83,6 +83,7 @@ INTERACTIVE_MEL_PROCS = frozenset(
         "performFileImport",
         "performFileExport",
         "redoPreviousRender",
+        "renderWindowRenderCamera",  # Render-View proc (rendering slot / render_utils)
         "performAlignUV",
         "performLinearAlignUV",
         # Modeling Toolkit — require active viewport

@@ -275,11 +275,215 @@ class ArnoldBridgeTest(unittest.TestCase):
         self.assertTrue(
             cmds.ls(hist, type="reverse"), "smoothness-invert reverse node missing"
         )
-        # AO feeds the aiMultiply blended into base color.
+        # AO feeds the aiMultiply blended into base color — and it must be the
+        # GREEN channel broadcast to input2R/G/B, NOT the whole packed outColor.
+        # Wiring the full (metallic, AO, detail) color into the multiply zeroes
+        # red on a non-metal and renders every object green (issue 3 regression).
+        mult = cmds.listConnections(f"{ai}.baseColor", type="aiMultiply")
+        self.assertTrue(mult, "aiMultiply not feeding baseColor")
+        ao_src = cmds.listConnections(
+            f"{mult[0]}.input2R", source=True, destination=False, plugs=True
+        ) or []
+        self.assertTrue(
+            ao_src, "MSAO AO must broadcast into the baseColor multiply (input2R)"
+        )
+        self.assertTrue(
+            ao_src[0].endswith(".outColorG"),
+            f"MSAO AO must come from the GREEN channel (was the green-render bug "
+            f"when the whole outColor fed the multiply); got {ao_src[0]}",
+        )
+        # Belt-and-suspenders: the whole packed outColor must not drive the
+        # multiply (the green bug wired ``file.outColor`` into the input2 compound).
+        in2_srcs = cmds.listConnections(
+            f"{mult[0]}.input2", source=True, destination=False, plugs=True
+        ) or []
+        self.assertFalse(
+            any(p.endswith(".outColor") for p in in2_srcs),
+            "MSAO must broadcast a single channel, not the whole packed outColor",
+        )
+        # Smoothness lives in the packed ALPHA channel, so the file feeding
+        # roughness must read the real alpha (alphaIsLuminance=0). With aIL=1
+        # Maya synthesizes outAlpha from RGB luminance and silently drops
+        # smoothness, driving roughness from luminance(metallic, AO, detail).
+        # Walk specularRoughness ← reverse ← file to assert on the right node.
+        rev = cmds.listConnections(
+            f"{ai}.specularRoughness", source=True, destination=False, type="reverse"
+        ) or []
+        self.assertTrue(rev, "smoothness-invert reverse not feeding roughness")
+        rough_file = cmds.listConnections(
+            f"{rev[0]}.inputX", source=True, destination=False, type="file"
+        ) or []
+        self.assertTrue(rough_file, "reverse not fed by an MSAO file node")
+        self.assertEqual(
+            cmds.getAttr(f"{rough_file[0]}.alphaIsLuminance"), 0,
+            "MSAO smoothness must read the real alpha (aIL=0), not luminance",
+        )
+
+    def test_base_color_read_as_srgb(self):
+        # Albedo is sRGB-authored, so the bridge must tag its file node sRGB.
+        # Raw renders the Arnold preview too dark and breaks parity with the
+        # game material (whose base color stays at the sRGB default).
+        shader, _, _ = self._make_base_material("matBC", ["model_BaseColor.png"])
+        self.bridge.add(materials=shader)
+        ai = self.bridge.get_bridge(shader)
+        mult = cmds.listConnections(f"{ai}.baseColor", type="aiMultiply")
+        self.assertTrue(mult, "aiMultiply not feeding baseColor")
+        base_file = cmds.listConnections(
+            f"{mult[0]}.input1", source=True, destination=False, type="file"
+        ) or []
+        self.assertTrue(base_file, "base color file feeding the multiply missing")
+        self.assertEqual(
+            cmds.getAttr(f"{base_file[0]}.colorSpace"), "sRGB",
+            "base color must be read as sRGB, not Raw",
+        )
+
+    def test_mrao_channel_routing(self):
+        # MRAO: R=Metallic, G=Roughness, B=AO. Metalness + roughness (NOT
+        # inverted) + an AO multiply; no reverse node since roughness is direct.
+        shader, _, _ = self._make_base_material("matMRAO", ["model_MRAO.png"])
+        self.bridge.add(materials=shader)
+        ai = self.bridge.get_bridge(shader)
+
+        self.assertTrue(
+            cmds.listConnections(f"{ai}.metalness"), "MRAO->metalness missing"
+        )
+        self.assertTrue(
+            cmds.listConnections(f"{ai}.specularRoughness"), "MRAO->roughness missing"
+        )
+        hist = cmds.listHistory(ai) or []
+        self.assertFalse(
+            cmds.ls(hist, type="reverse"),
+            "MRAO roughness is direct — it must not insert a reverse node",
+        )
+        # AO is broadcast to the multiply's per-channel inputs (input2R/G/B),
+        # mirroring ORM; the parent compound plug reports no aggregate connection.
         mult = cmds.listConnections(f"{ai}.baseColor", type="aiMultiply")
         self.assertTrue(mult, "aiMultiply not feeding baseColor")
         self.assertTrue(
-            cmds.listConnections(f"{mult[0]}.input2"), "MSAO AO->multiply missing"
+            cmds.listConnections(f"{mult[0]}.input2R"), "MRAO AO->multiply missing"
+        )
+
+    def test_specular_drives_metalness(self):
+        # Specular has no aiStandardSurface analogue → used as a metalness proxy.
+        shader, _, _ = self._make_base_material("matSpec", ["model_Specular.png"])
+        self.bridge.add(materials=shader)
+        ai = self.bridge.get_bridge(shader)
+        self.assertTrue(
+            cmds.listConnections(f"{ai}.metalness"), "Specular->metalness missing"
+        )
+
+    def test_glossiness_inverts_to_roughness(self):
+        shader, _, _ = self._make_base_material("matGloss", ["model_Glossiness.png"])
+        self.bridge.add(materials=shader)
+        ai = self.bridge.get_bridge(shader)
+        self.assertTrue(
+            cmds.listConnections(f"{ai}.specularRoughness"),
+            "Glossiness->roughness missing",
+        )
+        hist = cmds.listHistory(ai) or []
+        self.assertTrue(
+            cmds.ls(hist, type="reverse"),
+            "Glossiness must invert to roughness via a reverse node",
+        )
+
+    def test_smoothness_inverts_to_roughness(self):
+        shader, _, _ = self._make_base_material("matSmooth", ["model_Smoothness.png"])
+        self.bridge.add(materials=shader)
+        ai = self.bridge.get_bridge(shader)
+        self.assertTrue(
+            cmds.listConnections(f"{ai}.specularRoughness"),
+            "Smoothness->roughness missing",
+        )
+        hist = cmds.listHistory(ai) or []
+        self.assertTrue(
+            cmds.ls(hist, type="reverse"),
+            "Smoothness must invert to roughness via a reverse node",
+        )
+
+    def test_bump_and_height_drive_object_space_bump(self):
+        # Bump / Height feed the bump2d in bump mode (bumpInterp 0), unlike a
+        # tangent-space normal (bumpInterp 1).
+        for name, mapfile in (
+            ("matBump", "model_Bump.png"),
+            ("matHeight", "model_Height.png"),
+        ):
+            shader, _, _ = self._make_base_material(name, [mapfile])
+            self.bridge.add(materials=shader)
+            ai = self.bridge.get_bridge(shader)
+            bump = cmds.listConnections(f"{ai}.normalCamera", type="bump2d")
+            self.assertTrue(bump, f"{name}: bump2d missing")
+            self.assertTrue(
+                cmds.listConnections(f"{bump[0]}.bumpValue"),
+                f"{name}: bumpValue not driven",
+            )
+            self.assertEqual(
+                cmds.getAttr(f"{bump[0]}.bumpInterp"), 0,
+                f"{name}: bump/height must use bump interpretation (0)",
+            )
+
+    def test_normal_uses_tangent_space_bump(self):
+        # A normal map keeps the tangent-space interpretation (bumpInterp 1).
+        shader, _, _ = self._make_base_material("matN", ["model_Normal_OpenGL.png"])
+        self.bridge.add(materials=shader)
+        ai = self.bridge.get_bridge(shader)
+        bump = cmds.listConnections(f"{ai}.normalCamera", type="bump2d")
+        self.assertTrue(bump, "bump2d missing")
+        self.assertEqual(
+            cmds.getAttr(f"{bump[0]}.bumpInterp"), 1,
+            "normal map must use tangent-space interpretation (1)",
+        )
+
+    # --------------------------------------------------- primary > fallback
+    def test_normal_supersedes_bump_and_height(self):
+        # A tangent normal wins the bump2d slot over the bump/height fallbacks
+        # (which would otherwise overwrite it with bump interpretation).
+        shader, _, _ = self._make_base_material(
+            "matNB", ["model_Normal_OpenGL.png", "model_Height.png"]
+        )
+        self.bridge.add(materials=shader)
+        ai = self.bridge.get_bridge(shader)
+        bump = cmds.listConnections(f"{ai}.normalCamera", type="bump2d")
+        self.assertTrue(bump, "bump2d missing")
+        self.assertEqual(
+            cmds.getAttr(f"{bump[0]}.bumpInterp"), 1,
+            "normal must win the bump slot over height (tangent interpretation)",
+        )
+
+    def test_roughness_supersedes_glossiness(self):
+        # Roughness (direct) wins over Glossiness (which would invert), so no
+        # smoothness-invert reverse node is created.
+        shader, _, _ = self._make_base_material(
+            "matRG", ["model_Roughness.png", "model_Glossiness.png"]
+        )
+        self.bridge.add(materials=shader)
+        ai = self.bridge.get_bridge(shader)
+        self.assertTrue(cmds.listConnections(f"{ai}.specularRoughness"))
+        hist = cmds.listHistory(ai) or []
+        self.assertFalse(
+            cmds.ls(hist, type="reverse"),
+            "Roughness must win over Glossiness (no smoothness-invert reverse)",
+        )
+
+    def test_packed_mask_supersedes_specular_and_standalone_ao(self):
+        # A packed mask drives both metalness and AO. A co-present Specular (a
+        # metalness *proxy*) and a standalone Ambient_Occlusion would each wire
+        # the same Arnold slot a second time, so the packed mask supersedes both
+        # — leaving exactly one driver per property (no force=True last-wins
+        # fight). The drop is conditional: Specular alone still drives metalness
+        # (test_specular_drives_metalness).
+        shader, _, _ = self._make_base_material(
+            "matMaskSpecAO",
+            ["model_MRAO.png", "model_Specular.png", "model_AO.png"],
+        )
+        types = {t for _, t in self.bridge._iter_base_textures(shader)}
+        self.assertIn("MRAO", types)
+        self.assertNotIn(
+            "Specular", types,
+            "packed metalness must supersede the Specular metalness proxy",
+        )
+        self.assertNotIn(
+            "Ambient_Occlusion", types,
+            "packed AO must supersede a standalone Ambient_Occlusion map",
         )
 
     # ---------------------------------------------------------------- scope
@@ -395,18 +599,6 @@ class ArnoldBridgeSlotsTest(unittest.TestCase):
         self._slots(force=True).b000()  # force → rebuild
         second_uuid = cmds.ls(ArnoldBridge().get_bridge(shader), uuid=True)[0]
         self.assertNotEqual(first_uuid, second_uuid)
-
-    def test_rebuild_button(self):
-        shader, cube = self._textured_cube("matSel")
-        cmds.select(cube, replace=True)
-        slots = self._slots()
-        slots.b000()
-        first_uuid = cmds.ls(slots._bridge.get_bridge(shader), uuid=True)[0]
-        slots.b002()  # Rebuild
-        self.assertTrue(slots._bridge.has_bridge(shader))
-        self.assertNotEqual(
-            cmds.ls(slots._bridge.get_bridge(shader), uuid=True)[0], first_uuid
-        )
 
     def test_select_bridged(self):
         shader, cube = self._textured_cube("matSel")

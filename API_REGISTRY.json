@@ -1,7 +1,7 @@
 {
   "name": "mayatk",
   "source_root": "mayatk/mayatk",
-  "generated_at": "2026-06-21",
+  "generated_at": "2026-06-22",
   "modules": [
     {
       "relpath": "anim_utils/_anim_utils.py",
@@ -12857,7 +12857,7 @@
               "qualname": "HdrManager.hdr_env",
               "kind": "property",
               "signature": "(self) -> Optional[str]",
-              "summary": "The skydome shape node, or ``None`` if not present.",
+              "summary": "The active skydome shape node, or ``None`` if none exists.",
               "line": 114,
               "deprecated": false
             },
@@ -12867,7 +12867,7 @@
               "kind": "method",
               "signature": "(self, tex: Optional[str]) -> None",
               "summary": "Set (and lazily create) the skydome's HDR file texture.",
-              "line": 126,
+              "line": 143,
               "deprecated": false
             },
             {
@@ -12876,7 +12876,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "Transform parent of the skydome shape, or ``None``.",
-              "line": 174,
+              "line": 200,
               "deprecated": false
             },
             {
@@ -12885,7 +12885,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "The ``file`` node currently driving ``color`` on the skydome.",
-              "line": 182,
+              "line": 208,
               "deprecated": false
             },
             {
@@ -12894,7 +12894,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "Current HDR file path on disk, or ``None``.",
-              "line": 188,
+              "line": 214,
               "deprecated": false
             },
             {
@@ -12903,7 +12903,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "Primary-ray visibility of the HDR (skydome as backdrop).",
-              "line": 201,
+              "line": 227,
               "deprecated": false
             },
             {
@@ -12912,7 +12912,7 @@
               "kind": "method",
               "signature": "(self, state: bool) -> None",
               "summary": "",
-              "line": 207,
+              "line": 233,
               "deprecated": false
             },
             {
@@ -12921,7 +12921,7 @@
               "kind": "method",
               "signature": "(self, state: bool) -> None",
               "summary": "Backward-compat shim for :attr:`visibility`.",
-              "line": 212,
+              "line": 238,
               "deprecated": false
             },
             {
@@ -12930,7 +12930,7 @@
               "kind": "property",
               "signature": "(self) -> float",
               "summary": "Y rotation (degrees) of the skydome transform;",
-              "line": 219,
+              "line": 245,
               "deprecated": false
             },
             {
@@ -12939,7 +12939,7 @@
               "kind": "method",
               "signature": "(self, degrees: float) -> None",
               "summary": "",
-              "line": 225,
+              "line": 251,
               "deprecated": false
             },
             {
@@ -12948,7 +12948,7 @@
               "kind": "property",
               "signature": "(self) -> float",
               "summary": "Linear light-output multiplier on the skydome;",
-              "line": 246,
+              "line": 269,
               "deprecated": false
             },
             {
@@ -12957,7 +12957,7 @@
               "kind": "method",
               "signature": "(self, value: float) -> None",
               "summary": "",
-              "line": 251,
+              "line": 274,
               "deprecated": false
             },
             {
@@ -12966,7 +12966,7 @@
               "kind": "property",
               "signature": "(self) -> float",
               "summary": "Photographic stops (log2) on the skydome's ``aiExposure``.",
-              "line": 255,
+              "line": 278,
               "deprecated": false
             },
             {
@@ -12975,7 +12975,7 @@
               "kind": "method",
               "signature": "(self, stops: float) -> None",
               "summary": "",
-              "line": 263,
+              "line": 286,
               "deprecated": false
             },
             {
@@ -12984,7 +12984,7 @@
               "kind": "property",
               "signature": "(self) -> int",
               "summary": "Importance-sampling resolution of the HDR (``resolution``);",
-              "line": 267,
+              "line": 290,
               "deprecated": false
             },
             {
@@ -12993,7 +12993,7 @@
               "kind": "method",
               "signature": "(self, value: int) -> None",
               "summary": "",
-              "line": 276,
+              "line": 299,
               "deprecated": false
             },
             {
@@ -13002,7 +13002,7 @@
               "kind": "property",
               "signature": "(self) -> int",
               "summary": "Light samples (``aiSamples``) — soft-IBL noise control;",
-              "line": 280,
+              "line": 303,
               "deprecated": false
             },
             {
@@ -13011,7 +13011,7 @@
               "kind": "method",
               "signature": "(self, value: int) -> None",
               "summary": "",
-              "line": 285,
+              "line": 308,
               "deprecated": false
             },
             {
@@ -13020,7 +13020,7 @@
               "kind": "property",
               "signature": "(self) -> float",
               "summary": "Diffuse contribution scale (``aiDiffuse``);",
-              "line": 289,
+              "line": 312,
               "deprecated": false
             },
             {
@@ -13029,7 +13029,7 @@
               "kind": "method",
               "signature": "(self, value: float) -> None",
               "summary": "",
-              "line": 294,
+              "line": 317,
               "deprecated": false
             },
             {
@@ -13038,7 +13038,7 @@
               "kind": "property",
               "signature": "(self) -> float",
               "summary": "Specular contribution scale (``aiSpecular``);",
-              "line": 298,
+              "line": 321,
               "deprecated": false
             },
             {
@@ -13047,7 +13047,7 @@
               "kind": "method",
               "signature": "(self, value: float) -> None",
               "summary": "",
-              "line": 303,
+              "line": 326,
               "deprecated": false
             },
             {
@@ -13056,7 +13056,7 @@
               "kind": "method",
               "signature": "(self, hdrMap: str = '', hdrMapVisibility: bool = False, intensity: Optional[float] = None, exposure: Optional[float] = None, rotation: Optional[float] = None, resolution: Optional[int] = None, samples: Optional[int] = None, diffuse: Optional[float] = None, specular: Optional[float] = None) -> Optional[str]",
               "summary": "Apply settings to the (lazily-created) skydome network.",
-              "line": 311,
+              "line": 334,
               "deprecated": false
             },
             {
@@ -13065,7 +13065,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Remove the skydome and its connected file/place2d nodes.",
-              "line": 349,
+              "line": 372,
               "deprecated": false
             }
           ]
@@ -13073,7 +13073,7 @@
         {
           "name": "HdrManagerSlots",
           "summary": "Switchboard slots for the HDR Manager UI.",
-          "line": 440,
+          "line": 482,
           "bases": [
             "ptk.LoggingMixin",
             "ptk.HelpMixin"
@@ -13085,7 +13085,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Configure header menu and refresh button.",
-              "line": 572,
+              "line": 637,
               "deprecated": false
             },
             {
@@ -13094,7 +13094,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Wire the HDR dropdown: option-box plugins, context menu, auto-refresh.",
-              "line": 644,
+              "line": 712,
               "deprecated": false
             },
             {
@@ -13103,7 +13103,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "Selected HDR file path from the combobox.",
-              "line": 876,
+              "line": 1021,
               "deprecated": false
             },
             {
@@ -13112,7 +13112,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "",
-              "line": 881,
+              "line": 1026,
               "deprecated": false
             },
             {
@@ -13120,8 +13120,8 @@
               "qualname": "HdrManagerSlots.cmb000",
               "kind": "method",
               "signature": "(self, index, widget) -> None",
-              "summary": "HDR map selection — the panel's sole apply action.",
-              "line": 888,
+              "summary": "HDR map selection — the panel's sole apply action (always deferred).",
+              "line": 1033,
               "deprecated": false
             },
             {
@@ -13129,8 +13129,8 @@
               "qualname": "HdrManagerSlots.chk000",
               "kind": "method",
               "signature": "(self, state, widget) -> None",
-              "summary": "Toggle skydome primary-ray visibility.",
-              "line": 930,
+              "summary": "Toggle skydome primary-ray visibility (the HDR-as-backdrop flag).",
+              "line": 1058,
               "deprecated": false
             },
             {
@@ -13139,7 +13139,7 @@
               "kind": "method",
               "signature": "(self, value, widget) -> None",
               "summary": "Rotate the HDR around Y.",
-              "line": 934,
+              "line": 1075,
               "deprecated": false
             },
             {
@@ -13148,7 +13148,7 @@
               "kind": "method",
               "signature": "(self, value) -> None",
               "summary": "",
-              "line": 938,
+              "line": 1079,
               "deprecated": false
             },
             {
@@ -13157,7 +13157,7 @@
               "kind": "method",
               "signature": "(self, value) -> None",
               "summary": "",
-              "line": 941,
+              "line": 1082,
               "deprecated": false
             },
             {
@@ -13166,7 +13166,7 @@
               "kind": "method",
               "signature": "(self, value) -> None",
               "summary": "",
-              "line": 944,
+              "line": 1085,
               "deprecated": false
             },
             {
@@ -13175,7 +13175,7 @@
               "kind": "method",
               "signature": "(self, value) -> None",
               "summary": "",
-              "line": 947,
+              "line": 1088,
               "deprecated": false
             },
             {
@@ -13184,7 +13184,7 @@
               "kind": "method",
               "signature": "(self, value) -> None",
               "summary": "",
-              "line": 950,
+              "line": 1091,
               "deprecated": false
             },
             {
@@ -13193,7 +13193,7 @@
               "kind": "method",
               "signature": "(self, value) -> None",
               "summary": "",
-              "line": 953,
+              "line": 1094,
               "deprecated": false
             },
             {
@@ -13202,7 +13202,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Add HDR(s) from one dialog — pick loose files and/or a whole folder.",
-              "line": 1054,
+              "line": 1248,
               "deprecated": false
             },
             {
@@ -13211,7 +13211,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open the workspace's sourceimages folder in Explorer.",
-              "line": 1242,
+              "line": 1436,
               "deprecated": false
             },
             {
@@ -13220,7 +13220,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Delete the skydome network and reset the UI to defaults.",
-              "line": 1250,
+              "line": 1444,
               "deprecated": false
             },
             {
@@ -13229,7 +13229,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 1258,
+              "line": 1452,
               "deprecated": false
             },
             {
@@ -13238,7 +13238,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 1266,
+              "line": 1460,
               "deprecated": false
             },
             {
@@ -13247,7 +13247,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 1274,
+              "line": 1468,
               "deprecated": false
             },
             {
@@ -13256,7 +13256,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 1282,
+              "line": 1476,
               "deprecated": false
             }
           ]
@@ -13920,7 +13920,7 @@
               "kind": "method",
               "signature": "(self, materials: Optional[Union[str, List[str]]] = None, objects: Optional[Union[str, List[str]]] = None, force: bool = False) -> List[str]",
               "summary": "Attach an Arnold bridge to every base material in scope.",
-              "line": 78,
+              "line": 108,
               "deprecated": false
             },
             {
@@ -13929,7 +13929,7 @@
               "kind": "method",
               "signature": "(self, materials: Optional[Union[str, List[str]]] = None, objects: Optional[Union[str, List[str]]] = None) -> List[str]",
               "summary": "Delete the Arnold bridge from every base material in scope.",
-              "line": 134,
+              "line": 164,
               "deprecated": false
             },
             {
@@ -13938,7 +13938,7 @@
               "kind": "method",
               "signature": "(self, materials: Optional[Union[str, List[str]]] = None, objects: Optional[Union[str, List[str]]] = None) -> List[str]",
               "summary": "Remove and re-add the bridge — resyncs it to the base material's",
-              "line": 180,
+              "line": 210,
               "deprecated": false
             },
             {
@@ -13947,7 +13947,7 @@
               "kind": "method",
               "signature": "(self, material: str) -> Optional[str]",
               "summary": "Return the ``aiStandardSurface`` bridging *material*, or None.",
-              "line": 197,
+              "line": 227,
               "deprecated": false
             },
             {
@@ -13956,7 +13956,7 @@
               "kind": "method",
               "signature": "(self, material: str) -> bool",
               "summary": "True if *material*'s shading engine already has an Arnold bridge.",
-              "line": 212,
+              "line": 242,
               "deprecated": false
             }
           ]
@@ -13964,7 +13964,7 @@
         {
           "name": "ArnoldBridgeSlots",
           "summary": "Switchboard slots for the ``arnold_bridge.ui`` panel.",
-          "line": 578,
+          "line": 574,
           "bases": [
             "ptk.LoggingMixin",
             "ptk.HelpMixin"
@@ -13976,7 +13976,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Configure the header menu and help text.",
-              "line": 600,
+              "line": 596,
               "deprecated": false
             },
             {
@@ -13985,7 +13985,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Populate the Scope combobox (Selected Objects is the default).",
-              "line": 643,
+              "line": 639,
               "deprecated": false
             },
             {
@@ -13993,8 +13993,8 @@
               "qualname": "ArnoldBridgeSlots.b000",
               "kind": "method",
               "signature": "(self) -> None",
-              "summary": "Add Bridge.",
-              "line": 650,
+              "summary": "Add Network.",
+              "line": 646,
               "deprecated": false
             },
             {
@@ -14002,17 +14002,8 @@
               "qualname": "ArnoldBridgeSlots.b001",
               "kind": "method",
               "signature": "(self) -> None",
-              "summary": "Remove Bridge.",
-              "line": 654,
-              "deprecated": false
-            },
-            {
-              "name": "b002",
-              "qualname": "ArnoldBridgeSlots.b002",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Rebuild Bridge.",
-              "line": 658,
+              "summary": "Remove Network.",
+              "line": 650,
               "deprecated": false
             },
             {
@@ -14021,7 +14012,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Header action: select every base material that has a bridge.",
-              "line": 662,
+              "line": 654,
               "deprecated": false
             }
           ]
@@ -18197,6 +18188,86 @@
       ]
     },
     {
+      "relpath": "render_utils/_render_utils.py",
+      "summary": "Render-control helpers.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "RenderUtils",
+          "summary": "Renderer enumeration / selection and Render-View control.",
+          "line": 28,
+          "bases": [
+            "ptk.HelpMixin"
+          ],
+          "members": [
+            {
+              "name": "get_available_renderers",
+              "qualname": "RenderUtils.get_available_renderers",
+              "kind": "classmethod",
+              "signature": "(cls) -> List[Dict[str, object]]",
+              "summary": "Renderers the user can pick.",
+              "line": 50,
+              "deprecated": false
+            },
+            {
+              "name": "current_renderer",
+              "qualname": "RenderUtils.current_renderer",
+              "kind": "staticmethod",
+              "signature": "() -> str",
+              "summary": "The scene's active renderer (``defaultRenderGlobals.currentRenderer``).",
+              "line": 125,
+              "deprecated": false
+            },
+            {
+              "name": "set_renderer",
+              "qualname": "RenderUtils.set_renderer",
+              "kind": "classmethod",
+              "signature": "(cls, name: str) -> None",
+              "summary": "Make *name* the active renderer, loading its plugin if required.",
+              "line": 137,
+              "deprecated": false
+            },
+            {
+              "name": "render_camera",
+              "qualname": "RenderUtils.render_camera",
+              "kind": "staticmethod",
+              "signature": "(camera: str, editor: str = 'render') -> None",
+              "summary": "Render *camera* into the Render View, opening it if needed.",
+              "line": 144,
+              "deprecated": false
+            },
+            {
+              "name": "redo_previous_render",
+              "qualname": "RenderUtils.redo_previous_render",
+              "kind": "staticmethod",
+              "signature": "(editor: str = 'render') -> None",
+              "summary": "Re-render the last render with its previous settings (fast path).",
+              "line": 153,
+              "deprecated": false
+            },
+            {
+              "name": "supports_ipr",
+              "qualname": "RenderUtils.supports_ipr",
+              "kind": "classmethod",
+              "signature": "(cls, renderer: Optional[str] = None) -> bool",
+              "summary": "True if *renderer* can start an interactive (IPR) session.",
+              "line": 170,
+              "deprecated": false
+            },
+            {
+              "name": "start_ipr",
+              "qualname": "RenderUtils.start_ipr",
+              "kind": "classmethod",
+              "signature": "(cls, camera: str, renderer: Optional[str] = None) -> bool",
+              "summary": "Launch interactive (IPR) realtime rendering for *renderer*.",
+              "line": 186,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
       "relpath": "rig_utils/_rig_utils.py",
       "summary": "",
       "functions": [],
@@ -19246,7 +19317,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Reveal and select objects in the Outliner panel.",
-              "line": 184,
+              "line": 190,
               "deprecated": false
             },
             {
@@ -19255,7 +19326,7 @@
               "kind": "staticmethod",
               "signature": "(url, logger=None) -> bool",
               "summary": "Handle ``action://`` links emitted by ``log_link()`` in a QTextBrowser.",
-              "line": 195,
+              "line": 201,
               "deprecated": false
             }
           ]
