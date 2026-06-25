@@ -575,24 +575,50 @@ class MatUpdater(ptk.LoggingMixin):
             if not cmds.attributeQuery(attr_name, node=material, exists=True):
                 continue
 
-            attr = f"{material}.{attr_name}"
-            inputs = cmds.listConnections(attr, source=True, destination=False)
-            if inputs:
-                input_node = inputs[0]
-                # Check if input_node is one of our matching nodes OR driven by them
-                # We check history of input_node (including itself)
-                history = cmds.listHistory(input_node)
-                if any(n in matching_nodes for n in history):
-                    # Disconnect
-                    cls.logger.info(
-                        f"Disconnecting {attr_name} (driven by updated file)"
+            # Packed maps (MSAO/ORM) wire their unpacked channels into the
+            # compound's *child* plugs (e.g. TEX_ao_mapR/G/B), and a parent-level
+            # query won't report those (so the stale packed connection survives
+            # the rewire). Gather the parent plug plus any R/G/B/X/Y/Z children so
+            # every incoming connection is caught.
+            plug_names = [attr_name]
+            for suffix in ("R", "G", "B", "X", "Y", "Z"):
+                child = f"{attr_name}{suffix}"
+                if cmds.attributeQuery(child, node=material, exists=True):
+                    plug_names.append(child)
+
+            # Collect unique (src_plug, dest_plug) pairs; a parent-compound query
+            # may also echo child connections, so dedupe before disconnecting.
+            pairs = set()
+            for plug_name in plug_names:
+                conns = (
+                    cmds.listConnections(
+                        f"{material}.{plug_name}",
+                        source=True,
+                        destination=False,
+                        plugs=True,
+                        connections=True,
                     )
-                    # Get the plug
-                    input_plugs = cmds.listConnections(
-                        attr, source=True, plugs=True, destination=False
-                    )
-                    if input_plugs:
-                        cmds.disconnectAttr(input_plugs[0], attr)
+                    or []
+                )
+                # Flat [destPlug, srcPlug, destPlug, srcPlug, ...].
+                for i in range(0, len(conns), 2):
+                    pairs.add((conns[i + 1], conns[i]))
+
+            disconnected = False
+            for src_plug, dest_plug in pairs:
+                # Disconnect only plugs whose source traces back to an updated
+                # file — directly, or through an intermediate node such as the
+                # reverse used to invert smoothness into roughness.
+                src_node = src_plug.split(".")[0]
+                history = cmds.listHistory(src_node) or []
+                if any(n in matching_nodes for n in history) and cmds.isConnected(
+                    src_plug, dest_plug
+                ):
+                    cmds.disconnectAttr(src_plug, dest_plug)
+                    disconnected = True
+
+            if disconnected:  # one line per attribute, not per child plug
+                cls.logger.info(f"Disconnecting {attr_name} (driven by updated file)")
 
     @classmethod
     def update_network(cls, material, texture_paths, config) -> Dict[str, str]:
@@ -610,8 +636,12 @@ class MatUpdater(ptk.LoggingMixin):
             if map_type:
                 inventory[map_type] = path
 
-        # Filter redundant maps (in-place)
-        ptk.MapFactory.filter_redundant_maps(inventory)
+        # Filter redundant maps (in-place). Pass the config so packed/loose
+        # redundancy follows the target preset: an unpacked preset (e.g. PBR
+        # Metallic/Roughness, mask_map=False) drops a redundant MSAO/ORM/MRAO
+        # in favor of the separate Metallic/Roughness/AO maps, rather than the
+        # packed map superseding them.
+        ptk.MapFactory.filter_redundant_maps(inventory, config=config)
 
         if config.get("dry_run", False):
             cls.logger.info("[Dry Run] Skipping connection.")
@@ -681,6 +711,14 @@ class MatUpdaterSlots(MatUpdater):
                 "• Browse… — pick texture files; updates materials that reference them."
             ),
         )
+        # Dry Run — kept at the top so it's the first thing reached under the
+        # selection mode; simulate the run without writing files or editing nodes.
+        widget.menu.add(
+            "QCheckBox",
+            setObjectName="chk_dry_run",
+            setText="Dry Run",
+            setToolTip="Simulate the process without making changes.",
+        )
         widget.menu.add("Separator", setTitle="Processing")
         # Convert Format
         cmb_format = widget.menu.add(
@@ -742,6 +780,7 @@ class MatUpdaterSlots(MatUpdater):
             "QCheckBox",
             setObjectName="chk_discover_sourceimages",
             setText="Discover Maps in sourceimages",
+            setChecked=True,
             setToolTip=(
                 "Pull in same-base-name textures found in the project's "
                 "sourceimages folder that aren't wired into the material "
@@ -749,13 +788,6 @@ class MatUpdaterSlots(MatUpdater):
                 "Only map types missing from the material are added; "
                 "connected textures are never replaced."
             ),
-        )
-        # Dry Run
-        widget.menu.add(
-            "QCheckBox",
-            setObjectName="chk_dry_run",
-            setText="Dry Run",
-            setToolTip="Simulate the process without making changes.",
         )
         widget.menu.add("Separator", setTitle="File Management")
         # File Transfer Mode

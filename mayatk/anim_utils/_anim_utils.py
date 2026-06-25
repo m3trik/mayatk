@@ -2940,6 +2940,30 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
         return filtered_objects
 
+    @staticmethod
+    def scene_has_animation() -> bool:
+        """True if the scene contains any time-based animation a playblast would capture.
+
+        Looks for time-input animation curves (``animCurveTL/TA/TU/TT``) — keyed
+        attributes driven by the timeline. This deliberately covers *all* keyed
+        content (transforms, cameras, blendshape morphs, visibility, lights,
+        materials, …), not just transforms, and excludes driven keys
+        (``animCurveU*``), whose motion depends on a driver rather than time.
+
+        Unlike :meth:`ShotStore.has_animation` (transform-scoped, for shot
+        detection), this is the canonical "does anything move over time?" check —
+        used to early-out of playblast/preview captures on a static scene.
+
+        It is intentionally lightweight: it checks for the *existence* of time
+        curves, not whether they carry meaningful (non-flat) motion. Returns
+        ``False`` when Maya is unavailable.
+        """
+        if cmds is None:
+            return False
+        return bool(
+            cmds.ls(type=["animCurveTL", "animCurveTA", "animCurveTU", "animCurveTT"])
+        )
+
     @classmethod
     @CoreUtils.undoable
     def adjust_key_spacing(

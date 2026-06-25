@@ -612,6 +612,48 @@ class TestDisconnectAssociatedAttributes(MayaTkTestCase):
         conns = cmds.listConnections(f"{mat}.baseColor", source=True) or []
         self.assertIn(fn, conns, "Unrelated path must not trigger disconnection")
 
+    def test_disconnects_child_plug_connections(self):
+        """Regression: a packed map wired into compound *child* plugs (as
+        _connect_channel does for MSAO -> TEX_ao_mapR/G/B) must be fully
+        disconnected, not left behind because only the parent was queried."""
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="cp_mat")
+        fn = cmds.shadingNode("file", asTexture=True, name="cp_file")
+        cmds.setAttr(f"{fn}.fileTextureName", self.tex, type="string")
+        # Wire one channel into the baseColor children (mimics _connect_channel).
+        children = ("baseColorR", "baseColorG", "baseColorB")
+        for child in children:
+            cmds.connectAttr(f"{fn}.outColorG", f"{mat}.{child}", force=True)
+        for child in children:  # sanity: setup actually connected the children
+            self.assertTrue(cmds.isConnected(f"{fn}.outColorG", f"{mat}.{child}"))
+
+        MatUpdater.disconnect_associated_attributes(mat, [self.tex])
+
+        for child in children:
+            self.assertFalse(
+                cmds.isConnected(f"{fn}.outColorG", f"{mat}.{child}"),
+                f"{child} child-plug connection must be removed",
+            )
+
+    def test_disconnects_through_intermediate_node(self):
+        """A child-plug connection driven *through* an intermediate node (the
+        reverse that inverts smoothness->roughness) must also be disconnected."""
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="im_mat")
+        fn = cmds.shadingNode("file", asTexture=True, name="im_file")
+        cmds.setAttr(f"{fn}.fileTextureName", self.tex, type="string")
+        rev = cmds.shadingNode("reverse", asUtility=True, name="im_rev")
+        cmds.connectAttr(f"{fn}.outAlpha", f"{rev}.inputX", force=True)
+        children = ("baseColorR", "baseColorG", "baseColorB")
+        for child in children:
+            cmds.connectAttr(f"{rev}.outputX", f"{mat}.{child}", force=True)
+
+        MatUpdater.disconnect_associated_attributes(mat, [self.tex])
+
+        for child in children:
+            self.assertFalse(
+                cmds.isConnected(f"{rev}.outputX", f"{mat}.{child}"),
+                f"{child} driven via reverse node must be removed",
+            )
+
 
 # ---------------------------------------------------------------------------
 # update_network
@@ -656,6 +698,42 @@ class TestUpdateNetwork(MayaTkTestCase):
         # No real connection should have been made
         conns = cmds.listConnections(f"{self.mat}.baseColor", source=True) or []
         self.assertEqual(conns, [], "Dry run must not create connections")
+
+    def test_unpacked_preset_drops_msao_for_separate_maps(self):
+        """Regression: PBR Metallic/Roughness (mask_map=False) must connect the
+        separate Metallic/Roughness/AO maps, not the redundant packed MSAO."""
+        paths = []
+        for name in ("Metallic", "Roughness", "Ambient_Occlusion", "MSAO"):
+            p = os.path.join(self.tmp, f"thing_{name}.png").replace("\\", "/")
+            with open(p, "w") as f:
+                f.write("dummy")
+            paths.append(p)
+
+        inventory = MatUpdater.update_network(
+            self.mat, paths, {"dry_run": True, "mask_map": False}
+        )
+        self.assertNotIn("MSAO", inventory, "Redundant MSAO should be dropped")
+        self.assertIn("Metallic", inventory)
+        self.assertIn("Roughness", inventory)
+        self.assertIn("Ambient_Occlusion", inventory)
+
+    def test_packed_preset_keeps_msao_over_separate_maps(self):
+        """The HDRP/mask-map preset (mask_map=True) keeps the packed MSAO and
+        drops the separate components."""
+        paths = []
+        for name in ("Metallic", "Roughness", "Ambient_Occlusion", "MSAO"):
+            p = os.path.join(self.tmp, f"thing_{name}.png").replace("\\", "/")
+            with open(p, "w") as f:
+                f.write("dummy")
+            paths.append(p)
+
+        inventory = MatUpdater.update_network(
+            self.mat, paths, {"dry_run": True, "mask_map": True}
+        )
+        self.assertIn("MSAO", inventory)
+        self.assertNotIn("Metallic", inventory)
+        self.assertNotIn("Roughness", inventory)
+        self.assertNotIn("Ambient_Occlusion", inventory)
 
 
 # ---------------------------------------------------------------------------

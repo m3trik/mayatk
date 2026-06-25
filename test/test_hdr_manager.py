@@ -123,6 +123,45 @@ class TestHdrManager(MayaTkTestCase):
         self.assertAlmostEqual(cmds.getAttr(f"{skydome}.aiSpecular"), 0.0)
         self.assertAlmostEqual(self.mgr.specular, 0.0)
 
+    def test_sky_radius_roundtrip(self):
+        """sky_radius drives the skydome's skyRadius (viewport-preview size)."""
+        self.mgr.hdr_env = "C:/tmp/x.exr"
+        skydome = self.mgr.hdr_env
+        # Created hidden (skyRadius=0) so the dome sphere doesn't clutter the VP.
+        self.assertEqual(cmds.getAttr(f"{skydome}.skyRadius"), 0)
+
+        self.mgr.sky_radius = 750
+        self.assertAlmostEqual(cmds.getAttr(f"{skydome}.skyRadius"), 750)
+        self.assertAlmostEqual(self.mgr.sky_radius, 750)
+
+    def test_sky_radius_clamps_negative_to_zero(self):
+        """A negative radius is meaningless — clamped to 0 (preview off)."""
+        self.mgr.hdr_env = "C:/tmp/x.exr"
+        self.mgr.sky_radius = -50
+        self.assertEqual(self.mgr.sky_radius, 0)
+
+    def test_preview_toggles_sky_radius(self):
+        """preview is the on/off boolean over skyRadius (on → PREVIEW_SKY_RADIUS)."""
+        self.mgr.hdr_env = "C:/tmp/x.exr"
+        skydome = self.mgr.hdr_env
+        self.assertFalse(self.mgr.preview)  # created hidden (skyRadius 0)
+
+        self.mgr.preview = True
+        self.assertEqual(
+            cmds.getAttr(f"{skydome}.skyRadius"), HdrManager.PREVIEW_SKY_RADIUS
+        )
+        self.assertTrue(self.mgr.preview)
+
+        self.mgr.preview = False
+        self.assertEqual(cmds.getAttr(f"{skydome}.skyRadius"), 0)
+        self.assertFalse(self.mgr.preview)
+
+    def test_preview_true_with_manual_radius(self):
+        """preview reads True for any non-zero skyRadius (incl. a manual size)."""
+        self.mgr.hdr_env = "C:/tmp/x.exr"
+        self.mgr.sky_radius = 5000  # user sized it manually in the viewport
+        self.assertTrue(self.mgr.preview)
+
     def test_setter_refuses_incomplete_image(self):
         """The hdr_env setter must not build a network for a truncated/corrupt HDR.
 
@@ -223,12 +262,17 @@ class TestHdrManager(MayaTkTestCase):
             samples=2,
             diffuse=0.25,
             specular=0.75,
+            preview=True,
         )
         self.assertIsNotNone(node)
         self.assertEqual(cmds.getAttr(f"{node}.resolution"), 4096)
         self.assertEqual(cmds.getAttr(f"{node}.aiSamples"), 2)
         self.assertAlmostEqual(cmds.getAttr(f"{node}.aiDiffuse"), 0.25)
         self.assertAlmostEqual(cmds.getAttr(f"{node}.aiSpecular"), 0.75)
+        # preview=True sizes the dome to PREVIEW_SKY_RADIUS (viewport backdrop).
+        self.assertEqual(
+            cmds.getAttr(f"{node}.skyRadius"), HdrManager.PREVIEW_SKY_RADIUS
+        )
 
 
 class TestRotationSetterRobust(unittest.TestCase):
@@ -386,6 +430,9 @@ class _StubManager:
         # The wired HDR file path the combo should mirror (None = no env);
         # tests set this to drive _select_active_in_combo.
         self.hdr_file_path = None
+        # Viewport-preview state the rotation slider's toggle/skyRadius drive.
+        self.sky_radius = 0
+        self.preview = False
 
     @property
     def hdr_env(self):
@@ -427,6 +474,11 @@ def _make_slots(env=None):
     s.manager = _StubManager(env)
     s.ui = _StubUi()
     s.sb = _StubSb()
+    # Rotation-slider option-box plugins are wired only in _setup_rotation_slider
+    # (live panel); default them to None so hdr_map_visibility/preview read cleanly.
+    s._viewport_toggle = None
+    s._render_toggle = None
+    s._rotation_value = None
     s._sync_calls = []
     s._sync_ui_to_scene = lambda: s._sync_calls.append(1)
     s._refresh_combo = lambda: None
@@ -532,32 +584,63 @@ class TestHdrSelectionDoesNotEagerLoad(unittest.TestCase):
 
 
 class TestVisibilityToggleSynchronous(unittest.TestCase):
-    """``chk000`` applies the Visible flag SYNCHRONOUSLY (issue 1: gray IPR).
+    """``_on_render_visible`` applies the Visible flag SYNCHRONOUSLY (issue 1: gray IPR).
 
     The skydome ``camera`` flag must be set immediately on toggle — like the
     other live controls (intensity / exposure / rotation) — so an active Arnold
     IPR picks it up through its normal attribute-edit callback. It must NOT be
-    deferred: a checkbox has no combo-popup re-entrancy to escape (unlike the
+    deferred: the toggle has no combo-popup re-entrancy to escape (unlike the
     map swap), and deferring it to ``evalDeferred(lowestPriority=True)`` let an
     active IPR starve the ``setAttr`` so toggling Visible appeared to do nothing.
-    Pure slot-level invariant — no Maya / Arnold needed.
+    Pure slot-level invariant — no Maya / Arnold needed. ('Visible' moved from
+    the ``chk000`` checkbox to the rotation slider's render-visibility option-box
+    toggle, which fires this via its ``toggled`` signal.)
     """
 
-    def test_chk000_applies_visibility_synchronously(self):
+    def test_render_visible_applies_synchronously(self):
         s = _make_slots(env="aiSkyDomeLight_")
         calls = []
         s.manager.set_hdr_map_visibility = lambda v: calls.append(v)
-        HdrManagerSlots.chk000(s, True, None)
+        HdrManagerSlots._on_render_visible(s, True)
         # Applied immediately, in-band — not pushed onto the idle queue.
         self.assertEqual(calls, [True])
         self.assertEqual(s.sb.deferred, [])
 
-    def test_chk000_uncheck_applies_false(self):
+    def test_render_visible_off_applies_false(self):
         s = _make_slots(env="aiSkyDomeLight_")
         calls = []
         s.manager.set_hdr_map_visibility = lambda v: calls.append(v)
-        HdrManagerSlots.chk000(s, False, None)
+        HdrManagerSlots._on_render_visible(s, False)
         self.assertEqual(calls, [False])
+
+
+class TestViewToggleSlots(unittest.TestCase):
+    """The rotation slider's two view toggles drive the engine synchronously.
+
+    Viewport-visibility (``_on_viewport_visible`` → ``manager.preview``) and
+    render-visibility (``_on_render_visible`` → ``manager.set_hdr_map_visibility``)
+    apply live in-band, never deferred — like the other live controls. Pure
+    slot-level — no Maya / Arnold needed.
+    """
+
+    def test_viewport_visible_sets_preview_in_band(self):
+        s = _make_slots(env="aiSkyDomeLight_")
+        HdrManagerSlots._on_viewport_visible(s, True)
+        self.assertTrue(s.manager.preview)
+        self.assertEqual(s.sb.deferred, [])  # live, never deferred
+
+    def test_viewport_invisible_clears_preview(self):
+        s = _make_slots(env="aiSkyDomeLight_")
+        s.manager.preview = True
+        HdrManagerSlots._on_viewport_visible(s, False)
+        self.assertFalse(s.manager.preview)
+
+    def test_hdr_map_flags_false_without_toggles(self):
+        # Before the option-box toggles are wired, both flag reads fall back to
+        # False (no AttributeError) so a build-path apply has sane defaults.
+        s = _make_slots(env=None)
+        self.assertFalse(HdrManagerSlots.hdr_map_visibility.fget(s))
+        self.assertFalse(HdrManagerSlots.hdr_map_preview.fget(s))
 
 
 class TestFailedApplyResyncsCombo(unittest.TestCase):
@@ -964,6 +1047,33 @@ class TestHdrSpinBoxesAreUitk(unittest.TestCase):
         declared = {cw.findtext("class") for cw in self.root.iter("customwidget")}
         self.assertIn("DoubleSpinBox", declared)
         self.assertIn("SpinBox", declared)
+
+
+class TestRotationSliderUi(unittest.TestCase):
+    """The rotation slider is a uitk Slider (carries the option box: value +
+    viewport/render toggles). The old Visible checkbox (chk000), the tilt spin
+    box (spn_tilt), and the separate preview slider (sld_preview) are all gone.
+    Static ``.ui`` guard — no Qt; pairs with _setup_rotation_slider.
+    """
+
+    def setUp(self):
+        import xml.etree.ElementTree as ET
+        import mayatk.light_utils.hdr_manager as hm
+
+        ui_path = os.path.join(os.path.dirname(hm.__file__), "hdr_manager.ui")
+        self.root = ET.parse(ui_path).getroot()
+
+    def test_rotation_slider_is_uitk_slider(self):
+        classes = {w.get("name"): w.get("class") for w in self.root.iter("widget")}
+        self.assertEqual(classes.get("slider000"), "Slider")
+        # Removed controls: Visible checkbox, tilt spin box, preview slider.
+        self.assertNotIn("chk000", classes)
+        self.assertNotIn("spn_tilt", classes)
+        self.assertNotIn("sld_preview", classes)
+
+    def test_slider_customwidget_declared(self):
+        declared = {cw.findtext("class") for cw in self.root.iter("customwidget")}
+        self.assertIn("Slider", declared)
 
 
 class TestSelectComboPath(unittest.TestCase):

@@ -208,7 +208,7 @@
                 <number>1</number>
                </property>
                <item>
-                <widget class="QSlider" name="slider000">
+                <widget class="Slider" name="slider000">
                  <property name="minimumSize">
                   <size>
                    <width>0</width>
@@ -222,7 +222,7 @@
                   </size>
                  </property>
                  <property name="toolTip">
-                  <string>Rotate the HDR environment around Y (0–360°).</string>
+                  <string>Rotate the HDR environment around Y (0–360°). Option box (▸): exact angle, plus viewport-visibility and render-visibility toggles.</string>
                  </property>
                  <property name="minimum">
                   <number>0</number>
@@ -232,28 +232,6 @@
                  </property>
                  <property name="orientation">
                   <enum>Qt::Horizontal</enum>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QCheckBox" name="chk000">
-                 <property name="minimumSize">
-                  <size>
-                   <width>0</width>
-                   <height>19</height>
-                  </size>
-                 </property>
-                 <property name="maximumSize">
-                  <size>
-                   <width>60</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                 <property name="toolTip">
-                  <string>Set the HDR map visibility.</string>
-                 </property>
-                 <property name="text">
-                  <string>Visible</string>
                  </property>
                 </widget>
                </item>
@@ -598,6 +576,11 @@
    <class>SpinBox</class>
    <extends>QDoubleSpinBox</extends>
    <header>uitk.widgets.spinBox.SpinBox.h</header>
+  </customwidget>
+  <customwidget>
+   <class>Slider</class>
+   <extends>QSlider</extends>
+   <header>uitk.widgets.slider.Slider.h</header>
   </customwidget>
   <customwidget>
    <class>CollapsableGroup</class>

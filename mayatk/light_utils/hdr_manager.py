@@ -13,9 +13,13 @@ Knobs the manager owns on the skydome:
 * ``intensity``  — linear multiplier on the light output.
 * ``exposure``   — photographic stops (log2) via Arnold's ``aiExposure``;
   returns 0.0 / no-ops on older mtoa builds that don't expose it.
-* ``rotation``   — Y rotation on the transform parent.
+* ``rotation``   — Y rotation (azimuth) on the transform parent.
 * ``visibility`` — primary-ray (``camera``) flag controlling whether the
-  HDR is visible *as a backdrop* rather than just as lighting.
+  HDR is visible *as a backdrop* rather than just as lighting (in the render).
+* ``sky_radius`` / ``preview`` — ``skyRadius``; the dome's display-sphere size
+  in the interactive viewport (0 = hidden). Shows the HDR as a Viewport 2.0
+  backdrop without rendering; lighting is unaffected (the dome is at infinity).
+  ``preview`` is the on/off boolean over it (on → :attr:`PREVIEW_SKY_RADIUS`).
 * ``resolution`` — importance-sampling resolution of the HDR (``resolution``).
 * ``samples``    — light samples (``aiSamples``) governing IBL noise.
 * ``diffuse`` / ``specular`` — per-component contribution scales
@@ -25,8 +29,8 @@ The skydome's scalar attributes (``intensity``, ``exposure``, ``resolution``,
 ``samples``, ``diffuse``, ``specular``) are all read/written through
 :meth:`_get_light_attr` / :meth:`_set_light_attr`, which fall back to the
 Arnold default (and no-op the write) when the attribute is absent — so the
-manager stays robust across mtoa versions. (``rotation`` lives on the
-transform and ``visibility`` is the ``camera`` flag, so those go direct.)
+manager stays robust across mtoa versions. (``rotation`` lives on the transform
+and ``visibility`` is the ``camera`` flag, so those go direct.)
 
 Maya 2025+ / Arnold (``mtoa``) plugin required for any network mutation.
 """
@@ -63,6 +67,13 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
     # Trailing underscore preserved for backward compatibility with
     # existing scenes and tests that look up the node by this exact name.
     hdr_env_name: str = "aiSkyDomeLight_"
+
+    # Sky radius applied when the viewport-preview toggle switches on — Arnold's
+    # own default (a fresh aiSkyDomeLight is 1000), large enough to enclose a
+    # typical scene so the HDR shows as a Viewport 2.0 backdrop. The exact size
+    # is fine-tuned manually in the viewport; off = 0 (the manager's create-time
+    # default, which hides the dome sphere).
+    PREVIEW_SKY_RADIUS: float = 1000.0
 
     # ------------------------------------------------------------------
     # Plugin
@@ -242,24 +253,56 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
         self.visibility = state
 
     @property
+    def sky_radius(self) -> float:
+        """Viewport-preview dome radius (``skyRadius``); 0 = no viewport backdrop.
+
+        Controls only the dome's *display* sphere in the interactive viewport —
+        lighting and reflections are unaffected (the dome is at infinity). The
+        manager creates the dome at ``skyRadius=0`` (hidden); raising it to a
+        value that encloses the scene shows the HDR as a Viewport 2.0 backdrop
+        without rendering. Distinct from :attr:`visibility` (the ``camera`` flag,
+        which is the backdrop *in the Arnold render*).
+        """
+        return self._get_light_attr("skyRadius", 0.0)
+
+    @sky_radius.setter
+    def sky_radius(self, value: float) -> None:
+        self._set_light_attr("skyRadius", max(0.0, float(value)))
+
+    @property
+    def preview(self) -> bool:
+        """Viewport-preview visibility — True when the dome shows in the viewport.
+
+        Convenience boolean over :attr:`sky_radius`: reads ``True`` when the
+        dome's display sphere is sized (``skyRadius`` > 0), and on set toggles it
+        to :attr:`PREVIEW_SKY_RADIUS` (on) or 0 (off). The exact size is then
+        fine-tuned manually in the viewport. Distinct from :attr:`visibility`
+        (the ``camera`` flag — the backdrop *in the Arnold render*).
+        """
+        return self.sky_radius > 0.0
+
+    @preview.setter
+    def preview(self, state: bool) -> None:
+        self.sky_radius = self.PREVIEW_SKY_RADIUS if state else 0.0
+
+    @property
     def rotation(self) -> float:
-        """Y rotation (degrees) of the skydome transform; 0 if absent."""
+        """Y rotation (degrees, azimuth) of the skydome transform; 0 if absent."""
         transform = self.hdr_env_transform
         return float(cmds.getAttr(f"{transform}.rotateY")) if transform else 0.0
 
     @rotation.setter
     def rotation(self, degrees: float) -> None:
         transform = self.hdr_env_transform
-        # No-op on a stale / partly-deleted network rather than throwing up
-        # into the UI slot — a slider drag must never error.
+        # No-op on a stale / partly-deleted network rather than throwing up into
+        # the UI slot — a slider drag must never error.
         if not transform or not cmds.objExists(transform):
             return
-        # Set rotateY directly. cmds.rotate's positionals are (angleX, angleY,
-        # angleZ, *objects) — the old call passed the transform *first*, so Maya
-        # parsed the angle as an object ("Object N is invalid") and raised on
-        # EVERY set (valid transform too); the try/except swallowed it, so the
-        # dome never actually rotated. setAttr is unambiguous, and the dome only
-        # ever spins around Y from a default pivot.
+        # setAttr, NOT cmds.rotate: the latter's positionals are (angleX, angleY,
+        # angleZ, *objects), so passing the transform first made Maya parse the
+        # angle as an object ("Object N is invalid") and raise on every set — the
+        # swallowed exception is why the dome once never rotated. The dome only
+        # ever spins around Y from a default pivot, so a direct setAttr suffices.
         try:
             cmds.setAttr(f"{transform}.rotateY", float(degrees))
         except Exception as e:  # a slider drag must never crash Maya
@@ -342,6 +385,7 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
         samples: Optional[int] = None,
         diffuse: Optional[float] = None,
         specular: Optional[float] = None,
+        preview: Optional[bool] = None,
     ) -> Optional[str]:
         """Apply settings to the (lazily-created) skydome network.
 
@@ -363,6 +407,7 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
             ("samples", samples),
             ("diffuse", diffuse),
             ("specular", specular),
+            ("preview", preview),
         ):
             if value is not None:
                 setattr(self, attr, value)
@@ -519,6 +564,15 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self.ui = self.sb.loaded_ui.hdr_manager
         self.manager = HdrManager()
 
+        # Option-box plugins on the rotation slider, wired in
+        # _setup_rotation_slider (deferred): an inline degrees value plus two
+        # view toggles — viewport visibility (skyRadius preview) and render
+        # visibility (camera flag). Held so _sync_ui_to_scene can push live
+        # scene state into them.
+        self._rotation_value = None
+        self._viewport_toggle = None
+        self._render_toggle = None
+
         # Keep the dropdown a live mirror of the scene's HDR environment.
         # Scene open / new / import swap the whole environment AND the
         # sourceimages set the list is drawn from → re-scan disk + re-sync.
@@ -561,6 +615,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         # self.ui until register_children runs (see __init__); wrap before the
         # _sync_ui_to_scene reads below, since wrapping reparents the widgets.
         self.sb.add_reset_buttons(self.ui)
+        self._setup_rotation_slider()
 
         self._refresh_combo()
         self._sync_ui_to_scene()
@@ -571,6 +626,62 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         # yet; the real load happens lazily on the first mutating action.
         if not self.manager.arnold_loaded():
             self.ui.footer.setText("Arnold (mtoa) not loaded — loads on first use.")
+
+    def _setup_rotation_slider(self) -> None:
+        """Wire the rotation slider's option box: inline degrees value + two view toggles.
+
+        Done here (deferred) rather than a ``slider000_init`` hook because
+        wrapping a widget in its option box reparents it — and the switchboard
+        only self-heals such deferred wrappers after ``register_children`` (the
+        same reason :meth:`add_reset_buttons` runs here, see ``__init__``).
+
+        The slider drives :attr:`HdrManager.rotation` (Y spin). Its option box
+        holds, left-to-right:
+
+        * a :class:`ValueOption` — the exact angle, typeable + live;
+        * a **viewport-visibility** toggle (:attr:`HdrManager.preview` — the
+          dome's ``skyRadius`` display in the interactive viewport); and
+        * a **render-visibility** toggle (:attr:`HdrManager.visibility` — the
+          ``camera`` flag, the backdrop in the Arnold render).
+
+        Both toggles are non-persistent (``settings_key=False``): they mirror
+        live scene state (set in :meth:`_sync_ui_to_scene`), never a stored UI
+        pref — like the dropdown's ``restore_state=False``. The two toggles are
+        built directly (not via ``add_toggle``) so both option instances are
+        captured — ``find_option`` returns only the first of a shared type.
+        """
+        from uitk.widgets.optionBox.options.toggle import ToggleOption
+        from uitk.widgets.optionBox.options.value import ValueOption
+
+        ob = self.ui.slider000.option_box
+        # ValueOption sorts ahead of the buttons (see OptionBox._option_order),
+        # so the exact-angle field sits flush against the slider, left of both
+        # toggles. Viewport toggle added before render → viewport is the first
+        # (left) button (option sort is stable within the shared "toggle" key).
+        ob.add_value(width=46, suffix="°")
+        self._viewport_toggle = ToggleOption(
+            wrapped_widget=self.ui.slider000,
+            icon="screen",
+            tooltip_on="HDR shown as a backdrop in the viewport. Click to hide.",
+            tooltip_off="HDR hidden in the viewport (skyRadius 0). Click to show.",
+            initial=False,
+            settings_key=False,
+        )
+        self._viewport_toggle.toggled.connect(self._on_viewport_visible)
+        self._render_toggle = ToggleOption(
+            wrapped_widget=self.ui.slider000,
+            icon="camera",
+            tooltip_on="HDR visible as a backdrop in the Arnold render. Click to hide.",
+            tooltip_off="HDR hidden from the render (lighting only). Click to show.",
+            initial=False,
+            settings_key=False,
+        )
+        self._render_toggle.toggled.connect(self._on_render_visible)
+        ob.add_option(self._viewport_toggle)
+        ob.add_option(self._render_toggle)
+        # Force the lazy wrap now so the field + toggles render with the panel.
+        _ = ob.container
+        self._rotation_value = ob.find_option(ValueOption)
 
     # ------------------------------------------------------------------
     # Feedback
@@ -666,8 +777,12 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                     "folder; the import mode is set just below it.",
                     "Adjust <b>Intensity</b> (linear), <b>Exposure</b> (stops), "
                     "and <b>Resolution</b> (HDR importance-sampling res).",
-                    "Drag the rotation slider to spin the environment around Y.",
-                    "Toggle <b>Visible</b> to show the HDR as a viewport backdrop.",
+                    "Drag the rotation slider to spin the environment around Y. "
+                    "Its option box (▸) holds the exact angle plus two view "
+                    "toggles: <b>viewport visibility</b> (show the HDR as a "
+                    "viewport backdrop — fine-tune its size manually) and "
+                    "<b>render visibility</b> (the HDR as a backdrop in the "
+                    "Arnold <i>render</i>).",
                 ],
                 sections=[
                     ("Advanced Options (collapsible)", [
@@ -942,6 +1057,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         intensity = self.manager.intensity if has_env else 1.0
         exposure = self.manager.exposure if has_env else 0.0
         visible = self.manager.visibility if has_env else False
+        preview = self.manager.preview if has_env else False
         resolution = self.manager.resolution if has_env else 1000
         samples = self.manager.samples if has_env else 1
         diffuse = self.manager.diffuse if has_env else 1.0
@@ -951,7 +1067,6 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             (self.ui.slider000, "setSliderPosition", rotation),
             (self.ui.spn_intensity, "setValue", intensity),
             (self.ui.spn_exposure, "setValue", exposure),
-            (self.ui.chk000, "setChecked", visible),
             (self.ui.spn_resolution, "setValue", resolution),
             (self.ui.spn_samples, "setValue", samples),
             (self.ui.spn_diffuse, "setValue", diffuse),
@@ -962,6 +1077,18 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                 getattr(widget, setter)(value)
             finally:
                 widget.blockSignals(False)
+
+        # The two view toggles and the inline degrees field live in the rotation
+        # slider's option box, not the .ui — push live state into them directly.
+        # Toggles set silently (emit=False, no scene write); the value field is
+        # refreshed since the blocked setSliderPosition above didn't fire the
+        # slider's valueChanged that normally mirrors it.
+        if self._viewport_toggle is not None:
+            self._viewport_toggle.set_on(preview, emit=False)
+        if self._render_toggle is not None:
+            self._render_toggle.set_on(visible, emit=False)
+        if self._rotation_value is not None:
+            self._rotation_value.refresh()
 
         # Reflect the LIVE scene HDR in the dropdown so the combo always shows
         # what's actually lighting the scene (it's restore_state=False, so it
@@ -1024,7 +1151,18 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
 
     @property
     def hdr_map_visibility(self) -> bool:
-        return self.ui.chk000.isChecked()
+        """Render 'Visible' flag — read from the rotation slider's render toggle.
+
+        Falls back to ``False`` if the toggle isn't wired yet (e.g. before
+        :meth:`_setup_rotation_slider`)."""
+        return bool(self._render_toggle.is_on) if self._render_toggle else False
+
+    @property
+    def hdr_map_preview(self) -> bool:
+        """Viewport-preview flag — read from the rotation slider's viewport toggle.
+
+        Falls back to ``False`` if the toggle isn't wired yet."""
+        return bool(self._viewport_toggle.is_on) if self._viewport_toggle else False
 
     # ------------------------------------------------------------------
     # Slot handlers
@@ -1055,20 +1193,31 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             self.ui.footer.setText(f"Applying {os.path.basename(path)}…", level="info")
         self._defer_to_idle(self._apply_selection)
 
-    def chk000(self, state, widget) -> None:
-        """Toggle skydome primary-ray visibility (the HDR-as-backdrop flag).
+    def _on_viewport_visible(self, state) -> None:
+        """Toggle the HDR's viewport backdrop — the rotation slider's first toggle.
 
+        Sets :attr:`HdrManager.preview`, sizing the dome's ``skyRadius`` so the
+        HDR shows in the interactive viewport (on) or hides it (off). Applied
+        synchronously like the other live controls. Lighting is unaffected (the
+        dome is at infinity); the exact size is fine-tuned manually in the
+        viewport. Distinct from :meth:`_on_render_visible` (the Arnold *render*
+        backdrop).
+        """
+        self.manager.preview = bool(state)
+
+    def _on_render_visible(self, state) -> None:
+        """Toggle skydome primary-ray visibility — the rotation slider's second toggle.
+
+        Sets the ``camera`` flag (the HDR as a backdrop in the Arnold *render*).
         Applied **synchronously**, exactly like the other live controls
-        (intensity / exposure / rotation below), so an active Arnold IPR picks up
-        the ``camera``-flag change immediately through its normal attribute-edit
-        callback — the same way dragging the Intensity field updates the render.
+        (intensity / exposure / rotation), so an active Arnold IPR picks up the
+        flag change immediately through its normal attribute-edit callback.
 
-        Deliberately NOT deferred. Unlike the map swap (:meth:`cmb000`), a
-        checkbox toggle has no combobox-popup-teardown re-entrancy to escape, so
-        the IPR-safety deferral doesn't apply here; worse, deferring it to
-        ``evalDeferred(lowestPriority=True)`` let an active IPR (which keeps the
-        idle queue busy) starve the ``setAttr``, so toggling Visible appeared to
-        do nothing in the RenderView.
+        Deliberately NOT deferred. Unlike the map swap (:meth:`cmb000`), a toggle
+        has no combobox-popup-teardown re-entrancy to escape; worse, deferring it
+        to ``evalDeferred(lowestPriority=True)`` let an active IPR (which keeps
+        the idle queue busy) starve the ``setAttr``, so toggling Visible appeared
+        to do nothing in the RenderView.
         """
         self.manager.set_hdr_map_visibility(bool(state))
 
@@ -1242,6 +1391,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             samples=self.ui.spn_samples.value(),
             diffuse=self.ui.spn_diffuse.value(),
             specular=self.ui.spn_specular.value(),
+            preview=self.hdr_map_preview,
         )
         self._notify(f"Applied: {os.path.basename(path)}", level="success")
 

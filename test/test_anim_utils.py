@@ -3780,5 +3780,55 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
         print(f"{'='*60}\n")
 
 
+class TestSceneHasAnimation(MayaTkTestCase):
+    """Tests for AnimUtils.scene_has_animation (playblast early-exit guard)."""
+
+    def test_empty_scene_has_no_animation(self):
+        """A scene with geometry but no keys reports no animation."""
+        cmds.polyCube(name="static_cube")
+        self.assertFalse(AnimUtils.scene_has_animation())
+
+    def test_keyed_transform_is_animation(self):
+        """A time-keyed transform attribute counts as animation."""
+        cube = cmds.polyCube(name="moving_cube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=10, value=10)
+        self.assertTrue(AnimUtils.scene_has_animation())
+
+    def test_keyed_non_transform_is_animation(self):
+        """Non-transform time animation (e.g. a keyed visibility/shape attr) still counts.
+
+        This is the behavior that distinguishes it from the transform-scoped
+        ``ShotStore.has_animation`` — a camera/blendshape/material-only animated
+        scene must not be treated as static by the playblast guard.
+        """
+        cam = cmds.camera()[0]
+        cam_shape = cmds.listRelatives(cam, shapes=True)[0]
+        cmds.setKeyframe(cam_shape, attribute="focalLength", time=1, value=35)
+        cmds.setKeyframe(cam_shape, attribute="focalLength", time=10, value=80)
+        self.assertTrue(AnimUtils.scene_has_animation())
+
+    def test_driven_key_only_is_not_time_animation(self):
+        """A set-driven key (animCurveU*) is driver-based, not time-based, so it does
+        not count as animation a playblast would capture."""
+        driver = cmds.polyCube(name="driver_cube")[0]
+        driven = cmds.polySphere(name="driven_sphere")[0]
+        cmds.setDrivenKeyframe(
+            f"{driven}.translateX",
+            currentDriver=f"{driver}.translateY",
+            driverValue=0,
+            value=0,
+        )
+        cmds.setDrivenKeyframe(
+            f"{driven}.translateX",
+            currentDriver=f"{driver}.translateY",
+            driverValue=10,
+            value=10,
+        )
+        # No time-input curves exist — only animCurveU* driven curves.
+        self.assertFalse(cmds.ls(type=["animCurveTL", "animCurveTA", "animCurveTU", "animCurveTT"]))
+        self.assertFalse(AnimUtils.scene_has_animation())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
