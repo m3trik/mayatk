@@ -2,11 +2,11 @@
 
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
-_Generated: 2026-06-22_
+_Generated: 2026-06-25_
 
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin)`
-  - methods: bake, bake_objects, objects_to_curves, get_anim_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, optimize_keys, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range
+  - methods: bake, bake_objects, objects_to_curves, get_anim_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, optimize_keys, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range
 
 ### `anim_utils/blendshape_animator/_blendshape_animator.py` — Main workflow facade for blendShape morph-animation creation, editing, and export.
 - `class BlendshapeAnimator(ptk.LoggingMixin)`
@@ -658,9 +658,9 @@ _Generated: 2026-06-22_
 
 ### `light_utils/hdr_manager.py` — Arnold HDR environment manager.
 - `class HdrManager(ptk.LoggingMixin, ptk.HelpMixin)`
-  - methods: arnold_loaded, arnold_available, ensure_plugin_loaded, hdr_env, hdr_env, hdr_env_transform, hdr_file_node, hdr_file_path, visibility, visibility, set_hdr_map_visibility, rotation, rotation, intensity, intensity, exposure, exposure, resolution, resolution, samples, samples, diffuse, diffuse, specular, specular, create_network, clear
+  - methods: arnold_loaded, arnold_available, ensure_plugin_loaded, hdr_env, hdr_env, hdr_env_transform, hdr_file_node, hdr_file_path, visibility, visibility, set_hdr_map_visibility, sky_radius, sky_radius, preview, preview, rotation, rotation, intensity, intensity, exposure, exposure, resolution, resolution, samples, samples, diffuse, diffuse, specular, specular, create_network, clear
 - `class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin)`
-  - methods: header_init, cmb000_init, hdr_map, hdr_map_visibility, cmb000, chk000, slider000, spn_intensity, spn_exposure, spn_resolution, spn_samples, spn_diffuse, spn_specular, add_hdr, open_sourceimages, clear_network, ctx_select_skydome, ctx_select_transform, ctx_select_file_node, ctx_reveal_in_explorer
+  - methods: header_init, cmb000_init, hdr_map, hdr_map_visibility, hdr_map_preview, cmb000, slider000, spn_intensity, spn_exposure, spn_resolution, spn_samples, spn_diffuse, spn_specular, add_hdr, open_sourceimages, clear_network, ctx_select_skydome, ctx_select_transform, ctx_select_file_node, ctx_reveal_in_explorer
 
 ### `light_utils/lightmap_baker/lightmap_baker.py` — High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 - `class LightmapBaker(ptk.LoggingMixin)`

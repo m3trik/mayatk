@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-06-22_
+_Generated: 2026-06-25_
 
 ## Index
 
@@ -213,6 +213,7 @@ _Generated: 2026-06-22_
   - `AnimUtils.move_keys_to_frame(objects=None, frame=None, time_range=None, selected_keys_only=False, retain_spacing=False, channel_box_attrs_only=False, align: str = 'auto')` *(static)* — Move keyframes to the given frame with comprehensive control options.
   - `AnimUtils.set_keys_for_attributes(objects, target_times=None, refresh_channel_box=False, **kwargs)` *(static)* — Sets keyframes for the specified attributes on given objects at given times.
   - `AnimUtils.filter_objects_with_keys(objects: Optional[Union[str, List[str]]] = None, keys: Optional[List[str]] = None) -> List[object]` *(static)* — Filter the given objects for those with specific keys set.
+  - `AnimUtils.scene_has_animation() -> bool` *(static)* — True if the scene contains any time-based animation a playblast would capture.
   - `AnimUtils.adjust_key_spacing(cls, objects: Optional[List[str]] = None, spacing: int = 1, time: Optional[int] = 0, relative: bool = True, preserve_keys: bool = False, selected_keys_only: bool = False, exact_gap: bool = False, prevent_collisions: bool = True)` *(class)* — Adjusts the spacing between keyframes for specified objects at a given time,
   - `AnimUtils.add_intermediate_keys(objects: Union[str, str, List[Union[str, str]]], time_range: Optional[Union[int, Tuple[int, int]]] = None, percent: Optional[float] = None, include_flat: bool = False, ignore: Union[str, List[str], None] = None) -> None` *(static)* — Keys selected or animated attributes on given object(s) within a time range.
   - `AnimUtils.remove_intermediate_keys(objects: Union[str, str, List[Union[str, str]]], time_range: Optional[Union[int, Tuple[int, int]]] = None, ignore: Union[str, List[str], None] = None) -> int` *(static)* — Removes all intermediate keyframes, keeping only the first and last key on each attribute.
@@ -2101,7 +2102,7 @@ Slots for the Unity bridge panel.
 
 Arnold HDR environment manager.
 
-- **[`class HdrManager(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L55)** — Manage a single ``aiSkyDomeLight`` + connected ``file`` texture.
+- **[`class HdrManager(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L59)** — Manage a single ``aiSkyDomeLight`` + connected ``file`` texture.
   - `HdrManager.arnold_loaded() -> bool` *(static)* — True if ``mtoa`` is *already* loaded — cheap, side-effect-free query.
   - `HdrManager.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin can be loaded right now.
   - `HdrManager.ensure_plugin_loaded(cls) -> bool` *(class)* — Backward-compat alias for :meth:`arnold_available`.
@@ -2113,7 +2114,11 @@ Arnold HDR environment manager.
   - `HdrManager.visibility(self) -> bool` *(property)* — Primary-ray visibility of the HDR (skydome as backdrop).
   - `HdrManager.visibility(self, state: bool) -> None`
   - `HdrManager.set_hdr_map_visibility(self, state: bool) -> None` — Backward-compat shim for :attr:`visibility`.
-  - `HdrManager.rotation(self) -> float` *(property)* — Y rotation (degrees) of the skydome transform;
+  - `HdrManager.sky_radius(self) -> float` *(property)* — Viewport-preview dome radius (``skyRadius``);
+  - `HdrManager.sky_radius(self, value: float) -> None`
+  - `HdrManager.preview(self) -> bool` *(property)* — Viewport-preview visibility — True when the dome shows in the viewport.
+  - `HdrManager.preview(self, state: bool) -> None`
+  - `HdrManager.rotation(self) -> float` *(property)* — Y rotation (degrees, azimuth) of the skydome transform;
   - `HdrManager.rotation(self, degrees: float) -> None`
   - `HdrManager.intensity(self) -> float` *(property)* — Linear light-output multiplier on the skydome;
   - `HdrManager.intensity(self, value: float) -> None`
@@ -2127,15 +2132,15 @@ Arnold HDR environment manager.
   - `HdrManager.diffuse(self, value: float) -> None`
   - `HdrManager.specular(self) -> float` *(property)* — Specular contribution scale (``aiSpecular``);
   - `HdrManager.specular(self, value: float) -> None`
-  - `HdrManager.create_network(self, hdrMap: str = '', hdrMapVisibility: bool = False, intensity: Optional[float] = None, exposure: Optional[float] = None, rotation: Optional[float] = None, resolution: Optional[int] = None, samples: Optional[int] = None, diffuse: Optional[float] = None, specular: Optional[float] = None) -> Optional[str]` — Apply settings to the (lazily-created) skydome network.
+  - `HdrManager.create_network(self, hdrMap: str = '', hdrMapVisibility: bool = False, intensity: Optional[float] = None, exposure: Optional[float] = None, rotation: Optional[float] = None, resolution: Optional[int] = None, samples: Optional[int] = None, diffuse: Optional[float] = None, specular: Optional[float] = None, preview: Optional[bool] = None) -> Optional[str]` — Apply settings to the (lazily-created) skydome network.
   - `HdrManager.clear(self) -> None` — Remove the skydome and its connected file/place2d nodes.
-- **[`class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L482)** — Switchboard slots for the HDR Manager UI.
+- **[`class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L527)** — Switchboard slots for the HDR Manager UI.
   - `HdrManagerSlots.header_init(self, widget) -> None` — Configure header menu and refresh button.
   - `HdrManagerSlots.cmb000_init(self, widget) -> None` — Wire the HDR dropdown: option-box plugins, context menu, auto-refresh.
   - `HdrManagerSlots.hdr_map(self) -> Optional[str]` *(property)* — Selected HDR file path from the combobox.
-  - `HdrManagerSlots.hdr_map_visibility(self) -> bool` *(property)*
+  - `HdrManagerSlots.hdr_map_visibility(self) -> bool` *(property)* — Render 'Visible' flag — read from the rotation slider's render toggle.
+  - `HdrManagerSlots.hdr_map_preview(self) -> bool` *(property)* — Viewport-preview flag — read from the rotation slider's viewport toggle.
   - `HdrManagerSlots.cmb000(self, index, widget) -> None` — HDR map selection — the panel's sole apply action (always deferred).
-  - `HdrManagerSlots.chk000(self, state, widget) -> None` — Toggle skydome primary-ray visibility (the HDR-as-backdrop flag).
   - `HdrManagerSlots.slider000(self, value, widget) -> None` — Rotate the HDR around Y.
   - `HdrManagerSlots.spn_intensity(self, value) -> None`
   - `HdrManagerSlots.spn_exposure(self, value) -> None`
@@ -2510,7 +2515,7 @@ Lightweight material state snapshot and restore.
   - `MatUpdater.update_materials(cls, materials: List[Any] = None, config: Union[str, Dict[str, Any]] = None, verbose: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, Any]` *(class)* — Update materials with processed textures.
   - `MatUpdater.disconnect_associated_attributes(cls, material, file_paths, config=None)` *(class)* — Disconnects PBR attributes if they are driven by the specified files.
   - `MatUpdater.update_network(cls, material, texture_paths, config) -> Dict[str, str]` *(class)* — Connect processed textures to the material.
-- **[`class MatUpdaterSlots(MatUpdater)`](mayatk/mayatk/mat_utils/mat_updater.py#L637)**
+- **[`class MatUpdaterSlots(MatUpdater)`](mayatk/mayatk/mat_utils/mat_updater.py#L667)**
   - `MatUpdaterSlots.header_init(self, widget)` — Format global options in the header menu.
   - `MatUpdaterSlots.selection_mode(self)` *(property)*
   - `MatUpdaterSlots.move_to_folder(self)` *(property)*
