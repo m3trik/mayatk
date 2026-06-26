@@ -2,6 +2,7 @@
 # coding=utf-8
 import unittest
 import time
+from unittest import mock
 from qtpy import QtWidgets, QtCore, QtGui
 try:
     from base_test import MayaTkTestCase
@@ -10,6 +11,56 @@ except ImportError:
 
 from mayatk.ui_utils.maya_native_menus import MayaNativeMenus as MayaMenuHandler, EmbeddedMenuWidget
 import maya.cmds as cmds
+
+
+class TestNativeMenuFailFast(MayaTkTestCase):
+    """A native-menu mapping that's stale for this Maya version must fail fast.
+
+    Several MENU_MAPPING entries are version-specific and raise on newer Maya
+    (e.g. ``buildToonMenu`` removed, ``buildHelpMenu`` arity changed,
+    ``mainCacheMenu`` shell gone). When the init command raises, ``get_menu``
+    must bail immediately and return ``None`` — NOT build a placeholder and spin
+    the (now 6-attempt) ``processEvents`` populate loop, which was the bulk of
+    the multi-second launch stall a broken menu caused.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.handler = MayaMenuHandler()
+
+    def test_init_failure_returns_none_without_populating(self):
+        # "edit" normally builds fine; force its init command to raise so the
+        # test is deterministic and independent of which mappings are stale.
+        with mock.patch(
+            "mayatk.ui_utils.maya_native_menus.mel.eval",
+            side_effect=RuntimeError("simulated stale menu proc"),
+        ), mock.patch.object(
+            self.handler,
+            "_populate_menu",
+            side_effect=AssertionError("populate loop must not run on init failure"),
+        ):
+            result = self.handler.get_menu("edit")
+
+        self.assertIsNone(result, "get_menu must return None when init raises")
+        self.assertNotIn(
+            "edit", self.handler.menus, "no placeholder may be cached on failure"
+        )
+
+    def test_init_failure_is_fast(self):
+        # Without the early-out this spun 15x processEvents (seconds). Bail
+        # makes it near-instant; allow generous headroom for the menu-set switch.
+        with mock.patch(
+            "mayatk.ui_utils.maya_native_menus.mel.eval",
+            side_effect=RuntimeError("simulated stale menu proc"),
+        ):
+            t0 = time.time()
+            result = self.handler.get_menu("edit")
+            elapsed = time.time() - t0
+
+        self.assertIsNone(result)
+        self.assertLess(
+            elapsed, 3.0, f"failed native-menu build must be fast, took {elapsed:.2f}s"
+        )
 
 
 class TestMayaMenuHandlerExtended(MayaTkTestCase):

@@ -348,25 +348,37 @@ class _TaskActionsMixin(_TaskDataMixin):
         AnimUtils.snap_keys_to_frames(self.objects)
         self.logger.info("Keyframes have been snapped.")
 
-    def create_glb(self):
-        """Convert the just-exported FBX to a GLB sidecar via pythontk's MeshConvert.
+    def create_glb(self, fbx_path: Optional[str] = None, announce: bool = True):
+        """Convert an exported FBX to a GLB sidecar via pythontk's MeshConvert.
 
         Runs after the FBX has been written; ``perform_export`` invokes this
         explicitly rather than as part of the pre-export task pipeline.
+
+        Parameters:
+            fbx_path: FBX to convert. Defaults to ``self.export_path`` (the
+                FBX-alongside case). The GLB-only path passes the temp FBX so the
+                ``.glb`` lands beside it (then gets moved into the output dir).
+            announce: When True, log the resulting path. The GLB-only path sets
+                this False and logs the final (moved) path itself.
+
+        Returns:
+            The created ``.glb`` path, or ``None`` if conversion failed.
         """
         self.logger.info("Converting FBX to GLB...")
         try:
             glb_path = ptk.MeshConvert.fbx_to_glb(
-                self.export_path,
+                fbx_path or self.export_path,
                 overwrite=True,
                 auto_install=True,
                 prompt=False,
             )
         except (FileNotFoundError, RuntimeError) as e:
             self.logger.error(f"GLB conversion failed: {e}")
-            return
+            return None
 
-        self.logger.success(f"GLB created: {glb_path}")
+        if announce:
+            self.logger.success(f"GLB created: {glb_path}")
+        return glb_path
 
     def export_data_node(self):
         """Include the shared ``data_export`` carrier in the export (default on).
@@ -1546,7 +1558,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             },
             # NOTE: `version` is a UI-only field — consumed by SceneExporter
             # (pop'd before run_tasks), never executed by the task pipeline.
-            # Same pattern as `create_glb` below.
+            # The output format (FBX / GLB / FBX+GLB) is the same kind of UI-only
+            # field, but it lives in its own `cmb004` Format combo rather than the
+            # task list, so it isn't defined here.
             "version": {
                 "widget_type": "QLineEdit",
                 "setPlaceholderText": "{stem}_v{n:03d}  — empty disables",
@@ -1563,16 +1577,6 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 ),
                 "setText": "",  # off by default — opt-in
                 "value_method": "text",
-            },
-            "create_glb": {
-                "widget_type": "QCheckBox",
-                "setText": "Create GLB Alongside FBX",
-                "setToolTip": (
-                    "After the FBX is written, convert it to a binary glTF (.glb)\n"
-                    "in the same directory using pythontk's MeshConvert (FBX2glTF).\n"
-                    "FBX2glTF is downloaded on first use into ~/.pythontk/tools/."
-                ),
-                "setChecked": False,
             },
         }
 

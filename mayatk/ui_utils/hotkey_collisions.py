@@ -111,6 +111,62 @@ def _ks_modifier(ks: list, mod: str) -> bool:
     return ks[idx] == "1"
 
 
+def keystring_to_token(ks: list) -> str:
+    """Convert an ``assignCommand`` keyString array to a Maya hotkey token.
+
+    e.g. ``["I", "0", "1", ...]`` (Ctrl+I) -> ``"ctl+i"``. A single upper-case
+    letter is normalised to ``sht+`` + its lower-case form (Maya stores
+    shift+letter as the upper-case glyph). Returns ``""`` for an empty array
+    or a keyless entry — Maya reports the key as the literal string ``"NONE"``
+    (case varies across versions) for a runtime/name command whose hotkey has
+    been cleared.
+    """
+    if not ks or not ks[0] or str(ks[0]).strip().lower() == "none":
+        return ""
+    key = ks[0]
+    ctrl = _ks_modifier(ks, "ctrl")
+    alt = _ks_modifier(ks, "alt")
+    shift = _ks_modifier(ks, "shift")
+    if len(key) == 1 and key.isalpha() and key.isupper():
+        shift = True
+        key = key.lower()
+    mods = []
+    if ctrl:
+        mods.append("ctl")
+    if alt:
+        mods.append("alt")
+    if shift:
+        mods.append("sht")
+    return "+".join(mods + [key])
+
+
+def live_hotkey_map() -> dict:
+    """Return ``{runtime_command: maya_key_token}`` for the active hotkey set.
+
+    Reads Maya's live ``assignCommand`` registry — the source of truth that
+    reflects bindings made through the Macro Manager *and* Maya's own Hotkey
+    Editor. Empty outside an interactive Maya (the registry is unavailable in
+    ``mayapy`` standalone, where ``numElements`` is ``None``).
+    """
+    result: dict = {}
+    try:
+        count = cmds.assignCommand(query=True, numElements=True) or 0
+    except Exception:
+        return result
+    for i in range(1, count + 1):
+        try:
+            ks = cmds.assignCommand(i, query=True, keyString=True)
+            cmd = cmds.assignCommand(i, query=True, command=True) or ""
+        except Exception:
+            continue
+        if not cmd or not ks:
+            continue
+        token = keystring_to_token(ks)
+        if token:
+            result[cmd] = token
+    return result
+
+
 def _find_bound_command(parsed: dict) -> str:
     """Return the runtime command bound to the parsed shortcut, or ''.
 

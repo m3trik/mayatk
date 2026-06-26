@@ -370,13 +370,36 @@ class TestRigUtils(MayaTkTestCase):
         old_uuid = cmds.ls(str(skin), uuid=True)[0]
 
         # Test
-        RigUtils.rebind_skin_clusters([self.cube])
+        result = RigUtils.rebind_skin_clusters([self.cube])
 
         # Verify skinCluster still exists (it's a new one, but exists)
         new_skin = cmds.ls(cmds.listHistory(self.cube), type="skinCluster")
         self.assertTrue(new_skin)
         new_uuid = cmds.ls(str(new_skin[0]), uuid=True)[0]
         self.assertNotEqual(new_uuid, old_uuid)  # Should be a new node
+
+        # Summary reports the success and nothing else.
+        self.assertEqual(result["rebound"], [self.cube])
+        self.assertEqual(result["no_skin_cluster"], [])
+        self.assertEqual(result["wrong_type"], [])
+        self.assertEqual(result["failed"], [])
+
+    def test_rebind_skin_clusters_no_skin_cluster(self):
+        """A mesh with no skinCluster is reported under 'no_skin_cluster'."""
+        result = RigUtils.rebind_skin_clusters([self.sphere])
+        self.assertEqual(result["rebound"], [])
+        self.assertEqual(result["no_skin_cluster"], [self.sphere])
+        self.assertEqual(result["wrong_type"], [])
+        self.assertEqual(result["failed"], [])
+
+    def test_rebind_skin_clusters_wrong_type(self):
+        """A non-mesh-transform input is reported under 'wrong_type'."""
+        loc = cmds.spaceLocator(name="rebind_loc")[0]
+        result = RigUtils.rebind_skin_clusters([loc])
+        self.assertEqual(result["rebound"], [])
+        self.assertEqual(result["no_skin_cluster"], [])
+        self.assertEqual(result["wrong_type"], [loc])
+        self.assertEqual(result["failed"], [])
 
 
 if __name__ == "__main__":

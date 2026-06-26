@@ -14,6 +14,7 @@ import maya.cmds as cmds
 from base_test import MayaTkTestCase
 from mayatk.ui_utils.hotkey_collisions import (
     parse_qt_sequence,
+    keystring_to_token,
     maya_collision_checker,
 )
 
@@ -61,6 +62,41 @@ class TestParseQtSequence(unittest.TestCase):
         # "Ctrl+K, Ctrl+S" is a multi-step sequence Maya can't represent
         # as a single hotkey query.
         self.assertIsNone(parse_qt_sequence("Ctrl+K, Ctrl+S"))
+
+
+class TestKeystringToToken(unittest.TestCase):
+    """Pure keyString -> token conversion — no Maya state required."""
+
+    # 7-element Maya 2025 layout: [key, alt, ctrl, ?, shift, release, ?]
+    def _ks(self, key, alt="0", ctrl="0", shift="0"):
+        return [key, alt, ctrl, "0", shift, "0", "0"]
+
+    def test_ctrl_letter(self):
+        # Maya stores a non-shifted letter as its lower-case glyph.
+        self.assertEqual(keystring_to_token(self._ks("i", ctrl="1")), "ctl+i")
+
+    def test_uppercase_letter_becomes_shift(self):
+        # Maya stores shift+letter as the upper-case glyph, no shift flag.
+        self.assertEqual(keystring_to_token(self._ks("K")), "sht+k")
+
+    def test_empty_array(self):
+        self.assertEqual(keystring_to_token([]), "")
+        self.assertEqual(keystring_to_token(None), "")
+
+    def test_empty_key(self):
+        self.assertEqual(keystring_to_token(self._ks("")), "")
+
+    def test_none_sentinel_key_is_empty(self):
+        """Maya reports a keyless (cleared) command's key as the string 'NONE'.
+
+        Regression: that literal leaked through to the Macro Manager and
+        rendered as the hotkey 'NONE' (and two such entries falsely collided).
+        Case varies across Maya versions, so the guard is case-insensitive.
+        """
+        for sentinel in ("NONE", "None", "none"):
+            self.assertEqual(keystring_to_token(self._ks(sentinel)), "", sentinel)
+        # …even if a stray modifier flag is set on the orphan entry.
+        self.assertEqual(keystring_to_token(self._ks("NONE", ctrl="1")), "")
 
 
 class TestMayaCollisionChecker(MayaTkTestCase):

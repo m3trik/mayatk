@@ -511,7 +511,6 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
         )
         spn_stagger = widget.option_box.menu.add(
             "QSpinBox",
-            setText="Stagger",
             setObjectName="spn_stagger",
             setToolTip=(
                 "Extra frames added between each clip when Key All\n"

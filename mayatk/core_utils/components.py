@@ -12,7 +12,7 @@ except Exception as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils._core_utils import CoreUtils, as_strings
+from mayatk.core_utils._core_utils import CoreUtils, as_strings, short_name
 
 
 def _split_component(comp: str) -> Tuple[str, Optional[str], Optional[int]]:
@@ -949,7 +949,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         upper_hardness: float = None,
         lower_hardness: float = None,
         unlock_normals: bool = False,
-    ) -> None:
+    ) -> List[str]:
         """Set edge hardness based on normal angle thresholds.
 
         When ``unlock_normals`` is True, each affected mesh is reset to a
@@ -962,9 +962,21 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
            keeps the previously-baked values as "user-tweaked" and
            polySoftEdge only flips the edge flag without changing shading.
         3. ``polySoftEdge`` then drives the final shading.
+
+        When ``unlock_normals`` is False the meshes are pre-flighted for
+        locked vertex normals. Locked normals silently block ``polySoftEdge``
+        from updating shading, so rather than no-op invisibly the operation is
+        aborted before any edits: a console warning is emitted and the
+        offending object paths are returned so the caller can surface a
+        user-facing message.
+
+        Returns:
+            list: Unambiguous object paths skipped because their vertex
+            normals are locked and ``unlock_normals`` was False. Empty when
+            the operation ran (or had nothing to do).
         """
         if upper_hardness is None and lower_hardness is None:
-            return
+            return []
 
         all_edges, edge_angles = cls.get_edges_by_normal_angle(
             objects, 0, 180, return_angles=True
@@ -972,21 +984,51 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
 
         object_to_edges = cls.map_components_to_objects(all_edges)
 
+        # Resolve every unambiguous DAG path spanned by the selection up front.
+        # A map_components_to_objects key is a leaf name that can collide across
+        # the scene (two `pCube1`s under different parents merge into one key),
+        # so derive the full path set from the path-qualified edge strings — a
+        # single key can front more than one real object.
+        object_to_paths = {}
+        for obj, edges in object_to_edges.items():
+            nodes = {e.split(".")[0] for e in edges} or {obj}
+            object_to_paths[obj] = [
+                path
+                for node in nodes
+                for path in (cmds.ls(node, long=True, objectsOnly=True) or [node])
+            ]
+
+        # Guard: locked vertex normals (FBX/Marmoset imports) silently block
+        # polySoftEdge from updating shading. When the caller opts out of
+        # unlocking, abort before any edits and report every offending object.
+        if not unlock_normals:
+            locked_objects = [
+                path
+                for paths in object_to_paths.values()
+                for path in paths
+                if any(
+                    cmds.polyNormalPerVertex(f"{path}.vtx[*]", q=True, freezeNormal=True)
+                    or []
+                )
+            ]
+            if locked_objects:
+                cmds.warning(
+                    "set_edge_hardness: aborted — locked vertex normals on "
+                    f"{', '.join(short_name(o) for o in locked_objects)}. "
+                    "Enable 'Unlock Normals' to release them before applying "
+                    "hardness."
+                )
+                return locked_objects
+
         saved_selection = cmds.ls(sl=True, long=True) or []
 
         for obj, edges in object_to_edges.items():
-            # Resolve the unambiguous DAG path from one of the edges — the
-            # `obj` key in object_to_edges is a leaf name that can collide
-            # with other nodes; edge strings are path-qualified.
-            edge_node = edges[0].split(".")[0] if edges else obj
-            transforms = cmds.ls(edge_node, long=True, objectsOnly=True) or []
-            obj_path = transforms[0] if transforms else obj
-
             if unlock_normals:
-                cmds.polyNormalPerVertex(f"{obj_path}.vtx[*]", unFreezeNormal=True)
-                # polySetToFaceNormal acts on the active selection.
-                cmds.select(obj_path, replace=True)
-                cmds.polySetToFaceNormal()
+                for obj_path in object_to_paths[obj]:
+                    cmds.polyNormalPerVertex(f"{obj_path}.vtx[*]", unFreezeNormal=True)
+                    # polySetToFaceNormal acts on the active selection.
+                    cmds.select(obj_path, replace=True)
+                    cmds.polySetToFaceNormal()
             upper_edges = (
                 [e for e in edges if edge_angles[str(e)] >= angle_threshold]
                 if upper_hardness is not None
@@ -1010,6 +1052,8 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             cmds.select(saved_selection, replace=True)
         else:
             cmds.select(clear=True)
+
+        return []
 
     @classmethod
     def get_faces_with_similar_normals(
