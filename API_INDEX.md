@@ -113,12 +113,13 @@ _Generated: 2026-06-27_
 - `class ObjectStatus`
 - `class StepStatus`
   - methods: status, missing_count, total_count
-- `class ColumnMap`
+- `class ColumnMap(SchemaSpec)`
   - methods: to_dict, from_dict
 - `class ShotManifest`
   - methods: sync, rewire_audio, update, build_plan, assess, from_csv
 
 ### `anim_utils/shots/shot_manifest/behaviors/_behaviors.py` — Behaviors — load and apply YAML keying recipes.
+- `templates() -> TemplateSet`
 - `load_behavior(name: str, search_path: Optional[Path] = None) -> Dict[str, Any]`
 - `list_behaviors(search_path: Optional[Path] = None, kind: Optional[str] = None) -> List[str]`
 - `resolve_keys(block_def: Dict, start: float, end: float) -> List[Dict[str, Any]]`
@@ -127,6 +128,13 @@ _Generated: 2026-06-27_
 - `apply_audio_clip(obj: str, start: float, end: float, source_path: str = '') -> None`
 - `compute_duration(behavior_entries: List[Dict[str, str]], fallback: float = 30, fps: Optional[float] = None) -> float`
 - `apply_to_shots(shots: list, apply_fn, exists_fn=None, has_keys_fn=None, store=None) -> Dict[str, list]`
+
+### `anim_utils/shots/shot_manifest/behaviors/_spec.py` — Schema for a *behavior* template file, defined as a dataclass.
+- `validate_duration(value: Any) -> List[str]`
+- `validate_verify(value: Any) -> List[str]`
+- `validate_attributes(value: Any) -> List[str]`
+- `format_markdown() -> str`
+- `class BehaviorSpec(SchemaSpec)`
 
 ### `anim_utils/shots/shot_manifest/manifest_data.py` — Constants, column layout, and pure helper functions for the Shot Manifest UI.
 - `fmt_behavior(name: str) -> str`
@@ -138,9 +146,17 @@ _Generated: 2026-06-27_
 - `prune_to_top_boundaries(region_starts: List[float], n_steps: int) -> List[float]`
 
 ### `anim_utils/shots/shot_manifest/mapping/_mapping.py` — CSV mapping resolver — interprets JSON mapping files.
+- `templates() -> TemplateSet`
 - `discover(directory: Optional[str] = None) -> List[str]`
 - `load_mapping(name: str, directory: Optional[str] = None) -> Dict[str, Any]`
 - `resolve(csv_path: str, mapping: Optional[Dict[str, Any]] = None, *, name: Optional[str] = None, directory: Optional[str] = None) -> List[BuilderStep]`
+
+### `anim_utils/shots/shot_manifest/mapping/_spec.py` — Schema for a CSV *mapping* file, defined as a dataclass.
+- `validate_audio_resolve(value: Any) -> List[str]`
+- `validate_default_behaviors(value: Any) -> List[str]`
+- `format_markdown() -> str`
+- `class AudioMethod`
+- `class MappingSpec(SchemaSpec)`
 
 ### `anim_utils/shots/shot_manifest/range_resolver.py` — Range resolution algorithm for the Shot Manifest.
 - `resolve_ranges(steps: List[BuilderStep], user_ranges: Dict[str, Tuple[Optional[float], Optional[float]]], gap_starts: List[float], gap_end_map: Dict[float, float], gap: float, use_selected_keys: bool, last_resolved: List[Tuple[str, float, Optional[float], bool]], from_step_idx: int = 0, default_duration: float = 0) -> List[Tuple[str, float, Optional[float], bool]]`

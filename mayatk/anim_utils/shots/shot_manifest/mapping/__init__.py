@@ -16,6 +16,12 @@ from mayatk.anim_utils.shots.shot_manifest.mapping._mapping import (  # noqa: F4
     discover,
     load_mapping,
     resolve,
+    templates,
+)
+from mayatk.anim_utils.shots.shot_manifest.mapping._spec import (  # noqa: F401
+    MappingSpec,
+    AUDIO_METHODS,
+    format_markdown,
 )
 
 __all__ = [
@@ -23,4 +29,8 @@ __all__ = [
     "discover",
     "load_mapping",
     "resolve",
+    "templates",
+    "format_markdown",
+    "MappingSpec",
+    "AUDIO_METHODS",
 ]

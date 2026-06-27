@@ -43,11 +43,14 @@ API
 :func:`load_mapping` — read a JSON mapping and return a callable.
 :func:`resolve` — ``(csv_path, mapping_name) → List[BuilderStep]``.
 """
+import functools
 import json
 import logging
 import re as _re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
+
+from pythontk import TemplateSet
 
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     BuilderObject,
@@ -55,6 +58,7 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     ColumnMap,
     parse_csv,
 )
+from mayatk.anim_utils.shots.shot_manifest.mapping._spec import MappingSpec
 
 # Log under the package name, not this private impl module, so the logger name
 # stays stable across the __init__ -> _mapping split.
@@ -65,10 +69,30 @@ __all__ = [
     "discover",
     "load_mapping",
     "resolve",
+    "templates",
 ]
 
 DEFAULT_DIR: Path = Path(__file__).parent
-"""Default directory for mapping JSON files."""
+"""Directory of built-in (read-only) mapping JSON files shipped with the tool."""
+
+
+@functools.lru_cache(maxsize=None)
+def templates() -> TemplateSet:
+    """The shared :class:`~pythontk.TemplateSet` backing mapping discovery.
+
+    A cached singleton (built on first use, so importing this module never
+    touches the filesystem). Two tiers: built-in files in :data:`DEFAULT_DIR`
+    plus the user's own under ``user_config_root()/mayatk/shot_manifest_mappings/``
+    (a user mapping shadows a built-in of the same name — "duplicate to edit").
+    Exposes ``names``/``source``/``user_dir``/``skeleton``/``write_skeleton`` for
+    the UI's source-tagging and empty-folder seeding (an example to copy).
+    """
+    return TemplateSet(
+        "shot_manifest_mappings",
+        MappingSpec,
+        "mayatk",
+        builtin_dir=DEFAULT_DIR,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -77,11 +101,18 @@ DEFAULT_DIR: Path = Path(__file__).parent
 
 
 def discover(directory: Optional[str] = None) -> List[str]:
-    """List available mapping names (without ``.json``) in *directory*.
+    """List available mapping names (without ``.json``).
 
-    Excludes files starting with ``_``.
+    With no *directory* (the normal case) this returns the union of built-in and
+    user mappings via :func:`templates`, so a user's own files appear alongside
+    the shipped ones. Either way ``_``-prefixed stems are excluded (the repo's
+    private/partial convention — a user can park ``_draft.json`` without it
+    surfacing in the picker). A *directory* override scans just that folder
+    (back-compat / tests).
     """
-    d = Path(directory) if directory else DEFAULT_DIR
+    if directory is None:
+        return [n for n in templates().names() if not n.startswith("_")]
+    d = Path(directory)
     if not d.is_dir():
         return []
     return sorted(p.stem for p in d.glob("*.json") if not p.stem.startswith("_"))
@@ -96,28 +127,44 @@ def load_mapping(
     name: str,
     directory: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Read a mapping JSON by *name* and return the parsed dict.
+    """Read a mapping JSON by *name*, validate it, and return the parsed dict.
+
+    Resolution order:
+        * *name* ending in ``.json`` → that path directly.
+        * *directory* given → ``{directory}/{name}.json`` (back-compat / tests).
+        * otherwise → resolve through :func:`templates` (built-in + user tiers).
+
+    The file is validated against :class:`MappingSpec`: warnings (e.g. an
+    unrecognised key) are logged; hard errors (unknown audio method, missing
+    required key, wrong structure) raise :class:`~pythontk.SchemaError` so the
+    caller can surface a precise message instead of a stack trace.
 
     Parameters:
-        name: Mapping stem (e.g. ``"c5m_training"``).  Can also be a
-            full path ending in ``.json``.
-        directory: Folder containing mapping files.
-            Defaults to :data:`DEFAULT_DIR`.
+        name: Mapping stem (e.g. ``"c5m_training"``) or a full ``.json`` path.
+        directory: Optional folder override.
 
     Raises:
-        FileNotFoundError: If no matching ``.json`` file exists.
+        FileNotFoundError: If no matching mapping exists.
+        pythontk.SchemaError: If the mapping is structurally invalid.
     """
     if name.endswith(".json"):
         path = Path(name)
+        if not path.is_file():
+            raise FileNotFoundError(f"Mapping not found: {path}")
+        data = json.loads(path.read_text(encoding="utf-8"))
+    elif directory is not None:
+        path = Path(directory) / f"{name}.json"
+        if not path.is_file():
+            raise FileNotFoundError(f"Mapping not found: {path}")
+        data = json.loads(path.read_text(encoding="utf-8"))
     else:
-        d = Path(directory) if directory else DEFAULT_DIR
-        path = d / f"{name}.json"
+        try:
+            data = templates().raw(name)
+        except KeyError as exc:
+            raise FileNotFoundError(str(exc)) from exc
 
-    if not path.is_file():
-        raise FileNotFoundError(f"Mapping not found: {path}")
-
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+    MappingSpec.validate(data).raise_or_warn(prefix=f"mapping {name!r}: ", logger=log)
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -187,33 +234,37 @@ def _build_column_map(columns: Dict[str, Any]) -> ColumnMap:
 # ---------------------------------------------------------------------------
 
 
-def _build_audio_resolver(
-    cfg: Dict[str, Any],
-) -> Callable[[BuilderStep], None]:
-    """Dispatch to the right resolver based on ``cfg["method"]``."""
+# Resolver builders keyed by audio_resolve method — same key set as
+# :data:`._spec.AUDIO_METHODS` (``test_mapping_spec`` guards against drift).
+# Adding a method is one entry here + one descriptor there; the dispatcher and
+# the validator/docs never change (OCP).
+_AUDIO_BUILDERS: Dict[str, Callable[[Dict[str, Any]], Callable[[BuilderStep], None]]] = {
+    "prefix": lambda cfg: _audio_prefix(
+        cfg.get("directory", ""), cfg.get("extensions", (".wav", ".mp3"))
+    ),
+    "regex": lambda cfg: _audio_regex(
+        cfg.get("directory", ""),
+        cfg["pattern"],
+        cfg.get("extensions", (".wav", ".mp3")),
+    ),
+    "map": lambda cfg: _audio_map(cfg.get("clips", {})),
+    "derive": lambda cfg: _audio_derive(
+        cfg.get("words", 3),
+        cfg.get("separator", "_"),
+        cfg.get("directory", ""),
+        cfg.get("extensions", (".wav", ".mp3")),
+    ),
+}
+
+
+def _build_audio_resolver(cfg: Dict[str, Any]) -> Callable[[BuilderStep], None]:
+    """Dispatch to the resolver builder for ``cfg["method"]`` (default ``prefix``)."""
     method = cfg.get("method", "prefix")
-    if method == "prefix":
-        return _audio_prefix(
-            cfg.get("directory", ""),
-            cfg.get("extensions", (".wav", ".mp3")),
-        )
-    elif method == "regex":
-        return _audio_regex(
-            cfg.get("directory", ""),
-            cfg["pattern"],
-            cfg.get("extensions", (".wav", ".mp3")),
-        )
-    elif method == "map":
-        return _audio_map(cfg.get("clips", {}))
-    elif method == "derive":
-        return _audio_derive(
-            cfg.get("words", 3),
-            cfg.get("separator", "_"),
-            cfg.get("directory", ""),
-            cfg.get("extensions", (".wav", ".mp3")),
-        )
-    else:
-        raise ValueError(f"Unknown audio_resolve method: {method!r}")
+    try:
+        builder = _AUDIO_BUILDERS[method]
+    except KeyError:
+        raise ValueError(f"Unknown audio_resolve method: {method!r}") from None
+    return builder(cfg)
 
 
 def _audio_prefix(

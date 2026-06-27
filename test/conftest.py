@@ -68,3 +68,17 @@ for _parent, _child in (
     _parent_mod = sys.modules[_parent]
     if not hasattr(_parent_mod, _child):
         setattr(_parent_mod, _child, sys.modules[f"{_parent}.{_child}"])
+
+
+# ---------------------------------------------------------------------------
+# Sandbox the ecosystem user-config root so tests never read or write the real
+# PresetStore / TemplateSet locations (last-used pointers, user presets, and
+# user mapping/behavior templates). Mirrors test_preset_store's redirect; see
+# the "test suite wiped live QSettings" lesson — never touch a live user store.
+# ---------------------------------------------------------------------------
+import os  # noqa: E402
+import tempfile  # noqa: E402
+
+from pythontk.core_utils.user_config import CONFIG_ROOT_ENV_VAR  # noqa: E402
+
+os.environ[CONFIG_ROOT_ENV_VAR] = tempfile.mkdtemp(prefix="mayatk_test_config_")

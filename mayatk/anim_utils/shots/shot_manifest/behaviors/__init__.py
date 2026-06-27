@@ -26,6 +26,11 @@ from mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors import (  # noqa
     apply_audio_clip,
     compute_duration,
     apply_to_shots,
+    templates,
+)
+from mayatk.anim_utils.shots.shot_manifest.behaviors._spec import (  # noqa: F401
+    BehaviorSpec,
+    format_markdown,
 )
 
 __all__ = [
@@ -37,4 +42,7 @@ __all__ = [
     "apply_audio_clip",
     "compute_duration",
     "apply_to_shots",
+    "templates",
+    "format_markdown",
+    "BehaviorSpec",
 ]

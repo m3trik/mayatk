@@ -1161,59 +1161,213 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             BEHAVIOR_STATUS_COLORS["error"] = PASTEL_STATUS["missing_object"][0]
 
     def _setup_mapping_combo(self) -> None:
-        """Add a mapping-file selector combo to the header menu."""
-        from mayatk.anim_utils.shots.shot_manifest.mapping import discover
-        from uitk.widgets.widgetComboBox import WidgetComboBox
+        """Add the mapping selector to the header menu as an option-box template.
+
+        A titled divider introduces the control, then a
+        :class:`~uitk.widgets.comboBox.ComboBox` whose ``option_box`` carries two
+        icon buttons to its right — *Refresh* (rescan the folder) and *Open
+        folder*.  Mapping files aren't edited in-place from the UI; the workflow
+        is to open the folder, manage the files externally, then refresh.
+        """
+        from uitk.widgets.comboBox import ComboBox
 
         menu = self.ui.header.menu
+        menu.add("Separator", setTitle="CSV Mapping")
         cmb = menu.add(
-            WidgetComboBox,
+            ComboBox,
             setObjectName="cmb_csv_mapping",
-            setToolTip="Select a JSON mapping file for CSV parsing.",
+            setToolTip=(
+                "Select a CSV mapping. Built-in mappings ship with the tool;\n"
+                "your own live in the mappings folder — open it to add or edit\n"
+                "files, then click Refresh."
+            ),
         )
         self._cmb_mapping = cmb
         self._refresh_mapping_list()
-        cmb.currentTextChanged.connect(self._on_mapping_changed)
+        cmb.currentIndexChanged.connect(self._on_mapping_changed)
+        # Pin the combo (and thus its square icon buttons) to the header menu's
+        # row height so the template row lines up with the sibling buttons.
+        self._wire_mapping_option_box(
+            cmb, target_h=getattr(menu, "fixed_item_height", None)
+        )
 
-    def _refresh_mapping_list(self) -> None:
-        """Refresh the mapping combo box items."""
-        from mayatk.anim_utils.shots.shot_manifest.mapping import discover
+    def _wire_mapping_option_box(self, cmb, target_h=None) -> None:
+        """Attach the option-box toolbar to *cmb*: *Refresh* then *Open folder*.
+
+        Factored out so the construction is unit-testable on a real ComboBox.
+        A no-op when *cmb* isn't a real widget — the controller's logic tests
+        run against a mocked UI where the toolbar is irrelevant.
+
+        *target_h* pins the combo to the header row height; the option-box sizes
+        its square icon buttons to the combo's height, so both end up matching
+        the sibling buttons.  Falls back to the combo's natural height hint.
+        """
+        from qtpy import QtWidgets
+
+        if not isinstance(cmb, QtWidgets.QWidget):
+            return
+
+        cmb.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        h = (
+            target_h
+            if isinstance(target_h, int) and target_h > 0
+            else cmb.sizeHint().height()
+        )
+        cmb.setFixedHeight(h)
+        # Give the combo its row height *now*, before the synchronous option-box
+        # wrap below: the option-box sizes its icon buttons from the wrapped
+        # widget's current height, which is otherwise 0 until the still-hidden
+        # header menu is first laid out.
+        cmb.resize(cmb.width() or cmb.sizeHint().width(), h)
+
+        cmb.option_box.add_action(
+            callback=self._refresh_mapping_list,
+            icon="refresh",
+            tooltip="Rescan the mappings folder for files you've added, removed, or edited.",
+        )
+        cmb.option_box.add_action(
+            callback=self._open_mappings_folder,
+            icon="folder",
+            tooltip="Open the mappings folder to add or edit files (manage them here, then Refresh).",
+        )
+
+    def _refresh_mapping_list(self, select: Optional[str] = None) -> None:
+        """Rebuild the mapping combo, tagging each item by source.
+
+        The item *text* carries a built-in/user tag for the user; the real
+        mapping name is stored as item *data* so selection stays robust.
+        Selection priority: *select* arg > last-used > ``default`` > ``(none)``.
+        """
+        from mayatk.anim_utils.shots.shot_manifest.mapping import discover, templates
 
         cmb = self._cmb_mapping
         cmb.blockSignals(True)
         cmb.clear()
-        cmb.addItem("(none)")
-        search_dir = self._mapping_dir or None
-        names = list(discover(search_dir))
-        for name in names:
-            cmb.addItem(name)
-        # Auto-select "default" mapping when available
-        if "default" in names:
-            cmb.setCurrentIndex(names.index("default") + 1)  # +1 for "(none)"
+        cmb.addItem("(none)", None)
+        if self._mapping_dir:
+            names = list(discover(self._mapping_dir))
+            for name in names:
+                cmb.addItem(name, name)
+        else:
+            ts = templates()
+            names = ts.names()
+            for name in names:
+                tag = "user" if ts.source(name) == "user" else "built-in"
+                cmb.addItem(f"{name}  ·  {tag}", name)
+
+        target = select
+        if target is None and not self._mapping_dir:
+            target = templates().active
+        idx = self._combo_data_index(target) if target else -1
+        if idx < 0 and "default" in names:
+            idx = self._combo_data_index("default")
+        cmb.setCurrentIndex(idx if idx >= 0 else 0)
         cmb.blockSignals(False)
-        # Sync _active_mapping with final combo text
-        self._on_mapping_changed(cmb.currentText())
+        # Programmatic refresh: apply but don't persist — rebuilding the list
+        # must not overwrite the user's last-used pointer.
+        self._apply_mapping(cmb.currentData(), persist=False)
 
-    def _on_mapping_changed(self, name: str) -> None:
-        """Handle mapping combo selection."""
-        from mayatk.anim_utils.shots.shot_manifest.mapping import load_mapping
+    def _combo_data_index(self, name) -> int:
+        """Index of the combo item whose data == *name*, or -1."""
+        cmb = self._cmb_mapping
+        for i in range(cmb.count()):
+            if cmb.itemData(i) == name:
+                return i
+        return -1
 
-        if not name or name == "(none)":
+    def _on_mapping_changed(self, arg=None) -> None:
+        """Handle a mapping selection.
+
+        Connected to ``currentIndexChanged`` (passes an int) — the real mapping
+        name is read from the current item's data. A ``str`` *arg* is also
+        accepted (legacy/tests) and used directly as the name.
+        """
+        if isinstance(arg, str):
+            name = None if (not arg or arg == "(none)") else arg
+        else:
+            name = self._cmb_mapping.currentData()
+        self._apply_mapping(name, persist=True)
+
+    def _apply_mapping(self, name, persist: bool) -> None:
+        """Load *name* into ``_active_mapping`` and re-parse the current CSV.
+
+        *persist* records the choice as last-used (skipped in directory-override
+        mode, whose pointer belongs to a different store).
+        """
+        from mayatk.anim_utils.shots.shot_manifest.mapping import load_mapping, templates
+
+        if not name:
             self._active_mapping = None
         else:
             try:
-                search_dir = self._mapping_dir or None
-                self._active_mapping = load_mapping(name, search_dir)
+                self._active_mapping = load_mapping(name, self._mapping_dir or None)
             except Exception as exc:
                 self.logger.error("Failed to load mapping '%s': %s", name, exc)
                 self._set_footer(f"Mapping error: {exc}", color=ERROR_COLOR)
                 self._active_mapping = None
                 return
+            if persist and not self._mapping_dir:
+                try:
+                    templates().active = name  # remember last-used across sessions
+                except Exception:
+                    pass
 
-        # Re-parse the current CSV with the new mapping
         path = self._csv_path or self.ui.txt_csv_path.text().strip()
         if path:
             self._load_csv(path)
+
+    def _open_mappings_folder(self) -> None:
+        """Open the writable folder where user mapping files live.
+
+        Mapping files are managed externally, not edited in-place from the UI:
+        the user opens this folder, adds/edits/removes files, then clicks
+        *Refresh*.  On first use (empty folder) it's seeded with a documented
+        example and the format reference, so there's a model to copy and a spec
+        to read.
+        """
+        from mayatk.anim_utils.shots.shot_manifest.mapping import templates
+
+        ts = templates()
+        d = ts.user_dir
+        d.mkdir(parents=True, exist_ok=True)
+        self._seed_mappings_folder(ts)
+        ptk.FileUtils.open_explorer(str(d), logger=self.logger)
+
+    @staticmethod
+    def _seed_mappings_folder(ts) -> None:
+        """Seed *ts*'s empty user folder with an example mapping + format reference.
+
+        A no-op once the folder holds anything, so it never clobbers the user's
+        files or re-creates ones they deleted on purpose.  Failures are
+        swallowed — seeding is a convenience, not a precondition for opening.
+        The folder is derived from *ts* so the seeded example (written via
+        ``write_skeleton``) and the reference always land together.  The
+        reference is generated from the same ``format_markdown`` SSoT as the
+        shipped doc, so it's always current with the schema.
+        """
+        from pathlib import Path
+        from mayatk.anim_utils.shots.shot_manifest.mapping import format_markdown
+
+        folder = Path(ts.user_dir)
+        try:
+            # "Empty" means no user-managed files. Ignore bookkeeping dotfiles
+            # (the PresetStore ``.active`` last-used pointer in particular) —
+            # selecting a mapping writes ``.active`` here, and without this filter
+            # the very first 'Open folder' after a selection would skip seeding.
+            if any(p for p in folder.iterdir() if not p.name.startswith(".")):
+                return
+        except OSError:
+            return
+        try:
+            ts.write_skeleton("example")
+        except Exception:
+            pass
+        try:
+            (folder / "MAPPING_FORMAT.md").write_text(
+                format_markdown(), encoding="utf-8"
+            )
+        except Exception:
+            pass
 
     # ---- mode switching (single source of truth) -------------------------
 
