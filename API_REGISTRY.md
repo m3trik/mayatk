@@ -282,13 +282,13 @@ Switchboard slots controller for blendshape_animator.ui.
   - `BlendshapeAnimatorSlots.b001(self, widget) -> None` — Add Tweens — dispatches by mode.
   - `BlendshapeAnimatorSlots.b003(self, widget) -> None` — Diagnose Topology.
   - `BlendshapeAnimatorSlots.b004_init(self, widget) -> None` — Cleanup Topology Mismatches — option_box for the two flags.
-  - `BlendshapeAnimatorSlots.b004(self, widget) -> None`
+  - `BlendshapeAnimatorSlots.b004(self, widget) -> None` — Clean up blendshape targets whose topology doesn't match the base mesh.
   - `BlendshapeAnimatorSlots.b005(self, widget) -> None` — Recover Animation.
   - `BlendshapeAnimatorSlots.b006_init(self, widget) -> None` — Apply All Edits — option_box for skip_duplicates, validate_topology.
   - `BlendshapeAnimatorSlots.b006(self, widget) -> None` — Apply All Edits — bulk apply with optional flags from the option_box.
   - `BlendshapeAnimatorSlots.b007(self, widget) -> None` — Remove Target Mesh.
   - `BlendshapeAnimatorSlots.b008_init(self, widget) -> None` — Finalize for Export — option_box for the four boolean flags.
-  - `BlendshapeAnimatorSlots.b008(self, widget) -> None`
+  - `BlendshapeAnimatorSlots.b008(self, widget) -> None` — Finalize the blendshape setup for export (scene cleanup, bake history, hide source).
 
 <a id="anim_utils--blendshape_animator--creator"></a>
 ### `anim_utils/blendshape_animator/creator.py`
@@ -585,13 +585,13 @@ Range resolution algorithm for the Shot Manifest.
 
 Switchboard slots for the Shot Manifest UI.
 
-- **[`class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L48)** — Business logic for the Shot Manifest UI.
+- **[`class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L55)** — Business logic for the Shot Manifest UI.
   - `ShotManifestController.detect(self, gap: Optional[float] = None) -> None` — Detect animation regions in the scene and populate the table.
   - `ShotManifestController.remove_callbacks(self) -> None` — Remove ShotStore listener and ScriptJobManager subscriptions.
   - `ShotManifestController.browse_csv(self) -> None` — Open a file dialog and load the selected CSV.
   - `ShotManifestController.build(self) -> None` — Build or update shots in the store from loaded steps.
   - `ShotManifestController.assess(self, skip_key_check: bool = False) -> None` — Compare CSV steps against the live Maya shots and color the tree.
-- **[`class ShotManifestSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L1665)** — Switchboard slot class â€” routes UI events to the controller.
+- **[`class ShotManifestSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L1772)** — Switchboard slot class â€” routes UI events to the controller.
   - `ShotManifestSlots.header_init(self, widget)` — Header menu is configured once in controller.__init__.
   - `ShotManifestSlots.btn_expand_missing(self)` — Expand all step rows that have missing objects or behaviors.
   - `ShotManifestSlots.btn_expand_extra(self)` — Expand all step rows that have scene-discovered extra objects.
@@ -1280,7 +1280,7 @@ Centralized Maya event subscription manager.
   - `ColorManagerSlots.b000(self) -> None` — Reset Colors
   - `ColorManagerSlots.b001(self) -> None` — Apply selected color to selected objects.
   - `ColorManagerSlots.b002(self) -> None` — Select objects by the currently selected color.
-  - `ColorManagerSlots.b003(self) -> None`
+  - `ColorManagerSlots.b003(self) -> None` — Pick up the selected object's wireframe color into the active color button (eyedropper).
 
 <a id="display_utils--exploded_view"></a>
 ### `display_utils/exploded_view.py`
@@ -1538,15 +1538,15 @@ UI slots for the Macro Manager panel.
   - `NamingSlots.header_init(self, widget)` — Configure header menu with tool description and workflow instructions.
   - `NamingSlots.valid_suffixes(self)` *(property)* — Get current valid suffixes from tb003 widget fields.
   - `NamingSlots.txt000_init(self, widget)` — Initialize Find
-  - `NamingSlots.txt000(self, widget)` — Find
+  - `NamingSlots.txt000(self, widget)` — Find: filter/select scene objects whose name matches the search pattern.
   - `NamingSlots.txt001_init(self, widget)` — Initialize Rename
-  - `NamingSlots.txt001(self, widget)` — Rename
+  - `NamingSlots.txt001(self, widget)` — Rename: rename matched objects (find → replace, with regex / suffix options).
   - `NamingSlots.tb000_init(self, widget)` — Initialize Convert Case
   - `NamingSlots.tb000(self, widget)` — Convert Case
   - `NamingSlots.tb001_init(self, widget)` — Initialize Suffix By Location
   - `NamingSlots.tb001(self, widget)` — Suffix By Location
   - `NamingSlots.tb002_init(self, widget)` — Initialize Strip Chars
-  - `NamingSlots.tb002(self, widget)` — Strip Chars
+  - `NamingSlots.tb002(self, widget)` — Strip Chars: remove a number of leading/trailing characters from the selected names.
   - `NamingSlots.tb003_init(self, widget)` — Initialize Suffix By Type
   - `NamingSlots.tb003(self, widget)` — Suffix By Type
 
@@ -2004,7 +2004,7 @@ Maya Connection Module
   - `SceneExporterSlots.cmb001_init(self, widget) -> None` — Auto-generate Export Settings UI from task definitions using WidgetComboBox.
   - `SceneExporterSlots.cmb002_init(self, widget) -> None` — Auto-generate Check Settings UI from check definitions using WidgetComboBox.
   - `SceneExporterSlots.cmb004_init(self, widget) -> None` — Init Output Format — FBX (default), GLB, or FBX + GLB.
-  - `SceneExporterSlots.b000(self) -> None` — Export.
+  - `SceneExporterSlots.b000(self) -> None` — Export: run the scene export with the configured tasks and settings.
   - `SceneExporterSlots.b010(self) -> None` — Set Output Directory
   - `SceneExporterSlots.b003(self) -> None` — Add Preset.
   - `SceneExporterSlots.b004(self) -> None` — Remove Preset.
@@ -2175,19 +2175,19 @@ Arnold HDR environment manager.
   - `HdrManagerSlots.hdr_map_preview(self) -> bool` *(property)* — Viewport-preview flag — read from the rotation slider's viewport toggle.
   - `HdrManagerSlots.cmb000(self, index, widget) -> None` — HDR map selection — the panel's sole apply action (always deferred).
   - `HdrManagerSlots.slider000(self, value, widget) -> None` — Rotate the HDR around Y.
-  - `HdrManagerSlots.spn_intensity(self, value) -> None`
-  - `HdrManagerSlots.spn_exposure(self, value) -> None`
-  - `HdrManagerSlots.spn_resolution(self, value) -> None`
-  - `HdrManagerSlots.spn_samples(self, value) -> None`
-  - `HdrManagerSlots.spn_diffuse(self, value) -> None`
-  - `HdrManagerSlots.spn_specular(self, value) -> None`
+  - `HdrManagerSlots.spn_intensity(self, value) -> None` — Set the skydome's HDR intensity (brightness multiplier).
+  - `HdrManagerSlots.spn_exposure(self, value) -> None` — Set the skydome's exposure (in stops).
+  - `HdrManagerSlots.spn_resolution(self, value) -> None` — Set the baked skydome resolution.
+  - `HdrManagerSlots.spn_samples(self, value) -> None` — Set the skydome's render sample count.
+  - `HdrManagerSlots.spn_diffuse(self, value) -> None` — Set the skydome's diffuse contribution.
+  - `HdrManagerSlots.spn_specular(self, value) -> None` — Set the skydome's specular contribution.
   - `HdrManagerSlots.add_hdr(self) -> None` — Add HDR(s) from one dialog — pick loose files and/or a whole folder.
   - `HdrManagerSlots.open_sourceimages(self) -> None` — Open the workspace's sourceimages folder in Explorer.
   - `HdrManagerSlots.clear_network(self) -> None` — Delete the skydome network and reset the UI to defaults.
-  - `HdrManagerSlots.ctx_select_skydome(self) -> None`
-  - `HdrManagerSlots.ctx_select_transform(self) -> None`
-  - `HdrManagerSlots.ctx_select_file_node(self) -> None`
-  - `HdrManagerSlots.ctx_reveal_in_explorer(self) -> None`
+  - `HdrManagerSlots.ctx_select_skydome(self) -> None` — Select the skydome (HDR environment) node in the scene.
+  - `HdrManagerSlots.ctx_select_transform(self) -> None` — Select the skydome's transform node.
+  - `HdrManagerSlots.ctx_select_file_node(self) -> None` — Select the file node feeding the skydome's HDR texture.
+  - `HdrManagerSlots.ctx_reveal_in_explorer(self) -> None` — Reveal the skydome's HDR texture file in the system file explorer.
 
 <a id="light_utils--lightmap_baker--lightmap_baker"></a>
 ### `light_utils/lightmap_baker/lightmap_baker.py`
@@ -2970,10 +2970,10 @@ Sweep a circular profile along NURBS curve(s) to build a tube.
   - `ImageTracerSlots.txt000_init(self, widget)`
   - `ImageTracerSlots.browse_image(self)`
   - `ImageTracerSlots.chk000(self, state)` — Use Blue Pencil
-  - `ImageTracerSlots.b002(self)`
-  - `ImageTracerSlots.b003(self)`
-  - `ImageTracerSlots.b004(self)`
-  - `ImageTracerSlots.b005(self)`
+  - `ImageTracerSlots.b002(self)` — Trace the source image into curves.
+  - `ImageTracerSlots.b003(self)` — Build a mesh from the traced curves.
+  - `ImageTracerSlots.b004(self)` — Build a mesh from the traced negative space.
+  - `ImageTracerSlots.b005(self)` — Project the traced result onto a plane.
 
 <a id="render_utils--_render_utils"></a>
 ### `render_utils/_render_utils.py`
@@ -3185,10 +3185,10 @@ Programmatic access to Maya's Channel Box.
 
 Maya hotkey collision checker for the uitk HotkeyEditor.
 
-- [`parse_qt_sequence(sequence: str) -> Optional[dict]`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L41) — Convert a Qt key sequence string to ``cmds.hotkey`` query kwargs.
-- [`keystring_to_token(ks: list) -> str`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L114) — Convert an ``assignCommand`` keyString array to a Maya hotkey token.
-- [`live_hotkey_map() -> dict`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L143) — Return ``{runtime_command: maya_key_token}`` for the active hotkey set.
-- [`maya_collision_checker(sequence, scope, ui_name, method_name)`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L226) — Check a proposed binding against Maya's active hotkey set.
+- [`parse_qt_sequence(sequence: str) -> Optional[dict]`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L42) — Convert a Qt key sequence string to ``cmds.hotkey`` query kwargs.
+- [`keystring_to_token(ks: list) -> str`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L115) — Convert an ``assignCommand`` keyString array to a Maya hotkey token.
+- [`live_hotkey_map() -> dict`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L144) — Return ``{runtime_command: maya_key_token}`` for the active hotkey set.
+- [`maya_collision_checker(sequence, scope, ui_name, method_name)`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L255) — Check a proposed binding against Maya's active hotkey set.
 
 <a id="ui_utils--maya_bridge_slots"></a>
 ### `ui_utils/maya_bridge_slots.py`

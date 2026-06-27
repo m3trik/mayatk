@@ -658,7 +658,7 @@
               "qualname": "BlendshapeAnimatorSlots.b004",
               "kind": "method",
               "signature": "(self, widget) -> None",
-              "summary": "",
+              "summary": "Clean up blendshape targets whose topology doesn't match the base mesh.",
               "line": 466,
               "deprecated": false
             },
@@ -668,7 +668,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Recover Animation.",
-              "line": 477,
+              "line": 478,
               "deprecated": false
             },
             {
@@ -677,7 +677,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Apply All Edits — option_box for skip_duplicates, validate_topology.",
-              "line": 489,
+              "line": 490,
               "deprecated": false
             },
             {
@@ -686,7 +686,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Apply All Edits — bulk apply with optional flags from the option_box.",
-              "line": 510,
+              "line": 511,
               "deprecated": false
             },
             {
@@ -695,7 +695,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Remove Target Mesh.",
-              "line": 536,
+              "line": 537,
               "deprecated": false
             },
             {
@@ -704,7 +704,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Finalize for Export — option_box for the four boolean flags.",
-              "line": 546,
+              "line": 547,
               "deprecated": false
             },
             {
@@ -712,8 +712,8 @@
               "qualname": "BlendshapeAnimatorSlots.b008",
               "kind": "method",
               "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 573,
+              "summary": "Finalize the blendshape setup for export (scene cleanup, bake history, hide source).",
+              "line": 574,
               "deprecated": false
             }
           ]
@@ -2444,7 +2444,7 @@
         {
           "name": "ShotManifestController",
           "summary": "Business logic for the Shot Manifest UI.",
-          "line": 48,
+          "line": 55,
           "bases": [
             "ManifestTableMixin",
             "ptk.LoggingMixin"
@@ -2456,7 +2456,7 @@
               "kind": "method",
               "signature": "(self, gap: Optional[float] = None) -> None",
               "summary": "Detect animation regions in the scene and populate the table.",
-              "line": 223,
+              "line": 231,
               "deprecated": false
             },
             {
@@ -2465,7 +2465,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Remove ShotStore listener and ScriptJobManager subscriptions.",
-              "line": 520,
+              "line": 528,
               "deprecated": false
             },
             {
@@ -2474,7 +2474,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open a file dialog and load the selected CSV.",
-              "line": 1229,
+              "line": 1278,
               "deprecated": false
             },
             {
@@ -2483,7 +2483,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Build or update shots in the store from loaded steps.",
-              "line": 1366,
+              "line": 1473,
               "deprecated": false
             },
             {
@@ -2492,7 +2492,7 @@
               "kind": "method",
               "signature": "(self, skip_key_check: bool = False) -> None",
               "summary": "Compare CSV steps against the live Maya shots and color the tree.",
-              "line": 1570,
+              "line": 1677,
               "deprecated": false
             }
           ]
@@ -2500,7 +2500,7 @@
         {
           "name": "ShotManifestSlots",
           "summary": "Switchboard slot class â€” routes UI events to the controller.",
-          "line": 1665,
+          "line": 1772,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -2511,7 +2511,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Header menu is configured once in controller.__init__.",
-              "line": 1678,
+              "line": 1785,
               "deprecated": false
             },
             {
@@ -2520,7 +2520,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Expand all step rows that have missing objects or behaviors.",
-              "line": 1682,
+              "line": 1789,
               "deprecated": false
             },
             {
@@ -2529,7 +2529,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Expand all step rows that have scene-discovered extra objects.",
-              "line": 1686,
+              "line": 1793,
               "deprecated": false
             },
             {
@@ -2538,7 +2538,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the shared shots settings panel.",
-              "line": 1690,
+              "line": 1797,
               "deprecated": false
             },
             {
@@ -2547,7 +2547,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Assess shots against live Maya scene.",
-              "line": 1696,
+              "line": 1803,
               "deprecated": false
             },
             {
@@ -2556,7 +2556,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Build shots from loaded steps (or auto-detect from scene).",
-              "line": 1700,
+              "line": 1807,
               "deprecated": false
             }
           ]
@@ -6955,7 +6955,7 @@
               "qualname": "ColorManagerSlots.b003",
               "kind": "method",
               "signature": "(self) -> None",
-              "summary": "",
+              "summary": "Pick up the selected object's wireframe color into the active color button (eyedropper).",
               "line": 513,
               "deprecated": false
             }
@@ -7911,7 +7911,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Populate the header menu (global actions + preset selector).",
-              "line": 87,
+              "line": 83,
               "deprecated": false
             },
             {
@@ -7920,7 +7920,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Populate the category filter combobox.",
-              "line": 212,
+              "line": 208,
               "deprecated": false
             },
             {
@@ -7929,7 +7929,7 @@
               "kind": "method",
               "signature": "(self, index)",
               "summary": "Category filter changed — refresh the table.",
-              "line": 223,
+              "line": 219,
               "deprecated": false
             },
             {
@@ -7938,7 +7938,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "One-time table setup, then (re)populate.",
-              "line": 231,
+              "line": 227,
               "deprecated": false
             }
           ]
@@ -8778,7 +8778,7 @@
               "qualname": "NamingSlots.txt000",
               "kind": "method",
               "signature": "(self, widget)",
-              "summary": "Find",
+              "summary": "Find: filter/select scene objects whose name matches the search pattern.",
               "line": 127,
               "deprecated": false
             },
@@ -8796,7 +8796,7 @@
               "qualname": "NamingSlots.txt001",
               "kind": "method",
               "signature": "(self, widget)",
-              "summary": "Rename",
+              "summary": "Rename: rename matched objects (find → replace, with regex / suffix options).",
               "line": 190,
               "deprecated": false
             },
@@ -8850,7 +8850,7 @@
               "qualname": "NamingSlots.tb002",
               "kind": "method",
               "signature": "(self, widget)",
-              "summary": "Strip Chars",
+              "summary": "Strip Chars: remove a number of leading/trailing characters from the selected names.",
               "line": 339,
               "deprecated": false
             },
@@ -12234,7 +12234,7 @@
               "qualname": "SceneExporterSlots.b000",
               "kind": "method",
               "signature": "(self) -> None",
-              "summary": "Export.",
+              "summary": "Export: run the scene export with the configured tasks and settings.",
               "line": 1022,
               "deprecated": false
             },
@@ -13432,7 +13432,7 @@
               "qualname": "HdrManagerSlots.spn_intensity",
               "kind": "method",
               "signature": "(self, value) -> None",
-              "summary": "",
+              "summary": "Set the skydome's HDR intensity (brightness multiplier).",
               "line": 1228,
               "deprecated": false
             },
@@ -13441,8 +13441,8 @@
               "qualname": "HdrManagerSlots.spn_exposure",
               "kind": "method",
               "signature": "(self, value) -> None",
-              "summary": "",
-              "line": 1231,
+              "summary": "Set the skydome's exposure (in stops).",
+              "line": 1232,
               "deprecated": false
             },
             {
@@ -13450,8 +13450,8 @@
               "qualname": "HdrManagerSlots.spn_resolution",
               "kind": "method",
               "signature": "(self, value) -> None",
-              "summary": "",
-              "line": 1234,
+              "summary": "Set the baked skydome resolution.",
+              "line": 1236,
               "deprecated": false
             },
             {
@@ -13459,8 +13459,8 @@
               "qualname": "HdrManagerSlots.spn_samples",
               "kind": "method",
               "signature": "(self, value) -> None",
-              "summary": "",
-              "line": 1237,
+              "summary": "Set the skydome's render sample count.",
+              "line": 1240,
               "deprecated": false
             },
             {
@@ -13468,8 +13468,8 @@
               "qualname": "HdrManagerSlots.spn_diffuse",
               "kind": "method",
               "signature": "(self, value) -> None",
-              "summary": "",
-              "line": 1240,
+              "summary": "Set the skydome's diffuse contribution.",
+              "line": 1244,
               "deprecated": false
             },
             {
@@ -13477,8 +13477,8 @@
               "qualname": "HdrManagerSlots.spn_specular",
               "kind": "method",
               "signature": "(self, value) -> None",
-              "summary": "",
-              "line": 1243,
+              "summary": "Set the skydome's specular contribution.",
+              "line": 1248,
               "deprecated": false
             },
             {
@@ -13487,7 +13487,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Add HDR(s) from one dialog — pick loose files and/or a whole folder.",
-              "line": 1398,
+              "line": 1396,
               "deprecated": false
             },
             {
@@ -13496,7 +13496,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open the workspace's sourceimages folder in Explorer.",
-              "line": 1586,
+              "line": 1584,
               "deprecated": false
             },
             {
@@ -13505,7 +13505,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Delete the skydome network and reset the UI to defaults.",
-              "line": 1594,
+              "line": 1592,
               "deprecated": false
             },
             {
@@ -13513,8 +13513,8 @@
               "qualname": "HdrManagerSlots.ctx_select_skydome",
               "kind": "method",
               "signature": "(self) -> None",
-              "summary": "",
-              "line": 1602,
+              "summary": "Select the skydome (HDR environment) node in the scene.",
+              "line": 1600,
               "deprecated": false
             },
             {
@@ -13522,8 +13522,8 @@
               "qualname": "HdrManagerSlots.ctx_select_transform",
               "kind": "method",
               "signature": "(self) -> None",
-              "summary": "",
-              "line": 1610,
+              "summary": "Select the skydome's transform node.",
+              "line": 1609,
               "deprecated": false
             },
             {
@@ -13531,7 +13531,7 @@
               "qualname": "HdrManagerSlots.ctx_select_file_node",
               "kind": "method",
               "signature": "(self) -> None",
-              "summary": "",
+              "summary": "Select the file node feeding the skydome's HDR texture.",
               "line": 1618,
               "deprecated": false
             },
@@ -13540,8 +13540,8 @@
               "qualname": "HdrManagerSlots.ctx_reveal_in_explorer",
               "kind": "method",
               "signature": "(self) -> None",
-              "summary": "",
-              "line": 1626,
+              "summary": "Reveal the skydome's HDR texture file in the system file explorer.",
+              "line": 1627,
               "deprecated": false
             }
           ]
@@ -18092,7 +18092,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Populate filter combobox and wire its option_box invert action.",
-              "line": 799,
+              "line": 802,
               "deprecated": false
             },
             {
@@ -18101,7 +18101,7 @@
               "kind": "method",
               "signature": "(self, index)",
               "summary": "Filter changed — refresh table.",
-              "line": 831,
+              "line": 834,
               "deprecated": false
             },
             {
@@ -18110,7 +18110,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "One-time table setup: action columns, context menu, scriptJobs.",
-              "line": 844,
+              "line": 847,
               "deprecated": false
             },
             {
@@ -18119,7 +18119,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Tear down every event subscription owned by this slots instance.",
-              "line": 2927,
+              "line": 2930,
               "deprecated": false
             }
           ]
@@ -18455,7 +18455,7 @@
               "qualname": "ImageTracerSlots.b002",
               "kind": "method",
               "signature": "(self)",
-              "summary": "",
+              "summary": "Trace the source image into curves.",
               "line": 502,
               "deprecated": false
             },
@@ -18464,8 +18464,8 @@
               "qualname": "ImageTracerSlots.b003",
               "kind": "method",
               "signature": "(self)",
-              "summary": "",
-              "line": 507,
+              "summary": "Build a mesh from the traced curves.",
+              "line": 508,
               "deprecated": false
             },
             {
@@ -18473,8 +18473,8 @@
               "qualname": "ImageTracerSlots.b004",
               "kind": "method",
               "signature": "(self)",
-              "summary": "",
-              "line": 512,
+              "summary": "Build a mesh from the traced negative space.",
+              "line": 514,
               "deprecated": false
             },
             {
@@ -18482,8 +18482,8 @@
               "qualname": "ImageTracerSlots.b005",
               "kind": "method",
               "signature": "(self)",
-              "summary": "",
-              "line": 517,
+              "summary": "Project the traced result onto a plane.",
+              "line": 520,
               "deprecated": false
             }
           ]
@@ -20017,7 +20017,7 @@
           "kind": "function",
           "signature": "(sequence: str) -> Optional[dict]",
           "summary": "Convert a Qt key sequence string to ``cmds.hotkey`` query kwargs.",
-          "line": 41,
+          "line": 42,
           "deprecated": false
         },
         {
@@ -20026,7 +20026,7 @@
           "kind": "function",
           "signature": "(ks: list) -> str",
           "summary": "Convert an ``assignCommand`` keyString array to a Maya hotkey token.",
-          "line": 114,
+          "line": 115,
           "deprecated": false
         },
         {
@@ -20035,7 +20035,7 @@
           "kind": "function",
           "signature": "() -> dict",
           "summary": "Return ``{runtime_command: maya_key_token}`` for the active hotkey set.",
-          "line": 143,
+          "line": 144,
           "deprecated": false
         },
         {
@@ -20044,7 +20044,7 @@
           "kind": "function",
           "signature": "(sequence, scope, ui_name, method_name)",
           "summary": "Check a proposed binding against Maya's active hotkey set.",
-          "line": 226,
+          "line": 255,
           "deprecated": false
         }
       ],
