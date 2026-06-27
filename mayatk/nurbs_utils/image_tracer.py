@@ -500,21 +500,25 @@ class ImageTracerSlots:
         self.ui.txt000.setEnabled(not state)
 
     def b002(self):
+        """Trace the source image into curves."""
         tracer = self._get_tracer()
         if tracer:
             tracer.trace_curves()
 
     def b003(self):
+        """Build a mesh from the traced curves."""
         tracer = self._get_tracer()
         if tracer:
             tracer.create_mesh()
 
     def b004(self):
+        """Build a mesh from the traced negative space."""
         tracer = self._get_tracer()
         if tracer:
             tracer.create_negative_space_mesh()
 
     def b005(self):
+        """Project the traced result onto a plane."""
         tracer = self._get_tracer()
         if tracer:
             tracer.project_on_plane()

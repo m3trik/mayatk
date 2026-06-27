@@ -48,3 +48,23 @@ sys.modules["maya.cmds"] = mock_cmds
 sys.modules.setdefault("maya.mel", MagicMock())
 sys.modules.setdefault("maya.OpenMaya", MagicMock())
 sys.modules.setdefault("maya.OpenMayaUI", MagicMock())
+
+# Bind each injected submodule as an attribute on its parent package so that
+# attribute access (``import maya`` then ``maya.cmds``) resolves to the same
+# mock as the ``sys.modules`` entry.  Direct ``sys.modules`` injection bypasses
+# the import machinery that normally sets this attribute, so without it
+# ``maya.cmds`` raises ``AttributeError`` under the mock even though
+# ``import maya.cmds`` works.  Guarded with ``hasattr`` so a real ``maya``
+# module (e.g. under mayapy) is never clobbered.
+for _parent, _child in (
+    ("maya", "cmds"),
+    ("maya", "mel"),
+    ("maya", "OpenMaya"),
+    ("maya", "OpenMayaUI"),
+    ("maya", "api"),
+    ("maya.api", "OpenMaya"),
+    ("maya.api", "OpenMayaAnim"),
+):
+    _parent_mod = sys.modules[_parent]
+    if not hasattr(_parent_mod, _child):
+        setattr(_parent_mod, _child, sys.modules[f"{_parent}.{_child}"])

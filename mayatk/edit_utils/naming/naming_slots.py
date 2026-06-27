@@ -125,7 +125,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
 
     @Signals("returnPressed")
     def txt000(self, widget):
-        """Find"""
+        """Find: filter/select scene objects whose name matches the search pattern."""
         # An asterisk denotes startswith*, *endswith, *contains*
         regex = widget.ui.txt000.option_box.menu.chk001.isChecked()
         ign_case = widget.ui.txt000.option_box.menu.chk000.isChecked()
@@ -188,7 +188,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
     # The LineEdit text parameter is not emitted on `returnPressed`
     @Signals("returnPressed")
     def txt001(self, widget):
-        """Rename"""
+        """Rename: rename matched objects (find → replace, with regex / suffix options)."""
         # An asterisk denotes startswith*, *endswith, *contains*
         find = widget.ui.txt000.text()
         to = widget.text()
@@ -337,7 +337,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         )
 
     def tb002(self, widget):
-        """Strip Chars"""
+        """Strip Chars: remove a number of leading/trailing characters from the selected names."""
         sel = cmds.ls(selection=True) or []
         kwargs = {
             "num_chars": widget.option_box.menu.s000.value(),

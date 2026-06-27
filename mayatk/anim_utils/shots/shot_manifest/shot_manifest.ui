@@ -13,19 +13,19 @@
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">
-     <number>6</number>
+     <number>4</number>
     </property>
     <property name="leftMargin">
-     <number>6</number>
+     <number>4</number>
     </property>
     <property name="topMargin">
-     <number>6</number>
+     <number>4</number>
     </property>
     <property name="rightMargin">
-     <number>6</number>
+     <number>4</number>
     </property>
     <property name="bottomMargin">
-     <number>6</number>
+     <number>4</number>
     </property>
     <item>
      <widget class="Header" name="header" native="true">
@@ -47,7 +47,7 @@
         <bold>true</bold>
        </font>
       </property>
-      <property name="text">
+      <property name="text" stdset="0">
        <string>SHOT MANIFEST</string>
       </property>
      </widget>
@@ -221,14 +221,14 @@ automatically. Assesses the scene after completion.</string>
    <header>uitk.widgets.footer</header>
   </customwidget>
   <customwidget>
-   <class>PushButton</class>
-   <extends>QPushButton</extends>
-   <header>uitk.widgets.pushButton</header>
-  </customwidget>
-  <customwidget>
    <class>LineEdit</class>
    <extends>QLineEdit</extends>
    <header>uitk.widgets.lineEdit</header>
+  </customwidget>
+  <customwidget>
+   <class>PushButton</class>
+   <extends>QPushButton</extends>
+   <header>uitk.widgets.pushButton</header>
   </customwidget>
   <customwidget>
    <class>TreeWidget</class>

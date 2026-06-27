@@ -469,6 +469,73 @@ class TestComponents(MayaTkTestCase):
             "unlock_normals=False must preserve the user's locked normals",
         )
 
+    def test_set_edge_hardness_aborts_and_returns_locked_objects(self):
+        """unlock_normals=False on a mesh with locked normals must abort and
+        return the offending object(s) so the UI can warn the user — locked
+        normals silently block polySoftEdge, so applying hardness would no-op.
+        """
+        cmds.polyNormalPerVertex(self.cube + ".vtx[*]", freezeNormal=True)
+
+        result = Components.set_edge_hardness(
+            self.cube, 45, upper_hardness=0, lower_hardness=180, unlock_normals=False
+        )
+
+        self.assertTrue(result, "locked normals must be reported, not silently skipped")
+        self.assertTrue(
+            any("test_comp_cube" in p for p in result),
+            "the returned paths must identify the blocked object",
+        )
+        # Normals must remain locked — the operation was aborted before edits.
+        self.assertTrue(
+            all(
+                cmds.polyNormalPerVertex(self.cube + ".vtx[*]", q=True, freezeNormal=True)
+            ),
+            "an aborted run must not touch the mesh",
+        )
+
+    def test_set_edge_hardness_detects_locked_across_name_collision(self):
+        """Two objects sharing a leaf name merge into one
+        map_components_to_objects key. The guard must check *every* object the
+        key fronts — locking only the collided sibling must still be detected,
+        not silently skipped because the first-resolved object was clean.
+        """
+        cmds.group(cmds.polyCube(name="dup_norm_cube")[0], name="grpA")
+        cmds.group(cmds.polyCube(name="dup_norm_cube")[0], name="grpB")
+        # Lock only the second cube's normals.
+        cmds.polyNormalPerVertex("grpB|dup_norm_cube.vtx[*]", freezeNormal=True)
+
+        result = Components.set_edge_hardness(
+            ["grpA|dup_norm_cube", "grpB|dup_norm_cube"],
+            45,
+            upper_hardness=0,
+            lower_hardness=180,
+            unlock_normals=False,
+        )
+        self.assertTrue(
+            any("grpB" in p for p in result),
+            "the locked collided sibling must be reported, not silently skipped",
+        )
+
+    def test_set_edge_hardness_returns_empty_on_clean_mesh(self):
+        """A mesh without locked normals proceeds and returns an empty list."""
+        result = Components.set_edge_hardness(
+            self.cube, 45, upper_hardness=0, lower_hardness=180, unlock_normals=False
+        )
+        self.assertEqual(result, [], "an unblocked run must report nothing skipped")
+
+    def test_set_edge_hardness_unlock_requested_returns_empty(self):
+        """unlock_normals=True bypasses the guard even when normals are locked."""
+        cmds.polyNormalPerVertex(self.cube + ".vtx[*]", freezeNormal=True)
+
+        result = Components.set_edge_hardness(
+            self.cube, 45, upper_hardness=0, lower_hardness=180, unlock_normals=True
+        )
+        self.assertEqual(result, [], "unlocking opt-in must not report a block")
+
+    def test_set_edge_hardness_no_values_returns_empty(self):
+        """The no-hardness early exit returns an empty list (not None)."""
+        self.assertEqual(Components.set_edge_hardness(self.cube, 45), [])
+
     def test_set_edge_hardness_restores_selection(self):
         """polySoftEdge selects the affected edges as a side-effect — the
         helper must restore the caller's selection so HUD/component-count

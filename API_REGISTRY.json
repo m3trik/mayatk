@@ -1,7 +1,7 @@
 {
   "name": "mayatk",
   "source_root": "mayatk/mayatk",
-  "generated_at": "2026-06-25",
+  "generated_at": "2026-06-27",
   "modules": [
     {
       "relpath": "anim_utils/_anim_utils.py",
@@ -4569,7 +4569,7 @@
               "kind": "method",
               "signature": "(self, widget=None)",
               "summary": "Key Audio Event — write ON (1) at current frame, optionally OFF at end.",
-              "line": 537,
+              "line": 536,
               "deprecated": false
             },
             {
@@ -4578,7 +4578,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Remove Audio — nuke every track, DG node, and the composite.",
-              "line": 679,
+              "line": 678,
               "deprecated": false
             },
             {
@@ -4587,7 +4587,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Cleanup Unused — delete unkeyed tracks and their DG nodes.",
-              "line": 687,
+              "line": 686,
               "deprecated": false
             },
             {
@@ -4596,7 +4596,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Replace Selected Track — swap the selected track's audio file.",
-              "line": 692,
+              "line": 691,
               "deprecated": false
             },
             {
@@ -4605,7 +4605,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Rename Track — rename the currently selected track's id.",
-              "line": 736,
+              "line": 735,
               "deprecated": false
             }
           ]
@@ -5330,7 +5330,7 @@
               "name": "set_edge_hardness",
               "qualname": "Components.set_edge_hardness",
               "kind": "classmethod",
-              "signature": "(cls, objects, angle_threshold: float, upper_hardness: float = None, lower_hardness: float = None, unlock_normals: bool = False) -> None",
+              "signature": "(cls, objects, angle_threshold: float, upper_hardness: float = None, lower_hardness: float = None, unlock_normals: bool = False) -> List[str]",
               "summary": "Set edge hardness based on normal angle thresholds.",
               "line": 945,
               "deprecated": false
@@ -5341,7 +5341,7 @@
               "kind": "classmethod",
               "signature": "(cls, faces, transforms=None, similar_faces=None, range_x=0.1, range_y=0.1, range_z=0.1, returned_type='str')",
               "summary": "Filter for faces with normals that fall within an X,Y,Z tolerance.",
-              "line": 1015,
+              "line": 1059,
               "deprecated": false
             },
             {
@@ -5350,7 +5350,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, by_uv_shell=False)",
               "summary": "Average the normals of the given objects.",
-              "line": 1085,
+              "line": 1129,
               "deprecated": false
             },
             {
@@ -5359,7 +5359,7 @@
               "kind": "staticmethod",
               "signature": "(objects, space: str = 'world')",
               "summary": "Transfer vertex normals from source mesh to target meshes.",
-              "line": 1104,
+              "line": 1148,
               "deprecated": false
             },
             {
@@ -5368,7 +5368,7 @@
               "kind": "classmethod",
               "signature": "(cls, components, num_of_connected=(0, 2), connected_type='', returned_type='str')",
               "summary": "Get a list of components filtered by the number of their connected components.",
-              "line": 1151,
+              "line": 1195,
               "deprecated": false
             },
             {
@@ -5377,7 +5377,7 @@
               "kind": "classmethod",
               "signature": "(cls, vertex, angle_weighted=False)",
               "summary": "Return the normal at the given vertex.",
-              "line": 1180,
+              "line": 1224,
               "deprecated": false
             },
             {
@@ -5386,7 +5386,7 @@
               "kind": "staticmethod",
               "signature": "(components)",
               "summary": "Get a vector representing the averaged and normalized vertex-face normals.",
-              "line": 1201,
+              "line": 1245,
               "deprecated": false
             },
             {
@@ -5395,7 +5395,7 @@
               "kind": "staticmethod",
               "signature": "(edges=None, amount=None, angle=None)",
               "summary": "Adjust properties of the given edges with optional crease and edge softening/hardening.",
-              "line": 1216,
+              "line": 1260,
               "deprecated": false
             },
             {
@@ -5404,7 +5404,7 @@
               "kind": "staticmethod",
               "signature": "(edges)",
               "summary": "Return any creased edges from a list of edges.",
-              "line": 1237,
+              "line": 1281,
               "deprecated": false
             },
             {
@@ -5413,7 +5413,7 @@
               "kind": "staticmethod",
               "signature": "(frm, to)",
               "summary": "Transfer creased edges from the 'frm' object to the 'to' objects.",
-              "line": 1250,
+              "line": 1294,
               "deprecated": false
             }
           ]
@@ -7895,6 +7895,57 @@
       ]
     },
     {
+      "relpath": "edit_utils/macro_manager/macro_manager_slots.py",
+      "summary": "UI slots for the Macro Manager panel.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "MacroManagerSlots",
+          "summary": "Switchboard slots for the Macro Manager UI.",
+          "line": 23,
+          "bases": [],
+          "members": [
+            {
+              "name": "header_init",
+              "qualname": "MacroManagerSlots.header_init",
+              "kind": "method",
+              "signature": "(self, widget)",
+              "summary": "Populate the header menu (global actions + preset selector).",
+              "line": 87,
+              "deprecated": false
+            },
+            {
+              "name": "cmb000_init",
+              "qualname": "MacroManagerSlots.cmb000_init",
+              "kind": "method",
+              "signature": "(self, widget)",
+              "summary": "Populate the category filter combobox.",
+              "line": 212,
+              "deprecated": false
+            },
+            {
+              "name": "cmb000",
+              "qualname": "MacroManagerSlots.cmb000",
+              "kind": "method",
+              "signature": "(self, index)",
+              "summary": "Category filter changed — refresh the table.",
+              "line": 223,
+              "deprecated": false
+            },
+            {
+              "name": "tbl000_init",
+              "qualname": "MacroManagerSlots.tbl000_init",
+              "kind": "method",
+              "signature": "(self, widget)",
+              "summary": "One-time table setup, then (re)populate.",
+              "line": 231,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
       "relpath": "edit_utils/macros.py",
       "summary": "",
       "functions": [],
@@ -7902,7 +7953,7 @@
         {
           "name": "MacroManager",
           "summary": "Assign macro functions to hotkeys.",
-          "line": 24,
+          "line": 26,
           "bases": [
             "ptk.HelpMixin"
           ],
@@ -7913,7 +7964,7 @@
               "kind": "classmethod",
               "signature": "(cls, *args)",
               "summary": "Extends `set_macro` to accept a list of strings representing positional and keyword arguments.",
-              "line": 58,
+              "line": 60,
               "deprecated": false
             },
             {
@@ -7922,7 +7973,7 @@
               "kind": "staticmethod",
               "signature": "(func, input_string)",
               "summary": "Parses an input string into positional and keyword arguments, and",
-              "line": 72,
+              "line": 74,
               "deprecated": false
             },
             {
@@ -7931,7 +7982,178 @@
               "kind": "classmethod",
               "signature": "(cls, name, key=None, cat=None, ann=None, default=False, delete_existing=True)",
               "summary": "Sets a default runtime command with a keyboard shortcut.",
-              "line": 94,
+              "line": 96,
+              "deprecated": false
+            },
+            {
+              "name": "list_available_macros",
+              "qualname": "MacroManager.list_available_macros",
+              "kind": "classmethod",
+              "signature": "(cls) -> Dict[str, str]",
+              "summary": "Discover every ``m_*`` macro callable, mapped to its annotation.",
+              "line": 193,
+              "deprecated": false
+            },
+            {
+              "name": "macro_label",
+              "qualname": "MacroManager.macro_label",
+              "kind": "classmethod",
+              "signature": "(cls, name: str) -> str",
+              "summary": "Humanize a macro name for display, e.g.",
+              "line": 221,
+              "deprecated": false
+            },
+            {
+              "name": "macro_category",
+              "qualname": "MacroManager.macro_category",
+              "kind": "classmethod",
+              "signature": "(cls, name: str) -> str",
+              "summary": "Default category for a macro, derived from the ``*Macros`` mixin that",
+              "line": 239,
+              "deprecated": false
+            },
+            {
+              "name": "list_categories",
+              "qualname": "MacroManager.list_categories",
+              "kind": "classmethod",
+              "signature": "(cls) -> List[str]",
+              "summary": "Sorted distinct default categories across all discoverable macros.",
+              "line": 256,
+              "deprecated": false
+            },
+            {
+              "name": "macro_help",
+              "qualname": "MacroManager.macro_help",
+              "kind": "classmethod",
+              "signature": "(cls, name: str) -> str",
+              "summary": "Return a macro's full (dedented) docstring — the single source of",
+              "line": 268,
+              "deprecated": false
+            },
+            {
+              "name": "get_current_bindings",
+              "qualname": "MacroManager.get_current_bindings",
+              "kind": "classmethod",
+              "signature": "(cls) -> Dict[str, dict]",
+              "summary": "Return the *live* key + category for every available macro.",
+              "line": 283,
+              "deprecated": false
+            },
+            {
+              "name": "apply_bindings",
+              "qualname": "MacroManager.apply_bindings",
+              "kind": "classmethod",
+              "signature": "(cls, bindings: Dict[str, dict]) -> None",
+              "summary": "Apply a binding set ``{name: {\"key\", \"cat\"}}``.",
+              "line": 325,
+              "deprecated": false
+            },
+            {
+              "name": "clear_hotkey",
+              "qualname": "MacroManager.clear_hotkey",
+              "kind": "classmethod",
+              "signature": "(cls, name: str, key: Optional[str] = None) -> None",
+              "summary": "Unbind ``name``'s hotkey (the runtime command itself is kept).",
+              "line": 342,
+              "deprecated": false
+            },
+            {
+              "name": "unset_macro",
+              "qualname": "MacroManager.unset_macro",
+              "kind": "classmethod",
+              "signature": "(cls, name: str, key: Optional[str] = None) -> None",
+              "summary": "Clear ``name``'s hotkey and delete its (non-default) runtime command.",
+              "line": 368,
+              "deprecated": false
+            },
+            {
+              "name": "find_conflicts",
+              "qualname": "MacroManager.find_conflicts",
+              "kind": "classmethod",
+              "signature": "(cls, bindings: Dict[str, dict]) -> Dict[str, List[str]]",
+              "summary": "Return ``{normalized_key: [macro, ...]}`` for keys bound more than once.",
+              "line": 382,
+              "deprecated": false
+            },
+            {
+              "name": "qt_sequence_to_maya_key",
+              "qualname": "MacroManager.qt_sequence_to_maya_key",
+              "kind": "classmethod",
+              "signature": "(cls, sequence: str) -> str",
+              "summary": "Convert a Qt key-sequence string (``\"Ctrl+Shift+I\"``) to a Maya token.",
+              "line": 427,
+              "deprecated": false
+            },
+            {
+              "name": "maya_key_to_qt_sequence",
+              "qualname": "MacroManager.maya_key_to_qt_sequence",
+              "kind": "classmethod",
+              "signature": "(cls, key: str) -> str",
+              "summary": "Convert a Maya key token (``\"ctl+sht+i\"``) to a Qt key-sequence string.",
+              "line": 451,
+              "deprecated": false
+            },
+            {
+              "name": "list_presets",
+              "qualname": "MacroManager.list_presets",
+              "kind": "classmethod",
+              "signature": "(cls) -> List[str]",
+              "summary": "Return all preset names (built-in + user, user shadows built-in).",
+              "line": 484,
+              "deprecated": false
+            },
+            {
+              "name": "load_preset",
+              "qualname": "MacroManager.load_preset",
+              "kind": "classmethod",
+              "signature": "(cls, name: str) -> Dict[str, dict]",
+              "summary": "Return the binding set stored under *name* (``_meta`` stripped).",
+              "line": 489,
+              "deprecated": false
+            },
+            {
+              "name": "save_preset",
+              "qualname": "MacroManager.save_preset",
+              "kind": "classmethod",
+              "signature": "(cls, name: str, bindings: Optional[Dict[str, dict]] = None) -> str",
+              "summary": "Save *bindings* (default: the current bindings) as user preset *name*.",
+              "line": 495,
+              "deprecated": false
+            },
+            {
+              "name": "delete_preset",
+              "qualname": "MacroManager.delete_preset",
+              "kind": "classmethod",
+              "signature": "(cls, name: str) -> bool",
+              "summary": "Delete a *user* preset (built-ins are read-only).",
+              "line": 512,
+              "deprecated": false
+            },
+            {
+              "name": "get_active_preset",
+              "qualname": "MacroManager.get_active_preset",
+              "kind": "classmethod",
+              "signature": "(cls) -> Optional[str]",
+              "summary": "The last-selected/applied preset name, or ``None``.",
+              "line": 517,
+              "deprecated": false
+            },
+            {
+              "name": "set_active_preset",
+              "qualname": "MacroManager.set_active_preset",
+              "kind": "classmethod",
+              "signature": "(cls, name: Optional[str]) -> None",
+              "summary": "Set (or clear, with ``None``) the active-preset pointer.",
+              "line": 522,
+              "deprecated": false
+            },
+            {
+              "name": "apply_saved_macros",
+              "qualname": "MacroManager.apply_saved_macros",
+              "kind": "classmethod",
+              "signature": "(cls, name: Optional[str] = None) -> None",
+              "summary": "Apply a saved preset/template's bindings to Maya on demand.",
+              "line": 527,
               "deprecated": false
             }
           ]
@@ -7939,7 +8161,7 @@
         {
           "name": "DisplayMacros",
           "summary": "",
-          "line": 171,
+          "line": 556,
           "bases": [],
           "members": [
             {
@@ -7948,7 +8170,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle Component Id Display through vertices, edges, faces, UVs, and off.",
-              "line": 175,
+              "line": 560,
               "deprecated": false
             },
             {
@@ -7957,7 +8179,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle face normals, vertex normals, tangents, and off.",
-              "line": 211,
+              "line": 596,
               "deprecated": false
             },
             {
@@ -7966,7 +8188,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle Soft Edge Display.",
-              "line": 273,
+              "line": 658,
               "deprecated": false
             },
             {
@@ -7974,8 +8196,8 @@
               "qualname": "DisplayMacros.m_toggle_visibility",
               "kind": "staticmethod",
               "signature": "()",
-              "summary": "Toggle Visibility",
-              "line": 292,
+              "summary": "Toggle visibility of the selected objects, keeping them selected.",
+              "line": 677,
               "deprecated": false
             },
             {
@@ -7984,7 +8206,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle the display of UV border edges for the given objects.",
-              "line": 298,
+              "line": 687,
               "deprecated": false
             },
             {
@@ -7993,7 +8215,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Toggle Back-Face Culling on selected objects, or on all objects if none are selected.",
-              "line": 328,
+              "line": 717,
               "deprecated": false
             },
             {
@@ -8002,7 +8224,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Isolate the current selection in the active 3D viewport.",
-              "line": 353,
+              "line": 742,
               "deprecated": false
             },
             {
@@ -8011,7 +8233,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Cycle the display state of all selected objects based on the first object's state.",
-              "line": 374,
+              "line": 763,
               "deprecated": false
             },
             {
@@ -8020,7 +8242,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Toggle Wireframe Display on selected objects, or on all objects if none are selected.",
-              "line": 428,
+              "line": 817,
               "deprecated": false
             },
             {
@@ -8029,7 +8251,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggle grid and image plane visibility.",
-              "line": 449,
+              "line": 838,
               "deprecated": false
             },
             {
@@ -8037,8 +8259,8 @@
               "qualname": "DisplayMacros.m_frame",
               "kind": "staticmethod",
               "signature": "(objects) -> None",
-              "summary": "Frame selected by a set amount with three toggle states.",
-              "line": 472,
+              "summary": "Frame the selection, cycling zoom level on repeated presses.",
+              "line": 861,
               "deprecated": false
             },
             {
@@ -8047,7 +8269,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects) -> None",
               "summary": "Toggle smooth mesh preview.",
-              "line": 525,
+              "line": 920,
               "deprecated": false
             },
             {
@@ -8056,7 +8278,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles the wireframe display state.",
-              "line": 565,
+              "line": 960,
               "deprecated": false
             },
             {
@@ -8064,8 +8286,8 @@
               "qualname": "DisplayMacros.m_material_override",
               "kind": "staticmethod",
               "signature": "()",
-              "summary": "Toggle Material Override",
-              "line": 597,
+              "summary": "Toggle the viewport's default-material override.",
+              "line": 992,
               "deprecated": false
             },
             {
@@ -8074,7 +8296,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Toggles viewport display mode between wireframe, smooth shaded with textures off,",
-              "line": 622,
+              "line": 1022,
               "deprecated": false
             },
             {
@@ -8083,7 +8305,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Toggles viewport lighting between different states: default, all lights, active lights,",
-              "line": 671,
+              "line": 1071,
               "deprecated": false
             }
           ]
@@ -8091,7 +8313,7 @@
         {
           "name": "EditMacros",
           "summary": "",
-          "line": 711,
+          "line": 1111,
           "bases": [],
           "members": [
             {
@@ -8100,7 +8322,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None)",
               "summary": "Group the given objects (or selection), center the pivot, and rename the group.",
-              "line": 716,
+              "line": 1116,
               "deprecated": false
             },
             {
@@ -8109,7 +8331,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)",
               "summary": "Combine multiple meshes.",
-              "line": 727,
+              "line": 1127,
               "deprecated": false
             },
             {
@@ -8118,7 +8340,7 @@
               "kind": "staticmethod",
               "signature": "(objects, repair_mesh=True, keep_boolean=True, **kwargs)",
               "summary": "Perform a boolean operation on two meshes using cmds, managing shorthand and full parameter names d…",
-              "line": 755,
+              "line": 1155,
               "deprecated": false
             },
             {
@@ -8127,7 +8349,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle lock/unlock vertex normals.",
-              "line": 799,
+              "line": 1199,
               "deprecated": false
             },
             {
@@ -8136,7 +8358,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Paste and rename by removing 'pasted__' prefix and reference file names,",
-              "line": 839,
+              "line": 1239,
               "deprecated": false
             },
             {
@@ -8144,8 +8366,8 @@
               "qualname": "EditMacros.m_multi_component",
               "kind": "staticmethod",
               "signature": "() -> None",
-              "summary": "Multi-Component Selection.",
-              "line": 906,
+              "summary": "Enable the multi-component selection mask.",
+              "line": 1306,
               "deprecated": false
             },
             {
@@ -8153,8 +8375,8 @@
               "qualname": "EditMacros.m_merge_vertices",
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.001) -> None",
-              "summary": "Merge Vertices.",
-              "line": 917,
+              "summary": "Merge vertices within a small distance tolerance.",
+              "line": 1321,
               "deprecated": false
             }
           ]
@@ -8162,7 +8384,7 @@
         {
           "name": "SelectionMacros",
           "summary": "",
-          "line": 958,
+          "line": 1367,
           "bases": [],
           "members": [
             {
@@ -8171,7 +8393,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set object selection mask.",
-              "line": 962,
+              "line": 1371,
               "deprecated": false
             },
             {
@@ -8180,7 +8402,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set vertex selection mask.",
-              "line": 970,
+              "line": 1379,
               "deprecated": false
             },
             {
@@ -8189,7 +8411,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set edge selection mask.",
-              "line": 976,
+              "line": 1385,
               "deprecated": false
             },
             {
@@ -8198,7 +8420,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set face selection mask.",
-              "line": 982,
+              "line": 1391,
               "deprecated": false
             },
             {
@@ -8207,7 +8429,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the current selection of geometry or components.",
-              "line": 988,
+              "line": 1397,
               "deprecated": false
             },
             {
@@ -8216,7 +8438,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle selectability of the given objects.",
-              "line": 1006,
+              "line": 1415,
               "deprecated": false
             },
             {
@@ -8225,7 +8447,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles between UV shell and UV component selection.",
-              "line": 1065,
+              "line": 1474,
               "deprecated": false
             },
             {
@@ -8234,7 +8456,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the component selection on the currently selected objects.",
-              "line": 1089,
+              "line": 1498,
               "deprecated": false
             }
           ]
@@ -8242,7 +8464,7 @@
         {
           "name": "UiMacros",
           "summary": "",
-          "line": 1119,
+          "line": 1528,
           "bases": [],
           "members": [
             {
@@ -8251,7 +8473,7 @@
               "kind": "staticmethod",
               "signature": "(toggle_menu: bool = True, toggle_panels: bool = True) -> None",
               "summary": "Toggle UI toolbars and menu bar in sync.",
-              "line": 1123,
+              "line": 1532,
               "deprecated": false
             }
           ]
@@ -8259,7 +8481,7 @@
         {
           "name": "AnimationMacros",
           "summary": "",
-          "line": 1155,
+          "line": 1564,
           "bases": [],
           "members": [
             {
@@ -8268,7 +8490,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 1160,
+              "line": 1569,
               "deprecated": false
             },
             {
@@ -8277,7 +8499,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Un-set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 1170,
+              "line": 1579,
               "deprecated": false
             }
           ]
@@ -8285,7 +8507,7 @@
         {
           "name": "Macros",
           "summary": "",
-          "line": 1182,
+          "line": 1591,
           "bases": [
             "MacroManager",
             "DisplayMacros",
@@ -11839,7 +12061,7 @@
         {
           "name": "SceneExporter",
           "summary": "",
-          "line": 29,
+          "line": 30,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -11850,7 +12072,7 @@
               "kind": "method",
               "signature": "(self, export_dir: str, objects: Optional[Union[List[str], Callable]] = None, preset_file: Optional[str] = None, output_name: Optional[str] = None, export_visible: bool = True, file_format: Optional[str] = 'FBX export', create_log_file: bool = False, timestamp: bool = False, name_regex: Optional[str] = None, log_level: str = 'WARNING', hide_log_file: Optional[bool] = None, log_handler: Optional[object] = None, tasks: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, bool]]",
               "summary": "Perform the export operation, including initialization and task management.",
-              "line": 99,
+              "line": 100,
               "deprecated": false
             },
             {
@@ -11859,7 +12081,7 @@
               "kind": "method",
               "signature": "(self, version_format: str = '') -> str",
               "summary": "Generate the full export file path.",
-              "line": 316,
+              "line": 339,
               "deprecated": false
             },
             {
@@ -11868,7 +12090,7 @@
               "kind": "method",
               "signature": "(self, name: str) -> str",
               "summary": "Format the export name using a regex pattern and replacement (e.g.",
-              "line": 463,
+              "line": 486,
               "deprecated": false
             },
             {
@@ -11877,7 +12099,7 @@
               "kind": "method",
               "signature": "(self, export_path: str) -> str",
               "summary": "Generate the log file path based on the export path.",
-              "line": 483,
+              "line": 506,
               "deprecated": false
             },
             {
@@ -11886,7 +12108,7 @@
               "kind": "method",
               "signature": "(self, log_file_path: str)",
               "summary": "Setup file logging to log actions during export.",
-              "line": 488,
+              "line": 511,
               "deprecated": false
             },
             {
@@ -11895,7 +12117,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Close and remove file handlers after logging is complete.",
-              "line": 502,
+              "line": 525,
               "deprecated": false
             },
             {
@@ -11904,7 +12126,7 @@
               "kind": "method",
               "signature": "(self, preset_file: str = None, verify: bool = False) -> Optional[dict]",
               "summary": "Load an FBX export preset and optionally verify it.",
-              "line": 512,
+              "line": 535,
               "deprecated": false
             },
             {
@@ -11913,7 +12135,7 @@
               "kind": "method",
               "signature": "(self) -> dict",
               "summary": "Verify a set of predefined FBX export settings and log their values.",
-              "line": 550,
+              "line": 573,
               "deprecated": false
             }
           ]
@@ -11921,7 +12143,7 @@
         {
           "name": "SceneExporterSlots",
           "summary": "",
-          "line": 593,
+          "line": 616,
           "bases": [
             "SceneExporter"
           ],
@@ -11932,7 +12154,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "",
-              "line": 633,
+              "line": 656,
               "deprecated": false
             },
             {
@@ -11941,7 +12163,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Optional[str]]",
               "summary": "Return available presets, using cached values if the preset directory has not changed.",
-              "line": 652,
+              "line": 675,
               "deprecated": false
             },
             {
@@ -11950,7 +12172,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the header widget.",
-              "line": 688,
+              "line": 711,
               "deprecated": false
             },
             {
@@ -11959,7 +12181,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Preset",
-              "line": 732,
+              "line": 764,
               "deprecated": false
             },
             {
@@ -11968,7 +12190,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Output Directory",
-              "line": 835,
+              "line": 872,
               "deprecated": false
             },
             {
@@ -11977,7 +12199,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Init Output Name",
-              "line": 873,
+              "line": 910,
               "deprecated": false
             },
             {
@@ -11986,7 +12208,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Auto-generate Export Settings UI from task definitions using WidgetComboBox.",
-              "line": 898,
+              "line": 947,
               "deprecated": false
             },
             {
@@ -11995,7 +12217,16 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Auto-generate Check Settings UI from check definitions using WidgetComboBox.",
-              "line": 925,
+              "line": 974,
+              "deprecated": false
+            },
+            {
+              "name": "cmb004_init",
+              "qualname": "SceneExporterSlots.cmb004_init",
+              "kind": "method",
+              "signature": "(self, widget) -> None",
+              "summary": "Init Output Format — FBX (default), GLB, or FBX + GLB.",
+              "line": 1008,
               "deprecated": false
             },
             {
@@ -12004,7 +12235,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Export.",
-              "line": 959,
+              "line": 1022,
               "deprecated": false
             },
             {
@@ -12013,7 +12244,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Set Output Directory",
-              "line": 1059,
+              "line": 1126,
               "deprecated": false
             },
             {
@@ -12022,7 +12253,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Add Preset.",
-              "line": 1067,
+              "line": 1134,
               "deprecated": false
             },
             {
@@ -12031,7 +12262,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Remove Preset.",
-              "line": 1085,
+              "line": 1152,
               "deprecated": false
             },
             {
@@ -12040,7 +12271,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Set Preset Directory.",
-              "line": 1101,
+              "line": 1168,
               "deprecated": false
             },
             {
@@ -12049,7 +12280,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open Output Directory",
-              "line": 1111,
+              "line": 1178,
               "deprecated": false
             },
             {
@@ -12058,7 +12289,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open Preset Directory.",
-              "line": 1117,
+              "line": 1184,
               "deprecated": false
             },
             {
@@ -12067,7 +12298,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Edit Preset",
-              "line": 1127,
+              "line": 1194,
               "deprecated": false
             },
             {
@@ -12076,7 +12307,16 @@
               "kind": "method",
               "signature": "(self, output_dir: str) -> None",
               "summary": "Record the output directory into the recent values plugin.",
-              "line": 1158,
+              "line": 1225,
+              "deprecated": false
+            },
+            {
+              "name": "save_output_name",
+              "qualname": "SceneExporterSlots.save_output_name",
+              "kind": "method",
+              "signature": "(self, output_name: str) -> None",
+              "summary": "Record the output filename into the recent values plugin.",
+              "line": 1230,
               "deprecated": false
             }
           ]
@@ -12124,7 +12364,7 @@
         {
           "name": "TaskManager",
           "summary": "Contains all task-related UI definitions for the Scene Exporter.",
-          "line": 1325,
+          "line": 1337,
           "bases": [
             "TaskFactory",
             "_TaskActionsMixin",
@@ -12137,7 +12377,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 1395,
+              "line": 1407,
               "deprecated": false
             },
             {
@@ -12146,7 +12386,7 @@
               "kind": "method",
               "signature": "(self, value)",
               "summary": "Invalidate the materials cache whenever objects change.",
-              "line": 1399,
+              "line": 1411,
               "deprecated": false
             },
             {
@@ -12155,7 +12395,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return the task definitions for the UI.",
-              "line": 1411,
+              "line": 1423,
               "deprecated": false
             },
             {
@@ -12164,7 +12404,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return the check definitions for the UI.",
-              "line": 1580,
+              "line": 1584,
               "deprecated": false
             },
             {
@@ -12173,7 +12413,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return all definitions combined for backward compatibility.",
-              "line": 1710,
+              "line": 1714,
               "deprecated": false
             }
           ]
@@ -13428,7 +13668,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Configure the header menu and help text.",
-              "line": 965,
+              "line": 975,
               "deprecated": false
             },
             {
@@ -13437,7 +13677,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Populate the Quality combobox from the shared preset store.",
-              "line": 1068,
+              "line": 1080,
               "deprecated": false
             },
             {
@@ -13446,7 +13686,7 @@
               "kind": "method",
               "signature": "(self, index, widget) -> None",
               "summary": "Apply the selected preset's dials to the Resolution / Samples fields.",
-              "line": 1079,
+              "line": 1091,
               "deprecated": false
             },
             {
@@ -13455,7 +13695,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Populate the bake-level (Mode) combobox;",
-              "line": 1084,
+              "line": 1096,
               "deprecated": false
             },
             {
@@ -13464,7 +13704,25 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Populate the Packing combobox;",
-              "line": 1095,
+              "line": 1107,
+              "deprecated": false
+            },
+            {
+              "name": "cmb_scope_init",
+              "qualname": "LightmapBakerSlots.cmb_scope_init",
+              "kind": "method",
+              "signature": "(self, widget) -> None",
+              "summary": "Populate the Scope combobox;",
+              "line": 1118,
+              "deprecated": false
+            },
+            {
+              "name": "cmb_resolution_init",
+              "qualname": "LightmapBakerSlots.cmb_resolution_init",
+              "kind": "method",
+              "signature": "(self, widget) -> None",
+              "summary": "Populate the Resolution combobox (value carried as item data);",
+              "line": 1150,
               "deprecated": false
             },
             {
@@ -13473,7 +13731,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Add the Prefix / Suffix / Auto picker to the name-affix field.",
-              "line": 1106,
+              "line": 1172,
               "deprecated": false
             },
             {
@@ -13482,7 +13740,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Bake lightmaps for the selection in the chosen Mode (revert → bake → commit).",
-              "line": 1137,
+              "line": 1202,
               "deprecated": false
             },
             {
@@ -13491,7 +13749,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Undo the bake wiring on the selected objects (or all baked ones).",
-              "line": 1237,
+              "line": 1306,
               "deprecated": false
             },
             {
@@ -13500,7 +13758,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open the project's sourceimages folder (where bakes go) in Explorer.",
-              "line": 1251,
+              "line": 1320,
               "deprecated": false
             }
           ]
@@ -18446,7 +18704,7 @@
               "name": "rebind_skin_clusters",
               "qualname": "RigUtils.rebind_skin_clusters",
               "kind": "classmethod",
-              "signature": "(cls, meshes: Optional[List[str]] = None, temp_dir: Optional[str] = None, inherits_transform: Optional[bool] = None) -> None",
+              "signature": "(cls, meshes: Optional[List[str]] = None, temp_dir: Optional[str] = None, inherits_transform: Optional[bool] = None) -> Dict[str, list]",
               "summary": "Rebinds skinClusters on the given meshes, preserving weights, bind pose, and transform lock state.",
               "line": 1117,
               "deprecated": false
@@ -19763,12 +20021,30 @@
           "deprecated": false
         },
         {
+          "name": "keystring_to_token",
+          "qualname": "keystring_to_token",
+          "kind": "function",
+          "signature": "(ks: list) -> str",
+          "summary": "Convert an ``assignCommand`` keyString array to a Maya hotkey token.",
+          "line": 114,
+          "deprecated": false
+        },
+        {
+          "name": "live_hotkey_map",
+          "qualname": "live_hotkey_map",
+          "kind": "function",
+          "signature": "() -> dict",
+          "summary": "Return ``{runtime_command: maya_key_token}`` for the active hotkey set.",
+          "line": 143,
+          "deprecated": false
+        },
+        {
           "name": "maya_collision_checker",
           "qualname": "maya_collision_checker",
           "kind": "function",
           "signature": "(sequence, scope, ui_name, method_name)",
           "summary": "Check a proposed binding against Maya's active hotkey set.",
-          "line": 170,
+          "line": 226,
           "deprecated": false
         }
       ],
@@ -19920,7 +20196,7 @@
               "kind": "method",
               "signature": "(self, menu_key: str)",
               "summary": "Displays the specified Maya menu in a standalone window.",
-              "line": 524,
+              "line": 544,
               "deprecated": false
             }
           ]

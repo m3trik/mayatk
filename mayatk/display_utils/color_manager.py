@@ -511,6 +511,7 @@ class ColorManagerSlots(ColorManager):
             cmds.select(clear=True)
 
     def b003(self) -> None:
+        """Pick up the selected object's wireframe color into the active color button (eyedropper)."""
         objects = self.selected_objects
         if not objects:
             return

@@ -440,7 +440,22 @@ class MayaNativeMenus(ptk.LoggingMixin):
         try:
             mel.eval(init_command)
         except Exception as e:
-            self.logger.warning(f"Menu init command for '{menu_key}' raised: {e}")
+            # The init command is Maya-version-specific. Several mappings are
+            # stale on newer Maya — build procs renamed (``buildToonMenu``
+            # gone), arguments changed (``buildHelpMenu`` now takes none), or
+            # the target menu shell no longer exists (``mainCacheMenu``). A
+            # raise here means the native menu can't be built in this Maya, so
+            # bail immediately and let the caller fall back to the hand-authored
+            # ``<key>#submenu`` overlay. Previously this only warned, then spun
+            # a doomed 15-attempt ``processEvents`` populate loop — that loop,
+            # not the error itself, was the bulk of the multi-second stall when
+            # a broken menu was requested (e.g. toon ~10s, help ~5s).
+            self.logger.debug(f"Native menu '{menu_key}' unavailable: {e}")
+            try:
+                cmds.setMenuMode(orig_menu_set)
+            except Exception:
+                pass
+            return None
         cmds.refresh()
 
         placeholder_menu = PersistentMenu(maya_menu_name, UiUtils.get_main_window())
@@ -466,7 +481,12 @@ class MayaNativeMenus(ptk.LoggingMixin):
         previous_action_count = -1
         stable_iterations = 0
         required_stable_iterations = 2
-        max_attempts = 15
+        # Working menus populate synchronously right after the init command, so
+        # they stabilize within ~3 passes. A higher cap only burned wall-clock
+        # pumping ``processEvents`` for menus that never populate; the dead ones
+        # are now caught earlier (init raises -> get_menu bails), so keep this
+        # tight as a backstop for the genuinely-async case.
+        max_attempts = 6
         attempt = 0
 
         while attempt < max_attempts:
@@ -517,8 +537,8 @@ class MayaNativeMenus(ptk.LoggingMixin):
             placeholder_widget.menu.lower()
             placeholder_widget._raise_layout_widgets()
         else:
-            self.logger.warning(
-                f"Failed to fully initialize menu '{menu_key}' after {attempt} attempts."
+            self.logger.debug(
+                f"Native menu '{menu_key}' did not populate after {attempt} attempts."
             )
 
     def display_menu(self, menu_key: str):

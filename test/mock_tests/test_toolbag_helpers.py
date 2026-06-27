@@ -640,6 +640,14 @@ class TestRenderedTemplateExecutes(unittest.TestCase):
         cls.SEND_TO = SEND_TO
 
     def setUp(self):
+        # Sibling suites (test_marmoset_rpc) pop sys.modules["mset"] on cleanup
+        # to simulate "not hosted by Toolbag", clobbering the module-level fake
+        # installed at import. These tests exec rendered templates that do
+        # ``import mset``, so re-establish the fake here to stay order-
+        # independent (otherwise ``import mset`` falls back to None and the
+        # template hits ``'NoneType' has no attribute 'importModel'``).
+        sys.modules["mset"] = _fake_mset
+
         self._tmpdir = tempfile.mkdtemp(prefix="toolbag_helpers_exec_")
         # Real textures on disk -- the new missing-file guard skips paths
         # that don't exist, so the manifest must point at actual files.

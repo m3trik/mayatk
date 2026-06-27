@@ -12,6 +12,7 @@ import time
 import base64
 import ctypes
 import shutil
+import tempfile
 import logging
 from datetime import datetime
 from typing import List, Dict, Optional, Callable, Union, Any
@@ -154,12 +155,21 @@ class SceneExporter(ptk.LoggingMixin):
         self._setup_logging(log_level, log_handler)
 
         # Pop UI-defined settings that aren't actual task-pipeline methods.
-        # `version` influences path generation (resolved below); `create_glb`
-        # runs after FBX export.  Both are surfaced as task_definitions
-        # entries for uniform UI generation but consumed here directly.
+        # `version` influences path generation (resolved below); `output_format`
+        # selects FBX / GLB / FBX+GLB and is consumed after the FBX is written.
         tasks = dict(tasks) if tasks else {}
         version_format = tasks.pop("version", "") or ""
-        create_glb_enabled = bool(tasks.pop("create_glb", False))
+        # Output format: "fbx" (default), "glb" (GLB only — the FBX is written to
+        # a temp dir and discarded after conversion), or "fbx_glb" (both, side by
+        # side). A legacy `create_glb=True` (older callers / saved templates)
+        # maps to "fbx_glb".
+        output_format = (tasks.pop("output_format", "") or "").lower()
+        if not output_format:
+            output_format = "fbx_glb" if tasks.pop("create_glb", False) else "fbx"
+        else:
+            tasks.pop("create_glb", None)  # format wins over any legacy flag
+        create_glb_enabled = output_format in ("glb", "fbx_glb")
+        glb_only = output_format == "glb"
 
         # Generate the export path (with versioning applied if requested).
         self.export_path = self.generate_export_path(version_format=version_format)
@@ -220,28 +230,64 @@ class SceneExporter(ptk.LoggingMixin):
                 self.logger.error("No objects to export.")
                 return False
 
-            # Perform the actual export
+            # Perform the actual export. For GLB-only the FBX is written to a
+            # throwaway temp dir (so it never lands in — or overwrites anything
+            # in — the output directory) and removed once converted.
+            glb_tempdir = None
             try:
+                if glb_only:
+                    glb_tempdir = tempfile.mkdtemp(prefix="scene_exporter_glb_")
+                    fbx_write_path = os.path.join(
+                        glb_tempdir, os.path.basename(self.export_path)
+                    )
+                else:
+                    fbx_write_path = self.export_path
+
                 # Use cmds.file for export to avoid object-wrapper overhead
                 # cmds.exportSelected wraps cmds.file(..., exportSelected=True)
                 cmds.file(
-                    self.export_path,
+                    fbx_write_path,
                     force=True,
                     options="v=0;",
                     type=file_format,
                     exportSelected=True,
                 )
                 export_succeeded = True
-                elapsed = time.time() - start_time
 
-                # Write hierarchy manifest for future diff checks
+                # Write hierarchy manifest for future diff checks. Keyed off the
+                # logical export path (output dir + stem), independent of where
+                # the FBX was actually written.
                 self.task_manager.write_hierarchy_manifest()
 
-                # Build the single, consolidated success banner.
+                # GLB conversion. For GLB-only, convert the temp FBX then move the
+                # .glb into the output dir; the banner reports it as the
+                # deliverable. A failed conversion has no deliverable, so the
+                # export fails. For FBX+GLB the FBX is the deliverable and the GLB
+                # is written alongside it *after* the banner.
+                deliverable_path = self.export_path
+                if glb_only:
+                    glb_path = self.task_manager.create_glb(
+                        fbx_path=fbx_write_path, announce=False
+                    )
+                    if not (glb_path and os.path.exists(glb_path)):
+                        self.logger.error(
+                            "GLB-only export failed: FBX→GLB conversion produced "
+                            "no file."
+                        )
+                        export_succeeded = False
+                        return False
+                    deliverable_path = os.path.splitext(self.export_path)[0] + ".glb"
+                    shutil.move(glb_path, deliverable_path)
+                    self.logger.success(f"GLB created: {deliverable_path}")
+
+                # Build the single, consolidated success banner. Measure the
+                # duration here (vs. right after the FBX write) so GLB-only
+                # reflects the conversion time too.
+                elapsed = time.time() - start_time
                 export_info_lines = [
                     f"✓ File written successfully",
                     "",
-                    f"Path: {self.export_path}",
+                    f"Path: {deliverable_path}",
                     f"Duration: {elapsed:.1f}s",
                 ]
                 # Include task/check counts from the pipeline phase
@@ -258,15 +304,17 @@ class SceneExporter(ptk.LoggingMixin):
                     "EXPORT SUCCESSFUL", export_info_lines, level="SUCCESS"
                 )
 
-                # Post-export GLB sidecar — runs after the banner so the FBX
-                # success message isn't visually preceded by an unrelated
-                # GLB error if conversion fails.
-                if create_glb_enabled:
+                # FBX+GLB: GLB sidecar runs after the banner so the FBX success
+                # message isn't visually preceded by an unrelated GLB error if
+                # conversion fails.
+                if create_glb_enabled and not glb_only:
                     self.task_manager.create_glb()
             except Exception as e:
                 self.logger.error(f"Failed to export objects: {e}")
                 raise RuntimeError(f"Failed to export objects: {e}")
             finally:
+                if glb_tempdir:
+                    shutil.rmtree(glb_tempdir, ignore_errors=True)
                 if self.create_log_file:
                     self.close_file_handlers()
         finally:
@@ -284,33 +332,8 @@ class SceneExporter(ptk.LoggingMixin):
         if not export_succeeded:
             return False
 
-        # After successful export, gather detailed info
-        export_info = {
-            "output_file": os.path.basename(self.export_path),
-            "export_duration": time.time() - start_time,
-            "objects_exported": (
-                len(objects) if hasattr(self, "objects") and self.objects else 0
-            ),
-        }
-
-        # Add file size if export was successful
-        if os.path.exists(self.export_path):
-            file_size = os.path.getsize(self.export_path)
-            if file_size > 1024 * 1024:  # > 1MB
-                export_info["file_size"] = f"{file_size / (1024*1024):.2f} MB"
-            else:
-                export_info["file_size"] = f"{file_size / 1024:.2f} KB"
-
-        # Add frame range if animation export
-        if hasattr(self, "_animation_range") and self._animation_range:
-            export_info["frame_range"] = self._animation_range
-
-        # Add preset info
-        if preset_file:
-            preset_name = os.path.splitext(os.path.basename(preset_file))[0]
-            export_info["preset_used"] = preset_name
-
-        # Return True since tasks already ran successfully before export
+        # Tasks/checks already ran (and any GLB conversion completed) before
+        # this point; a True return means the deliverable was written.
         return True
 
     def generate_export_path(self, version_format: str = "") -> str:
@@ -687,9 +710,18 @@ class SceneExporterSlots(SceneExporter):
 
     def header_init(self, widget):
         """Initialize the header widget."""
-        # Enable whole-window presets on the header menu
+        # Enable whole-window presets ("templates") on the header menu. The
+        # template captures the full panel run config -- tasks (cmb001), checks
+        # (cmb002), FBX preset (cmb000), plus the menu's log settings -- so
+        # switching a saved template updates them. ``scope="window"`` reaches the
+        # owning MainWindow's registered widgets (the menu-only default would
+        # only see the header menu's own items). Excludes are machine/scene-
+        # specific or transient: output dir (txt000), output filename (txt001),
+        # log output (txt003). The preset combo is always excluded internally.
         widget.menu.add_presets = True
         widget.menu.presets.preset_dir = "mayatk/scene_exporter"
+        widget.menu.presets.scope = "window"
+        widget.menu.presets.exclude("txt000", "txt001", "txt003")
         widget.menu.presets.metadata_provider = self._fbx_preset_metadata_provider
         widget.menu.presets.on_metadata_loaded = self._on_fbx_preset_metadata_loaded
 
@@ -734,6 +766,11 @@ class SceneExporterSlots(SceneExporter):
         if not widget.is_initialized:
             widget.restore_state = True  # Enable state restore
             widget.refresh_on_show = True  # Call this method on show
+            # Persist the selection by preset NAME, not combo index: the item
+            # list is rebuilt from a directory scan each show, so an index saved
+            # one session points at a different preset (or out of range -> "None")
+            # the next. See StateManager.restore_by / _RESTORE_MODES.
+            widget.restore_by = "text"
 
             # Determine initial state
             current_dir = self.ui.settings.value("preset_dir")
@@ -895,6 +932,18 @@ class SceneExporterSlots(SceneExporter):
             setObjectName="txt002",
         )
 
+        # Recent output filenames — option box button with history popup
+        from uitk.widgets.optionBox.options.recent_values import RecentValuesOption
+
+        self._recent_names_option = RecentValuesOption(
+            wrapped_widget=widget,
+            settings_key="scene_exporter_output_filenames",
+            max_recent=10,
+            display_format="basename",
+            text_align="left",
+        )
+        widget.option_box.add_option(self._recent_names_option)
+
     def cmb001_init(self, widget) -> None:
         """Auto-generate Export Settings UI from task definitions using WidgetComboBox."""
         widget_items = []
@@ -956,8 +1005,22 @@ class SceneExporterSlots(SceneExporter):
         # Add all widgets to the combo box with a header
         widget.add(widget_items, header="Validation Checks", clear=True)
 
+    def cmb004_init(self, widget) -> None:
+        """Init Output Format — FBX (default), GLB, or FBX + GLB.
+
+        ``currentData()`` yields the ``output_format`` token ``b000`` forwards to
+        ``perform_export``. GLB-only writes the FBX to a temp dir and keeps only
+        the converted ``.glb``; FBX + GLB keeps both side by side.
+        """
+        if not widget.is_initialized:
+            widget.restore_state = True
+        widget.add(
+            {"FBX": "fbx", "GLB": "glb", "FBX + GLB": "fbx_glb"},
+            clear=True,
+        )
+
     def b000(self) -> None:
-        """Export."""
+        """Export: run the scene export with the configured tasks and settings."""
         self.ui.txt003.clear()
         task_params = {}
         check_params = {}
@@ -1010,8 +1073,6 @@ class SceneExporterSlots(SceneExporter):
             task_params = {k: v for k, v in task_params.items() if v}
             check_params = {k: v for k, v in check_params.items() if v}
 
-        # Combine for logging
-        all_params = {**task_params, **check_params}
         self.logger.debug(f"Task parameters: {task_params}")
         self.logger.debug(f"Check parameters: {check_params}")
 
@@ -1038,6 +1099,11 @@ class SceneExporterSlots(SceneExporter):
                     consider_animated_visible=True,
                 )
 
+        # Output format (FBX / GLB / FBX+GLB) lives in its own cmb004 combo, not
+        # the task list; fold it into the tasks payload perform_export consumes.
+        export_tasks = {**task_params, **check_params}
+        export_tasks["output_format"] = self.ui.cmb004.currentData()
+
         export_successful = self.perform_export(
             objects=objects_to_export,
             export_dir=self.ui.txt000.text(),
@@ -1050,11 +1116,12 @@ class SceneExporterSlots(SceneExporter):
             timestamp=self.ui.chk004.isChecked(),
             create_log_file=self.ui.b011.isChecked(),
             log_level=self.ui.cmb003.currentData(),  # Updated from cmb001 to cmb003
-            tasks={**task_params, **check_params},  # Pass both to perform_export
+            tasks=export_tasks,
         )
 
         output_dir = self.ui.txt000.text()
         self.save_output_dir(output_dir)
+        self.save_output_name(self.ui.txt001.text())
 
     def b010(self) -> None:
         """Set Output Directory"""
@@ -1159,6 +1226,11 @@ class SceneExporterSlots(SceneExporter):
         """Record the output directory into the recent values plugin."""
         if output_dir and hasattr(self, "_recent_dirs_option"):
             self._recent_dirs_option.record(ptk.format_path(output_dir))
+
+    def save_output_name(self, output_name: str) -> None:
+        """Record the output filename into the recent values plugin."""
+        if output_name and hasattr(self, "_recent_names_option"):
+            self._recent_names_option.record(output_name)
 
     def _fbx_preset_metadata_provider(self) -> dict:
         """Return the currently selected FBX preset as embeddable metadata."""

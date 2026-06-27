@@ -142,7 +142,27 @@ class MayaUiHandler(UiHandler):
 
         menu_widget = handler.get_menu(menu_key)
         if not menu_widget:
-            self.sb.logger.warning(f"Could not retrieve Maya menu for '{menu_key}'")
+            # Native menu couldn't be built in this Maya version (stale mapping
+            # / removed proc / renamed shell). Fall back to the hand-authored
+            # '<key>#submenu' overlay when one is registered — tentacle ships
+            # these for every Maya menu, so the user still gets a usable menu
+            # instead of a broken empty one. This is the same overlay the
+            # marking menu uses for an unresolvable target (see can_resolve),
+            # engaged here at build time. Degrades to None when no overlay is
+            # registered (e.g. a standalone mayatk switchboard).
+            overlay = f"{menu_key}#submenu"
+            try:
+                if self.sb.is_registered_ui(overlay):
+                    fallback = self.sb.get_ui(overlay)
+                    if fallback is not None:
+                        self.logger.debug(
+                            f"[{menu_key}] Native menu unavailable; "
+                            f"falling back to '{overlay}' overlay."
+                        )
+                        return fallback
+            except Exception as e:  # noqa: BLE001 - fallback must never raise
+                self.logger.debug(f"[{menu_key}] Overlay fallback failed: {e}")
+            self.logger.debug(f"Could not retrieve Maya menu for '{menu_key}'")
             return None
 
         # Retrieve Maya Main Window for correct parenting (ensures Z-order on top)

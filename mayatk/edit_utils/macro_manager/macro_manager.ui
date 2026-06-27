@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>shot_sequencer</class>
- <widget class="QMainWindow" name="shot_sequencer">
+ <class>macro_manager</class>
+ <widget class="QMainWindow" name="macro_manager">
   <property name="geometry">
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>700</width>
-    <height>485</height>
+    <width>520</width>
+    <height>600</height>
    </rect>
   </property>
   <widget class="QWidget" name="centralwidget">
@@ -48,45 +48,48 @@
        </font>
       </property>
       <property name="text" stdset="0">
-       <string>SHOT SEQUENCER</string>
+       <string>MACRO MANAGER</string>
       </property>
      </widget>
     </item>
     <item>
-     <layout class="QHBoxLayout" name="shots_layout">
+     <layout class="QHBoxLayout" name="filterLayout">
       <property name="spacing">
+       <number>0</number>
+      </property>
+      <property name="leftMargin">
        <number>1</number>
       </property>
+      <property name="topMargin">
+       <number>0</number>
+      </property>
+      <property name="rightMargin">
+       <number>1</number>
+      </property>
+      <property name="bottomMargin">
+       <number>0</number>
+      </property>
       <item>
-       <widget class="ComboBox" name="cmb_mode">
-        <property name="sizePolicy">
-         <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-          <horstretch>0</horstretch>
-          <verstretch>0</verstretch>
-         </sizepolicy>
-        </property>
+       <widget class="ComboBox" name="cmb000">
         <property name="minimumSize">
          <size>
-          <width>70</width>
+          <width>90</width>
           <height>19</height>
          </size>
         </property>
         <property name="maximumSize">
          <size>
-          <width>70</width>
+          <width>90</width>
           <height>19</height>
          </size>
+        </property>
+        <property name="toolTip">
+         <string>Filter macros by category.</string>
         </property>
        </widget>
       </item>
       <item>
-       <widget class="ComboBox" name="cmb_shot">
-        <property name="sizePolicy">
-         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
-          <horstretch>1</horstretch>
-          <verstretch>0</verstretch>
-         </sizepolicy>
-        </property>
+       <widget class="LineEdit" name="txt000">
         <property name="minimumSize">
          <size>
           <width>0</width>
@@ -99,27 +102,56 @@
           <height>19</height>
          </size>
         </property>
+        <property name="toolTip">
+         <string>Filter macros by name or description using wildcards (case-insensitive).
+
+  *          any characters    m_*select*  → m_object_selection, m_vertex_selection …
+  ?          single character
+  [abc]      character set
+
+Separate multiple patterns with commas.</string>
+        </property>
+        <property name="placeholderText">
+         <string>Filter… (m_*select*, *wireframe)</string>
+        </property>
+        <property name="clearButtonEnabled">
+         <bool>false</bool>
+        </property>
        </widget>
       </item>
      </layout>
     </item>
     <item>
-     <widget class="SequencerWidget" name="sequencer_widget">
-      <property name="sizePolicy">
-       <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-        <horstretch>0</horstretch>
-        <verstretch>0</verstretch>
-       </sizepolicy>
+     <widget class="TableWidget" name="tbl000">
+      <property name="selectionMode">
+       <enum>QAbstractItemView::ExtendedSelection</enum>
       </property>
-      <property name="minimumSize">
-       <size>
-        <width>0</width>
-        <height>200</height>
-       </size>
+      <property name="selectionBehavior">
+       <enum>QAbstractItemView::SelectRows</enum>
       </property>
-      <property name="orientation">
-       <enum>Qt::Horizontal</enum>
-      </property>
+      <attribute name="horizontalHeaderVisible">
+       <bool>true</bool>
+      </attribute>
+      <column>
+       <property name="text">
+        <string>Macro</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>Hotkey</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>Category</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>Description</string>
+       </property>
+      </column>
      </widget>
     </item>
     <item>
@@ -127,13 +159,7 @@
       <property name="minimumSize">
        <size>
         <width>0</width>
-        <height>19</height>
-       </size>
-      </property>
-      <property name="maximumSize">
-       <size>
-        <width>16777215</width>
-        <height>19</height>
+        <height>25</height>
        </size>
       </property>
      </widget>
@@ -153,15 +179,19 @@
    <header>uitk.widgets.footer</header>
   </customwidget>
   <customwidget>
+   <class>LineEdit</class>
+   <extends>QLineEdit</extends>
+   <header>uitk.widgets.lineEdit</header>
+  </customwidget>
+  <customwidget>
+   <class>TableWidget</class>
+   <extends>QTableWidget</extends>
+   <header>uitk.widgets.table_widget</header>
+  </customwidget>
+  <customwidget>
    <class>ComboBox</class>
    <extends>QComboBox</extends>
    <header>uitk.widgets.comboBox.ComboBox.h</header>
-  </customwidget>
-  <customwidget>
-   <class>SequencerWidget</class>
-   <extends>QSplitter</extends>
-   <header>uitk.widgets.sequencer._sequencer</header>
-   <container>1</container>
   </customwidget>
  </customwidgets>
  <resources/>

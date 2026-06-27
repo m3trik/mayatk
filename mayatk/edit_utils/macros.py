@@ -1,6 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import Set
+import os
+import inspect
+from typing import Dict, List, Optional, Tuple
 
 try:
     import maya.cmds as cmds
@@ -118,7 +120,8 @@ class MacroManager(ptk.HelpMixin):
 
         if not ann:  # if no ann is given, try using the method's docstring.
             method = getattr(cls, name)
-            ann = method.__doc__.split("\n")[0]  # use only the first line.
+            doc = method.__doc__ or ""
+            ann = doc.split("\n")[0].strip()  # use only the first line.
 
         if cmds.runTimeCommand(name, exists=True):
             if cmds.runTimeCommand(name, query=True, default=True):
@@ -148,24 +151,406 @@ class MacroManager(ptk.HelpMixin):
         )
 
         # set hotkey
-        # modifiers
-        ctl = False
-        alt = False
-        sht = False
-        for char in key.split("+"):
-            if char == "ctl":
-                ctl = True
-            elif char == "alt":
-                alt = True
-            elif char == "sht":
-                sht = True
-            else:
-                key = char
-
-        # print(name, char, ctl, alt, sht)
+        ctl, alt, sht, key = cls._parse_key(key)
         cmds.hotkey(
             keyShortcut=key, name=nameCommand, ctl=ctl, alt=alt, sht=sht
         )  # set only the key press.
+
+    # ------------------------------------------------------------------
+    # Management API (UI-agnostic — fully functional without the UI)
+    # ------------------------------------------------------------------
+    # The methods below are the single source of truth for discovering,
+    # querying, applying, clearing, and persisting macro bindings. Both the
+    # ``MacroManager`` UI panel and the ``userSetup`` startup path are thin
+    # consumers; nothing here imports Qt or the switchboard. A *binding* is a
+    # ``{"key": <maya-token>, "cat": <category>}`` dict; a *binding set* maps
+    # macro name -> binding and is exactly what a preset file stores.
+
+    MACRO_PREFIX = "m_"
+    PRESET_NAME = "macro_manager"
+    PRESET_PACKAGE = "mayatk"
+    DEFAULT_PRESET = "default"
+
+    # Source tokens that should keep a fixed casing in the humanized label
+    # (e.g. ``m_toggle_UV_select_type`` -> "Toggle UV Select Type"). Tokens
+    # already upper-case in the method name (``UV``) are preserved as-is.
+    _LABEL_ACRONYMS = {"uv": "UV", "uvs": "UVs", "id": "ID", "ui": "UI", "3d": "3D"}
+
+    # Modifier-order is canonical (ctl, alt, sht) so equivalent chords compare
+    # equal regardless of how they were typed.
+    _MOD_ORDER = ("ctl", "alt", "sht")
+    # Qt KeySequence modifier name -> Maya token.
+    _QT_MOD_MAP = {
+        "ctrl": "ctl",
+        "control": "ctl",
+        "alt": "alt",
+        "shift": "sht",
+        "meta": "ctl",
+        "cmd": "ctl",
+    }
+
+    @classmethod
+    def list_available_macros(cls) -> Dict[str, str]:
+        """Discover every ``m_*`` macro callable, mapped to its annotation.
+
+        Returns:
+            ``{macro_name: first_docstring_line}`` sorted by name. DCC-free —
+            pure class introspection, so the UI can populate its table without
+            a live Maya.
+        """
+        macros: Dict[str, str] = {}
+        for name in dir(cls):
+            if not name.startswith(cls.MACRO_PREFIX):
+                continue
+            try:
+                attr = inspect.getattr_static(cls, name)
+            except AttributeError:
+                continue
+            func = (
+                attr.__func__
+                if isinstance(attr, (staticmethod, classmethod))
+                else attr
+            )
+            if not callable(func):
+                continue
+            doc = (getattr(func, "__doc__", "") or "").strip()
+            macros[name] = doc.split("\n")[0].strip() if doc else ""
+        return dict(sorted(macros.items()))
+
+    @classmethod
+    def macro_label(cls, name: str) -> str:
+        """Humanize a macro name for display, e.g. ``m_back_face_culling`` ->
+        "Back Face Culling" (acronyms like ``UV`` / ``ID`` are preserved)."""
+        base = name[len(cls.MACRO_PREFIX):] if name.startswith(cls.MACRO_PREFIX) else name
+        words = []
+        for word in base.split("_"):
+            if not word:
+                continue
+            low = word.lower()
+            if low in cls._LABEL_ACRONYMS:
+                words.append(cls._LABEL_ACRONYMS[low])
+            elif word.isupper() and len(word) > 1:
+                words.append(word)  # already an acronym in the source name
+            else:
+                words.append(word.capitalize())
+        return " ".join(words)
+
+    @classmethod
+    def macro_category(cls, name: str) -> str:
+        """Default category for a macro, derived from the ``*Macros`` mixin that
+        defines it (e.g. a method on :class:`DisplayMacros` -> ``"Display"``).
+
+        The defining mixin is the single source of truth for a macro's category,
+        so every discoverable macro has a sensible default with no per-macro
+        annotation to maintain. Returns ``""`` when *name* isn't defined on a
+        ``*Macros`` mixin.
+        """
+        for klass in cls.__mro__:
+            kname = klass.__name__
+            if kname.endswith("Macros") and kname != "Macros" and name in vars(klass):
+                stem = kname[: -len("Macros")]
+                return cls._LABEL_ACRONYMS.get(stem.lower(), stem)
+        return ""
+
+    @classmethod
+    def list_categories(cls) -> List[str]:
+        """Sorted distinct default categories across all discoverable macros.
+
+        Derived from the ``*Macros`` mixins (via :meth:`macro_category`) so the
+        category set never drifts from the code organization — adding a new
+        ``<Domain>Macros`` mixin contributes its category automatically.
+        """
+        cats = {cls.macro_category(name) for name in cls.list_available_macros()}
+        cats.discard("")
+        return sorted(cats)
+
+    @classmethod
+    def macro_help(cls, name: str) -> str:
+        """Return a macro's full (dedented) docstring — the single source of
+        truth for its UI tooltip. Empty string when the macro has no docstring."""
+        try:
+            attr = inspect.getattr_static(cls, name)
+        except AttributeError:
+            return ""
+        func = (
+            attr.__func__
+            if isinstance(attr, (staticmethod, classmethod))
+            else attr
+        )
+        return (inspect.getdoc(func) or "").strip()
+
+    @classmethod
+    def get_current_bindings(cls) -> Dict[str, dict]:
+        """Return the *live* key + category for every available macro.
+
+        Reads Maya's actual hotkey registry (via
+        :func:`mayatk.ui_utils.hotkey_collisions.live_hotkey_map`) and the live
+        ``runTimeCommand`` category, so the result reflects bindings made through
+        this panel *and* Maya's own Hotkey Editor — the "just works after you set
+        it" contract. Outside an interactive Maya the live registry is empty, so
+        every macro reports no key.
+
+        Returns:
+            ``{macro_name: {"key": str, "cat": str}}`` for every available macro.
+            Unbound macros report an empty ``key``; ``cat`` falls back to the
+            mixin-derived default (:meth:`macro_category`) so it is never empty.
+        """
+        live: Dict[str, str] = {}
+        if cmds is not None:
+            try:
+                from mayatk.ui_utils.hotkey_collisions import live_hotkey_map
+
+                live = live_hotkey_map()
+            except Exception:
+                live = {}
+
+        bindings: Dict[str, dict] = {}
+        for name in cls.list_available_macros():
+            cat = ""
+            if cmds is not None:
+                try:
+                    if cmds.runTimeCommand(name, exists=True):
+                        cat = cmds.runTimeCommand(name, query=True, category=True) or ""
+                except Exception:
+                    pass
+            # Fall back to the mixin-derived default so every macro has a
+            # category even when unbound / no live runTimeCommand category.
+            bindings[name] = {
+                "key": live.get(name, ""),
+                "cat": cat or cls.macro_category(name),
+            }
+        return bindings
+
+    @classmethod
+    def apply_bindings(cls, bindings: Dict[str, dict]) -> None:
+        """Apply a binding set ``{name: {"key", "cat"}}``.
+
+        An entry with a falsy ``key`` clears that macro's hotkey instead of
+        setting one. ``set_macro`` remains the single low-level applier.
+        """
+        for name, spec in (bindings or {}).items():
+            if not isinstance(spec, dict):
+                continue
+            key = spec.get("key")
+            cat = spec.get("cat")
+            if not key:
+                cls.clear_hotkey(name)
+                continue
+            cls.set_macro(name, key=key, cat=cat)
+
+    @classmethod
+    def clear_hotkey(cls, name: str, key: Optional[str] = None) -> None:
+        """Unbind ``name``'s hotkey (the runtime command itself is kept).
+
+        When *key* is omitted it is resolved from the active/``default`` preset
+        so the correct chord is released.
+        """
+        if cmds is None:
+            return
+        if key is None:  # resolve the live key Maya currently has bound
+            try:
+                from mayatk.ui_utils.hotkey_collisions import live_hotkey_map
+
+                key = live_hotkey_map().get(name)
+            except Exception:
+                key = None
+        if not key:
+            return
+        ctl, alt, sht, k = cls._parse_key(key)
+        try:
+            cmds.hotkey(
+                keyShortcut=k, name="", releaseName="", ctl=ctl, alt=alt, sht=sht
+            )
+        except RuntimeError as error:
+            print(f"# Error: {__file__}: clear_hotkey({name}): {error} #")
+
+    @classmethod
+    def unset_macro(cls, name: str, key: Optional[str] = None) -> None:
+        """Clear ``name``'s hotkey and delete its (non-default) runtime command."""
+        cls.clear_hotkey(name, key=key)
+        if cmds is None:
+            return
+        try:
+            if cmds.runTimeCommand(name, exists=True) and not cmds.runTimeCommand(
+                name, query=True, default=True
+            ):
+                cmds.runTimeCommand(name, edit=True, delete=True)
+        except RuntimeError as error:
+            print(f"# Error: {__file__}: unset_macro({name}): {error} #")
+
+    @classmethod
+    def find_conflicts(cls, bindings: Dict[str, dict]) -> Dict[str, List[str]]:
+        """Return ``{normalized_key: [macro, ...]}`` for keys bound more than once."""
+        from collections import defaultdict
+
+        by_key: Dict[str, List[str]] = defaultdict(list)
+        for name, spec in (bindings or {}).items():
+            key = spec.get("key") if isinstance(spec, dict) else None
+            if key:
+                by_key[cls._normalize_key(key)].append(name)
+        return {k: v for k, v in by_key.items() if len(v) > 1}
+
+    # --- key-format helpers (pure string, DCC-free) -------------------
+
+    @staticmethod
+    def _parse_key(key: str) -> Tuple[bool, bool, bool, str]:
+        """Split a Maya key token into ``(ctl, alt, sht, key)``.
+
+        Modifiers (``ctl``/``alt``/``sht``) are matched case-insensitively; the
+        remaining token is the key itself (e.g. ``"i"``, ``"F3"``).
+        """
+        ctl = alt = sht = False
+        k = str(key)
+        for char in str(key).split("+"):
+            token = char.strip()
+            low = token.lower()
+            if low == "ctl":
+                ctl = True
+            elif low == "alt":
+                alt = True
+            elif low == "sht":
+                sht = True
+            else:
+                k = token
+        return ctl, alt, sht, k
+
+    @classmethod
+    def _normalize_key(cls, key: str) -> str:
+        """Canonical form of a key token (sorted modifiers, lowercased letter)."""
+        ctl, alt, sht, k = cls._parse_key(key)
+        present = {"ctl": ctl, "alt": alt, "sht": sht}
+        mods = [m for m in cls._MOD_ORDER if present[m]]
+        k = k.lower() if len(k) == 1 else k
+        return "+".join(mods + [k])
+
+    @classmethod
+    def qt_sequence_to_maya_key(cls, sequence: str) -> str:
+        """Convert a Qt key-sequence string (``"Ctrl+Shift+I"``) to a Maya token.
+
+        Returns ``""`` when *sequence* carries no non-modifier key.
+        """
+        if not sequence:
+            return ""
+        present = {"ctl": False, "alt": False, "sht": False}
+        key = None
+        for part in str(sequence).split("+"):
+            token = part.strip()
+            mod = cls._QT_MOD_MAP.get(token.lower())
+            if mod:
+                present[mod] = True
+            elif token:
+                key = token
+        if key is None:
+            return ""
+        if len(key) == 1:
+            key = key.lower()
+        mods = [m for m in cls._MOD_ORDER if present[m]]
+        return "+".join(mods + [key])
+
+    @classmethod
+    def maya_key_to_qt_sequence(cls, key: str) -> str:
+        """Convert a Maya key token (``"ctl+sht+i"``) to a Qt key-sequence string."""
+        if not key:
+            return ""
+        ctl, alt, sht, k = cls._parse_key(key)
+        seq: List[str] = []
+        if ctl:
+            seq.append("Ctrl")
+        if alt:
+            seq.append("Alt")
+        if sht:
+            seq.append("Shift")
+        seq.append(k.upper() if len(k) == 1 else k)
+        return "+".join(seq)
+
+    # --- preset persistence (PresetStore-backed, DCC-free) ------------
+
+    @classmethod
+    def _preset_store(cls) -> "ptk.PresetStore":
+        """Two-tier store: shipped ``macro_manager/presets`` + a writable user tier.
+
+        Resolves to the same files the UI's ``uitk.PresetManager`` uses (relative
+        ``preset_dir="mayatk/macro_manager"``), so headless and GUI share one
+        source of truth.
+        """
+        builtin_dir = os.path.join(
+            os.path.dirname(__file__), "macro_manager", "presets"
+        )
+        return ptk.PresetStore(
+            cls.PRESET_NAME, package=cls.PRESET_PACKAGE, builtin_dir=builtin_dir
+        )
+
+    @classmethod
+    def list_presets(cls) -> List[str]:
+        """Return all preset names (built-in + user, user shadows built-in)."""
+        return cls._preset_store().list()
+
+    @classmethod
+    def load_preset(cls, name: str) -> Dict[str, dict]:
+        """Return the binding set stored under *name* (``_meta`` stripped)."""
+        data = cls._preset_store().load(name)
+        return {k: v for k, v in data.items() if k != "_meta"}
+
+    @classmethod
+    def save_preset(
+        cls, name: str, bindings: Optional[Dict[str, dict]] = None
+    ) -> str:
+        """Save *bindings* (default: the current bindings) as user preset *name*.
+
+        Sets *name* as the active preset and returns the written path (as str).
+        """
+        if bindings is None:
+            bindings = cls.get_current_bindings()
+        data: Dict[str, object] = {"_meta": {"version": 1}}
+        data.update(bindings)
+        store = cls._preset_store()
+        path = store.save(name, data)
+        store.active = name
+        return str(path)
+
+    @classmethod
+    def delete_preset(cls, name: str) -> bool:
+        """Delete a *user* preset (built-ins are read-only). Returns success."""
+        return cls._preset_store().delete(name)
+
+    @classmethod
+    def get_active_preset(cls) -> Optional[str]:
+        """The last-selected/applied preset name, or ``None``."""
+        return cls._preset_store().active
+
+    @classmethod
+    def set_active_preset(cls, name: Optional[str]) -> None:
+        """Set (or clear, with ``None``) the active-preset pointer."""
+        cls._preset_store().active = name
+
+    @classmethod
+    def apply_saved_macros(cls, name: Optional[str] = None) -> None:
+        """Apply a saved preset/template's bindings to Maya on demand.
+
+        This is **not** a startup requirement — hotkeys set through the Macro
+        Manager are registered as non-default ``runTimeCommand`` + ``hotkey``
+        entries, which Maya persists and restores on its own. Use this to apply
+        a named template explicitly (e.g. the shipped ``default`` set) from the
+        UI or a pipeline.
+
+        Resolution order: explicit *name* -> the persisted active preset ->
+        the shipped ``default`` template. A stale active pointer falls back to
+        ``default``. Loading an explicit *name* makes it active.
+        """
+        store = cls._preset_store()
+        target = name or store.active or cls.DEFAULT_PRESET
+        try:
+            bindings = cls.load_preset(target)
+        except (KeyError, ValueError, OSError):
+            if target == cls.DEFAULT_PRESET:
+                return
+            try:
+                bindings = cls.load_preset(cls.DEFAULT_PRESET)
+            except (KeyError, ValueError, OSError):
+                return
+        cls.apply_bindings(bindings)
+        if name:
+            store.active = name
 
 
 class DisplayMacros:
@@ -290,7 +675,11 @@ class DisplayMacros:
 
     @staticmethod
     def m_toggle_visibility():
-        """Toggle Visibility"""
+        """Toggle visibility of the selected objects, keeping them selected.
+
+        Hides shown objects (and shows hidden ones) without clearing the
+        selection, so you can repeatedly flip the same set on and off.
+        """
         mel.eval("ToggleVisibilityAndKeepSelection")
 
     @staticmethod
@@ -470,7 +859,13 @@ class DisplayMacros:
     @staticmethod
     @CoreUtils.selected
     def m_frame(objects) -> None:
-        """Frame selected by a set amount with three toggle states."""
+        """Frame the selection, cycling zoom level on repeated presses.
+
+        Pressing the hotkey repeatedly steps through three progressively
+        tighter / looser fit factors, so one key both frames and fine-tunes
+        the framing. With nothing selected, frames all objects. Honors the
+        active component mask (vertex / edge / face) for component framing.
+        """
         # Initialise the MEL global variable used to track the toggle state.
         mel.eval('global int $toggleFrame_; if (!`exists "toggleFrame_"`) {$toggleFrame_=0;}')
         mode = cmds.selectMode(q=True, component=True)
@@ -595,7 +990,12 @@ class DisplayMacros:
 
     @staticmethod
     def m_material_override():
-        """Toggle Material Override"""
+        """Toggle the viewport's default-material override.
+
+        Replaces all assigned materials in the active viewport with Maya's flat
+        default material so you can read silhouette and form without texture or
+        shading distraction. Press again to restore the real materials.
+        """
         panel = UiUtils.get_model_panel(with_focus=True)
         if not panel:
             cmds.inViewMessage(
@@ -904,7 +1304,11 @@ class EditMacros:
 
     @staticmethod
     def m_multi_component() -> None:
-        """Multi-Component Selection."""
+        """Enable the multi-component selection mask.
+
+        Lets you select vertices, edges, and faces simultaneously without
+        switching component modes — useful for mixed-component operations.
+        """
         mel.eval("SelectMultiComponentMask")
         cmds.inViewMessage(
             statusMessage="<hl>Multi-Component Selection Mode</hl><br>Mask is now <hl>ON</hl>.",
@@ -915,7 +1319,12 @@ class EditMacros:
     @staticmethod
     @CoreUtils.selected
     def m_merge_vertices(objects, tolerance=0.001) -> None:
-        """Merge Vertices."""
+        """Merge vertices within a small distance tolerance.
+
+        In component mode, merges the selected vertices (or collapses selected
+        edges / faces to their center). In object mode, merges every coincident
+        vertex on each selected mesh. Tolerance defaults to 0.001.
+        """
         objects = cmds.ls(objects, objectsOnly=True)
 
         if not objects:

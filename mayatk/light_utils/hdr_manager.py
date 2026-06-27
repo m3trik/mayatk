@@ -1226,21 +1226,27 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self.manager.rotation = value
 
     def spn_intensity(self, value) -> None:
+        """Set the skydome's HDR intensity (brightness multiplier)."""
         self.manager.intensity = value
 
     def spn_exposure(self, value) -> None:
+        """Set the skydome's exposure (in stops)."""
         self.manager.exposure = value
 
     def spn_resolution(self, value) -> None:
+        """Set the baked skydome resolution."""
         self.manager.resolution = value
 
     def spn_samples(self, value) -> None:
+        """Set the skydome's render sample count."""
         self.manager.samples = value
 
     def spn_diffuse(self, value) -> None:
+        """Set the skydome's diffuse contribution."""
         self.manager.diffuse = value
 
     def spn_specular(self, value) -> None:
+        """Set the skydome's specular contribution."""
         self.manager.specular = value
 
     def _validate_or_warn(self, path: str, *, dialog: bool = True) -> bool:
@@ -1261,27 +1267,19 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             return True
         name = os.path.basename(path)
         self._notify(
-            f"{name} isn't fully downloaded ({reason})",
+            f"{name} is incomplete on disk ({reason})",
             level="error",
             detail=(
                 f"HDR not loaded — only part of the file is on disk ({reason}):\n"
                 f"{path}\n\n"
-                "This is almost always an online-only cloud file (Dropbox / "
-                "OneDrive) that hasn't finished syncing — Maya's viewport would "
-                "crash trying to load it. In Explorer, right-click it → 'Make "
-                "available offline' / 'Always keep on this device', wait for the "
-                "download to finish, then retry. If the file is already fully "
-                "local, it's truncated/corrupt — re-export or re-download it."
+                "Common causes: it's a cloud file (Dropbox / OneDrive) still syncing, a download or export that was interrupted, or the disk filled up mid-write. If it's a cloud file, make sure your sync app is running and let it finish downloading (right-click -> 'Make available offline' / 'Always keep on this device'); otherwise free up disk space and re-export or re-download it. Then retry."
             ),
             dialog=dialog,
             # Digestible popup — filename + the fix, no raw path (that's logged
             # to the console for anyone who needs it).
             dialog_text=(
-                f"{name} isn't fully downloaded ({reason}).\n\n"
-                "It's almost certainly an online-only cloud file (Dropbox / "
-                "OneDrive) that hasn't finished syncing. In Explorer, "
-                "right-click it → 'Make available offline', wait for it to "
-                "download, then retry.\n\n(Full path in the Script Editor.)"
+                f"{name} is incomplete on disk ({reason}).\n\n"
+                "Common causes: a cloud file (Dropbox / OneDrive) still syncing, an interrupted download or export, or a full disk. If it's a cloud file, make sure your sync app is running and it finishes downloading; otherwise free up space and re-export or re-download it, then retry.\n\n(Full path in the Script Editor.)"
             ),
         )
         return False
@@ -1600,6 +1598,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     # ------------------------------------------------------------------
 
     def ctx_select_skydome(self) -> None:
+        """Select the skydome (HDR environment) node in the scene."""
         node = self.manager.hdr_env
         if not node:
             self._notify("No skydome in scene.", level="warning")
@@ -1608,6 +1607,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self._notify(f"Selected: {node}", level="success")
 
     def ctx_select_transform(self) -> None:
+        """Select the skydome's transform node."""
         node = self.manager.hdr_env_transform
         if not node:
             self._notify("No skydome transform in scene.", level="warning")
@@ -1616,6 +1616,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self._notify(f"Selected: {node}", level="success")
 
     def ctx_select_file_node(self) -> None:
+        """Select the file node feeding the skydome's HDR texture."""
         node = self.manager.hdr_file_node
         if not node:
             self._notify("No file node connected to the skydome.", level="warning")
@@ -1624,6 +1625,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self._notify(f"Selected: {node}", level="success")
 
     def ctx_reveal_in_explorer(self) -> None:
+        """Reveal the skydome's HDR texture file in the system file explorer."""
         path = self.manager.hdr_file_path
         if path and os.path.exists(path):
             subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])

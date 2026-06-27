@@ -464,6 +464,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         )
 
     def b004(self, widget) -> None:
+        """Clean up blendshape targets whose topology doesn't match the base mesh."""
         if not self._validate_setup():
             self._set_status("Setup not complete — Create or Load first.")
             return
@@ -571,6 +572,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             )
 
     def b008(self, widget) -> None:
+        """Finalize the blendshape setup for export (scene cleanup, bake history, hide source)."""
         if not self._validate_setup():
             self._set_status("Setup not complete — Create or Load first.")
             return

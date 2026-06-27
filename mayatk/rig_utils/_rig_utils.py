@@ -1119,7 +1119,7 @@ class RigUtils(ptk.HelpMixin):
         meshes: Optional[List[str]] = None,
         temp_dir: Optional[str] = None,
         inherits_transform: Optional[bool] = None,
-    ) -> None:
+    ) -> Dict[str, list]:
         """Rebinds skinClusters on the given meshes, preserving weights, bind pose, and transform lock state.
 
         Parameters:
@@ -1129,6 +1129,13 @@ class RigUtils(ptk.HelpMixin):
                 - True: explicitly sets inheritsTransform = True
                 - False: explicitly sets inheritsTransform = False
                 - None: preserves the original inheritsTransform value
+
+        Returns:
+            dict: Per-object outcome summary categorizing every resolved input:
+                - "rebound" (List[str]): transforms whose skinCluster was rebound.
+                - "no_skin_cluster" (List[str]): mesh transforms that had no skinCluster.
+                - "wrong_type" (List[str]): inputs that weren't a mesh transform.
+                - "failed" (List[Tuple[str, str]]): (name, error) for objects that raised.
         """
         import os
 
@@ -1138,18 +1145,40 @@ class RigUtils(ptk.HelpMixin):
             )
         os.makedirs(temp_dir, exist_ok=True)
 
-        if meshes is None:
-            mesh_shapes = cmds.ls(type="mesh", noIntermediate=True) or []
-        else:
-            mesh_shapes = []
-            for m in meshes:
-                if cmds.objectType(m, isAType="transform"):
-                    shapes = NodeUtils.get_shapes(m, no_intermediate=True)
-                    if shapes:
-                        mesh_shapes.append(shapes[0])
+        result = {
+            "rebound": [],
+            "no_skin_cluster": [],
+            "wrong_type": [],
+            "failed": [],
+        }
 
-        for shape in mesh_shapes:
-            transform_name = "<unknown>"
+        # Resolve inputs to (shape, transform, label) triples, recording
+        # invalid inputs so the caller can distinguish "wrong type" from
+        # "no skinCluster".
+        shape_inputs = []  # list of (mesh_shape, transform, input_label)
+        if meshes is None:
+            for shape in cmds.ls(type="mesh", noIntermediate=True) or []:
+                transform = NodeUtils.get_parent(shape)
+                if transform:
+                    shape_inputs.append((shape, transform, leaf_name(transform)))
+        else:
+            for m in meshes:
+                label = leaf_name(m)
+                if not cmds.objectType(m, isAType="transform"):
+                    result["wrong_type"].append(label)
+                    print(f"[SKIP] Not a mesh transform: {label}")
+                    continue
+                shapes = NodeUtils.get_shapes(m, no_intermediate=True)
+                mesh_shapes = [s for s in shapes if cmds.nodeType(s) == "mesh"]
+                if not mesh_shapes:
+                    result["wrong_type"].append(label)
+                    print(f"[SKIP] No mesh shape: {label}")
+                    continue
+                # ``m`` is the selected transform; use it directly so instanced
+                # shapes operate on the chosen parent, not an arbitrary one.
+                shape_inputs.append((mesh_shapes[0], m, label))
+
+        for shape, transform, label in shape_inputs:
             try:
                 # ``cmds.listHistory`` doesn't accept ``type=``;
                 # filter the result post-call.
@@ -1158,15 +1187,12 @@ class RigUtils(ptk.HelpMixin):
                     h for h in history if cmds.nodeType(h) == "skinCluster"
                 ]
                 if not skin_clusters:
+                    result["no_skin_cluster"].append(label)
+                    print(f"[SKIP] No skinCluster: {label}")
                     continue
 
                 skin_cluster = skin_clusters[0]
-                transform = NodeUtils.get_parent(shape)
-                if transform is None:
-                    continue
-                transform_name = leaf_name(transform)
-
-                print(f"Processing: {skin_cluster} on {transform_name}")
+                print(f"Processing: {skin_cluster} on {label}")
 
                 inherits_plug = f"{transform}.inheritsTransform"
 
@@ -1188,7 +1214,7 @@ class RigUtils(ptk.HelpMixin):
                     )
 
                 # Export weights
-                weight_file = os.path.join(temp_dir, f"{transform_name}_weights.xml")
+                weight_file = os.path.join(temp_dir, f"{label}_weights.xml")
                 cmds.deformerWeights(
                     os.path.basename(weight_file),
                     export=True,
@@ -1246,10 +1272,22 @@ class RigUtils(ptk.HelpMixin):
                 # Restore transform lock state
                 Attributes.set_lock_state(transform, lock_state=lock_state)
 
-                print(f"[OK] Rebound: {transform_name}")
+                result["rebound"].append(label)
+                print(f"[OK] Rebound: {label}")
 
             except Exception as e:
-                print(f"[FAIL] Failed: {transform_name} -> {e}")
+                result["failed"].append((label, str(e)))
+                print(f"[FAIL] Failed: {label} -> {e}")
+
+        # Detailed one-line console summary of the whole run.
+        print(
+            "[rebind_skin_clusters] "
+            f"rebound={len(result['rebound'])}, "
+            f"no_skin_cluster={len(result['no_skin_cluster'])}, "
+            f"wrong_type={len(result['wrong_type'])}, "
+            f"failed={len(result['failed'])}"
+        )
+        return result
 
 
 # -----------------------------------------------------------------------------
