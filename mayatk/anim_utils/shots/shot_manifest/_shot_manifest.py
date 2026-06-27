@@ -12,7 +12,12 @@ import re
 from dataclasses import dataclass, field, fields
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
+from pythontk import SchemaSpec, spec_field
+
 from mayatk.anim_utils.shots._shots import ShotStore
+
+# Imported at module scope (not deferred like the other AudioUtils uses) so tests
+# can patch ``_shot_manifest.AudioUtils`` as the seam for ``_default_audio_exists``.
 from mayatk.audio_utils._audio_utils import AudioUtils
 
 log = logging.getLogger(__name__)
@@ -515,25 +520,53 @@ def detect_behaviors(text: str) -> List[str]:
 
 
 @dataclass
-class ColumnMap:
+class ColumnMap(SchemaSpec):
     """Maps logical fields to CSV header names (case-insensitive).
 
     Each field is a tuple of acceptable header aliases. The parser reads
     the header row and resolves names to column indices automatically.
 
-    Serialisable via :meth:`to_dict` / :meth:`from_dict` so instances
-    can be stored as preset metadata.
+    A :class:`~pythontk.SchemaSpec`, so the ``columns`` block of a mapping
+    file is self-validating and self-documenting; serialisable via
+    :meth:`to_dict` / :meth:`from_dict` (tuple ⇄ list) so instances round-trip
+    through JSON.
     """
 
-    step_id: Tuple[str, ...] = ("Step",)
-    description: Tuple[str, ...] = ("Step Contents", "Contents")
-    assets: Tuple[str, ...] = ("Asset Names", "Asset")
-    audio: Tuple[str, ...] = ("Voice Support", "Voice")
-    exclude_steps: Tuple[str, ...] = ("SETUP",)
-    exclude_values: Dict[str, Tuple[str, ...]] = field(
-        default_factory=lambda: {"assets": ("N/A",)}
+    step_id: Tuple[str, ...] = spec_field(
+        help="Header alias(es) for the step-ID column.",
+        example=["Step"],
+        default=("Step",),
     )
-    metadata_pass: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
+    description: Tuple[str, ...] = spec_field(
+        help="Header alias(es) for the step description / contents column.",
+        example=["Step Contents", "Contents"],
+        default=("Step Contents", "Contents"),
+    )
+    assets: Tuple[str, ...] = spec_field(
+        help="Header alias(es) for the assets / object-names column.",
+        example=["Asset Names", "Asset"],
+        default=("Asset Names", "Asset"),
+    )
+    audio: Tuple[str, ...] = spec_field(
+        help="Header alias(es) for the audio / voice-over column (optional).",
+        example=["Voice Support", "Voice"],
+        default=("Voice Support", "Voice"),
+    )
+    exclude_steps: Tuple[str, ...] = spec_field(
+        help="Step IDs to skip entirely (e.g. setup rows).",
+        example=["SETUP"],
+        default=("SETUP",),
+    )
+    exclude_values: Dict[str, Tuple[str, ...]] = spec_field(
+        help='Per-field cell values to treat as empty, e.g. {"assets": ["N/A"]}.',
+        example={"assets": ["N/A"]},
+        default_factory=lambda: {"assets": ("N/A",)},
+    )
+    metadata_pass: Dict[str, Tuple[str, ...]] = spec_field(
+        help='Extra columns copied into shot metadata: {key: [header aliases]}.',
+        example={"priority": ["Priority"]},
+        default_factory=dict,
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialise to a JSON-safe dict (tuples â†’ lists)."""

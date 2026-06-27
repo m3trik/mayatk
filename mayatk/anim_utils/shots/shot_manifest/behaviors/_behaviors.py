@@ -10,6 +10,10 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 
+from pythontk import Codec, TemplateSet
+
+from mayatk.anim_utils.shots.shot_manifest.behaviors._spec import BehaviorSpec
+
 try:
     import maya.cmds as cmds
 except ImportError:
@@ -21,6 +25,40 @@ except ImportError:
 log = logging.getLogger(__name__.rpartition(".")[0])
 
 _BEHAVIORS_DIR = Path(__file__).parent
+
+
+def _yaml_codec() -> Codec:
+    """YAML codec for the behavior store (lazy import keeps pythontk YAML-free)."""
+    try:
+        import yaml
+    except ImportError as exc:
+        raise ImportError("PyYAML is required for behavior templates") from exc
+
+    return Codec(
+        ext=".yaml",
+        load=yaml.safe_load,
+        dump=lambda data: yaml.safe_dump(data, sort_keys=False),
+    )
+
+
+@functools.lru_cache(maxsize=None)
+def templates() -> TemplateSet:
+    """The shared :class:`~pythontk.TemplateSet` backing behavior discovery.
+
+    A cached singleton (built on first use, so importing this module touches
+    neither the filesystem nor PyYAML). Built-in behaviors in
+    :data:`_BEHAVIORS_DIR` (read-only) plus the user's own under
+    ``user_config_root()/mayatk/shot_manifest_behaviors/`` (a user file shadows a
+    built-in of the same name) — the same machinery the CSV mappings use, so both
+    extend, validate, and document identically.
+    """
+    return TemplateSet(
+        "shot_manifest_behaviors",
+        BehaviorSpec,
+        "mayatk",
+        builtin_dir=_BEHAVIORS_DIR,
+        codec=_yaml_codec(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -37,8 +75,9 @@ def load_behavior(name: str, search_path: Optional[Path] = None) -> Dict[str, An
 
     Parameters:
         name: Template name without extension (e.g. ``"fade_in"``).
-        search_path: Directory to search. Defaults to the built-in
-            ``behaviors/`` directory next to this module.
+        search_path: Directory to search. When given, only that directory is
+            used (back-compat / tests). When omitted, the two-tier set is used:
+            a user template shadows a built-in of the same name.
 
     Returns:
         Parsed YAML dict.
@@ -46,12 +85,34 @@ def load_behavior(name: str, search_path: Optional[Path] = None) -> Dict[str, An
     Raises:
         FileNotFoundError: If the template file does not exist.
     """
-    return _load_behavior_cached(name, search_path or _BEHAVIORS_DIR)
+    if search_path is not None:
+        return _load_behavior_cached(name, Path(search_path))
+    if templates().source(name) is None:
+        raise FileNotFoundError(f"Behavior template not found: {name}")
+    return _load_behavior_validated(name)
+
+
+@functools.lru_cache(maxsize=64)
+def _load_behavior_validated(name: str) -> Dict[str, Any]:
+    """Two-tier store load + schema-validate, cached per name.
+
+    Loads through the :class:`~pythontk.TemplateSet` store — its codec and
+    sanitized path match the ``source``/``names`` lookup, so there's no
+    hand-rolled re-read or raw-name mismatch — then validates like
+    :func:`load_mapping`: hard errors raise ``SchemaError`` with a precise
+    message; unknown keys are logged, not fatal.  Cached so a build that
+    re-requests the same behavior once per object reads + validates only once.
+    """
+    data = templates().raw(name)
+    BehaviorSpec.validate(data).raise_or_warn(prefix=f"behavior {name!r}: ", logger=log)
+    return data
 
 
 @functools.lru_cache(maxsize=32)
 def _load_behavior_cached(name: str, base: Path) -> Dict[str, Any]:
-    """Internal cached loader — arguments must be hashable."""
+    """Single-directory cached loader (explicit ``search_path`` / back-compat).
+
+    Arguments must be hashable."""
     try:
         import yaml
     except ImportError as exc:
@@ -69,26 +130,40 @@ def list_behaviors(
     """Return stem names of all available behavior templates.
 
     Parameters:
-        search_path: Directory to scan. Defaults to the built-in
-            ``behaviors/`` directory.
+        search_path: Directory to scan. When omitted, the two-tier set is used
+            (built-in + user templates, unioned). When given, only that folder
+            is scanned (back-compat / tests).
         kind: When provided, only return behaviors whose ``kind`` list
             includes this value (e.g. ``"scene"`` or ``"audio"``).
             Templates without a ``kind`` key default to ``["scene"]``.
     """
-    base = search_path or _BEHAVIORS_DIR
-    if not base.is_dir():
-        return []
-    names = sorted(p.stem for p in base.glob("*.yaml"))
+    if search_path is not None:
+        base = Path(search_path)
+        names = sorted(p.stem for p in base.glob("*.yaml")) if base.is_dir() else []
+
+        def _load(n: str) -> Dict[str, Any]:
+            return load_behavior(n, base)
+
+    else:
+        names = templates().names()
+
+        def _load(n: str) -> Dict[str, Any]:
+            return load_behavior(n)
+
     if kind is None:
         return names
     result = []
     for name in names:
         try:
-            tmpl = load_behavior(name, base)
-        except FileNotFoundError:
+            tmpl = _load(name)
+        except (FileNotFoundError, ValueError) as exc:
+            # A missing or invalid template (load_behavior now schema-validates,
+            # raising SchemaError — a ValueError — on a bad one) must not hide
+            # every valid behavior from the picker. Skip it here; validation
+            # still raises at apply time so the user gets a precise error then.
+            log.warning("Skipping behavior %r in listing: %s", name, exc)
             continue
-        allowed = tmpl.get("kind", ["scene"])
-        if kind in allowed:
+        if kind in tmpl.get("kind", ["scene"]):
             result.append(name)
     return result
 

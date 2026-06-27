@@ -2012,7 +2012,7 @@
           "kind": "function",
           "signature": "(step: BuilderStep, initial_shot_length: float, fit_mode: FitMode, fps: float) -> Tuple[float, float, float]",
           "summary": "Compute final shot duration for *step* under the given fit policy.",
-          "line": 185,
+          "line": 190,
           "deprecated": false
         },
         {
@@ -2021,7 +2021,7 @@
           "kind": "function",
           "signature": "(obj: BuilderObject, shot_start: float, shot_end: float, fps: float) -> 'PlannedObject'",
           "summary": "Materialise a :class:`PlannedObject` with absolute keyframes.",
-          "line": 302,
+          "line": 307,
           "deprecated": false
         },
         {
@@ -2030,7 +2030,7 @@
           "kind": "function",
           "signature": "(text: str) -> List[str]",
           "summary": "Return behavior names inferred from descriptive *text*.",
-          "line": 499,
+          "line": 504,
           "deprecated": false
         },
         {
@@ -2039,7 +2039,7 @@
           "kind": "function",
           "signature": "(filepath: str, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> List[BuilderStep]",
           "summary": "Parse a structured CSV into a list of :class:`BuilderStep`.",
-          "line": 636,
+          "line": 669,
           "deprecated": false
         }
       ],
@@ -2047,14 +2047,14 @@
         {
           "name": "BuilderObject",
           "summary": "One asset within a step.",
-          "line": 27,
+          "line": 32,
           "bases": [],
           "members": []
         },
         {
           "name": "BuilderStep",
           "summary": "One step (= one future sequencer shot).",
-          "line": 37,
+          "line": 42,
           "bases": [],
           "members": [
             {
@@ -2063,7 +2063,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Text shown in the tree Description column.",
-              "line": 48,
+              "line": 53,
               "deprecated": false
             },
             {
@@ -2072,7 +2072,7 @@
               "kind": "classmethod",
               "signature": "(cls, candidates: List[Dict]) -> Tuple[List['BuilderStep'], Dict[str, Tuple[float, float]]]",
               "summary": "Convert detection candidates to BuilderSteps + pre-filled ranges.",
-              "line": 53,
+              "line": 58,
               "deprecated": false
             }
           ]
@@ -2080,42 +2080,42 @@
         {
           "name": "PlannedShot",
           "summary": "Immutable build instruction computed before any store mutation.",
-          "line": 106,
+          "line": 111,
           "bases": [],
           "members": []
         },
         {
           "name": "PlannedKey",
           "summary": "One keyframe to be written during commit.",
-          "line": 142,
+          "line": 147,
           "bases": [],
           "members": []
         },
         {
           "name": "PlannedObject",
           "summary": "Per-object build instruction with fully-resolved keyframes.",
-          "line": 154,
+          "line": 159,
           "bases": [],
           "members": []
         },
         {
           "name": "BuildPlan",
           "summary": "Complete plan for a build pass.",
-          "line": 171,
+          "line": 176,
           "bases": [],
           "members": []
         },
         {
           "name": "ObjectStatus",
           "summary": "Assessment result for one object within a step.",
-          "line": 437,
+          "line": 442,
           "bases": [],
           "members": []
         },
         {
           "name": "StepStatus",
           "summary": "Assessment result for one step.",
-          "line": 453,
+          "line": 458,
           "bases": [],
           "members": [
             {
@@ -2124,7 +2124,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Worst-of-children rollup.",
-              "line": 464,
+              "line": 469,
               "deprecated": false
             },
             {
@@ -2133,7 +2133,7 @@
               "kind": "property",
               "signature": "(self) -> int",
               "summary": "",
-              "line": 481,
+              "line": 486,
               "deprecated": false
             },
             {
@@ -2142,7 +2142,7 @@
               "kind": "property",
               "signature": "(self) -> int",
               "summary": "",
-              "line": 485,
+              "line": 490,
               "deprecated": false
             }
           ]
@@ -2150,8 +2150,10 @@
         {
           "name": "ColumnMap",
           "summary": "Maps logical fields to CSV header names (case-insensitive).",
-          "line": 518,
-          "bases": [],
+          "line": 523,
+          "bases": [
+            "SchemaSpec"
+          ],
           "members": [
             {
               "name": "to_dict",
@@ -2159,7 +2161,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[str, Any]",
               "summary": "Serialise to a JSON-safe dict (tuples â†’ lists).",
-              "line": 538,
+              "line": 571,
               "deprecated": false
             },
             {
@@ -2168,7 +2170,7 @@
               "kind": "classmethod",
               "signature": "(cls, data: Dict[str, Any]) -> 'ColumnMap'",
               "summary": "Reconstruct from a dict produced by :meth:`to_dict`.",
-              "line": 552,
+              "line": 585,
               "deprecated": false
             }
           ]
@@ -2176,7 +2178,7 @@
         {
           "name": "ShotManifest",
           "summary": "Creates shot store entries from parsed steps and applies behaviors.",
-          "line": 784,
+          "line": 817,
           "bases": [],
           "members": [
             {
@@ -2185,7 +2187,7 @@
               "kind": "method",
               "signature": "(self, steps: List[BuilderStep], apply_behaviors: bool = True, ranges: Optional[Dict[str, Tuple[float, float]]] = None, remove_missing: bool = True, zero_duration_fallback: bool = False, fit_mode: FitMode = DEFAULT_FIT_MODE, initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH) -> Tuple[Dict[str, str], Dict[str, list], List[StepStatus]]",
               "summary": "Full build pipeline: plan -> commit -> apply behaviors -> assess.",
-              "line": 828,
+              "line": 861,
               "deprecated": false
             },
             {
@@ -2194,7 +2196,7 @@
               "kind": "staticmethod",
               "signature": "(tracks: Optional[List[str]] = None) -> Dict[str, List[str]]",
               "summary": "Reconcile managed DG audio nodes with keyed track state.",
-              "line": 891,
+              "line": 924,
               "deprecated": false
             },
             {
@@ -2203,7 +2205,7 @@
               "kind": "method",
               "signature": "(self, steps: List[BuilderStep], ranges: Optional[Dict[str, Tuple[float, float]]] = None, remove_missing: bool = True, zero_duration_fallback: bool = False, fit_mode: FitMode = DEFAULT_FIT_MODE, initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH) -> Dict[str, str]",
               "summary": "Sync parsed steps to the ShotStore (data only, no behaviors).",
-              "line": 917,
+              "line": 950,
               "deprecated": false
             },
             {
@@ -2212,7 +2214,7 @@
               "kind": "method",
               "signature": "(self, steps: List[BuilderStep], ranges: Optional[Dict[str, Tuple[float, float]]] = None, remove_missing: bool = True, zero_duration_fallback: bool = False, fit_mode: FitMode = DEFAULT_FIT_MODE, initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH) -> BuildPlan",
               "summary": "Return a :class:`BuildPlan` without committing anything.",
-              "line": 1354,
+              "line": 1387,
               "deprecated": false
             },
             {
@@ -2221,7 +2223,7 @@
               "kind": "method",
               "signature": "(self, steps: List[BuilderStep], exists_fn: Optional[Callable[[str], bool]] = None, verify_fn: Optional[Callable] = None, keyframe_range_fn: Optional[Callable[[str], Optional[Tuple[float, float]]]] = None, audio_exists_fn: Optional[Callable[[str], bool]] = None, skip_scene_discovery: bool = False) -> List[StepStatus]",
               "summary": "Compare parsed steps against the current store state.",
-              "line": 1387,
+              "line": 1420,
               "deprecated": false
             },
             {
@@ -2230,7 +2232,7 @@
               "kind": "staticmethod",
               "signature": "(filepath: str, store: Optional[ShotStore] = None, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> Tuple['ShotManifest', List[BuilderStep]]",
               "summary": "Convenience: parse a CSV and return a ready-to-build engine.",
-              "line": 1744,
+              "line": 1777,
               "deprecated": false
             }
           ]
@@ -2242,12 +2244,21 @@
       "summary": "Behaviors — load and apply YAML keying recipes.",
       "functions": [
         {
+          "name": "templates",
+          "qualname": "templates",
+          "kind": "function",
+          "signature": "() -> TemplateSet",
+          "summary": "The shared :class:`~pythontk.TemplateSet` backing behavior discovery.",
+          "line": 45,
+          "deprecated": false
+        },
+        {
           "name": "load_behavior",
           "qualname": "load_behavior",
           "kind": "function",
           "signature": "(name: str, search_path: Optional[Path] = None) -> Dict[str, Any]",
           "summary": "Load a YAML behavior template by stem name.",
-          "line": 31,
+          "line": 69,
           "deprecated": false
         },
         {
@@ -2256,7 +2267,7 @@
           "kind": "function",
           "signature": "(search_path: Optional[Path] = None, kind: Optional[str] = None) -> List[str]",
           "summary": "Return stem names of all available behavior templates.",
-          "line": 66,
+          "line": 127,
           "deprecated": false
         },
         {
@@ -2265,7 +2276,7 @@
           "kind": "function",
           "signature": "(block_def: Dict, start: float, end: float) -> List[Dict[str, Any]]",
           "summary": "Resolve an ``in`` or ``out`` block to absolute keyframe dicts.",
-          "line": 101,
+          "line": 171,
           "deprecated": false
         },
         {
@@ -2274,7 +2285,7 @@
           "kind": "function",
           "signature": "(obj: str, behavior_name: str, start: float, end: float, attrs: Optional[List[str]] = None, search_path: Optional[Path] = None, source_path: str = '', anchor_override: Optional[str] = None) -> None",
           "summary": "Apply a named behavior template to an object over a time range.",
-          "line": 152,
+          "line": 222,
           "deprecated": false
         },
         {
@@ -2283,7 +2294,7 @@
           "kind": "function",
           "signature": "(obj: str, behavior_name: str, start: float, end: float, search_path: Optional[Path] = None, keyframe_fn: Optional[Any] = None) -> bool",
           "summary": "Check whether expected behavior keyframes exist on an object.",
-          "line": 294,
+          "line": 364,
           "deprecated": false
         },
         {
@@ -2292,7 +2303,7 @@
           "kind": "function",
           "signature": "(obj: str, start: float, end: float, source_path: str = '') -> None",
           "summary": "Author start/stop keys for an audio track over *(start, end)*.",
-          "line": 438,
+          "line": 508,
           "deprecated": false
         },
         {
@@ -2301,7 +2312,7 @@
           "kind": "function",
           "signature": "(behavior_entries: List[Dict[str, str]], fallback: float = 30, fps: Optional[float] = None) -> float",
           "summary": "Derive duration from the behavior templates referenced in *behavior_entries*.",
-          "line": 519,
+          "line": 589,
           "deprecated": false
         },
         {
@@ -2310,11 +2321,64 @@
           "kind": "function",
           "signature": "(shots: list, apply_fn, exists_fn=None, has_keys_fn=None, store=None) -> Dict[str, list]",
           "summary": "Apply declared behaviors from shot metadata to Maya objects.",
-          "line": 647,
+          "line": 717,
           "deprecated": false
         }
       ],
       "classes": []
+    },
+    {
+      "relpath": "anim_utils/shots/shot_manifest/behaviors/_spec.py",
+      "summary": "Schema for a *behavior* template file, defined as a dataclass.",
+      "functions": [
+        {
+          "name": "validate_duration",
+          "qualname": "validate_duration",
+          "kind": "function",
+          "signature": "(value: Any) -> List[str]",
+          "summary": "``duration`` is a frame count or the literal ``\"from_source\"``.",
+          "line": 28,
+          "deprecated": false
+        },
+        {
+          "name": "validate_verify",
+          "qualname": "validate_verify",
+          "kind": "function",
+          "signature": "(value: Any) -> List[str]",
+          "summary": "",
+          "line": 37,
+          "deprecated": false
+        },
+        {
+          "name": "validate_attributes",
+          "qualname": "validate_attributes",
+          "kind": "function",
+          "signature": "(value: Any) -> List[str]",
+          "summary": "``attributes`` = {attr: {in?/out?: {offset,duration,values,anchor,tangent}}}.",
+          "line": 46,
+          "deprecated": false
+        },
+        {
+          "name": "format_markdown",
+          "qualname": "format_markdown",
+          "kind": "function",
+          "signature": "() -> str",
+          "summary": "Generate the full ``BEHAVIOR_FORMAT.md`` reference from the schema SSoT.",
+          "line": 110,
+          "deprecated": false
+        }
+      ],
+      "classes": [
+        {
+          "name": "BehaviorSpec",
+          "summary": "Schema for one behavior template (see ``BEHAVIOR_FORMAT.md``).",
+          "line": 68,
+          "bases": [
+            "SchemaSpec"
+          ],
+          "members": []
+        }
+      ]
     },
     {
       "relpath": "anim_utils/shots/shot_manifest/manifest_data.py",
@@ -2391,12 +2455,21 @@
       "summary": "CSV mapping resolver — interprets JSON mapping files.",
       "functions": [
         {
+          "name": "templates",
+          "qualname": "templates",
+          "kind": "function",
+          "signature": "() -> TemplateSet",
+          "summary": "The shared :class:`~pythontk.TemplateSet` backing mapping discovery.",
+          "line": 80,
+          "deprecated": false
+        },
+        {
           "name": "discover",
           "qualname": "discover",
           "kind": "function",
           "signature": "(directory: Optional[str] = None) -> List[str]",
-          "summary": "List available mapping names (without ``.json``) in *directory*.",
-          "line": 79,
+          "summary": "List available mapping names (without ``.json``).",
+          "line": 103,
           "deprecated": false
         },
         {
@@ -2404,8 +2477,8 @@
           "qualname": "load_mapping",
           "kind": "function",
           "signature": "(name: str, directory: Optional[str] = None) -> Dict[str, Any]",
-          "summary": "Read a mapping JSON by *name* and return the parsed dict.",
-          "line": 95,
+          "summary": "Read a mapping JSON by *name*, validate it, and return the parsed dict.",
+          "line": 126,
           "deprecated": false
         },
         {
@@ -2414,11 +2487,62 @@
           "kind": "function",
           "signature": "(csv_path: str, mapping: Optional[Dict[str, Any]] = None, *, name: Optional[str] = None, directory: Optional[str] = None) -> List[BuilderStep]",
           "summary": "Parse a CSV through a mapping and return fully resolved steps.",
-          "line": 128,
+          "line": 175,
           "deprecated": false
         }
       ],
       "classes": []
+    },
+    {
+      "relpath": "anim_utils/shots/shot_manifest/mapping/_spec.py",
+      "summary": "Schema for a CSV *mapping* file, defined as a dataclass.",
+      "functions": [
+        {
+          "name": "validate_audio_resolve",
+          "qualname": "validate_audio_resolve",
+          "kind": "function",
+          "signature": "(value: Any) -> List[str]",
+          "summary": "Validate the polymorphic ``audio_resolve`` block.",
+          "line": 76,
+          "deprecated": false
+        },
+        {
+          "name": "validate_default_behaviors",
+          "qualname": "validate_default_behaviors",
+          "kind": "function",
+          "signature": "(value: Any) -> List[str]",
+          "summary": "Validate the ``default_behaviors`` block ({kind: [behavior names]}).",
+          "line": 89,
+          "deprecated": false
+        },
+        {
+          "name": "format_markdown",
+          "qualname": "format_markdown",
+          "kind": "function",
+          "signature": "() -> str",
+          "summary": "Generate the full ``MAPPING_FORMAT.md`` reference from the schema SSoT.",
+          "line": 123,
+          "deprecated": false
+        }
+      ],
+      "classes": [
+        {
+          "name": "AudioMethod",
+          "summary": "Descriptor for one ``audio_resolve`` strategy (drives validate/docs).",
+          "line": 28,
+          "bases": [],
+          "members": []
+        },
+        {
+          "name": "MappingSpec",
+          "summary": "Schema for one CSV-mapping file (see ``MAPPING_FORMAT.md``).",
+          "line": 101,
+          "bases": [
+            "SchemaSpec"
+          ],
+          "members": []
+        }
+      ]
     },
     {
       "relpath": "anim_utils/shots/shot_manifest/range_resolver.py",
@@ -2474,7 +2598,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open a file dialog and load the selected CSV.",
-              "line": 1278,
+              "line": 1432,
               "deprecated": false
             },
             {
@@ -2483,7 +2607,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Build or update shots in the store from loaded steps.",
-              "line": 1473,
+              "line": 1627,
               "deprecated": false
             },
             {
@@ -2492,7 +2616,7 @@
               "kind": "method",
               "signature": "(self, skip_key_check: bool = False) -> None",
               "summary": "Compare CSV steps against the live Maya shots and color the tree.",
-              "line": 1677,
+              "line": 1831,
               "deprecated": false
             }
           ]
@@ -2500,7 +2624,7 @@
         {
           "name": "ShotManifestSlots",
           "summary": "Switchboard slot class â€” routes UI events to the controller.",
-          "line": 1772,
+          "line": 1926,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -2511,7 +2635,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Header menu is configured once in controller.__init__.",
-              "line": 1785,
+              "line": 1939,
               "deprecated": false
             },
             {
@@ -2520,7 +2644,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Expand all step rows that have missing objects or behaviors.",
-              "line": 1789,
+              "line": 1943,
               "deprecated": false
             },
             {
@@ -2529,7 +2653,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Expand all step rows that have scene-discovered extra objects.",
-              "line": 1793,
+              "line": 1947,
               "deprecated": false
             },
             {
@@ -2538,7 +2662,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the shared shots settings panel.",
-              "line": 1797,
+              "line": 1951,
               "deprecated": false
             },
             {
@@ -2547,7 +2671,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Assess shots against live Maya scene.",
-              "line": 1803,
+              "line": 1957,
               "deprecated": false
             },
             {
@@ -2556,7 +2680,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Build shots from loaded steps (or auto-detect from scene).",
-              "line": 1807,
+              "line": 1961,
               "deprecated": false
             }
           ]

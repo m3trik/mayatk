@@ -1515,6 +1515,113 @@ class TestMappingCombo(unittest.TestCase, _ControllerHarness):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_option_box_toolbar_constructs_on_real_combo(self):
+        """The option-box toolbar builds on a real ComboBox and matches the row.
+
+        The other mapping tests use a mocked combo, so this is the offscreen
+        check that the real construction is correct (what a live Maya session
+        would otherwise be the first to exercise): exactly two square icon
+        buttons (Refresh + Open folder, no in-place editing controls), and the
+        combo plus both buttons pinned to the header row height.
+        """
+        from qtpy import QtWidgets
+        from uitk.widgets.comboBox import ComboBox
+
+        host = QtWidgets.QWidget()
+        QtWidgets.QVBoxLayout(host)
+        cmb = ComboBox()
+        host.layout().addWidget(cmb)
+        cmb.addItem("(none)", None)
+
+        ctrl = object.__new__(ShotManifestController)
+        ctrl._mapping_dir = None
+        ctrl._cmb_mapping = cmb
+
+        target = 20
+        ctrl._wire_mapping_option_box(cmb, target_h=target)  # must not raise
+
+        # Combo pinned to the row height.
+        self.assertEqual(cmb.maximumHeight(), target)
+
+        # Toolbar = exactly two square icon buttons, both sized to the row.
+        layout = cmb.option_box.container.layout()
+        btns = [layout.itemAt(i).widget() for i in range(1, layout.count())]
+        self.assertEqual(len(btns), 2)
+        for b in btns:
+            self.assertEqual(b.maximumHeight(), target)
+
+        # Order: Refresh then Open folder (both equal-priority ActionOptions,
+        # so the option box's stable sort keeps Refresh on the left, as asked).
+        handlers = [
+            getattr(o, "_action_handler", None)
+            for o in cmb.option_box._option_box.get_options()
+        ]
+        self.assertEqual(
+            handlers, [ctrl._refresh_mapping_list, ctrl._open_mappings_folder]
+        )
+
+    def test_wire_option_box_is_noop_on_non_widget(self):
+        """Toolbar wiring is a clean no-op when the combo isn't a real widget
+        (the mocked controller-test UI)."""
+        ctrl = object.__new__(ShotManifestController)
+        ctrl._wire_mapping_option_box(MagicMock())  # must not raise
+
+    def test_seed_mappings_folder_seeds_empty_then_noops(self):
+        """First open of an empty mappings folder drops an example + format
+        reference (the externally-managed workflow needs a model to copy);
+        a populated folder is left untouched on later opens."""
+        import tempfile
+        import shutil
+        from pathlib import Path
+        from pythontk import TemplateSet
+        from mayatk.anim_utils.shots.shot_manifest.mapping import templates
+
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            ts = TemplateSet("seed_test", templates().spec, "mayatk", user_dir=tmp)
+            udir = ts.user_dir
+            udir.mkdir(parents=True, exist_ok=True)
+
+            ShotManifestController._seed_mappings_folder(ts)
+            names = sorted(p.name for p in udir.iterdir())
+            self.assertIn("example.json", names)
+            self.assertIn("MAPPING_FORMAT.md", names)
+
+            # Non-empty folder → no-op: a user edit survives a second open.
+            (udir / "example.json").write_text("EDIT", encoding="utf-8")
+            ShotManifestController._seed_mappings_folder(ts)
+            self.assertEqual(
+                (udir / "example.json").read_text(encoding="utf-8"), "EDIT"
+            )
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_seed_survives_active_sentinel(self):
+        """Regression: selecting a mapping writes the PresetStore ``.active``
+        bookkeeping dotfile into the user folder; that must NOT count as
+        'non-empty', or the first 'Open folder' after a selection would skip
+        seeding (no example/reference)."""
+        import tempfile
+        import shutil
+        from pathlib import Path
+        from pythontk import TemplateSet
+        from mayatk.anim_utils.shots.shot_manifest.mapping import templates
+
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            ts = TemplateSet("seed_test", templates().spec, "mayatk", user_dir=tmp)
+            udir = ts.user_dir
+            udir.mkdir(parents=True, exist_ok=True)
+            ts.active = "speedrun"  # writes the `.active` dotfile, as a selection does
+            self.assertTrue((udir / ".active").is_file())
+
+            ShotManifestController._seed_mappings_folder(ts)
+            names = sorted(p.name for p in udir.iterdir())
+            self.assertIn("example.json", names)  # seed not defeated by `.active`
+            self.assertIn("MAPPING_FORMAT.md", names)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 # ---------------------------------------------------------------------------
 # Tests: Incremental CSV sync (zero-duration fallback)

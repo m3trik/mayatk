@@ -26,8 +26,10 @@ _Generated: 2026-06-27_
 - [`anim_utils/shots/_shots.py`](#anim_utils--shots--_shots) — Shared shot data model and persistent store.
 - [`anim_utils/shots/shot_manifest/_shot_manifest.py`](#anim_utils--shots--shot_manifest--_shot_manifest) — Shot Manifest â€” parse structured CSVs and populate a ShotStore.
 - [`anim_utils/shots/shot_manifest/behaviors/_behaviors.py`](#anim_utils--shots--shot_manifest--behaviors--_behaviors) — Behaviors — load and apply YAML keying recipes.
+- [`anim_utils/shots/shot_manifest/behaviors/_spec.py`](#anim_utils--shots--shot_manifest--behaviors--_spec) — Schema for a *behavior* template file, defined as a dataclass.
 - [`anim_utils/shots/shot_manifest/manifest_data.py`](#anim_utils--shots--shot_manifest--manifest_data) — Constants, column layout, and pure helper functions for the Shot Manifest UI.
 - [`anim_utils/shots/shot_manifest/mapping/_mapping.py`](#anim_utils--shots--shot_manifest--mapping--_mapping) — CSV mapping resolver — interprets JSON mapping files.
+- [`anim_utils/shots/shot_manifest/mapping/_spec.py`](#anim_utils--shots--shot_manifest--mapping--_spec) — Schema for a CSV *mapping* file, defined as a dataclass.
 - [`anim_utils/shots/shot_manifest/range_resolver.py`](#anim_utils--shots--shot_manifest--range_resolver) — Range resolution algorithm for the Shot Manifest.
 - [`anim_utils/shots/shot_manifest/shot_manifest_slots.py`](#anim_utils--shots--shot_manifest--shot_manifest_slots) — Switchboard slots for the Shot Manifest UI.
 - [`anim_utils/shots/shot_manifest/table_presenter.py`](#anim_utils--shots--shot_manifest--table_presenter) — Tree-widget presentation mixin for the Shot Manifest controller.
@@ -509,27 +511,27 @@ Shared shot data model and persistent store.
 
 Shot Manifest â€” parse structured CSVs and populate a ShotStore.
 
-- [`resolve_duration(step: BuilderStep, initial_shot_length: float, fit_mode: FitMode, fps: float) -> Tuple[float, float, float]`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L185) — Compute final shot duration for *step* under the given fit policy.
-- [`plan_object_keys(obj: BuilderObject, shot_start: float, shot_end: float, fps: float) -> 'PlannedObject'`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L302) — Materialise a :class:`PlannedObject` with absolute keyframes.
-- [`detect_behaviors(text: str) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L499) — Return behavior names inferred from descriptive *text*.
-- [`parse_csv(filepath: str, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> List[BuilderStep]`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L636) — Parse a structured CSV into a list of :class:`BuilderStep`.
-- **[`class BuilderObject`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L27)** — One asset within a step.
-- **[`class BuilderStep`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L37)** — One step (= one future sequencer shot).
+- [`resolve_duration(step: BuilderStep, initial_shot_length: float, fit_mode: FitMode, fps: float) -> Tuple[float, float, float]`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L190) — Compute final shot duration for *step* under the given fit policy.
+- [`plan_object_keys(obj: BuilderObject, shot_start: float, shot_end: float, fps: float) -> 'PlannedObject'`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L307) — Materialise a :class:`PlannedObject` with absolute keyframes.
+- [`detect_behaviors(text: str) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L504) — Return behavior names inferred from descriptive *text*.
+- [`parse_csv(filepath: str, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> List[BuilderStep]`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L669) — Parse a structured CSV into a list of :class:`BuilderStep`.
+- **[`class BuilderObject`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L32)** — One asset within a step.
+- **[`class BuilderStep`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L42)** — One step (= one future sequencer shot).
   - `BuilderStep.display_text(self) -> str` *(property)* — Text shown in the tree Description column.
   - `BuilderStep.from_detection(cls, candidates: List[Dict]) -> Tuple[List['BuilderStep'], Dict[str, Tuple[float, float]]]` *(class)* — Convert detection candidates to BuilderSteps + pre-filled ranges.
-- **[`class PlannedShot`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L106)** — Immutable build instruction computed before any store mutation.
-- **[`class PlannedKey`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L142)** — One keyframe to be written during commit.
-- **[`class PlannedObject`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L154)** — Per-object build instruction with fully-resolved keyframes.
-- **[`class BuildPlan`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L171)** — Complete plan for a build pass.
-- **[`class ObjectStatus`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L437)** — Assessment result for one object within a step.
-- **[`class StepStatus`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L453)** — Assessment result for one step.
+- **[`class PlannedShot`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L111)** — Immutable build instruction computed before any store mutation.
+- **[`class PlannedKey`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L147)** — One keyframe to be written during commit.
+- **[`class PlannedObject`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L159)** — Per-object build instruction with fully-resolved keyframes.
+- **[`class BuildPlan`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L176)** — Complete plan for a build pass.
+- **[`class ObjectStatus`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L442)** — Assessment result for one object within a step.
+- **[`class StepStatus`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L458)** — Assessment result for one step.
   - `StepStatus.status(self) -> str` *(property)* — Worst-of-children rollup.
   - `StepStatus.missing_count(self) -> int` *(property)*
   - `StepStatus.total_count(self) -> int` *(property)*
-- **[`class ColumnMap`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L518)** — Maps logical fields to CSV header names (case-insensitive).
+- **[`class ColumnMap(SchemaSpec)`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L523)** — Maps logical fields to CSV header names (case-insensitive).
   - `ColumnMap.to_dict(self) -> Dict[str, Any]` — Serialise to a JSON-safe dict (tuples â†’ lists).
   - `ColumnMap.from_dict(cls, data: Dict[str, Any]) -> 'ColumnMap'` *(class)* — Reconstruct from a dict produced by :meth:`to_dict`.
-- **[`class ShotManifest`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L784)** — Creates shot store entries from parsed steps and applies behaviors.
+- **[`class ShotManifest`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L817)** — Creates shot store entries from parsed steps and applies behaviors.
   - `ShotManifest.sync(self, steps: List[BuilderStep], apply_behaviors: bool = True, ranges: Optional[Dict[str, Tuple[float, float]]] = None, remove_missing: bool = True, zero_duration_fallback: bool = False, fit_mode: FitMode = DEFAULT_FIT_MODE, initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH) -> Tuple[Dict[str, str], Dict[str, list], List[StepStatus]]` — Full build pipeline: plan -> commit -> apply behaviors -> assess.
   - `ShotManifest.rewire_audio(tracks: Optional[List[str]] = None) -> Dict[str, List[str]]` *(static)* — Reconcile managed DG audio nodes with keyed track state.
   - `ShotManifest.update(self, steps: List[BuilderStep], ranges: Optional[Dict[str, Tuple[float, float]]] = None, remove_missing: bool = True, zero_duration_fallback: bool = False, fit_mode: FitMode = DEFAULT_FIT_MODE, initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH) -> Dict[str, str]` — Sync parsed steps to the ShotStore (data only, no behaviors).
@@ -542,14 +544,26 @@ Shot Manifest â€” parse structured CSVs and populate a ShotStore.
 
 Behaviors — load and apply YAML keying recipes.
 
-- [`load_behavior(name: str, search_path: Optional[Path] = None) -> Dict[str, Any]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L31) — Load a YAML behavior template by stem name.
-- [`list_behaviors(search_path: Optional[Path] = None, kind: Optional[str] = None) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L66) — Return stem names of all available behavior templates.
-- [`resolve_keys(block_def: Dict, start: float, end: float) -> List[Dict[str, Any]]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L101) — Resolve an ``in`` or ``out`` block to absolute keyframe dicts.
-- [`apply_behavior(obj: str, behavior_name: str, start: float, end: float, attrs: Optional[List[str]] = None, search_path: Optional[Path] = None, source_path: str = '', anchor_override: Optional[str] = None) -> None`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L152) — Apply a named behavior template to an object over a time range.
-- [`verify_behavior(obj: str, behavior_name: str, start: float, end: float, search_path: Optional[Path] = None, keyframe_fn: Optional[Any] = None) -> bool`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L294) — Check whether expected behavior keyframes exist on an object.
-- [`apply_audio_clip(obj: str, start: float, end: float, source_path: str = '') -> None`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L438) — Author start/stop keys for an audio track over *(start, end)*.
-- [`compute_duration(behavior_entries: List[Dict[str, str]], fallback: float = 30, fps: Optional[float] = None) -> float`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L519) — Derive duration from the behavior templates referenced in *behavior_entries*.
-- [`apply_to_shots(shots: list, apply_fn, exists_fn=None, has_keys_fn=None, store=None) -> Dict[str, list]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L647) — Apply declared behaviors from shot metadata to Maya objects.
+- [`templates() -> TemplateSet`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L45) — The shared :class:`~pythontk.TemplateSet` backing behavior discovery.
+- [`load_behavior(name: str, search_path: Optional[Path] = None) -> Dict[str, Any]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L69) — Load a YAML behavior template by stem name.
+- [`list_behaviors(search_path: Optional[Path] = None, kind: Optional[str] = None) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L127) — Return stem names of all available behavior templates.
+- [`resolve_keys(block_def: Dict, start: float, end: float) -> List[Dict[str, Any]]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L171) — Resolve an ``in`` or ``out`` block to absolute keyframe dicts.
+- [`apply_behavior(obj: str, behavior_name: str, start: float, end: float, attrs: Optional[List[str]] = None, search_path: Optional[Path] = None, source_path: str = '', anchor_override: Optional[str] = None) -> None`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L222) — Apply a named behavior template to an object over a time range.
+- [`verify_behavior(obj: str, behavior_name: str, start: float, end: float, search_path: Optional[Path] = None, keyframe_fn: Optional[Any] = None) -> bool`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L364) — Check whether expected behavior keyframes exist on an object.
+- [`apply_audio_clip(obj: str, start: float, end: float, source_path: str = '') -> None`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L508) — Author start/stop keys for an audio track over *(start, end)*.
+- [`compute_duration(behavior_entries: List[Dict[str, str]], fallback: float = 30, fps: Optional[float] = None) -> float`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L589) — Derive duration from the behavior templates referenced in *behavior_entries*.
+- [`apply_to_shots(shots: list, apply_fn, exists_fn=None, has_keys_fn=None, store=None) -> Dict[str, list]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L717) — Apply declared behaviors from shot metadata to Maya objects.
+
+<a id="anim_utils--shots--shot_manifest--behaviors--_spec"></a>
+### `anim_utils/shots/shot_manifest/behaviors/_spec.py`
+
+Schema for a *behavior* template file, defined as a dataclass.
+
+- [`validate_duration(value: Any) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_spec.py#L28) — ``duration`` is a frame count or the literal ``"from_source"``.
+- [`validate_verify(value: Any) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_spec.py#L37)
+- [`validate_attributes(value: Any) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_spec.py#L46) — ``attributes`` = {attr: {in?/out?: {offset,duration,values,anchor,tangent}}}.
+- [`format_markdown() -> str`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_spec.py#L110) — Generate the full ``BEHAVIOR_FORMAT.md`` reference from the schema SSoT.
+- **[`class BehaviorSpec(SchemaSpec)`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_spec.py#L68)** — Schema for one behavior template (see ``BEHAVIOR_FORMAT.md``).
 
 <a id="anim_utils--shots--shot_manifest--manifest_data"></a>
 ### `anim_utils/shots/shot_manifest/manifest_data.py`
@@ -569,9 +583,21 @@ Constants, column layout, and pure helper functions for the Shot Manifest UI.
 
 CSV mapping resolver — interprets JSON mapping files.
 
-- [`discover(directory: Optional[str] = None) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_mapping.py#L79) — List available mapping names (without ``.json``) in *directory*.
-- [`load_mapping(name: str, directory: Optional[str] = None) -> Dict[str, Any]`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_mapping.py#L95) — Read a mapping JSON by *name* and return the parsed dict.
-- [`resolve(csv_path: str, mapping: Optional[Dict[str, Any]] = None, *, name: Optional[str] = None, directory: Optional[str] = None) -> List[BuilderStep]`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_mapping.py#L128) — Parse a CSV through a mapping and return fully resolved steps.
+- [`templates() -> TemplateSet`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_mapping.py#L80) — The shared :class:`~pythontk.TemplateSet` backing mapping discovery.
+- [`discover(directory: Optional[str] = None) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_mapping.py#L103) — List available mapping names (without ``.json``).
+- [`load_mapping(name: str, directory: Optional[str] = None) -> Dict[str, Any]`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_mapping.py#L126) — Read a mapping JSON by *name*, validate it, and return the parsed dict.
+- [`resolve(csv_path: str, mapping: Optional[Dict[str, Any]] = None, *, name: Optional[str] = None, directory: Optional[str] = None) -> List[BuilderStep]`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_mapping.py#L175) — Parse a CSV through a mapping and return fully resolved steps.
+
+<a id="anim_utils--shots--shot_manifest--mapping--_spec"></a>
+### `anim_utils/shots/shot_manifest/mapping/_spec.py`
+
+Schema for a CSV *mapping* file, defined as a dataclass.
+
+- [`validate_audio_resolve(value: Any) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_spec.py#L76) — Validate the polymorphic ``audio_resolve`` block.
+- [`validate_default_behaviors(value: Any) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_spec.py#L89) — Validate the ``default_behaviors`` block ({kind: [behavior names]}).
+- [`format_markdown() -> str`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_spec.py#L123) — Generate the full ``MAPPING_FORMAT.md`` reference from the schema SSoT.
+- **[`class AudioMethod`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_spec.py#L28)** — Descriptor for one ``audio_resolve`` strategy (drives validate/docs).
+- **[`class MappingSpec(SchemaSpec)`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping/_spec.py#L101)** — Schema for one CSV-mapping file (see ``MAPPING_FORMAT.md``).
 
 <a id="anim_utils--shots--shot_manifest--range_resolver"></a>
 ### `anim_utils/shots/shot_manifest/range_resolver.py`
@@ -591,7 +617,7 @@ Switchboard slots for the Shot Manifest UI.
   - `ShotManifestController.browse_csv(self) -> None` — Open a file dialog and load the selected CSV.
   - `ShotManifestController.build(self) -> None` — Build or update shots in the store from loaded steps.
   - `ShotManifestController.assess(self, skip_key_check: bool = False) -> None` — Compare CSV steps against the live Maya shots and color the tree.
-- **[`class ShotManifestSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L1772)** — Switchboard slot class â€” routes UI events to the controller.
+- **[`class ShotManifestSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L1926)** — Switchboard slot class â€” routes UI events to the controller.
   - `ShotManifestSlots.header_init(self, widget)` — Header menu is configured once in controller.__init__.
   - `ShotManifestSlots.btn_expand_missing(self)` — Expand all step rows that have missing objects or behaviors.
   - `ShotManifestSlots.btn_expand_extra(self)` — Expand all step rows that have scene-discovered extra objects.
