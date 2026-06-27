@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
-_Generated: 2026-06-25_
+_Generated: 2026-06-27_
 
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin)`
@@ -451,9 +451,13 @@ _Generated: 2026-06-25_
 - `class DynamicPipeSlots`
   - methods: header_init, b000
 
+### `edit_utils/macro_manager/macro_manager_slots.py` — UI slots for the Macro Manager panel.
+- `class MacroManagerSlots`
+  - methods: header_init, cmb000_init, cmb000, tbl000_init
+
 ### `edit_utils/macros.py`
 - `class MacroManager(ptk.HelpMixin)`
-  - methods: set_macros, call_with_input, set_macro
+  - methods: set_macros, call_with_input, set_macro, list_available_macros, macro_label, macro_category, list_categories, macro_help, get_current_bindings, apply_bindings, clear_hotkey, unset_macro, find_conflicts, qt_sequence_to_maya_key, maya_key_to_qt_sequence, list_presets, load_preset, save_preset, delete_preset, get_active_preset, set_active_preset, apply_saved_macros
 - `class DisplayMacros`
   - methods: m_component_id_display, m_normals_display, m_soft_edge_display, m_toggle_visibility, m_toggle_uv_border_edges, m_back_face_culling, m_isolate_selected, m_cycle_display_state, m_wireframe_toggle, m_grid_and_image_planes, m_frame, m_smooth_preview, m_wireframe, m_material_override, m_shading, m_lighting
 - `class EditMacros`
@@ -606,7 +610,7 @@ _Generated: 2026-06-25_
 - `class SceneExporter(ptk.LoggingMixin)`
   - methods: perform_export, generate_export_path, format_export_name, generate_log_file_path, setup_file_logging, close_file_handlers, load_fbx_export_preset, verify_fbx_preset
 - `class SceneExporterSlots(SceneExporter)`
-  - methods: workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, b000, b010, b003, b004, b005, b006, b007, b008, save_output_dir
+  - methods: workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb004_init, b000, b010, b003, b004, b005, b006, b007, b008, save_output_dir, save_output_name
 
 ### `env_utils/scene_exporter/task_factory.py`
 - `class TaskFactory`
@@ -666,7 +670,7 @@ _Generated: 2026-06-25_
 - `class LightmapBaker(ptk.LoggingMixin)`
   - methods: preset_store, from_preset, bake_fused, bake_separated, commit_unlit, revert_unlit, pack_atlas, commit_lightmap, revert_lightmap, revert
 - `class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`
-  - methods: header_init, cmb000_init, cmb000, cmb001_init, cmb002_init, txt000_init, b000, revert_to_source, open_sourceimages
+  - methods: header_init, cmb000_init, cmb000, cmb001_init, cmb002_init, cmb_scope_init, cmb_resolution_init, txt000_init, b000, revert_to_source, open_sourceimages
 
 ### `mat_utils/_affix_mode.py` — Shared affix-mode option-box helper for mat_utils slot files.
 - `add_affix_mode_menu(widget, default_mode: str = 'auto', on_change=None)`
@@ -991,6 +995,8 @@ _Generated: 2026-06-25_
 
 ### `ui_utils/hotkey_collisions.py` — Maya hotkey collision checker for the uitk HotkeyEditor.
 - `parse_qt_sequence(sequence: str) -> Optional[dict]`
+- `keystring_to_token(ks: list) -> str`
+- `live_hotkey_map() -> dict`
 - `maya_collision_checker(sequence, scope, ui_name, method_name)`
 
 ### `ui_utils/maya_bridge_slots.py` — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
