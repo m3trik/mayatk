@@ -755,8 +755,13 @@ class TestValidateOrWarn(unittest.TestCase):
             self.assertIn("truncated", s.ui.footer.text)
             self.assertEqual(len(s.sb.message_box_calls), 1)
             dialog_msg = s.sb.message_box_calls[0][0]
-            # The dialog must carry the actionable cloud-sync guidance...
-            self.assertIn("Make available offline", dialog_msg)
+            # The dialog must enumerate the real causes (a cloud file still
+            # syncing OR a full disk) with actionable fixes, not assert one --
+            # "make available offline" is a misdiagnosis when the disk is full.
+            low = dialog_msg.lower()
+            self.assertIn("cloud", low)
+            self.assertIn("sync", low)
+            self.assertIn("free up space", low)
             # ...but stay digestible — the raw full path goes to the console,
             # not the popup.
             self.assertNotIn(path, dialog_msg)

@@ -51,14 +51,10 @@ class MacroManagerSlots:
         self.controller = Macros
         self.CATEGORIES = self.controller.list_categories() or type(self).CATEGORIES
 
-        # This panel is a resizable table: the user drags the window taller to
-        # see more rows, so that height is real content, not the trailing dead
-        # space fit_to_content_on_show is meant to trim. Left enabled, the
-        # first show of every session restores the saved geometry and then
-        # snaps the height back to the table's tiny content minimum (a
-        # QTableWidget's sizeHint ignores row count) — the window "resizes
-        # each show". Opt out so the restored height is authoritative.
-        self.ui.fit_to_content_on_show = False
+        # NOTE: no fit_to_content_on_show opt-out needed -- uitk's MainWindow now
+        # treats a restored geometry as authoritative (skips the on-show fit when
+        # a saved size was restored), so this resizable table panel keeps its
+        # hand-expanded height across sessions automatically.
 
         self.presets = None
         self._category_delegate = None  # in-cell Category dropdown delegate

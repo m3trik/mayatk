@@ -298,11 +298,14 @@ class TestSceneExporter(MayaTkTestCase):
         )
 
     def test_task_timing_logged(self):
-        """Verify per-task timing is logged at INFO level.
+        """Verify per-task completion+timing is logged at SUCCESS level.
 
-        Added timing instrumentation to _manage_context so each task/check
-        logs its execution duration for performance diagnostics.
-        Fixed: 2026-02-22
+        _manage_context logs each task/check's execution duration. The line
+        was promoted INFO -> SUCCESS so a completed task reads as a success
+        and the redundant trailing "Check passed" lines could be dropped.
+        SUCCESS (25) is above INFO (20), so an INFO-level handler still
+        captures it.
+        Fixed: 2026-02-22 (timing), 2026-06-27 (level promoted to SUCCESS)
         """
         log_output = []
         handler = logging.Handler()

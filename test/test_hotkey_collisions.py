@@ -190,13 +190,15 @@ class TestMayaCollisionChecker(MayaTkTestCase):
         conflicts = maya_collision_checker("", "window", "ui_x", "method_x")
         self.assertEqual(conflicts, [])
 
-    def test_conflict_carries_no_clear_action(self):
-        """Maya conflicts must not be auto-clearable from outside Maya."""
+    def test_conflict_in_editable_set_carries_clear_action(self):
+        """In an editable (user) hotkey set, a Maya conflict is clearable: it
+        carries a callable clear_action so the editor can free the binding.
+        (setUp makes TEST_SET — a user set — current, so unbinding is allowed.)"""
         conflicts = maya_collision_checker(
             "Ctrl+Alt+J", "application", "ui_x", "method_x"
         )
         self.assertEqual(len(conflicts), 1)
-        self.assertIsNone(conflicts[0].clear_action)
+        self.assertTrue(callable(conflicts[0].clear_action))
 
     def test_no_false_match_with_extra_modifiers(self):
         """Querying with Shift added shouldn't match a Ctrl+Alt-only binding."""

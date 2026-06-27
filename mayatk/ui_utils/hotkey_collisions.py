@@ -6,9 +6,10 @@ Hosts that integrate the editor inside Maya register
 :func:`maya_collision_checker` via
 ``editor.add_collision_checker(...)``. The checker queries Maya's active
 hotkey set and reports any runtime command bound to the same key
-combination as a soft warning — Maya's bindings cannot be auto-cleared
-from outside Maya's own Hotkey Editor, so users decide whether to
-proceed.
+combination. The conflict carries a clear-action that unbinds Maya's
+hotkey when the active set is editable (a user set, not the locked
+``Maya_Default``), so the editor can offer to free the key; on a locked
+set the conflict is reported read-only.
 """
 from typing import List, Optional
 
@@ -223,6 +224,34 @@ def _current_hotkey_set() -> str:
         return ""
 
 
+def _is_hotkey_set_editable() -> bool:
+    """True when the active Maya hotkey set can be edited from here.
+
+    Maya's factory ``Maya_Default`` set is read-only — bindings can only be
+    changed in a user-created set. Maya exposes no ``-locked`` query, so the
+    known factory set name is treated as locked and any other (user) set as
+    editable. Returns False when the set can't be queried (e.g. headless).
+    """
+    current = _current_hotkey_set()
+    return bool(current) and current != "Maya_Default"
+
+
+def _unbind_maya_hotkey(parsed: dict) -> None:
+    """Clear Maya's press (and release) binding for the parsed key combo.
+
+    Requires the active hotkey set to be editable (see
+    :func:`_is_hotkey_set_editable`) — Maya raises on a locked set. ``parsed``
+    is the :func:`parse_qt_sequence` output (``keyShortcut`` + modifier flags).
+    """
+    mods = {k: v for k, v in parsed.items() if k != "keyShortcut"}
+    key = parsed["keyShortcut"]
+    # Clear press + release in one atomic call (mirrors Macros.clear_hotkey) so a
+    # key can never be left half-cleared. The long-form modifier flags produced by
+    # parse_qt_sequence (ctrlModifier/altModifier/shiftModifier) are valid
+    # cmds.hotkey aliases of ctl/alt/sht.
+    cmds.hotkey(keyShortcut=key, name="", releaseName="", **mods)
+
+
 def maya_collision_checker(sequence, scope, ui_name, method_name):
     """Check a proposed binding against Maya's active hotkey set.
 
@@ -249,15 +278,26 @@ def maya_collision_checker(sequence, scope, ui_name, method_name):
         return conflicts
 
     set_name = _current_hotkey_set()
+    editable = _is_hotkey_set_editable()
     desc = f"Maya runtime command '{bound}'"
     if set_name:
         desc += f" (hotkey set: {set_name})"
+
+    # Maya's binding can be cleared, but only in an editable (user) set. On the
+    # locked factory set we leave clear_action None and say why, so the editor
+    # disables its "free Maya binding" option rather than no-opping.
+    clear = None
+    if editable:
+        clear = lambda p=dict(parsed): _unbind_maya_hotkey(p)
+    else:
+        desc += " — locked set; switch to a custom Maya hotkey set to clear it"
 
     conflicts.append(
         CollisionConflict(
             source="maya",
             description=desc,
-            breaks_binding=False,  # external — cannot auto-clear Maya's binding
+            breaks_binding=False,  # external — coexists unless explicitly cleared
+            clear_action=clear,
         )
     )
     return conflicts

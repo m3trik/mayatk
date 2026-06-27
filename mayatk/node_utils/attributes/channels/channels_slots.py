@@ -419,6 +419,9 @@ class ChannelsSlots:
             fixed_item_height=20,
         )
         menu.setTitle("Create Attribute")
+        # Chrome is deferred to first show; build it now so the header exists
+        # for the pin->hide swap below (this popup shows immediately).
+        menu.ensure_chrome()
         # Swap the default pin button in the header for a hide button —
         # this popup is a one-shot form, not a pinnable tool panel.
         if menu.header:

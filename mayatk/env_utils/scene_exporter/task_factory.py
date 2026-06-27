@@ -51,7 +51,7 @@ class TaskFactory:
                 t0 = time.perf_counter()
                 result = self._execute_task_method(method, value)
                 elapsed = time.perf_counter() - t0
-                self.logger.info(f"  Completed {task_name} in {elapsed:.3f}s")
+                self.logger.success(f"  Completed {task_name} in {elapsed:.3f}s")
                 task_results[task_name] = result
 
                 # Store original state for reversion if this is a "set_" task
@@ -179,7 +179,7 @@ class TaskFactory:
 
             with self._manage_context(sorted_checks) as check_results:
                 all_checks_passed = self._process_check_results(
-                    check_results, checks_only, failed_checks
+                    check_results, failed_checks
                 )
 
         # Store counts so the caller (SceneExporter) can include them
@@ -200,23 +200,20 @@ class TaskFactory:
     def _process_check_results(
         self,
         check_results: Dict[str, Any],
-        checks_only: Dict[str, Any],
         failed_checks: list,
     ) -> bool:
-        """Process check results and return overall success status."""
+        """Process check results and return overall success status.
+
+        Per-check completion is already reported (at SUCCESS level) by the
+        task runner's "Completed {name}" line, so passing checks need no
+        extra log entry here — only failures are tracked.
+        """
         all_checks_passed = True
 
-        for index, (check_name, result) in enumerate(check_results.items(), start=1):
-            progress = f"[{index}/{len(checks_only)}]"
-
-            success = self._is_success(result)
-            messages = self._get_log_messages(result)
-
-            if not success:
+        for check_name, result in check_results.items():
+            if not self._is_success(result):
                 failed_checks.append(check_name)
                 all_checks_passed = False
-            else:
-                self.logger.success(f"{progress} Check passed: {check_name}")
 
         return all_checks_passed
 

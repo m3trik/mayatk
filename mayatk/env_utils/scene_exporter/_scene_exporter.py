@@ -1020,7 +1020,7 @@ class SceneExporterSlots(SceneExporter):
         )
 
     def b000(self) -> None:
-        """Export."""
+        """Export: run the scene export with the configured tasks and settings."""
         self.ui.txt003.clear()
         task_params = {}
         check_params = {}

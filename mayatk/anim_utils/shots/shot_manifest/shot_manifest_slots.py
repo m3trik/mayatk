@@ -44,6 +44,13 @@ from mayatk.anim_utils.shots._shots import (
 )
 from mayatk.anim_utils.shots.shot_manifest.table_presenter import ManifestTableMixin
 
+# When free space is below this, surface the actual figure alongside the
+# read-failure causes: low disk is then a plausible culprit and the concrete
+# number helps the user spot a (nearly) full volume.  Shown as a fact, never
+# asserted as *the* cause; above this it's omitted as noise.  A healthy working
+# volume rarely sits this low, so it won't fire on a normal disk.
+_LOW_DISK_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
+
 
 class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     """Business logic for the Shot Manifest UI."""
@@ -102,6 +109,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._active_mapping = None  # loaded JSON dict from mapping/
         self._mapping_dir = None  # custom directory override
         self._setup_recent_csv()
+        self._setup_csv_path_editing()
         self._setup_csv_toggle()
         self._setup_header_menu()
         self._setup_mapping_combo()
@@ -906,6 +914,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             max_recent=10,
         )
         txt.option_box.add_option(self._recent_csv_option)
+        # Picking a recent path should load it (parity with Browse).  The
+        # signal fires only on an explicit user selection, never on record,
+        # so this can't loop with _load_csv's record() call.
+        self._recent_csv_option.value_selected.connect(self._on_csv_recent_selected)
 
         self._browse_csv_option = BrowseOption(
             wrapped_widget=txt,
@@ -914,6 +926,43 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             callback=lambda path: self._on_csv_browsed(path),
         )
         txt.option_box.add_option(self._browse_csv_option)
+
+    def _setup_csv_path_editing(self) -> None:
+        """Make the CSV path field typeable/pasteable with live validation.
+
+        The field ships read-only (browse-only) in the .ui.  Here we allow
+        direct entry, attach uitk's built-in ``"file"`` path validator for
+        live invalid-path feedback (red action color + tooltip), and load
+        the CSV on commit (Enter / focus-out) via :meth:`_on_csv_path_edited`.
+        """
+        txt = self.ui.txt_csv_path
+        txt.setReadOnly(False)
+        txt.set_validator(
+            "file",
+            invalid_tooltip="CSV file not found — check the path.",
+            empty_is_valid=True,
+        )
+        txt.editingFinished.connect(self._on_csv_path_edited)
+
+    def _on_csv_path_edited(self) -> None:
+        """Load the CSV when a typed/pasted path is committed (Enter / focus-out).
+
+        Skips empty input and an unchanged path (a bare re-commit on
+        focus-out).  Any other changed path is handed to _load_csv -- the
+        single authority on validity -- which strips it, reports a missing
+        file, surfaces an unreadable cloud placeholder, and keeps the field
+        editable on failure.
+        """
+        path = self.ui.txt_csv_path.text().strip()
+        if not path or path == self._csv_path:
+            return
+        self._load_csv(path)
+
+    def _on_csv_recent_selected(self, _value=None) -> None:
+        """Load the CSV when a path is chosen from the recent-values list."""
+        path = self.ui.txt_csv_path.text().strip()
+        if path:
+            self._on_csv_browsed(path)
 
     def _setup_csv_toggle(self) -> None:
         """Connect the CSV checkbox to enable/disable the path and browse widgets."""
@@ -1256,6 +1305,20 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         """
         import os
 
+        # Attempting a load means CSV mode is active: enable the path
+        # widgets up front so any failure below (missing file, unreadable
+        # cloud placeholder, malformed CSV) still leaves the field
+        # inspectable and browsable.  Otherwise a failed load returns early
+        # and strands the user with a disabled control they can't use to
+        # see or correct the bad path.
+        self._sync_csv_widgets(True)
+
+        # Cancel any pending validator debounce on the path field so its live
+        # isfile check can't re-color the field after the load below sets the
+        # authoritative result (e.g. flip an unreadable cloud file back to
+        # "valid" 300ms later).  No-op when no validator is installed.
+        self.ui.txt_csv_path.validate_now()
+
         if not os.path.isfile(path):
             self.ui.txt_csv_path.set_action_color("invalid")
             self._set_footer(f"File not found: {path}", color=ERROR_COLOR)
@@ -1268,6 +1331,15 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 steps = resolve(path, mapping=self._active_mapping)
             else:
                 steps = parse_csv(path, columns=self._column_map)
+        except OSError as exc:
+            # isfile() passed but the bytes can't be read.  Don't assume a
+            # single cause -- _describe_read_failure enumerates the likely
+            # culprits (full disk / stopped sync client / locked / disconnected),
+            # always surfaces the raw error, and appends the free space if low.
+            self.logger.error("Failed to read CSV %r: %s", path, exc)
+            self.ui.txt_csv_path.set_action_color("invalid")
+            self._set_footer(self._describe_read_failure(path, exc), color=ERROR_COLOR)
+            return
         except Exception as exc:
             self.logger.error("Failed to parse CSV: %s", exc)
             self.ui.txt_csv_path.set_action_color("invalid")
@@ -1305,6 +1377,41 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         # for new steps added between existing ones.
         if store_ranges:
             self._refresh_ranges()
+
+    @staticmethod
+    def _describe_read_failure(path: str, exc: OSError) -> str:
+        """Explain an unreadable CSV without over-committing to one cause.
+
+        ``isfile()`` passed but the bytes wouldn't read.  The tempting
+        diagnosis -- "it's a cloud file that hasn't downloaded, make it
+        available offline" -- is usually wrong: cloud placeholders hydrate on
+        demand fine, and a genuine failure is far more often a full volume or a
+        stopped sync client.
+
+        So *enumerate* the likely causes (the cloud-client clause only for
+        cloud-managed files) rather than assert one, always include the raw
+        error, and append the actual free space when it's low enough to be a
+        plausible culprit -- as a fact the user can act on, never as the single
+        asserted cause.
+        """
+        import os
+
+        causes = ["the disk may be full"]
+        if ptk.FileUtils.is_cloud_placeholder(path):
+            causes.append(
+                "your cloud sync app (Dropbox/OneDrive/...) may not be running"
+            )
+        causes.append("the file may be locked by another program")
+        causes.append("the drive may be disconnected")
+        msg = (
+            f"Can't read CSV: {exc}. The file exists but its contents can't be "
+            f"read - {', '.join(causes)}. Check, then reload."
+        )
+        free = ptk.FileUtils.free_space(path)
+        if free is not None and free < _LOW_DISK_BYTES:
+            drive = os.path.splitdrive(os.path.abspath(path))[0] or "the drive"
+            msg += f" ({drive} has only {free // (1024 * 1024)} MB free.)"
+        return msg
 
     # ---- helpers ---------------------------------------------------------
 

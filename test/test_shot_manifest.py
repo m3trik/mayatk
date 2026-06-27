@@ -3561,8 +3561,13 @@ class TestSetClipBehavior(unittest.TestCase):
             apply_audio_clip,
         )
 
-        _mock_cmds.ls.return_value = []
-        with self.assertLogs(
+        # has_track() probes the carrier via cmds.objExists/attributeQuery,
+        # which the shared mock reports truthy — so patch it to False to
+        # deterministically exercise the missing-track warning path.
+        with patch(
+            "mayatk.audio_utils._audio_utils.AudioUtils.has_track",
+            return_value=False,
+        ), self.assertLogs(
             "mayatk.anim_utils.shots.shot_manifest.behaviors",
             level="WARNING",
         ) as cm:
