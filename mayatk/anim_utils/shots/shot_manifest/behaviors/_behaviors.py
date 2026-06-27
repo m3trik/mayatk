@@ -156,7 +156,12 @@ def list_behaviors(
     for name in names:
         try:
             tmpl = _load(name)
-        except FileNotFoundError:
+        except (FileNotFoundError, ValueError) as exc:
+            # A missing or invalid template (load_behavior now schema-validates,
+            # raising SchemaError — a ValueError — on a bad one) must not hide
+            # every valid behavior from the picker. Skip it here; validation
+            # still raises at apply time so the user gets a precise error then.
+            log.warning("Skipping behavior %r in listing: %s", name, exc)
             continue
         if kind in tmpl.get("kind", ["scene"]):
             result.append(name)
