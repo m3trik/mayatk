@@ -2276,7 +2276,7 @@
           "kind": "function",
           "signature": "(block_def: Dict, start: float, end: float) -> List[Dict[str, Any]]",
           "summary": "Resolve an ``in`` or ``out`` block to absolute keyframe dicts.",
-          "line": 171,
+          "line": 176,
           "deprecated": false
         },
         {
@@ -2285,7 +2285,7 @@
           "kind": "function",
           "signature": "(obj: str, behavior_name: str, start: float, end: float, attrs: Optional[List[str]] = None, search_path: Optional[Path] = None, source_path: str = '', anchor_override: Optional[str] = None) -> None",
           "summary": "Apply a named behavior template to an object over a time range.",
-          "line": 222,
+          "line": 227,
           "deprecated": false
         },
         {
@@ -2294,7 +2294,7 @@
           "kind": "function",
           "signature": "(obj: str, behavior_name: str, start: float, end: float, search_path: Optional[Path] = None, keyframe_fn: Optional[Any] = None) -> bool",
           "summary": "Check whether expected behavior keyframes exist on an object.",
-          "line": 364,
+          "line": 369,
           "deprecated": false
         },
         {
@@ -2303,7 +2303,7 @@
           "kind": "function",
           "signature": "(obj: str, start: float, end: float, source_path: str = '') -> None",
           "summary": "Author start/stop keys for an audio track over *(start, end)*.",
-          "line": 508,
+          "line": 513,
           "deprecated": false
         },
         {
@@ -2312,7 +2312,7 @@
           "kind": "function",
           "signature": "(behavior_entries: List[Dict[str, str]], fallback: float = 30, fps: Optional[float] = None) -> float",
           "summary": "Derive duration from the behavior templates referenced in *behavior_entries*.",
-          "line": 589,
+          "line": 594,
           "deprecated": false
         },
         {
@@ -2321,7 +2321,7 @@
           "kind": "function",
           "signature": "(shots: list, apply_fn, exists_fn=None, has_keys_fn=None, store=None) -> Dict[str, list]",
           "summary": "Apply declared behaviors from shot metadata to Maya objects.",
-          "line": 717,
+          "line": 722,
           "deprecated": false
         }
       ],
