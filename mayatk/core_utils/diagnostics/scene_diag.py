@@ -1706,7 +1706,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
         formatter = _logging.Formatter("%(message)s")
 
         # Explicit ``font-family`` on the ``<pre>`` overrides any font
-        # inherited from the outer ``format_rich_text`` wrapper (``<font>``
+        # inherited from the outer ``RichTextFormatter.format`` wrapper (``<font>``
         # + ``<div align=...>``). ``margin:0`` keeps per-section <pre>
         # blocks visually stitched together — identical line spacing
         # to the previous single-block layout.

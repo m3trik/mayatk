@@ -397,12 +397,12 @@ _Generated: 2026-07-01_
 - `class DisplayUtils(ptk.HelpMixin)`
   - methods: add_to_isolation, is_templated, set_visibility, get_visible_geometry, add_to_isolation_set, reset_viewport
 
-### `display_utils/color_manager.py`
+### `display_utils/color_id.py`
 - `class ColorUtils`
   - methods: assign_material, set_color_attribute, get_material_color, get_wireframe_color, get_vertex_color, set_vertex_color, get_color_difference
-- `class ColorManager(ColorUtils)`
+- `class ColorId(ColorUtils)`
   - methods: apply_color, get_objects_by_color, reset_colors, reset_vertex_colors
-- `class ColorManagerSlots(ColorManager)`
+- `class ColorIdSlots(ColorId)`
   - methods: header_init, selected_objects, selected_button, target_color, b000, b001, b002, b003
 
 ### `display_utils/exploded_view.py`
@@ -1009,7 +1009,7 @@ _Generated: 2026-07-01_
 - `class ChannelBox`
   - methods: connect_selection_changed, disconnect_selection_changed, get_selected_attrs, get_selected_objects, get_selected_plugs, select, select_visual, clear_selection, get_all_attrs, get_attr_properties, watch_selection, unwatch_selection, get_context_menu_actions, snapshot, diff, list_mel_procs, read_mel_proc, dump_tree, dump_model, list_signals, list_item_views
 
-### `ui_utils/hotkey_collisions.py` — Maya hotkey collision checker for the uitk HotkeyEditor.
+### `ui_utils/hotkey_collisions.py` — Maya hotkey collision checker for the uitk ShortcutEditor.
 - `parse_qt_sequence(sequence: str) -> Optional[dict]`
 - `keystring_to_token(ks: list) -> str`
 - `live_hotkey_map() -> dict`

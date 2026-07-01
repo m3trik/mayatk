@@ -229,5 +229,86 @@ class TestMayaCollisionChecker(MayaTkTestCase):
         self.assertIn(self.RUNTIME_CMD, conflicts[0].description)
 
 
+class TestGlobalContextOnly(unittest.TestCase):
+    """``_find_bound_command`` must read only Maya's GLOBAL (viewport) hotkey
+    context, never the whole ``assignCommand`` registry.
+
+    Regression for the cross-session bug: a key (e.g. ``n``) carries a viewport
+    binding *and* an editor/tool-context binding (Time Editor / Profiler). The
+    old code scanned ``assignCommand`` and reported the context binding too —
+    but the unbind can only clear the viewport one, so the conflict was
+    unresolvable and the editor re-prompted to "free Maya" every session while
+    the user's command stayed dead. The checker must consider only the binding
+    that actually shadows a Qt shortcut and that it can clear.
+    """
+
+    def _patch(self, global_name, assign_entries):
+        """Swap a fake ``cmds`` onto the module. ``assign_entries`` is a list of
+        ``(name_command, runtime_command)`` rows ``_runtime_command_for`` scans."""
+        import mayatk.ui_utils.hotkey_collisions as hc
+
+        class FakeCmds:
+            def hotkey(self, *a, **k):
+                # Only the global-context query returns a binding name.
+                return global_name if k.get("query") else None
+
+            def assignCommand(self, *a, **k):
+                if k.get("numElements"):
+                    return len(assign_entries)
+                name_command, runtime = assign_entries[a[0] - 1]
+                if k.get("name"):
+                    return name_command
+                if k.get("command"):
+                    return runtime
+                return None
+
+        original = hc.cmds
+        hc.cmds = FakeCmds()
+        self.addCleanup(lambda: setattr(hc, "cmds", original))
+        return hc
+
+    def test_ignores_context_binding_when_global_is_empty(self):
+        # Nothing bound in the global context, but assignCommand still lists a
+        # Time Editor binding on the key -> must report NO collision.
+        hc = self._patch(
+            "", [("TimeEditorToggleSoloSelectedTracksNameCommand", "TimeEditorToggleSoloSelectedTracks")]
+        )
+        self.assertEqual(hc._find_bound_command({"keyShortcut": "n"}), "")
+
+    def test_reports_global_binding_resolved_to_runtime(self):
+        # A real global binding is reported, resolved to the friendly runtime
+        # command for the conflict message.
+        hc = self._patch(
+            "NameComCreate_Reference", [("NameComCreate_Reference", "CreateReference")]
+        )
+        self.assertEqual(
+            hc._find_bound_command({"keyShortcut": "r", "ctrlModifier": True}),
+            "CreateReference",
+        )
+
+    def test_none_sentinel_global_binding_is_empty(self):
+        hc = self._patch("NONE", [])
+        self.assertEqual(hc._find_bound_command({"keyShortcut": "n"}), "")
+
+    def test_unresolvable_global_name_falls_back_to_name_command(self):
+        # Global context has a binding whose name command isn't in the registry
+        # scan (defensive) -> still reported, by its name command.
+        hc = self._patch("SomeOrphanNameCommand", [])
+        self.assertEqual(
+            hc._find_bound_command({"keyShortcut": "n"}), "SomeOrphanNameCommand"
+        )
+
+    def test_mod_kwargs_emit_only_set_modifiers(self):
+        import mayatk.ui_utils.hotkey_collisions as hc
+
+        self.assertEqual(hc._hotkey_mod_kwargs({"keyShortcut": "r"}), {})
+        self.assertEqual(
+            hc._hotkey_mod_kwargs(
+                {"keyShortcut": "r", "ctrlModifier": True, "altModifier": True}
+            ),
+            {"ctl": True, "alt": True},
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

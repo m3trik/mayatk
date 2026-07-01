@@ -240,7 +240,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
                 and len(color) == 3
                 and all(isinstance(c, (int, float)) for c in color)
             ):
-                from mayatk.display_utils.color_manager import ColorUtils
+                from mayatk.display_utils.color_id import ColorUtils
 
                 ColorUtils.set_color_attribute(
                     node, color, attr_type="wireframe", force=True

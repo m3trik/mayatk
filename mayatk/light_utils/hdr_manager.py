@@ -737,7 +737,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             # Keep the popup digestible — the short message / explicit
             # dialog_text, not the full console detail (which can carry a long
             # raw path). MessageBox.setText auto-colours these level prefixes
-            # (see uitk _html_style.PREFIX_STYLES). "Ok" makes the box modal.
+            # (see uitk RichTextFormatter.PREFIX_SEVERITY). "Ok" makes the box modal.
             body = dialog_text or message
             self.sb.message_box(f"{prefix} {body}", "Ok")
 

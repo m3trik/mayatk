@@ -160,7 +160,7 @@ class ColorUtils:
         return sum(abs(c1 - c2) for c1, c2 in zip(color1, color2)) / 3.0
 
 
-class ColorManager(ColorUtils):
+class ColorId(ColorUtils):
     @classmethod
     def apply_color(
         cls,
@@ -333,13 +333,16 @@ class ColorManager(ColorUtils):
     ]
 
 
-class ColorManagerSlots(ColorManager):
+class ColorIdSlots(ColorId):
+    # Storage key intentionally kept as the legacy "color_manager" (the tool
+    # was renamed Color Manager -> Color ID): it keys existing saved palettes
+    # and the PresetManager legacy-migration table, and is never user-visible.
     _PRESET_DIR = "mayatk/color_manager"
     _DEFAULT_PRESET = "default"
 
     def __init__(self, switchboard):
         self.sb = switchboard
-        self.ui = self.sb.loaded_ui.color_manager
+        self.ui = self.sb.loaded_ui.color_id
 
         self.button_grp = self.sb.create_button_groups(self.ui, "chk000-11")
         buttons = self.button_grp.buttons()
@@ -355,10 +358,11 @@ class ColorManagerSlots(ColorManager):
 
         for i, button in enumerate(buttons):
             button._initialColor = self.sb.QtGui.QColor(
-                *ColorManager.DEFAULT_SWATCH_COLORS[
-                    i % len(ColorManager.DEFAULT_SWATCH_COLORS)
+                *ColorId.DEFAULT_SWATCH_COLORS[
+                    i % len(ColorId.DEFAULT_SWATCH_COLORS)
                 ]
             )
+            button.keep_square = True  # square swatches that track column width
             button.settings = self.ui.settings
         self.ui.chk000.setChecked(True)
 
@@ -391,7 +395,7 @@ class ColorManagerSlots(ColorManager):
         presets.metadata_provider = lambda: {
             "swatches": [
                 self._hex_from_rgb(rgb)
-                for rgb in ColorManager.DEFAULT_SWATCH_COLORS
+                for rgb in ColorId.DEFAULT_SWATCH_COLORS
             ]
         }
         try:
@@ -403,7 +407,7 @@ class ColorManagerSlots(ColorManager):
         """Configure header help text and preset combobox."""
         widget.set_help_text(
             fmt(
-                title="Color Manager",
+                title="Color ID",
                 body="Assign colors to scene objects through any combination "
                 "of four channels: material, outliner tint, wireframe "
                 "override, and vertex colors.",
@@ -490,7 +494,7 @@ class ColorManagerSlots(ColorManager):
             "apply_to_outliner": self.ui.chk013.isChecked(),
             "apply_to_material": self.ui.chk014.isChecked(),
         }
-        ColorManager.apply_color(objects, color=self.target_color, **kwargs)
+        ColorId.apply_color(objects, color=self.target_color, **kwargs)
 
     def b002(self) -> None:
         """Select objects by the currently selected color."""
@@ -533,7 +537,7 @@ class ColorManagerSlots(ColorManager):
 if __name__ == "__main__":
     from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
 
-    ui = MayaUiHandler.instance().get("color_manager", reload=True)
+    ui = MayaUiHandler.instance().get("color_id", reload=True)
     ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------

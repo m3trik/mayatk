@@ -231,11 +231,11 @@ class MacroManagerSlots:
             # (chord for Hotkey, dropdown for Category); NoEditTriggers keeps
             # the other columns read-only — each capture delegate opens its own
             # column explicitly regardless of triggers.
-            from uitk.widgets.hotkey_capture_delegate import install_hotkey_capture
-            from uitk.widgets.choice_capture_delegate import install_choice_capture
+            from uitk.widgets.delegates.shortcut_capture import install_shortcut_capture
+            from uitk.widgets.delegates.choice_capture import install_choice_capture
 
             widget.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-            install_hotkey_capture(
+            install_shortcut_capture(
                 widget, self.COL_HOTKEY, self._on_hotkey_captured
             )
             self._category_delegate = install_choice_capture(

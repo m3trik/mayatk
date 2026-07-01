@@ -1,15 +1,22 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Maya hotkey collision checker for the uitk HotkeyEditor.
+"""Maya hotkey collision checker for the uitk ShortcutEditor.
 
 Hosts that integrate the editor inside Maya register
 :func:`maya_collision_checker` via
-``editor.add_collision_checker(...)``. The checker queries Maya's active
-hotkey set and reports any runtime command bound to the same key
-combination. The conflict carries a clear-action that unbinds Maya's
-hotkey when the active set is editable (a user set, not the locked
-``Maya_Default``), so the editor can offer to free the key; on a locked
-set the conflict is reported read-only.
+``editor.add_collision_checker(...)``. The checker queries the active hotkey
+set's **global (viewport) context** and reports the runtime command bound to
+the same key there — the only binding that competes with an application-wide
+Qt shortcut. The conflict carries a clear-action that unbinds Maya's hotkey
+when the active set is editable (a user set, not the locked ``Maya_Default``),
+so the editor can offer to free the key; on a locked set the conflict is
+reported read-only.
+
+Deliberately ignored: editor/tool-scoped bindings (Time Editor, Profiler, …)
+that share the key in their own hotkey context. They fire only while that
+editor is focused, never shadow a viewport shortcut, and can't be cleared from
+here — surfacing them produced an unresolvable conflict the editor re-prompted
+to "free" every session (see :func:`_find_bound_command`).
 """
 from typing import List, Optional
 
@@ -168,52 +175,82 @@ def live_hotkey_map() -> dict:
     return result
 
 
-def _find_bound_command(parsed: dict) -> str:
-    """Return the runtime command bound to the parsed shortcut, or ''.
+def _hotkey_mod_kwargs(parsed: dict) -> dict:
+    """Translate ``parse_qt_sequence`` modifier flags to ``cmds.hotkey`` kwargs.
 
-    Iterates the active hotkey set's ``assignCommand`` registry and
-    matches by key + modifier flags. Returns the runtime command name
-    (resolved from the bound name command) so messages name something
-    a Maya user can find in their Hotkey Editor.
+    Emits only the modifiers that are set, using the short ``ctl``/``alt``/
+    ``sht`` aliases Maya's hotkey query matches on.
     """
-    target_key = parsed.get("keyShortcut", "")
-    target_alt = bool(parsed.get("altModifier"))
-    target_ctrl = bool(parsed.get("ctrlModifier"))
-    target_shift = bool(parsed.get("shiftModifier"))
+    kwargs: dict = {}
+    if parsed.get("ctrlModifier"):
+        kwargs["ctl"] = True
+    if parsed.get("altModifier"):
+        kwargs["alt"] = True
+    if parsed.get("shiftModifier"):
+        kwargs["sht"] = True
+    return kwargs
 
+
+def _runtime_command_for(name_command: str) -> str:
+    """Resolve a name command to its wrapped runtime command, or ''.
+
+    The global hotkey query returns the *name command*; the friendlier runtime
+    command (what a user sees in Maya's Hotkey Editor) is read from the
+    ``assignCommand`` registry entry carrying that same name command. Used only
+    to label an already-confirmed conflict, so the registry scan is paid once
+    per user edit, not per query.
+    """
+    if not name_command:
+        return ""
     try:
         count = cmds.assignCommand(query=True, numElements=True) or 0
     except Exception:
         return ""
-
     for i in range(1, count + 1):
         try:
-            ks = cmds.assignCommand(i, query=True, keyString=True)
+            if (cmds.assignCommand(i, query=True, name=True) or "") == name_command:
+                return cmds.assignCommand(i, query=True, command=True) or ""
         except Exception:
             continue
-        if not ks or ks[0] != target_key:
-            continue
-        if (
-            _ks_modifier(ks, "alt") != target_alt
-            or _ks_modifier(ks, "ctrl") != target_ctrl
-            or _ks_modifier(ks, "shift") != target_shift
-        ):
-            continue
-        # Maya 2025's nameCommand doesn't support a query flag, so resolve
-        # the wrapped runtime command via assignCommand directly. That's
-        # the name a user sees in Maya's Hotkey Editor.
-        try:
-            rt_name = cmds.assignCommand(i, query=True, command=True) or ""
-        except Exception:
-            rt_name = ""
-        if rt_name:
-            return rt_name
-        try:
-            nc_name = cmds.assignCommand(i, query=True, name=True) or ""
-        except Exception:
-            nc_name = ""
-        return nc_name
     return ""
+
+
+def _find_bound_command(parsed: dict) -> str:
+    """Return the runtime command bound to *parsed* in Maya's GLOBAL context, or ''.
+
+    Queries the global (viewport) hotkey context via
+    ``cmds.hotkey(..., query=True, name=True)`` — the only binding that actually
+    competes with an application-wide Qt shortcut, and the only one
+    :func:`_unbind_maya_hotkey` can clear.
+
+    Editor/tool-scoped bindings (Time Editor, Profiler, …) that share the key
+    live in their own hotkey context: they fire only while that editor is
+    focused, never shadow a viewport shortcut, and can't be cleared from here.
+    The previous implementation scanned the whole ``assignCommand`` registry and
+    so surfaced those as collisions — an *unresolvable* conflict the editor
+    offered to "free" but couldn't, so the same key re-prompted to unbind Maya
+    every session and the user's command stayed dead (Maya kept the key). This
+    queries the global context only: once the viewport binding is cleared, the
+    query returns '' and the conflict is gone for good. Empirically verified in
+    Maya — ``cmds.hotkey('n', q, name)`` returns the viewport binding and ''
+    after a clear, while ``assignCommand`` still lists the Time Editor binding.
+
+    Returns the friendly runtime-command name (resolved from the name command),
+    falling back to the name command itself. Empty outside an interactive Maya.
+    """
+    key = parsed.get("keyShortcut", "")
+    if not key:
+        return ""
+    try:
+        name_command = (
+            cmds.hotkey(key, query=True, name=True, **_hotkey_mod_kwargs(parsed))
+            or ""
+        )
+    except Exception:
+        return ""
+    if not name_command or name_command.strip().lower() == "none":
+        return ""
+    return _runtime_command_for(name_command) or name_command
 
 
 def _current_hotkey_set() -> str:
@@ -248,8 +285,19 @@ def _unbind_maya_hotkey(parsed: dict) -> None:
     # Clear press + release in one atomic call (mirrors Macros.clear_hotkey) so a
     # key can never be left half-cleared. The long-form modifier flags produced by
     # parse_qt_sequence (ctrlModifier/altModifier/shiftModifier) are valid
-    # cmds.hotkey aliases of ctl/alt/sht.
+    # cmds.hotkey aliases of ctl/alt/sht. This clears the global (viewport)
+    # binding — the one that shadows a Qt shortcut; see _find_bound_command for
+    # why editor/tool-context bindings are left alone.
     cmds.hotkey(keyShortcut=key, name="", releaseName="", **mods)
+    # Persist immediately. A cmds.hotkey edit lives only in the in-memory set;
+    # Maya flushes hotkeys to disk on a *clean* exit, so a crash or hard-kill
+    # would otherwise lose the freed key and Maya's binding would be back next
+    # launch — re-eating the key and re-prompting the editor to free it. Making
+    # the user's deliberate "free this key" durable right away closes that gap.
+    try:
+        cmds.savePrefs(hotkeys=True)
+    except Exception:
+        pass
 
 
 def maya_collision_checker(sequence, scope, ui_name, method_name):
@@ -265,7 +313,7 @@ def maya_collision_checker(sequence, scope, ui_name, method_name):
         A list of ``CollisionConflict`` entries (imported lazily so the
         module is still importable when uitk isn't installed).
     """
-    from uitk.widgets.editors.hotkey_editor import CollisionConflict
+    from uitk.widgets.editors.shortcut_editor.registry_editor import CollisionConflict
 
     conflicts: List = []
 

@@ -70,7 +70,7 @@ _Generated: 2026-07-01_
 - [`core_utils/preview.py`](#core_utils--preview) — Hermetic preview with replay-on-commit (H1 design).
 - [`core_utils/script_job_manager.py`](#core_utils--script_job_manager) — Centralized Maya event subscription manager.
 - [`display_utils/_display_utils.py`](#display_utils--_display_utils)
-- [`display_utils/color_manager.py`](#display_utils--color_manager)
+- [`display_utils/color_id.py`](#display_utils--color_id)
 - [`display_utils/exploded_view.py`](#display_utils--exploded_view)
 - [`edit_utils/_edit_utils.py`](#edit_utils--_edit_utils)
 - [`edit_utils/bevel.py`](#edit_utils--bevel)
@@ -179,7 +179,7 @@ _Generated: 2026-07-01_
 - [`ui_utils/_ui_utils.py`](#ui_utils--_ui_utils)
 - [`ui_utils/calculator.py`](#ui_utils--calculator)
 - [`ui_utils/channel_box.py`](#ui_utils--channel_box) — Programmatic access to Maya's Channel Box.
-- [`ui_utils/hotkey_collisions.py`](#ui_utils--hotkey_collisions) — Maya hotkey collision checker for the uitk HotkeyEditor.
+- [`ui_utils/hotkey_collisions.py`](#ui_utils--hotkey_collisions) — Maya hotkey collision checker for the uitk ShortcutEditor.
 - [`ui_utils/maya_bridge_slots.py`](#ui_utils--maya_bridge_slots) — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 - [`ui_utils/maya_native_menus.py`](#ui_utils--maya_native_menus)
 - [`ui_utils/maya_ui_handler.py`](#ui_utils--maya_ui_handler)
@@ -1282,10 +1282,10 @@ Centralized Maya event subscription manager.
   - `DisplayUtils.add_to_isolation_set(objects: Union[str, object, List[Union[str, object]]])` *(static)* — Adds the specified transform objects to the current isolation set if isolation mode is active in th…
   - `DisplayUtils.reset_viewport(max_res=4096)` *(static)* — Resets Viewport 2.0 to fix graphical glitches (e.g.
 
-<a id="display_utils--color_manager"></a>
-### `display_utils/color_manager.py`
+<a id="display_utils--color_id"></a>
+### `display_utils/color_id.py`
 
-- **[`class ColorUtils`](mayatk/mayatk/display_utils/color_manager.py#L17)**
+- **[`class ColorUtils`](mayatk/mayatk/display_utils/color_id.py#L17)**
   - `ColorUtils.assign_material(obj: str, color: Tuple[float, float, float]) -> str` *(static)* — Assigns a material to an object based on the RGB value.
   - `ColorUtils.set_color_attribute(cls, obj: str, color: Tuple[float, float, float], attr_type: str, force: bool = False) -> None` *(class)* — Applies color based on the attribute type specified, optionally overriding attribute locks.
   - `ColorUtils.get_material_color(obj: str) -> Optional[Tuple[float, float, float]]` *(static)* — Gets the color of the object's material.
@@ -1293,20 +1293,20 @@ Centralized Maya event subscription manager.
   - `ColorUtils.get_vertex_color(obj: str, vertex_id: int) -> Optional[Tuple[float, float, float]]` *(static)* — Gets the color of a specific vertex on the object.
   - `ColorUtils.set_vertex_color(objects: List[str], color: Tuple[float, float, float]) -> None` *(static)* — Applies the specified color to the object's vertices.
   - `ColorUtils.get_color_difference(color1: Tuple[float, float, float], color2: Tuple[float, float, float]) -> float` *(static)* — Calculate the average difference between two RGB colors.
-- **[`class ColorManager(ColorUtils)`](mayatk/mayatk/display_utils/color_manager.py#L163)**
-  - `ColorManager.apply_color(cls, objects: List[str], color: Optional[Tuple[float, float, float]] = None, apply_to_material: bool = False, apply_to_vertex: bool = False, apply_to_wireframe: bool = False, apply_to_outliner: bool = False) -> None` *(class)* — Applies color based on given criteria to objects.
-  - `ColorManager.get_objects_by_color(cls, target_color: Tuple[float, float, float], threshold: float = 0.1, check_material_color: bool = False, check_vertex_color: bool = False, check_wireframe_color: bool = False, check_outliner_color: bool = False) -> List[str]` *(class)* — Select objects by color, with optional checks for material, vertex, wireframe, and outliner colors.
-  - `ColorManager.reset_colors(cls, objects: List[str], reset_outliner: bool = True, reset_wireframe: bool = True, reset_vertex: bool = True, reset_material: bool = True) -> None` *(class)* — Resets colors to default for given objects, with options to specify which color types to reset.
-  - `ColorManager.reset_vertex_colors(objects: List[str]) -> None` *(static)* — Resets vertex colors for the given object(s), handling potential errors gracefully.
-- **[`class ColorManagerSlots(ColorManager)`](mayatk/mayatk/display_utils/color_manager.py#L336)**
-  - `ColorManagerSlots.header_init(self, widget)` — Configure header help text and preset combobox.
-  - `ColorManagerSlots.selected_objects(self) -> List[str]` *(property)* — Return the currently selected objects, or an empty list if no objects are selected.
-  - `ColorManagerSlots.selected_button(self) -> Optional[object]` *(property)* — Return the currently selected button in the button group.
-  - `ColorManagerSlots.target_color(self) -> Optional[Tuple[float, float, float]]` *(property)* — Return the color of the selected button, or None if no button is selected.
-  - `ColorManagerSlots.b000(self) -> None` — Reset Colors
-  - `ColorManagerSlots.b001(self) -> None` — Apply selected color to selected objects.
-  - `ColorManagerSlots.b002(self) -> None` — Select objects by the currently selected color.
-  - `ColorManagerSlots.b003(self) -> None` — Pick up the selected object's wireframe color into the active color button (eyedropper).
+- **[`class ColorId(ColorUtils)`](mayatk/mayatk/display_utils/color_id.py#L163)**
+  - `ColorId.apply_color(cls, objects: List[str], color: Optional[Tuple[float, float, float]] = None, apply_to_material: bool = False, apply_to_vertex: bool = False, apply_to_wireframe: bool = False, apply_to_outliner: bool = False) -> None` *(class)* — Applies color based on given criteria to objects.
+  - `ColorId.get_objects_by_color(cls, target_color: Tuple[float, float, float], threshold: float = 0.1, check_material_color: bool = False, check_vertex_color: bool = False, check_wireframe_color: bool = False, check_outliner_color: bool = False) -> List[str]` *(class)* — Select objects by color, with optional checks for material, vertex, wireframe, and outliner colors.
+  - `ColorId.reset_colors(cls, objects: List[str], reset_outliner: bool = True, reset_wireframe: bool = True, reset_vertex: bool = True, reset_material: bool = True) -> None` *(class)* — Resets colors to default for given objects, with options to specify which color types to reset.
+  - `ColorId.reset_vertex_colors(objects: List[str]) -> None` *(static)* — Resets vertex colors for the given object(s), handling potential errors gracefully.
+- **[`class ColorIdSlots(ColorId)`](mayatk/mayatk/display_utils/color_id.py#L336)**
+  - `ColorIdSlots.header_init(self, widget)` — Configure header help text and preset combobox.
+  - `ColorIdSlots.selected_objects(self) -> List[str]` *(property)* — Return the currently selected objects, or an empty list if no objects are selected.
+  - `ColorIdSlots.selected_button(self) -> Optional[object]` *(property)* — Return the currently selected button in the button group.
+  - `ColorIdSlots.target_color(self) -> Optional[Tuple[float, float, float]]` *(property)* — Return the color of the selected button, or None if no button is selected.
+  - `ColorIdSlots.b000(self) -> None` — Reset Colors
+  - `ColorIdSlots.b001(self) -> None` — Apply selected color to selected objects.
+  - `ColorIdSlots.b002(self) -> None` — Select objects by the currently selected color.
+  - `ColorIdSlots.b003(self) -> None` — Pick up the selected object's wireframe color into the active color button (eyedropper).
 
 <a id="display_utils--exploded_view"></a>
 ### `display_utils/exploded_view.py`
@@ -3209,12 +3209,12 @@ Programmatic access to Maya's Channel Box.
 <a id="ui_utils--hotkey_collisions"></a>
 ### `ui_utils/hotkey_collisions.py`
 
-Maya hotkey collision checker for the uitk HotkeyEditor.
+Maya hotkey collision checker for the uitk ShortcutEditor.
 
-- [`parse_qt_sequence(sequence: str) -> Optional[dict]`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L42) — Convert a Qt key sequence string to ``cmds.hotkey`` query kwargs.
-- [`keystring_to_token(ks: list) -> str`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L115) — Convert an ``assignCommand`` keyString array to a Maya hotkey token.
-- [`live_hotkey_map() -> dict`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L144) — Return ``{runtime_command: maya_key_token}`` for the active hotkey set.
-- [`maya_collision_checker(sequence, scope, ui_name, method_name)`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L255) — Check a proposed binding against Maya's active hotkey set.
+- [`parse_qt_sequence(sequence: str) -> Optional[dict]`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L49) — Convert a Qt key sequence string to ``cmds.hotkey`` query kwargs.
+- [`keystring_to_token(ks: list) -> str`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L122) — Convert an ``assignCommand`` keyString array to a Maya hotkey token.
+- [`live_hotkey_map() -> dict`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L151) — Return ``{runtime_command: maya_key_token}`` for the active hotkey set.
+- [`maya_collision_checker(sequence, scope, ui_name, method_name)`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L303) — Check a proposed binding against Maya's active hotkey set.
 
 <a id="ui_utils--maya_bridge_slots"></a>
 ### `ui_utils/maya_bridge_slots.py`

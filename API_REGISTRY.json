@@ -6882,7 +6882,7 @@
       ]
     },
     {
-      "relpath": "display_utils/color_manager.py",
+      "relpath": "display_utils/color_id.py",
       "summary": "",
       "functions": [],
       "classes": [
@@ -6958,7 +6958,7 @@
           ]
         },
         {
-          "name": "ColorManager",
+          "name": "ColorId",
           "summary": "",
           "line": 163,
           "bases": [
@@ -6967,7 +6967,7 @@
           "members": [
             {
               "name": "apply_color",
-              "qualname": "ColorManager.apply_color",
+              "qualname": "ColorId.apply_color",
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], color: Optional[Tuple[float, float, float]] = None, apply_to_material: bool = False, apply_to_vertex: bool = False, apply_to_wireframe: bool = False, apply_to_outliner: bool = False) -> None",
               "summary": "Applies color based on given criteria to objects.",
@@ -6976,7 +6976,7 @@
             },
             {
               "name": "get_objects_by_color",
-              "qualname": "ColorManager.get_objects_by_color",
+              "qualname": "ColorId.get_objects_by_color",
               "kind": "classmethod",
               "signature": "(cls, target_color: Tuple[float, float, float], threshold: float = 0.1, check_material_color: bool = False, check_vertex_color: bool = False, check_wireframe_color: bool = False, check_outliner_color: bool = False) -> List[str]",
               "summary": "Select objects by color, with optional checks for material, vertex, wireframe, and outliner colors.",
@@ -6985,7 +6985,7 @@
             },
             {
               "name": "reset_colors",
-              "qualname": "ColorManager.reset_colors",
+              "qualname": "ColorId.reset_colors",
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], reset_outliner: bool = True, reset_wireframe: bool = True, reset_vertex: bool = True, reset_material: bool = True) -> None",
               "summary": "Resets colors to default for given objects, with options to specify which color types to reset.",
@@ -6994,7 +6994,7 @@
             },
             {
               "name": "reset_vertex_colors",
-              "qualname": "ColorManager.reset_vertex_colors",
+              "qualname": "ColorId.reset_vertex_colors",
               "kind": "staticmethod",
               "signature": "(objects: List[str]) -> None",
               "summary": "Resets vertex colors for the given object(s), handling potential errors gracefully.",
@@ -7004,83 +7004,83 @@
           ]
         },
         {
-          "name": "ColorManagerSlots",
+          "name": "ColorIdSlots",
           "summary": "",
           "line": 336,
           "bases": [
-            "ColorManager"
+            "ColorId"
           ],
           "members": [
             {
               "name": "header_init",
-              "qualname": "ColorManagerSlots.header_init",
+              "qualname": "ColorIdSlots.header_init",
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text and preset combobox.",
-              "line": 402,
+              "line": 406,
               "deprecated": false
             },
             {
               "name": "selected_objects",
-              "qualname": "ColorManagerSlots.selected_objects",
+              "qualname": "ColorIdSlots.selected_objects",
               "kind": "property",
               "signature": "(self) -> List[str]",
               "summary": "Return the currently selected objects, or an empty list if no objects are selected.",
-              "line": 445,
+              "line": 449,
               "deprecated": false
             },
             {
               "name": "selected_button",
-              "qualname": "ColorManagerSlots.selected_button",
+              "qualname": "ColorIdSlots.selected_button",
               "kind": "property",
               "signature": "(self) -> Optional[object]",
               "summary": "Return the currently selected button in the button group.",
-              "line": 453,
+              "line": 457,
               "deprecated": false
             },
             {
               "name": "target_color",
-              "qualname": "ColorManagerSlots.target_color",
+              "qualname": "ColorIdSlots.target_color",
               "kind": "property",
               "signature": "(self) -> Optional[Tuple[float, float, float]]",
               "summary": "Return the color of the selected button, or None if no button is selected.",
-              "line": 461,
+              "line": 465,
               "deprecated": false
             },
             {
               "name": "b000",
-              "qualname": "ColorManagerSlots.b000",
+              "qualname": "ColorIdSlots.b000",
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Reset Colors",
-              "line": 471,
+              "line": 475,
               "deprecated": false
             },
             {
               "name": "b001",
-              "qualname": "ColorManagerSlots.b001",
+              "qualname": "ColorIdSlots.b001",
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Apply selected color to selected objects.",
-              "line": 481,
+              "line": 485,
               "deprecated": false
             },
             {
               "name": "b002",
-              "qualname": "ColorManagerSlots.b002",
+              "qualname": "ColorIdSlots.b002",
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Select objects by the currently selected color.",
-              "line": 495,
+              "line": 499,
               "deprecated": false
             },
             {
               "name": "b003",
-              "qualname": "ColorManagerSlots.b003",
+              "qualname": "ColorIdSlots.b003",
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Pick up the selected object's wireframe color into the active color button (eyedropper).",
-              "line": 513,
+              "line": 517,
               "deprecated": false
             }
           ]
@@ -11963,7 +11963,7 @@
               "kind": "method",
               "signature": "(self, text)",
               "summary": "Handle the filter text input.",
-              "line": 2639,
+              "line": 2640,
               "deprecated": false
             },
             {
@@ -11972,7 +11972,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "",
-              "line": 2645,
+              "line": 2646,
               "deprecated": false
             },
             {
@@ -11981,7 +11981,7 @@
               "kind": "method",
               "signature": "(self, index, widget)",
               "summary": "Handle workspace selection changes.",
-              "line": 2649,
+              "line": 2650,
               "deprecated": false
             },
             {
@@ -11990,7 +11990,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the recursive search toggle.",
-              "line": 2672,
+              "line": 2673,
               "deprecated": false
             },
             {
@@ -11999,7 +11999,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the ignore empty workspaces toggle.",
-              "line": 2711,
+              "line": 2712,
               "deprecated": false
             },
             {
@@ -12008,7 +12008,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the ignore case checkbox.",
-              "line": 2760,
+              "line": 2761,
               "deprecated": false
             },
             {
@@ -12017,7 +12017,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide binary checkbox.",
-              "line": 2765,
+              "line": 2766,
               "deprecated": false
             },
             {
@@ -12026,7 +12026,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the filter by suffix checkbox.",
-              "line": 2770,
+              "line": 2771,
               "deprecated": false
             },
             {
@@ -12035,7 +12035,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide suffix checkbox.",
-              "line": 2775,
+              "line": 2776,
               "deprecated": false
             },
             {
@@ -12044,7 +12044,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide extension checkbox.",
-              "line": 2780,
+              "line": 2781,
               "deprecated": false
             },
             {
@@ -12053,7 +12053,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Toggle visibility of the Notes (metadata) column.",
-              "line": 2785,
+              "line": 2786,
               "deprecated": false
             },
             {
@@ -12062,7 +12062,7 @@
               "kind": "method",
               "signature": "(self, text)",
               "summary": "Handle suffix text changes.",
-              "line": 2802,
+              "line": 2803,
               "deprecated": false
             },
             {
@@ -12071,7 +12071,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the filter by folder structure checkbox.",
-              "line": 2818,
+              "line": 2819,
               "deprecated": false
             },
             {
@@ -12080,7 +12080,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Browse for a root directory.",
-              "line": 2823,
+              "line": 2824,
               "deprecated": false
             },
             {
@@ -12089,7 +12089,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the current directory in the file explorer.",
-              "line": 2840,
+              "line": 2841,
               "deprecated": false
             },
             {
@@ -12098,7 +12098,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Set dir to current workspace.",
-              "line": 2845,
+              "line": 2846,
               "deprecated": false
             },
             {
@@ -12107,7 +12107,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the scene file at the right-clicked row.",
-              "line": 2850,
+              "line": 2851,
               "deprecated": false
             },
             {
@@ -12116,7 +12116,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Toggle reference state for the right-clicked row.",
-              "line": 2864,
+              "line": 2865,
               "deprecated": false
             },
             {
@@ -12125,7 +12125,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unlink and import the reference at the right-clicked row.",
-              "line": 2871,
+              "line": 2872,
               "deprecated": false
             },
             {
@@ -12134,7 +12134,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Save the current scene to the workspace.",
-              "line": 2883,
+              "line": 2884,
               "deprecated": false
             },
             {
@@ -12143,7 +12143,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Refresh the file list.",
-              "line": 2887,
+              "line": 2888,
               "deprecated": false
             },
             {
@@ -12152,7 +12152,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Convert all references to assemblies.",
-              "line": 2891,
+              "line": 2892,
               "deprecated": false
             },
             {
@@ -12161,7 +12161,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unlink and import all references.",
-              "line": 2895,
+              "line": 2896,
               "deprecated": false
             },
             {
@@ -12170,7 +12170,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Remove all references from the scene.",
-              "line": 2899,
+              "line": 2900,
               "deprecated": false
             }
           ]
@@ -20133,7 +20133,7 @@
     },
     {
       "relpath": "ui_utils/hotkey_collisions.py",
-      "summary": "Maya hotkey collision checker for the uitk HotkeyEditor.",
+      "summary": "Maya hotkey collision checker for the uitk ShortcutEditor.",
       "functions": [
         {
           "name": "parse_qt_sequence",
@@ -20141,7 +20141,7 @@
           "kind": "function",
           "signature": "(sequence: str) -> Optional[dict]",
           "summary": "Convert a Qt key sequence string to ``cmds.hotkey`` query kwargs.",
-          "line": 42,
+          "line": 49,
           "deprecated": false
         },
         {
@@ -20150,7 +20150,7 @@
           "kind": "function",
           "signature": "(ks: list) -> str",
           "summary": "Convert an ``assignCommand`` keyString array to a Maya hotkey token.",
-          "line": 115,
+          "line": 122,
           "deprecated": false
         },
         {
@@ -20159,7 +20159,7 @@
           "kind": "function",
           "signature": "() -> dict",
           "summary": "Return ``{runtime_command: maya_key_token}`` for the active hotkey set.",
-          "line": 144,
+          "line": 151,
           "deprecated": false
         },
         {
@@ -20168,7 +20168,7 @@
           "kind": "function",
           "signature": "(sequence, scope, ui_name, method_name)",
           "summary": "Check a proposed binding against Maya's active hotkey set.",
-          "line": 255,
+          "line": 303,
           "deprecated": false
         }
       ],

@@ -71,12 +71,16 @@
          </font>
         </property>
         <property name="text">
-         <string>COLOR MANAGER</string>
+         <string>COLOR ID</string>
         </property>
        </widget>
       </item>
       <item>
-       <layout class="QGridLayout" name="gridLayout">
+       <widget class="QGroupBox" name="grp_palette">
+        <property name="title">
+         <string>Palette</string>
+        </property>
+        <layout class="QGridLayout" name="gridLayout">
         <item row="0" column="0">
          <widget class="ColorSwatch" name="chk000">
           <property name="text">
@@ -233,12 +237,13 @@
           </property>
          </widget>
         </item>
-       </layout>
+        </layout>
+       </widget>
       </item>
       <item>
        <widget class="QGroupBox" name="groupBox_2">
         <property name="title">
-         <string/>
+         <string>Channels</string>
         </property>
         <layout class="QVBoxLayout" name="verticalLayout_6">
          <property name="spacing">
@@ -385,6 +390,9 @@
       </item>
       <item>
        <widget class="QGroupBox" name="groupBox">
+        <property name="title">
+         <string>Actions</string>
+        </property>
         <layout class="QVBoxLayout" name="verticalLayout_5">
          <property name="spacing">
           <number>0</number>
