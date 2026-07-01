@@ -36,6 +36,39 @@ class TestColorUtilsStaticHelpers(QuickTestCase):
         )
 
 
+class TestDefaultSwatchColors(QuickTestCase):
+    """The DEFAULT_SWATCH_COLORS palette on ColorId — pure data, no Maya."""
+
+    def test_palette_has_12_colors(self):
+        self.assertEqual(len(ColorId.DEFAULT_SWATCH_COLORS), 12)
+
+    def test_palette_colors_are_valid_rgb_tuples(self):
+        for color in ColorId.DEFAULT_SWATCH_COLORS:
+            self.assertIsInstance(color, tuple)
+            self.assertEqual(len(color), 3)
+            for ch in color:
+                self.assertGreaterEqual(ch, 0)
+                self.assertLessEqual(ch, 255)
+
+    def test_palette_colors_are_all_distinct(self):
+        colors = ColorId.DEFAULT_SWATCH_COLORS
+        self.assertEqual(len(colors), len(set(colors)))
+
+    def test_palette_colors_are_desaturated(self):
+        """Default colors should be muted (not fully saturated primaries)."""
+        import colorsys
+
+        for r, g, b in ColorId.DEFAULT_SWATCH_COLORS:
+            _, sat, _ = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+            # HSV saturation < 200/255 (~0.784) == muted; matches the
+            # Qt QColor.saturation() < 200 threshold the palette was tuned for.
+            self.assertLess(
+                sat,
+                200 / 255.0,
+                f"Color {(r, g, b)} is too saturated ({sat:.3f})",
+            )
+
+
 class TestColorUtilsMaterial(MayaTkTestCase):
     """ColorUtils.assign_material — creates lambert + assigns."""
 
