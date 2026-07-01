@@ -52,7 +52,7 @@ def _rename(node, new_name) -> str:
 # From mayatk package
 from mayatk.env_utils.namespace_sandbox import NamespaceSandbox
 from mayatk.cam_utils._cam_utils import CamUtils
-from mayatk.display_utils.color_manager import ColorUtils
+from mayatk.display_utils.color_id import ColorUtils
 from mayatk.node_utils._node_utils import NodeUtils
 
 

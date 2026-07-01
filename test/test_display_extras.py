@@ -1,16 +1,16 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Test Suite for display_utils extras (color_manager, exploded_view).
+"""Test Suite for display_utils extras (color_id, exploded_view).
 
 Covers:
-    - ColorUtils / ColorManager (color_manager.py)
+    - ColorUtils / ColorId (color_id.py)
     - ExplodedView (exploded_view.py)
 """
 import unittest
 
 import maya.cmds as cmds
 
-from mayatk.display_utils.color_manager import ColorUtils, ColorManager
+from mayatk.display_utils.color_id import ColorUtils, ColorId
 from mayatk.display_utils.exploded_view import ExplodedView
 
 from base_test import MayaTkTestCase, QuickTestCase
@@ -34,6 +34,39 @@ class TestColorUtilsStaticHelpers(QuickTestCase):
         self.assertAlmostEqual(
             ColorUtils.get_color_difference((0.5, 0.5, 0.5), (0, 0, 1)), 0.5
         )
+
+
+class TestDefaultSwatchColors(QuickTestCase):
+    """The DEFAULT_SWATCH_COLORS palette on ColorId — pure data, no Maya."""
+
+    def test_palette_has_12_colors(self):
+        self.assertEqual(len(ColorId.DEFAULT_SWATCH_COLORS), 12)
+
+    def test_palette_colors_are_valid_rgb_tuples(self):
+        for color in ColorId.DEFAULT_SWATCH_COLORS:
+            self.assertIsInstance(color, tuple)
+            self.assertEqual(len(color), 3)
+            for ch in color:
+                self.assertGreaterEqual(ch, 0)
+                self.assertLessEqual(ch, 255)
+
+    def test_palette_colors_are_all_distinct(self):
+        colors = ColorId.DEFAULT_SWATCH_COLORS
+        self.assertEqual(len(colors), len(set(colors)))
+
+    def test_palette_colors_are_desaturated(self):
+        """Default colors should be muted (not fully saturated primaries)."""
+        import colorsys
+
+        for r, g, b in ColorId.DEFAULT_SWATCH_COLORS:
+            _, sat, _ = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+            # HSV saturation < 200/255 (~0.784) == muted; matches the
+            # Qt QColor.saturation() < 200 threshold the palette was tuned for.
+            self.assertLess(
+                sat,
+                200 / 255.0,
+                f"Color {(r, g, b)} is too saturated ({sat:.3f})",
+            )
 
 
 class TestColorUtilsMaterial(MayaTkTestCase):
@@ -92,12 +125,12 @@ class TestColorUtilsVertex(MayaTkTestCase):
         self.assertIsNotNone(color)
 
 
-class TestColorManager(MayaTkTestCase):
-    """ColorManager.apply_color and reset_colors."""
+class TestColorId(MayaTkTestCase):
+    """ColorId.apply_color and reset_colors."""
 
     def test_apply_color_to_outliner(self):
         cube = cmds.polyCube(name="cm_out_cube")[0]
-        ColorManager.apply_color(
+        ColorId.apply_color(
             [cube], color=(0.0, 1.0, 0.0), apply_to_outliner=True
         )
         # useOutlinerColor should be True
@@ -106,15 +139,15 @@ class TestColorManager(MayaTkTestCase):
     def test_apply_color_random_when_none(self):
         cube = cmds.polyCube(name="cm_rand_cube")[0]
         # Should not raise — uses random color
-        ColorManager.apply_color([cube], apply_to_outliner=True)
+        ColorId.apply_color([cube], apply_to_outliner=True)
 
     def test_reset_colors_runs(self):
         cube = cmds.polyCube(name="cm_reset_cube")[0]
-        ColorManager.apply_color(
+        ColorId.apply_color(
             [cube], color=(1.0, 0.0, 0.0), apply_to_outliner=True
         )
         # Reset shouldn't raise
-        ColorManager.reset_colors([cube])
+        ColorId.reset_colors([cube])
 
 
 class TestExplodedView(MayaTkTestCase):
