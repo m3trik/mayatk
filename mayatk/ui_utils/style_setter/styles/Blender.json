@@ -1,0 +1,18 @@
+{
+  "_meta": {
+    "description": "Recolors Maya's viewport background and dormant grid/edge colors to match Blender 5.1's factory defaults. Deliberately narrow: only the always-on, visually dominant viewport elements verified against a live Blender factory-startup session. Selection/active colors, node editor, hypergraph, script editor syntax, and the other 300+ displayRGBColor names are untouched.",
+    "source": "Blender 5.1 --background --factory-startup preferences.themes[0].view_3d dump, 2026-07-04 (see blendertk/blendertk/ui_utils/style_setter/themes/Maya.xml + CHANGELOG for the reverse direction).",
+    "background": "Blender's real factory default is a flat SINGLE_COLOR (0.188, 0.188, 0.188) — not a gradient. backgroundTop/backgroundBottom are set to the same value so the result reads flat regardless of whether gradient mode is on.",
+    "grid": "Blender's grid + grid_major theme colors are both #545454 (they differ only in alpha, which colorIndex can't carry) — resolved via displayColor('grid', dormant=True) to a colorIndex slot, since grid lines are palette-indexed, not direct RGB.",
+    "polyEdge": "Blender's wire theme color is flat black (#000000) — applied to the DORMANT (deselected) polygon edge color only; Maya's active/selection highlight color is untouched."
+  },
+  "rgb": {
+    "background": [0.188, 0.188, 0.188, 1.0],
+    "backgroundTop": [0.188, 0.188, 0.188, 1.0],
+    "backgroundBottom": [0.188, 0.188, 0.188, 1.0]
+  },
+  "display_color": {
+    "grid": { "dormant": [0.329, 0.329, 0.329] },
+    "polyEdge": { "dormant": [0.0, 0.0, 0.0] }
+  }
+}

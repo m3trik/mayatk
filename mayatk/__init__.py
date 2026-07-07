@@ -137,6 +137,7 @@ DEFAULT_INCLUDE = {
     "ui_utils.maya_native_menus": "MayaNativeMenus",
     "ui_utils.maya_ui_handler": "MayaUiHandler",
     "ui_utils.node_icons": "NodeIcons",
+    "ui_utils.style_setter._style_setter": "StyleSetter",
     # Transform utils
     "xform_utils.matrices": "Matrices",
     "xform_utils.pivot_watcher": "PivotWatcher",

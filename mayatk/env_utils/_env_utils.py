@@ -47,6 +47,7 @@ class EnvUtils(ptk.HelpMixin):
                 cmds.internalVar(userPresetsDir=True)
             ),
             "user_app_path": lambda: os.path.normpath(cmds.internalVar(userAppDir=True)),
+            "prefs_path": lambda: os.path.normpath(cmds.internalVar(userPrefDir=True)),
             "version": lambda: cmds.about(version=True),
             "renderer": lambda: cmds.getAttr("defaultRenderGlobals.currentRenderer"),
             "workspace": lambda: cmds.workspace(q=True, rd=True),
