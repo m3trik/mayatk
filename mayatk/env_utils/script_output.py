@@ -2,184 +2,13 @@
 # coding=utf-8
 import maya.cmds as cmds
 import maya.mel as mel
-from typing import List, Optional
+from typing import Optional
 from qtpy import QtWidgets, QtGui, QtCore
 from maya.OpenMayaUI import MQtUtil
 from maya.app.general.mayaMixin import MayaQWidgetDockableMixin
 from shiboken6 import wrapInstance
 from mayatk.env_utils.maya_connection import MayaConnection
-
-
-class ScriptHighlightRule:
-    def __init__(
-        self,
-        color: tuple[int, int, int],
-        pattern: str,
-        bg_color: Optional[tuple[int, int, int]] = None,
-        bold: bool = False,
-        italic: bool = False,
-    ):
-        self.pattern = QtCore.QRegularExpression(pattern)
-        self.format = QtGui.QTextCharFormat()
-        self.format.setForeground(QtGui.QColor(*color))
-        if bg_color:
-            self.format.setBackground(QtGui.QColor(*bg_color))
-        font = QtGui.QFont("Courier New", 9)
-        font.setBold(bold)
-        font.setItalic(italic)
-        self.format.setFont(font)
-
-
-class ScriptHighlighter(QtGui.QSyntaxHighlighter):
-    def __init__(self, doc: QtGui.QTextDocument, rules: List[ScriptHighlightRule]):
-        super().__init__(doc)
-        self.rules = rules
-
-    def highlightBlock(self, text: str) -> None:
-        for rule in self.rules:
-            match_iter = rule.pattern.globalMatch(text)
-            while match_iter.hasNext():
-                match = match_iter.next()
-                self.setFormat(
-                    match.capturedStart(), match.capturedLength(), rule.format
-                )
-
-
-class ScriptOutput(QtWidgets.QTextEdit):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setReadOnly(True)
-        self.setFontFamily("Courier New")
-        # Ensure Ctrl+C works reliably even when Maya intercepts shortcuts
-        self._copy_shortcut = QtGui.QShortcut(QtGui.QKeySequence.Copy, self)
-        self._copy_shortcut.setContext(QtCore.Qt.ApplicationShortcut)
-        self._copy_shortcut.activated.connect(self._handle_copy_shortcut)
-        # Install application-level event filter to capture Ctrl+C before Maya
-        app = QtWidgets.QApplication.instance()
-        if app:
-            app.installEventFilter(self)
-        # Ensure the widget reliably gets/keeps focus and supports selection
-        self.setFocusPolicy(QtCore.Qt.StrongFocus)
-        self.setTextInteractionFlags(
-            QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
-        )
-        self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
-        self.customContextMenuRequested.connect(self._context_menu)
-
-        # Set up syntax highlighting
-        rules = [
-            ScriptHighlightRule((90, 90, 90), r"(//|#).+"),  # comment
-            ScriptHighlightRule((205, 200, 120), r".*\bWarning\b.*"),  # warning
-            ScriptHighlightRule((165, 75, 75), r".*\bError\b.*"),  # error
-            ScriptHighlightRule((115, 215, 150), r".*\bResult\b.*"),  # result
-            ScriptHighlightRule((130, 220, 210), r".*\bInfo\b.*"),  # info (pastel teal)
-        ]
-        self.highlighter = ScriptHighlighter(self.document(), rules)
-
-    def keyPressEvent(self, event: QtGui.QKeyEvent):
-        """Ensure copy shortcut works reliably in the output widget."""
-        if event.matches(QtGui.QKeySequence.Copy):
-            self._handle_copy_shortcut()
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def event(self, event: QtCore.QEvent):
-        """Intercept shortcut override so Maya doesn't steal Ctrl+C."""
-        if event.type() == QtCore.QEvent.ShortcutOverride:
-            if isinstance(event, QtGui.QKeyEvent) and event.matches(
-                QtGui.QKeySequence.Copy
-            ):
-                if self.textCursor().hasSelection():
-                    event.accept()
-                    return True
-        return super().event(event)
-
-    def eventFilter(self, obj, event: QtCore.QEvent):
-        if event.type() in (QtCore.QEvent.KeyPress, QtCore.QEvent.ShortcutOverride):
-            if isinstance(event, QtGui.QKeyEvent) and event.matches(
-                QtGui.QKeySequence.Copy
-            ):
-                if self.textCursor().hasSelection():
-                    self._handle_copy_shortcut()
-                    event.accept()
-                    return True
-        return super().eventFilter(obj, event)
-
-    def _handle_copy_shortcut(self):
-        if self.textCursor().hasSelection():
-            cursor = self.textCursor()
-            text = cursor.selectedText().replace("\u2029", "\n")
-            QtWidgets.QApplication.clipboard().setText(text)
-
-    def _clear_script_editor(self):
-        """Clear both the widget and the actual Maya Script Editor output"""
-        # Clear this widget
-        self.clear()
-
-        # Clear the actual Maya Script Editor
-        conn = MayaConnection.get_instance()
-        if not conn.is_connected:
-            conn.connect(mode="auto")
-
-        if not conn.clear_script_editor():
-            print("Failed to clear Maya Script Editor")
-
-    def _context_menu(self, pos: QtCore.QPoint):
-        # Create a simple context menu
-        menu = QtWidgets.QMenu(self)
-
-        menu.addAction("Clear", self._clear_script_editor)
-        menu.addAction("Copy", self.copy)  # Qt's built-in copy
-
-        menu.addSeparator()  # Always ensure Script Editor is present
-        ws_name = "scriptEditorPanel1Window"
-        if not cmds.workspaceControl(ws_name, exists=True):
-            mel.eval("ScriptEditor;")
-            cmds.workspaceControl(ws_name, edit=True, visible=True)
-
-        # Get current echo state using MEL for more reliability
-        try:
-            # Use the correct MEL command for echo all commands
-            echo_all = bool(mel.eval("commandEcho -query -state"))
-        except Exception:
-            echo_all = False
-
-        echo_action = menu.addAction("Echo All Commands")
-        echo_action.setCheckable(True)
-        echo_action.setChecked(echo_all)
-
-        def on_toggled(checked):
-            try:
-                # Use MEL commands for more reliable operation
-                if checked:
-                    mel.eval("commandEcho -state on")
-                else:
-                    mel.eval("commandEcho -state off")
-
-                print(f"Echo All Commands: {'ON' if checked else 'OFF'}")
-
-                # Verify the change took effect
-                actual_state = bool(mel.eval("commandEcho -query -state"))
-
-                if actual_state != checked:
-                    print(
-                        f"Warning: Echo All Commands may not have updated correctly. Current state: {'ON' if actual_state else 'OFF'}"
-                    )
-                    # Update checkbox to reflect actual state
-                    echo_action.blockSignals(True)
-                    echo_action.setChecked(actual_state)
-                    echo_action.blockSignals(False)
-
-            except Exception as e:
-                print(f"Failed to toggle Echo All Commands: {e}")
-                # Revert checkbox state on failure
-                echo_action.blockSignals(True)
-                echo_action.setChecked(not checked)
-                echo_action.blockSignals(False)
-
-        echo_action.toggled.connect(on_toggled)
-        menu.exec(self.mapToGlobal(pos))
+from uitk import ScriptOutput
 
 
 class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
@@ -198,10 +27,64 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        self.output = ScriptOutput()
+        # The read-only, syntax-highlighted view now lives in uitk (shared with
+        # blendertk / standalone). Maya-specific behavior is injected: Clear also
+        # empties Maya's reporter, and the context menu gains the Echo toggle.
+        self.output = ScriptOutput(
+            clear_callback=self._clear_reporter,
+            context_menu_hook=self._echo_menu_hook,
+        )
         layout.addWidget(self.output)
         self.resize(800, 300)
         self._mirror_script_editor_output()
+
+    def _clear_reporter(self):
+        """Context-menu **Clear**: empty the mirror widget AND Maya's reporter."""
+        self.output.clear()
+        conn = MayaConnection.get_instance()
+        if not conn.is_connected:
+            conn.connect(mode="auto")
+        if not conn.clear_script_editor():
+            print("Failed to clear Maya Script Editor")
+
+    def _echo_menu_hook(self, menu: QtWidgets.QMenu):
+        """Append Maya's 'Echo All Commands' toggle to the shared context menu."""
+        menu.addSeparator()
+        # Ensure the Script Editor exists so commandEcho has a target.
+        ws_name = "scriptEditorPanel1Window"
+        if not cmds.workspaceControl(ws_name, exists=True):
+            mel.eval("ScriptEditor;")
+            cmds.workspaceControl(ws_name, edit=True, visible=True)
+
+        try:
+            echo_all = bool(mel.eval("commandEcho -query -state"))
+        except Exception:
+            echo_all = False
+
+        echo_action = menu.addAction("Echo All Commands")
+        echo_action.setCheckable(True)
+        echo_action.setChecked(echo_all)
+
+        def on_toggled(checked):
+            try:
+                mel.eval("commandEcho -state on" if checked else "commandEcho -state off")
+                print(f"Echo All Commands: {'ON' if checked else 'OFF'}")
+                actual_state = bool(mel.eval("commandEcho -query -state"))
+                if actual_state != checked:
+                    print(
+                        f"Warning: Echo All Commands may not have updated correctly. "
+                        f"Current state: {'ON' if actual_state else 'OFF'}"
+                    )
+                    echo_action.blockSignals(True)
+                    echo_action.setChecked(actual_state)
+                    echo_action.blockSignals(False)
+            except Exception as e:
+                print(f"Failed to toggle Echo All Commands: {e}")
+                echo_action.blockSignals(True)
+                echo_action.setChecked(not checked)
+                echo_action.blockSignals(False)
+
+        echo_action.toggled.connect(on_toggled)
 
     @staticmethod
     def _get_script_editor_output_widget() -> Optional[QtWidgets.QPlainTextEdit]:

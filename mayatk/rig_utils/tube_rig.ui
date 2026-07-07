@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>220</width>
-    <height>350</height>
+    <height>331</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -158,8 +158,8 @@
         <rect>
          <x>0</x>
          <y>0</y>
-         <width>218</width>
-         <height>116</height>
+         <width>216</width>
+         <height>112</height>
         </rect>
        </property>
        <attribute name="label">
@@ -343,8 +343,8 @@
         <rect>
          <x>0</x>
          <y>0</y>
-         <width>120</width>
-         <height>137</height>
+         <width>106</width>
+         <height>132</height>
         </rect>
        </property>
        <attribute name="label">
@@ -535,7 +535,7 @@
         <rect>
          <x>0</x>
          <y>0</y>
-         <width>114</width>
+         <width>100</width>
          <height>32</height>
         </rect>
        </property>
@@ -590,7 +590,7 @@
         <rect>
          <x>0</x>
          <y>0</y>
-         <width>119</width>
+         <width>106</width>
          <height>32</height>
         </rect>
        </property>
@@ -645,7 +645,7 @@
         <rect>
          <x>0</x>
          <y>0</y>
-         <width>120</width>
+         <width>110</width>
          <height>32</height>
         </rect>
        </property>

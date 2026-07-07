@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.12.64"
+__version__ = "0.12.66"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -35,7 +35,8 @@ DEFAULT_INCLUDE = {
     "anim_utils.scale_keys": "*",
     "anim_utils.stagger_keys": "*",
     "anim_utils.segment_keys": "SegmentKeys",
-    "anim_utils.smart_bake": ["SmartBake", "smart_bake"],
+    "anim_utils.smart_bake._smart_bake": "SmartBake",
+    "anim_utils.smart_bake.bake_session": "RestoreResult",
     "anim_utils.shots.shot_sequencer._shot_sequencer": ["ShotSequencer", "ShotBlock"],
     "anim_utils.shots._shots": "ShotStore",
     "anim_utils.blendshape_animator._blendshape_animator": "BlendshapeAnimator",
@@ -48,7 +49,7 @@ DEFAULT_INCLUDE = {
     "env_utils.devtools": "*",
     # Core utils - specific classes
     "core_utils.components": "Components",
-    "core_utils.instancing.auto_instancer": "AutoInstancer",
+    "core_utils.auto_instancer._auto_instancer": ["AutoInstancer", "auto_instance"],
     "core_utils.mash->Mash": "*",
     "core_utils.preview": "Preview",
     "core_utils.script_job_manager": "ScriptJobManager",
@@ -136,6 +137,7 @@ DEFAULT_INCLUDE = {
     "ui_utils.maya_native_menus": "MayaNativeMenus",
     "ui_utils.maya_ui_handler": "MayaUiHandler",
     "ui_utils.node_icons": "NodeIcons",
+    "ui_utils.style_setter._style_setter": "StyleSetter",
     # Transform utils
     "xform_utils.matrices": "Matrices",
     "xform_utils.pivot_watcher": "PivotWatcher",

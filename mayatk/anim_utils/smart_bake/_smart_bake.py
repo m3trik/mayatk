@@ -14,6 +14,8 @@ Analyzes scene objects to detect what requires baking:
 Auto-detects optimal time range from driver animation.
 Designed for Unity/game engine export workflows.
 """
+import math
+from contextlib import contextmanager
 from typing import Dict, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass, field
 
@@ -93,6 +95,12 @@ class BakeResult:
     muted_drivers: List[str] = field(default_factory=list)
     """Driver nodes that were muted (if mute_drivers=True)."""
 
+    session_id: Optional[str] = None
+    """Id of the restore-manifest session recorded for this bake (if
+    restorable=True). Pass to ``SmartBake.restore()`` to reverse the bake —
+    the manifest persists on the ``data_internal`` node, so restore works
+    even after scene save/reopen."""
+
     @property
     def baked_count(self) -> int:
         """Number of objects successfully baked."""
@@ -171,9 +179,10 @@ class SmartBake:
         optimize_keys: bool = False,
         bake_blend_shapes: bool = True,
         bake_inherited_visibility: bool = False,
-        use_override_layer: bool = False,
+        use_override_layer: bool = True,
         mute_drivers: bool = False,
-        backup_file: Any = False,
+        backup_file: Any = None,
+        restorable: bool = True,
     ):
         """Initialize SmartBake with configuration.
 
@@ -182,6 +191,9 @@ class SmartBake:
             sample_by: Keyframe sample interval (1 = every frame).
             preserve_outside_keys: Keep existing keys outside bake range.
             delete_inputs: Delete constraint/expression nodes after baking.
+                Destructive — the restore manifest cannot rebuild deleted
+                drivers, so the session is marked non-restorable and a scene
+                backup is saved by default (see backup_file).
                 Ignored when use_override_layer=True (use mute_drivers instead).
             optimize_keys: Run AnimUtils.optimize_keys() on baked objects to
                 remove static curves and redundant flat keys.
@@ -192,17 +204,30 @@ class SmartBake:
                 mesh transforms.  Required for FBX/Unity when parent LOC
                 nodes toggle visibility that child GEO inherits at runtime.
             use_override_layer: Bake to a new override animation layer instead
-                of the base layer. Original constraints/expressions remain
-                connected on base but are overridden by the baked layer.
-                Toggle layer mute to compare baked vs. live results.
-                FBX export will flatten layers when FBXExportBakeComplexAnimation=True.
+                of the base layer (default: True — nondestructive). Original
+                constraints/expressions remain connected on base but are
+                overridden by the baked layer. Toggle layer mute to compare
+                baked vs. live results. FBX export will flatten layers when
+                FBXExportBakeComplexAnimation=True. Base-layer mode
+                (use_override_layer=False) converts SDK curves in place and
+                disconnects drivers — recoverable only via the restore
+                manifest (restorable=True) or a backup.
             mute_drivers: Mute (disable) driver nodes after baking instead of
                 deleting them. Useful with use_override_layer for better playback
-                performance while keeping drivers recoverable. Set nodeState=2.
+                performance while keeping drivers recoverable. Sets nodeState=2;
+                prior states are recorded in the restore manifest.
             backup_file: Save scene backup before any destructive operations.
-                - False: No backup (default)
-                - True: Save to scene directory as 'scenename_prebake.ma'
-                - str: Custom file path for backup
+                - None (default): auto — backup only when delete_inputs=True
+                  in base-layer mode (the one non-restorable path).
+                - False: never back up.
+                - True: Save to scene directory as 'scenename_prebake.ma'.
+                - str: Custom file path for backup.
+            restorable: Record a restore-manifest session for this bake
+                (default: True). The manifest persists on the data_internal
+                node; ``SmartBake.restore()`` reverses the bake — deletes the
+                override layer, unmutes drivers, re-enables IK handles,
+                restores visibility, and rebuilds base-layer driver networks
+                from stashed curves. Costs a few small nodes/attrs per bake.
         """
         self.objects = objects
         self.sample_by = sample_by
@@ -213,7 +238,10 @@ class SmartBake:
         self.bake_inherited_visibility = bake_inherited_visibility
         self.use_override_layer = use_override_layer
         self.mute_drivers = mute_drivers
+        if backup_file is None:
+            backup_file = bool(delete_inputs and not use_override_layer)
         self.backup_file = backup_file
+        self.restorable = restorable
 
         # Cache for node type inheritance lookups
         self._type_cache: Dict[str, List[str]] = {}
@@ -594,12 +622,14 @@ class SmartBake:
                     all_times.extend(times)
 
         if all_times:
-            return int(min(all_times)), int(max(all_times))
+            # floor/ceil — int() truncates toward zero and would drop
+            # fractional driver keys at the range boundaries.
+            return math.floor(min(all_times)), math.ceil(max(all_times))
 
         # Fallback to playback range
         start = cmds.playbackOptions(query=True, minTime=True)
         end = cmds.playbackOptions(query=True, maxTime=True)
-        return int(start), int(end)
+        return math.floor(start), math.ceil(end)
 
     def _get_driver_time_range(self, node: str, source_type: str) -> List[float]:
         """Get keyframe times from a driver node's animation curves.
@@ -642,6 +672,7 @@ class SmartBake:
         start: int,
         end: int,
         result: "BakeResult",
+        session: Optional[dict] = None,
     ) -> None:
         """Sample effective ancestor visibility and key it on each object.
 
@@ -719,6 +750,27 @@ class SmartBake:
                         if start <= t <= end:
                             sample_times.add(t)
 
+                # Keying below mutates the child's OWN vis curve in place —
+                # stash a pristine duplicate first so restore can bring the
+                # original animation back instead of deleting it with the
+                # baked keys.
+                if session is not None:
+                    from mayatk.anim_utils.smart_bake import bake_session
+
+                    vis_stash = (
+                        bake_session.stash_curve(child_vis_curves[0])
+                        if child_vis_curves
+                        else None
+                    )
+                    session["visibility"].append(
+                        {
+                            "object": bake_session.node_ref(obj),
+                            "had_curve": bool(child_vis_curves),
+                            "stash": vis_stash,
+                            "original_value": float(original_vis),
+                        }
+                    )
+
                 sorted_times = sorted(sample_times)
 
                 # Snapshot the child's own visibility at ALL sample
@@ -775,54 +827,60 @@ class SmartBake:
                     f"SmartBake: Failed to bake inherited visibility " f"for {obj}: {e}"
                 )
 
-    def _create_override_layer(self, to_bake: Dict[str, Any]) -> str:
-        """Create an override animation layer for baking.
+    def _create_override_layer(self) -> str:
+        """Create an empty override animation layer for baking.
 
         Delegates to AnimUtils.create_animation_layer() for layer creation.
-
-        Parameters:
-            to_bake: Dict of {object: BakeAnalysis} for objects being baked.
+        Deliberately does NOT pre-register attributes onto the layer (no
+        ``attributes=`` kwarg): pre-registering via ``cmds.animLayer(edit=True,
+        attribute=...)`` and then ``bakeResults(destinationLayer=...)`` onto
+        the SAME freshly-created layer corrupts the bake — every sampled key
+        comes back as one flat constant (whatever value was live at
+        registration time) instead of the true per-frame curve. Proven live:
+        a locator animated 0->5 baked through a pre-registered layer read
+        back flat at every frame; handing bakeResults the empty layer and
+        letting it wire the attributes itself reproduces the original motion
+        exactly, including non-linear ("auto") tangent shape.
 
         Returns:
-            Name of the created animation layer.
+            Name of the created (empty) animation layer.
         """
         from mayatk.anim_utils._anim_utils import AnimUtils
-
-        # Collect all attributes that will be baked
-        attributes = []
-        for obj, data in to_bake.items():
-            for channel in data.all_driven_channels:
-                attributes.append(f"{obj}.{channel}")
 
         return AnimUtils.create_animation_layer(
             name="SmartBake_Override",
             override=True,
-            attributes=attributes,
             preferred=True,
             timestamp_suffix=True,
             unique_name=True,
         )
 
-    def _mute_driver_nodes(self, to_bake: Dict[str, Any]) -> List[str]:
+    def _mute_driver_nodes(self, to_bake: Dict[str, Any]) -> List[Tuple[str, int]]:
         """Mute driver nodes by setting nodeState=2 (Blocking).
 
         Parameters:
             to_bake: Dict of {object: BakeAnalysis} for objects being baked.
 
         Returns:
-            List of node names that were muted.
+            List of ``(node, prior_nodeState)`` tuples for the restore manifest.
         """
-        muted = []
+        muted: List[Tuple[str, int]] = []
+        seen: Set[str] = set()
         for obj, data in to_bake.items():
-            for nodes in data.source_nodes.values():
+            for source_type, nodes in data.source_nodes.items():
+                if source_type.startswith("inherited_visibility"):
+                    continue  # ancestor curves/plugs, not driver nodes
                 for node in nodes:
-                    if cmds.objExists(node):
-                        try:
-                            if cmds.attributeQuery("nodeState", node=node, exists=True):
-                                cmds.setAttr(f"{node}.nodeState", 2)  # Blocking
-                                muted.append(node)
-                        except RuntimeError:
-                            pass
+                    if node in seen or not cmds.objExists(node):
+                        continue
+                    seen.add(node)
+                    try:
+                        if cmds.attributeQuery("nodeState", node=node, exists=True):
+                            prior = cmds.getAttr(f"{node}.nodeState")
+                            cmds.setAttr(f"{node}.nodeState", 2)  # Blocking
+                            muted.append((node, int(prior)))
+                    except RuntimeError:
+                        pass
         return muted
 
     @CoreUtils.undoable
@@ -866,6 +924,65 @@ class SmartBake:
         # Save backup before any destructive operations
         result.backup_path = self._save_backup()
 
+        # Restore-manifest session: records everything this bake changes so
+        # SmartBake.restore() can reverse it (persisted on data_internal).
+        from mayatk.anim_utils.smart_bake import bake_session
+
+        session: Optional[dict] = None
+        if self.restorable:
+            # delete_inputs removes the driver nodes themselves — nothing to
+            # reconnect afterwards, so the session is recorded but flagged
+            # non-restorable (restore() then points at the backup instead).
+            # mute_drivers takes precedence over delete_inputs at cleanup
+            # time, so drivers survive (and the session stays restorable).
+            will_delete = (
+                self.delete_inputs
+                and not self.use_override_layer
+                and not self.mute_drivers
+            )
+            session = {
+                "version": bake_session.BakeSessionStore.SCHEMA_VERSION,
+                "id": bake_session.BakeSessionStore.new_session_id(),
+                "restorable": not will_delete,
+                "time_range": list(time_range),
+                "override_layer": None,
+                "baked_plugs": [],
+                "connections": [],
+                "stashed_curves": [],
+                "visibility": [],
+                "ik_handles": [],
+                "muted_drivers": [],
+                "backup_path": result.backup_path,
+            }
+
+            # bakeResults(disableImplicitControl=True) zeroes ikBlend on the
+            # handles EVEN when baking to an override layer — record the
+            # pre-bake state so restore can re-enable IK.
+            if session["restorable"]:
+                seen_handles: Set[str] = set()
+                for obj, data in to_bake.items():
+                    for handle in data.source_nodes.get("ik", []):
+                        if handle in seen_handles or not cmds.objExists(handle):
+                            continue
+                        seen_handles.add(handle)
+                        if not cmds.attributeQuery("ikBlend", node=handle, exists=True):
+                            continue
+                        had_incoming = bool(
+                            cmds.listConnections(
+                                f"{handle}.ikBlend",
+                                source=True,
+                                destination=False,
+                                type="animCurve",
+                            )
+                        )
+                        session["ik_handles"].append(
+                            {
+                                "ref": bake_session.node_ref(handle),
+                                "ik_blend": float(cmds.getAttr(f"{handle}.ikBlend")),
+                                "had_incoming": had_incoming,
+                            }
+                        )
+
         # Split inherited-visibility objects from standard driven channels.
         # These get their own dedicated layer and frame-by-frame sampling.
         inherited_vis_objects = {}
@@ -897,7 +1014,7 @@ class SmartBake:
         # Create override layer for standard channels (excludes visibility)
         override_layer = None
         if self.use_override_layer and remaining_to_bake:
-            override_layer = self._create_override_layer(remaining_to_bake)
+            override_layer = self._create_override_layer()
             result.override_layer = override_layer
 
         start, end = time_range
@@ -921,6 +1038,7 @@ class SmartBake:
                 start,
                 end,
                 result,
+                session=session,
             )
 
         # -----------------------------------------------------------
@@ -944,6 +1062,40 @@ class SmartBake:
             # SmartBake logic: explicit channel lists derived from analysis
             key = tuple(sorted(channels))
             grouped_by_channels[key].append(obj)
+
+        # Base-layer mode is destructive: bakeResults converts SDK curves in
+        # place (the original animCurveU node is DELETED and replaced by a
+        # same-named animCurveT) and disconnects driver networks.  Before
+        # baking, snapshot each plug's incoming connections and stash a
+        # locked duplicate of every animCurve feeding it (directly or
+        # through passthrough nodes) so restore can rebuild the network.
+        # Layer mode needs none of this — original connections stay live.
+        if (
+            session is not None
+            and session["restorable"]
+            and not self.use_override_layer
+        ):
+            stashed_curve_nodes: Set[str] = set()
+            for obj, data in remaining_to_bake.items():
+                channels = data.all_driven_channels
+                if not channels:
+                    continue
+                session["baked_plugs"].append(
+                    {"ref": bake_session.node_ref(obj), "channels": channels}
+                )
+                for channel in channels:
+                    plug = f"{obj}.{channel}"
+                    session["connections"].extend(
+                        bake_session.snapshot_connections(plug)
+                    )
+                    for curve in bake_session.collect_upstream_curves(
+                        plug, self.PASSTHROUGH_TYPES
+                    ):
+                        if curve not in stashed_curve_nodes:
+                            stashed_curve_nodes.add(curve)
+                            session["stashed_curves"].append(
+                                bake_session.stash_curve(curve)
+                            )
 
         for channels, objects in grouped_by_channels.items():
             try:
@@ -986,7 +1138,16 @@ class SmartBake:
         if result.baked:
             if self.mute_drivers:
                 # Mute drivers (set nodeState=2) - keeps them recoverable
-                result.muted_drivers = self._mute_driver_nodes(to_bake)
+                muted_with_states = self._mute_driver_nodes(to_bake)
+                result.muted_drivers = [node for node, _ in muted_with_states]
+                if session is not None:
+                    session["muted_drivers"] = [
+                        {
+                            "ref": bake_session.node_ref(node),
+                            "prior_state": prior,
+                        }
+                        for node, prior in muted_with_states
+                    ]
             elif self.delete_inputs and not self.use_override_layer:
                 # Delete drivers (destructive).
                 # IMPORTANT: bakeResults converts SDK curves (animCurveU*)
@@ -1060,6 +1221,22 @@ class SmartBake:
                 )
             result.optimized = list(result.baked.keys())
 
+        # Persist the restore manifest — only when the bake actually
+        # changed something worth reversing.
+        if session is not None:
+            if result.baked or result.visibility_curves:
+                if override_layer and cmds.objExists(override_layer):
+                    session["override_layer"] = bake_session.node_ref(override_layer)
+                bake_session.BakeSessionStore.push(session)
+                result.session_id = session["id"]
+            else:
+                # Bake was a no-op — discard any stashes created for it.
+                for record in session["stashed_curves"]:
+                    bake_session.discard_stash(record)
+                for entry in session["visibility"]:
+                    if entry.get("stash"):
+                        bake_session.discard_stash(entry["stash"])
+
         return result
 
     def execute(self) -> BakeResult:
@@ -1070,6 +1247,105 @@ class SmartBake:
         """
         analysis = self.analyze()
         return self.bake(analysis)
+
+    # -------------------------------------------------------------------------
+    # Restore
+    # -------------------------------------------------------------------------
+
+    @classmethod
+    def list_sessions(cls) -> List[str]:
+        """Return ids of restorable bake sessions recorded in this scene,
+        oldest first."""
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        return BakeSessionStore.list_ids()
+
+    @classmethod
+    @CoreUtils.undoable
+    def restore(cls, session_id: Optional[str] = None) -> "RestoreResult":
+        """Reverse a bake session recorded by ``bake(restorable=True)``.
+
+        Restores from the manifest persisted on the ``data_internal`` node,
+        so this works in a later Maya session after scene save/reopen:
+
+        - Deletes the override animation layer (drivers resume).
+        - Unmutes drivers to their recorded nodeState values.
+        - Re-enables IK handles (``disableImplicitControl`` zeroes ikBlend
+          even when baking to a layer).
+        - Restores visibility: deletes baked curves, reconnects the stashed
+          original curve or resets the recorded static value.
+        - Base-layer bakes: deletes the baked curves and rebuilds the driver
+          network — reconnects recorded constraint/expression/motion-path
+          plugs and unstashes SDK / blended key curves.
+
+        Known limitation: if bake deleted an intermediate blend node (e.g. a
+        pairBlend), its wiring cannot be rebuilt — the stashed curve is
+        reconnected directly to the channel where possible and a warning is
+        reported. Restore never raises on missing nodes; per-item issues are
+        collected in ``RestoreResult.warnings``.
+
+        Parameters:
+            session_id: Session to restore. None (default) restores the most
+                recent session (LIFO). The session is removed from the
+                manifest either way — including non-restorable
+                (delete_inputs) sessions, so older sessions stay reachable.
+
+        Returns:
+            RestoreResult with success flag, per-category restore lists, and
+            warnings. ``success=False`` means the session was missing or
+            recorded as non-restorable.
+        """
+        from mayatk.anim_utils.smart_bake.bake_session import (
+            BakeSessionStore,
+            RestoreResult,
+            restore_session,
+        )
+
+        session = BakeSessionStore.peek(session_id)
+        if session is None:
+            result = RestoreResult(session_id=session_id)
+            result.warnings.append(
+                "No bake session found to restore."
+                if session_id is None
+                else f"Bake session '{session_id}' not found."
+            )
+            cmds.warning(f"SmartBake: {result.warnings[0]}")
+            return result
+
+        result = restore_session(session)
+        # Pop only after the restore pass completes — an unexpected failure
+        # mid-restore leaves the session in place so it can be retried.
+        BakeSessionStore.pop(session.get("id"))
+        for warning in result.warnings:
+            cmds.warning(f"SmartBake restore: {warning}")
+        return result
+
+    @classmethod
+    @contextmanager
+    def session(cls, **kwargs):
+        """Context manager: bake on enter, restore on exit.
+
+        The scene is returned to its pre-bake state even if the body raises —
+        made for export workflows::
+
+            with SmartBake.session(objects=meshes) as result:
+                export_fbx(...)
+            # layer deleted, drivers unmuted, IK re-enabled
+
+        Parameters:
+            **kwargs: Forwarded to SmartBake.__init__ (restorable is forced
+                True — the exit restore depends on the manifest).
+
+        Yields:
+            BakeResult from the enter-time bake.
+        """
+        kwargs["restorable"] = True
+        result = cls(**kwargs).execute()
+        try:
+            yield result
+        finally:
+            if result.session_id:
+                cls.restore(result.session_id)
 
     @classmethod
     def run(cls, **kwargs) -> BakeResult:
@@ -1083,9 +1359,10 @@ class SmartBake:
                 - delete_inputs: Delete driver nodes after bake (default: False)
                 - optimize_keys: Remove redundant keys after bake (default: False)
                 - bake_blend_shapes: Bake driven blend shape weights (default: True)
-                - use_override_layer: Bake to override layer (default: False)
+                - use_override_layer: Bake to override layer (default: True)
                 - mute_drivers: Mute drivers instead of deleting (default: False)
-                - backup_file: Save backup before baking (default: False)
+                - backup_file: Save backup before baking (default: None = auto)
+                - restorable: Record a restore-manifest session (default: True)
 
         Returns:
             BakeResult dataclass with bake operation results.

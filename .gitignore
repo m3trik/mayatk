@@ -206,8 +206,15 @@ mayatk/mat_utils/resources/hdr/aircraft_workshop_01_4k.tx
 mayatk/mat_utils/resources/hdr/empty_warehouse_01_4k.tx
 upload_errors.txt
 
+# Runtime API-surface dump (drift-gate build artifact — never committed)
+API_RUNTIME.json
+
 test/temp_tests/
 
 # Test runner output (regenerated each run)
 test/logs/
-test/debug_audio_clips.fbx
+test/debug_*.fbx
+test/test_output.txt
+test/test_stderr.txt
+test/test_stdout.txt
+test/cmds_syntax_report.txt

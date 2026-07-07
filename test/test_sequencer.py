@@ -965,28 +965,32 @@ class TestDetectShotsBehavior(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# MayaScenePersistence — round-trip against a real data node
+# MayaScenePersistence — round-trip against the shared data_internal node
 # ---------------------------------------------------------------------------
 
 
 @unittest.skipUnless(HAS_MAYA, "Requires Maya (standalone or GUI)")
 class TestMayaScenePersistenceRoundTrip(unittest.TestCase):
     """Mock-based suites cover the script-job wiring; this verifies the data
-    actually round-trips through a Maya network node.
+    actually round-trips through the shared ``data_internal`` channel.
     """
 
     def setUp(self):
         cmds.file(new=True, force=True)
 
-    def test_save_writes_node_and_load_reads_back(self):
-        from mayatk.anim_utils.shots._shots import MayaScenePersistence, NODE_NAME
+    def test_save_writes_channel_and_load_reads_back(self):
+        from mayatk.anim_utils.shots._shots import MayaScenePersistence, ATTR_NAME
+        from mayatk.node_utils.data_nodes import DataNodes
 
         persistence = MayaScenePersistence()
         payload = {"shots": [{"id": 0, "name": "S0", "start": 0, "end": 50}]}
         persistence.save(payload)
 
-        # Storage node should exist after save.
-        self.assertTrue(cmds.objExists(NODE_NAME))
+        # Payload lands on the shared internal carrier, not a dedicated node.
+        self.assertTrue(cmds.objExists(DataNodes.INTERNAL))
+        self.assertTrue(
+            cmds.attributeQuery(ATTR_NAME, node=DataNodes.INTERNAL, exists=True)
+        )
 
         # Load returns the same payload.
         self.assertEqual(persistence.load(), payload)
@@ -996,6 +1000,36 @@ class TestMayaScenePersistenceRoundTrip(unittest.TestCase):
 
         # Fresh scene — no storage node yet.
         self.assertIsNone(MayaScenePersistence().load())
+
+    def test_load_migrates_legacy_shotstore_node(self):
+        """A pre-consolidation ``shotStore`` node is folded into data_internal."""
+        import json
+        from mayatk.anim_utils.shots._shots import (
+            MayaScenePersistence,
+            ATTR_NAME,
+            LEGACY_NODE_NAME,
+            LEGACY_ATTR_NAME,
+        )
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        payload = {"shots": [{"id": 1, "name": "legacy", "start": 5, "end": 42}]}
+        node = cmds.createNode("network", name=LEGACY_NODE_NAME)
+        cmds.addAttr(node, longName=LEGACY_ATTR_NAME, dataType="string")
+        cmds.setAttr(
+            f"{node}.{LEGACY_ATTR_NAME}", json.dumps(payload), type="string"
+        )
+        cmds.lockNode(node, lock=False, lockName=True)  # matches old carrier
+
+        persistence = MayaScenePersistence()
+        self.assertEqual(persistence.load(), payload)
+
+        # Old carrier is gone; payload now lives on data_internal.
+        self.assertFalse(cmds.objExists(LEGACY_NODE_NAME))
+        self.assertEqual(
+            DataNodes.get_internal_string(ATTR_NAME), json.dumps(payload)
+        )
+        # Subsequent loads read the migrated channel directly.
+        self.assertEqual(persistence.load(), payload)
 
 
 # ---------------------------------------------------------------------------

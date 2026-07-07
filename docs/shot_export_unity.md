@@ -35,7 +35,8 @@ ShotStore.enable_auto_export()                # before-export hook: republish fr
 hook (`FbxUtils.register_export_preparer`); the Audio system registers its own via
 `AudioClips.enable_auto_export()`. Both ride out on the **same** `data_export`
 GameObject with distinct attrs — Shots' plain `fbx_takes`/`shot_metadata`, Audio's
-proxy-mirrored `audio_manifest` (+ keyed `audio_clip_*`) — so a scene with both
+plain `audio_manifest` (baked from the keyed `audio_clip_*` authoring state on
+`data_internal`) — so a scene with both
 exports one FBX that Unity imports into both a `ShotMetadataController` and an
 `AudioEventController` on the prefab root. The hook is reference-counted: enable
 either or both; each runs once per export, fault-isolated. Verified end-to-end by

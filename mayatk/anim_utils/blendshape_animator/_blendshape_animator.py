@@ -10,6 +10,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.anim_utils.blendshape_animator.applicator import Applicator, ApplyStatus
 from mayatk.anim_utils.blendshape_animator.creator import Creator
 from mayatk.anim_utils.blendshape_animator.helpers import list_history
@@ -43,17 +44,28 @@ class BlendshapeAnimator(ptk.LoggingMixin):
     # CREATE
     # =============================================================================
 
+    DEFAULT_START_FRAME = 5500
+    DEFAULT_END_FRAME = 5800
+
+    @CoreUtils.undoable
     def create(
         self,
         base_mesh: Optional[str] = None,
         target_mesh: Optional[str] = None,
-        start_frame: int = 5500,
-        end_frame: int = 5800,
+        start_frame: Optional[int] = None,
+        end_frame: Optional[int] = None,
         name: str = "morph",
         test_setup: bool = True,
     ) -> bool:
         """Set up basic morph animation between two meshes."""
         self.logger.info("=== CREATE PHASE: Setting up morph animation ===")
+
+        # Coalesce here rather than in the signature so callers that pass
+        # None through (e.g. basic_workflow) still get the defaults.
+        if start_frame is None:
+            start_frame = self.DEFAULT_START_FRAME
+        if end_frame is None:
+            end_frame = self.DEFAULT_END_FRAME
 
         if base_mesh is None or target_mesh is None:
             selection = cmds.ls(selection=True)
@@ -94,6 +106,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
             self.tween_applicator = Applicator(self.keyframes)
 
             if not self.keyframes.create_keyframes(start_frame, end_frame):
+                self._clear_setup_state()
                 return False
 
             if test_setup:
@@ -106,7 +119,18 @@ class BlendshapeAnimator(ptk.LoggingMixin):
 
         except RuntimeError as e:
             self.logger.error(f"in CREATE phase: {e}")
+            self._clear_setup_state()
             return False
+
+    def _clear_setup_state(self) -> None:
+        """Reset the bound setup after a failed create so the animator (and
+        any UI gating on it) doesn't report a half-initialized setup."""
+        self.base_mesh = None
+        self.target_mesh = None
+        self.blendshape = None
+        self.keyframes = None
+        self.tween_creator = None
+        self.tween_applicator = None
 
     # =============================================================================
     # EDIT — three explicit methods (no string dispatch)
@@ -289,6 +313,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
 
         return animator
 
+    @CoreUtils.undoable
     def apply_all_edits(self) -> bool:
         """Apply all target edits to the current setup."""
         self.logger.info("=== APPLYING ALL TARGET EDITS ===")
@@ -307,6 +332,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         self.logger.warning("No target edits found to apply")
         return False
 
+    @CoreUtils.undoable
     def finalize_for_export(
         self,
         cleanup_scene: bool = True,
@@ -380,16 +406,19 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         if delete_construction_history and self.base_mesh:
             self.logger.info("Step 3: Cleaning construction history...")
             try:
-                history = list_history(self.base_mesh)
-                to_delete = [
-                    n for n in history
-                    if cmds.nodeType(n) not in ("blendShape", "mesh", "transform")
-                ]
-
-                if to_delete:
-                    cmds.delete(to_delete)
+                # Maya's canonical non-deformer history bake: removes
+                # construction nodes while preserving deformers (blendShape,
+                # skinCluster) and the animation curves driving them.  A
+                # type-filtered cmds.delete over listHistory would also
+                # delete the weight animCurve (nodeType 'animCurveTU'),
+                # destroying the morph animation this function exports.
+                before = set(list_history(self.base_mesh))
+                cmds.bakePartialHistory(self.base_mesh, prePostDeformers=True)
+                removed = len(before - set(list_history(self.base_mesh)))
+                if removed:
                     self.logger.info(
-                        f"  Cleaned {len(to_delete)} history nodes (preserved blendShape)"
+                        f"  Cleaned {removed} history nodes "
+                        "(preserved blendShape + animation)"
                     )
                 else:
                     self.logger.info("  No unnecessary history to clean")

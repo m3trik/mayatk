@@ -207,14 +207,17 @@ class StaggerKeys:
                 by_time=True,
             )
 
-            # Capture and print new ranges
-            # Re-collect segments to get updated times
+            # Capture and print new ranges.  Re-collect with the SAME
+            # parameters as the operative collection above — differing
+            # params would report ranges the stagger never touched.
             new_segments = SegmentKeys.collect_segments(
                 objects,
                 ignore=ignore,
                 split_static=split_static,
+                selected_keys_only=selected_keys_only,
                 channel_box_attrs=channel_box_attrs,
-                ignore_visibility_holds=split_static,
+                ignore_visibility_holds=ignore_visibility_holds,
+                ignore_holds=False,
                 exclude_next_start=True,
             )
             new_ranges = SegmentKeys.get_time_ranges(new_segments)

@@ -432,49 +432,82 @@ class MayaNativeMenus(ptk.LoggingMixin):
             self.logger.error(f"No initialization command found for menu '{menu_key}'")
             return None
 
-        orig_menu_set = cmds.menuSet(q=True, label=True)
+        try:
+            orig_menu_set = cmds.menuSet(q=True, label=True)
+        except RuntimeError:
+            # Batch / standalone Maya has no menu sets — and no native menus
+            # to clone. Bail cleanly instead of raising out of the panel open.
+            self.logger.debug(f"No menu sets in this session; skipping '{menu_key}'.")
+            return None
         self.logger.debug(
             f"Switching menu mode to '{target_menu_set}' (original: {orig_menu_set})"
         )
         cmds.setMenuMode(target_menu_set)
+        # Everything from here runs with the menu mode switched; the finally
+        # guarantees the user's original menu set comes back on EVERY exit —
+        # a stuck mode silently swaps the whole main-window menu bar.
         try:
-            mel.eval(init_command)
-        except Exception as e:
-            # The init command is Maya-version-specific. Several mappings are
-            # stale on newer Maya — build procs renamed (``buildToonMenu``
-            # gone), arguments changed (``buildHelpMenu`` now takes none), or
-            # the target menu shell no longer exists (``mainCacheMenu``). A
-            # raise here means the native menu can't be built in this Maya, so
-            # bail immediately and let the caller fall back to the hand-authored
-            # ``<key>#submenu`` overlay. Previously this only warned, then spun
-            # a doomed 15-attempt ``processEvents`` populate loop — that loop,
-            # not the error itself, was the bulk of the multi-second stall when
-            # a broken menu was requested (e.g. toon ~10s, help ~5s).
-            self.logger.debug(f"Native menu '{menu_key}' unavailable: {e}")
+            try:
+                mel.eval(init_command)
+            except Exception as e:
+                # The init command is Maya-version-specific. Several mappings are
+                # stale on newer Maya — build procs renamed (``buildToonMenu``
+                # gone), arguments changed (``buildHelpMenu`` now takes none), or
+                # the target menu shell no longer exists (``mainCacheMenu``). A
+                # raise here means the native menu can't be built in this Maya, so
+                # bail immediately and let the caller fall back to the hand-authored
+                # ``<key>#submenu`` overlay. Previously this only warned, then spun
+                # a doomed 15-attempt ``processEvents`` populate loop — that loop,
+                # not the error itself, was the bulk of the multi-second stall when
+                # a broken menu was requested (e.g. toon ~10s, help ~5s).
+                self.logger.debug(f"Native menu '{menu_key}' unavailable: {e}")
+                return None
+            cmds.refresh()
+
+            placeholder_menu = PersistentMenu(maya_menu_name, UiUtils.get_main_window())
+            placeholder_widget = EmbeddedMenuWidget(placeholder_menu)
+            placeholder_widget.setObjectName(menu_key)
+
+            try:
+                populated = self._populate_menu(
+                    menu_key, maya_menu_name, placeholder_widget
+                )
+            except Exception as e:
+                self.logger.debug(f"Native menu '{menu_key}' populate failed: {e}")
+                populated = False
+            if not populated:
+                # Stale shell / dead main window / zero actions — never cache or
+                # return an empty wrapper (the ``menu_key in self.menus`` fast
+                # path would hand it back forever). The caller falls back to the
+                # hand-authored ``<key>#submenu`` overlay instead.
+                placeholder_widget.deleteLater()
+                return None
+
+            # Cache only a successfully populated menu.
+            self.menus[menu_key] = placeholder_widget
+            return placeholder_widget
+        finally:
             try:
                 cmds.setMenuMode(orig_menu_set)
             except Exception:
                 pass
-            return None
-        cmds.refresh()
-
-        placeholder_menu = PersistentMenu(maya_menu_name, UiUtils.get_main_window())
-        placeholder_widget = EmbeddedMenuWidget(placeholder_menu)
-        placeholder_widget.setObjectName(menu_key)
-        self.menus[menu_key] = placeholder_widget
-
-        self._populate_menu(menu_key, maya_menu_name, orig_menu_set, placeholder_widget)
-        return placeholder_widget
 
     def _populate_menu(
         self,
         menu_key: str,
         maya_menu_name: str,
-        orig_menu_set: str,
         placeholder_widget: "EmbeddedMenuWidget",
-    ) -> None:
-        """Synchronously copy actions from Maya's source menu into the wrapper."""
+    ) -> bool:
+        """Synchronously copy actions from Maya's source menu into the wrapper.
+
+        Returns True when at least one action was copied. Menu-mode restore is
+        owned by :meth:`get_menu`'s ``finally`` — not here — so no exit path
+        can leave Maya switched into the target menu set.
+        """
         main_window = UiUtils.get_main_window()
+        if main_window is None:
+            self.logger.debug(f"No Maya main window; cannot populate '{menu_key}'.")
+            return False
         menu_bar = main_window.menuBar()
 
         target_menu = None
@@ -524,9 +557,6 @@ class MayaNativeMenus(ptk.LoggingMixin):
 
             QtWidgets.QApplication.processEvents()
 
-        cmds.setMenuMode(orig_menu_set)
-        self.logger.debug(f"Restored original menu mode: {orig_menu_set}")
-
         if target_menu and previous_action_count > 0:
             placeholder_widget.menu.clear()
             for action in target_menu.actions():
@@ -536,10 +566,12 @@ class MayaNativeMenus(ptk.LoggingMixin):
             )
             placeholder_widget.menu.lower()
             placeholder_widget._raise_layout_widgets()
-        else:
-            self.logger.debug(
-                f"Native menu '{menu_key}' did not populate after {attempt} attempts."
-            )
+            return True
+
+        self.logger.debug(
+            f"Native menu '{menu_key}' did not populate after {attempt} attempts."
+        )
+        return False
 
     def display_menu(self, menu_key: str):
         """Displays the specified Maya menu in a standalone window."""

@@ -12,13 +12,15 @@ import unittest
 
 import maya.cmds as cmds
 
-from mayatk.core_utils.instancing.instancing_strategy import (
+from mayatk.core_utils.auto_instancer.instancing_strategy import (
     InstancingStrategy,
     StrategyConfig,
     StrategyType,
 )
-from mayatk.core_utils.instancing.assembly_reconstructor import AssemblyReconstructor
-from mayatk.core_utils.instancing.geometry_matcher import GeometryMatcher
+from mayatk.core_utils.auto_instancer.assembly_reconstructor import (
+    AssemblyReconstructor,
+)
+from mayatk.core_utils.auto_instancer.geometry_matcher import GeometryMatcher
 
 from base_test import MayaTkTestCase, QuickTestCase
 
@@ -159,9 +161,6 @@ class TestAssemblyReconstructorAPI(MayaTkTestCase):
         result = self.recon.separate_combined_meshes([combined])
         # polySeparate yields >= 2 nodes for a 2-shell combine
         self.assertGreaterEqual(len(result), 2)
-
-    def test_combine_targets_initialized_empty(self):
-        self.assertEqual(self.recon.combine_targets, [])
 
     def test_is_mesh_transform_true_for_polycube(self):
         cube = cmds.polyCube(name="mesh_check_cube")[0]

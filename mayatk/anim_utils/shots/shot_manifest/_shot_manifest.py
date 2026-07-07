@@ -126,7 +126,6 @@ class PlannedShot:
     description: str = ""
     existing_shot_id: Optional[int] = None
     ripple_delta: float = 0.0  # shift applied to later shots
-    planned_objects: List["PlannedObject"] = field(default_factory=list)
 
 
 FitMode = Literal["extend_only", "fit_contents"]
@@ -143,43 +142,6 @@ DEFAULT_FIT_MODE: FitMode = ShotStore.DEFAULT_FIT_MODE  # type: ignore[assignmen
 AUDIO_PLACEHOLDER_DURATION: float = 30.0
 
 
-@dataclass
-class PlannedKey:
-    """One keyframe to be written during commit.
-
-    All frame values are *absolute* (already offset by shot.start).
-    """
-
-    frame: float
-    attr: str
-    value: float
-
-
-@dataclass
-class PlannedObject:
-    """Per-object build instruction with fully-resolved keyframes.
-
-    Lives inside a :class:`PlannedShot`.  No Maya calls required to
-    produce or consume this structure; commit just replays the keys.
-    """
-
-    name: str
-    kind: str = "scene"  # "scene" | "audio"
-    source_path: str = ""
-    behaviors: List[str] = field(default_factory=list)
-    keys: List[PlannedKey] = field(default_factory=list)
-    # For audio: the resolved clip length in frames at scene FPS.
-    audio_span: float = 0.0
-
-
-@dataclass
-class BuildPlan:
-    """Complete plan for a build pass. Pure data, no Maya references."""
-
-    shots: List[PlannedShot] = field(default_factory=list)
-    fit_mode: FitMode = DEFAULT_FIT_MODE
-    initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH
-    fps: float = 24.0
 
 
 # ---------------------------------------------------------------------------
@@ -302,135 +264,6 @@ def _audio_placeholder_dur(step: BuilderStep) -> Optional[float]:
             except Exception:
                 pass
     return AUDIO_PLACEHOLDER_DURATION if has_audio else None
-
-
-def plan_object_keys(
-    obj: BuilderObject,
-    shot_start: float,
-    shot_end: float,
-    fps: float,
-) -> "PlannedObject":
-    """Materialise a :class:`PlannedObject` with absolute keyframes.
-
-    Non-audio behaviors are distributed positionally across the shot
-    span by their index in ``obj.behaviors``:
-    ``anchor = idx / max(total - 1, 1)`` (0.0=start, 0.5=middle,
-    1.0=end).  Each behavior's block is slid linearly via
-    ``base = shot_start + anchor * (span - duration) + offset`` — the
-    same formula used at commit time by ``apply_behavior`` /
-    :func:`resolve_keys`.  The YAML template's ``anchor`` field is a
-    default used only by direct callers; it is overridden here.
-
-    Audio objects with ``duration: from_source`` emit a two-key range
-    at ``shot_start`` → ``shot_start + audio_span`` (value 1 / value 0)
-    and do not participate in positional distribution — they key the
-    track's carrier attr, not scene attributes.
-
-    Pure function — no Maya calls, only behavior template file reads
-    and optional audio file stat via :class:`AudioUtils`.
-    """
-    from mayatk.anim_utils.shots.shot_manifest.behaviors import load_behavior
-
-    try:
-        from mayatk.audio_utils._audio_utils import AudioUtils as _AU
-    except Exception:
-        _AU = None  # type: ignore[assignment]
-
-    po = PlannedObject(
-        name=obj.name,
-        kind=obj.kind,
-        source_path=obj.source_path,
-        behaviors=list(obj.behaviors),
-    )
-
-    # Precompute non-audio behavior count so positional anchors can be
-    # assigned by list position (matches apply_to_shots).  Audio
-    # ``from_source`` behaviors are excluded — they are time-driven by
-    # the clip length, not positionally distributed.
-    non_audio_behaviors: List[str] = []
-    for bname in obj.behaviors:
-        if not bname:
-            continue
-        try:
-            tmpl = load_behavior(bname)
-        except FileNotFoundError:
-            continue
-        if tmpl.get("duration") == "from_source":
-            continue
-        non_audio_behaviors.append(bname)
-    non_audio_total = len(non_audio_behaviors)
-    non_audio_idx = 0
-
-    for bname in obj.behaviors:
-        if not bname:
-            continue
-        try:
-            tmpl = load_behavior(bname)
-        except FileNotFoundError:
-            continue
-
-        dur_field = tmpl.get("duration")
-        if dur_field == "from_source":
-            # Audio clip — two boundary keys on the track's enum attr.
-            src = obj.source_path
-            track_attr = ""
-            if _AU is not None:
-                try:
-                    tid = _AU.normalize_track_id(obj.name)
-                    track_attr = _AU.attr_for(tid)
-                    if not src and _AU.has_track(tid):
-                        src = _AU.get_path(tid) or ""
-                except Exception as exc:
-                    log.debug("audio track resolve failed for %r: %s", obj.name, exc)
-            span = 0.0
-            if src and _AU is not None:
-                try:
-                    frames, _ = _AU.audio_duration_frames(src, fps)
-                    span = float(frames) if frames and frames > 0 else 0.0
-                except Exception as exc:
-                    log.debug("audio duration probe failed for %r: %s", obj.name, exc)
-            if span <= 0 or not track_attr:
-                # Without a real source or track attr we can't author
-                # authoritative markers.  Skip — assess will flag it.
-                continue
-            po.audio_span = span
-            po.source_path = po.source_path or src
-            po.keys.append(PlannedKey(frame=shot_start, attr=track_attr, value=1))
-            po.keys.append(
-                PlannedKey(frame=shot_start + span, attr=track_attr, value=0)
-            )
-            continue
-
-        # Scene behavior: iterate attributes and resolve in/out phases.
-        # Positional anchor: distribute behaviors evenly across the shot
-        # based on their order in obj.behaviors.  1 behavior → 0.0,
-        # 2 → 0.0/1.0, 3 → 0.0/0.5/1.0, N → idx / max(total-1, 1).
-        anchor = non_audio_idx / max(non_audio_total - 1, 1)
-        non_audio_idx += 1
-        span = shot_end - shot_start
-        for attr_name, attr_def in tmpl.get("attributes", {}).items():
-            for phase in ("in", "out"):
-                block = attr_def.get(phase)
-                if not block:
-                    continue
-                offset = float(block.get("offset", 0) or 0)
-                duration = float(block.get("duration", 0) or 0)
-                values = block.get("values", [0.0, 1.0])
-                if len(values) < 2:
-                    continue
-                # Slide the behavior's block linearly between shot
-                # start and end (end-aligned when anchor == 1.0).
-                base = shot_start + anchor * (span - duration) + offset
-                k0_frame = base
-                k1_frame = base + duration
-                po.keys.append(
-                    PlannedKey(frame=k0_frame, attr=attr_name, value=float(values[0]))
-                )
-                po.keys.append(
-                    PlannedKey(frame=k1_frame, attr=attr_name, value=float(values[-1]))
-                )
-
-    return po
 
 
 # ---------------------------------------------------------------------------
@@ -1096,11 +929,6 @@ class ShotManifest:
                 scene_objs = [o for o in step.objects if o.kind != "audio"]
                 obj_names = [o.name for o in scene_objs]
 
-                fps_for_keys = self._resolve_fps()
-                planned_objs = [
-                    plan_object_keys(o, start, end, fps_for_keys) for o in step.objects
-                ]
-
                 plan.append(
                     PlannedShot(
                         step=step,
@@ -1110,7 +938,6 @@ class ShotManifest:
                         objects=obj_names,
                         metadata=meta,
                         description=step.display_text,
-                        planned_objects=planned_objs,
                     )
                 )
                 # Advance virtual cursor
@@ -1213,12 +1040,6 @@ class ShotManifest:
             # Compute merged objects for patched shots
             merged_objects = sorted(csv_objs | scene_discovered)
 
-            fps_for_keys = self._resolve_fps()
-            planned_objs = [
-                plan_object_keys(o, ex_start, ex_end, fps_for_keys)
-                for o in step.objects
-            ]
-
             plan.append(
                 PlannedShot(
                     step=step,
@@ -1230,7 +1051,6 @@ class ShotManifest:
                     description=step.display_text or "",
                     existing_shot_id=existing.shot_id,
                     ripple_delta=ripple_delta,
-                    planned_objects=planned_objs,
                 )
             )
 
@@ -1384,37 +1204,6 @@ class ShotManifest:
             self._fps_cache = 24.0
         return self._fps_cache
 
-    def build_plan(
-        self,
-        steps: List[BuilderStep],
-        ranges: Optional[Dict[str, Tuple[float, float]]] = None,
-        remove_missing: bool = True,
-        zero_duration_fallback: bool = False,
-        fit_mode: FitMode = DEFAULT_FIT_MODE,
-        initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH,
-    ) -> BuildPlan:
-        """Return a :class:`BuildPlan` without committing anything.
-
-        Public plan-inspection API — useful for previews, diffing, and
-        the test harness.  Calling :meth:`update` or :meth:`sync`
-        afterwards recomputes an equivalent plan internally.
-        """
-        self._fps_cache = None
-        shots = self._compute_plan(
-            steps,
-            ranges=ranges,
-            remove_missing=remove_missing,
-            zero_duration_fallback=zero_duration_fallback,
-            fit_mode=fit_mode,
-            initial_shot_length=initial_shot_length,
-        )
-        return BuildPlan(
-            shots=shots,
-            fit_mode=fit_mode,
-            initial_shot_length=initial_shot_length,
-            fps=self._resolve_fps(),
-        )
-
     # ---- assess ----------------------------------------------------------
 
     def assess(
@@ -1505,7 +1294,6 @@ class ShotManifest:
                 continue
 
             obj_statuses = []
-            max_key_end = shot.end if shot else 0.0
             for obj in step.objects:
                 if obj.kind == "audio":
                     exists = audio_exists_fn(obj.name)
@@ -1548,8 +1336,6 @@ class ShotManifest:
                     # User-animated: query actual keyframe extent
                     key_range = keyframe_range_fn(obj.name)
                     status = "user_animated" if key_range else "valid"
-                    if key_range and key_range[1] > max_key_end:
-                        max_key_end = key_range[1]
                 else:
                     status = "valid"
                 obj_statuses.append(

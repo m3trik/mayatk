@@ -384,6 +384,15 @@ class TestEditUtils(MayaTkTestCase):
         similar = EditUtils.get_similar_topo(self.cube)
         self.assertIn(dup, similar)
 
+    def test_get_similar_mesh_no_polygons_in_scene_no_crash(self):
+        """Regression: cmds.filterExpand returns None (not []) when zero
+        polygon transforms exist in the scene, so `set(cmds.filterExpand(...))`
+        raised 'TypeError: NoneType object is not iterable' instead of just
+        returning an empty result.
+        """
+        cmds.delete(self.cube, self.sphere)
+        self.assertEqual(EditUtils.get_similar_mesh([]), [])
+
     def test_non_manifold(self):
         """Test non-manifold geometry detection."""
         # Create non-manifold geometry: 2 cubes sharing one vertex

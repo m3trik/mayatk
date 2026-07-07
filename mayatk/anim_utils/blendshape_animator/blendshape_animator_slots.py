@@ -18,6 +18,7 @@ from mayatk.anim_utils.blendshape_animator.applicator import ApplyStatus
 from mayatk.anim_utils.blendshape_animator.target import Target, Targets
 from mayatk.anim_utils.blendshape_animator.weights import Weights
 from mayatk.anim_utils.blendshape_animator.helpers import list_history
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.node_utils.attributes._attributes import Attributes
 
@@ -706,12 +707,18 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             if self._show_only_mismatches and topology == "match":
                 continue
 
-            status_enum = self._row_status.get(tween.mesh, ApplyStatus.APPLIED)
-            status = {
-                ApplyStatus.APPLIED: "applied",
-                ApplyStatus.SKIPPED_DUPLICATE: "skipped",
-                ApplyStatus.ERROR: "error",
-            }[status_enum]
+            # Tweens with no recorded apply result are pending — defaulting
+            # to APPLIED would show green for edits never applied back.
+            status_enum = self._row_status.get(tween.mesh)
+            status = (
+                "pending"
+                if status_enum is None
+                else {
+                    ApplyStatus.APPLIED: "applied",
+                    ApplyStatus.SKIPPED_DUPLICATE: "skipped",
+                    ApplyStatus.ERROR: "error",
+                }[status_enum]
+            )
 
             frame = tween.target_frame
             item = _NumericSortItem(
@@ -816,7 +823,8 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             cmds.currentTime(single.target_frame)
             self._set_status(f"Jumped to frame {single.target_frame}")
         elif chosen is act_reapply:
-            results = self.tween_applicator.apply_tweens(list(tweens))
+            with CoreUtils.undo_chunk("Re-apply Tweens"):
+                results = self.tween_applicator.apply_tweens(list(tweens))
             for t, s in results:
                 self._row_status[t.mesh] = s
             applied = sum(1 for _, s in results if s is ApplyStatus.APPLIED)
@@ -826,13 +834,14 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             self._refresh_tree()
         elif chosen is act_delete:
             deleted = 0
-            for tween in tweens:
-                try:
-                    cmds.delete(tween.mesh)
-                    self._row_status.pop(tween.mesh, None)
-                    deleted += 1
-                except RuntimeError as e:
-                    self.logger.error(f"Could not delete {tween.mesh}: {e}")
+            with CoreUtils.undo_chunk("Delete Tween Meshes"):
+                for tween in tweens:
+                    try:
+                        cmds.delete(tween.mesh)
+                        self._row_status.pop(tween.mesh, None)
+                        deleted += 1
+                    except RuntimeError as e:
+                        self.logger.error(f"Could not delete {tween.mesh}: {e}")
             self._set_status(
                 f"Deleted {deleted}/{len(tweens)} tween mesh(es)"
             )

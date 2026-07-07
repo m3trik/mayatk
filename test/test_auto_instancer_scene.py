@@ -12,7 +12,7 @@ if test_dir not in sys.path:
 
 from base_test import MayaTkTestCase
 from mayatk import AutoInstancer
-from mayatk.core_utils.instancing.geometry_matcher import GeometryMatcher
+from mayatk.core_utils.auto_instancer.geometry_matcher import GeometryMatcher
 
 
 class SceneAuditor:
@@ -336,9 +336,7 @@ class TestAutoInstancerScene(MayaTkTestCase):
         for s in shells:
             sig = matcher.get_mesh_signature(s)
             sigs.append((s, sig))
-            debug_log.append(
-                f"  Shell {s}: V={sig[0]}, A={sig[3]}, PCA={sig[4]}"
-            )
+            debug_log.append(f"  Shell {s}: V={sig[0]}, PCA={sig[3]}")
 
         # Check if signatures match for expected groups
         sig_map = defaultdict(list)
@@ -347,7 +345,7 @@ class TestAutoInstancerScene(MayaTkTestCase):
 
         debug_log.append(f"DEBUG: Signature Groups found: {len(sig_map)}")
         for sig, names in sig_map.items():
-            debug_log.append(f"  Sig {sig[:4]}... : {len(names)} items -> {names}")
+            debug_log.append(f"  Sig {sig[:3]}... : {len(names)} items -> {names}")
 
         if len(sig_map) != 3:
             debug_log.append(

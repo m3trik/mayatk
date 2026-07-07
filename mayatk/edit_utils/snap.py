@@ -229,14 +229,26 @@ class Snap(ptk.HelpMixin):
         snap_count = 0
 
         for obj in objects:
-            # Check if it's a component (vertex, etc.)
-            if hasattr(obj, "getPosition"):
-                pos = obj.getPosition(space="world")
-                new_pos = list(pos)
-                for i, axis in enumerate(["x", "y", "z"]):
-                    if axis in axes:
-                        new_pos[i] = round(pos[i] / grid_size) * grid_size
-                obj.setPosition(new_pos, space="world")
+            obj = str(obj)
+            # Components carry a '.' (vtx/cv/e/f from ls(flatten=True)) and
+            # snap their own positions. Edges/faces snap via their
+            # constituent vertices — an absolute move on a multi-point
+            # component would collapse it to a single position.
+            if "." in obj:
+                if ".e[" in obj or ".f[" in obj:
+                    points = cmds.ls(
+                        cmds.polyListComponentConversion(obj, toVertex=True),
+                        flatten=True,
+                    )
+                else:
+                    points = [obj]
+                for point in points:
+                    pos = cmds.pointPosition(point, world=True)
+                    new_pos = [
+                        round(p / grid_size) * grid_size if axis in axes else p
+                        for p, axis in zip(pos, "xyz")
+                    ]
+                    cmds.move(*new_pos, point, absolute=True, worldSpace=True)
                 snap_count += 1
             else:
                 # It's a transform - snap the pivot

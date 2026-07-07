@@ -8,7 +8,7 @@ if test_dir not in sys.path:
     sys.path.append(test_dir)
 
 import base_test
-from mayatk.core_utils.instancing.auto_instancer import AutoInstancer
+from mayatk.core_utils.auto_instancer._auto_instancer import AutoInstancer
 
 
 class TestOriginalMeshSeparated(base_test.QuickTestCase):
@@ -19,9 +19,11 @@ class TestOriginalMeshSeparated(base_test.QuickTestCase):
         # 1. Setup: Create the group and objects
         group = cmds.group(em=True, n="original_mesh_separated")
 
-        # Create a prototype cube
-        proto = cmds.polyCube(w=10, h=10, d=10, n="Cube_Proto")[0]
-        # Add some detail to make it unique/identifiable if needed, but simple cube is fine for basic test
+        # Create a prototype cube. Subdivided well above MICRO_TRI_THRESHOLD
+        # (300) so the group instances rather than being deferred to the
+        # remainder-combine (below the threshold, repeated duplicates merge
+        # instead — see test_strategy_micro_mesh_duplicates_merge_when_combining).
+        proto = cmds.polyCube(w=10, h=10, d=10, sx=6, sy=6, sz=6, n="Cube_Proto")[0]
 
         # Create duplicates inside the group
         cubes = []

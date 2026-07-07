@@ -1,4 +1,4 @@
-﻿# !/usr/bin/python
+# !/usr/bin/python
 # coding=utf-8
 """
 Test Suite for mayatk.anim_utils.scale_keys module
@@ -1410,6 +1410,34 @@ class TestScaleKeysFixes(MayaTkTestCase):
             self.assertEqual(out_type, "step", f"Out-tangent at {t} should be step")
 
 
+class TestAuditRegressionFixes(MayaTkTestCase):
+    """Regression tests for the 2026-07 anim_utils audit fixes."""
+
+    def test_invalid_group_mode_falls_back_instead_of_raising(self):
+        """An invalid group_mode crashed __init__ with ValueError; it must
+        warn and fall back to 'single_group' (matching the mode fallback)."""
+        cube = self.create_test_cube("group_mode_cube")
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+
+        sk = ScaleKeys(objects=[cube], factor=2.0, group_mode="bogus_mode")
+        self.assertEqual(sk.group_mode, "single_group")
+        # And it still executes.
+        self.assertGreater(sk.execute(), 0)
+
+    def test_speed_scale_returns_processed_object_count(self):
+        """_execute_speed_scale must surface the processed-object count —
+        the completion report always printed 'objects processed=0'."""
+        cube = self.create_test_cube("speed_report_cube")
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+
+        sk = ScaleKeys(objects=[cube], mode="speed", factor=2.0)
+        result = sk._execute_speed_scale([], None)
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 2)
+
+
 if __name__ == "__main__":
     try:
         from PySide6.QtWidgets import QApplication
@@ -1426,6 +1454,5 @@ if __name__ == "__main__":
             pass
 
     unittest.main(verbosity=2)
-import unittest
 
 

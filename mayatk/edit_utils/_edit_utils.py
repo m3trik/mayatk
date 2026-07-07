@@ -70,7 +70,8 @@ class EditUtils(ptk.HelpMixin):
         Parameters:
             objects (list): List of mesh objects to combine.
             group_by_material (bool): Combine objects into groups based on their assigned materials.
-            cluster_by_distance (bool): If True, further subdivide material groups based on spatial proximity.
+            cluster_by_distance (bool): Subdivide combine groups by spatial
+                proximity. Works with or without ``group_by_material``.
             threshold (float): The maximum distance between objects to be considered in the same cluster.
         """
         if objects is None:
@@ -95,6 +96,16 @@ class EditUtils(ptk.HelpMixin):
             )
             return None
 
+        def unite_group(group_objs, label):
+            # Get name before combine destroys the object
+            name = str(group_objs[0]).split("|")[-1].split(":")[-1]
+            try:
+                united = cmds.polyUnite(group_objs, centerPivot=True, ch=False)
+                return cmds.rename(united[0], name)
+            except Exception as e:
+                cmds.warning(f"Failed to combine {label}: {e}")
+                return None
+
         # Suspend viewport refresh across the heavy work. On large selections
         # the per-command idle redraws in interactive Maya are what make this
         # appear to hang; the guard re-enables refresh even on error.
@@ -105,34 +116,25 @@ class EditUtils(ptk.HelpMixin):
                     cluster_by_distance=cluster_by_distance,
                     threshold=threshold,
                 )
-                combined_meshes = []
-                for mat_key, group_objs in groups.items():
-                    if len(group_objs) < 2:
-                        continue
-
-                    # Get name before combine destroys the object
-                    first_obj = group_objs[0]
-                    name = str(first_obj).split("|")[-1].split(":")[-1]
-
-                    try:
-                        united = cmds.polyUnite(group_objs, centerPivot=True, ch=False)
-                        mesh = cmds.rename(united[0], name)
-                        combined_meshes.append(mesh)
-                    except Exception as e:
-                        cmds.warning(f"Failed to combine group {mat_key}: {e}")
-
-                if not combined_meshes:
-                    cmds.warning("No groups found with more than 1 object to combine.")
-                    return None
-
-                return combined_meshes
-
+            elif cluster_by_distance:
+                clusters = MatUtils._cluster_objects_by_distance(objects, threshold)
+                groups = {f"cluster_{i}": c for i, c in enumerate(clusters)}
             else:
-                # Get name before combine destroys the object
-                name = str(objects[0]).split("|")[-1].split(":")[-1]
-                combined_mesh = cmds.polyUnite(objects, centerPivot=True, ch=False)[0]
-                combined_mesh = cmds.rename(combined_mesh, name)
-                return combined_mesh
+                return unite_group(objects, "selection")
+
+            combined_meshes = []
+            for key, group_objs in groups.items():
+                if len(group_objs) < 2:
+                    continue
+                mesh = unite_group(group_objs, f"group {key}")
+                if mesh:
+                    combined_meshes.append(mesh)
+
+            if not combined_meshes:
+                cmds.warning("No groups found with more than 1 object to combine.")
+                return None
+
+            return combined_meshes
 
     @staticmethod
     @CoreUtils.undoable
@@ -1601,6 +1603,18 @@ class EditUtils(ptk.HelpMixin):
         return find_duplicates(faces)
 
     @staticmethod
+    def _get_scene_polygon_transforms():
+        """All polygon-mesh transforms currently in the scene.
+
+        cmds.filterExpand returns None (not []) when nothing matches the
+        mask, so callers must not set() its result directly.
+        """
+        return set(
+            cmds.filterExpand(cmds.ls(long=True, typ="transform"), selectionMask=12)
+            or []
+        )
+
+    @staticmethod
     @CoreUtils.undoable
     def get_similar_mesh(
         objects, tolerance=0.0, inc_orig=False, select=False, **kwargs
@@ -1626,9 +1640,7 @@ class EditUtils(ptk.HelpMixin):
         """
         objects_list = cmds.ls(as_strings(objects), long=True, transforms=True)
 
-        otherSceneMeshes = set(
-            cmds.filterExpand(cmds.ls(long=True, typ="transform"), selectionMask=12)
-        )  # polygon selection mask.
+        otherSceneMeshes = EditUtils._get_scene_polygon_transforms()
 
         all_similar = []
         originals = set()
@@ -1683,13 +1695,14 @@ class EditUtils(ptk.HelpMixin):
         Returns:
             (list) Similar objects.
         """
-        obj, *other = cmds.filterExpand(
-            cmds.ls(as_strings(obj), long=True, tr=True), selectionMask=12
+        obj, *other = (
+            cmds.filterExpand(
+                cmds.ls(as_strings(obj), long=True, tr=True), selectionMask=12
+            )
+            or []
         )  # polygon selection mask.
 
-        otherSceneMeshes = set(
-            cmds.filterExpand(cmds.ls(long=True, typ="transform"), sm=12)
-        )
+        otherSceneMeshes = EditUtils._get_scene_polygon_transforms()
         similar = cmds.ls(
             [
                 m

@@ -957,14 +957,35 @@ class Attributes(ptk.HelpMixin):
 
         Parameters:
             objects: Object(s) to unlock.
-            attributes: Specific attributes (e.g. ``['tx', 'ry']``).
-                If ``None``, unlocks all standard transform attributes.
+            attributes: Specific attributes (e.g. ``['tx', 'ry']``) to scope
+                the unlock to. If ``None``, unlocks all standard transform
+                attributes via :meth:`get_lock_state`.
         """
-        lock_state = cls.get_lock_state(objects, unlock=True)
+        if attributes is None:
+            lock_state = cls.get_lock_state(objects, unlock=True)
+            try:
+                yield
+            finally:
+                cls.set_lock_state(objects, lock_state=lock_state)
+            return
+
+        nodes = cmds.ls(as_strings(objects), long=True) or []
+        plugs = [
+            f"{node}.{attr}"
+            for node in nodes
+            for attr in attributes
+            if cmds.attributeQuery(attr, node=node, exists=True)
+        ]
+        was_locked = {plug: cmds.getAttr(plug, lock=True) for plug in plugs}
+        for plug, locked in was_locked.items():
+            if locked:
+                cmds.setAttr(plug, lock=False)
         try:
             yield
         finally:
-            cls.set_lock_state(objects, lock_state=lock_state)
+            for plug, locked in was_locked.items():
+                if locked:
+                    cmds.setAttr(plug, lock=True)
 
     # ======================================================================
     # Channel-box operations

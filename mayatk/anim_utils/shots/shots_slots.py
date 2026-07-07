@@ -85,6 +85,10 @@ class ShotsController(ptk.LoggingMixin):
         # the persistence layer detects a scene change — no duplicate
         # scriptJobs needed.
         ShotStore.add_invalidation_listener(self._on_store_invalidated)
+        # Tear down on panel close: the invalidation registry is a class-level
+        # list holding strong refs, so without this every reopen leaks a
+        # controller whose stale listener then fires against destroyed widgets.
+        self.ui.destroyed.connect(lambda *_: self.remove_callbacks())
 
         # Enable hide-on-mouse-leave so the window behaves like a quick-access panel.
         # WindowStaysOnTopHint prevents the panel from falling behind the

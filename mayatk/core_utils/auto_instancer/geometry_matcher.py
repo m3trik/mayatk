@@ -3,6 +3,7 @@
 """Geometry analysis and matching logic for AutoInstancer."""
 from __future__ import annotations
 
+import logging
 from typing import Optional, Tuple, Union, List
 import numpy as np
 from scipy.spatial import KDTree
@@ -17,6 +18,8 @@ import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils, leaf_name, get_bounding_box
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.xform_utils._xform_utils import get_translation, get_object_matrix
+
+logger = logging.getLogger(__name__)
 
 
 def _mfn(shape):
@@ -157,6 +160,69 @@ class GeometryMatcher:
         self.require_same_material = require_same_material
         self.check_uvs = check_uvs
         self.verbose = verbose
+        # Discovery-phase caches — valid while the scene is static. Callers
+        # that mutate geometry between comparison batches must clear_cache().
+        self._points_cache: dict = {}
+        self._normals_cache: dict = {}
+        self._pair_cache: dict = {}
+
+    def clear_cache(self) -> None:
+        """Drop cached point arrays and pair results (call after scene edits).
+
+        Hierarchy comparison re-visits the same shape pairs many times
+        (child pairing retries, transform-compatibility re-checks), and each
+        uncached robust comparison is a full PCA alignment — the caches turn
+        that repeated work into dict lookups.
+        """
+        self._points_cache.clear()
+        self._normals_cache.clear()
+        self._pair_cache.clear()
+
+    def _object_points(self, shape: str) -> np.ndarray:
+        """Cached object-space points for *shape* as an (N, 3) array."""
+        pts = self._points_cache.get(shape)
+        if pts is None:
+            mpts = mesh_points(shape, world=False)
+            pts = np.array([(p.x, p.y, p.z) for p in mpts])
+            self._points_cache[shape] = pts
+        return pts
+
+    def _object_normals(self, shape: str) -> Optional[np.ndarray]:
+        """Cached object-space per-vertex averaged normals as an (N, 3) array.
+
+        Used to verify that a geometric match also aligns shading — point
+        positions alone cannot distinguish a symmetric shape from its flipped
+        twin (a flat plate maps onto itself under a 180° flip while its
+        normals invert).
+        """
+        if shape in self._normals_cache:
+            return self._normals_cache[shape]
+        normals = None
+        try:
+            sel = om.MSelectionList()
+            sel.add(shape)
+            fn = om.MFnMesh(sel.getDagPath(0))
+            # getNormals() is the SHADING truth (includes locked/user
+            # normals); getVertexNormals() averages geometric face normals
+            # and silently ignores custom shading. Average the face-vertex
+            # shading normals per vertex.
+            _, norm_ids = fn.getNormalIds()
+            _, verts = fn.getVertices()
+            arr = np.array(
+                [(n.x, n.y, n.z) for n in fn.getNormals(om.MSpace.kObject)]
+            )
+            acc = np.zeros((fn.numVertices, 3))
+            np.add.at(acc, np.array(list(verts)), arr[np.array(list(norm_ids))])
+            lengths = np.linalg.norm(acc, axis=1)
+            nz = lengths > 1e-9
+            acc[nz] /= lengths[nz, None]
+            # Fully-cancelling vertices stay zero — their dot contributes
+            # rejection, which is correct (contradictory shading).
+            normals = acc
+        except Exception:
+            pass
+        self._normals_cache[shape] = normals
+        return normals
 
     def quantize(self, value: float, precision: int = 4) -> float:
         """Round a value to a specific precision to ignore float noise."""
@@ -165,7 +231,12 @@ class GeometryMatcher:
         return round(value, precision)
 
     def get_pca_basis(self, node: str) -> Optional["om.MMatrix"]:
-        """Returns the PCA basis matrix (rotation only) for the node's mesh."""
+        """Returns the PCA basis matrix (rotation only) for the node's mesh.
+
+        The frame is stabilized so identical geometry always yields the same
+        basis (see ``_stabilize_axes``) — without this, copies canonicalize
+        to different local point sets and never match cheaply.
+        """
         shape = NodeUtils.get_shape(node)
         if not _is_mesh_shape(shape):
             return None
@@ -181,9 +252,11 @@ class GeometryMatcher:
             cov = np.cov(centered, rowvar=False)
             evals, evecs = np.linalg.eigh(cov)
 
-            # X=evecs[:, 2], Y=evecs[:, 1] (largest two eigenvectors)
-            x_axis = evecs[:, 2]
-            y_axis = evecs[:, 1]
+            order = np.argsort(evals)[::-1]  # descending: axes[0] = largest
+            axes = [evecs[:, i] for i in order]
+            axes = self._stabilize_axes(axes, evals[order], centered)
+
+            x_axis, y_axis = axes[0], axes[1]
             # Right-handed
             z_axis = np.cross(x_axis, y_axis)
 
@@ -196,10 +269,87 @@ class GeometryMatcher:
         except Exception:
             return None
 
-    def get_mesh_signature(
-        self, transform: str, include_area: bool = True
-    ) -> Optional[Tuple]:
-        """Get a lightweight signature for quick rejection."""
+    @staticmethod
+    def _stabilize_axes(
+        axes: List[np.ndarray], evals: np.ndarray, centered: np.ndarray
+    ) -> List[np.ndarray]:
+        """Make a PCA frame deterministic for identical geometry.
+
+        ``eigh`` returns sign-arbitrary eigenvectors, and inside a degenerate
+        (rotationally symmetric) eigen-subspace ANY orthogonal basis is
+        valid — float noise then spins each copy's frame differently, so
+        identical parts canonicalize to different local geometry and every
+        comparison falls into the expensive robust path (and can outright
+        fail at tight tolerance: a 15°-grid spin search cannot exactly align
+        an 18°-per-segment cylinder).
+
+        Anchors, all derived from the geometry itself (consistent across
+        copies that share vertex order): the third moment along each axis
+        fixes signs; the vertex farthest from the symmetry axis orients
+        degenerate subspaces (immune to where vertex 0 happens to sit —
+        first-vertex anchoring breaks on cones and lathed shapes whose
+        leading vertex lies ON the axis).
+        """
+        ref = centered[0]
+        span = max(abs(float(evals[0])), 1e-12)
+
+        def anchored(vec: np.ndarray) -> np.ndarray:
+            skew = float(np.sum(np.dot(centered, vec) ** 3))
+            anchor = skew if abs(skew) > 1e-9 * span else float(np.dot(ref, vec))
+            return -vec if anchor < 0 else vec
+
+        def plane_anchor(axis: np.ndarray) -> Optional[np.ndarray]:
+            """Unit direction ⊥ *axis* toward the vertex farthest from it."""
+            offsets = centered - np.outer(np.dot(centered, axis), axis)
+            radii = np.linalg.norm(offsets, axis=1)
+            best = int(np.argmax(radii))
+            if radii[best] <= 1e-9:
+                return None  # all vertices on the axis
+            return offsets[best] / radii[best]
+
+        def eigh_fallback() -> List[np.ndarray]:
+            return [anchored(a) for a in axes]
+
+        degenerate = [
+            abs(float(evals[i]) - float(evals[i + 1])) < 0.05 * span
+            for i in range(2)
+        ]
+
+        if all(degenerate):
+            # Fully symmetric (sphere-like): anchor to the farthest vertex,
+            # then the farthest off-that-axis vertex.
+            norms = np.linalg.norm(centered, axis=1)
+            best = int(np.argmax(norms))
+            if norms[best] > 1e-9:
+                a = centered[best] / norms[best]
+                b = plane_anchor(a)
+                if b is not None:
+                    return [a, b, np.cross(a, b)]
+            return eigh_fallback()  # point-like geometry — nothing to anchor
+
+        for i in range(2):
+            if degenerate[i]:
+                # Re-anchor the degenerate pair (i, i+1) within its plane.
+                other_idx = 2 - 2 * i  # the non-degenerate axis
+                other = anchored(axes[other_idx])
+                a = plane_anchor(other)
+                if a is None:
+                    break  # degenerate geometry — fall through
+                axes_out: List[np.ndarray] = [None, None, None]  # type: ignore[list-item]
+                axes_out[other_idx] = other
+                axes_out[i] = a
+                axes_out[i + 1] = np.cross(other, a)
+                return axes_out
+
+        return eigh_fallback()
+
+    def get_mesh_signature(self, transform: str) -> Optional[Tuple]:
+        """Lightweight signature for quick rejection.
+
+        Returns ``(verts, edges, faces, pca_sig, materials, uv_signature)``,
+        or ``None`` when *transform* has no shape. Surface area is
+        deliberately absent — it is not scale invariant.
+        """
         mesh = NodeUtils.get_shape(transform)
         if not mesh:
             return None
@@ -207,9 +357,6 @@ class GeometryMatcher:
         num_verts = cmds.polyEvaluate(mesh, vertex=True) or 0
         num_edges = cmds.polyEvaluate(mesh, edge=True) or 0
         num_faces = cmds.polyEvaluate(mesh, face=True) or 0
-
-        approx_area = 0.0
-        # Area is not scale invariant, so we ignore it for signature matching
 
         # PCA Signature (Eigenvalues)
         pca_sig = ()
@@ -235,7 +382,7 @@ class GeometryMatcher:
                     pca_sig = tuple(sorted([self.quantize(e, 3) for e in evals]))
             except Exception as e:
                 if self.verbose:
-                    print(f"PCA failed for {transform}: {e}")
+                    logger.debug(f"PCA failed for {transform}: {e}")
 
         materials = ()
         if self.require_same_material:
@@ -257,78 +404,18 @@ class GeometryMatcher:
             num_verts,
             num_edges,
             num_faces,
-            approx_area,
             pca_sig,
             materials,
             uv_signature,
         )
 
-    def _whiten_points(self, points):
-        """
-        Whiten points (center, align to PCA, normalize variance).
-        Returns:
-            whitened_points: (N, 3) array
-            vectors: (3, 3) eigenvectors (rotation)
-            scales: (3,) scale factors (1/sqrt(eigenvalues))
-            centroid: (3,) centroid
-        """
-        centroid = np.mean(points, axis=0)
-        centered = points - centroid
-
-        cov = np.cov(centered, rowvar=False)
-        eigenvalues, eigenvectors = np.linalg.eigh(cov)
-
-        # Sort descending
-        idx = eigenvalues.argsort()[::-1]
-        eigenvalues = eigenvalues[idx]
-        eigenvectors = eigenvectors[:, idx]
-
-        # Calculate scales (1 / sqrt(variance))
-        valid_variance = eigenvalues.copy()
-        valid_variance[valid_variance < 1e-9] = 1.0
-        scales = 1.0 / np.sqrt(valid_variance)
-        scales[eigenvalues < 1e-9] = 1.0
-
-        whitened = np.dot(centered, eigenvectors) * scales
-
-        return whitened, eigenvectors, scales, centroid
-
-    def _check_whitened_match(self, p1, p2, tolerance) -> Optional[np.ndarray]:
-        """Check if two whitened point clouds match under axis sign flips.
-
-        Returns a 4x4 numpy diagonal-sign matrix on success (caller-assembled
-        into the final relative transform).
-        """
-        import itertools
-
-        tree = KDTree(p1)
-        best_dist = float("inf")
-
-        for signs in itertools.product([1, -1], repeat=3):
-            p2_flipped = p2 * signs
-
-            dists, _ = tree.query(p2_flipped, k=1)
-            max_dist = np.max(dists)
-
-            if max_dist < best_dist:
-                best_dist = max_dist
-
-            if max_dist <= tolerance:
-                m_w = np.eye(4)
-                m_w[0, 0] = signs[0]
-                m_w[1, 1] = signs[1]
-                m_w[2, 2] = signs[2]
-                return m_w
-
-        if self.verbose:
-            print(f"[DEBUG] Best whitened match dist: {best_dist} (Tol: {tolerance})")
-
-        return None
-
     def are_meshes_identical(
         self, t1: str, t2: str
     ) -> Tuple[bool, Optional["om.MMatrix"]]:
         """Detailed geometric comparison using robust PCA alignment.
+
+        Results are memoized per shape pair (see ``clear_cache``) — hierarchy
+        comparison re-visits the same pairs many times.
 
         Returns:
             (is_identical, relative_transform_matrix)
@@ -338,136 +425,168 @@ class GeometryMatcher:
         if not m1 or not m2:
             return False, None
 
-        pts1 = mesh_points(m1, world=False)
-        pts2 = mesh_points(m2, world=False)
-        if len(pts1) != len(pts2):
+        key = (m1, m2)
+        cached = self._pair_cache.get(key)
+        if cached is not None:
+            return cached
+
+        result = self._are_meshes_identical_uncached(m1, m2, t1, t2)
+        self._pair_cache[key] = result
+        return result
+
+    # Minimum mean normal dot product for a match to count as shading-
+    # compatible. Identical copies score ~1.0; a flipped symmetric twin
+    # scores ~-1.0.
+    NORMAL_AGREEMENT_THRESHOLD = 0.8
+
+    def _normals_agree(self, m1: str, m2: str, idx=None, idx_valid=None) -> bool:
+        """True when per-vertex normals of the two shapes align.
+
+        ``idx`` maps each m1 vertex to its geometrically-matched m2 vertex:
+        ``None`` = same ordering, an (N,) array = one pairing each, an
+        (N, K) array = K nearest candidates per vertex with ``idx_valid``
+        masking which of them sit within the positional tolerance. CAD hard
+        edges duplicate a position with different normals, so a single
+        nearest-neighbor pairing can pick the wrong coincident twin and veto
+        a true copy — with candidates, each vertex scores by its
+        best-agreeing twin. Degrades to True when normals can't be read —
+        the positional match then stands alone, as before.
+        """
+        n1 = self._object_normals(m1)
+        n2 = self._object_normals(m2)
+        if n1 is None or n2 is None or len(n1) != len(n2):
+            return True
+        if idx is None:
+            dots = np.sum(n1 * n2, axis=1)
+        elif getattr(idx, "ndim", 1) == 1:
+            dots = np.sum(n1 * n2[idx], axis=1)
+        else:
+            cand = np.einsum("pki,pi->pk", n2[idx], n1)
+            if idx_valid is not None:
+                cand = np.where(idx_valid, cand, -np.inf)
+            dots = cand.max(axis=1)
+        # A true copy aligns EVERY normal (float noise cannot drive a ~1 dot
+        # below zero) — a single flipped normal rejects the match.
+        return (
+            float(dots.mean()) >= self.NORMAL_AGREEMENT_THRESHOLD
+            and not bool((dots < 0.0).any())
+        )
+
+    def _are_meshes_identical_uncached(
+        self, m1: str, m2: str, t1: str, t2: str
+    ) -> Tuple[bool, Optional["om.MMatrix"]]:
+        pts1_array = self._object_points(m1)
+        pts2_array = self._object_points(m2)
+        if len(pts1_array) != len(pts2_array):
             return False, None
 
-        # Fast path: ordered compare
-        for p1, p2 in zip(pts1, pts2):
-            if p1.distanceTo(p2) > self.tolerance:
-                break
-        else:
+        # Fast path: ordered compare (vectorized). A failed normal check
+        # falls through rather than rejecting — the PCA path can still find
+        # a rotation aligning both points AND normals (e.g. a flipped-
+        # authored plate matches under a 180° in-plane-axis rotation).
+        if len(pts1_array) == 0 or float(
+            np.max(np.linalg.norm(pts1_array - pts2_array, axis=1))
+        ) <= self.tolerance:
             if self.check_uvs:
                 if not self._are_uvs_identical(m1, m2):
                     if self.verbose:
-                        print(f"[DEBUG] UV mismatch for {t1} vs {t2}")
+                        logger.debug(f"UV mismatch for {t1} vs {t2}")
                     return False, None
 
+            if len(pts1_array) == 0 or self._normals_agree(m1, m2):
+                if self.verbose:
+                    logger.debug(f"Fast path matched for {t1} vs {t2}")
+                return True, None
             if self.verbose:
-                print(f"[DEBUG] Fast path matched for {t1} vs {t2}")
-            return True, None
-
-        # Robust path: order-invariant nearest-neighbor check
-        pts1_array = np.asarray(
-            [(float(p.x), float(p.y), float(p.z)) for p in pts1], dtype=float
-        )
-        pts2_array = np.asarray(
-            [(float(p.x), float(p.y), float(p.z)) for p in pts2], dtype=float
-        )
+                logger.debug(
+                    f"Fast path normals disagree for {t1} vs {t2}; trying PCA"
+                )
 
         # Intermediate check: unordered identity
         # If vertices are reordered but geometry matches in local space, the
         # fast path fails but this succeeds. Prefer identity over a possibly
-        # ambiguous PCA transform.
+        # ambiguous PCA transform. K nearest candidates per vertex — hard
+        # edges duplicate positions, and the wrong coincident twin must not
+        # veto the match (see _normals_agree).
         tree = KDTree(pts2_array)
-        dists, _ = tree.query(pts1_array, k=1)
-        if np.max(dists) <= self.tolerance:
+        k_twins = min(4, len(pts2_array))
+        dists, nn_idx = tree.query(pts1_array, k=k_twins)
+        if k_twins == 1:
+            dists, nn_idx = dists[:, None], nn_idx[:, None]
+        if np.max(dists[:, 0]) <= self.tolerance:
             if self.check_uvs:
                 if not self._are_uvs_identical(m1, m2):
                     if self.verbose:
-                        print(f"[DEBUG] UV mismatch for {t1} vs {t2}")
+                        logger.debug(f"UV mismatch for {t1} vs {t2}")
                     return False, None
 
-            if self.verbose:
-                print(f"[DEBUG] Unordered Identity match for {t1} vs {t2}")
-            return True, None
-
-        if self.scale_tolerance > 0:
-            # Whitening (PCA Normalization) for arbitrary scale matching
-            p1_w, v1, s1, c1 = self._whiten_points(pts1_array)
-            p2_w, v2, s2, c2 = self._whiten_points(pts2_array)
-
-            if self.verbose:
-                print(f"[DEBUG] Whitening {t1} vs {t2}")
-                print(f"  S1: {s1}")
-                print(f"  S2: {s2}")
-
-            whitened_tolerance = max(self.tolerance * 100.0, 0.15)
-
-            m_w = self._check_whitened_match(p1_w, p2_w, whitened_tolerance)
-
-            if m_w is None:
+            idx_valid = dists <= self.tolerance
+            idx_valid[:, 0] = True  # the nearest is always a candidate
+            if self._normals_agree(m1, m2, idx=nn_idx, idx_valid=idx_valid):
                 if self.verbose:
-                    print(f"[DEBUG] Whitened PCA transform failed for {t1} vs {t2}")
-                return False, None
+                    logger.debug(f"Unordered Identity match for {t1} vs {t2}")
+                return True, None
+            if self.verbose:
+                logger.debug(
+                    f"Unordered normals disagree for {t1} vs {t2}; trying PCA"
+                )
 
-            # Construct final matrix: M = V1 * S1 * M_w * S2_inv * V2_T
-            m_v1 = np.eye(4)
-            m_v1[:3, :3] = v1
-            m_s1 = np.eye(4)
-            m_s1[0, 0] = s1[0]
-            m_s1[1, 1] = s1[1]
-            m_s1[2, 2] = s1[2]
-            m_s2_inv = np.eye(4)
-            m_s2_inv[0, 0] = 1.0 / s2[0]
-            m_s2_inv[1, 1] = 1.0 / s2[1]
-            m_s2_inv[2, 2] = 1.0 / s2[2]
-            m_v2_T = np.eye(4)
-            m_v2_T[:3, :3] = v2.T
-
-            m_combined = m_v1 @ m_s1 @ m_w @ m_s2_inv @ m_v2_T
-
-            # Translation: T = C2 - (C1 transformed by m_combined rotation)
-            v_c1 = np.array([c1[0], c1[1], c1[2], 1.0])
-            transformed = v_c1 @ m_combined
-            m_combined[3, 0] = c2[0] - transformed[0]
-            m_combined[3, 1] = c2[1] - transformed[1]
-            m_combined[3, 2] = c2[2] - transformed[2]
-
-            return True, _np_to_mmatrix(m_combined)
-
-        # Standard path (uniform scale or no scale).  Center both vert
-        # clouds and compare — detects same-shape / different-translation
-        # cases (e.g. one mesh frozen at an offset, another not). The
-        # match itself is desirable for assembly reconstruction but the
-        # auto-translation acceptance is too lax for strict leaf-
-        # instancing where a frozen-at-offset cube should remain distinct
-        # from a transform-translated one.  Gate the *acceptance* on
-        # ``scale_tolerance > 0`` (the user's opt-in for geometric-
-        # equivalence matching) but always center for the downstream PCA
-        # path (``c1`` / ``c2`` are referenced below).
+        # Center both vert clouds for the PCA alignment below.
+        # Deliberately NO pure-translation acceptance here: a frozen-at-offset
+        # cube must remain distinct from a transform-translated one in strict
+        # leaf-instancing.
         c1 = np.mean(pts1_array, axis=0)
         c2 = np.mean(pts2_array, axis=0)
 
-        centered1 = pts1_array - c1
-        centered2 = pts2_array - c2
+        pts1_array = pts1_array - c1
+        pts2_array = pts2_array - c2
 
+        scale = 1.0
         if self.scale_tolerance > 0:
-            tree = KDTree(centered2)
-            dists, _ = tree.query(centered1, k=1)
-            if float(dists.max()) <= float(self.tolerance):
+            # UNIFORM-scale matching: normalize the candidate's RMS radius
+            # onto the prototype's, then run the SAME rigid verification
+            # (rotation search, strict tolerance, normals gate). Uniform
+            # scale preserves proportions and normals, and Maya carries it
+            # on the instance transform. The per-axis whitening this
+            # replaces erased ALL proportion information — a flat lid
+            # whitened into the same unit cloud as a tall body and
+            # "matched" at a loose tolerance.
+            r1 = float(np.sqrt((pts1_array**2).sum(axis=1).mean()))
+            r2 = float(np.sqrt((pts2_array**2).sum(axis=1).mean()))
+            if r1 < 1e-12 or r2 < 1e-12:
+                return False, None
+            scale = r1 / r2
+            if abs(scale - 1.0) > 1e-9:
+                pts2_array = pts2_array * scale
                 if self.verbose:
-                    print(f"[DEBUG] KDTree matched for {t1} vs {t2}")
+                    logger.debug(
+                        f"Uniform-scale normalize {t2} onto {t1}: s={scale:.6f}"
+                    )
 
-                # Pure-translation match (rotation = identity)
-                m = np.eye(4)
-                m[3, 0] = c2[0] - c1[0]
-                m[3, 1] = c2[1] - c1[1]
-                m[3, 2] = c2[2] - c1[2]
-                return True, _np_to_mmatrix(m)
-
-        pts1_array = centered1
-        pts2_array = centered2
-
-        # Robust PCA Alignment (handles baked rotations and symmetry)
+        # Robust PCA Alignment (handles baked rotations and symmetry).
+        # Normals participate in candidate selection so a symmetric shape is
+        # never matched to its flipped twin (positions tie; shading doesn't).
         matrix_list = ptk.PointCloud.pca_transform(
-            pts1_array, pts2_array, tolerance=self.tolerance, robust=True
+            pts1_array,
+            pts2_array,
+            tolerance=self.tolerance,
+            robust=True,
+            normals_a=self._object_normals(m1),
+            normals_b=self._object_normals(m2),
+            normal_threshold=self.NORMAL_AGREEMENT_THRESHOLD,
         )
 
         if matrix_list:
             # matrix_list is a flat 16-element list (row-major)
             m_combined = np.array(matrix_list, dtype=float).reshape(4, 4)
+            if scale != 1.0:
+                # The rotation was solved with the candidate pre-scaled by
+                # ``scale`` (p1·M ≈ scale·p2): fold the scale back out so
+                # the matrix maps the prototype's geometry onto the
+                # candidate's true size (verified against a synthetic 0.6×
+                # baked-scale copy — the instance transform carries the
+                # scale).
+                m_combined[:3, :3] /= scale
 
             # Translation: T = C2 - (M_combined * C1)
             v_c1 = np.array([c1[0], c1[1], c1[2], 1.0])
@@ -546,14 +665,11 @@ class GeometryMatcher:
         if not m1 or not m2:
             return False
 
-        pts_a = mesh_points(m1, world=False)
-        pts_b = mesh_points(m2, world=False)
+        pts1 = self._object_points(m1)
+        pts2 = self._object_points(m2)
 
-        if len(pts_a) != len(pts_b):
+        if len(pts1) != len(pts2):
             return False
-
-        pts1 = np.array([(p.x, p.y, p.z) for p in pts_a])
-        pts2 = np.array([(p.x, p.y, p.z) for p in pts_b])
 
         # Identity if matrix is None or an MMatrix-equivalent identity
         if matrix is None:
@@ -618,8 +734,8 @@ class GeometryMatcher:
                     t1, t2, relative_transform
                 ):
                     if self.verbose:
-                        print(
-                            f"[DEBUG] Mesh mismatch with expected transform for {t1} vs {t2}"
+                        logger.debug(
+                            f"Mesh mismatch with expected transform for {t1} vs {t2}"
                         )
                     return False, None
             else:
@@ -635,8 +751,8 @@ class GeometryMatcher:
                     t1, t2, rel_mtx
                 ):
                     if self.verbose:
-                        print(
-                            f"[DEBUG] Transform found by shape match does not align parent-space geometry for {t1} vs {t2}"
+                        logger.debug(
+                            f"Transform found by shape match does not align parent-space geometry for {t1} vs {t2}"
                         )
                     return False, None
 
@@ -710,34 +826,34 @@ class GeometryMatcher:
             # If failed and we have a transform, maybe it was the wrong one
             if transform_determined:
                 if self.verbose:
-                    print(
-                        f"[DEBUG] Transform mismatch. Retrying {c1} vs {c2} independently..."
+                    logger.debug(
+                        f"Transform mismatch. Retrying {c1} vs {c2} independently..."
                     )
 
                 is_indep_match, indep_mtx = self.are_hierarchies_identical(c1, c2, None)
 
                 if is_indep_match and indep_mtx is not None:
                     if self.verbose:
-                        print(
-                            f"[DEBUG] Independent match found. Checking compatibility with {len(processed_pairs)} pairs."
+                        logger.debug(
+                            f"Independent match found. Checking compatibility with {len(processed_pairs)} pairs."
                         )
                     all_compatible = True
                     for p1, p2 in processed_pairs:
                         if self.verbose:
-                            print(f"[DEBUG] Checking compatibility with {p1} vs {p2}")
+                            logger.debug(f"Checking compatibility with {p1} vs {p2}")
                         ok, _ = self.are_hierarchies_identical(p1, p2, indep_mtx)
                         if not ok:
                             if self.verbose:
-                                print(
-                                    f"[DEBUG] New transform incompatible with previous pair {p1} vs {p2}"
+                                logger.debug(
+                                    f"New transform incompatible with previous pair {p1} vs {p2}"
                                 )
                             all_compatible = False
                             break
 
                     if all_compatible:
                         if self.verbose:
-                            print(
-                                f"[DEBUG] Updated relative transform to robust candidate"
+                            logger.debug(
+                                f"Updated relative transform to robust candidate"
                             )
                         relative_transform = indep_mtx
                         processed_pairs.append((c1, c2))

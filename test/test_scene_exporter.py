@@ -973,7 +973,7 @@ class TestSceneExporter(MayaTkTestCase):
         """
         self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
-        with patch("mayatk.anim_utils.smart_bake.SmartBake") as MockBaker:
+        with patch("mayatk.anim_utils.smart_bake._smart_bake.SmartBake") as MockBaker:
             mock_instance = MockBaker.return_value
             mock_analysis = {}
             mock_instance.analyze.return_value = mock_analysis
@@ -1401,7 +1401,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
         with self.assertLogs("test_export_data_node", level="INFO") as cm:
             self.tm.export_data_node()
         self.assertTrue(
-            any("2 shot(s)" in m for m in cm.output),
+            any("shot_metadata (2 entries)" in m for m in cm.output),
             f"post-export summary missing shot count: {cm.output}",
         )
 
@@ -1415,7 +1415,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
         with self.assertLogs("test_export_data_node", level="INFO") as cm:
             self.tm.export_data_node()
         self.assertTrue(
-            any("audio event(s)" in m for m in cm.output),
+            any("audio_manifest (2 entries)" in m for m in cm.output),
             f"post-export summary missing audio count: {cm.output}",
         )
 

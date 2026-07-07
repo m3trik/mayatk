@@ -3,33 +3,6 @@ import os
 import sys
 import maya.cmds as cmds
 
-
-# --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
-from contextlib import contextmanager as _contextmanager
-
-
-def _pm_open_file(*args, **kw):
-    kw.setdefault("open", True)
-    return cmds.file(*args, **kw)
-
-
-def _pm_new_file(**kw):
-    kw.setdefault("new", True)
-    return cmds.file(**kw)
-
-
-def _pm_rename_file(path):
-    return cmds.file(rename=path)
-
-
-@_contextmanager
-def _pm_undo_chunk():
-    cmds.undoInfo(openChunk=True)
-    try:
-        yield
-    finally:
-        cmds.undoInfo(closeChunk=True)
-# --- end shims ---
 try:
     import cv2
     import numpy as np
@@ -74,37 +47,21 @@ except ImportError as e:
 class TestImageTracer(unittest.TestCase):
     def setUp(self):
         self.keep_scene = True
+        try:
+            base_dir = os.path.dirname(__file__)
+        except NameError:
+            import tempfile
 
-        # Check for user provided image
-        user_image = r"C:\Users\m3tri\Desktop\heat_sink_1.png"
-        if os.path.exists(user_image):
-            self.test_image_path = user_image
-            self.using_user_image = True
-        else:
-            self.using_user_image = False
-            try:
-                base_dir = os.path.dirname(__file__)
-            except NameError:
-                import tempfile
-
-                base_dir = tempfile.gettempdir()
-            self.test_image_path = os.path.join(base_dir, "test_shape.png")
-            self.create_test_image()
+            base_dir = tempfile.gettempdir()
+        self.test_image_path = os.path.join(base_dir, "test_shape.png")
+        self.create_test_image()
 
     def tearDown(self):
-        if not getattr(self, "using_user_image", False) and os.path.exists(
-            self.test_image_path
-        ):
+        if os.path.exists(self.test_image_path):
             try:
                 os.remove(self.test_image_path)
             except OSError:
                 pass
-
-        # Cleanup scene if not keeping it
-        if not getattr(self, "keep_scene", False):
-            # We can't easily track what the class created unless we store it
-            # But since we are running in a test environment, we might want to rely on the user manually cleaning or newFile
-            pass
 
     def create_test_image(self):
         if cv2 is None or np is None:
@@ -116,8 +73,7 @@ class TestImageTracer(unittest.TestCase):
 
     def test_trace_curves(self):
         if ImageTracer is None:
-            print("Skipping test: ImageTracer module not found")
-            return
+            self.skipTest("ImageTracer module not found")
 
         # Test with simplification
         tracer = ImageTracer(
@@ -145,7 +101,7 @@ class TestImageTracer(unittest.TestCase):
 
     def test_create_mesh(self):
         if ImageTracer is None:
-            return
+            self.skipTest("ImageTracer module not found")
 
         tracer = ImageTracer(self.test_image_path, scale=0.1)
         result_grp = tracer.create_mesh(name="positive_mesh")
@@ -153,7 +109,7 @@ class TestImageTracer(unittest.TestCase):
 
     def test_create_negative_space(self):
         if ImageTracer is None:
-            return
+            self.skipTest("ImageTracer module not found")
 
         tracer = ImageTracer(self.test_image_path, scale=0.1)
         result_grp = tracer.create_negative_space_mesh(name="negative_mesh")
@@ -161,7 +117,7 @@ class TestImageTracer(unittest.TestCase):
 
     def test_project_on_plane(self):
         if ImageTracer is None:
-            return
+            self.skipTest("ImageTracer module not found")
 
         tracer = ImageTracer(self.test_image_path, scale=0.1)
         result_grp = tracer.project_on_plane(name="projected_curves")
@@ -169,11 +125,9 @@ class TestImageTracer(unittest.TestCase):
 
     def test_blue_pencil_tracing(self):
         if ImageTracer is None:
-            print("Skipping test: ImageTracer module not found")
-            return
+            self.skipTest("ImageTracer module not found")
         if cv2 is None:
-            print("Skipping test: OpenCV not found")
-            return
+            self.skipTest("OpenCV not found")
 
         # Create a dummy zip file with a png inside
         import zipfile
@@ -219,7 +173,7 @@ class TestImageTracer(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    _pm_new_file(f=True)
+    cmds.file(new=True, force=True)
     import mayatk as mtk
 
     mtk.clear_scrollfield_reporters()

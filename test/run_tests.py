@@ -26,6 +26,7 @@ Directory Structure:
     - Main Test Suite: mayatk/test/ (Standardized test_*.py files only)
     - Temporary Tests: mayatk/test/temp_tests/ (Reproduction scripts, scratchpad tests)
 """
+import os
 import re
 import sys
 import textwrap
@@ -58,7 +59,13 @@ class MayaTestRunner:
         self.temp_test_dir = self.test_dir / "temp_tests"
         self.temp_test_dir.mkdir(exist_ok=True)
 
-        self.results_file = self.temp_test_dir / "test_results.txt"
+        # Scoped by port: two concurrent invocations (e.g. a background
+        # --all run and a manual scoped check on --port) would otherwise
+        # share one file — the second run's ``unlink()``-then-rewrite
+        # clobbers the first's in-progress content, and wait_for_results'
+        # file-based fallback (which just looks for a "SUMMARY" marker) then
+        # reports the FIRST run "done" with the SECOND run's results.
+        self.results_file = self.temp_test_dir / f"test_results_{port}.txt"
         try:
             self.connection = maya_connection.MayaConnection.get_instance()
         except NameError:
@@ -802,8 +809,12 @@ finally:
             color = "orange"
             status = f"{passed} passed, {failed} failed"
 
-        # Create the new badge
-        new_badge = f"[![Tests](https://img.shields.io/badge/Tests-{status.replace(' ', '%20').replace(',', '')}-{color}.svg)](test/)"
+        # Link target computed relative to the README's location
+        # (docs/README.md -> ../test/), so a regenerate can't break the link.
+        link_target = (
+            Path(os.path.relpath(self.test_dir, readme_path.parent)).as_posix() + "/"
+        )
+        new_badge = f"[![Tests](https://img.shields.io/badge/Tests-{status.replace(' ', '%20').replace(',', '')}-{color}.svg)]({link_target})"
 
         # Check if a Tests badge already exists and replace it
         tests_badge_pattern = (

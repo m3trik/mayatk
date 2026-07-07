@@ -15,12 +15,6 @@ except ImportError:
 import mayatk as mtk
 from uitk.widgets.mixins.tooltip_mixin import fmt
 
-from mayatk.mat_utils._affix_mode import (
-    add_affix_mode_menu,
-    current_affix_mode,
-    resolve_affix,
-)
-
 
 class ImageToPlaneSlots:
     """Switchboard slots for the Image to Plane UI.
@@ -96,17 +90,16 @@ class ImageToPlaneSlots:
     # ------------------------------------------------------------------
 
     def txt_suffix_init(self, widget):
-        """Add a prefix/suffix/auto-mode combobox to the affix field's option menu."""
-        add_affix_mode_menu(
-            widget,
-            default_mode="auto",
+        """Add a prefix/suffix/auto-mode picker to the affix field."""
+        widget.option_box.set_affix(
+            default="auto",
             on_change=lambda _mode, w=widget: self._apply_affix_placeholder(w),
         )
         self._apply_affix_placeholder(widget)
 
     @staticmethod
     def _apply_affix_placeholder(widget):
-        mode = current_affix_mode(widget)
+        mode = widget.option_box.affix_mode
         if mode == "prefix":
             widget.setPlaceholderText("Material Prefix")
             widget.setToolTip(
@@ -177,11 +170,11 @@ class ImageToPlaneSlots:
         mat_type = (
             "stingray" if self.ui.cmb_mat_type.currentIndex() == 0 else "standard"
         )
-        prefix, suffix = resolve_affix(self.ui.txt_suffix, default="suffix")
+        prefix, suffix = self.ui.txt_suffix.option_box.resolve_affix(default="suffix")
         if not prefix and not suffix:
             # Empty field — apply mode-aware default so a user who switched
             # to Prefix mode and cleared the text still gets a sensible value.
-            if current_affix_mode(self.ui.txt_suffix) == "prefix":
+            if self.ui.txt_suffix.option_box.affix_mode == "prefix":
                 prefix = "MAT_"
             else:
                 suffix = "_MAT"

@@ -1,8 +1,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/Version-0.12.64-blue.svg)](https://pypi.org/project/mayatk/)
+[![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-397%20passed-brightgreen.svg)](test/)
+[![Tests](https://img.shields.io/badge/Tests-3575%20passed-brightgreen.svg)](../test/)
 
 # mayatk
 
@@ -96,6 +96,12 @@ it bootstraps one with a fresh `Switchboard`. The editor window is cached per-ha
 
 - **[Scene data nodes](data_nodes.md)** — the shared `data_internal` / `data_export` two-node model that every tool uses to stash scene-wide metadata and (optionally) embed it in an FBX.
 - **[Shot data in the FBX → Unity](shot_export_unity.md)** — exporting Shots as named Unity AnimationClips plus embedded shot metadata, and side-by-side coexistence with Audio events.
+
+Format specs (co-located with the code that consumes them):
+
+- **[Shot-manifest behaviors](../mayatk/anim_utils/shots/shot_manifest/behaviors/BEHAVIOR_FORMAT.md)** — behavior file format for the shot manifest.
+- **[Shot-manifest mapping](../mayatk/anim_utils/shots/shot_manifest/mapping/MAPPING_FORMAT.md)** — mapping file format for the shot manifest.
+- **[Scene-exporter template rules](../mayatk/env_utils/scene_exporter/TEMPLATE_RULES.md)** — export-template rule syntax.
 
 ---
 

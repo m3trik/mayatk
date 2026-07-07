@@ -3939,11 +3939,10 @@ class TestSavePersistenceUndoSafe(unittest.TestCase):
 
         persistence = MayaScenePersistence()
         _mock_cmds.undoInfo = MagicMock()
-        mock_node = MagicMock()
 
         with patch(
-            "mayatk.node_utils._node_utils.NodeUtils.ensure_data_node",
-            return_value=mock_node,
+            "mayatk.node_utils.data_nodes.DataNodes.set_internal_string",
+            return_value="data_internal",
         ):
             persistence.save({"test": "data"})
 
@@ -3959,12 +3958,10 @@ class TestSavePersistenceUndoSafe(unittest.TestCase):
 
         persistence = MayaScenePersistence()
         _mock_cmds.undoInfo = MagicMock()
-        mock_node = MagicMock()
-        mock_node.attr.return_value.set.side_effect = RuntimeError("boom")
 
         with patch(
-            "mayatk.node_utils._node_utils.NodeUtils.ensure_data_node",
-            return_value=mock_node,
+            "mayatk.node_utils.data_nodes.DataNodes.set_internal_string",
+            side_effect=RuntimeError("boom"),
         ):
             with self.assertRaises(RuntimeError):
                 persistence.save({"test": "data"})

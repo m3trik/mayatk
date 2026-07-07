@@ -79,9 +79,24 @@ class MayaUiHandler(UiHandler):
             MayaUiHandler.instance().editors.show("browser")
         """
         if switchboard is None:
-            # SingletonMixin._instances is shared across all subclasses;
-            # filter to our class so we don't return a sibling handler.
-            for inst in cls._instances.values():
+            # SingletonMixin._instances is shared across all subclasses and
+            # never pruned, so it can hold handlers from torn-down sessions
+            # (their switchboard's C++ object deleted with its parent). Walk
+            # newest-first, filtered to our class, and skip — and prune — any
+            # handler whose switchboard is dead: returning one would make
+            # every subsequent call raise RuntimeError on deleted Qt objects.
+            # Newest-first also prefers the production handler (e.g. tentacle's)
+            # over an older shelf-bootstrapped one when both are alive.
+            for key, inst in list(cls._instances.items()):
+                if not isinstance(inst, cls):
+                    continue
+                sb = getattr(inst, "sb", None)
+                # Switchboard's shared liveness probe; treat a missing probe
+                # (older uitk) as alive rather than guessing.
+                is_alive = getattr(sb, "_widget_is_alive", None) if sb else None
+                if is_alive is not None and not is_alive(sb):
+                    del cls._instances[key]
+            for inst in reversed(list(cls._instances.values())):
                 if isinstance(inst, cls):
                     return inst
         return super().instance(switchboard=switchboard, **kwargs)
@@ -103,6 +118,10 @@ class MayaUiHandler(UiHandler):
         """Retrieve a UI, checking Maya menus first."""
         # Check if name corresponds to a Maya menu
         if maya_native_menus and name in maya_native_menus.MayaNativeMenus.MENU_MAPPING:
+            # The base get() honors ``reload``; map it onto the menu branch's
+            # ``overwrite`` so ``get(name, reload=True)`` rebuilds here too
+            # instead of silently returning the cached wrapper.
+            kwargs.setdefault("overwrite", reload)
             return self._load_maya_ui(menu_key=name, **kwargs)
 
         return super().get(name, reload=reload, **kwargs)
@@ -184,31 +203,48 @@ class MayaUiHandler(UiHandler):
             parent=maya_window,
         )
 
-        # Add Window flag without clobbering anything MainWindow already set.
-        # When a QMainWindow has a parent, Qt treats it as an embedded child;
-        # the Window flag keeps it a floating tool window.
-        ui.set_flags(Window=True)
+        # add_ui just registered the window into loaded_ui — from here on a
+        # raise would leave a half-built UI cached (the peek() above returns
+        # it forever after). Evict from both caches on any failure and fail
+        # soft; the next call rebuilds from scratch.
+        try:
+            # Add Window flag without clobbering anything MainWindow already set.
+            # When a QMainWindow has a parent, Qt treats it as an embedded child;
+            # the Window flag keeps it a floating tool window.
+            ui.set_flags(Window=True)
 
-        if header:
-            ui.header = self.sb.registered_widgets.Header()
-            ui.header.setTitle(ui.objectName().upper())
-            ui.header.attach_to(ui.centralWidget())
-            ui.style.set(ui.header, "dark", "Header")
-            self.logger.debug(
-                f"[{menu_key}] Header attached: hasattr(ui, 'header')={hasattr(ui, 'header')}, "
-                f"header.window() is ui: {ui.header.window() is ui}"
+            if header:
+                ui.header = self.sb.registered_widgets.Header()
+                ui.header.setTitle(ui.objectName().upper())
+                ui.header.attach_to(ui.centralWidget())
+                ui.style.set(ui.header, "dark", "Header")
+                self.logger.debug(
+                    f"[{menu_key}] Header attached: hasattr(ui, 'header')={hasattr(ui, 'header')}, "
+                    f"header.window() is ui: {ui.header.window() is ui}"
+                )
+
+            ui.edit_tags(add="maya_menu")
+            self.logger.debug(f"[{menu_key}] Maya UI created with tags={ui.tags}")
+
+            # Apply styles (including header buttons) through the normal pipeline.
+            # Maya native menus don't have the 'mayatk' tag, so they get the
+            # default pin button from DEFAULT_STYLE.
+            self.apply_styles(ui)
+
+            # Menu is fully populated (synchronous in get_menu); lock the
+            # window to exact content size before it is ever shown.
+            menu_widget.fit_to_window()
+
+            return ui
+        except Exception as e:
+            self.logger.error(
+                f"[{menu_key}] Wrapper setup failed after registration; "
+                f"evicting the half-built UI: {type(e).__name__}: {e}"
             )
-
-        ui.edit_tags(add="maya_menu")
-        self.logger.debug(f"[{menu_key}] Maya UI created with tags={ui.tags}")
-
-        # Apply styles (including header buttons) through the normal pipeline.
-        # Maya native menus don't have the 'mayatk' tag, so they get the
-        # default pin button from DEFAULT_STYLE.
-        self.apply_styles(ui)
-
-        # Menu is fully populated (synchronous in get_menu); lock the
-        # window to exact content size before it is ever shown.
-        menu_widget.fit_to_window()
-
-        return ui
+            try:
+                del self.sb.loaded_ui[menu_key]
+            except Exception:  # noqa: BLE001 - eviction is best-effort
+                pass
+            handler.menus.pop(menu_key, None)
+            ui.deleteLater()
+            return None

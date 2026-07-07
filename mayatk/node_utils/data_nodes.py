@@ -1,6 +1,5 @@
 # !/usr/bin/python
 # coding=utf-8
-import logging
 from typing import Optional
 
 
@@ -9,29 +8,31 @@ try:
 except ImportError:
     cmds = None
 
-logger = logging.getLogger(__name__)
-
 
 class DataNodes:
     """Manages the two shared scene data nodes.
 
-    ``data_internal`` (network node) is the single source of truth.
-    All tools write their attributes here.
+    ``data_internal`` (network node) is the single source of truth for
+    tool-authored state.  A ``network`` node never serialises into an FBX,
+    so anything here persists with the scene but can't leak into exports.
 
-    ``data_export`` (locked transform) is the FBX export surface.
-    Attributes are exposed via Maya proxy attrs that alias back to
-    ``data_internal``, providing zero-cost synchronisation through
-    Maya's dependency graph.
+    ``data_export`` (locked, hidden transform) is the FBX export surface —
+    its attrs ride into the FBX as user properties.
 
-    Usage::
+    Three mechanisms, by the nature of the value:
 
-        # Tool registers an attr (creates on both nodes + proxy link):
-        DataNodes.mirror_attr("audio_trigger", attributeType="enum",
-                              enumName="None", keyable=True)
+    - :meth:`set_export_string` — regenerated-at-export artifacts (JSON
+      manifests, wire strings) as plain string channels on ``data_export``.
+    - :meth:`set_internal_string` — scene-persistent state that must never
+      export (restore manifests, app state).
+    - :meth:`mirror_attr` — authored, edited-over-time values: the attr
+      lives on ``data_internal`` with a Maya proxy on ``data_export`` that
+      aliases it (zero-cost sync through the dependency graph)::
 
-        # Tool writes to internal — export follows automatically:
-        cmds.setAttr("data_internal.audio_trigger", 2)
-        assert cmds.getAttr("data_export.audio_trigger") == 2
+        DataNodes.mirror_attr("my_flag", attributeType="enum",
+                              enumName="off:on", keyable=True)
+        cmds.setAttr("data_internal.my_flag", 1)      # author here
+        assert cmds.getAttr("data_export.my_flag") == 1
     """
 
     INTERNAL = "data_internal"
@@ -168,11 +169,43 @@ class DataNodes:
             )
 
     # ------------------------------------------------------------------
+    # Internal string channels (plain attrs on the internal node)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def set_internal_string(attr: str, value: str) -> str:
+        """Write *value* to a plain string attr on ``data_internal`` (create if needed).
+
+        Carrier for tool-authored state that must persist with the scene but
+        never ride into the FBX (``data_export`` attrs are exported as user
+        properties; ``data_internal`` is not part of the export set).  Used
+        e.g. by ``SmartBake`` for its restore manifest.
+
+        Returns:
+            str: Name of the ``data_internal`` node.
+        """
+        internal = str(DataNodes.ensure_internal())
+        if not cmds.attributeQuery(attr, node=internal, exists=True):
+            cmds.addAttr(internal, longName=attr, dataType="string")
+        cmds.setAttr(f"{internal}.{attr}", value, type="string")
+        return internal
+
+    @staticmethod
+    def get_internal_string(attr: str) -> Optional[str]:
+        """Return the string value of an internal-node channel, or ``None``."""
+        if cmds is None or not cmds.objExists(DataNodes.INTERNAL):
+            return None
+        node = DataNodes.INTERNAL
+        if not cmds.attributeQuery(attr, node=node, exists=True):
+            return None
+        return cmds.getAttr(f"{node}.{attr}") or None
+
+    # ------------------------------------------------------------------
     # Export string channels (plain attrs on the export node)
     # ------------------------------------------------------------------
 
     @staticmethod
-    def set_export_string(attr: str, value: str) -> str:
+    def set_export_string(attr: str, value: str) -> Optional[str]:
         """Write *value* to a plain string attr on the export node (create if needed).
 
         Generic carrier for export-time data (e.g. ``fbx_takes``,
@@ -181,9 +214,21 @@ class DataNodes:
         tool-authored state, so they don't belong on the ``data_internal`` SSoT.
         The value rides into the FBX as a user property.
 
+        An empty *value* clears the channel without creating the carrier just
+        to hold an empty manifest (matching the blendertk mirror): the attr is
+        set to ``""`` when it already exists, and nothing is created otherwise.
+
         Returns:
-            str: Name of the ``data_export`` node.
+            str | None: Name of the ``data_export`` node, or ``None`` when an
+            empty *value* had nothing to clear.
         """
+        if not value:
+            if not cmds.objExists(DataNodes.EXPORT) or not cmds.attributeQuery(
+                attr, node=DataNodes.EXPORT, exists=True
+            ):
+                return None
+            cmds.setAttr(f"{DataNodes.EXPORT}.{attr}", "", type="string")
+            return DataNodes.EXPORT
         export = str(DataNodes.ensure_export())
         if not cmds.attributeQuery(attr, node=export, exists=True):
             cmds.addAttr(export, longName=attr, dataType="string")
@@ -199,97 +244,3 @@ class DataNodes:
         if not cmds.attributeQuery(attr, node=node, exists=True):
             return None
         return cmds.getAttr(f"{node}.{attr}") or None
-
-    # ------------------------------------------------------------------
-    # Legacy migration
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def migrate_legacy_carriers():
-        """Migrate old ``audio_events*`` carrier transforms to the new nodes.
-
-        Scans the scene for transforms that carry an ``audio_trigger``
-        attribute but are not ``data_export``.  For each legacy carrier:
-
-        1. Copies the ``audio_trigger`` enum definition to ``data_internal``.
-        2. Reconnects any animation curves to ``data_internal.audio_trigger``.
-        3. Copies ``audio_file_map`` and ``audio_manifest`` string attrs.
-        4. Deletes the old carrier transform.
-
-        Returns:
-            list[str]: Names of carriers that were migrated.
-        """
-        if cmds is None:
-            return []
-
-        export_name = DataNodes.EXPORT
-        migrated = []
-
-        for node in cmds.ls(type="transform") or []:
-            if node == export_name:
-                continue
-            if not cmds.attributeQuery("audio_trigger", node=node, exists=True):
-                continue
-
-            logger.info(
-                "Migrating legacy carrier '%s' → '%s'", node, DataNodes.INTERNAL
-            )
-
-            # Ensure target nodes exist.
-            internal = DataNodes.ensure_internal()
-            internal_str = str(internal)
-
-            # --- Enum definition ---
-            raw = cmds.attributeQuery("audio_trigger", node=node, listEnum=True)
-            enum_str = raw[0] if raw else "None"
-
-            if not cmds.attributeQuery("audio_trigger", node=internal_str, exists=True):
-                cmds.addAttr(
-                    internal_str,
-                    longName="audio_trigger",
-                    attributeType="enum",
-                    enumName=enum_str,
-                    keyable=True,
-                )
-            else:
-                # Update enum labels to include any from the legacy carrier.
-                cmds.addAttr(
-                    f"{internal_str}.audio_trigger", edit=True, enumName=enum_str
-                )
-
-            # --- Animation curves ---
-            src_attr = f"{node}.audio_trigger"
-            dst_attr = f"{internal_str}.audio_trigger"
-            anim_curves = (
-                cmds.listConnections(src_attr, type="animCurve", d=False) or []
-            )
-            for curve in anim_curves:
-                # Disconnect from old, connect to new.
-                cmds.disconnectAttr(f"{curve}.output", src_attr)
-                try:
-                    cmds.connectAttr(f"{curve}.output", dst_attr, force=True)
-                except RuntimeError:
-                    pass  # already connected
-
-            # --- String attrs (file map, manifest) ---
-            for str_attr in ("audio_file_map", "audio_manifest"):
-                if cmds.attributeQuery(str_attr, node=node, exists=True):
-                    val = cmds.getAttr(f"{node}.{str_attr}") or ""
-                    if not cmds.attributeQuery(
-                        str_attr, node=internal_str, exists=True
-                    ):
-                        cmds.addAttr(internal_str, longName=str_attr, dataType="string")
-                    cmds.setAttr(f"{internal_str}.{str_attr}", val, type="string")
-
-            # --- Ensure proxy on export node ---
-            DataNodes.mirror_attr(
-                "audio_trigger", attributeType="enum", enumName=enum_str, keyable=True
-            )
-
-            # Delete old carrier.
-            # Unlock name first (carriers had lockName=True).
-            cmds.lockNode(node, lock=False, lockName=False)
-            cmds.delete(node)
-            migrated.append(node)
-
-        return migrated

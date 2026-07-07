@@ -227,15 +227,17 @@ class AudioClips(ptk.LoggingMixin):
         the resulting ``"<frame>:<label>"`` wire string onto the FBX export
         surface so it survives as a user property.
 
-        Uses the two-node carrier pattern (``data_internal`` source of truth,
-        ``data_export`` locked transform that FBX actually serialises):
-        :meth:`mayatk.node_utils.data_nodes.DataNodes.mirror_attr` creates
-        ``audio_manifest`` on ``data_internal`` with a proxy alias on
-        ``data_export``.  Writing to the source updates the export proxy
-        automatically; the value rides out as a string user-prop on the
-        ``data_export`` GameObject in the imported FBX.  Downstream importers
-        (e.g. unitytk ``AudioEventImporter``) attach a single scene-wide
-        audio-event component to that GameObject.
+        The manifest is a regenerated export artifact — authoring state (the
+        keyed ``audio_clip_<id>`` enums and ``audio_file_map``) stays on
+        ``data_internal``; only this baked projection ships, written as a
+        plain string channel on ``data_export`` via
+        :meth:`mayatk.node_utils.data_nodes.DataNodes.set_export_string`.
+        The value rides out as a string user-prop on the ``data_export``
+        GameObject in the imported FBX.  Downstream importers (e.g. unitytk
+        ``AudioEventImporter``) attach a single scene-wide audio-event
+        component from it.  Scenes written when the manifest was still
+        proxy-mirrored are healed in place (see
+        :meth:`_drop_legacy_manifest_proxy`).
 
         Idempotent — overwrites any prior value on the attr.  Called once
         before FBX export, typically from a scene-exporter pre-export hook.
@@ -270,19 +272,49 @@ class AudioClips(ptk.LoggingMixin):
             carrier=carrier, frame_offset=playback_min
         )
 
-        DataNodes.mirror_attr(cls.MANIFEST_ATTR, dataType="string")
-        cmds.setAttr(
-            f"{DataNodes.INTERNAL}.{cls.MANIFEST_ATTR}", manifest, type="string"
-        )
+        # The manifest is a regenerated export artifact, so it lives as a
+        # plain string channel on data_export (set_export_string) — not as
+        # authored state mirrored from data_internal.
+        cls._drop_legacy_manifest_proxy()
+        DataNodes.set_export_string(cls.MANIFEST_ATTR, manifest)
         n_entries = len(manifest.split()) if manifest else 0
         cls.logger.info(
             "prepare_for_export: stamped %s.%s with %d entr%s.",
-            DataNodes.INTERNAL,
+            DataNodes.EXPORT,
             cls.MANIFEST_ATTR,
             n_entries,
             "y" if n_entries == 1 else "ies",
         )
         return manifest
+
+    @classmethod
+    def _drop_legacy_manifest_proxy(cls) -> None:
+        """Self-heal pre-taxonomy scenes: drop the old mirror_attr manifest pair.
+
+        The manifest used to be authored on ``data_internal`` with a Maya
+        proxy on ``data_export``.  A plain string attr can't replace a proxy
+        of the same name in place, so remove the old proxy (and the now
+        purposeless internal source attr) before the plain-channel write.
+        No-op on current scenes.
+        """
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        export, internal, attr = DataNodes.EXPORT, DataNodes.INTERNAL, cls.MANIFEST_ATTR
+        try:
+            if cmds.objExists(export) and cmds.attributeQuery(
+                attr, node=export, exists=True
+            ):
+                # Only a proxy needs replacing — a plain channel is already right.
+                if cmds.addAttr(f"{export}.{attr}", query=True, usedAsProxy=True):
+                    cmds.deleteAttr(f"{export}.{attr}")
+                    if cmds.attributeQuery(attr, node=internal, exists=True):
+                        cmds.deleteAttr(f"{internal}.{attr}")
+        except Exception:  # never let migration block an export
+            cls.logger.debug("legacy manifest proxy cleanup skipped.", exc_info=True)
+
+    #: Explicit user opt-out (``disable_auto_export``) — session-global; wins
+    #: over the automatic registration that creating a track performs.
+    _auto_export_disabled = False
 
     @classmethod
     def enable_auto_export(cls) -> None:
@@ -292,20 +324,37 @@ class AudioClips(ptk.LoggingMixin):
         (:meth:`mayatk.env_utils.fbx_utils.FbxUtils.register_export_preparer`), so
         the manifest rides into **any** FBX export — File ▸ Export, the Game
         Exporter, a script — with no Scene Exporter and no staleness window.
-        Opt-in and session-global; composes with the Shots auto-export (both
-        stamp distinct attrs on the shared ``data_export`` node).  Call
-        :func:`disable_auto_export` to remove it.
+        Session-global, and automatic once a track is created (authoring opts
+        you in); composes with the Shots auto-export (both stamp distinct attrs
+        on the shared ``data_export`` node).  Call :func:`disable_auto_export`
+        to remove it for the session.
         """
-        from mayatk.env_utils.fbx_utils import FbxUtils
+        cls._auto_export_disabled = False
+        cls._register_export_preparer()
 
-        FbxUtils.register_export_preparer("audio", cls.prepare_for_export)
+    @classmethod
+    def disable_auto_export(cls) -> None:
+        """Remove the before-export preparer for the rest of the session.
 
-    @staticmethod
-    def disable_auto_export() -> None:
-        """Remove the before-export preparer installed by :func:`enable_auto_export`."""
+        An explicit opt-out: the automatic registration performed by track
+        creation respects it and won't re-install the hook.
+        """
+        cls._auto_export_disabled = True
         from mayatk.env_utils.fbx_utils import FbxUtils
 
         FbxUtils.unregister_export_preparer("audio")
+
+    @classmethod
+    def _register_export_preparer(cls) -> None:
+        """Install the session preparer unless the user explicitly opted out."""
+        if cls._auto_export_disabled:
+            return
+        try:
+            from mayatk.env_utils.fbx_utils import FbxUtils
+
+            FbxUtils.register_export_preparer("audio", cls.prepare_for_export)
+        except Exception:  # outside Maya / hooks unavailable — never block authoring
+            pass
 
     @classmethod
     def list_nodes(cls) -> List[str]:

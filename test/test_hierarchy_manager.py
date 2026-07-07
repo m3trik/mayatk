@@ -7608,7 +7608,12 @@ class TestHierarchyManagerSlotsUserDataPaths(MayaTkTestCase):
     # ------------------------------------------------------------------
 
     def test_drop_reparent_to_node(self):
-        """Drag-drop reparent must move the Maya node under the new parent."""
+        """Drag-drop reparent must move the Maya node under the new parent.
+
+        The handler takes the whole dropped selection as (item, new_parent)
+        pairs — batching lets multi-select drags reparent everything in one
+        undo chunk with a single tree rebuild at the end.
+        """
         parent = cmds.group(empty=True, name="HM_RP_PARENT")
         child = cmds.group(empty=True, name="HM_RP_CHILD")
         # Currently child is at world root.
@@ -7617,7 +7622,7 @@ class TestHierarchyManagerSlotsUserDataPaths(MayaTkTestCase):
         child_item = self._make_item(child)
         parent_item = self._make_item(parent)
 
-        self.slot._on_tree001_drop_reparent(child_item, parent_item)
+        self.slot._on_tree001_drop_reparent([(child_item, parent_item)])
 
         new_parent = cmds.listRelatives(child, parent=True)
         self.assertIsNotNone(new_parent, "Child should now have a parent")
@@ -7636,12 +7641,36 @@ class TestHierarchyManagerSlotsUserDataPaths(MayaTkTestCase):
             cmds.ls(child, long=True)[0]  # use the long path post-parent
         )
 
-        self.slot._on_tree001_drop_reparent(child_item, None)
+        self.slot._on_tree001_drop_reparent([(child_item, None)])
 
         self.assertIsNone(
             cmds.listRelatives("HM_RP_W_CHILD", parent=True),
             "Child should now be at world root",
         )
+
+    def test_drop_reparent_multi_select_batches(self):
+        """A multi-item drop reparents EVERY item — the old per-item loop
+        refreshed (rebuilt) the tree inside the first callback, deleting the
+        remaining QTreeWidgetItems mid-iteration (RuntimeError, partial
+        reparent)."""
+        parent = cmds.group(empty=True, name="HM_RP_M_PARENT")
+        child_a = cmds.group(empty=True, name="HM_RP_M_A")
+        child_b = cmds.group(empty=True, name="HM_RP_M_B")
+
+        parent_item = self._make_item(parent)
+        moves = [
+            (self._make_item(child_a), parent_item),
+            (self._make_item(child_b), parent_item),
+        ]
+
+        self.slot._on_tree001_drop_reparent(moves)
+
+        for child in ("HM_RP_M_A", "HM_RP_M_B"):
+            got = cmds.listRelatives(child, parent=True)
+            self.assertIsNotNone(got, f"{child} should have been reparented")
+            self.assertEqual(got[0].split("|")[-1], "HM_RP_M_PARENT")
+        # One rebuild for the whole batch, not one per item.
+        self.slot.controller.refresh_trees.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -153,6 +153,39 @@ class TestGroupCombine(MayaTkTestCase):
             f"Combined mesh should be under '{grp}', got '{result_parent}'",
         )
 
+    def test_combine_preserves_parent_group_full_paths(self):
+        """Same as test_combine_preserves_parent_group but with full DAG
+        paths as input.
+
+        Bug: ``_prepare_reparent``'s childless-parent check compared
+        ``children`` (queried without ``fullPath``) against ``node_set``
+        (built from the caller's raw input strings) — a format mismatch in
+        either direction (full-path children vs short-name node_set, or vice
+        versa) always made ``remaining`` non-empty, so the guarding temp-null
+        was never created for whichever input format wasn't tested. Callers
+        that resolve full paths before combining (e.g. AutoInstancer's
+        remainder-combine) hit Maya's polyUnite-deletes-the-emptied-parent
+        behavior with no protection. Fixed: 2026-07-06.
+        """
+        grp = cmds.group(em=True, n="container_grp_full")
+        c1 = cmds.polyCube(n="child_c")[0]
+        c2 = cmds.polyCube(n="child_d")[0]
+        cmds.parent(c1, grp)
+        cmds.parent(c2, grp)
+        full_paths = cmds.ls([c1, c2], long=True)
+
+        combined = EditUtils.combine_objects(full_paths)
+
+        self.assertTrue(
+            cmds.objExists(grp),
+            "Parent group should still exist after combine",
+        )
+        result_parent = cmds.listRelatives(combined, parent=True)
+        self.assertTrue(
+            result_parent and result_parent[0] == grp,
+            f"Combined mesh should be under '{grp}', got '{result_parent}'",
+        )
+
     def test_combine_preserves_parent_with_extra_children(self):
         """Verify combine works when parent has additional non-combined children.
 

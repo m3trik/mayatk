@@ -2262,6 +2262,7 @@ class TubeRigSlots:
             tube_rig.create_pole_vector(ik_handle, mid_joint=mid_joint)
             self.sb.message_box("Standard RP IK & Pole Vector created.")
 
+    @CoreUtils.undoable
     def b003(self):
         """Macros: Bind Joint Chain to Tube."""
         try:

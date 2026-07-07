@@ -16,6 +16,7 @@ from pythontk.img_utils.map_factory import (
 )
 
 # from this package:
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.mat_utils._mat_utils import MatUtils
@@ -466,9 +467,13 @@ class ShaderTemplates:
         saver.save_graph(nodes, file_path, exclude_types=exclude_types)
 
     @staticmethod
+    @CoreUtils.undoable
     def restore_template(file_path, texture_paths=None, name=None):
         """
         Restore a shader template from a file.
+
+        Runs in one undo chunk — it creates a whole node network, so a
+        partial failure must not leave half-built nodes needing N undos.
 
         Args:
             file_path (str): Path to the YAML template file.
@@ -486,7 +491,9 @@ class ShaderTemplates:
 
 
 class ShaderTemplatesSlots(ptk.LoggingMixin):
-    def __init__(self, switchboard, log_level="DEBUG"):
+    # INFO (not WARNING): the logger is redirected into the panel's txt001,
+    # so info-level lines ARE the user feedback ("COMPLETED.", saved paths).
+    def __init__(self, switchboard, log_level="INFO"):
         super().__init__()
 
         self.sb = switchboard
@@ -503,13 +510,10 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
         self.logger.setup_logging_redirect(self.ui.txt001)
 
-        # Load plugins
-        EnvUtils.load_plugin("shaderFXPlugin")  # Load Stingray plugin
-        EnvUtils.load_plugin("mtoa")  # Load Arnold plugin
-
-    @property
-    def template_name(self):
-        return "test"
+        # NOTE: shader plugins (shaderFXPlugin / mtoa) load lazily in b000 —
+        # loading here froze every panel open for seconds (mtoa boots the
+        # whole Arnold renderer), and a missing plugin raised out of
+        # __init__, killing the slots instance (panel opened dead).
 
     def header_init(self, widget):
         """Initialize the header widget."""
@@ -567,6 +571,10 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         """Initialize the ComboBox for shader templates."""
         if not widget.is_initialized:
             widget.restore_state = True
+            # Persist the pick by TEXT, not index — the list is rebuilt from
+            # os.listdir each show, so a stored index selects whichever
+            # template happens to occupy that row next session.
+            widget.restore_by = "text"
             widget.refresh_on_show = True
             widget.menu.add(
                 self.sb.registered_widgets.Label,
@@ -650,6 +658,15 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
             self.logger.error("No template selected.")
             return
 
+        # Lazy, non-fatal plugin load (see __init__ note). A template that
+        # doesn't use a missing plugin's node types still restores fine; one
+        # that does surfaces per-node errors from the restorer below.
+        for plugin in ("shaderFXPlugin", "mtoa"):
+            try:
+                EnvUtils.load_plugin(plugin)
+            except ValueError as e:
+                self.logger.debug(str(e))
+
         restored_nodes = ShaderTemplates.restore_template(
             yaml_file_path, self.image_files or []
         )
@@ -674,16 +691,32 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
     def b002(self):
         """Save current graph as a new shader template."""
         selected_nodes = cmds.ls(selection=True) or []
-        script_directory = os.path.dirname(__file__)
-        template_directory = os.path.join(script_directory, "templates")
+        if not selected_nodes:
+            self.logger.error("Select a material to save its network.")
+            return
 
-        if not os.path.exists(template_directory):
-            os.makedirs(template_directory)
+        template_directory = os.path.join(os.path.dirname(__file__), "templates")
+        os.makedirs(template_directory, exist_ok=True)
 
-        file_path = os.path.join(template_directory, f"{self.template_name}.yaml")
+        # The panel has no name field — prompt, defaulting to the selected
+        # material's name. (This replaced a hardcoded "test" placeholder that
+        # could only ever write test.yaml once.)
+        default_name = str(selected_nodes[0]).rsplit("|", 1)[-1].replace(":", "_")
+        QtWidgets = self.sb.QtWidgets
+        name, ok = QtWidgets.QInputDialog.getText(
+            self.ui, "Save Template", "Template name:", text=default_name
+        )
+        name = "".join(c for c in (name or "").strip() if c not in '\\/:*?"<>|')
+        if not ok or not name:
+            self.logger.info("Save cancelled.")
+            return
 
+        file_path = os.path.join(template_directory, f"{name}.yaml")
         if os.path.exists(file_path):
-            self.logger.error("File already exists.")
+            self.logger.error(
+                f"Template '{name}' already exists — pick another name, or "
+                "rename/delete the existing one from the template dropdown's menu."
+            )
             return
 
         ShaderTemplates.save_template(

@@ -146,6 +146,90 @@ class TestAnimUtils(MayaTkTestCase):
             f"Expected only t=5 redundant on translateX, got {tx_redundant}",
         )
 
+    def test_get_redundant_flat_keys_remove_locked_destination(self):
+        """remove=True must not crash when the driven attribute is locked.
+
+        Bug: the rebuild path (delete old curve, create a new one on the
+        same plug) failed with 'RuntimeError: (kFailure): Unexpected
+        Internal Failure' when the destination attribute was locked —
+        Maya refuses the reconnect ("Destination is locked") inside
+        MDGModifier.doIt(). Locked channels are common on rig controls.
+        Fixed: 2026-07-01
+        """
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=0)
+
+        plug = f"{self.cube}.translateX"
+        cmds.setAttr(plug, lock=True)
+        redundant = AnimUtils.get_redundant_flat_keys([self.cube], remove=True)
+
+        tx_redundant = [
+            sorted(times) for curve, times in redundant if "translateX" in curve
+        ]
+        self.assertEqual(tx_redundant, [[5.0]])
+
+        # The redundant key must actually be gone from the curve. Query by
+        # curve node name, not the locked plug — Maya's `keyframe -q`
+        # returns None for a locked attribute name (unrelated Maya quirk).
+        curve = cmds.listConnections(plug, source=True, destination=False)[0]
+        keys = cmds.keyframe(curve, query=True, timeChange=True) or []
+        self.assertNotIn(5.0, keys)
+        self.assertIn(1.0, keys)
+        self.assertIn(10.0, keys)
+
+        # The attribute must remain locked afterward — the fix must not
+        # leave the channel permanently unlocked.
+        self.assertTrue(
+            cmds.getAttr(plug, lock=True),
+            "translateX should remain locked after the rebuild",
+        )
+
+    def test_get_redundant_flat_keys_remove_parent_compound_locked(self):
+        """remove=True must survive a locked parent compound.
+
+        Bug: rig locators commonly lock the whole 'translate'/'rotate'
+        compound rather than individual channels.  The rebuild path read
+        ``dest_plug.isLocked`` (True — inherited from the compound) but
+        clearing it only touches the child plug's own flag; the parent
+        stayed locked, MDGModifier.doIt() aborted with '(kFailure):
+        Unexpected Internal Failure', and every curve after it in the
+        batch (plus all later optimize phases) went unprocessed.
+        Fixed: 2026-07-01
+        """
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=0)
+
+        plug = f"{self.cube}.translateX"
+        parent_plug = f"{self.cube}.translate"
+        curve = cmds.listConnections(plug, source=True, destination=False)[0]
+        cmds.setAttr(parent_plug, lock=True)
+
+        redundant = AnimUtils.get_redundant_flat_keys([self.cube], remove=True)
+
+        tx_redundant = [
+            sorted(times) for c, times in redundant if "translateX" in c
+        ]
+        self.assertEqual(tx_redundant, [[5.0]])
+
+        keys = cmds.keyframe(curve, query=True, timeChange=True) or []
+        self.assertNotIn(5.0, keys)
+        self.assertIn(1.0, keys)
+        self.assertIn(10.0, keys)
+
+        # The compound must remain locked, and the rebuild must not have
+        # added an own lock flag to the child channel (getAttr -lock is
+        # inherited-aware, so check the child after unlocking the parent).
+        self.assertTrue(cmds.getAttr(parent_plug, lock=True))
+        cmds.setAttr(parent_plug, lock=False)
+        self.assertFalse(
+            cmds.getAttr(plug, lock=True),
+            "child channel gained a spurious own lock flag during rebuild",
+        )
+
     def test_get_tangent_info(self):
         """Test retrieving tangent info."""
         info = AnimUtils.get_tangent_info(f"{self.cube}.translateX", 1)
@@ -1013,16 +1097,82 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertIn(1.0, keys)
         self.assertIn(10.0, keys)
 
-    def test_invert_keys(self):
-        """Test inverting keys."""
-        # Select object
+    def _tx_key_pairs(self):
+        """Return sorted (time, value) pairs for the cube's translateX keys."""
+        times = cmds.keyframe(self.cube, attribute="translateX", query=True) or []
+        pairs = []
+        for t in sorted(set(times)):
+            v = cmds.keyframe(
+                self.cube,
+                attribute="translateX",
+                query=True,
+                time=(t, t),
+                valueChange=True,
+            )[0]
+            pairs.append((round(t, 3), round(v, 3)))
+        return pairs
+
+    def test_invert_keys_auto_mirrors_in_place(self):
+        """Auto mode (time=None) reverses the animation within its own key
+        range — a move, not a copy dropped at the playhead.
+
+        Regression: with the playhead inside the key range, auto mode used to
+        place a reversed copy at the current time, garbling the originals.
+        """
+        cmds.setKeyframe(self.cube, attribute="translateX", time=4, value=3)
         cmds.select(self.cube)
-        # Invert horizontally around frame 5
-        AnimUtils.invert_keys(time=5, relative=False, mode="horizontal")
-        # Key at 1 should move to 9 (5 + (5-1)) -> Wait, logic is inversion_point - (key_time - max_time)
-        # Let's just check that keys moved
-        keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
-        self.assertNotEqual(keys, [1.0, 10.0])
+        cmds.currentTime(1)  # playhead inside the key range
+
+        AnimUtils.invert_keys(mode="horizontal")
+
+        self.assertEqual(
+            self._tx_key_pairs(),
+            [(1.0, 10.0), (7.0, 3.0), (10.0, 0.0)],
+            "Auto invert should mirror keys in place (range preserved, timing reversed)",
+        )
+
+    def test_invert_keys_explicit_time_places_copy(self):
+        """An explicit absolute time places a reversed copy there, keeping the originals."""
+        cmds.select(self.cube)
+        AnimUtils.invert_keys(time=20, relative=False, mode="horizontal")
+        self.assertEqual(
+            self._tx_key_pairs(),
+            [(1.0, 0.0), (10.0, 10.0), (20.0, 10.0), (29.0, 0.0)],
+        )
+
+    def test_invert_keys_relative_time_offsets_from_last_key(self):
+        """Relative time offsets the reversed copy from the last key (0 = ping-pong)."""
+        cmds.select(self.cube)
+        AnimUtils.invert_keys(time=0, relative=True, mode="horizontal")
+        self.assertEqual(
+            self._tx_key_pairs(),
+            [(1.0, 0.0), (10.0, 10.0), (19.0, 0.0)],
+        )
+
+    def test_invert_keys_delete_original(self):
+        """delete_original removes the source keys, leaving only the reversed copy."""
+        cmds.select(self.cube)
+        AnimUtils.invert_keys(
+            time=20, relative=False, mode="horizontal", delete_original=True
+        )
+        self.assertEqual(self._tx_key_pairs(), [(20.0, 10.0), (29.0, 0.0)])
+
+    def test_invert_keys_vertical_flips_values_in_place(self):
+        """Vertical mode flips values about the pivot without moving keys."""
+        cmds.select(self.cube)
+        AnimUtils.invert_keys(mode="vertical", value_pivot=0.0)
+        self.assertEqual(self._tx_key_pairs(), [(1.0, 0.0), (10.0, -10.0)])
+
+    def test_invert_keys_explicit_objects_argument(self):
+        """Objects can be passed explicitly instead of relying on the selection."""
+        cmds.select(clear=True)
+        AnimUtils.invert_keys(
+            self.cube, time=20, relative=False, mode="horizontal"
+        )
+        self.assertEqual(
+            self._tx_key_pairs(),
+            [(1.0, 0.0), (10.0, 10.0), (20.0, 10.0), (29.0, 0.0)],
+        )
 
     def test_align_selected_keyframes(self):
         """Test aligning selected keyframes."""
@@ -1415,6 +1565,151 @@ class TestAnimUtils(MayaTkTestCase):
         keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
         self.assertNotIn(0.0, keys)
         self.assertNotIn(11.0, keys)
+
+    def test_untie_preserves_shaped_equal_value_end_keys(self):
+        """Untie must not delete a genuine end key that shares its neighbor's
+        value but has shaped (sloped) tangents — e.g. an authored overshoot
+        that returns to the same value.
+
+        Bug: untie_keyframes flagged bookends by value equality alone, so a
+        shaped end key was deleted and the curve's shape changed.
+        """
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=10)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=10)
+        # Shape the final equal-value segment: sloped tangents on the end key
+        # produce a dip/overshoot between frames 5 and 10.
+        cmds.keyTangent(
+            self.cube,
+            attribute="translateX",
+            time=(10, 10),
+            inTangentType="fixed",
+            outTangentType="fixed",
+            inAngle=45,
+            outAngle=45,
+        )
+
+        AnimUtils.untie_keyframes([self.cube])
+
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True) or []
+        self.assertIn(
+            10.0, keys, "untie_keyframes removed a genuine shaped end key"
+        )
+
+    def test_untie_does_not_wipe_two_key_flat_curve(self):
+        """A deliberate 2-key hold (both keys the same value) must survive
+        untie_keyframes.
+
+        Bug: both keys were flagged as tied, so untie deleted the entire
+        curve — destroying the user's hold.
+        """
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=3)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=3)
+
+        AnimUtils.untie_keyframes([self.cube])
+
+        keys = cmds.keyframe(self.cube, attribute="translateX", query=True) or []
+        self.assertEqual(
+            sorted(keys),
+            [1.0, 10.0],
+            "untie_keyframes destroyed an intentional 2-key hold",
+        )
+
+    def test_tie_untie_round_trip_inside_range(self):
+        """Bookends inserted INSIDE the keyed range land on the curve slope,
+        so their values don't match their neighbors — untie must still remove
+        exactly those keys (via the metadata tie_keyframes records).
+        """
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        for t, v in [(1, 0), (10, 10), (20, 0)]:
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=v)
+        original = sorted(
+            cmds.keyframe(self.cube, attribute="translateX", query=True)
+        )
+
+        AnimUtils.tie_keyframes([self.cube], custom_range=(5, 15))
+        keys_after_tie = cmds.keyframe(self.cube, attribute="translateX", query=True)
+        self.assertIn(5.0, keys_after_tie)
+        self.assertIn(15.0, keys_after_tie)
+
+        AnimUtils.untie_keyframes([self.cube])
+
+        keys = sorted(
+            cmds.keyframe(self.cube, attribute="translateX", query=True) or []
+        )
+        self.assertEqual(
+            keys,
+            original,
+            f"tie/untie round trip did not restore original keys: {keys}",
+        )
+
+    def test_untie_heuristic_removes_legacy_bookends_without_metadata(self):
+        """Curves tied before the metadata record existed carry no attr; the
+        heuristic fallback must still remove plain flat bookend keys.
+        """
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        for t, v in [(1, 0), (2, 0), (9, 10), (10, 10)]:
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=v)
+
+        AnimUtils.untie_keyframes([self.cube])
+
+        keys = sorted(
+            cmds.keyframe(self.cube, attribute="translateX", query=True) or []
+        )
+        self.assertEqual(
+            keys,
+            [2.0, 9.0],
+            f"heuristic fallback failed to remove legacy bookends: {keys}",
+        )
+
+    def test_tie_bookend_on_existing_interior_key_survives_untie(self):
+        """A bookend time that coincides with an EXISTING interior key must
+        not be recorded as a tie — untie would otherwise delete the user's
+        key.
+        """
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        for t, v in [(1, 0), (5, 3), (10, 10)]:
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=v)
+
+        AnimUtils.tie_keyframes([self.cube], custom_range=(5, 15))
+        AnimUtils.untie_keyframes([self.cube])
+
+        keys = sorted(
+            cmds.keyframe(self.cube, attribute="translateX", query=True) or []
+        )
+        self.assertIn(5.0, keys, "untie deleted a user key at the bookend time")
+        value_at_5 = cmds.keyframe(
+            self.cube,
+            attribute="translateX",
+            query=True,
+            time=(5, 5),
+            valueChange=True,
+        )[0]
+        self.assertAlmostEqual(value_at_5, 3.0, places=5)
+
+    def test_tie_untie_stacked_bookends(self):
+        """Two tie passes with different ranges stack bookends; a single
+        untie must remove all of them, not just the outermost pair.
+        """
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=3, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=8, value=7)
+
+        AnimUtils.tie_keyframes([self.cube])  # playback 1-10 -> bookends 1, 10
+        AnimUtils.tie_keyframes([self.cube], padding=5)  # -> bookends -4, 15
+
+        AnimUtils.untie_keyframes([self.cube])
+
+        keys = sorted(
+            cmds.keyframe(self.cube, attribute="translateX", query=True) or []
+        )
+        self.assertEqual(
+            keys,
+            [3.0, 8.0],
+            f"untie left stacked bookends behind: {keys}",
+        )
 
     def test_tie_keyframes_preserves_stepped_tangents(self):
         """Verify tie_keyframes preserves stepped tangent types on bookend keys.
@@ -2135,7 +2430,7 @@ class TestAnimUtils(MayaTkTestCase):
         curve, causing the object to snap to origin.
         Fixed: 2026-02-24
         """
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         # Create target (static locator) at position (7, 3, -2)
         loc = cmds.spaceLocator(name="constraint_target")[0]
@@ -2223,7 +2518,7 @@ class TestAnimUtils(MayaTkTestCase):
         destroying all baked animation.
         Fixed: 2026-02-25
         """
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cmds.playbackOptions(minTime=1, maxTime=20)
 
@@ -2267,12 +2562,16 @@ class TestAnimUtils(MayaTkTestCase):
             f"Pre-bake should be SDK type, got {cmds.nodeType(curves[0])}",
         )
 
-        # SmartBake with delete_inputs=True (the bug scenario)
+        # SmartBake with delete_inputs=True (the bug scenario).
+        # delete_inputs is a base-layer behavior — request base-layer mode
+        # explicitly (the default is now the nondestructive override layer).
         baker = SmartBake(
             objects=[str(driven)],
             sample_by=1,
             optimize_keys=False,
             delete_inputs=True,
+            use_override_layer=False,
+            backup_file=False,
         )
         result = baker.execute()
 
@@ -2949,7 +3248,7 @@ class TestAnimUtils(MayaTkTestCase):
         optimize_keys → interior flat keys removed, boundary keys kept.
         Expected: value preserved exactly, key count reduced to 2 per channel.
         """
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cmds.playbackOptions(minTime=1, maxTime=30)
 
@@ -3016,7 +3315,7 @@ class TestAnimUtils(MayaTkTestCase):
         optimize_keys → animated keys preserved, flat hold reduced.
         Expected: animated portion intact, flat region has 2 boundary keys.
         """
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cmds.playbackOptions(minTime=1, maxTime=40)
 
@@ -3105,7 +3404,7 @@ class TestAnimUtils(MayaTkTestCase):
         optimize_keys → minimal reduction (all keys needed for shape).
         Expected: key count stays high, max value deviation < 0.5.
         """
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cmds.playbackOptions(minTime=1, maxTime=60)
 
@@ -3176,7 +3475,7 @@ class TestAnimUtils(MayaTkTestCase):
         optimize_keys → flat segments reduced, stepped tangents preserved.
         Expected: segments hold constant between steps, key count reduced.
         """
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cmds.playbackOptions(minTime=1, maxTime=20)
 
@@ -3252,7 +3551,7 @@ class TestAnimUtils(MayaTkTestCase):
         optimize_keys → tx keeps animated keys, ty/tz reduced to boundaries.
         Expected: tx values match constraint, ty/tz hold positions preserved.
         """
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cmds.playbackOptions(minTime=1, maxTime=30)
 
@@ -3346,7 +3645,7 @@ class TestAnimUtils(MayaTkTestCase):
         Cube point-constrained. Run full pipeline.
         Expected: all evaluated values match pre-pipeline truth within tolerance.
         """
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cmds.playbackOptions(minTime=1, maxTime=60)
 
@@ -3636,7 +3935,7 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
         End-to-end: imports FBX, smart-bakes constrained objects with
         delete_inputs + optimize_keys, verifies no position drift.
         """
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         animated = self._reload_cached_scene()
         self.assertTrue(animated, "No animated objects found in FBX")
@@ -3693,7 +3992,7 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
 
         Runs the same task sequence as TaskManager in the real exporter.
         """
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         animated = self._reload_cached_scene()
         self.assertTrue(animated, "No animated objects found in FBX")
@@ -3828,6 +4127,158 @@ class TestSceneHasAnimation(MayaTkTestCase):
         # No time-input curves exist — only animCurveU* driven curves.
         self.assertFalse(cmds.ls(type=["animCurveTL", "animCurveTA", "animCurveTU", "animCurveTT"]))
         self.assertFalse(AnimUtils.scene_has_animation())
+
+
+class TestAuditRegressionFixes(MayaTkTestCase):
+    """Regression tests for the 2026-07 anim_utils audit fixes.
+
+    Each test pins a confirmed bug: it fails on the pre-fix code and
+    must keep passing after.
+    """
+
+    # ---- parse_time_range -------------------------------------------------
+
+    def test_parse_time_range_accepts_float_frame(self):
+        """A float frame must map to (t, t) — falling through to None made
+        delete_keys(time=10.5) wipe the ENTIRE timeline."""
+        self.assertEqual(AnimUtils.parse_time_range(10.5), (10.5, 10.5))
+        self.assertEqual(AnimUtils.parse_time_range(10), (10, 10))
+
+    def test_delete_keys_float_frame_deletes_only_that_frame(self):
+        cube = cmds.polyCube(name="del_float_cube")[0]
+        for f in (1.0, 10.5, 20.0):
+            cmds.setKeyframe(cube, attribute="translateX", t=f, v=f)
+        AnimUtils.delete_keys([cube], "translateX", time=10.5)
+        remaining = cmds.keyframe(
+            f"{cube}.translateX", query=True, timeChange=True
+        )
+        self.assertEqual(remaining, [1.0, 20.0])
+
+    # ---- get_frame_ranges ------------------------------------------------
+
+    def test_get_frame_ranges_precision_zero_no_crash(self):
+        """precision=0 raised ZeroDivisionError via round(value / 0)."""
+        cube = cmds.polyCube(name="range_prec_cube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", t=1, v=0)
+        cmds.setKeyframe(cube, attribute="translateX", t=10, v=5)
+        ranges = AnimUtils.get_frame_ranges([cube], precision=0)
+        self.assertEqual(ranges[cube], [(1.0, 10.0)])
+
+    # ---- selected-keys moves ----------------------------------------------
+
+    def test_move_selected_keys_leaves_unselected_in_span(self):
+        """Non-contiguous graph-editor selection: the unselected key
+        between two selected keys must NOT move (a (min, max) range edit
+        dragged it along)."""
+        cube = cmds.polyCube(name="move_sel_cube")[0]
+        for f, v in ((1, 0.0), (5, 5.0), (10, 0.0)):
+            cmds.setKeyframe(cube, attribute="translateX", t=f, v=v)
+        cmds.selectKey(clear=True)
+        cmds.selectKey(f"{cube}.translateX", add=True, time=(1, 1))
+        cmds.selectKey(f"{cube}.translateX", add=True, time=(10, 10))
+
+        AnimUtils.move_keys_to_frame(
+            frame=21, objects=[cube], selected_keys_only=True, align="start"
+        )
+        times = cmds.keyframe(f"{cube}.translateX", query=True, timeChange=True)
+        # Unselected key at 5 stays; selected keys moved by +20.
+        self.assertIn(5.0, times)
+        self.assertIn(21.0, times)
+        self.assertIn(30.0, times)
+
+    def test_move_selected_keys_mixed_object_selection_no_crash(self):
+        """Objects without selected keys returned None from the per-object
+        query and crashed iteration with TypeError."""
+        keyed = cmds.polyCube(name="move_mix_keyed")[0]
+        unkeyed = cmds.polyCube(name="move_mix_unkeyed")[0]
+        cmds.setKeyframe(keyed, attribute="translateX", t=1, v=0)
+        cmds.setKeyframe(keyed, attribute="translateX", t=10, v=5)
+        cmds.selectKey(clear=True)
+        cmds.selectKey(f"{keyed}.translateX", add=True, time=(1, 10))
+
+        result = AnimUtils.move_keys_to_frame(
+            frame=50,
+            objects=[keyed, unkeyed],
+            selected_keys_only=True,
+            align="start",
+        )
+        self.assertNotEqual(result, False)
+        times = cmds.keyframe(f"{keyed}.translateX", query=True, timeChange=True)
+        self.assertEqual(min(times), 50.0)
+
+    # ---- get_redundant_flat_keys undoability -------------------------------
+
+    def test_redundant_flat_key_removal_is_undoable(self):
+        """The om2 rebuild bypassed the undo queue — cmds.undo() left the
+        keys permanently deleted."""
+        cube = cmds.polyCube(name="flat_undo_cube")[0]
+        # 5-key flat run: interior 3 keys are redundant.
+        for f in (1, 5, 10, 15, 20):
+            cmds.setKeyframe(cube, attribute="translateX", t=f, v=3.0)
+        plug = f"{cube}.translateX"
+        self.assertEqual(cmds.keyframe(plug, query=True, keyframeCount=True), 5)
+
+        result = AnimUtils.get_redundant_flat_keys([cube], remove=True)
+        self.assertTrue(result)
+        self.assertEqual(cmds.keyframe(plug, query=True, keyframeCount=True), 2)
+
+        cmds.undo()
+        self.assertEqual(
+            cmds.keyframe(plug, query=True, keyframeCount=True),
+            5,
+            "undo must restore the removed flat keys",
+        )
+
+    def test_redundant_flat_key_removal_locked_attr(self):
+        """A locked driven attribute must not abort the removal — curve-node
+        edits are lock-independent, and the lock must survive untouched.
+        NOTE: keyframe QUERIES on a locked plug return 0, so assertions go
+        through the curve node."""
+        cube = cmds.polyCube(name="flat_lock_cube")[0]
+        for f in (1, 5, 10, 15, 20):
+            cmds.setKeyframe(cube, attribute="translateX", t=f, v=3.0)
+        plug = f"{cube}.translateX"
+        curve = cmds.listConnections(plug, type="animCurve")[0]
+        cmds.setAttr(plug, lock=True)
+        try:
+            AnimUtils.get_redundant_flat_keys([cube], remove=True)
+            self.assertEqual(
+                cmds.keyframe(curve, query=True, keyframeCount=True), 2
+            )
+            self.assertTrue(cmds.getAttr(plug, lock=True), "lock must be restored")
+        finally:
+            cmds.setAttr(plug, lock=False)
+
+    # ---- set_keys_for_attributes --------------------------------------------
+
+    def test_set_keys_for_attributes_float_time(self):
+        """A float scalar target_times was rejected (only int was wrapped)."""
+        cube = cmds.polyCube(name="set_float_cube")[0]
+        AnimUtils.set_keys_for_attributes([cube], target_times=7.5, translateX=3.0)
+        times = cmds.keyframe(f"{cube}.translateX", query=True, timeChange=True)
+        self.assertEqual(times, [7.5])
+
+    # ---- _shift_key_times helper ----------------------------------------------
+
+    def test_shift_key_times_moves_only_given_times(self):
+        cube = cmds.polyCube(name="shift_helper_cube")[0]
+        for f in (1, 5, 10):
+            cmds.setKeyframe(cube, attribute="translateX", t=f, v=float(f))
+        curve = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        moved = AnimUtils._shift_key_times(curve, [1.0, 10.0], 20.0)
+        self.assertEqual(moved, 2)
+        times = cmds.keyframe(curve, query=True, timeChange=True)
+        self.assertEqual(sorted(times), [5.0, 21.0, 30.0])
+
+    # ---- add_intermediate_keys -------------------------------------------------
+
+    def test_add_intermediate_keys_restores_playhead(self):
+        cube = cmds.polyCube(name="interm_cube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", t=1, v=0)
+        cmds.setKeyframe(cube, attribute="translateX", t=10, v=9)
+        cmds.currentTime(3, edit=True)
+        AnimUtils.add_intermediate_keys([cube], include_flat=True)
+        self.assertEqual(cmds.currentTime(query=True), 3.0)
 
 
 if __name__ == "__main__":

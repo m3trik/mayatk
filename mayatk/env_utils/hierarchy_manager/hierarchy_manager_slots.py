@@ -1096,11 +1096,14 @@ class _MiddleButtonDragFilter(QtCore.QObject):
         if etype == QtCore.QEvent.Drop and self._reparent_callback:
             # Let Qt handle the tree-item move first
             result = super().eventFilter(obj, event)
-            # Now mirror reparent operations in Maya
-            for item in self._dragged_items:
-                new_parent = item.parent()
-                self._reparent_callback(item, new_parent)
+            # Mirror every reparent in Maya via ONE batch callback. The
+            # callback rebuilds the tree, which deletes every QTreeWidgetItem —
+            # a per-item callback left the remaining iterations holding dead
+            # items (RuntimeError, partial reparent on multi-select drags).
+            moves = [(item, item.parent()) for item in self._dragged_items]
             self._dragged_items.clear()
+            if moves:
+                self._reparent_callback(moves)
             return result
 
         return super().eventFilter(obj, event)
@@ -1436,43 +1439,60 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         finally:
             self._renaming_in_progress = False
 
-    def _on_tree001_drop_reparent(self, item, new_parent_item):
-        """Mirror a tree-widget drag-drop reparent in the Maya scene.
+    def _on_tree001_drop_reparent(self, moves):
+        """Mirror tree-widget drag-drop reparents in the Maya scene.
 
-        Called by ``_MiddleButtonDragFilter`` after Qt finishes moving the
-        tree item.
+        Called by ``_MiddleButtonDragFilter`` with the whole dropped selection
+        after Qt finishes moving the tree items. Item data is resolved up
+        front — the rebuild below deletes every ``QTreeWidgetItem``, so
+        nothing may touch an item after the first refresh. All reparents run
+        in one undo chunk (one Ctrl+Z reverts the whole drag) and the tree is
+        rebuilt once at the end.
 
         Parameters:
-            item: The ``QTreeWidgetItem`` that was moved.
-            new_parent_item: Its new parent item (``None`` if dropped at root).
+            moves: List of ``(item, new_parent_item)`` pairs;
+                ``new_parent_item`` is ``None`` when dropped at root.
         """
-        node = item.data(0, self.sb.QtCore.Qt.UserRole)
-        if not node or not cmds.objExists(node):
-            return
-
-        try:
+        role = self.sb.QtCore.Qt.UserRole
+        pending = []  # (node, parent_node | None-for-world)
+        for item, new_parent_item in moves:
+            node = item.data(0, role)
+            if not node or not cmds.objExists(node):
+                continue
             if new_parent_item is not None:
-                parent_node = new_parent_item.data(0, self.sb.QtCore.Qt.UserRole)
+                parent_node = new_parent_item.data(0, role)
                 if not parent_node or not cmds.objExists(parent_node):
                     self.controller.logger.warning(
-                        "Drop target has no Maya node â€” reparent skipped."
+                        "Drop target has no Maya node — reparent skipped."
                     )
-                    return
-                cmds.parent(node, parent_node)
-                self.controller.logger.info(
-                    f"Reparented '{node}' under '{parent_node}'"
-                )
+                    continue
+                pending.append((node, parent_node))
             else:
-                # Dropped at root level â†’ world-parent
-                cmds.parent(node, world=True)
-                self.controller.logger.info(f"Reparented '{node}' to world")
-            # DAG paths change after parent; rebuild trees so user data
-            # reflects the new scene state.
-            self.controller.refresh_trees()
-        except Exception as e:
-            self.controller.logger.error(f"Maya reparent failed for '{node}': {e}")
-            # Refresh tree to revert the visual move
-            self.controller.tree.populate_current_scene_tree(self.ui.tree001)
+                pending.append((node, None))  # dropped at root → world-parent
+        if not pending:
+            return
+
+        cmds.undoInfo(openChunk=True, chunkName="Drag Reparent")
+        try:
+            for node, parent_node in pending:
+                try:
+                    if parent_node is None:
+                        cmds.parent(node, world=True)
+                        self.controller.logger.info(f"Reparented '{node}' to world")
+                    else:
+                        cmds.parent(node, parent_node)
+                        self.controller.logger.info(
+                            f"Reparented '{node}' under '{parent_node}'"
+                        )
+                except Exception as e:
+                    self.controller.logger.error(
+                        f"Maya reparent failed for '{node}': {e}"
+                    )
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        # One rebuild reflects every success and reverts the visual move of
+        # any failure (DAG paths changed for the successes either way).
+        self.controller.refresh_trees()
 
     def tree001_init(self, widget):
         """Initialize the current scene hierarchy tree widget."""

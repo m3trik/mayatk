@@ -1,271 +1,77 @@
-# Maya Test Infrastructure
+# mayatk Test Suite
 
-This directory contains unit tests for the mayatk package and utilities for running them in Maya.
+Tests need the real Maya runtime (`maya.cmds`) and can't run under plain `pytest` /
+the workspace `.venv` — **except** `mock_tests/`, which mocks `maya.cmds` via its
+own `conftest.py` and runs under plain `pytest`. See the root
+[`CLAUDE.md`](../../CLAUDE.md) hard rule: never connect to an existing Maya
+session (`--reuse` / `force_new_instance=False` are forbidden outside mock-only
+unit tests) — every run launches a **fresh** Maya instance.
 
-## Quick Start
+## Layout
 
-### Windows PowerShell Script (Easiest)
+| Path | What | How it runs |
+|:---|:---|:---|
+| `test/test_*.py` | Main suite | `run_tests.py`, auto-discovered by glob |
+| `test/extended/` | Needs real scene assets on disk | `run_tests.py --extended` (opt-in; skips cleanly if assets are missing) |
+| `test/mock_tests/` | `maya.cmds` mocked, no Maya needed | plain `pytest test/mock_tests/` |
+| `test/temp_tests/` | Gitignored scratch (repro/probe/verify scripts) | ad hoc; swept freely, never promoted without review |
+| `test/test_assets/` | Fixture files (images, `.fbx`, …) | read-only inputs |
 
-Simply use the provided Windows script for all common operations:
+## Base classes (`base_test.py`)
 
-```powershell
-# From the test directory:
-cd O:\Cloud\Code\_scripts\mayatk\test
+- `MayaTkTestCase` — full scene reset (`cmds.file(new=True, force=True)`) in
+  `setUp`/`tearDown`. Default for anything that touches the scene.
+- `QuickTestCase` — skips scene reset, for tests that don't need a clean scene.
+- `skipUnlessExtended` — gates a test behind `MAYATK_EXTENDED_TESTS=1`
+  (set automatically by `run_tests.py --extended`).
 
-# Run default core tests (8 modules)
-.\test.ps1
-
-# List all available test modules
-.\test.ps1 -List
-
-# Run quick validation test
-.\test.ps1 -Quick
-
-# Run ALL test modules (17 modules)
-.\test.ps1 -All
-
-# Run specific modules
-.\test.ps1 core components
-.\test.ps1 edit xform mat
-
-# View last test results
-.\test.ps1 -Results
-
-# Monitor tests in real-time
-.\test.ps1 -Watch
-
-# Test Maya connection
-.\test.ps1 -Connect
-
-# Get help
-.\test.ps1 -Help
-```
-
-Or use the batch file wrapper:
-```cmd
-test.bat -List
-test.bat core edit
-```
-
-### Python Direct (Advanced)
-
-Use the Python runner directly for more control:
+## Running
 
 ```powershell
-# Run default core tests
-python run_tests.py
+$MAYAPY = "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe"
+$env:PYTHONPATH = "$PWD\..\..\mayatk;$PWD\..\..\pythontk;$PWD\..\..\uitk;$PWD\..\..\tentacle"
 
-# Run specific modules
-python run_tests.py core_utils components
+& $MAYAPY run_tests.py                # default "core" modules (fast sanity check)
+& $MAYAPY run_tests.py core_utils components   # specific modules (test_ prefix optional)
+& $MAYAPY run_tests.py --all          # every test_*.py in the main suite
+& $MAYAPY run_tests.py --all --extended --mocks  # + extended/ + mock_tests/ too
+& $MAYAPY run_tests.py --list         # list discovered modules by category
+& $MAYAPY run_tests.py --quick        # single quick validation test
+& $MAYAPY run_tests.py --dry-run      # validate module names/paths, run nothing
 
-# Run ALL test modules
-python run_tests.py --all
-
-# List available tests
-python run_tests.py --list
-
-# Quick validation test
-python run_tests.py --quick
-
-# Dry run (validate without running)
-python run_tests.py --dry-run
+# mock_tests/ needs no Maya at all:
+python -m pytest test/mock_tests/ -q
 ```
 
-## Overview
+`run_tests.py` launches Maya via `MayaConnection`
+(`mayatk/env_utils/maya_connection.py`), waits for results (`--no-wait` for
+fire-and-forget), writes `test/temp_tests/test_results_<port>.txt` (scoped by
+`--port` so concurrent invocations don't clobber each other's results), and
+updates the `docs/README.md` test badge (`--no-badge` to skip). `--keep-maya`
+leaves the launched instance open afterward.
 
-The test infrastructure supports execution via Maya's command port:
+## Static checks (no Maya)
 
-1. **Remote execution** - Run tests from terminal/IDE while Maya is running
-2. **Unified test runner** - Single runner for all test modules
-3. **Real-time monitoring** - See progress in Maya Script Editor and terminal
-4. **Results tracking** - Results saved to `test_results.txt`
+- `test_static_analysis.py` — pyflakes guard across `mayatk/mayatk/` for
+  undefined names; runs under any interpreter, skips if pyflakes isn't
+  installed.
+- `check_cmds_syntax.py` — validates every `cmds.*` / `mel.eval` name against
+  the live Maya command registry (needs `mayapy`). `--report` writes a file.
+- `check_cmds_naming.py` — naming-convention lint for `cmds` usage.
 
-## Setup
-
-### One-Time Maya Setup
-
-In Maya's Script Editor, run:
-```python
-import mayatk.env_utils.maya_connection as mc
-mc.open_command_ports(python=":7002")
-```
-
-This opens the Python command port on port 7002 (default).
+## Writing tests
 
 ```python
-import unittest
-import sys
+import maya.cmds as cmds
+from base_test import MayaTkTestCase
 
-sys.path.insert(0, r'O:\Cloud\Code\_scripts\mayatk\test')
-
-# Run all tests
-loader = unittest.TestLoader()
-suite = loader.discover(start_dir=r'O:\Cloud\Code\_scripts\mayatk\test', pattern='*_test.py')
-runner = unittest.TextTestRunner(verbosity=2)
-result = runner.run(suite)
+class TestSomething(MayaTkTestCase):
+    def test_basic_behavior(self):
+        cube = cmds.polyCube(name="test_cube")[0]
+        self.assertNodeExists(cube)
 ```
 
-## Test Files
-
-- `*_test.py` - Individual test modules
-- `maya_test_runner.py` - Remote test execution utility
-- `setup_maya_for_tests.py` - Maya setup helper for remote testing
-- `run_tests.py` - Legacy direct test runner
-
-## Command Port Details
-
-### What is a Command Port?
-
-Maya's command port allows external applications to send Python/MEL commands to a running Maya instance via TCP/IP sockets.
-
-### Opening Ports Manually
-
-```python
-import pymel.core as pm
-
-# Open Python command port
-pm.commandPort(name=':7002', sourceType='python')
-
-# Open MEL command port
-pm.commandPort(name=':7001', sourceType='mel')
-```
-
-Or using mayatk:
-```python
-import mayatk
-mayatk.openPorts(python=':7002', mel=':7001')
-```
-
-### Closing Ports
-
-```python
-pm.commandPort(name=':7002', close=True)
-pm.commandPort(name=':7001', close=True)
-```
-
-## Architecture
-
-### Module Resolver & Lazy Loading
-
-The package uses a custom module resolver (`pythontk.core_utils.module_resolver`) that enables:
-
-- **Lazy loading**: Modules are imported only when accessed
-- **Centralized configuration**: All imports managed through root `__init__.py`
-- **Empty subpackage __init__ files**: Subpackages don't need complex initialization
-
-Example configuration in `mayatk/__init__.py`:
-```python
-DEFAULT_INCLUDE = {
-    # Expose all classes from legacy modules
-    "_core_utils": "*",
-    
-    # Expose specific classes from nested modules
-    "core_utils.diagnostics.mesh": "MeshDiagnostics",
-    "core_utils.diagnostics.animation": "AnimCurveDiagnostics",
-    
-    # Expose functions
-    "env_utils.command_port": ["openPorts"],
-}
-
-bootstrap_package(globals(), include=DEFAULT_INCLUDE)
-```
-
-### No Fallbacks Policy
-
-The module resolver **no longer supports fallbacks**. If a module import fails, the error must be fixed at the source rather than masked with a fallback mapping. This ensures:
-
-- Clear error messages pointing to the real problem
-- No hidden import failures
-- Easier debugging and maintenance
-
-## Writing Tests
-
-### Basic Test Structure
-
-```python
-import unittest
-import pymel.core as pm
-import mayatk as mtk
-
-class MyFeatureTest(unittest.TestCase):
-    """Tests for MyFeature functionality"""
-    
-    def setUp(self):
-        """Create test scene"""
-        pm.mel.file(new=True, force=True)
-        # Setup test objects
-        
-    def tearDown(self):
-        """Clean up test scene"""
-        # Delete test objects
-        pass
-        
-    def test_basic_functionality(self):
-        """Test basic feature works"""
-        result = mtk.some_function()
-        self.assertIsNotNone(result)
-```
-
-### Best Practices
-
-1. **Clean scene state**: Use `setUp()` and `tearDown()` to manage scene state
-2. **Descriptive names**: Test names should clearly indicate what they test
-3. **Isolated tests**: Each test should be independent
-4. **Docstrings**: Document what each test verifies
-5. **Assertions**: Use appropriate assertion methods (`assertEqual`, `assertIsNotNone`, etc.)
-
-## Troubleshooting
-
-### "Connection refused" when running remote tests
-
-**Cause**: Maya's command port is not open or is on a different port.
-
-**Solution**: Run `setup_maya_for_tests.py` in Maya to open the command port.
-
-### Import errors in tests
-
-**Cause**: Test directory or mayatk not in Python path.
-
-**Solution**: Ensure paths are added:
-```python
-import sys
-sys.path.insert(0, r'O:\Cloud\Code\_scripts')
-sys.path.insert(0, r'O:\Cloud\Code\_scripts\mayatk\test')
-```
-
-### Tests hang indefinitely
-
-**Cause**: Maya is waiting for input or a modal dialog is open.
-
-**Solution**: 
-- Close any open dialogs in Maya
-- Ensure tests don't create modal dialogs
-- Use `pm.mel.file(new=True, force=True)` to avoid "save changes" prompts
-
-### Module not found errors
-
-**Cause**: Module resolver configuration is incorrect or module doesn't exist.
-
-**Solution**: 
-1. Check that the module exists at the specified path
-2. Verify `DEFAULT_INCLUDE` mapping in `mayatk/__init__.py`
-3. Ensure no typos in module/class names
-
-## Development Workflow
-
-1. **Write test** - Create or update test file
-2. **Setup Maya** - Run `setup_maya_for_tests.py` in Maya (if not already done)
-3. **Run tests** - Execute `maya_test_runner.py` from IDE
-4. **Fix issues** - Address any failures
-5. **Verify** - Re-run tests to confirm fixes
-6. **Commit** - Commit working tests with implementation
-
-## Additional Resources
-
-- [unittest documentation](https://docs.python.org/3/library/unittest.html)
-- [PyMEL documentation](https://help.autodesk.com/view/MAYAUL/2024/ENU/)
-- [Maya Command Port documentation](https://help.autodesk.com/view/MAYAUL/2024/ENU/?guid=__CommandsPython_commandPort_html)
-
----
-
-**Note**: This test infrastructure requires Maya to be running for test execution. For pure Python functionality, consider creating separate unit tests that don't require Maya.
+No `pymel` — mayatk is fully migrated to `maya.cmds` (see root `CLAUDE.md`).
+One test file per production module; new `test_*.py` files are picked up
+automatically, no registration needed. Reproduction/debug scripts go in
+`test/temp_tests/`, not the main suite.

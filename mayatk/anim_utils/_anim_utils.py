@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 from typing import List, Tuple, Dict, ClassVar, Optional, Union, Any, Iterable, Set, Callable
+import json
 import math
 
 try:
@@ -207,8 +208,8 @@ class _AnimUtilsMixin:
                                 break
                         except Exception:
                             pass
-            except Exception as e:
-                print(f"DEBUG: Outer exception for {curve}: {e}")
+            except Exception:
+                pass  # Unclassifiable curve — treat as non-visibility.
 
             if is_visibility:
                 vis_curves.append(curve)
@@ -459,21 +460,18 @@ class _AnimUtilsMixin:
                 inTangentType=in_type,
                 outTangentType=out_type,
             )
-            # Only apply angle/weight for non-step tangents
-            # Step tangents are immediate jumps with no adjustable angle/weight
-            if in_type not in ("step", "stepnext") or out_type not in (
-                "step",
-                "stepnext",
-            ):
-                cmds.keyTangent(
-                    curve,
-                    edit=True,
-                    time=(time,),
-                    inAngle=data.get("inAngle"),
-                    outAngle=data.get("outAngle"),
-                    inWeight=data.get("inWeight"),
-                    outWeight=data.get("outWeight"),
-                )
+            # Only apply angle/weight per non-step side — editing an angle on
+            # a stepped side silently converts it to "fixed", destroying the
+            # hold, so each side must be gated independently.
+            angle_kwargs = {}
+            if in_type not in ("step", "stepnext"):
+                angle_kwargs["inAngle"] = data.get("inAngle")
+                angle_kwargs["inWeight"] = data.get("inWeight")
+            if out_type not in ("step", "stepnext"):
+                angle_kwargs["outAngle"] = data.get("outAngle")
+                angle_kwargs["outWeight"] = data.get("outWeight")
+            if angle_kwargs:
+                cmds.keyTangent(curve, edit=True, time=(time,), **angle_kwargs)
         except Exception:
             pass
 
@@ -546,6 +544,94 @@ def _find_adjacent_key(fn, frame, n):
         if fn.input(ki).value >= frame - 1e-4:
             return ki
     return None
+
+
+TIED_KEYS_ATTR = "mayatkTiedKeys"
+"""String attribute added to anim curve nodes by tie_keyframes, holding a
+JSON list of the bookend key times it inserted.  untie_keyframes uses this
+record to remove exactly those keys instead of guessing from value equality.
+"""
+
+
+def _resolve_keyed_objects(objects) -> List[str]:
+    """Coerce *objects* to a list of node-name strings.
+
+    None means every keyed transform in the scene.
+    """
+    if objects is None:
+        return [
+            obj
+            for obj in cmds.ls(type="transform")
+            if cmds.keyframe(obj, query=True, timeChange=True)
+        ]
+    if isinstance(objects, str):
+        return [objects]
+    if isinstance(objects, (list, tuple, set)):
+        return [str(o) for o in objects]
+    return [str(objects)]
+
+
+def _read_tied_key_metadata(curve: str) -> Optional[List[float]]:
+    """Return the bookend times recorded on *curve* by tie_keyframes, or
+    None if the curve carries no (or unreadable) metadata.
+    """
+    try:
+        if not cmds.attributeQuery(TIED_KEYS_ATTR, node=curve, exists=True):
+            return None
+        raw = cmds.getAttr(f"{curve}.{TIED_KEYS_ATTR}")
+        if not raw:
+            return []
+        return [float(t) for t in json.loads(raw)]
+    except (RuntimeError, ValueError, TypeError):
+        return None
+
+
+def _write_tied_key_metadata(curve: str, times: List[float]) -> None:
+    """Merge *times* into the bookend-time record stored on *curve*.
+
+    Silently skips curves that can't take the attribute (e.g. referenced or
+    locked nodes) — untie then falls back to heuristic detection.
+    """
+    if not times:
+        return
+    try:
+        existing = _read_tied_key_metadata(curve) or []
+        if not cmds.attributeQuery(TIED_KEYS_ATTR, node=curve, exists=True):
+            cmds.addAttr(curve, longName=TIED_KEYS_ATTR, dataType="string")
+        merged = sorted({round(t, 4) for t in [*existing, *times]})
+        cmds.setAttr(f"{curve}.{TIED_KEYS_ATTR}", json.dumps(merged), type="string")
+    except RuntimeError:
+        pass
+
+
+def _clear_tied_key_metadata(curve: str) -> None:
+    """Remove the bookend-time record from *curve*, if present."""
+    try:
+        if cmds.attributeQuery(TIED_KEYS_ATTR, node=curve, exists=True):
+            cmds.deleteAttr(f"{curve}.{TIED_KEYS_ATTR}")
+    except RuntimeError:
+        pass
+
+
+def _key_is_flat_or_stepped(curve: str, time: float, angle_tol: float = 0.01) -> bool:
+    """True if the key at *time* has flat or stepped tangents on both sides —
+    the shape tie_keyframes always gives its bookend keys.
+
+    A shaped (sloped) key is genuine animation and must survive untie.
+    """
+    t = (time, time)
+    types = cmds.keyTangent(
+        curve, query=True, time=t, inTangentType=True, outTangentType=True
+    )
+    angles = cmds.keyTangent(curve, query=True, time=t, inAngle=True, outAngle=True)
+    if not types or not angles:
+        return False
+    for side_type, side_angle in zip(types, angles):
+        if side_type in ("step", "stepnext"):
+            continue
+        if abs(side_angle) > angle_tol:
+            return False
+    return True
 
 
 class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
@@ -651,25 +737,29 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
         # Belt-and-suspenders: re-apply tangent types after creation
         # in case setKeyframe's auto-tangent logic overrode them.
+        # Skip sides the caller explicitly set via kwargs — the preserved
+        # types must not override an intentional caller choice.
         if tangent_types:
-            try:
-                cmds.keyTangent(
-                    plug,
-                    time=(time, time),
-                    edit=True,
-                    outTangentType=tangent_types[1],
-                )
-            except Exception:
-                pass
-            try:
-                cmds.keyTangent(
-                    plug,
-                    time=(time, time),
-                    edit=True,
-                    inTangentType=in_tt,
-                )
-            except Exception:
-                pass
+            if "outTangentType" not in kwargs:
+                try:
+                    cmds.keyTangent(
+                        plug,
+                        time=(time, time),
+                        edit=True,
+                        outTangentType=tangent_types[1],
+                    )
+                except Exception:
+                    pass
+            if "inTangentType" not in kwargs:
+                try:
+                    cmds.keyTangent(
+                        plug,
+                        time=(time, time),
+                        edit=True,
+                        inTangentType=in_tt,
+                    )
+                except Exception:
+                    pass
 
     @classmethod
     def bake(
@@ -698,7 +788,9 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         Parameters:
             objects: Object(s) to bake.
             attributes: Attribute name(s) to bake. If None, bakes all keyable.
-            time_range: (start, end) tuple. If None, uses current playback range.
+            time_range: (start, end) tuple. If None, Maya's bakeResults
+                default range is used (the existing keyed range — NOT the
+                playback range).
             sample_by: Step size for baking keys.
             preserve_outside_keys: Keep keys outside the bake range.
             simulation: Perform simulation bake.
@@ -773,11 +865,17 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
             # If no attributes requested (bake all)
             else:
-                # If only_keyed demanded for 'all' mode, we rely on bakeResults behavior?
-                # bakeResults without -at flag bakes all keyable.
-                # If we want to strictly enforce 'only_keyed', we have to find them manually.
-                # For now, assuming standard behavior for None attributes unless explicitly requested.
-                groups[None].append(obj)
+                if only_keyed:
+                    # bakeResults without -at bakes all keyable, so keyed-only
+                    # must be enforced manually: bake just the attributes that
+                    # already have animation curves.
+                    curves = cmds.keyframe(str(obj), query=True, name=True) or []
+                    attrs_to_bake = cls._curves_to_attributes(curves, obj)
+                    if not attrs_to_bake:
+                        continue
+                    groups[tuple(sorted(attrs_to_bake))].append(obj)
+                else:
+                    groups[None].append(obj)
 
         # 4. Execute Batches
         results = []
@@ -1135,137 +1233,96 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 continue
 
             if remove:
-                # --- Rebuild approach: read surviving keys' data via om2,
-                # delete the old curve node, create a new one connected
-                # to the same plug, and batch-add surviving keys with
-                # addKeysWithTangents.  This is O(surviving) instead of
-                # O(removed) and eliminates 165K+ individual fn.remove()
-                # calls.  All auto tangents are frozen to kFixed during
-                # rebuild (preserving exact XY angles); boundary tangents
-                # facing into flat segments are post-set to kFlat so Maya
-                # computes proper handle lengths. ---
-                import maya.api.OpenMaya as om2
-                import maya.api.OpenMayaAnim as oma2
+                # --- Undoable removal: interior keys of a flat run are
+                # contiguous, so each run is removed with a single
+                # time-range cutKey — O(segments) commands.  Boundary
+                # tangents are frozen first (flat on the hold-facing
+                # side, fixed on the interior-facing side) so the curve
+                # keeps its shape when its neighbors vanish; keys away
+                # from a run keep both neighbors and recompute their
+                # auto tangents to identical values.  Everything goes
+                # through cmds so the whole edit lands in the undo
+                # chunk opened by @CoreUtils.undoable — unlike an om2
+                # rebuild, which bypasses the undo queue entirely. ---
+                _AUTO_TANGENTS = {"auto", "spline", "clamped", "autoease", "automix"}
 
-                _auto_set_int = {
-                    oma2.MFnAnimCurve.kTangentAuto,
-                    oma2.MFnAnimCurve.kTangentSmooth,
-                    oma2.MFnAnimCurve.kTangentClamped,
-                }
-                kFlat = oma2.MFnAnimCurve.kTangentFlat
-                kFixed = oma2.MFnAnimCurve.kTangentFixed
-
-                n_keys = len(times)
-                bnd_starts = set(int(s) for s in seg_starts)
-                bnd_ends = set(int(e) for e in seg_lasts)
-                remove_set = set(remove_indices.tolist())
-                surviving = sorted(set(range(n_keys)) - remove_set)
-
-                sel = om2.MSelectionList()
-                sel.add(curve)
-                dep = sel.getDependNode(0)
-                fn = oma2.MFnAnimCurve(dep)
-
-                # Read surviving keys' complete data
-                s_times = []
-                s_values = []
-                s_in_tt = []
-                s_out_tt = []
-                s_in_x = []
-                s_in_y = []
-                s_out_x = []
-                s_out_y = []
-                flat_fixups = []  # (surv_idx, is_in_tangent)
-
-                for si, idx in enumerate(surviving):
-                    s_times.append(fn.input(idx))
-                    s_values.append(fn.value(idx))
-
-                    in_tt = fn.inTangentType(idx)
-                    out_tt = fn.outTangentType(idx)
-                    in_xy = fn.getTangentXY(idx, True)
-                    out_xy = fn.getTangentXY(idx, False)
-
-                    is_start = idx in bnd_starts
-                    is_end = idx in bnd_ends
-
-                    # Freeze auto tangents → kFixed (preserve angle).
-                    # Boundary tangents into flat segments → kFlat (post-set).
-                    if is_end and in_tt in _auto_set_int:
-                        in_tt = kFixed
-                        in_xy = (in_xy[0], 0.0)
-                        flat_fixups.append((si, True))
-                    elif in_tt in _auto_set_int:
-                        in_tt = kFixed
-
-                    if is_start and out_tt in _auto_set_int:
-                        out_tt = kFixed
-                        out_xy = (out_xy[0], 0.0)
-                        flat_fixups.append((si, False))
-                    elif out_tt in _auto_set_int:
-                        out_tt = kFixed
-
-                    s_in_tt.append(in_tt)
-                    s_out_tt.append(out_tt)
-                    s_in_x.append(in_xy[0])
-                    s_in_y.append(in_xy[1])
-                    s_out_x.append(out_xy[0])
-                    s_out_y.append(out_xy[1])
-
-                curve_type = fn.animCurveType
-                pre_inf = fn.preInfinityType
-                post_inf = fn.postInfinityType
-                is_weighted = fn.isWeighted
-
-                # Get output plug before deleting
-                fn_dep = om2.MFnDependencyNode(dep)
-                out_plug = fn_dep.findPlug("output", True)
-                dest_plugs = out_plug.destinations()
-                if not dest_plugs:
-                    continue
-                dest_plug = dest_plugs[0]
-
-                # Delete old curve, create new one on same plug
-                mod = om2.MDGModifier()
-                mod.deleteNode(dep)
-                mod.doIt()
-
-                fn_new = oma2.MFnAnimCurve()
-                fn_new.create(dest_plug, curve_type)
-                if is_weighted:
-                    fn_new.setIsWeighted(True)
-
-                fn_new.addKeysWithTangents(
-                    s_times,
-                    s_values,
-                    tangentInTypeArray=s_in_tt,
-                    tangentOutTypeArray=s_out_tt,
-                    tangentInXArray=s_in_x,
-                    tangentInYArray=s_in_y,
-                    tangentOutXArray=s_out_x,
-                    tangentOutYArray=s_out_y,
-                    convertUnits=False,
+                # No lock handling needed: cutKey/keyTangent addressed at
+                # the CURVE NODE edit keys even when the driven attribute
+                # (or its parent compound) is locked — locks only guard the
+                # plug connection the old delete/reconnect rebuild touched.
+                in_types = cmds.keyTangent(curve, query=True, inTangentType=True) or []
+                out_types = (
+                    cmds.keyTangent(curve, query=True, outTangentType=True) or []
                 )
-                fn_new.setPreInfinityType(pre_inf)
-                fn_new.setPostInfinityType(post_inf)
 
-                # Post-set tangent types that addKeysWithTangents ignores
-                # when XY data is provided (step, stepNext, flat, linear, etc.)
-                for si in range(len(s_in_tt)):
-                    if s_in_tt[si] != kFixed:
-                        fn_new.setInTangentType(si, s_in_tt[si])
-                    if s_out_tt[si] != kFixed:
-                        fn_new.setOutTangentType(si, s_out_tt[si])
+                seg_pairs = [(int(s), int(e)) for s, e in zip(seg_starts, seg_lasts)]
+                try:
+                    # 1) Freeze ALL auto tangents to 'fixed' (locks each
+                    # key's current angle) — not just the boundary keys.
+                    # Downstream FBX export reinterprets 'auto' tangents
+                    # with its own algorithm, corrupting the curve shape,
+                    # so no survivor may remain auto.  Contiguous runs
+                    # are edited with one index-range call (a baked curve
+                    # is typically a single run).
+                    for flag, tlist in (
+                        ("inTangentType", in_types),
+                        ("outTangentType", out_types),
+                    ):
+                        run = None
+                        for i, tt in enumerate(tlist):
+                            if tt in _AUTO_TANGENTS:
+                                if run is None:
+                                    run = i
+                            elif run is not None:
+                                cmds.keyTangent(
+                                    curve, edit=True, index=(run, i - 1), **{flag: "fixed"}
+                                )
+                                run = None
+                        if run is not None:
+                            cmds.keyTangent(
+                                curve,
+                                edit=True,
+                                index=(run, len(tlist) - 1),
+                                **{flag: "fixed"},
+                            )
 
-                # Post-set boundary tangents to kFlat for proper handle length
-                for si, is_in in flat_fixups:
-                    if is_in:
-                        fn_new.setInTangentType(si, kFlat)
-                    else:
-                        fn_new.setOutTangentType(si, kFlat)
+                    # 2) Boundary tangents facing a flat run go flat for
+                    # proper hold handles — only where the original type
+                    # was auto-computed (shaped/stepped sides stay put).
+                    for s, e in seg_pairs:
+                        if s < len(out_types) and out_types[s] in _AUTO_TANGENTS:
+                            cmds.keyTangent(
+                                curve,
+                                edit=True,
+                                time=(times[s], times[s]),
+                                outTangentType="flat",
+                            )
+                        if e < len(in_types) and in_types[e] in _AUTO_TANGENTS:
+                            cmds.keyTangent(
+                                curve,
+                                edit=True,
+                                time=(times[e], times[e]),
+                                inTangentType="flat",
+                            )
 
-            curve_ref = curve if as_strings else curve
-            redundant.append((curve_ref, [times[int(i)] for i in remove_indices]))
+                    # 3) cutKey accepts only ONE range per call — cut each
+                    # flat run's interior separately (time ranges are
+                    # stable across removals, so order is irrelevant).
+                    for s, e in seg_pairs:
+                        cmds.cutKey(
+                            curve, time=(times[s + 1], times[e - 1]), clear=True
+                        )
+                except RuntimeError as exc:
+                    # Skip this curve rather than aborting the whole
+                    # batch (and every later optimize phase) — the
+                    # remaining curves are independent.
+                    cmds.warning(
+                        f"AnimUtils.get_redundant_flat_keys: key removal on "
+                        f"'{curve}' failed ({exc}); curve skipped."
+                    )
+                    continue
+
+            redundant.append((curve, [times[int(i)] for i in remove_indices]))
 
         return redundant
 
@@ -2107,11 +2164,14 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         def _try_selected():
             if not sel_curves:
                 return None
-            # Scope to curves belonging to the resolved objects.
+            # Scope to curves belonging to the resolved objects.  When
+            # objects were resolved but own no curves, none of the
+            # selected curves can be theirs — returning them unscoped
+            # would operate on unrelated objects' animation.
             obj_curve_set = _get_obj_curve_set()
             scoped = (
                 [c for c in sel_curves if c in obj_curve_set]
-                if obj_curve_set
+                if objects
                 else list(sel_curves)
             )
             if not scoped:
@@ -2602,7 +2662,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             all_times = []
             for obj in objects:
                 if selected_keys_only:
-                    _keys = cmds.keyframe(obj, query=True, name=True, sl=True)
+                    _keys = cmds.keyframe(obj, query=True, name=True, sl=True) or []
                     for _node in _keys:
                         if time_range:
                             _t = cmds.keyframe(
@@ -2647,7 +2707,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             # Find the anchor key across all objects
             for obj in objects:
                 if selected_keys_only:
-                    keys = cmds.keyframe(obj, query=True, name=True, sl=True)
+                    keys = cmds.keyframe(obj, query=True, name=True, sl=True) or []
                     for node in keys:
                         if time_range:
                             active_key_times = cmds.keyframe(
@@ -2686,7 +2746,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             # Get keyframes based on selection preference and time range
             if selected_keys_only:
                 # Use AnimUtils pattern for selected keys
-                keys = cmds.keyframe(obj, query=True, name=True, sl=True)
+                keys = cmds.keyframe(obj, query=True, name=True, sl=True) or []
 
                 # Filter by channel box attributes if requested
                 if channel_box_attrs_only:
@@ -2697,7 +2757,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                             node, plugs=True, destination=True, source=False
                         )
                         if connections:
-                            attr_name = connections[0].attrName()
+                            # listConnections returns plug strings ("node.attr")
+                            attr_name = str(connections[0]).split(".")[-1]
                             if attr_name in channel_box_attrs:
                                 filtered_keys.append(node)
                     keys = filtered_keys
@@ -2720,15 +2781,11 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                             anchor_time = _anchor(active_key_times)
                             offset = frame - anchor_time
 
-                        # Move keys using AnimUtils pattern
-                        cmds.keyframe(
-                            node,
-                            edit=True,
-                            time=(min(active_key_times), max(active_key_times)),
-                            relative=True,
-                            timeChange=offset,
+                        # Move exactly the selected keys — a (min, max) range
+                        # edit would also drag unselected keys inside the span.
+                        keys_moved += AnimUtils._shift_key_times(
+                            node, active_key_times, offset
                         )
-                        keys_moved += len(active_key_times)
             else:
                 # Handle all keys in time range
                 if channel_box_attrs_only:
@@ -2853,7 +2910,9 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         """
         if target_times is None:
             target_times = [cmds.currentTime(query=True)]
-        elif isinstance(target_times, int):
+        elif isinstance(target_times, (int, float)) and not isinstance(
+            target_times, bool
+        ):
             target_times = [target_times]
 
         # Auto-detect per-object mode: if first remaining kwarg value is a dict of attributes
@@ -3144,6 +3203,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             cls.set_tangent_info(attr_name, adjusted_time, tangent_info)
 
     @staticmethod
+    @CoreUtils.undoable
     def add_intermediate_keys(
         objects: Union[str, str, List[Union[str, str]]],
         time_range: Optional[Union[int, Tuple[int, int]]] = None,
@@ -3241,34 +3301,38 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 if frames:
                     attr_key_data.setdefault((obj, attr), []).extend(frames)
 
-        # Collect values for all frames
-        frame_values = {}
-        for (obj, attr), frames in attr_key_data.items():
-            plug = f"{obj}.{attr}"
-            for frame in frames:
-                cmds.currentTime(frame, edit=True)
-                frame_values.setdefault(frame, {}).setdefault(obj, {})[
-                    attr
-                ] = cmds.getAttr(plug)
+        # Collect values, then set keys — both phases scrub the playhead,
+        # so restore it afterward regardless of failures.
+        original_time = cmds.currentTime(query=True)
+        try:
+            frame_values = {}
+            for (obj, attr), frames in attr_key_data.items():
+                plug = f"{obj}.{attr}"
+                for frame in frames:
+                    cmds.currentTime(frame, edit=True)
+                    frame_values.setdefault(frame, {}).setdefault(obj, {})[
+                        attr
+                    ] = cmds.getAttr(plug)
 
-        # Set keys
-        for frame, obj_data in frame_values.items():
-            cmds.currentTime(frame, edit=True)
-            for obj, attr_values in obj_data.items():
-                for attr, value in attr_values.items():
-                    plug = f"{obj}.{attr}"
-                    if not include_flat:
-                        try:
-                            val_prev = cmds.getAttr(plug, time=frame - 1)
-                            val_next = cmds.getAttr(plug, time=frame + 1)
-                            if isclose(value, val_prev, abs_tol=1e-6) and isclose(
-                                value, val_next, abs_tol=1e-6
-                            ):
+            for frame, obj_data in frame_values.items():
+                cmds.currentTime(frame, edit=True)
+                for obj, attr_values in obj_data.items():
+                    for attr, value in attr_values.items():
+                        plug = f"{obj}.{attr}"
+                        if not include_flat:
+                            try:
+                                val_prev = cmds.getAttr(plug, time=frame - 1)
+                                val_next = cmds.getAttr(plug, time=frame + 1)
+                                if isclose(value, val_prev, abs_tol=1e-6) and isclose(
+                                    value, val_next, abs_tol=1e-6
+                                ):
+                                    continue
+                            except Exception:
                                 continue
-                        except Exception:
-                            continue
-                    cmds.setAttr(plug, value)
-                    cmds.setKeyframe(plug)
+                        cmds.setAttr(plug, value)
+                        cmds.setKeyframe(plug)
+        finally:
+            cmds.currentTime(original_time, edit=True)
 
     @staticmethod
     @CoreUtils.undoable
@@ -3447,27 +3511,38 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
     @staticmethod
     @CoreUtils.undoable
     def invert_keys(
+        objects=None,
         time=None,
         relative=True,
         delete_original=False,
         mode="horizontal",
         value_pivot=0.0,
     ):
-        """Invert keyframes around the last key, preferring selected keys but falling back to all keys.
+        """Invert keyframes, preferring selected keys but falling back to all keys.
+
+        When `time` is None (default) the keys are mirrored **in place**: the
+        animation reverses within its own key range. That is a move, not a
+        copy — `relative` and `delete_original` are ignored. When `time` is
+        given, a reversed copy is placed at that time instead, and the source
+        keys are kept unless `delete_original` is True.
 
         Parameters:
-            time (int, optional): Desired start time for inverted keys.
-                If None, uses the current time as an absolute start position.
+            objects (str/list, optional): Objects whose keys to invert.
+                Defaults to the current selection.
+            time (int, optional): Start time for the reversed copy.
+                If None, mirrors the keys in place (no copy is made).
             relative (bool): When True, time is treated as an offset from the last key.
-                Ignored when time is None (auto mode always uses absolute positioning).
-                Defaults to True.
-            delete_original (bool): Delete the source keyframes after inversion. Defaults to False.
+                Ignored when time is None. Defaults to True.
+            delete_original (bool): Delete the source keyframes after copying.
+                Implied when time is None. Defaults to False.
             mode (str): Inversion mode. "horizontal" (time), "vertical" (value), or "both". Defaults to "horizontal".
             value_pivot (float): Pivot value for vertical inversion. Defaults to 0.0.
         """
-
-        selection = cmds.ls(selection=True, )
-        if not selection:
+        if objects is None:
+            objects = cmds.ls(selection=True)
+        else:
+            objects = [str(o) for o in ptk.make_iterable(objects)]
+        if not objects:
             raise RuntimeError("No objects selected.")
 
         selected_key_times = cmds.keyframe(query=True, sl=True, tc=True) or []
@@ -3477,7 +3552,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         seen_entries: Set[Tuple[str, float]] = set()
         all_key_times: List[float] = []
 
-        for obj in selection:
+        for obj in objects:
             key_nodes = (
                 cmds.keyframe(obj, query=True, name=True, selected=True) or []
                 if use_selected
@@ -3508,10 +3583,13 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         min_time = min(all_key_times)
 
         if time is None:
-            time = cmds.currentTime(q=True)
-            relative = False
-
-        inversion_point = max_time + time if relative else time
+            # In-place mirror: t' = min + (max - t) reverses the keys within
+            # their own range; forcing delete_original turns the insert-then-
+            # cut below into a move.
+            inversion_point = min_time
+            delete_original = True
+        else:
+            inversion_point = max_time + time if relative else time
 
         keyframe_data: List[
             Tuple[Any, float, float, float, float, Optional[float], Optional[float]]
@@ -3609,43 +3687,6 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 rounded_time = round(key_time, 3)
                 if (str(node), rounded_time) not in inverted_positions:
                     cmds.cutKey(node, time=(key_time, key_time))
-
-    @classmethod
-    def _apply_stagger(
-        cls,
-        groups_data: List[dict],
-        start_frame: float,
-        spacing: Union[int, float] = 0,
-        use_intervals: bool = False,
-        avoid_overlap: bool = False,
-        preserve_gaps: bool = False,
-    ) -> int:
-        """Apply staggering logic to a list of grouped keyframe data.
-
-        Shared logic used by stagger_keys and scale_keys (for overlap prevention).
-        Delegates to SegmentKeys.execute_stagger which implements safe execution order.
-
-        Parameters:
-            groups_data: List of dicts with 'start', 'duration', 'curves' keys.
-            start_frame: The frame to start the sequence from.
-            spacing: Gap/overlap amount.
-            use_intervals: Fixed interval mode.
-            avoid_overlap: Skip intervals to avoid overlap (interval mode only).
-            preserve_gaps: If True, only shifts forward to prevent overlap, never backward (sequential mode only).
-
-        Returns:
-            int: Number of groups shifted.
-        """
-        from mayatk.anim_utils.segment_keys import SegmentKeys
-
-        return SegmentKeys.execute_stagger(
-            groups_data,
-            start_frame=start_frame,
-            spacing=spacing,
-            use_intervals=use_intervals,
-            avoid_overlap=avoid_overlap,
-            preserve_gaps=preserve_gaps,
-        )
 
     @staticmethod
     def _move_curve_keys(
@@ -3756,89 +3797,41 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         return moved_count
 
     @staticmethod
-    def _shift_curves_by_amount(
-        curves: List[str],
-        shift_amount: float,
-        time_range: Optional[Tuple[float, float]] = None,
-    ) -> int:
-        """Helper method to shift a list of animation curves by a given amount.
+    def _shift_key_times(curve: str, times: List[float], offset: float) -> int:
+        """Shift exactly the given key times on a curve by a relative offset.
+
+        Unlike a (min, max) range edit, only the listed keys move — keys
+        lying between them are untouched.  Keys are processed in an order
+        that prevents a moved key from colliding with a later source key.
 
         Parameters:
-            curves (List[str]): List of animation curve nodes to shift.
-            shift_amount (float): Number of frames to shift the curves by.
-            time_range (Tuple[float, float], optional): Specific range of keys to shift.
+            curve (str): The animation curve (or plug) to edit.
+            times (List[float]): Key times to move.
+            offset (float): Relative frame offset to apply.
 
         Returns:
-            int: Number of curves successfully shifted.
+            int: Number of keys moved.
         """
-        shifted_count = 0
-        for curve in curves:
-            # Determine range to shift
-            if time_range:
-                # Use specified range
-                range_args = {"time": time_range}
-            else:
-                # Use full curve range
-                curve_keyframes = cmds.keyframe(curve, query=True, timeChange=True)
-                if not curve_keyframes:
-                    continue
-                range_args = {"time": (min(curve_keyframes), max(curve_keyframes))}
+        if not times or abs(offset) < 1e-9:
+            return 0
 
+        moved = 0
+        for t in sorted(set(times), reverse=offset > 0):
             try:
+                # option="over" lets a key travel past unmoved neighbors —
+                # Maya's default move clamps at the adjacent key.
                 cmds.keyframe(
                     curve,
                     edit=True,
+                    time=(t, t),
                     relative=True,
-                    timeChange=shift_amount,
-                    **range_args,
+                    timeChange=offset,
+                    option="over",
                 )
-                shifted_count += 1
+                moved += 1
             except RuntimeError as e:
-                cmds.warning(f"Failed to move keys for {curve}: {e}")
-        return shifted_count
-
-    @staticmethod
-    def _calculate_speed_profile(
-        obj: str, time_range: Tuple[float, float]
-    ) -> Tuple[List[float], List[float]]:
-        """Calculate per-frame speed profile for an object's positional movement.
-
-        Measures the distance traveled between consecutive frames to determine speed.
-        Returns both the raw speed values and normalized (0-1) speed values.
-
-        Parameters:
-            obj (str): The object to measure speed for.
-            time_range (Tuple[float, float]): (start_frame, end_frame) range to measure.
-
-        Returns:
-            Tuple[List[float], List[float]]: (speeds, normalized_speeds)
-                - speeds: Raw distance traveled per frame
-                - normalized_speeds: Normalized to 0-1 range where 1.0 = fastest movement
-
-        Example:
-            speeds, norm_speeds = AnimUtils._calculate_speed_profile(obj, (1, 100))
-        """
-        sample_times, progress, total_distance = AnimUtils._compute_motion_progress(
-            obj, time_range
-        )
-
-        if not sample_times or len(progress) < 2:
-            return [], []
-
-        speeds: List[float] = []
-        for index in range(1, len(progress)):
-            delta_progress = progress[index] - progress[index - 1]
-            speeds.append(delta_progress * total_distance)
-
-        if speeds:
-            max_speed = max(speeds)
-            normalized_speeds = [
-                s / max_speed if max_speed > 0 else 0.0 for s in speeds
-            ]
-        else:
-            normalized_speeds = []
-
-        return speeds, normalized_speeds
+                cmds.warning(f"Failed to move key at {t} on {curve}: {e}")
+        return moved
 
     @staticmethod
     def _group_overlapping_keyframes(obj_keyframe_data: List[dict]) -> List[dict]:
@@ -4013,9 +4006,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
         # Align each object's selected keyframes
         for data in obj_keyframe_data:
-            obj = data["obj"]
             curve_nodes = data["curve_nodes"]
-            times = data["times"]
             current_start = data["start"]
 
             # Calculate the shift amount
@@ -4024,21 +4015,15 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             if abs(shift_amount) < 1e-6:  # Skip if already aligned (within tolerance)
                 continue
 
-            # Shift the selected keyframes for this object
-            # Use the time range of selected keys to target only those keys
-            min_time = min(times)
-            max_time = max(times)
-
-            # Move the keyframes - must target the object, not individual curve nodes
-            # to ensure all selected keys move together
-            cmds.keyframe(
-                obj,
-                edit=True,
-                time=(min_time, max_time),
-                relative=True,
-                timeChange=shift_amount,
-                option="over",  # Only affect keyframes in the time range
-            )
+            # Move exactly the selected keys per curve — an object-level
+            # (min, max) range edit would also drag unselected keys lying
+            # inside the span and touch curves without any selection.
+            for node in curve_nodes:
+                sel_times = cmds.keyframe(
+                    node, query=True, selected=True, timeChange=True
+                )
+                if sel_times:
+                    AnimUtils._shift_key_times(node, sel_times, shift_amount)
 
         print(
             f"Aligned selected keyframes for {len(obj_keyframe_data)} object(s) to frame {target_frame:.2f}"
@@ -4518,7 +4503,10 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 time_range = None  # Process all
         elif isinstance(time, (list, tuple)) and len(time) == 2:
             time_range = (time[0], time[1])
-        elif isinstance(time, int):
+        elif isinstance(time, (int, float)) and not isinstance(time, bool):
+            # Accept float frames too — falling through to None here would
+            # make callers like delete_keys treat a single frame as
+            # "entire timeline".
             time_range = (time, time)
 
         return time_range
@@ -4788,6 +4776,10 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         def round_to_nearest(value: float, base: int) -> int:
             return int(base * round(value / base))
 
+        # Normalize once: a non-positive precision would divide by zero.
+        if precision is not None and precision <= 0:
+            precision = None
+
         frame_ranges = {}
         for obj in objects:
             keyframes = AnimUtils.get_keyframe_times(obj)
@@ -4799,7 +4791,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 for kf in keyframes[1:]:
                     if gap is not None and kf - last_frame > gap:
                         end_frame = last_frame
-                        if precision:
+                        if precision is not None:
                             start_frame = round_to_nearest(start_frame, precision)
                             end_frame = round_to_nearest(end_frame, precision)
                         ranges.append((start_frame, end_frame))
@@ -4825,9 +4817,15 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
     ) -> Dict[str, Dict[str, List[float]]]:
         """Detects tied (bookend) keyframes for given objects.
 
-        A tied keyframe is identified as a keyframe at the start or end of an attribute's
-        keyframe range that has the same value as the adjacent keyframe, indicating it's
-        likely a hold/bookend key rather than actual animation.
+        Curves tied by tie_keyframes carry an exact record of the inserted
+        bookend times (see TIED_KEYS_ATTR); those are returned authoritatively.
+        Curves without a record (tied before the metadata existed, or created
+        by hand) fall back to a conservative heuristic: an end key is tied if
+        it duplicates its neighbor's value AND is itself unshaped (flat or
+        stepped tangents on both sides), on a curve with at least 3 keys.
+        The tangent requirement protects genuine shaped keys (e.g. an authored
+        overshoot returning to the same value); the 3-key minimum protects a
+        deliberate 2-key hold from being flagged in its entirety.
 
         This is useful for:
         - Identifying keys added by tie_keyframes()
@@ -4859,25 +4857,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             if my_obj in tied_keys:
                 print(f"Object has tied keys: {tied_keys[my_obj]}")
         """
-        import maya.cmds as cmds
-
-        # Get objects to check
-        if objects is None:
-            objects = cmds.ls(type="transform")
-            # Filter objects that have keyframes
-            objects = [
-                obj
-                for obj in objects
-                if cmds.keyframe(obj, query=True, timeChange=True)
-            ]
-        else:
-            if isinstance(objects, str):
-                objects = [objects]
-            elif isinstance(objects, (list, tuple, set)):
-                objects = [str(o) for o in objects]
-            else:
-                objects = [str(objects)]
-
+        objects = _resolve_keyed_objects(objects)
         if not objects:
             return {}
 
@@ -4885,64 +4865,49 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
         for obj in objects:
             # Get all animation curves for this object
-            keyed_attrs = cmds.keyframe(obj, query=True, name=True)
+            keyed_curves = cmds.keyframe(obj, query=True, name=True)
 
-            if not keyed_attrs:
+            if not keyed_curves:
                 continue
 
             obj_tied_keys = {}
 
-            for attr in keyed_attrs:
-                # Get all keyframe times for this attribute
-                keyframe_times = cmds.keyframe(attr, query=True, timeChange=True)
+            for curve in keyed_curves:
+                # cmds.keyframe returns keys in time order; times and values
+                # are index-aligned.
+                keyframe_times = cmds.keyframe(curve, query=True, timeChange=True)
+                if not keyframe_times:
+                    continue
 
-                if not keyframe_times or len(keyframe_times) < 2:
-                    continue  # Need at least 2 keys to have potential ties
-
-                keyframe_times = sorted(keyframe_times)
-                tied_times = []
-
-                # Check start keyframe - is it a tie (same value as next key)?
-                if len(keyframe_times) > 1:
-                    start_value = cmds.keyframe(
-                        attr,
-                        query=True,
-                        time=(keyframe_times[0],),
-                        valueChange=True,
-                    )[0]
-                    next_value = cmds.keyframe(
-                        attr,
-                        query=True,
-                        time=(keyframe_times[1],),
-                        valueChange=True,
-                    )[0]
-
-                    # If values are the same, this is a tied keyframe
-                    if abs(start_value - next_value) < tolerance:
-                        tied_times.append(keyframe_times[0])
-
-                # Check end keyframe - is it a tie (same value as previous key)?
-                if len(keyframe_times) > 1:
-                    end_value = cmds.keyframe(
-                        attr,
-                        query=True,
-                        time=(keyframe_times[-1],),
-                        valueChange=True,
-                    )[0]
-                    prev_value = cmds.keyframe(
-                        attr,
-                        query=True,
-                        time=(keyframe_times[-2],),
-                        valueChange=True,
-                    )[0]
-
-                    # If values are the same, this is a tied keyframe
-                    if abs(end_value - prev_value) < tolerance:
-                        tied_times.append(keyframe_times[-1])
+                recorded = _read_tied_key_metadata(curve)
+                if recorded is not None:
+                    # Exact record of what tie_keyframes inserted. Keep only
+                    # times that still have a key (the user may have removed
+                    # or moved some since).
+                    tied_times = [
+                        t
+                        for t in recorded
+                        if any(abs(t - k) < 1e-4 for k in keyframe_times)
+                    ]
+                else:
+                    # Heuristic fallback for curves tied before metadata
+                    # existed.  Need at least 3 keys: a 2-key curve is a
+                    # deliberate hold, not animation plus a bookend.
+                    tied_times = []
+                    if len(keyframe_times) >= 3:
+                        values = cmds.keyframe(curve, query=True, valueChange=True)
+                        if abs(values[0] - values[1]) < tolerance and (
+                            _key_is_flat_or_stepped(curve, keyframe_times[0])
+                        ):
+                            tied_times.append(keyframe_times[0])
+                        if abs(values[-1] - values[-2]) < tolerance and (
+                            _key_is_flat_or_stepped(curve, keyframe_times[-1])
+                        ):
+                            tied_times.append(keyframe_times[-1])
 
                 # Store tied keyframes for this attribute if any were found
                 if tied_times:
-                    obj_tied_keys[attr] = tied_times
+                    obj_tied_keys[curve] = tied_times
 
             # Store object's tied keyframes if any were found
             if obj_tied_keys:
@@ -4967,6 +4932,11 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         them.  This eliminates the need for post-insertion tangent restoration
         and is O(curves) with only fast C++ calls per curve.
 
+        Each curve records the inserted bookend times in a string attribute
+        (TIED_KEYS_ATTR), so untie_keyframes can later remove exactly those
+        keys — even bookends inside the keyed range or stacked by repeated
+        tie passes.  untie_keyframes clears the record.
+
         Parameters:
             objects (List[str], optional): List of transform node names to process.
                 If None, all keyed objects in the scene will be used.
@@ -4988,25 +4958,10 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             # Use with absolute=True to add padding around actual keyframes
             tie_keyframes(absolute=True, padding=10)  # Adds 10 frame hold before/after animation
         """
-        import maya.cmds as cmds
         import maya.api.OpenMaya as om2
         import maya.api.OpenMayaAnim as oma2
 
-        if objects is None:  # Get all objects that have keyframes
-            objects = cmds.ls(type="transform")
-            objects = [
-                obj
-                for obj in objects
-                if cmds.keyframe(obj, query=True, timeChange=True)
-            ]
-        else:
-            if isinstance(objects, str):
-                objects = [objects]
-            elif isinstance(objects, (list, tuple, set)):
-                objects = [str(o) for o in objects]
-            else:
-                objects = [str(objects)]
-
+        objects = _resolve_keyed_objects(objects)
         if not objects:
             cmds.warning("No keyed objects found.")
             return
@@ -5073,6 +5028,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             if n == 0:
                 continue
 
+            inserted_bookends = []
+
             first_t = fn.input(0).value
             last_t = fn.input(n - 1).value
 
@@ -5086,8 +5043,10 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             bookend_tt = kStep if is_fully_stepped else kFlat
 
             # --- Start bookend ---
-            if abs(tie_start_frame - first_t) < 1e-4:
-                # Bookend overlaps first key — skip to avoid corrupting it
+            if abs(tie_start_frame - first_t) < 1e-4 or fn.find(start_mtime) is not None:
+                # A key already exists at the bookend time (range boundary or
+                # an interior key) — skip so it's never corrupted or recorded
+                # (and later removed) as a tie.
                 pass
             else:
                 if tie_start_frame < first_t:
@@ -5138,6 +5097,7 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 # Evaluate curve value at the bookend time and insert
                 start_val = fn.evaluate(start_mtime)
                 fn.addKey(start_mtime, start_val, bookend_tt, bookend_tt)
+                inserted_bookends.append(tie_start_frame)
 
             # --- End bookend ---
             # Re-read numKeys since we may have added a key
@@ -5145,8 +5105,8 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             # Re-read last_t from the actual last key
             last_t = fn.input(n - 1).value
 
-            if abs(tie_end_frame - last_t) < 1e-4:
-                # Bookend overlaps last key — skip
+            if abs(tie_end_frame - last_t) < 1e-4 or fn.find(end_mtime) is not None:
+                # A key already exists at the bookend time — skip (see start)
                 pass
             else:
                 if tie_end_frame > last_t:
@@ -5194,6 +5154,11 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
 
                 end_val = fn.evaluate(end_mtime)
                 fn.addKey(end_mtime, end_val, bookend_tt, bookend_tt)
+                inserted_bookends.append(tie_end_frame)
+
+            # Record exactly which keys were inserted so untie_keyframes can
+            # remove them without relying on value-equality guesswork.
+            _write_tied_key_metadata(fn.name(), inserted_bookends)
 
         print(
             f"Keyframes tied to frames {tie_start_frame} and {tie_end_frame} for keyed attributes."
@@ -5204,19 +5169,27 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
     def untie_keyframes(
         objects: List[str] = None,
         absolute: bool = False,
-    ):
+    ) -> Dict[str, Dict[str, List[float]]]:
         """Removes bookend keyframes added by tie_keyframes, but preserves genuine animation keys.
 
-        This method intelligently removes keyframes at the start and end of each attribute's
-        keyframe range that were likely added by tie_keyframes. It automatically detects
-        bookend keys by checking if the first/last keyframe has the same value as the
-        next/previous keyframe (indicating a hold rather than actual animation).
+        Curves tied by tie_keyframes carry an exact record of the inserted
+        bookend times, so those keys are removed precisely — including
+        bookends that landed inside the keyed range and bookends stacked by
+        multiple tie passes.  Curves without a record fall back to the
+        conservative heuristic in get_tied_keyframes (value-duplicate end key
+        with flat/stepped tangents, on a curve with at least 3 keys), so
+        genuine shaped keys and deliberate 2-key holds are never deleted.
 
         Parameters:
             objects (List[str], optional): List of transform node names to process.
                 If None, all keyed objects in the scene will be used.
             absolute (bool, optional): Reserved for future use. Currently not used as untie
                 automatically detects bookend keys per attribute.
+
+        Returns:
+            Dict[str, Dict[str, List[float]]]: The removed keys, mapping each
+                object to {curve_name: [removed_times]}.  Empty if nothing
+                was removed.
 
         Example:
             # Remove bookend keys added by tie_keyframes
@@ -5228,10 +5201,6 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
         # Use the helper method to detect tied keyframes
         tied_keyframes = AnimUtils.get_tied_keyframes(objects)
 
-        if not tied_keyframes:
-            print("No bookend keyframes found to remove.")
-            return
-
         keys_removed = 0
 
         # Remove all detected tied keyframes
@@ -5241,10 +5210,18 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                     cmds.cutKey(attr, time=(time, time), clear=True)
                     keys_removed += 1
 
+        # The scene is untied now — drop the bookend records so stale entries
+        # can't linger on these objects' curves.
+        for obj in _resolve_keyed_objects(objects):
+            for curve in cmds.keyframe(obj, query=True, name=True) or []:
+                _clear_tied_key_metadata(curve)
+
         if keys_removed > 0:
             print(f"Removed {keys_removed} bookend keyframe(s).")
         else:
             print("No bookend keyframes found to remove.")
+
+        return tied_keyframes
 
     @staticmethod
     def create_animation_layer(
@@ -5275,6 +5252,12 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             additive: Explicit additive mode. If True, sets override=False.
             attributes: List of attribute paths (e.g., ["pCube1.tx", "pCube1.ry"])
                 to add to the layer. These attributes will be animatable on this layer.
+                CAUTION: do NOT pre-register attributes you are about to
+                ``bakeResults(destinationLayer=...)`` onto this same layer —
+                the bake then writes a flat constant (the value live at
+                registration time) at every sampled frame instead of the true
+                curve. Hand bakeResults the empty layer and let it wire the
+                attributes itself (see SmartBake._create_override_layer).
             objects: List of objects to add all keyable attributes from.
                 Shorthand for adding all keyable attrs of each object.
             weight: Layer weight (0.0 to 1.0). Default is 1.0 (full influence).

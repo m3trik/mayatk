@@ -239,6 +239,54 @@ class FbxUtils(ptk.HelpMixin):
     # off the registry (installed on the first preparer / explicit enable,
     # removed when the last is gone).
 
+    # The declarative list of known metadata producers that stamp the shared
+    # ``data_export`` carrier: name → (module, class, no-arg refresh method).
+    # ``run_export_preparers`` falls back to these for any producer without a
+    # registered session preparer, so callers like the Scene Exporter refresh
+    # every subsystem without naming them. Add new producers HERE — nothing
+    # else needs to change. Resolved lazily; an unimportable producer is
+    # skipped (never blocks an export).
+    _KNOWN_PRODUCERS = {
+        "shots": ("mayatk.anim_utils.shots._shots", "ShotStore", "refresh_export_view"),
+        "audio": (
+            "mayatk.audio_utils.audio_clips._audio_clips",
+            "AudioClips",
+            "prepare_for_export",
+        ),
+    }
+
+    @staticmethod
+    def run_export_preparers(include_known: bool = True) -> None:
+        """Refresh every producer's ``data_export`` channel once, right now.
+
+        Runs each registered session preparer, then (when *include_known*)
+        every :attr:`_KNOWN_PRODUCERS` entry not already covered by a
+        registered preparer of the same name.  Each producer is isolated —
+        one failing or unimportable subsystem never blocks the others — and
+        each no-ops when it has nothing to write, so a metadata-free scene
+        leaves no carrier behind.  This is the one call an export pipeline
+        needs to make the carrier current.
+        """
+        import importlib
+
+        ran = set()
+        for name, prepare in list(FbxUtils._export_preparers.items()):
+            ran.add(name)
+            try:
+                prepare()
+            except Exception:  # one subsystem's failure must not block others
+                logger.warning("Export preparer %r failed.", name, exc_info=True)
+        if not include_known:
+            return
+        for name, (module_path, cls_name, method) in FbxUtils._KNOWN_PRODUCERS.items():
+            if name in ran:
+                continue
+            try:
+                producer = getattr(importlib.import_module(module_path), cls_name)
+                getattr(producer, method)()
+            except Exception:
+                logger.debug("Producer %r refresh skipped.", name, exc_info=True)
+
     @staticmethod
     def register_export_preparer(name: str, prepare: Callable[[], Any]) -> None:
         """Run *prepare* before every FBX export this session (installs the hook).
@@ -289,12 +337,12 @@ class FbxUtils(ptk.HelpMixin):
 
     @staticmethod
     def _on_before_export(*_):
-        """Run every registered preparer (isolated), then realize declared takes."""
-        for name, prepare in list(FbxUtils._export_preparers.items()):
-            try:
-                prepare()
-            except Exception:  # one subsystem's failure must not abort the export
-                logger.warning("Export preparer %r failed.", name, exc_info=True)
+        """Run every registered preparer (isolated), then realize declared takes.
+
+        Registered-only (no known-producer fallback): the session hook is
+        opt-in per subsystem, so a producer that unregistered stays out.
+        """
+        FbxUtils.run_export_preparers(include_known=False)
         FbxUtils.apply_takes_from_node()
 
     @staticmethod
