@@ -22,6 +22,7 @@ if scripts_dir not in sys.path:
     sys.path.insert(0, scripts_dir)
 
 import maya.cmds as cmds
+import pythontk as ptk
 from base_test import MayaTkTestCase
 from mayatk.light_utils.lightmap_baker import lightmap_baker as lmb_module
 from mayatk.light_utils.lightmap_baker.lightmap_baker import (
@@ -764,6 +765,38 @@ class _PackingCombo:
         return self._text
 
 
+class _ScopeCombo:
+    """Scope combobox stub: defaults to Selected, matching cmb_scope_init's
+    setCurrentIndex(0) (the prior selection-only behavior)."""
+
+    def __init__(self, text="Selected"):
+        self._text = text
+
+    def currentText(self):
+        return self._text
+
+
+class _ResolutionCombo:
+    """Resolution combobox stub: mirrors cmb_resolution_init's item-data model
+    (currentData() is the actual pixel size, not the display text) so
+    _resolution()/_set_resolution() round-trip without a real Qt widget.
+    """
+
+    _RESOLUTIONS = (256, 512, 1024, 2048, 4096)
+
+    def __init__(self, resolution=1024):
+        self._data = resolution  # tolerate an out-of-list placeholder value
+
+    def currentData(self):
+        return self._data
+
+    def setCurrentIndex(self, index):
+        self._data = self._RESOLUTIONS[index]
+
+    def blockSignals(self, _b):
+        pass
+
+
 class _ProgressCtx:
     """Stub of Footer.progress(): records each update() tick."""
 
@@ -795,18 +828,25 @@ class _Footer:
 
 
 class _LineEdit:
-    """Affix-field stub: text() + an empty option_box.menu (mode -> 'auto')."""
+    """Affix-field stub: text() + an option_box exposing ``resolve_affix`` the same
+    way uitk's real ``OptionBoxManager`` does when no ``AffixOption`` picker is
+    attached — auto-mode split of the wrapped text via ``pythontk.StrUtils.split_affix``
+    (see uitk/widgets/optionBox/utils.py::resolve_affix's no-picker fallback path)."""
 
     class _Menu:
         pass
 
     class _OptionBox:
-        def __init__(self):
+        def __init__(self, widget):
             self.menu = _LineEdit._Menu()
+            self._widget = widget
+
+        def resolve_affix(self, *, default="prefix"):
+            return ptk.StrUtils.split_affix(self._widget.text(), mode="auto", default=default)
 
     def __init__(self, text="_Lightmap"):
         self._text = text
-        self.option_box = _LineEdit._OptionBox()
+        self.option_box = _LineEdit._OptionBox(self)
 
     def text(self):
         return self._text
@@ -816,13 +856,15 @@ class _SlotUi:
     def __init__(
         self, res=1024, samples=4, affix="_Lightmap",
         mode="Lighting Only (keep maps)", packing="Per-Object (one map each)",
+        scope="Selected",
     ):
         self.footer = _Footer()
-        self.spn_resolution = _Spin(res)
+        self.cmb_resolution = _ResolutionCombo(res)
         self.spn_samples = _Spin(samples)
         self.txt000 = _LineEdit(affix)
         self.cmb001 = _ModeCombo(mode)
         self.cmb002 = _PackingCombo(packing)
+        self.cmb_scope = _ScopeCombo(scope)
 
 
 class _FakeWorkflow:
@@ -1049,7 +1091,7 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         ui = _SlotUi(res=1, samples=1)
         s = self._slots(ui)
         s.cmb000(0, _PresetCombo("desktop"))
-        self.assertEqual(ui.spn_resolution.value(), 2048)
+        self.assertEqual(ui.cmb_resolution.currentData(), 2048)
         self.assertEqual(ui.spn_samples.value(), 8)
 
     def test_revert_to_source_routes_selection(self):

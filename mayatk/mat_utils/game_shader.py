@@ -22,11 +22,6 @@ def _plug(node, attr: str) -> str:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.mat_utils._mat_utils import MatUtils
-from mayatk.mat_utils._affix_mode import (
-    add_affix_mode_menu,
-    current_affix_mode,
-    resolve_affix,
-)
 from mayatk.env_utils._env_utils import EnvUtils
 
 
@@ -1590,7 +1585,7 @@ class GameShaderSlots(GameShader):
         """Return the affix text when it resolves as a prefix, else empty string."""
         if not hasattr(self.ui, "txt002"):
             return ""
-        prefix, _ = resolve_affix(self.ui.txt002, default="prefix")
+        prefix, _ = self.ui.txt002.option_box.resolve_affix(default="prefix")
         return prefix
 
     @property
@@ -1598,7 +1593,7 @@ class GameShaderSlots(GameShader):
         """Return the affix text when it resolves as a suffix, else empty string."""
         if not hasattr(self.ui, "txt002"):
             return ""
-        _, suffix = resolve_affix(self.ui.txt002, default="prefix")
+        _, suffix = self.ui.txt002.option_box.resolve_affix(default="prefix")
         return suffix
 
     @property
@@ -1667,17 +1662,16 @@ class GameShaderSlots(GameShader):
             widget.add([*ptk.ImgUtils.writable, "Profile default"])
 
     def txt002_init(self, widget):
-        """Add a prefix/suffix/auto-mode combobox to the affix field's option menu."""
-        add_affix_mode_menu(
-            widget,
-            default_mode="prefix",
+        """Add a prefix/suffix/auto-mode picker to the affix field."""
+        widget.option_box.set_affix(
+            default="prefix",
             on_change=lambda _mode, w=widget: self._apply_affix_placeholder(w),
         )
         self._apply_affix_placeholder(widget)
 
     @staticmethod
     def _apply_affix_placeholder(widget):
-        mode = current_affix_mode(widget)
+        mode = widget.option_box.affix_mode
         if mode == "prefix":
             widget.setPlaceholderText("Prefix")
             widget.setToolTip(
@@ -1723,8 +1717,10 @@ class GameShaderSlots(GameShader):
         output_profile = template_name if not ext else None
 
         def progress_adapter(p, m):
-            if hasattr(self.ui, "progressBar"):
-                self.ui.progressBar.setValue(int(p))
+            # Surface progress in the footer (the .ui has no progressBar —
+            # the old setValue branch was dead) and keep the UI responsive
+            # during the long network build.
+            self.ui.footer.setText(f"{m} ({int(p)}%)" if m else f"{int(p)}%")
             self.sb.QtWidgets.QApplication.instance().processEvents()
 
         self.last_created_shader = self.create_network(

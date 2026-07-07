@@ -52,7 +52,6 @@ except ImportError:
     fmt = None
 
 from mayatk.mat_utils.texture_baker import TextureBaker
-from mayatk.mat_utils._affix_mode import add_affix_mode_menu, resolve_affix
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.data_nodes import DataNodes
@@ -761,12 +760,9 @@ class LightmapBaker(ptk.LoggingMixin):
             )
 
         if not objects:
-            # Only touch the carrier if our channel is already on it (don't
-            # create data_export just to write an empty manifest).
-            if cmds.objExists(DataNodes.EXPORT) and cmds.attributeQuery(
-                self.LIGHTMAP_METADATA, node=DataNodes.EXPORT, exists=True
-            ):
-                DataNodes.set_export_string(self.LIGHTMAP_METADATA, "")
+            # set_export_string clears an existing channel without creating
+            # data_export just to write an empty manifest.
+            DataNodes.set_export_string(self.LIGHTMAP_METADATA, "")
             return None
 
         manifest = json.dumps(
@@ -1171,10 +1167,10 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
 
     def txt000_init(self, widget) -> None:
         """Add the Prefix / Suffix / Auto picker to the name-affix field."""
-        add_affix_mode_menu(widget, default_mode="auto")
+        widget.option_box.set_affix(default="auto")
 
     def _apply_preset(self, name: str) -> bool:
-        """Load *name*'s dials into the Resolution / Samples spinboxes.
+        """Load *name*'s dials into the Resolution combobox / Samples spinbox.
 
         Single source for preset → dials (used by :meth:`cmb000` and the
         deferred :meth:`_initialize_ui`). Returns False if the preset is
@@ -1224,7 +1220,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         src = self._sourceimages_dir()
         # Name the output <object><affix> per the field (e.g. "<object>_Lightmap"),
         # following the texture-set convention; the shader inherits the name.
-        prefix, suffix = resolve_affix(self.ui.txt000, default="suffix")
+        prefix, suffix = self.ui.txt000.option_box.resolve_affix(default="suffix")
         fused = self._mode() == "fused"
         bake = self._baker.bake_fused if fused else self._baker.bake_separated
         # Indeterminate "busy" marquee, NOT a 0..100% bar: a single Arnold bake
