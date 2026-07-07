@@ -2,7 +2,7 @@
 
 **Role**: Maya 2025+ utils. Maya tech-artist + Python work. Prioritize stability, performance, native integration.
 
-**Nav**: [← root](../CLAUDE.md) · **Deps**: [pythontk](../pythontk/CLAUDE.md) · **Used by**: [tentacle](../tentacle/CLAUDE.md)
+**Nav**: [← root](../CLAUDE.md) · [docs](docs/README.md) · **Deps**: [pythontk](../pythontk/CLAUDE.md) · **Used by**: [tentacle](../tentacle/CLAUDE.md)
 
 ## Hard rule — session safety (protect user work)
 
@@ -54,7 +54,7 @@ $env:PYTHONPATH = "$PWD\mayatk;$PWD\pythontk;$PWD\uitk;$PWD\tentacle"
 
 - **Pre-flight (no Maya)** — AST syntax sweep: `python -c "import ast,glob; [ast.parse(open(f,encoding='utf-8').read()) for f in glob.glob('mayatk/mayatk/**/*.py',recursive=True)]"`
 - **Command-name check (mayapy)** — `& $MAYAPY mayatk\test\check_cmds_syntax.py` validates every `cmds.*` / `mel.eval` name against the live registry. `--report` writes a file; append `mayatk/mayatk tentacle/tentacle` to scope to a subset.
-- **Base classes** `test/base_test.py` → `MayaTkTestCase` (full cleanup) / `QuickTestCase` (fast). **Runner** `test/run_tests.py`. **Connection** `test/maya_connection.py` (Port / Standalone / Interactive).
+- **Base classes** `test/base_test.py` → `MayaTkTestCase` (full cleanup) / `QuickTestCase` (fast). **Runner** `test/run_tests.py`. **Connection** `mayatk/env_utils/maya_connection.py` (Port / Standalone / Interactive).
 
 | Test kind | How to tell | Run |
 |:---|:---|:---|
