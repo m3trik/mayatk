@@ -48,7 +48,7 @@ DEFAULT_INCLUDE = {
     "env_utils.devtools": "*",
     # Core utils - specific classes
     "core_utils.components": "Components",
-    "core_utils.instancing.auto_instancer": "AutoInstancer",
+    "core_utils.auto_instancer._auto_instancer": ["AutoInstancer", "auto_instance"],
     "core_utils.mash->Mash": "*",
     "core_utils.preview": "Preview",
     "core_utils.script_job_manager": "ScriptJobManager",

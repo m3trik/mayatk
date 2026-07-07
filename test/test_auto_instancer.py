@@ -20,6 +20,7 @@ except ImportError:
     QApplication = None
 
 import maya.cmds as cmds
+import maya.api.OpenMaya as om
 
 # --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
 from contextlib import contextmanager as _contextmanager
@@ -58,7 +59,7 @@ def skipUnlessExtended(func):
     )(func)
 
 
-from mayatk import AutoInstancer
+from mayatk import AutoInstancer, auto_instance
 
 
 class TestAutoInstancerHierarchy(MayaTkTestCase):
@@ -714,8 +715,11 @@ class TestAutoInstancerIntegration(MayaTkTestCase):
         # 3. Create GroupC (Modified Duplicate)
         grp_c = cmds.duplicate(grp_a, name="GroupC")[0]
 
-        # Modify GroupC contents
-        children_c = (cmds.listRelatives(str(grp_c), children=True) or [])
+        # Modify GroupC contents — full paths: sibling groups contain
+        # identically named children, so short names are ambiguous.
+        children_c = (
+            cmds.listRelatives(str(grp_c), children=True, fullPath=True) or []
+        )
         sub_c = [c for c in children_c if "SubGroup" in c][0]
 
         # Sphere: Change Material
@@ -737,7 +741,7 @@ class TestAutoInstancerIntegration(MayaTkTestCase):
         cmds.delete(cone_c, ch=True)
 
         # Cylinder: Lock Attribute (Should still instance)
-        cyl_c = (cmds.listRelatives(str(sub_c), children=True) or [])[0]
+        cyl_c = (cmds.listRelatives(str(sub_c), children=True, fullPath=True) or [])[0]
         cmds.setAttr(f"{cyl_c}.tx", lock=True)
 
         # SubGroup: Add custom attr to verify preservation on instance root
@@ -750,10 +754,27 @@ class TestAutoInstancerIntegration(MayaTkTestCase):
 
         # 5. Verification
 
-        # Helper to find child by partial name
+        # Helper to find child by partial name (full paths — sibling groups
+        # contain identically named children).
         def get_child(parent, name_part):
-            matches = [c for c in (cmds.listRelatives(str(parent), children=True) or []) if name_part in c]
+            children = (
+                cmds.listRelatives(str(parent), children=True, fullPath=True) or []
+            )
+            matches = [c for c in children if name_part in c.split("|")[-1]]
             return matches[0] if matches else None
+
+        def is_instanced(transform):
+            # fullPath is essential: a partial shape path like
+            # "Sphere_Material|Sphere_MaterialShape" pattern-matches the
+            # identically named shapes in the OTHER groups, so ls(allPaths)
+            # would count the wrong node's paths.
+            shape = (
+                cmds.listRelatives(transform, shapes=True, ni=True, fullPath=True)
+                or [None]
+            )[0]
+            if shape is None:
+                return False
+            return len(cmds.ls(shape, allPaths=True) or []) > 1
 
         # --- Verify GroupB (Should be fully instanced) ---
         # Note: GroupB itself is a transform, so it won't be an instance, but its children should be.
@@ -764,55 +785,45 @@ class TestAutoInstancerIntegration(MayaTkTestCase):
         if not cmds.objExists(str(grp_b)):
             grp_b = "GroupB"
 
-        cube_b = get_child(grp_b, "Cube")
         self.assertTrue(
-            len(cmds.ls(cmds.listRelatives(cube_b, shapes=True, ni=True)[0], allPaths=True)) > 1, "GroupB Cube should be instanced"
+            is_instanced(get_child(grp_b, "Cube")), "GroupB Cube should be instanced"
         )
-
-        sphere_b = get_child(grp_b, "Sphere")
         self.assertTrue(
-            len(cmds.ls(cmds.listRelatives(sphere_b, shapes=True, ni=True)[0], allPaths=True)) > 1, "GroupB Sphere should be instanced"
+            is_instanced(get_child(grp_b, "Sphere")),
+            "GroupB Sphere should be instanced",
         )
-
-        cone_b = get_child(grp_b, "Cone")
         self.assertTrue(
-            len(cmds.ls(cmds.listRelatives(cone_b, shapes=True, ni=True)[0], allPaths=True)) > 1, "GroupB Cone should be instanced"
+            is_instanced(get_child(grp_b, "Cone")), "GroupB Cone should be instanced"
         )
 
         sub_b = get_child(grp_b, "SubGroup")
-        cyl_b = (cmds.listRelatives(str(sub_b), children=True) or [])[0]
-        self.assertTrue(
-            len(cmds.ls(cmds.listRelatives(cyl_b, shapes=True, ni=True)[0], allPaths=True)) > 1, "GroupB Cylinder should be instanced"
-        )
+        cyl_b = (cmds.listRelatives(str(sub_b), children=True, fullPath=True) or [])[0]
+        self.assertTrue(is_instanced(cyl_b), "GroupB Cylinder should be instanced")
 
         # --- Verify GroupC (Partial Instancing) ---
 
         # Cube: Should be instanced (it was identical)
-        cube_c = get_child(grp_c, "Cube")
         self.assertTrue(
-            len(cmds.ls(cmds.listRelatives(cube_c, shapes=True, ni=True)[0], allPaths=True)) > 1, "GroupC Cube should be instanced"
+            is_instanced(get_child(grp_c, "Cube")), "GroupC Cube should be instanced"
         )
 
         # Sphere: Should NOT be instanced (different material)
-        sphere_c = get_child(grp_c, "Sphere")
         self.assertFalse(
-            len(cmds.ls(cmds.listRelatives(sphere_c, shapes=True, ni=True)[0], allPaths=True)) > 1,
+            is_instanced(get_child(grp_c, "Sphere")),
             "GroupC Sphere (Diff Mat) should NOT be instanced",
         )
 
         # Cone: Should NOT be instanced (frozen transform = different local geo)
-        cone_c = get_child(grp_c, "Cone")
         self.assertFalse(
-            len(cmds.ls(cmds.listRelatives(cone_c, shapes=True, ni=True)[0], allPaths=True)) > 1,
+            is_instanced(get_child(grp_c, "Cone")),
             "GroupC Cone (Frozen) should NOT be instanced",
         )
 
         # Cylinder: Should be instanced (locked attr shouldn't prevent it)
         sub_c_new = get_child(grp_c, "SubGroup")
-        cyl_c = (cmds.listRelatives(str(sub_c_new), children=True) or [])[0]
+        cyl_c = (cmds.listRelatives(str(sub_c_new), children=True, fullPath=True) or [])[0]
         self.assertTrue(
-            len(cmds.ls(cmds.listRelatives(cyl_c, shapes=True, ni=True)[0], allPaths=True)) > 1,
-            "GroupC Cylinder (Locked) should be instanced",
+            is_instanced(cyl_c), "GroupC Cylinder (Locked) should be instanced"
         )
 
         # Verify SubGroup preserved custom attr
@@ -860,17 +871,24 @@ class TestRealWorldScenarios(MayaTkTestCase):
         self.assertEqual(len(instances), 20, "Should create 19 instances + 1 prototype")
 
         if instances:
+            import maya.api.OpenMaya as om
+
+            def _mobject(node_name):
+                sel = om.MSelectionList()
+                sel.add(node_name)
+                return sel.getDependNode(0)
+
             prototype = instances[0]
-            shape = (cmds.listRelatives(str(prototype), shapes=True, ni=True) or [None])[0]
+            shape = (cmds.listRelatives(str(prototype), shapes=True, ni=True, fullPath=True) or [None])[0]
 
             # Verify all instances share the same shape
             # Compare MObjects to handle different DAG paths
-            shape_mobj = shape.__apimobject__()
+            shape_mobj = _mobject(shape)
 
             for inst in instances[1:]:
-                inst_shape = (cmds.listRelatives(str(inst), shapes=True, ni=True) or [None])[0]
+                inst_shape = (cmds.listRelatives(str(inst), shapes=True, ni=True, fullPath=True) or [None])[0]
                 self.assertEqual(
-                    inst_shape.__apimobject__(),
+                    _mobject(inst_shape),
                     shape_mobj,
                     "Instance should share the same shape MObject",
                 )
@@ -933,6 +951,7 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         _pm_new_file(force=True)
+        random.seed(42)  # randomize_transform must be deterministic per run
 
     def create_canister(self, name_prefix="Canister"):
         """Creates a simple canister assembly (Body + Lid)."""
@@ -1145,12 +1164,22 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
 
         # Combine
         shapes = [
-            t for t in cmds.ls(type="transform") if (cmds.listRelatives(str(t), shapes=True, ni=True) or [None])[0] and not t.isReadOnly()
+            t for t in cmds.ls(type="transform")
+            if (cmds.listRelatives(str(t), shapes=True, ni=True) or [None])[0]
+            and not (cmds.ls(t, readOnly=True) or [])
         ]
         combined = cmds.polyUnite(shapes, name="Combined_Clutter", ch=False)[0]
 
-        # Run
-        instancer = AutoInstancer(separate_combined=True, verbose=True, is_static=False)
+        # Run. combine_assemblies=False pins the GROUPING contract (Assembly
+        # groups persist and junk stays out of them); the combine-default
+        # path replaces repeated assemblies with combined meshes and is
+        # covered by TestAutoInstancerCombineDefaults.
+        instancer = AutoInstancer(
+            separate_combined=True,
+            combine_assemblies=False,
+            verbose=True,
+            is_static=False,
+        )
         instancer.run([combined])
 
         # Verify
@@ -1182,10 +1211,11 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
         )[0]
 
         instancer = AutoInstancer(
-            separate_combined=True, 
-            verbose=True, 
+            separate_combined=True,
+            combine_assemblies=False,  # pin the grouping contract (see above)
+            verbose=True,
             is_static=False,
-            search_radius_mult=1.1  # Reduced from default 1.5 to separate touching
+            search_radius_mult=1.1,  # Reduced from default 1.5 to separate touching
         )
         instancer.run([combined])
 
@@ -1221,19 +1251,243 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
         )
 
 
+class TestAssemblySorting(MayaTkTestCase):
+    """Regression tests for part→assembly sorting.
+
+    Each test pins a failure class found against the hand-sorted ground
+    truth scene (example_of_a_split_assembly_alt.ma): swapped clasps on
+    stacked copies, phantom fusion through different-material bridges,
+    speculative grouping of one-off part chains, and one-off extras chained
+    into stacked copies.
+    """
+
+    def setUp(self):
+        super().setUp()
+        _pm_new_file(force=True)
+
+    # -- helpers ---------------------------------------------------------
+    @staticmethod
+    def _assemblies():
+        from mayatk.core_utils.auto_instancer.assembly_reconstructor import (
+            ASSEMBLY_TAG_ATTR,
+        )
+
+        out = []
+        for t in cmds.ls(type="transform"):
+            try:
+                if cmds.attributeQuery(ASSEMBLY_TAG_ATTR, node=t, exists=True):
+                    out.append(t)
+            except Exception:
+                pass
+        return out
+
+    @staticmethod
+    def _combine_all(name):
+        shapes = [
+            t
+            for t in cmds.ls(type="transform")
+            if (cmds.listRelatives(str(t), shapes=True, ni=True) or [None])[0]
+            and not (cmds.ls(t, readOnly=True) or [])
+        ]
+        return cmds.polyUnite(shapes, name=name, ch=False)[0]
+
+    def _run(self, combined, **overrides):
+        kwargs = dict(
+            separate_combined=True,
+            combine_assemblies=False,  # groups must persist for assertions
+            verbose=False,
+            is_static=False,
+        )
+        kwargs.update(overrides)
+        AutoInstancer(**kwargs).run([combined])
+
+    # -- tests -----------------------------------------------------------
+    def test_stacked_suitcase_clasps_stay_with_their_body(self):
+        """Clasps on stacked identical cases must group with THEIR body.
+
+        Scalar distances tie between the two bodies; only the touch graph
+        disambiguates. Regression for clasps swapping between two stacked
+        suitcase assemblies.
+        """
+        for name, y in (("CaseA", 1.0), ("CaseB", 3.0)):  # bodies touch at y=2
+            body = cmds.polyCube(w=6, h=2, d=4, name=f"{name}_Body")[0]
+            cmds.xform(body, translation=[0, y, 0])
+            for i, x in enumerate((-1.5, 1.5)):
+                clasp = cmds.polyCube(w=0.4, h=0.6, d=0.3, name=f"{name}_Clasp{i}")[0]
+                # Front face, upper half of THIS body: overlaps only its
+                # own body's bbox.
+                cmds.xform(clasp, translation=[x, y + 0.55, 2.1])
+
+        combined = self._combine_all("Stacked_Cases")
+        self._run(combined)
+
+        assemblies = self._assemblies()
+        self.assertEqual(
+            len(assemblies), 2, "stacked pair should split into two assemblies"
+        )
+        for asm in assemblies:
+            kids = cmds.listRelatives(str(asm), children=True, fullPath=True) or []
+            self.assertEqual(len(kids), 3, f"{asm} should hold body + 2 clasps")
+            spans = []
+            for k in kids:
+                bb = cmds.exactWorldBoundingBox(k)
+                spans.append(((bb[1] + bb[4]) / 2.0, bb[4] - bb[1]))
+            body_y = max(spans, key=lambda s: s[1])[0]
+            for center_y, _h in spans:
+                self.assertLess(
+                    abs(center_y - body_y),
+                    1.0,
+                    f"{asm}: clasp grouped with the wrong body",
+                )
+
+    def test_material_bridge_does_not_fuse_assemblies(self):
+        """Same-material copies linked only via a different-material deck
+        must remain two components (phantom-fusion regression)."""
+        for i, x in enumerate((-3.0, 3.0)):
+            big = cmds.polyCube(w=2, h=1, d=2, name=f"Unit{i}_Big")[0]
+            cmds.xform(big, translation=[x, 1.0, 0])
+            small = cmds.polyCube(w=0.5, h=0.5, d=0.5, name=f"Unit{i}_Small")[0]
+            cmds.xform(small, translation=[x, 1.75, 0])
+        deck = cmds.polyCube(w=10, h=0.5, d=4, name="Deck")[0]
+        cmds.xform(deck, translation=[0, 0.25, 0])
+        deck_mat = cmds.shadingNode("lambert", asShader=True, name="DeckMat")
+        cmds.select(deck)
+        cmds.hyperShade(assign=deck_mat)
+
+        combined = self._combine_all("Bridged")
+        self._run(combined)
+
+        assemblies = self._assemblies()
+        self.assertEqual(len(assemblies), 2, "one assembly per unit expected")
+        for asm in assemblies:
+            kids = cmds.listRelatives(str(asm), children=True, fullPath=True) or []
+            self.assertEqual(len(kids), 2, f"deck leaked into {asm}")
+            bb = cmds.exactWorldBoundingBox(str(asm))
+            self.assertLess(
+                bb[3] - bb[0], 5.0, f"{asm} spans the deck — units fused"
+            )
+
+    def test_one_off_cluster_is_not_grouped(self):
+        """A connected chain of unique parts must not become an assembly."""
+        specs = [(2.0, 1.0, 2.0, 0.0), (1.2, 0.8, 1.5, 1.6), (0.6, 1.4, 0.9, 2.5)]
+        for i, (w, h, d, x) in enumerate(specs):
+            c = cmds.polyCube(w=w, h=h, d=d, name=f"Junk{i}")[0]
+            cmds.xform(c, translation=[x, h / 2.0, 0])
+
+        combined = self._combine_all("JunkChain")
+        self._run(combined)
+
+        self.assertEqual(
+            self._assemblies(),
+            [],
+            "a one-off part multiset must dissolve to loose parts",
+        )
+
+    def test_scaled_copies_form_supported_assemblies(self):
+        """Uniformly SCALED copies of one design support each other.
+
+        Three sizes of a body+2-knob unit share a topology multiset with
+        proportional part areas — all three must survive as assemblies
+        (support was previously exact-size only, dissolving every scaled
+        variant to loose parts). Also guards the symmetric-pair shatter: the
+        two identical knobs on ONE unit must never be split into per-pair
+        fragments.
+        """
+        for i, (s, x) in enumerate(((1.0, 0.0), (0.8, 12.0), (1.25, 25.0))):
+            body = cmds.polyCube(w=4 * s, h=2 * s, d=3 * s, name=f"Unit{i}_Body")[0]
+            cmds.xform(body, translation=[x, s, 0])
+            for j, kx in enumerate((-1.2, 1.2)):
+                knob = cmds.polyCube(
+                    w=0.5 * s, h=0.5 * s, d=0.4 * s, name=f"Unit{i}_Knob{j}"
+                )[0]
+                cmds.xform(knob, translation=[x + kx * s, 2.2 * s, 0])
+
+        combined = self._combine_all("ScaledTrio")
+        self._run(combined)
+
+        assemblies = self._assemblies()
+        self.assertEqual(len(assemblies), 3, "all three sizes should assemble")
+        for asm in assemblies:
+            kids = cmds.listRelatives(str(asm), children=True, fullPath=True) or []
+            self.assertEqual(len(kids), 3, f"{asm} should hold body + 2 knobs")
+
+    def test_fused_scaled_pair_splits_by_topology(self):
+        """Two DIFFERENT-size copies stacked touching split into per-copy
+        assemblies via the raw-topology fallback (area classes keep the
+        sizes apart, so the full-identity GCD sees only singletons)."""
+        for i, (s, y) in enumerate(((1.0, 1.0), (0.8, 2.8))):
+            body = cmds.polyCube(w=6 * s, h=2 * s, d=4 * s, name=f"Case{i}_Body")[0]
+            cmds.xform(body, translation=[0, y, 0])
+            for j, kx in enumerate((-1.5, 1.5)):
+                # Cylinders: clasps must be topologically distinct from the
+                # body so the coarse (nv, nf) counts carry structure.
+                clasp = cmds.polyCylinder(
+                    r=0.25 * s, h=0.6 * s, sx=8, name=f"Case{i}_Clasp{j}"
+                )[0]
+                cmds.xform(clasp, translation=[kx * s, y + 0.55 * s, 2.05 * s])
+
+        combined = self._combine_all("ScaledStack")
+        self._run(combined)
+
+        assemblies = self._assemblies()
+        self.assertEqual(len(assemblies), 2, "stacked sizes should split apart")
+        for asm in assemblies:
+            kids = cmds.listRelatives(str(asm), children=True, fullPath=True) or []
+            self.assertEqual(len(kids), 3, f"{asm} should hold body + 2 clasps")
+            diags = []
+            for k in kids:
+                bb = cmds.exactWorldBoundingBox(k)
+                diags.append(max(bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]))
+            # All parts of one assembly belong to ONE size: the body of the
+            # small copy is still far larger than a clasp of the big copy.
+            body_count = sum(1 for d in diags if d > 3.0)
+            self.assertEqual(body_count, 1, f"{asm}: sizes mixed across copies")
+
+    def test_one_off_base_stays_out_of_stacked_copies(self):
+        """A single pallet under stacked copies must not block the split or
+        contaminate an assembly (core-gcd extras path)."""
+        pallet = cmds.polyCube(w=8, h=0.4, d=6, name="Pallet")[0]
+        cmds.xform(pallet, translation=[0, 0.2, 0])
+        for i in range(2):
+            y = 1.4 + i * 2.0  # unit0 rests on the pallet, unit1 on unit0
+            body = cmds.polyCube(w=4, h=2, d=3, name=f"Unit{i}_Body")[0]
+            cmds.xform(body, translation=[0, y, 0])
+            knob = cmds.polyCube(w=0.5, h=0.5, d=0.4, name=f"Unit{i}_Knob")[0]
+            cmds.xform(knob, translation=[1.2, y + 0.5, 1.6])
+
+        combined = self._combine_all("PalletStack")
+        self._run(combined)
+
+        assemblies = self._assemblies()
+        self.assertEqual(len(assemblies), 2, "both stacked copies should split out")
+        for asm in assemblies:
+            kids = cmds.listRelatives(str(asm), children=True, fullPath=True) or []
+            self.assertEqual(len(kids), 2, f"pallet leaked into {asm}")
+            for k in kids:
+                bb = cmds.exactWorldBoundingBox(k)
+                self.assertLess(
+                    bb[3] - bb[0], 5.0, f"pallet-sized part inside {asm}"
+                )
+
+
 class TestRealWorldPhotoScenario(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         # Use a larger search radius to ensure Lids are found (Dist 1.5 vs Radius 1.23 at 0.6x).
         # We rely on the "Anti-Cannibalism" check (Area Threshold) to prevent the Base from eating the Canister.
         # Canister Body Area ~25 > Threshold ~20. So Canister is a Body, not a Part.
+        # combine_assemblies=False: this test pins the LEAF-level contract
+        # (individual bodies/lids/bases become instances inside persistent
+        # Assembly groups). The combine-default path replaces repeated
+        # assemblies with single combined meshes and is covered by
+        # TestAutoInstancerCombineDefaults.
         self.instancer = AutoInstancer(
             verbose=True,
             separate_combined=True,
+            combine_assemblies=False,
             search_radius_mult=1.5,
             tolerance=0.2,
             is_static=False,
-            # classification_threshold=1.5,  # Removed in refactor
         )
 
     def create_canister(self, name):
@@ -1417,6 +1671,495 @@ class TestRealWorldPhotoScenario(MayaTkTestCase):
         )
 
 
+class TestAutoInstancerNormals(MayaTkTestCase):
+    """Regression tests for shading/normal preservation.
+
+    Instancing replaces a member's geometry with the prototype's — every
+    accepted match must therefore align normals as well as positions, and
+    scene surgery (canonicalize) must never rotate locked normals.
+    """
+
+    def test_partially_flipped_shading_twin_is_not_matched(self):
+        """A twin with HALF its normals locked flipped must not group.
+
+        The point clouds are identical, but no rigid rotation reproduces a
+        mixed up/down shading pattern (a FULL flip of a symmetric plate is
+        just a 180° rotation and legitimately matches). Blind instancing
+        would repaint the replaced copy with the prototype's shading.
+        """
+        p1 = cmds.polyPlane(name="PlateA", sx=2, sy=1)[0]
+        p2 = cmds.polyPlane(name="PlateB", sx=2, sy=1)[0]
+        # Lock the second face's normals straight down — shading asymmetry.
+        vtx_faces = cmds.polyListComponentConversion(
+            f"{p2}.f[1]", toVertexFace=True
+        )
+        cmds.polyNormalPerVertex(vtx_faces, xyz=(0, -1, 0))
+
+        instancer = AutoInstancer(verbose=True)
+        groups = instancer.find_instance_groups([p1, p2])
+        grouped = [g for g in groups if g.members]
+        self.assertEqual(
+            grouped,
+            [],
+            "Partially-flipped-shading twin must not be grouped",
+        )
+
+    def test_flipped_frozen_plate_instances_with_correct_rotation(self):
+        """A 180°-rotated frozen plate must match via the rotation that also
+        maps its normals — and the replacement must preserve world shading."""
+        p1 = cmds.polyPlane(name="FrozenA", sx=1, sy=1)[0]
+        p2 = cmds.polyPlane(name="FrozenB", sx=1, sy=1)[0]
+        cmds.setAttr(f"{p2}.rotateX", 180)
+        cmds.makeIdentity(p2, apply=True, rotate=True)
+        cmds.setAttr(f"{p2}.translateX", 5)
+
+        def world_normal_y(transform):
+            sel = om.MSelectionList()
+            sel.add(str(transform))
+            dag = sel.getDagPath(0)
+            dag.extendToShape()
+            fn = om.MFnMesh(dag)
+            return fn.getPolygonNormal(0, om.MSpace.kWorld).y
+
+        n2_before = world_normal_y(p2)
+        # combine_non_instanced=False: this test pins MATCHING behavior; with
+        # combining on, a micro plate pair defers to the remainder merge.
+        instancer = AutoInstancer(verbose=True, combine_non_instanced=False)
+        created = instancer.run([p1, p2])
+        self.assertEqual(len(created), 2, "Flipped frozen plate should instance")
+        replaced = created[1]
+        self.assertAlmostEqual(
+            world_normal_y(replaced),
+            n2_before,
+            places=4,
+            msg="Replacement must preserve the member's world-space shading",
+        )
+
+    def test_canonicalize_preserves_locked_normals(self):
+        """canonicalize_transform rotates the transform while pinning
+        geometry — locked normals must be pinned with it."""
+        cyl = cmds.polyCylinder(name="LockedCyl", sx=12)[0]
+        cmds.setAttr(f"{cyl}.rotate", 20, 35, 10)
+        cmds.makeIdentity(cyl, apply=True, rotate=True)
+        # Lock every normal at its current value.
+        cmds.polyNormalPerVertex(f"{cyl}.vtx[*]", freezeNormal=True)
+
+        sel = om.MSelectionList()
+        sel.add(cyl)
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        fn = om.MFnMesh(dag)
+        before = [
+            om.MVector(fn.getPolygonNormal(f, om.MSpace.kWorld))
+            for f in range(fn.numPolygons)
+        ]
+
+        instancer = AutoInstancer(verbose=True)
+        instancer.reconstructor.canonicalize_transform(cyl)
+
+        after = [
+            om.MVector(fn.getPolygonNormal(f, om.MSpace.kWorld))
+            for f in range(fn.numPolygons)
+        ]
+        worst = min((b * a) for b, a in zip(before, after))
+        self.assertGreater(
+            worst,
+            0.999,
+            "Locked normals must keep their world direction through "
+            f"canonicalization (worst dot: {worst})",
+        )
+
+
+class TestCombineNonInstanced(MayaTkTestCase):
+    """The non-instanced remainder combines for a game-ready result."""
+
+    def setUp(self):
+        super().setUp()
+        _pm_new_file(force=True)
+
+    @staticmethod
+    def _assign_new_material(objs, name):
+        mat = cmds.shadingNode("lambert", asShader=True, name=name)
+        cmds.select(objs)
+        cmds.hyperShade(assign=mat)
+
+    def test_defaults_true(self):
+        inst = AutoInstancer()
+        self.assertTrue(inst.combine_non_instanced)
+        self.assertTrue(inst.combine_by_material)
+        self.assertTrue(inst.combine_by_distance)
+
+    def test_leftovers_combine_by_material_instances_untouched(self):
+        """Unique meshes merge per material; instanced pairs stay instances.
+
+        The duplicate pair is deliberately NON-micro (>= MICRO_TRI_THRESHOLD
+        triangles) so it instances — micro duplicates defer to the merge.
+        """
+        cube1 = cmds.polySphere(name="dupA", r=1, sx=20, sy=20)[0]
+        cube2 = cmds.polySphere(name="dupB", r=1, sx=20, sy=20)[0]
+        cmds.setAttr(f"{cube2}.translateX", 3)
+
+        sphere = cmds.polySphere(name="lo1", r=1, sx=8, sy=6)[0]
+        cone = cmds.polyCone(name="lo2", r=1, h=2)[0]
+        torus = cmds.polyTorus(name="lo3", r=1, sr=0.3)[0]
+        pyramid = cmds.polyPyramid(name="lo4", w=1)[0]
+        for i, n in enumerate((sphere, cone, torus, pyramid)):
+            cmds.setAttr(f"{n}.translateZ", 5 + i * 3)
+        self._assign_new_material([sphere, cone], "cniMatA")
+        self._assign_new_material([torus, pyramid], "cniMatB")
+
+        face_counts = {
+            n: cmds.polyEvaluate(n, face=True) for n in (sphere, cone, torus, pyramid)
+        }
+
+        auto_instance([cube1, cube2, sphere, cone, torus, pyramid])
+
+        # The identical cubes must be instances sharing one shape.
+        shape = cmds.listRelatives("dupA", shapes=True, ni=True, fullPath=True)[0]
+        self.assertEqual(len(cmds.ls(shape, allPaths=True)), 2)
+
+        # The four leftovers must have merged into one mesh per material.
+        # combine_objects renames each united mesh after its first member.
+        self.assertEqual(
+            cmds.polyEvaluate("lo1", face=True),
+            face_counts[sphere] + face_counts[cone],
+            "MatA leftovers should merge into one mesh",
+        )
+        self.assertEqual(
+            cmds.polyEvaluate("lo3", face=True),
+            face_counts[torus] + face_counts[pyramid],
+            "MatB leftovers should merge into one mesh",
+        )
+        for consumed in ("lo2", "lo4"):
+            self.assertFalse(cmds.objExists(consumed), f"{consumed} should be consumed")
+
+    def test_distance_clustering_without_material_grouping(self):
+        """combine_by_distance alone clusters spatially before uniting."""
+        names = []
+        for i, x in enumerate((0, 2, 100, 102)):
+            c = cmds.polyCube(name=f"far{i}", w=1 + i * 0.3, h=1, d=1)[0]
+            cmds.setAttr(f"{c}.translateX", x)
+            names.append(c)
+
+        result = auto_instance(
+            names,
+            combine_by_material=False,
+            combine_by_distance=True,
+            combine_distance_threshold=10.0,
+        )
+
+        combined = [m for m in result if cmds.objExists(m)]
+        self.assertEqual(
+            len(combined), 2, f"two spatial clusters expected: {result}"
+        )
+
+    def test_needs_individual_skips_combining(self):
+        a = cmds.polyCube(name="ni1", w=1, h=1, d=1)[0]
+        b = cmds.polySphere(name="ni2", r=1)[0]
+        cmds.setAttr(f"{b}.translateX", 4)
+        auto_instance([a, b], needs_individual=True)
+        self.assertTrue(cmds.objExists(a))
+        self.assertTrue(cmds.objExists(b))
+
+    def test_scaled_copy_instances_with_transform_scale(self):
+        """A uniformly scaled (baked) copy instances with the scale carried
+        on the instance transform — world placement and size preserved.
+        Guards the uniform-scale matching path and its matrix fold."""
+        a = cmds.polyCube(name="scaleProtoX", w=2, h=2, d=2)[0]
+        b = cmds.duplicate(a, name="scaledCopyX")[0]
+        cmds.setAttr(f"{b}.scale", 0.6, 0.6, 0.6)
+        cmds.makeIdentity(b, apply=True, scale=True)
+        cmds.setAttr(f"{b}.translate", 5, 1, 2)
+        bb_before = cmds.exactWorldBoundingBox(b)
+
+        auto_instance([a, b], scale_tolerance=1.0, combine_non_instanced=False)
+
+        shape = cmds.listRelatives(
+            "scaledCopyX", shapes=True, ni=True, fullPath=True
+        )[0]
+        self.assertEqual(
+            len(cmds.listRelatives(shape, allParents=True) or []),
+            2,
+            "scaled copy should share the prototype's shape",
+        )
+        bb_after = cmds.exactWorldBoundingBox("scaledCopyX")
+        for before, after in zip(bb_before, bb_after):
+            self.assertAlmostEqual(
+                before, after, places=3, msg="world bbox must be preserved"
+            )
+
+
+class TestAutoInstancerCombineDefaults(MayaTkTestCase):
+    """The assembly flow combines by default and instances per assembly type."""
+
+    def test_combine_assemblies_defaults_true(self):
+        self.assertTrue(AutoInstancer().combine_assemblies)
+
+    def test_repeated_assembly_type_combines_and_instances(self):
+        """Two copies of a combined 2-part assembly end up as ONE shared
+        combined shape — assembly-level instances, not micro part instances.
+
+        Guards the per-type clustering rule: the old scene-wide majority
+        threshold could never be met with several assembly types in a scene,
+        so nothing combined and copies degraded to micro instances.
+        """
+        cube = cmds.polyCube(name="acBody", w=2, h=2, d=2)[0]
+        sphere = cmds.polySphere(name="acLid", r=0.8)[0]
+        cmds.setAttr(f"{sphere}.translateY", 1.5)
+        combined = cmds.polyUnite([cube, sphere], name="acCopy1", ch=False)[0]
+        copy2 = cmds.duplicate(combined, name="acCopy2")[0]
+        cmds.setAttr(f"{copy2}.translateX", 10)
+
+        created = auto_instance(
+            [combined, copy2], separate_combined=True, verbose=True
+        )
+
+        self.assertEqual(len(created), 2, "Both copies should participate")
+        shapes = set()
+        for node in created:
+            shape = cmds.listRelatives(node, shapes=True, fullPath=True)[0]
+            shapes.add(cmds.ls(shape, uuid=True)[0])
+        self.assertEqual(
+            len(shapes), 1, "Copies must share ONE combined assembly shape"
+        )
+        parents = cmds.listRelatives(
+            cmds.ls(list(shapes)[0], long=True)[0], allParents=True
+        )
+        self.assertEqual(len(parents), 2)
+
+
+class TestAutoInstancerProductionSafety(MayaTkTestCase):
+    """Regression tests for production-safety guarantees.
+
+    Each test here documents a bug that was found in audit and fixed:
+    keep them passing — they guard against data loss and scene corruption.
+    """
+
+    def _shape_parent_count(self, node) -> int:
+        shapes = (
+            cmds.listRelatives(str(node), shapes=True, ni=True, fullPath=True) or []
+        )
+        if not shapes:
+            return 0
+        return len(cmds.listRelatives(shapes[0], allParents=True, fullPath=True) or [])
+
+    def test_hierarchy_mode_ignores_meshless_transforms(self):
+        """Cameras, locators and empty groups must never be 'instanced'.
+
+        Meshless transforms all produce identical (empty) hierarchy
+        signatures; before the fix they matched each other and were deleted
+        and replaced with empty transforms.
+        """
+        cam = cmds.camera(name="UserCam")[0]
+        loc1 = cmds.spaceLocator(name="Loc1")[0]
+        loc2 = cmds.spaceLocator(name="Loc2")[0]
+        grp1 = cmds.group(em=True, name="EmptyGrp1")
+        grp2 = cmds.group(em=True, name="EmptyGrp2")
+
+        # A genuine instanceable pair so the run isn't a no-op.
+        g1 = cmds.group(em=True, name="MeshGrp1")
+        c1 = cmds.polyCube(name="MeshCube1")[0]
+        cmds.parent(c1, g1)
+        cmds.duplicate(g1, name="MeshGrp2")
+
+        cmds.select(clear=True)
+        instancer = AutoInstancer(check_hierarchy=True, is_static=False, verbose=True)
+        instancer.run()
+
+        for node in (cam, loc1, loc2, grp1, grp2):
+            self.assertTrue(
+                cmds.objExists(node), f"{node} was destroyed by instancing"
+            )
+        self.assertTrue(
+            cmds.listRelatives(cam, shapes=True), "Camera lost its shape"
+        )
+        self.assertTrue(
+            cmds.listRelatives(loc1, shapes=True), "Locator lost its shape"
+        )
+        # The mesh pair WAS instanced.
+        self.assertGreater(self._shape_parent_count("MeshCube1"), 1)
+
+    def test_locked_nodes_skipped(self):
+        """Locked nodes are excluded instead of aborting the run mid-way."""
+        cube1 = cmds.polyCube(name="LockCube1")[0]
+        cube2 = cmds.polyCube(name="LockCube2")[0]
+        cmds.move(3, 0, 0, cube2)
+        cmds.lockNode(cube2, lock=True)
+        try:
+            instancer = AutoInstancer(is_static=False, verbose=True)
+            instancer.run([cube1, cube2])  # must not raise
+            self.assertEqual(self._shape_parent_count("LockCube1"), 1)
+            self.assertEqual(self._shape_parent_count("LockCube2"), 1)
+        finally:
+            cmds.lockNode(cube2, lock=False)
+
+    def test_run_does_not_mutate_configuration(self):
+        """run() derives flow flags locally; user config survives the call."""
+        c1 = cmds.polyCube(name="CfgCube1")[0]
+        c2 = cmds.polyCube(name="CfgCube2")[0]
+        cmds.move(2, 0, 0, c2)
+        combined = cmds.polyUnite(c1, c2, name="CfgCombined", ch=False)[0]
+
+        instancer = AutoInstancer(
+            separate_combined=True, check_hierarchy=False, is_static=False
+        )
+        instancer.run([combined])
+        self.assertFalse(
+            instancer.check_hierarchy, "run() must not mutate check_hierarchy"
+        )
+
+    def test_prototype_selection_natural_order(self):
+        """Prototype choice uses natural sort: Cube1 < Cube2 < Cube10."""
+        names = ["ProtoCube2", "ProtoCube10", "ProtoCube1"]
+        cubes = []
+        for i, name in enumerate(names):
+            cube = cmds.polyCube(name=name)[0]
+            cmds.move(i * 3, 0, 0, cube)
+            cubes.append(cube)
+
+        instancer = AutoInstancer(is_static=False, verbose=True)
+        instances = instancer.run(cubes)
+
+        self.assertEqual(len(instances), 3)
+        self.assertEqual(
+            instances[0].split("|")[-1],
+            "ProtoCube1",
+            "Prototype should be picked in natural sort order",
+        )
+
+    def test_single_undo_restores_originals(self):
+        """The whole run is one undo chunk."""
+        orig_undo_state = cmds.undoInfo(query=True, state=True)
+        cmds.undoInfo(state=True)
+        try:
+            c1 = cmds.polyCube(name="UndoCube1")[0]
+            c2 = cmds.polyCube(name="UndoCube2")[0]
+            cmds.move(4, 0, 0, c2)
+
+            instancer = AutoInstancer(is_static=False, verbose=True)
+            instancer.run([c1, c2])
+            self.assertGreater(self._shape_parent_count("UndoCube1"), 1)
+
+            cmds.undo()
+
+            self.assertTrue(cmds.objExists("UndoCube1"))
+            self.assertTrue(cmds.objExists("UndoCube2"))
+            self.assertEqual(
+                self._shape_parent_count("UndoCube1"),
+                1,
+                "One undo should restore the pre-run scene",
+            )
+            self.assertEqual(self._shape_parent_count("UndoCube2"), 1)
+        finally:
+            cmds.undoInfo(state=orig_undo_state)
+
+    def test_symmetric_parts_match_at_default_tolerance(self):
+        """Identical rotationally-symmetric parts must match at the DEFAULT
+        tolerance through the separate/canonicalize flow.
+
+        eigh's eigenvectors are arbitrary within a degenerate (rotationally
+        symmetric) subspace, so identical cylinder copies used to receive
+        different canonical spins; the robust matcher's 15°-grid spin search
+        then failed against an 18°-per-segment cylinder — silently leaving
+        identical parts un-instanced. The stabilized PCA frame must send
+        these through the exact fast path instead.
+        """
+        for i in range(3):
+            cyl = cmds.polyCylinder(r=1, h=4, name=f"Sym_{i}")[0]  # 18°/segment
+            cmds.move(i * 8, 0, 0, cyl)
+        combined = cmds.polyUnite(
+            cmds.ls("Sym_*", type="transform"), name="SymCombined", ch=False
+        )[0]
+
+        instancer = AutoInstancer(
+            separate_combined=True, is_static=False, verbose=True
+        )  # default tolerance
+        instancer.run([combined])
+
+        shapes = cmds.ls(type="mesh", noIntermediate=True, long=True) or []
+        self.assertTrue(shapes, "Scene should still contain mesh shapes")
+        unique_nodes = set(cmds.ls(shapes, uuid=True) or [])
+        self.assertEqual(
+            len(unique_nodes),
+            1,
+            "All three identical cylinders should share ONE mesh node",
+        )
+        parents = cmds.listRelatives(shapes[0], allParents=True, fullPath=True) or []
+        self.assertEqual(
+            len(parents), 3, "The shared shape should have all 3 transforms as parents"
+        )
+
+    def test_prototype_promotion_when_prototype_consumed(self):
+        """A group whose prototype died in an ancestor replacement must
+        promote a surviving member instead of dropping the group.
+
+        Setup: assemblies G1/G2 are identical, so G2 is replaced by an
+        instance of G1 — deleting G2's child "aaa", which (by natural name
+        order) is the PROTOTYPE of the leaf-cube group {aaa, mmm, zzz}.
+        The survivors (G1's child "zzz" and standalone "mmm") must still be
+        instanced together.
+        """
+        g1 = cmds.group(em=True, name="G1")
+        zzz = cmds.polyCube(name="zzz")[0]
+        cmds.parent(zzz, g1)
+
+        g2 = cmds.group(em=True, name="G2")
+        aaa = cmds.polyCube(name="aaa")[0]
+        cmds.parent(aaa, g2)
+        cmds.move(0, 0, 9, g2)
+
+        mmm = cmds.polyCube(name="mmm")[0]
+        cmds.move(5, 0, 0, mmm)
+
+        cmds.select(clear=True)
+        instancer = AutoInstancer(check_hierarchy=True, is_static=False, verbose=True)
+        # Pin the mechanism, not just the outcome: if group ordering ever
+        # changes so the leaf group runs before the assembly group, "mmm"
+        # would still be instanced WITHOUT promotion and this test would
+        # silently stop covering the promotion path.
+        with self.assertLogs(instancer.logger, level="DEBUG") as captured:
+            instancer.run()
+        self.assertTrue(
+            any("promoted survivor" in line for line in captured.output),
+            "Promotion path should have fired for the leaf group",
+        )
+
+        # Sanity: the assembly pass ran (G2's content replaced by instances).
+        self.assertGreater(
+            self._shape_parent_count("G1|zzz"), 1, "Assembly pass should have run"
+        )
+        # The standalone copy could only be instanced by the promoted group.
+        self.assertGreater(
+            self._shape_parent_count("mmm"),
+            1,
+            "Standalone copy should be instanced via promoted prototype",
+        )
+
+    def test_second_pass_scoped_to_input(self):
+        """The leaf pass must never touch scene content outside the input."""
+        out1 = cmds.polyCube(name="Outside1")[0]
+        out2 = cmds.polyCube(name="Outside2")[0]
+        cmds.move(0, 0, 20, out1)
+        cmds.move(4, 0, 20, out2)
+
+        c1 = cmds.polyCube(name="InCube1")[0]
+        c2 = cmds.polyCube(name="InCube2")[0]
+        cmds.move(6, 0, 0, c2)
+        combined = cmds.polyUnite(c1, c2, name="InCombined", ch=False)[0]
+
+        instancer = AutoInstancer(
+            separate_combined=True, is_static=False, verbose=True
+        )
+        instancer.run([combined])
+
+        self.assertEqual(
+            self._shape_parent_count("Outside1"),
+            1,
+            "Second pass must not touch nodes outside the input scope",
+        )
+        self.assertEqual(self._shape_parent_count("Outside2"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -1461,22 +2204,51 @@ class TestAutoInstancerUVs(MayaTkTestCase):
 
 
 class TestAutoInstancerStrategy(MayaTkTestCase):
-    def test_strategy_micro_mesh(self):
-        # Test that micro meshes are NOT instanced if count is low.
-        # Create 5 small cubes (micro mesh < 300 tris)
+    def test_strategy_micro_mesh_duplicates_instance(self):
+        # Repeated micro meshes DO instance when the remainder-combine is
+        # off: COMBINE is engine-side draw-call advice, not a reason to
+        # leave duplicates un-instanced in Maya (gating on it skipped whole
+        # small groups and shredded assemblies into micro leaf instances).
         cubes = [cmds.polyCube(name=f"MicroCube{i}")[0] for i in range(5)]
 
-        # Strategy: Micro (<300 tris) and Count < 10 -> COMBINE (Skip Instancing)
         instancer = AutoInstancer(
             separate_combined=False,
+            combine_non_instanced=False,
             check_uvs=False,
             verbose=True,
         )
-
-        # We need to run the full run() to trigger the strategy logic
         instances = instancer.run(cubes)
 
-        # Should be 0 instances created because Strategy says COMBINE/KEEP_SEPARATE
+        # Prototype + 4 converted members.
+        self.assertEqual(len(instances), 5)
+
+    def test_strategy_micro_mesh_duplicates_merge_when_combining(self):
+        # With the remainder-combine ON (default), micro duplicates defer to
+        # the merge instead: below MICRO_TRI_THRESHOLD the per-draw-call
+        # overhead of an instance costs more than the merged triangles (the
+        # reference scene merges its repeated micro tabs into the leftovers
+        # mesh rather than instancing them).
+        cubes = [cmds.polyCube(name=f"MergeCube{i}")[0] for i in range(5)]
+
+        result = AutoInstancer(separate_combined=False, verbose=True).run(cubes)
+
+        merged = [n for n in result if cmds.objExists(n)]
+        self.assertEqual(len(merged), 1, f"expected one merged mesh: {result}")
+        self.assertEqual(cmds.polyEvaluate(merged[0], face=True), 30)
+        # polyUnite consumes the originals (the merged mesh inherits the
+        # first member's name, so at most that one name survives).
+        self.assertLessEqual(sum(cmds.objExists(c) for c in cubes), 1)
+
+    def test_strategy_needs_individual_skips(self):
+        # needs_individual (KEEP_SEPARATE) still blocks conversion outright.
+        cubes = [cmds.polyCube(name=f"KeepCube{i}")[0] for i in range(5)]
+
+        instancer = AutoInstancer(
+            separate_combined=False,
+            needs_individual=True,
+            verbose=True,
+        )
+        instances = instancer.run(cubes)
         self.assertEqual(len(instances), 0)
 
     def test_strategy_gpu_instance(self):

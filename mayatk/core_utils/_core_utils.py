@@ -92,12 +92,16 @@ class _CoreUtilsInternal(object):
     @staticmethod
     def _prepare_reparent(
         nodes: List[object],
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """Prepare reparenting by using a temporary null if needed.
+    ) -> Tuple[Optional[str], List[str]]:
+        """Prepare reparenting by using temporary nulls if needed.
 
-        Creates a temporary null under any parent that would become childless
-        after the operation consumes the given nodes (e.g. polyUnite deletes
-        all children of a group, causing Maya to auto-delete the group).
+        Creates a temporary null under EVERY distinct parent that would
+        become childless after the operation consumes the given nodes (e.g.
+        polyUnite deletes all children of a group, causing Maya to
+        auto-delete the group) — not just the first one encountered: the
+        input may span several original parents (e.g. a material-grouped
+        combine sweeping leftovers from multiple source groups), and each
+        one that goes fully empty is independently at risk.
         """
         node_strs = [str(n) for n in nodes]
 
@@ -106,15 +110,18 @@ class _CoreUtilsInternal(object):
         # A single batched query avoids one ``listRelatives`` per node, which in
         # interactive Maya is the dominant cost on large selections.
         if not (cmds.listRelatives(node_strs, parent=True, fullPath=True) or []):
-            return None, None
+            return None, []
 
         first_parent_list = (
             cmds.listRelatives(node_strs[0], parent=True, fullPath=True) or None
         )
         parent = first_parent_list[0] if first_parent_list else None
-        temp_null: Optional[str] = None
+        temp_nulls: List[str] = []
 
-        node_set = set(node_strs)
+        # Resolve to full paths so membership checks against ``children``
+        # (also queried full-path) are format-agnostic regardless of whether
+        # the caller passed short names or full paths.
+        node_set = set(cmds.ls(node_strs, long=True) or node_strs)
 
         seen_parents = set()
         for node in node_strs:
@@ -126,22 +133,30 @@ class _CoreUtilsInternal(object):
                 continue
             seen_parents.add(parent_key)
 
-            children = cmds.listRelatives(parent_key, children=True) or []
+            children = (
+                cmds.listRelatives(parent_key, children=True, fullPath=True) or []
+            )
             remaining = [c for c in children if c not in node_set]
             if not remaining:
                 temp_null = cmds.createNode("transform", n="tempTempNull")
+                # Multiple protected parents each get a same-named temp null
+                # (Maya only disambiguates siblings, not cross-parent
+                # namesakes) — track by UUID so cleanup can never delete the
+                # wrong one or hit an ambiguous-name error.
+                temp_null_uuid = (cmds.ls(temp_null, uuid=True) or [None])[0]
                 cmds.parent(temp_null, parent_key)
-                break
+                if temp_null_uuid:
+                    temp_nulls.append(temp_null_uuid)
 
-        return parent, temp_null
+        return parent, temp_nulls
 
     @staticmethod
     def _finalize_reparent(
         new_node,
         parent: Optional[str],
-        temp_null: Optional[str],
+        temp_nulls: List[str],
     ) -> None:
-        """Clean up reparenting, handling the parent and temporary null."""
+        """Clean up reparenting, handling the parent and temporary nulls."""
         if parent and new_node:
             target = parent[0] if isinstance(parent, (list, tuple)) else parent
             try:
@@ -152,9 +167,10 @@ class _CoreUtilsInternal(object):
                     cmds.parent(str(n), target)
             except Exception as e:
                 cmds.warning(f"Failed to re-parent combined mesh: {e}")
-        if temp_null:
+        for temp_null_uuid in temp_nulls:
             try:
-                cmds.delete(temp_null)
+                for resolved in cmds.ls(temp_null_uuid, long=True) or []:
+                    cmds.delete(resolved)
             except Exception as e:
                 cmds.warning(f"Failed to delete temporary null: {e}")
 
@@ -186,7 +202,7 @@ class _CoreUtilsInternal(object):
     @contextlib.contextmanager
     def _temp_reparent(nodes):
         """Context manager to maintain hierarchy for nodes during operations that might reparent them."""
-        parent, temp_null = _CoreUtilsInternal._prepare_reparent(nodes)
+        parent, temp_nulls = _CoreUtilsInternal._prepare_reparent(nodes)
 
         class Result:
             def __init__(self):
@@ -197,7 +213,7 @@ class _CoreUtilsInternal(object):
         try:
             yield container
         finally:
-            _CoreUtilsInternal._finalize_reparent(container.result, parent, temp_null)
+            _CoreUtilsInternal._finalize_reparent(container.result, parent, temp_nulls)
 
 
 class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
