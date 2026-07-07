@@ -1,5 +1,298 @@
 # mayatk — API Changes
 
-_Diff vs prior baseline. Generated 2026-07-01._
+_Diff vs prior baseline. Generated 2026-07-07._
 
-No public API changes since last refresh.
+## Removed (70)
+
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::BuildPlan` — was `(class)`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::PlannedKey` — was `(class)`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::PlannedObject` — was `(class)`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::ShotManifest.build_plan` — was `(self, steps: List[BuilderStep], ranges: Optional[Dict[str, Tuple[float, float]]] = None, remove_missing: bool = True, zero_duration_fallback: bool = False, fit_mode: FitMode = DEFAULT_FIT_MODE, initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH) -> BuildPlan`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::plan_object_keys` — was `(obj: BuilderObject, shot_start: float, shot_end: float, fps: float) -> 'PlannedObject'`
+- `anim_utils/smart_bake.py::BakeAnalysis` — was `(class)`
+- `anim_utils/smart_bake.py::BakeAnalysis.all_driven_channels` — was `(self) -> List[str]`
+- `anim_utils/smart_bake.py::BakeAnalysis.requires_bake` — was `(self) -> bool`
+- `anim_utils/smart_bake.py::BakeResult` — was `(class)`
+- `anim_utils/smart_bake.py::BakeResult.baked_count` — was `(self) -> int`
+- `anim_utils/smart_bake.py::BakeResult.success` — was `(self) -> bool`
+- `anim_utils/smart_bake.py::SmartBake` — was `(class)`
+- `anim_utils/smart_bake.py::SmartBake.analyze` — was `(self) -> Dict[str, BakeAnalysis]`
+- `anim_utils/smart_bake.py::SmartBake.bake` — was `(self, analysis: Optional[Dict[str, BakeAnalysis]] = None, time_range: Optional[Tuple[int, int]] = None) -> BakeResult`
+- `anim_utils/smart_bake.py::SmartBake.execute` — was `(self) -> BakeResult`
+- `anim_utils/smart_bake.py::SmartBake.get_time_range` — was `(self, analysis: Optional[Dict[str, BakeAnalysis]] = None) -> Tuple[int, int]`
+- `anim_utils/smart_bake.py::SmartBake.run` — was `(cls, **kwargs) -> BakeResult`
+- `anim_utils/unbake_keys.py::unbake_animation` — was `(objects=None, threshold=0.001)`
+- `anim_utils/unbake_keys.py::unbake_animation_direction_based` — was `(objects=None, threshold=0.01)`
+- `anim_utils/unbake_keys.py::unbake_animation_smart` — was `(objects=None, threshold=0.001)`
+- `core_utils/instancing/assembly_reconstructor.py::AssemblyReconstructor` — was `(class)`
+- `core_utils/instancing/assembly_reconstructor.py::AssemblyReconstructor.canonicalize_leaf_meshes` — was `(self, nodes: List[object]) -> List[object]`
+- `core_utils/instancing/assembly_reconstructor.py::AssemblyReconstructor.canonicalize_transform` — was `(self, node) -> None`
+- `core_utils/instancing/assembly_reconstructor.py::AssemblyReconstructor.center_transform_on_geometry` — was `(self, node) -> None`
+- `core_utils/instancing/assembly_reconstructor.py::AssemblyReconstructor.combine_reassembled_assemblies` — was `(self, nodes: List[object]) -> List[object]`
+- `core_utils/instancing/assembly_reconstructor.py::AssemblyReconstructor.reassemble_assemblies` — was `(self, nodes: List[object]) -> List[object]`
+- `core_utils/instancing/assembly_reconstructor.py::AssemblyReconstructor.separate_combined_meshes` — was `(self, nodes: List[object]) -> List[object]`
+- `core_utils/instancing/auto_instancer.py::AutoInstancer` — was `(class)`
+- `core_utils/instancing/auto_instancer.py::AutoInstancer.check_uvs` — was `(self, value)`
+- `core_utils/instancing/auto_instancer.py::AutoInstancer.find_instance_groups` — was `(self, nodes: Optional[Sequence[object]] = None) -> List[InstanceGroup]`
+- `core_utils/instancing/auto_instancer.py::AutoInstancer.require_same_material` — was `(self, value)`
+- `core_utils/instancing/auto_instancer.py::AutoInstancer.run` — was `(self, nodes: Optional[Sequence[object]] = None) -> List[object]`
+- `core_utils/instancing/auto_instancer.py::AutoInstancer.tolerance` — was `(self, value)`
+- `core_utils/instancing/auto_instancer.py::AutoInstancer.verbose` — was `(self, value)`
+- `core_utils/instancing/auto_instancer.py::InstanceCandidate` — was `(class)`
+- `core_utils/instancing/auto_instancer.py::InstanceCandidate.exists` — was `(self) -> bool`
+- `core_utils/instancing/auto_instancer.py::InstanceCandidate.transform` — was `(self) -> str`
+- `core_utils/instancing/auto_instancer.py::InstanceGroup` — was `(class)`
+- `core_utils/instancing/geometry_matcher.py::GeometryMatcher` — was `(class)`
+- `core_utils/instancing/geometry_matcher.py::GeometryMatcher.are_hierarchies_identical` — was `(self, t1: str, t2: str, expected_transform: Optional['om.MMatrix'] = None, is_root: bool = False) -> Tuple[bool, Optional['om.MMatrix']]`
+- `core_utils/instancing/geometry_matcher.py::GeometryMatcher.are_meshes_identical` — was `(self, t1: str, t2: str) -> Tuple[bool, Optional['om.MMatrix']]`
+- `core_utils/instancing/geometry_matcher.py::GeometryMatcher.are_meshes_identical_with_transform` — was `(self, t1: str, t2: str, matrix) -> bool`
+- `core_utils/instancing/geometry_matcher.py::GeometryMatcher.get_hierarchy_signature` — was `(self, node: str) -> Tuple`
+- `core_utils/instancing/geometry_matcher.py::GeometryMatcher.get_mesh_signature` — was `(self, transform: str, include_area: bool = True) -> Optional[Tuple]`
+- `core_utils/instancing/geometry_matcher.py::GeometryMatcher.get_pca_basis` — was `(self, node: str) -> Optional['om.MMatrix']`
+- `core_utils/instancing/geometry_matcher.py::GeometryMatcher.quantize` — was `(self, value: float, precision: int = 4) -> float`
+- `core_utils/instancing/geometry_matcher.py::ShellInfo` — was `(class)`
+- `core_utils/instancing/geometry_matcher.py::calculate_mesh_volume` — was `(node: str) -> float`
+- `core_utils/instancing/geometry_matcher.py::mesh_get_uvs` — was `(shape, uv_set=None)`
+- `core_utils/instancing/geometry_matcher.py::mesh_num_uvs` — was `(shape, uv_set=None)`
+- `core_utils/instancing/geometry_matcher.py::mesh_points` — was `(shape, world: bool = False)`
+- `core_utils/instancing/geometry_matcher.py::mesh_triangles` — was `(shape)`
+- `core_utils/instancing/geometry_matcher.py::mesh_uv_set_names` — was `(shape)`
+- `core_utils/instancing/instancing_strategy.py::InstancingStrategy` — was `(class)`
+- `core_utils/instancing/instancing_strategy.py::InstancingStrategy.evaluate` — was `(self, group_size: int, mesh_node: Optional[object] = None, triangle_count: Optional[int] = None) -> StrategyType`
+- `core_utils/instancing/instancing_strategy.py::StrategyConfig` — was `(class)`
+- `core_utils/instancing/instancing_strategy.py::StrategyType` — was `(class)`
+- `env_utils/script_output.py::ScriptHighlightRule` — was `(class)`
+- `env_utils/script_output.py::ScriptHighlighter` — was `(class)`
+- `env_utils/script_output.py::ScriptHighlighter.highlightBlock` — was `(self, text: str) -> None`
+- `env_utils/script_output.py::ScriptOutput` — was `(class)`
+- `env_utils/script_output.py::ScriptOutput.event` — was `(self, event: QtCore.QEvent)`
+- `env_utils/script_output.py::ScriptOutput.eventFilter` — was `(self, obj, event: QtCore.QEvent)`
+- `env_utils/script_output.py::ScriptOutput.keyPressEvent` — was `(self, event: QtGui.QKeyEvent)`
+- `mat_utils/_affix_mode.py::add_affix_mode_menu` — was `(widget, default_mode: str = 'auto', on_change=None)`
+- `mat_utils/_affix_mode.py::current_affix_mode` — was `(widget) -> str`
+- `mat_utils/_affix_mode.py::resolve_affix` — was `(widget, default: str = 'prefix') -> Tuple[str, str]`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplatesSlots.template_name` — was `(self)`
+- `node_utils/_node_utils.py::NodeUtils.ensure_data_node` — was `(node_name: str, attr_name: str) -> str`
+- `node_utils/data_nodes.py::DataNodes.migrate_legacy_carriers` — was `()`
+
+## Added (93)
+
+- `anim_utils/smart_bake/_smart_bake.py::BakeAnalysis(class)`
+- `anim_utils/smart_bake/_smart_bake.py::BakeAnalysis.all_driven_channels(self) -> List[str]`
+- `anim_utils/smart_bake/_smart_bake.py::BakeAnalysis.requires_bake(self) -> bool`
+- `anim_utils/smart_bake/_smart_bake.py::BakeResult(class)`
+- `anim_utils/smart_bake/_smart_bake.py::BakeResult.baked_count(self) -> int`
+- `anim_utils/smart_bake/_smart_bake.py::BakeResult.success(self) -> bool`
+- `anim_utils/smart_bake/_smart_bake.py::SmartBake(class)`
+- `anim_utils/smart_bake/_smart_bake.py::SmartBake.analyze(self) -> Dict[str, BakeAnalysis]`
+- `anim_utils/smart_bake/_smart_bake.py::SmartBake.bake(self, analysis: Optional[Dict[str, BakeAnalysis]] = None, time_range: Optional[Tuple[int, int]] = None) -> BakeResult`
+- `anim_utils/smart_bake/_smart_bake.py::SmartBake.execute(self) -> BakeResult`
+- `anim_utils/smart_bake/_smart_bake.py::SmartBake.get_time_range(self, analysis: Optional[Dict[str, BakeAnalysis]] = None) -> Tuple[int, int]`
+- `anim_utils/smart_bake/_smart_bake.py::SmartBake.list_sessions(cls) -> List[str]`
+- `anim_utils/smart_bake/_smart_bake.py::SmartBake.restore(cls, session_id: Optional[str] = None) -> 'RestoreResult'`
+- `anim_utils/smart_bake/_smart_bake.py::SmartBake.run(cls, **kwargs) -> BakeResult`
+- `anim_utils/smart_bake/_smart_bake.py::SmartBake.session(cls, **kwargs)`
+- `anim_utils/smart_bake/bake_session.py::BakeSessionStore(class)`
+- `anim_utils/smart_bake/bake_session.py::BakeSessionStore.list_ids(cls) -> List[str]`
+- `anim_utils/smart_bake/bake_session.py::BakeSessionStore.load(cls) -> List[dict]`
+- `anim_utils/smart_bake/bake_session.py::BakeSessionStore.new_session_id(cls) -> str`
+- `anim_utils/smart_bake/bake_session.py::BakeSessionStore.peek(cls, session_id: Optional[str] = None) -> Optional[dict]`
+- `anim_utils/smart_bake/bake_session.py::BakeSessionStore.pop(cls, session_id: Optional[str] = None) -> Optional[dict]`
+- `anim_utils/smart_bake/bake_session.py::BakeSessionStore.push(cls, session: dict) -> None`
+- `anim_utils/smart_bake/bake_session.py::BakeSessionStore.save(cls, sessions: List[dict]) -> None`
+- `anim_utils/smart_bake/bake_session.py::RestoreResult(class)`
+- `anim_utils/smart_bake/bake_session.py::collect_upstream_curves(plug: str, passthrough_types: Set[str]) -> List[str]`
+- `anim_utils/smart_bake/bake_session.py::discard_stash(record: dict) -> None`
+- `anim_utils/smart_bake/bake_session.py::node_ref(node: str) -> Dict[str, Optional[str]]`
+- `anim_utils/smart_bake/bake_session.py::plug_ref(plug: str) -> Dict[str, Optional[str]]`
+- `anim_utils/smart_bake/bake_session.py::resolve_plug(ref: Optional[Dict[str, Optional[str]]]) -> Optional[str]`
+- `anim_utils/smart_bake/bake_session.py::resolve_ref(ref: Optional[Dict[str, Optional[str]]]) -> Optional[str]`
+- `anim_utils/smart_bake/bake_session.py::restore_session(session: dict) -> RestoreResult`
+- `anim_utils/smart_bake/bake_session.py::snapshot_connections(plug: str) -> List[List[dict]]`
+- `anim_utils/smart_bake/bake_session.py::stash_curve(curve: str) -> dict`
+- `anim_utils/smart_bake/bake_session.py::unstash_curve(record: dict, warnings: Optional[List[str]] = None, fallback_dst: Optional[str] = None) -> Optional[str]`
+- `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots(class)`
+- `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.b000(self, widget) -> None`
+- `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.b001(self, widget) -> None`
+- `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.cmb_backup_init(self, widget) -> None`
+- `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.cmb_scope_init(self, widget) -> None`
+- `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.header_init(self, widget) -> None`
+- `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.reset_defaults(self) -> None`
+- `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer(class)`
+- `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.check_uvs(self)`
+- `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.combine_assemblies(self)`
+- `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.find_instance_groups(self, nodes: Optional[Sequence[object]] = None, check_hierarchy: Optional[bool] = None) -> List[InstanceGroup]`
+- `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.require_same_material(self)`
+- `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.run(self, nodes: Optional[Sequence[object]] = None) -> List[str]`
+- `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.scale_tolerance(self)`
+- `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.search_radius_mult(self)`
+- `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.tolerance(self)`
+- `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.verbose(self)`
+- `core_utils/auto_instancer/_auto_instancer.py::InstanceCandidate(class)`
+- `core_utils/auto_instancer/_auto_instancer.py::InstanceCandidate.exists(self) -> bool`
+- `core_utils/auto_instancer/_auto_instancer.py::InstanceCandidate.transform(self) -> str`
+- `core_utils/auto_instancer/_auto_instancer.py::InstanceGroup(class)`
+- `core_utils/auto_instancer/_auto_instancer.py::auto_instance(nodes: Optional[Sequence[object]] = None, tolerance: float = 0.001, scale_tolerance: Optional[float] = None, require_same_material: Union[bool, int] = True, check_uvs: bool = False, check_hierarchy: bool = False, separate_combined: bool = False, combine_assemblies: bool = True, combine_non_instanced: bool = True, combine_by_material: bool = True, combine_by_distance: bool = True, combine_distance_threshold: float = 10000.0, search_radius_mult: float = 1.5, is_static: bool = True, needs_individual: bool = False, will_be_lightmapped: bool = False, can_gpu_instance: bool = True, verbose: bool = True, log_level: str = 'WARNING') -> List[str]`
+- `core_utils/auto_instancer/assembly_reconstructor.py::AssemblyReconstructor(class)`
+- `core_utils/auto_instancer/assembly_reconstructor.py::AssemblyReconstructor.canonicalize_leaf_meshes(self, nodes: List[object]) -> List[object]`
+- `core_utils/auto_instancer/assembly_reconstructor.py::AssemblyReconstructor.canonicalize_transform(self, node) -> None`
+- `core_utils/auto_instancer/assembly_reconstructor.py::AssemblyReconstructor.center_transform_on_geometry(self, node) -> None`
+- `core_utils/auto_instancer/assembly_reconstructor.py::AssemblyReconstructor.cleanup_empty_assembly_groups(self) -> None`
+- `core_utils/auto_instancer/assembly_reconstructor.py::AssemblyReconstructor.cleanup_empty_sources(self) -> None`
+- `core_utils/auto_instancer/assembly_reconstructor.py::AssemblyReconstructor.combine_reassembled_assemblies(self, nodes: List[object]) -> List[object]`
+- `core_utils/auto_instancer/assembly_reconstructor.py::AssemblyReconstructor.reassemble_assemblies(self, nodes: List[object]) -> List[object]`
+- `core_utils/auto_instancer/assembly_reconstructor.py::AssemblyReconstructor.separate_combined_meshes(self, nodes: List[object]) -> List[object]`
+- `core_utils/auto_instancer/geometry_matcher.py::GeometryMatcher(class)`
+- `core_utils/auto_instancer/geometry_matcher.py::GeometryMatcher.are_hierarchies_identical(self, t1: str, t2: str, expected_transform: Optional['om.MMatrix'] = None, is_root: bool = False) -> Tuple[bool, Optional['om.MMatrix']]`
+- `core_utils/auto_instancer/geometry_matcher.py::GeometryMatcher.are_meshes_identical(self, t1: str, t2: str) -> Tuple[bool, Optional['om.MMatrix']]`
+- `core_utils/auto_instancer/geometry_matcher.py::GeometryMatcher.are_meshes_identical_with_transform(self, t1: str, t2: str, matrix) -> bool`
+- `core_utils/auto_instancer/geometry_matcher.py::GeometryMatcher.clear_cache(self) -> None`
+- `core_utils/auto_instancer/geometry_matcher.py::GeometryMatcher.get_hierarchy_signature(self, node: str) -> Tuple`
+- `core_utils/auto_instancer/geometry_matcher.py::GeometryMatcher.get_mesh_signature(self, transform: str) -> Optional[Tuple]`
+- `core_utils/auto_instancer/geometry_matcher.py::GeometryMatcher.get_pca_basis(self, node: str) -> Optional['om.MMatrix']`
+- `core_utils/auto_instancer/geometry_matcher.py::GeometryMatcher.quantize(self, value: float, precision: int = 4) -> float`
+- `core_utils/auto_instancer/geometry_matcher.py::ShellInfo(class)`
+- `core_utils/auto_instancer/geometry_matcher.py::calculate_mesh_volume(node: str) -> float`
+- `core_utils/auto_instancer/geometry_matcher.py::mesh_get_uvs(shape, uv_set=None)`
+- `core_utils/auto_instancer/geometry_matcher.py::mesh_num_uvs(shape, uv_set=None)`
+- `core_utils/auto_instancer/geometry_matcher.py::mesh_points(shape, world: bool = False)`
+- `core_utils/auto_instancer/geometry_matcher.py::mesh_triangles(shape)`
+- `core_utils/auto_instancer/geometry_matcher.py::mesh_uv_set_names(shape)`
+- `core_utils/auto_instancer/instancing_strategy.py::InstancingStrategy(class)`
+- `core_utils/auto_instancer/instancing_strategy.py::InstancingStrategy.evaluate(self, group_size: int, mesh_node: Optional[object] = None, triangle_count: Optional[int] = None) -> StrategyType`
+- `core_utils/auto_instancer/instancing_strategy.py::StrategyConfig(class)`
+- `core_utils/auto_instancer/instancing_strategy.py::StrategyType(class)`
+- `env_utils/fbx_utils.py::FbxUtils.run_export_preparers(include_known: bool = True) -> None`
+- `node_utils/data_nodes.py::DataNodes.get_internal_string(attr: str) -> Optional[str]`
+- `node_utils/data_nodes.py::DataNodes.set_internal_string(attr: str, value: str) -> str`
+- `ui_utils/style_setter/_style_setter.py::StyleSetter(class)`
+- `ui_utils/style_setter/_style_setter.py::apply_template(name, persist=False)`
+- `ui_utils/style_setter/_style_setter.py::list_styles()`
+- `ui_utils/style_setter/_style_setter.py::list_templates()`
+- `ui_utils/style_setter/_style_setter.py::set_style(name, persist=False)`
+
+## Signature changed (41)
+
+- `anim_utils/_anim_utils.py::AnimUtils.invert_keys`
+  - was: `(time=None, relative=True, delete_original=False, mode='horizontal', value_pivot=0.0)`
+  - now: `(objects=None, time=None, relative=True, delete_original=False, mode='horizontal', value_pivot=0.0)`
+- `anim_utils/_anim_utils.py::AnimUtils.untie_keyframes`
+  - was: `(objects: List[str] = None, absolute: bool = False)`
+  - now: `(objects: List[str] = None, absolute: bool = False) -> Dict[str, Dict[str, List[float]]]`
+- `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.create`
+  - was: `(self, base_mesh: Optional[str] = None, target_mesh: Optional[str] = None, start_frame: int = 5500, end_frame: int = 5800, name: str = 'morph', test_setup: bool = True) -> bool`
+  - now: `(self, base_mesh: Optional[str] = None, target_mesh: Optional[str] = None, start_frame: Optional[int] = None, end_frame: Optional[int] = None, name: str = 'morph', test_setup: bool = True) -> bool`
+- `anim_utils/shots/_shots.py::ShotStore.disable_auto_export`
+  - was: `() -> None`
+  - now: `(cls) -> None`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.hidden_objects`
+  - was: `(self, value: set)`
+  - now: `(self) -> set`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.markers`
+  - was: `(self, value: List[Dict[str, Any]])`
+  - now: `(self) -> List[Dict[str, Any]]`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.shots`
+  - was: `(self, value: List[ShotBlock])`
+  - now: `(self) -> List[ShotBlock]`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.sequencer`
+  - was: `(self, value: Optional[ShotSequencer]) -> None`
+  - now: `(self) -> Optional[ShotSequencer]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.disable_auto_export`
+  - was: `() -> None`
+  - now: `(cls) -> None`
+- `display_utils/exploded_view.py::ExplodedView.objects`
+  - was: `(self, value: list)`
+  - now: `(self) -> list`
+- `env_utils/blender_bridge/_blender_bridge.py::BlenderBridge.blender_path`
+  - was: `(self, value: Optional[str]) -> None`
+  - now: `(self) -> Optional[str]`
+- `env_utils/hierarchy_manager/hierarchy_manager_slots.py::HierarchyManagerController.reference_path`
+  - was: `(self, text: str) -> None`
+  - now: `(self) -> str`
+- `env_utils/reference_manager.py::ReferenceManagerController.current_working_dir`
+  - was: `(self, value)`
+  - now: `(self)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.objects`
+  - was: `(self, value)`
+  - now: `(self)`
+- `env_utils/workspace_manager.py::WorkspaceManager.current_working_dir`
+  - was: `(self, value)`
+  - now: `(self)`
+- `env_utils/workspace_manager.py::WorkspaceManager.ignore_empty_workspaces`
+  - was: `(self, value)`
+  - now: `(self)`
+- `env_utils/workspace_manager.py::WorkspaceManager.recursive_search`
+  - was: `(self, value)`
+  - now: `(self)`
+- `env_utils/workspace_map.py::WorkspaceMap.current_working_dir`
+  - was: `(self, value)`
+  - now: `(self)`
+- `env_utils/workspace_map.py::WorkspaceMap.recursive_search`
+  - was: `(self, value)`
+  - now: `(self)`
+- `light_utils/hdr_manager.py::HdrManager.diffuse`
+  - was: `(self, value: float) -> None`
+  - now: `(self) -> float`
+- `light_utils/hdr_manager.py::HdrManager.exposure`
+  - was: `(self, stops: float) -> None`
+  - now: `(self) -> float`
+- `light_utils/hdr_manager.py::HdrManager.hdr_env`
+  - was: `(self, tex: Optional[str]) -> None`
+  - now: `(self) -> Optional[str]`
+- `light_utils/hdr_manager.py::HdrManager.intensity`
+  - was: `(self, value: float) -> None`
+  - now: `(self) -> float`
+- `light_utils/hdr_manager.py::HdrManager.preview`
+  - was: `(self, state: bool) -> None`
+  - now: `(self) -> bool`
+- `light_utils/hdr_manager.py::HdrManager.resolution`
+  - was: `(self, value: int) -> None`
+  - now: `(self) -> int`
+- `light_utils/hdr_manager.py::HdrManager.rotation`
+  - was: `(self, degrees: float) -> None`
+  - now: `(self) -> float`
+- `light_utils/hdr_manager.py::HdrManager.samples`
+  - was: `(self, value: int) -> None`
+  - now: `(self) -> int`
+- `light_utils/hdr_manager.py::HdrManager.sky_radius`
+  - was: `(self, value: float) -> None`
+  - now: `(self) -> float`
+- `light_utils/hdr_manager.py::HdrManager.specular`
+  - was: `(self, value: float) -> None`
+  - now: `(self) -> float`
+- `light_utils/hdr_manager.py::HdrManager.visibility`
+  - was: `(self, state: bool) -> None`
+  - now: `(self) -> bool`
+- `mat_utils/marmoset_bridge/_marmoset_bridge.py::MarmosetBridge.toolbag_path`
+  - was: `(self, value: Optional[str]) -> None`
+  - now: `(self) -> Optional[str]`
+- `mat_utils/marmoset_bridge/_marmoset_engine.py::MarmosetEngine.toolbag_path`
+  - was: `(self, value: Optional[str]) -> None`
+  - now: `(self) -> Optional[str]`
+- `mat_utils/substance_bridge/_substance_bridge.py::SubstanceBridge.painter_path`
+  - was: `(self, value: Optional[str]) -> None`
+  - now: `(self) -> Optional[str]`
+- `node_utils/attributes/channels/_channels.py::Channels.single_object_mode`
+  - was: `(self, value)`
+  - now: `(self)`
+- `node_utils/data_nodes.py::DataNodes.set_export_string`
+  - was: `(attr: str, value: str) -> str`
+  - now: `(attr: str, value: str) -> Optional[str]`
+- `rig_utils/tube_rig.py::TubeRig.rig_group`
+  - was: `(self, new_group: 'object')`
+  - now: `(self) -> str`
+- `rig_utils/wheel_rig.py::WheelRig.rig_name`
+  - was: `(self, name: str)`
+  - now: `(self) -> str`
+- `rig_utils/wheel_rig.py::WheelRigSlots.rig_name`
+  - was: `(self, name: str)`
+  - now: `(self) -> str`
+- `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.export_path`
+  - was: `(self, value)`
+  - now: `(self)`
+- `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.rizom_path`
+  - was: `(self, value)`
+  - now: `(self)`
+- `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.script_path`
+  - was: `(self, value)`
+  - now: `(self)`

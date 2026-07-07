@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
-_Generated: 2026-07-01_
+_Generated: 2026-07-07_
 
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin)`
@@ -100,23 +100,19 @@ _Generated: 2026-07-01_
 
 ### `anim_utils/shots/shot_manifest/_shot_manifest.py` — Shot Manifest â€” parse structured CSVs and populate a ShotStore.
 - `resolve_duration(step: BuilderStep, initial_shot_length: float, fit_mode: FitMode, fps: float) -> Tuple[float, float, float]`
-- `plan_object_keys(obj: BuilderObject, shot_start: float, shot_end: float, fps: float) -> 'PlannedObject'`
 - `detect_behaviors(text: str) -> List[str]`
 - `parse_csv(filepath: str, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> List[BuilderStep]`
 - `class BuilderObject`
 - `class BuilderStep`
   - methods: display_text, from_detection
 - `class PlannedShot`
-- `class PlannedKey`
-- `class PlannedObject`
-- `class BuildPlan`
 - `class ObjectStatus`
 - `class StepStatus`
   - methods: status, missing_count, total_count
 - `class ColumnMap(SchemaSpec)`
   - methods: to_dict, from_dict
 - `class ShotManifest`
-  - methods: sync, rewire_audio, update, build_plan, assess, from_csv
+  - methods: sync, rewire_audio, update, assess, from_csv
 
 ### `anim_utils/shots/shot_manifest/behaviors/_behaviors.py` — Behaviors — load and apply YAML keying recipes.
 - `templates() -> TemplateSet`
@@ -173,7 +169,7 @@ _Generated: 2026-07-01_
 
 ### `anim_utils/shots/shot_sequencer/_shot_sequencer.py` — Shot Sequencer — manages per-shot animation with ripple editing.
 - `class ShotSequencer`
-  - methods: shots, shots, hidden_objects, hidden_objects, markers, markers, is_object_hidden, set_object_hidden, sorted_shots, shot_by_id, shot_by_name, define_shot, from_current_range, reconcile_all_shots, collect_object_segments, audio_prefetch, collect_shot_sequences, move_sequences_to_shot, fit_shot_to_content, trim_shot_to_content, extend_shot_to_fit, detect_shots, detect_next_shot, move_object_keys, move_stepped_keys, move_object_in_shot, scale_object_keys, move_shot, slide_shot, expand_shot, resize_object, set_shot_duration, resize_shot, set_shot_start, reorder_shots, move_shot_to_position, respace, to_dict, from_dict
+  - methods: shots, hidden_objects, markers, is_object_hidden, set_object_hidden, sorted_shots, shot_by_id, shot_by_name, define_shot, from_current_range, reconcile_all_shots, collect_object_segments, audio_prefetch, collect_shot_sequences, move_sequences_to_shot, fit_shot_to_content, trim_shot_to_content, extend_shot_to_fit, detect_shots, detect_next_shot, move_object_keys, move_stepped_keys, move_object_in_shot, scale_object_keys, move_shot, slide_shot, expand_shot, resize_object, set_shot_duration, resize_shot, set_shot_start, reorder_shots, move_shot_to_position, respace, to_dict, from_dict
 
 ### `anim_utils/shots/shot_sequencer/clip_motion.py` — Clip motion, resize, and key-scaling logic for the shot sequencer.
 - `curves_for_attr(obj_name: str, attr_name: str) -> list`
@@ -201,7 +197,7 @@ _Generated: 2026-07-01_
 
 ### `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py` — Switchboard slots for the Shot Sequencer UI.
 - `class ShotSequencerController(GapManagerMixin, ClipMotionMixin, ShotNavMixin, MarkerManagerMixin, ptk.LoggingMixin)`
-  - methods: sequencer, sequencer, remove_callbacks, on_zone_context_menu, active_shot_id, on_undo, on_redo, on_clip_menu, on_gap_menu, refresh, hide_track, show_track, delete_track, on_selection_changed, on_track_selected, on_clip_locked, on_track_menu, on_header_menu, on_key_selection_changed, on_clip_renamed, on_playhead_moved
+  - methods: sequencer, remove_callbacks, on_zone_context_menu, active_shot_id, on_undo, on_redo, on_clip_menu, on_gap_menu, refresh, hide_track, show_track, delete_track, on_selection_changed, on_track_selected, on_clip_locked, on_track_menu, on_header_menu, on_key_selection_changed, on_clip_renamed, on_playhead_moved
 - `class ShotEditDialog`
   - methods: show
 - `class ShotSequencerSlots(ptk.LoggingMixin)`
@@ -213,22 +209,36 @@ _Generated: 2026-07-01_
 - `class ShotsSlots(ptk.LoggingMixin)`
   - methods: header_init, spn_detection, cmb_detection_mode, spn_initial_length, cmb_fit_mode, chk_snap_whole_frames, cmb_shot_select, txt_shot_name, spn_shot_start, spn_shot_end, txt_shot_desc, b000, btn_delete_all_shots, btn_move_shot, btn_apply_gap, btn_trim_empty, btn_trim_all_shots
 
-### `anim_utils/smart_bake.py` — Smart bake module for intelligent pre-bake animation processing.
+### `anim_utils/smart_bake/_smart_bake.py` — Smart bake module for intelligent pre-bake animation processing.
 - `class BakeAnalysis`
   - methods: requires_bake, all_driven_channels
 - `class BakeResult`
   - methods: baked_count, success
 - `class SmartBake`
-  - methods: analyze, get_time_range, bake, execute, run
+  - methods: analyze, get_time_range, bake, execute, list_sessions, restore, session, run
+
+### `anim_utils/smart_bake/bake_session.py` — Persistence and restore engine for SmartBake's nondestructive manifest.
+- `node_ref(node: str) -> Dict[str, Optional[str]]`
+- `resolve_ref(ref: Optional[Dict[str, Optional[str]]]) -> Optional[str]`
+- `plug_ref(plug: str) -> Dict[str, Optional[str]]`
+- `resolve_plug(ref: Optional[Dict[str, Optional[str]]]) -> Optional[str]`
+- `stash_curve(curve: str) -> dict`
+- `unstash_curve(record: dict, warnings: Optional[List[str]] = None, fallback_dst: Optional[str] = None) -> Optional[str]`
+- `discard_stash(record: dict) -> None`
+- `collect_upstream_curves(plug: str, passthrough_types: Set[str]) -> List[str]`
+- `snapshot_connections(plug: str) -> List[List[dict]]`
+- `restore_session(session: dict) -> RestoreResult`
+- `class BakeSessionStore`
+  - methods: load, save, push, peek, pop, list_ids, new_session_id
+- `class RestoreResult`
+
+### `anim_utils/smart_bake/smart_bake_slots.py` — Slots for the Smart Bake tool panel (smart_bake.ui).
+- `class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin)`
+  - methods: cmb_scope_init, cmb_backup_init, header_init, reset_defaults, b000, b001
 
 ### `anim_utils/stagger_keys.py` — Dedicated stagger-keys module to keep AnimUtils lean and testable.
 - `class StaggerKeys`
   - methods: stagger_keys
-
-### `anim_utils/unbake_keys.py`
-- `unbake_animation(objects=None, threshold=0.001)`
-- `unbake_animation_direction_based(objects=None, threshold=0.01)`
-- `unbake_animation_smart(objects=None, threshold=0.001)`
 
 ### `audio_utils/_audio_utils.py` — Unified audio system for Maya scenes.
 - `class TrackEvent`
@@ -288,6 +298,35 @@ _Generated: 2026-07-01_
 - `class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal)`
   - methods: undo_chunk, suspended_refresh, selected, undoable, reparent, wrap_control, confirm_existence, get_mfn_mesh, get_array_type, convert_array_type, get_parameter_mapping, set_parameter_mapping, build_mesh_similarity_mapping, get_mel_globals, reorder_objects
 
+### `core_utils/auto_instancer/_auto_instancer.py` — Scene auto-instancer: convert geometrically identical meshes to instances.
+- `auto_instance(nodes: Optional[Sequence[object]] = None, tolerance: float = 0.001, scale_tolerance: Optional[float] = None, require_same_material: Union[bool, int] = True, check_uvs: bool = False, check_hierarchy: bool = False, separate_combined: bool = False, combine_assemblies: bool = True, combine_non_instanced: bool = True, combine_by_material: bool = True, combine_by_distance: bool = True, combine_distance_threshold: float = 10000.0, search_radius_mult: float = 1.5, is_static: bool = True, needs_individual: bool = False, will_be_lightmapped: bool = False, can_gpu_instance: bool = True, verbose: bool = True, log_level: str = 'WARNING') -> List[str]`
+- `class InstanceCandidate`
+  - methods: transform, exists
+- `class InstanceGroup`
+- `class AutoInstancer(ptk.LoggingMixin)`
+  - methods: tolerance, scale_tolerance, require_same_material, check_uvs, combine_assemblies, search_radius_mult, verbose, run, find_instance_groups
+
+### `core_utils/auto_instancer/assembly_reconstructor.py` — Logic for separating and reassembling mesh assemblies.
+- `class AssemblyReconstructor`
+  - methods: separate_combined_meshes, cleanup_empty_sources, cleanup_empty_assembly_groups, center_transform_on_geometry, canonicalize_transform, canonicalize_leaf_meshes, reassemble_assemblies, combine_reassembled_assemblies
+
+### `core_utils/auto_instancer/geometry_matcher.py` — Geometry analysis and matching logic for AutoInstancer.
+- `mesh_points(shape, world: bool = False)`
+- `mesh_triangles(shape)`
+- `mesh_uv_set_names(shape)`
+- `mesh_get_uvs(shape, uv_set=None)`
+- `mesh_num_uvs(shape, uv_set=None)`
+- `calculate_mesh_volume(node: str) -> float`
+- `class ShellInfo`
+- `class GeometryMatcher`
+  - methods: clear_cache, quantize, get_pca_basis, get_mesh_signature, are_meshes_identical, get_hierarchy_signature, are_meshes_identical_with_transform, are_hierarchies_identical
+
+### `core_utils/auto_instancer/instancing_strategy.py` — Instancing strategy logic for AutoInstancer.
+- `class StrategyType(Enum)`
+- `class StrategyConfig`
+- `class InstancingStrategy`
+  - methods: evaluate
+
 ### `core_utils/components.py`
 - `class GetComponentsMixin`
   - methods: get_component_type, convert_alias, convert_component_type, get_component_index, convert_int_to_component, filter_components, get_components
@@ -346,34 +385,6 @@ _Generated: 2026-07-01_
 - `class UvDiagnostics`
   - methods: find_lightmap_uv_set, is_bakeable_lightmap, cleanup_uv_sets
 
-### `core_utils/instancing/assembly_reconstructor.py` — Logic for separating and reassembling mesh assemblies.
-- `class AssemblyReconstructor`
-  - methods: separate_combined_meshes, center_transform_on_geometry, canonicalize_transform, canonicalize_leaf_meshes, reassemble_assemblies, combine_reassembled_assemblies
-
-### `core_utils/instancing/auto_instancer.py` — Scene auto-instancer prototype.
-- `class InstanceCandidate`
-  - methods: transform, exists
-- `class InstanceGroup`
-- `class AutoInstancer(ptk.LoggingMixin)`
-  - methods: tolerance, tolerance, require_same_material, require_same_material, check_uvs, check_uvs, verbose, verbose, run, find_instance_groups
-
-### `core_utils/instancing/geometry_matcher.py` — Geometry analysis and matching logic for AutoInstancer.
-- `mesh_points(shape, world: bool = False)`
-- `mesh_triangles(shape)`
-- `mesh_uv_set_names(shape)`
-- `mesh_get_uvs(shape, uv_set=None)`
-- `mesh_num_uvs(shape, uv_set=None)`
-- `calculate_mesh_volume(node: str) -> float`
-- `class ShellInfo`
-- `class GeometryMatcher`
-  - methods: quantize, get_pca_basis, get_mesh_signature, are_meshes_identical, get_hierarchy_signature, are_meshes_identical_with_transform, are_hierarchies_identical
-
-### `core_utils/instancing/instancing_strategy.py` — Instancing strategy logic for AutoInstancer.
-- `class StrategyType(Enum)`
-- `class StrategyConfig`
-- `class InstancingStrategy`
-  - methods: evaluate
-
 ### `core_utils/mash.py`
 - `class MashNetworkNodes(object)`
   - methods: as_tuple
@@ -407,7 +418,7 @@ _Generated: 2026-07-01_
 
 ### `display_utils/exploded_view.py`
 - `class ExplodedView`
-  - methods: objects, objects, calculate_repulsive_force_vectorized, arrange_objects, explode, un_explode, toggle_explode, un_explode_all
+  - methods: objects, calculate_repulsive_force_vectorized, arrange_objects, explode, un_explode, toggle_explode, un_explode_all
 - `class ExplodedViewSlots(ExplodedView)`
   - methods: header_init, b000, b001, b002, b003
 
@@ -527,7 +538,7 @@ _Generated: 2026-07-01_
 - `template_modes(template_path: Path) -> Tuple[str, ...]`
 - `list_template_modes() -> List[Tuple[str, str]]`
 - `class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`
-  - methods: blender_path, blender_path, params_defaults, render_context
+  - methods: blender_path, params_defaults, render_context
 
 ### `env_utils/blender_bridge/blender_bridge_slots.py` — Slots for the Blender bridge panel.
 - `class BlenderBridgeSlots(MayaBridgeSlotsBase)`
@@ -549,7 +560,7 @@ _Generated: 2026-07-01_
 
 ### `env_utils/fbx_utils.py`
 - `class FbxUtils(ptk.HelpMixin)`
-  - methods: load_plugin, set_fbx_options, load_preset, export, reset_takes, apply_takes, apply_takes_from_node, register_export_preparer, unregister_export_preparer, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
+  - methods: load_plugin, set_fbx_options, load_preset, export, reset_takes, apply_takes, apply_takes_from_node, run_export_preparers, register_export_preparer, unregister_export_preparer, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
 
 ### `env_utils/handoff_export.py` — Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`
@@ -575,7 +586,7 @@ _Generated: 2026-07-01_
 
 ### `env_utils/hierarchy_manager/hierarchy_manager_slots.py`
 - `class HierarchyManagerController(ptk.LoggingMixin)`
-  - methods: workspace, reference_path, reference_path, analyze_hierarchies, pull_objects, repair_hierarchies, select_objects_in_maya, populate_reference_tree, refresh_trees, is_path_ignored, clear_ignored_paths, log_diff_results, get_recent_reference_scenes, save_recent_reference_scene
+  - methods: workspace, reference_path, analyze_hierarchies, pull_objects, repair_hierarchies, select_objects_in_maya, populate_reference_tree, refresh_trees, is_path_ignored, clear_ignored_paths, log_diff_results, get_recent_reference_scenes, save_recent_reference_scene
 - `class HierarchyManagerSlots(ptk.LoggingMixin)`
   - methods: header_init, tree000_init, tree001_init, cmb_diff_options_init, cmb_pull_options_init, tb003_init, tb001, tb002, tb003, b003, b005, b006, b007, b008, b009, b011, b012, b013, b014, b015, b016, b018, b017, count_tree_items
 
@@ -618,7 +629,7 @@ _Generated: 2026-07-01_
 - `class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin)`
   - methods: current_references, sanitize_namespace, add_reference, import_references, update_references, get_reference_top_transforms, get_reference_display_mode, set_reference_display_mode, remove_references
 - `class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin)`
-  - methods: current_working_dir, current_working_dir, block_table_selection_method, prepare_item_for_edit, restore_item_display, is_item_being_edited, handle_item_selection, sync_selection_to_references, update_current_dir, set_workspace, refresh_file_list, update_table, open_scene, unreference_all, unlink_all, unlink_references, convert_to_assembly, save_scene, rename_scene, delete_scene
+  - methods: current_working_dir, block_table_selection_method, prepare_item_for_edit, restore_item_display, is_item_being_edited, handle_item_selection, sync_selection_to_references, update_current_dir, set_workspace, refresh_file_list, update_table, open_scene, unreference_all, unlink_all, unlink_references, convert_to_assembly, save_scene, rename_scene, delete_scene
 - `class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin)`
   - methods: header_init, tbl000_init, tbl000_item_double_clicked, tbl000_item_changed, tbl000_editor_closed, btn_open_file_location, txt000_init, txt001_init, txt001, cmb000_init, cmb000, chk000, chk003, chk_ignore_case, chk_hide_binary, chk_filter_suffix, chk_hide_suffix, chk_hide_extension, chk_show_notes_column, txt_suffix, chk_filter_folder_structure, b000, b006, b001, btn_open_scene, btn_toggle_reference, btn_unlink_import, btn_save_scene, btn_refresh, btn_convert_assembly, btn_unlink_import_all, btn_unreference_all
 
@@ -634,16 +645,11 @@ _Generated: 2026-07-01_
 
 ### `env_utils/scene_exporter/task_manager.py`
 - `class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`
-  - methods: objects, objects, task_definitions, check_definitions, definitions
+  - methods: objects, task_definitions, check_definitions, definitions
 
 ### `env_utils/script_output.py`
 - `show(*args, **kwargs)`
 - `toggle(*args, **kwargs)`
-- `class ScriptHighlightRule`
-- `class ScriptHighlighter(QtGui.QSyntaxHighlighter)`
-  - methods: highlightBlock
-- `class ScriptOutput(QtWidgets.QTextEdit)`
-  - methods: keyPressEvent, event, eventFilter
 - `class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog)`
   - methods: enterEvent, show_console
 
@@ -663,11 +669,11 @@ _Generated: 2026-07-01_
 
 ### `env_utils/workspace_manager.py`
 - `class WorkspaceManager(ptk.HelpMixin)`
-  - methods: current_workspace, current_working_dir, current_working_dir, recursive_search, recursive_search, ignore_empty_workspaces, ignore_empty_workspaces, workspace_files, find_available_workspaces, invalidate_workspace_files, resolve_file_path
+  - methods: current_workspace, current_working_dir, recursive_search, ignore_empty_workspaces, workspace_files, find_available_workspaces, invalidate_workspace_files, resolve_file_path
 
 ### `env_utils/workspace_map.py`
 - `class WorkspaceMap(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin)`
-  - methods: current_working_dir, current_working_dir, recursive_search, recursive_search, workspace_data, invalidate_workspace_data, get_workspace_tree_data, get_filtered_workspaces, refresh_workspace_data
+  - methods: current_working_dir, recursive_search, workspace_data, invalidate_workspace_data, get_workspace_tree_data, get_filtered_workspaces, refresh_workspace_data
 - `class WorkspaceMapController(WorkspaceMap, ptk.LoggingMixin)`
   - methods: update_current_dir, refresh_tree, handle_tree_selection
 - `class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin)`
@@ -678,7 +684,7 @@ _Generated: 2026-07-01_
 
 ### `light_utils/hdr_manager.py` — Arnold HDR environment manager.
 - `class HdrManager(ptk.LoggingMixin, ptk.HelpMixin)`
-  - methods: arnold_loaded, arnold_available, ensure_plugin_loaded, hdr_env, hdr_env, hdr_env_transform, hdr_file_node, hdr_file_path, visibility, visibility, set_hdr_map_visibility, sky_radius, sky_radius, preview, preview, rotation, rotation, intensity, intensity, exposure, exposure, resolution, resolution, samples, samples, diffuse, diffuse, specular, specular, create_network, clear
+  - methods: arnold_loaded, arnold_available, ensure_plugin_loaded, hdr_env, hdr_env_transform, hdr_file_node, hdr_file_path, visibility, set_hdr_map_visibility, sky_radius, preview, rotation, intensity, exposure, resolution, samples, diffuse, specular, create_network, clear
 - `class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin)`
   - methods: header_init, cmb000_init, hdr_map, hdr_map_visibility, hdr_map_preview, cmb000, slider000, spn_intensity, spn_exposure, spn_resolution, spn_samples, spn_diffuse, spn_specular, add_hdr, open_sourceimages, clear_network, ctx_select_skydome, ctx_select_transform, ctx_select_file_node, ctx_reveal_in_explorer
 
@@ -687,11 +693,6 @@ _Generated: 2026-07-01_
   - methods: preset_store, from_preset, bake_fused, bake_separated, commit_unlit, revert_unlit, pack_atlas, commit_lightmap, revert_lightmap, revert
 - `class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`
   - methods: header_init, cmb000_init, cmb000, cmb001_init, cmb002_init, cmb_scope_init, cmb_resolution_init, txt000_init, b000, revert_to_source, open_sourceimages
-
-### `mat_utils/_affix_mode.py` — Shared affix-mode option-box helper for mat_utils slot files.
-- `add_affix_mode_menu(widget, default_mode: str = 'auto', on_change=None)`
-- `current_affix_mode(widget) -> str`
-- `resolve_affix(widget, default: str = 'prefix') -> Tuple[str, str]`
 
 ### `mat_utils/_mat_utils.py`
 - `class MatUtilsInternals(ptk.HelpMixin)`
@@ -722,14 +723,14 @@ _Generated: 2026-07-01_
 ### `mat_utils/marmoset_bridge/_marmoset_bridge.py` — Maya-side glue for the Marmoset Toolbag engine.
 - `build_bake_pairs_manifest(objects: Sequence[str], high_suffix: str, low_suffix: str) -> Dict[str, str]`
 - `class MarmosetBridge(ptk.HandoffBridge)`
-  - methods: toolbag_path, toolbag_path, params_defaults, render_template
+  - methods: toolbag_path, params_defaults, render_template
 
 ### `mat_utils/marmoset_bridge/_marmoset_engine.py` — Drive Marmoset Toolbag from the outside -- launch + templated automation.
 - `list_templates() -> List[Path]`
 - `template_modes(template_path: Path) -> Tuple[str, ...]`
 - `list_template_modes() -> List[Tuple[str, str]]`
 - `class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin)`
-  - methods: toolbag_path, toolbag_path, toolbag_log_path, preflight, deliver, send, render_template
+  - methods: toolbag_path, toolbag_log_path, preflight, deliver, send, render_template
 
 ### `mat_utils/marmoset_bridge/_toolbag_helpers.py` — Shared helpers for Marmoset Toolbag template scripts.
 - `derive_per_run_log_path(manifest_path)`
@@ -863,7 +864,7 @@ _Generated: 2026-07-01_
 - `class ShaderTemplates`
   - methods: save_template, restore_template
 - `class ShaderTemplatesSlots(ptk.LoggingMixin)`
-  - methods: template_name, header_init, lbl_graph_material, lbl_open_templates_dir, cmb002_init, refresh_templates, rename_template_safe, lbl000, lbl001, lbl002, b000, b001, b002
+  - methods: header_init, lbl_graph_material, lbl_open_templates_dir, cmb002_init, refresh_templates, rename_template_safe, lbl000, lbl001, lbl002, b000, b001, b002
 
 ### `mat_utils/substance_bridge/_substance_bridge.py` — Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
 - `list_templates() -> List[Path]`
@@ -871,7 +872,7 @@ _Generated: 2026-07-01_
 - `list_template_modes() -> List[Tuple[str, str]]`
 - `resolve_painter_log_path(painter_exe: Optional[str] = None) -> Optional[str]`
 - `class SubstanceBridge(ptk.HandoffBridge)`
-  - methods: painter_path, painter_path, painter_log_path, instances, find_live_managed, send
+  - methods: painter_path, painter_log_path, instances, find_live_managed, send
 
 ### `mat_utils/substance_bridge/connection.py` — Substance 3D Painter connection module.
 - `find_painter_exe() -> Optional[str]`
@@ -905,7 +906,7 @@ _Generated: 2026-07-01_
 
 ### `node_utils/_node_utils.py`
 - `class NodeUtils(ptk.HelpMixin)`
-  - methods: get_type, get_inherited_types, is_mesh, is_locator, is_group, is_geometry, is_constraint, is_expression, is_ik_effector, is_driven_key_curve, is_muted, is_motion_path, is_ik_handle, get_constraint_targets, get_groups, get_parent, get_children, get_shapes, get_shape, is_intermediate, node_is, list_transforms, get_unique_children, get_transform_node, get_shape_node, get_history_node, create_render_node, get_connected_nodes, create_assembly, get_instances, replace_with_instances, instance, uninstance, filter_duplicate_instances, ensure_data_node
+  - methods: get_type, get_inherited_types, is_mesh, is_locator, is_group, is_geometry, is_constraint, is_expression, is_ik_effector, is_driven_key_curve, is_muted, is_motion_path, is_ik_handle, get_constraint_targets, get_groups, get_parent, get_children, get_shapes, get_shape, is_intermediate, node_is, list_transforms, get_unique_children, get_transform_node, get_shape_node, get_history_node, create_render_node, get_connected_nodes, create_assembly, get_instances, replace_with_instances, instance, uninstance, filter_duplicate_instances
 
 ### `node_utils/attributes/_attributes.py` — Consolidated attribute utilities for Maya.
 - `class AttributeTemplate`
@@ -918,7 +919,7 @@ _Generated: 2026-07-01_
 
 ### `node_utils/attributes/channels/_channels.py` — Channels — Maya attribute query / mutation logic.
 - `class Channels`
-  - methods: is_pinned, single_object_mode, single_object_mode, pin_targets, get_selected_nodes, get_channel_box_selection, get_filter_kwargs, query_connected_attrs, collect_attr_names, collect_value_strings, get_attr_value, get_attr_type, get_incoming_connection, classify_connection, has_key_at_current_time, build_table_data, format_value, parse_value, toggle_lock, break_connections, set_lock, reset_to_default, toggle_keyable, delete_attributes, set_attribute_value, create_attribute, copy_attr_values, paste_attr_values, rename_attribute, rename_node, get_shape_nodes, get_history_nodes, toggle_key_at_current_time, set_breakdown_key, mute_attrs, unmute_attrs, hide_attrs, show_attrs, lock_and_hide_attrs, select_connections, can_freeze_selection, freeze_transforms, unfreeze_transforms, has_unfreeze_info
+  - methods: is_pinned, single_object_mode, pin_targets, get_selected_nodes, get_channel_box_selection, get_filter_kwargs, query_connected_attrs, collect_attr_names, collect_value_strings, get_attr_value, get_attr_type, get_incoming_connection, classify_connection, has_key_at_current_time, build_table_data, format_value, parse_value, toggle_lock, break_connections, set_lock, reset_to_default, toggle_keyable, delete_attributes, set_attribute_value, create_attribute, copy_attr_values, paste_attr_values, rename_attribute, rename_node, get_shape_nodes, get_history_nodes, toggle_key_at_current_time, set_breakdown_key, mute_attrs, unmute_attrs, hide_attrs, show_attrs, lock_and_hide_attrs, select_connections, can_freeze_selection, freeze_transforms, unfreeze_transforms, has_unfreeze_info
 
 ### `node_utils/attributes/channels/channels_slots.py` — UI slots for the Channels UI.
 - `class ChannelsSlots`
@@ -926,7 +927,7 @@ _Generated: 2026-07-01_
 
 ### `node_utils/data_nodes.py`
 - `class DataNodes`
-  - methods: ensure_internal, ensure_export, mirror_attr, set_export_string, get_export_string, migrate_legacy_carriers
+  - methods: ensure_internal, ensure_export, mirror_attr, set_internal_string, get_internal_string, set_export_string, get_export_string
 
 ### `nurbs_utils/_nurbs_utils.py`
 - `class NurbsUtils(ptk.HelpMixin)`
@@ -984,16 +985,16 @@ _Generated: 2026-07-01_
 - `class AnchorStrategy(TubeStrategy)`
   - methods: build
 - `class TubeRig(ptk.LoggingMixin)`
-  - methods: for_mesh, rig_name, rig_group, rig_group, build, generate_joint_chain, create_logic_curve, create_spline_drivers, skin_curve_to_drivers, setup_spline_twist, setup_auto_bend, setup_spline_stretch, create_start_end_locators, create_ik, create_pole_vector, bind_joint_chain, constrain_end_with_falloff
+  - methods: for_mesh, rig_name, rig_group, build, generate_joint_chain, create_logic_curve, create_spline_drivers, skin_curve_to_drivers, setup_spline_twist, setup_auto_bend, setup_spline_stretch, create_start_end_locators, create_ik, create_pole_vector, bind_joint_chain, constrain_end_with_falloff
 - `class RigModeConfig`
 - `class TubeRigSlots`
   - methods: header_init, apply_mode, get_mode, get_strategy, get_tube_rig, create_joints_from_tube, create_rig_from_joints, b000, b001, b002, b003, b004
 
 ### `rig_utils/wheel_rig.py`
 - `class WheelRig(ptk.LoggingMixin)`
-  - methods: rig_name, rig_name, get_expressions, delete_expressions, rig_rotation
+  - methods: rig_name, get_expressions, delete_expressions, rig_rotation
 - `class WheelRigSlots`
-  - methods: header_init, rig_name, rig_name, movement_axis, rotation_axis, resolve_selection, set_wheel_height, s000_init, update_rig_name_placeholder, cleanup, wheel_rig, b000
+  - methods: header_init, rig_name, movement_axis, rotation_axis, resolve_selection, set_wheel_height, s000_init, update_rig_name_placeholder, cleanup, wheel_rig, b000
 
 ### `ui_utils/_ui_utils.py`
 - `class UiUtils`
@@ -1035,13 +1036,20 @@ _Generated: 2026-07-01_
 - `class NodeIcons`
   - methods: icon_name_for_type, icon_name_for_node, get_icon, get_pixmap
 
+### `ui_utils/style_setter/_style_setter.py` — Match Maya's scriptable viewport colors to another DCC's look.
+- `list_styles()`
+- `set_style(name, persist=False)`
+- `list_templates()`
+- `apply_template(name, persist=False)`
+- `class StyleSetter`
+
 ### `uv_utils/_uv_utils.py`
 - `class UvUtils(ptk.HelpMixin)`
   - methods: calculate_uv_padding, orient_shells, move_to_uv_space, mirror_uvs, flip_uvs, get_uv_shell_sets, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, transfer_uvs, reorder_uv_sets, create_lightmap_uvs, remove_empty_uv_sets
 
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 - `class RizomUVBridge(ptk.LoggingMixin)`
-  - methods: rizom_path, rizom_path, rizom_version, export_path, export_path, script_path, script_path, process_with_rizomuv, send_to_rizomuv
+  - methods: rizom_path, rizom_version, export_path, script_path, process_with_rizomuv, send_to_rizomuv
 
 ### `uv_utils/rizom_bridge/parameters.py` — Registry of user-tunable RizomUV parameters exposed to the bridge UI.
 - `referenced_keys(script_text: str) -> 'set[str]'`
