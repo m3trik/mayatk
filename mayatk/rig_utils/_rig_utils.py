@@ -211,6 +211,18 @@ class RigUtils(ptk.HelpMixin):
                 result = base_name
             return result
 
+        def rename_by_uuid(uuid: str, new_name: str) -> str:
+            """Rename the node identified by ``uuid`` and return its new name.
+
+            Renaming a node reshuffles the DAG paths of its descendants, so a
+            descendant's stored *partial* path (e.g. obj's ``loc|leaf``) turns
+            stale the instant an ancestor is renamed.  Capturing UUIDs before
+            the rename pass and resolving each one just-in-time keeps the path
+            current regardless of rename order or leaf-name collisions.
+            """
+            paths = cmds.ls(uuid, long=True) if uuid else []
+            return cmds.rename(paths[0], new_name) if paths else uuid
+
         objects_str = (
             [str(o) for o in objects]
             if isinstance(objects, (list, tuple, set))
@@ -329,13 +341,20 @@ class RigUtils(ptk.HelpMixin):
             if freeze_object and not is_group:
                 XformUtils.freeze_transforms(obj, normal=True)
 
-            # Rename group, locator, and object using the clean base name
-            if parent and grp:
-                grp = cmds.rename(grp, f"{base_name_stripped}{grp_suffix}")
-            loc = cmds.rename(loc, f"{base_name_stripped}{loc_suffix}")
+            # Rename group, locator, and object using the clean base name.
+            # Capture UUIDs first — while every path is still valid — then
+            # rename via rename_by_uuid so an ancestor rename can't invalidate
+            # a descendant's stored partial path (see rename_by_uuid above).
+            grp_uuid = (cmds.ls(grp, uuid=True) or [None])[0] if grp else None
+            loc_uuid = (cmds.ls(loc, uuid=True) or [None])[0]
+            obj_uuid = (cmds.ls(obj, uuid=True) or [None])[0]
+
+            if parent and grp_uuid:
+                grp = rename_by_uuid(grp_uuid, f"{base_name_stripped}{grp_suffix}")
+            loc = rename_by_uuid(loc_uuid, f"{base_name_stripped}{loc_suffix}")
             # Only apply obj_suffix if the object is not a group
             if not is_group:
-                obj = cmds.rename(obj, f"{base_name_stripped}{obj_suffix}")
+                obj = rename_by_uuid(obj_uuid, f"{base_name_stripped}{obj_suffix}")
 
             if parent and grp:
                 XformUtils.freeze_transforms(grp, scale=True)
@@ -683,13 +702,16 @@ class RigUtils(ptk.HelpMixin):
                 f"'{constraint_node}' is not a constraint node."
             )
 
+        # The constraint command (``cmds.parentConstraint`` etc.) is reused for
+        # target autodetect, wiring the anchor, and reading weight aliases.
+        constraint_type = cmds.objectType(constraint_node)
+        constraint_cmd = getattr(cmds, constraint_type, None)
+
         result = {}
         # Target autodetect if not provided.  ``cmds.<constraint>(node,
         # q=True, targetList=True)`` is the canonical way to read targets
         # off a constraint regardless of internal plug layout.
         if constraint_targets is None:
-            constraint_type = cmds.objectType(constraint_node)
-            constraint_cmd = getattr(cmds, constraint_type, None)
             target_list: list = []
             if constraint_cmd:
                 try:
@@ -710,30 +732,22 @@ class RigUtils(ptk.HelpMixin):
             cmds.warning("No constraint targets found or provided.")
             return result
 
-        # Optionally add anchor as the last target
-        if anchor:
-            anchor_obj = cls.create_helper(
-                name=anchor,
-                helper_type="locator",
-                position=(0, 0, 0),
-            )
-            constraint_targets = list(constraint_targets) + [anchor_obj]
-            result["anchor_helper"] = anchor_obj
-
-        num_targets = len(constraint_targets)
-
+        # Resolve the driven object — where the switch attr lives, and what an
+        # anchor is constrained to. Done before creating any anchor so a
+        # failure here can't orphan a helper locator.
+        driven = cmds.listConnections(
+            f"{constraint_node}.constraintParentInverseMatrix",
+            source=True,
+            destination=False,
+        ) or cmds.listRelatives(constraint_node, type="transform", parent=True)
+        driven_obj = driven[0] if driven else None
         if node is None:
-            driven = cmds.listConnections(
-                f"{constraint_node}.constraintParentInverseMatrix",
-                source=True,
-                destination=False,
-            ) or cmds.listRelatives(constraint_node, type="transform", parent=True)
-            node = driven[0] if driven else None
+            node = driven_obj
         if node is None:
             cmds.warning("Could not determine node to add switch attribute to.")
             return result
 
-        # Check for duplicate attribute, handle overwrite
+        # Check for duplicate attribute, handle overwrite (before any anchor).
         if Attributes.has_attr(node, attr_name):
             if overwrite_existing:
                 cmds.deleteAttr(f"{node}.{attr_name}")
@@ -741,21 +755,57 @@ class RigUtils(ptk.HelpMixin):
                 cmds.warning(f"{node}.{attr_name} already exists.")
                 return result
 
-        # Discover weight aliases via constraint command — works on parent/orient/etc.
-        constraint_type = cmds.objectType(constraint_node)
-        constraint_cmd = getattr(cmds, constraint_type, None)
-        weight_alias_list: List[str] = []
-        if constraint_cmd:
+        def query_weight_aliases() -> List[str]:
+            if not constraint_cmd:
+                return []
             try:
-                weights = constraint_cmd(constraint_node, q=True, weightAliasList=True) or []
-                weight_alias_list = [f"{constraint_node}.{w}" for w in weights]
+                aliases = (
+                    constraint_cmd(constraint_node, q=True, weightAliasList=True) or []
+                )
+                return [f"{constraint_node}.{a}" for a in aliases]
             except Exception:
-                weight_alias_list = []
+                return []
 
-        # Ensure number of weights matches number of targets
-        if len(weight_alias_list) < num_targets:
+        # Sanity-check weight aliases against the (pre-anchor) targets first —
+        # a mismatch here bails cleanly, before any anchor helper is created.
+        weight_alias_list = query_weight_aliases()
+        if len(weight_alias_list) < len(constraint_targets):
             cmds.warning("Number of constraint weights does not match number of targets.")
             return result
+
+        # Optionally add a neutral/world anchor as the last target. The helper
+        # is wired into the constraint as a REAL target — re-invoking the
+        # constraint command on an already-constrained object appends a new
+        # target + weight; without this the anchor would do nothing.
+        # maintainOffset=True holds the object's current world pose when the
+        # anchor space is active. On failure the helper is deleted (nothing is
+        # orphaned); on success the weight aliases are re-read so the new one is
+        # included when wiring the switch. Because the count is validated above
+        # and Maya always appends exactly one weight, the anchor can only be
+        # created once the counts are guaranteed to line up — no dangling target.
+        if anchor:
+            if not (constraint_cmd and driven_obj):
+                cmds.warning(
+                    f"Cannot add anchor '{anchor}': constraint type "
+                    f"'{constraint_type}' or driven object unresolved."
+                )
+                return result
+            anchor_obj = cls.create_helper(
+                name=anchor,
+                helper_type="locator",
+                position=(0, 0, 0),
+            )
+            try:
+                constraint_cmd(anchor_obj, driven_obj, maintainOffset=True)
+            except Exception as e:
+                cmds.delete(anchor_obj)
+                cmds.warning(f"Could not add anchor '{anchor}' to the constraint: {e}")
+                return result
+            constraint_targets = list(constraint_targets) + [anchor_obj]
+            result["anchor_helper"] = anchor_obj
+            weight_alias_list = query_weight_aliases()
+
+        num_targets = len(constraint_targets)
 
         # Disconnect all inputs from weights
         for weight_attr in weight_alias_list:
