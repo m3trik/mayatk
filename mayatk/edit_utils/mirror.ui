@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>200</width>
-    <height>164</height>
+    <height>167</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -30,6 +30,9 @@
     </size>
    </property>
    <layout class="QVBoxLayout" name="verticalLayout_2">
+    <property name="spacing">
+     <number>2</number>
+    </property>
     <property name="leftMargin">
      <number>2</number>
     </property>
@@ -40,9 +43,6 @@
      <number>2</number>
     </property>
     <property name="bottomMargin">
-     <number>2</number>
-    </property>
-    <property name="spacing">
      <number>2</number>
     </property>
     <item>
@@ -139,20 +139,23 @@
          </item>
          <item row="2" column="3">
           <widget class="QRadioButton" name="chk004">
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>19</height>
-            </size>
-           </property>
            <property name="minimumSize">
             <size>
              <width>0</width>
              <height>19</height>
             </size>
            </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
            <property name="text">
             <string>Z</string>
+           </property>
+           <property name="checked">
+            <bool>true</bool>
            </property>
           </widget>
          </item>
@@ -288,15 +291,15 @@
          </item>
          <item row="2" column="2">
           <widget class="QRadioButton" name="chk003">
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>19</height>
-            </size>
-           </property>
            <property name="minimumSize">
             <size>
              <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
              <height>19</height>
             </size>
            </property>
@@ -358,15 +361,15 @@
          </item>
          <item row="2" column="1">
           <widget class="QRadioButton" name="chk002">
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>19</height>
-            </size>
-           </property>
            <property name="minimumSize">
             <size>
              <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
              <height>19</height>
             </size>
            </property>
