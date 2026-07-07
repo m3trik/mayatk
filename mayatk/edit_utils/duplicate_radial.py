@@ -99,8 +99,14 @@ class DuplicateRadial(ptk.LoggingMixin):
             )
 
             if suffix:
-                Naming.append_location_based_suffix(
-                    finalized, first_obj_as_ref=True, alphabetical=True
+                # The suffix pass RENAMES the copies — keep the returned
+                # final names, or the mapping goes stale (regroup_copies'
+                # objExists guard then silently no-ops the whole commit).
+                finalized = (
+                    Naming.append_location_based_suffix(
+                        finalized, first_obj_as_ref=True, alphabetical=True
+                    )
+                    or finalized
                 )
 
             originals_to_copies[node] = finalized
@@ -142,7 +148,14 @@ class DuplicateRadial(ptk.LoggingMixin):
         container_group = cmds.group(clean_copies, name=group_name)
         cls.logger.debug(f"Grouped all instances under: {container_group}")
 
-        return clean_copies
+        # Re-resolve after grouping — the pre-group names (world paths like
+        # '|copy1') went stale the moment the copies were reparented.
+        return (
+            cmds.listRelatives(
+                container_group, children=True, fullPath=True, type="transform"
+            )
+            or clean_copies
+        )
 
     @classmethod
     def _cleanup_original(cls, node: str, keep_original: bool) -> None:
@@ -409,11 +422,19 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
         return axis_mapping.get(pivot_index, "object")
 
     def regroup_copies(self):
-        """Regroup the instances under their original parent group."""
+        """Regroup the committed copies under a fresh ``*_array`` group.
+
+        The duplicate step parents every copy under ONE shared radial group;
+        the ``*_array`` group takes its place in the hierarchy. All copies are
+        unparented in a single call and the shared group is deleted only once
+        it is empty — the old per-copy loop deleted it while sibling copies
+        were still inside, destroying them.
+        """
         cmds.undoInfo(openChunk=True)
         try:
             for copies in self.copies.values():
-                if not all(cmds.objExists(copy) for copy in copies):
+                copies = [copy for copy in copies if cmds.objExists(copy)]
+                if not copies:
                     continue
 
                 first_obj_name = short_name(copies[0])
@@ -421,15 +442,16 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
                 name += "_array"
                 unique_name = Naming.generate_unique_name(name)
 
-                # Find grandparent of the first object — used as parent for the new group
-                first_parent = NodeUtils.get_parent(copies[0])
-                original_parent = NodeUtils.get_parent(first_parent) if first_parent else None
+                # The shared group's parent (if any) hosts the new group.
+                shared_group = NodeUtils.get_parent(copies[0])
+                original_parent = (
+                    NodeUtils.get_parent(shared_group) if shared_group else None
+                )
 
-                for copy in copies[1:]:
-                    copy_group = NodeUtils.get_parent(copy)
-                    cmds.parent(copy, world=True)
-                    if copy_group:
-                        cmds.delete(copy_group)
+                if shared_group:
+                    copies = [str(c) for c in cmds.parent(copies, world=True)]
+                    if not cmds.listRelatives(shared_group, children=True):
+                        cmds.delete(shared_group)
 
                 new_group = cmds.group(copies, n=unique_name)
 

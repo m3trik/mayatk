@@ -63,6 +63,140 @@ class TestNativeMenuFailFast(MayaTkTestCase):
         )
 
 
+class TestNativeMenuPopulateFailure(MayaTkTestCase):
+    """Populate-path failures must restore the menu mode and cache nothing.
+
+    ``get_menu`` switches Maya into the target menu set before building. The
+    init-failure path (above) restores it, but a failure *after* init — the
+    populate step raising (no main window, dead menuBar) or completing with
+    zero actions (menu shell present but empty on this Maya) — must equally:
+
+    * restore the original menu mode (a stuck mode swaps the user's whole
+      main-window menu bar);
+    * NOT cache the empty placeholder (a cached empty menu is returned forever
+      after via the ``menu_key in self.menus`` fast path); and
+    * return ``None`` so the caller falls back to the ``<key>#submenu``
+      overlay.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.handler = MayaMenuHandler()
+
+    def _get_menu_mocked(self, populate=None):
+        """Run get_menu('edit') with the Maya/Qt boundary stubbed out.
+
+        mel/cmds are patched so the test is deterministic in standalone (no
+        real menu build), and the two widget classes are stubbed so no Qt
+        construction happens (mayapy has no QApplication). *populate* is the
+        mock spec for ``_populate_menu``. Returns (result, setMenuMode_mock).
+        """
+        with mock.patch(
+            "mayatk.ui_utils.maya_native_menus.mel.eval"
+        ), mock.patch(
+            "mayatk.ui_utils.maya_native_menus.cmds.menuSet",
+            return_value="commonMenuSet",
+        ), mock.patch(
+            "mayatk.ui_utils.maya_native_menus.cmds.setMenuMode"
+        ) as set_mode, mock.patch(
+            "mayatk.ui_utils.maya_native_menus.cmds.refresh"
+        ), mock.patch(
+            "mayatk.ui_utils.maya_native_menus.PersistentMenu"
+        ), mock.patch(
+            "mayatk.ui_utils.maya_native_menus.EmbeddedMenuWidget"
+        ), mock.patch.object(
+            self.handler, "_populate_menu", **populate
+        ):
+            result = self.handler.get_menu("edit")
+        return result, set_mode
+
+    def _assert_failed_clean(self, result, set_mode):
+        self.assertIsNone(result, "failed populate must yield None")
+        self.assertNotIn(
+            "edit", self.handler.menus, "no placeholder may be cached on failure"
+        )
+        self.assertEqual(
+            set_mode.call_args_list[-1],
+            mock.call("commonMenuSet"),
+            "original menu mode must be restored",
+        )
+
+    def test_populate_raise_restores_mode_and_caches_nothing(self):
+        result, set_mode = self._get_menu_mocked(
+            populate={"side_effect": AttributeError("menuBar on dead main window")}
+        )
+        self._assert_failed_clean(result, set_mode)
+
+    def test_empty_populate_returns_none_and_caches_nothing(self):
+        # Populate completes but finds no actions (stale shell) — the empty
+        # wrapper must not be cached/returned as if it were a working menu.
+        result, set_mode = self._get_menu_mocked(populate={"return_value": False})
+        self._assert_failed_clean(result, set_mode)
+
+    def test_successful_populate_caches_and_returns_widget(self):
+        result, set_mode = self._get_menu_mocked(populate={"return_value": True})
+        self.assertIsNotNone(result, "successful build must return the wrapper")
+        self.assertIs(
+            self.handler.menus.get("edit"),
+            result,
+            "successful build must be cached under its key",
+        )
+        self.assertEqual(set_mode.call_args_list[-1], mock.call("commonMenuSet"))
+
+
+class TestPopulateMenuReturn(MayaTkTestCase):
+    """Exercise the REAL ``_populate_menu`` body (stubbed Qt/Maya boundary).
+
+    The populate-failure tests above mock ``_populate_menu`` wholesale, so a
+    defect inside its body (e.g. a stale variable reference raising at
+    runtime) would go unseen there while breaking every native-menu wrap in
+    production. These run the actual body against MagicMock menu objects and
+    pin the True/False return contract get_menu depends on.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.handler = MayaMenuHandler()
+
+    def _populate(self, menu_bar_actions):
+        main_window = mock.MagicMock()
+        main_window.menuBar.return_value.actions.return_value = menu_bar_actions
+        placeholder = mock.MagicMock()
+        with mock.patch(
+            "mayatk.ui_utils.maya_native_menus.UiUtils.get_main_window",
+            return_value=main_window,
+        ), mock.patch(
+            "mayatk.ui_utils.maya_native_menus.QtWidgets.QApplication.processEvents"
+        ):
+            result = self.handler._populate_menu("edit", "Edit", placeholder)
+        return result, placeholder
+
+    def test_returns_true_and_copies_actions_on_success(self):
+        item_a, item_b = mock.MagicMock(), mock.MagicMock()
+        source_action = mock.MagicMock()
+        source_action.text.return_value = "Edit"
+        source_action.menu.return_value.actions.return_value = [item_a, item_b]
+
+        result, placeholder = self._populate([source_action])
+
+        self.assertTrue(result, "_populate_menu must return True on success")
+        self.assertEqual(placeholder.menu.addAction.call_count, 2)
+
+    def test_returns_false_when_menu_absent(self):
+        result, placeholder = self._populate([])
+
+        self.assertFalse(result, "_populate_menu must return False when empty")
+        placeholder.menu.addAction.assert_not_called()
+
+    def test_returns_false_without_main_window(self):
+        with mock.patch(
+            "mayatk.ui_utils.maya_native_menus.UiUtils.get_main_window",
+            return_value=None,
+        ):
+            result = self.handler._populate_menu("edit", "Edit", mock.MagicMock())
+        self.assertFalse(result)
+
+
 class TestMayaMenuHandlerExtended(MayaTkTestCase):
     def setUp(self):
         super().setUp()

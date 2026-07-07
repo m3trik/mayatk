@@ -71,9 +71,10 @@ PLUGIN_CMDS = frozenset(
     }
 )
 
-# MEL procedures only defined in interactive / full-UI Maya.
+# MEL procedures / commands only registered in interactive (full-UI) Maya.
 INTERACTIVE_MEL_PROCS = frozenset(
     {
+        "savePrefs",  # native cmd; prefs flush to disk — absent in batch/standalone
         "changeSelectMode",
         "hypershadePanelMenuCommand",
         "hyperShadePanelMenuCommand",

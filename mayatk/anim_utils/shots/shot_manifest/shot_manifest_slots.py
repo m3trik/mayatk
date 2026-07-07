@@ -105,6 +105,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._last_resolved: List[Tuple[str, float, Optional[float], bool]] = []
         self._bind_store_listener()
         self._install_scene_jobs()
+        # connect_cleanup (in _install_scene_jobs) tears down only the SJM
+        # subscriptions; the ShotStore listener needs remove_callbacks, or it
+        # keeps the dead controller alive and firing after the panel closes.
+        self.ui.destroyed.connect(lambda *_: self.remove_callbacks())
         self._column_map = ColumnMap()
         self._active_mapping = None  # loaded JSON dict from mapping/
         self._mapping_dir = None  # custom directory override
@@ -323,6 +327,20 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             new_name = item.text(COL_STEP).strip()
             if not new_name or new_name == step_data.step_id:
                 return
+            # Reject a rename colliding with another step's id — duplicate
+            # step_ids clobber each other's ranges at build time (parse_csv
+            # guards the same way).
+            if any(
+                s.step_id == new_name for s in self._steps if s is not step_data
+            ):
+                import maya.cmds as cmds
+
+                cmds.warning(f"Duplicate step name '{new_name}' — rename reverted.")
+                tree = self.ui.tbl_steps
+                tree.blockSignals(True)
+                item.setText(COL_STEP, step_data.step_id)
+                tree.blockSignals(False)
+                return
             old_name = step_data.step_id
             step_data.step_id = new_name
             # Re-key user ranges
@@ -338,10 +356,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
             step_data = item.data(0, Qt.UserRole)
             if isinstance(step_data, BuilderStep):
-                if step_data.audio:
-                    step_data.audio = item.text(COL_DESC)
-                else:
-                    step_data.description = item.text(COL_DESC)
+                # The cell renders display_text (the description) — writing
+                # the edit to .audio would silently destroy the narration
+                # while the visible description stayed unchanged.
+                step_data.description = item.text(COL_DESC)
             return
 
         if column not in (COL_START, COL_END):

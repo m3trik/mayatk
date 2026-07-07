@@ -912,8 +912,8 @@ class ShadowRigSlots:
         self.ui.txt_source.editingFinished.connect(self.preview.refresh)
         self.ui.s000.currentIndexChanged.connect(self.preview.refresh)
         self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
-
-        self.ui.b001.clicked.connect(self.b001)
+        # b001 is auto-wired by the switchboard (method name == objectName);
+        # a raw connect here stacked a second connection → double-fire.
 
     def header_init(self, widget):
         """Configure header help text."""

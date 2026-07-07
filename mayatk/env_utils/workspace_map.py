@@ -347,7 +347,7 @@ class WorkspaceMapController(WorkspaceMap, ptk.LoggingMixin):
 class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
     """UI slots for the WorkspaceMap interface."""
 
-    def __init__(self, switchboard, log_level="DEBUG"):
+    def __init__(self, switchboard, log_level="WARNING"):
         super().__init__()
         self.logger.setLevel(log_level)
 
@@ -418,10 +418,13 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
             )
             widget.option_box.add_option(self._browse_option)
 
+            # objectName must NOT shadow the .ui's b001 (same dispatch /
+            # state key); name it after the slot so menu auto-wiring
+            # dispatches to set_to_workspace like the main button does.
             widget.menu.add(
                 "QPushButton",
                 setText="Set To Workspace",
-                setObjectName="b001",
+                setObjectName="set_to_workspace",
                 setToolTip="Set the root folder to that of the current workspace.",
             )
             widget.menu.add(

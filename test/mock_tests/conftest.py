@@ -42,6 +42,24 @@ sys.modules.setdefault("maya.mel", MagicMock())
 sys.modules.setdefault("maya.OpenMaya", MagicMock())
 sys.modules.setdefault("maya.OpenMayaUI", MagicMock())
 
+# Force-sync each submodule as an attribute of its parent package. Plain
+# ``sys.modules`` injection doesn't do this, so ``import maya.cmds as cmds``
+# (attribute-based binding) would otherwise keep resolving to whatever
+# ``test/conftest.py`` (the ancestor conftest, always loaded first by pytest)
+# already set — its own sync loop is ``hasattr``-guarded to protect a real
+# Maya install, which means it never yields to a second, more-specific mock.
+# This conftest is mock-only by design, so it overwrites unconditionally.
+for _parent, _child in (
+    ("maya", "cmds"),
+    ("maya", "mel"),
+    ("maya", "OpenMaya"),
+    ("maya", "OpenMayaUI"),
+    ("maya", "api"),
+    ("maya.api", "OpenMaya"),
+    ("maya.api", "OpenMayaAnim"),
+):
+    setattr(sys.modules[_parent], _child, sys.modules[f"{_parent}.{_child}"])
+
 
 def _sandbox_qsettings() -> None:
     """Keep the mock suite off the real ``QSettings`` store.

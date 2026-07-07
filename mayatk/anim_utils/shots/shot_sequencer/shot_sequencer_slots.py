@@ -107,6 +107,16 @@ class ShotSequencerController(
         self._register_time_change_callback()
         self._register_keyframe_callback()
         self._bind_store_listener()
+        # Tear down on panel close. Without this every callback above
+        # outlives the panel — _on_time_changed fires on each DG time change
+        # (every frame during playback) against destroyed widgets, and the
+        # callbacks accumulate across reopens. connect_cleanup covers the
+        # SJM-owned OpenMaya callbacks; remove_callbacks also unbinds the
+        # ShotStore listener and stops the keyframe debounce timer.
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        ScriptJobManager.instance().connect_cleanup(self.ui, owner=self)
+        self.ui.destroyed.connect(lambda *_: self.remove_callbacks())
         self.logger.debug("ShotSequencerController initialized.")
 
     # ---- footer helpers --------------------------------------------------
@@ -234,11 +244,14 @@ class ShotSequencerController(
         from mayatk.core_utils.script_job_manager import ScriptJobManager
 
         mgr = ScriptJobManager.instance()
-        for event_name in ("Undo", "Redo"):
+        for event_name, handler in (
+            ("Undo", self._on_maya_undo),
+            ("Redo", self._on_maya_redo),
+        ):
             token = mgr.add_om_callback(
                 om2.MEventMessage.addEventCallback,
                 event_name,
-                self._on_maya_undo,
+                handler,
                 owner=self,
             )
             if token is not None:
@@ -258,14 +271,30 @@ class ShotSequencerController(
         self._time_change_cb = None
         self._keyframe_cb = None
         if self._keyframe_debounce is not None:
-            self._keyframe_debounce.stop()
+            try:
+                self._keyframe_debounce.stop()
+            except RuntimeError:
+                pass  # timer's C++ object died with the closing panel
             self._keyframe_debounce = None
 
     def _on_maya_undo(self, *_args) -> None:
-        """Refresh the widget when Maya's undo/redo fires."""
+        """Restore the last shot-state snapshot when Maya's undo fires."""
         if self._syncing:
             return
         self._restore_shot_state()
+        self._segment_cache.clear()
+        self._sub_row_cache.clear()
+        self._sync_to_widget()
+
+    def _on_maya_redo(self, *_args) -> None:
+        """Refresh the widget when Maya's redo fires.
+
+        Unlike undo, redo must NOT pop the shot-state snapshot stack —
+        popping here would consume a restore point for an operation that
+        was just RE-applied, desyncing every subsequent undo.
+        """
+        if self._syncing:
+            return
         self._segment_cache.clear()
         self._sub_row_cache.clear()
         self._sync_to_widget()
@@ -586,8 +615,15 @@ class ShotSequencerController(
     @property
     def active_shot_id(self) -> Optional[int]:
         """Return the shot_id currently selected, or the first shot's id."""
+        # In markers mode the combobox itemData holds marker TIMES
+        # (floats), not shot ids — reading it would return a bogus id
+        # and silently break shot resolution downstream.
         cmb = getattr(self.ui, "cmb_shot", None)
-        if cmb is not None and cmb.currentIndex() >= 0:
+        if (
+            self._cmb_mode != "markers"
+            and cmb is not None
+            and cmb.currentIndex() >= 0
+        ):
             sid = cmb.itemData(cmb.currentIndex())
             if sid is not None:
                 return sid
@@ -2118,7 +2154,6 @@ class ShotSequencerController(
             return
         if set_audio(wav_path, audio_utils.get_fps()):
             self._bound_audio_node = node
-            self._bound_audio_path = wav_path
 
     @staticmethod
     def _resolve_preferred_audio_node() -> str:
@@ -2136,19 +2171,6 @@ class ShotSequencerController(
             if dg and cmds.objExists(dg):
                 return dg
         return ""
-
-    @staticmethod
-    def _get_composite_wav_path() -> str:
-        """Return the composite WAV file path, or empty string."""
-        try:
-            from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
-            node = AudioClips._find_composite_node()
-            if not node:
-                return ""
-            path = cmds.getAttr(f"{node}.filename") or ""
-            return path.replace("\\", "/")
-        except Exception:
-            return ""
 
     # ---- Transport controls (footer) -------------------------------------
 
@@ -2346,6 +2368,15 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         self.set_log_level(log_level)
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.shot_sequencer
+
+        # The shot dropdown mirrors the scene's shots (repopulated by
+        # _sync_combobox each sync), never a persisted UI value — opt out of
+        # cross-session index restore, or a stale index auto-selects (and
+        # fires cmb_shot on) the wrong shot next session. Mirrors
+        # ShotsController's cmb_shot_select opt-out.
+        cmb_shot = getattr(self.ui, "cmb_shot", None)
+        if cmb_shot is not None:
+            cmb_shot.restore_state = False
 
         # Create controller
         self.controller = ShotSequencerController(self)

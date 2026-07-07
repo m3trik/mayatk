@@ -42,6 +42,9 @@ class MarkerManagerMixin:
                 "opacity": md.opacity,
             }
         )
+        # Markers are serialized with the store — without marking it
+        # dirty the edit is silently dropped on the next save cycle.
+        self.sequencer.store.mark_dirty()
 
     def on_marker_moved(self, marker_id: int, new_time: float) -> None:
         """Update persisted marker time."""
@@ -74,3 +77,4 @@ class MarkerManagerMixin:
             }
             for md in widget.markers()
         ]
+        self.sequencer.store.mark_dirty()
