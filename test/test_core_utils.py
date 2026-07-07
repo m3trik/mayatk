@@ -236,6 +236,28 @@ class TestCoreUtils(MayaTkTestCase):
         # Should be locked again
         self.assertTrue(cmds.getAttr(f"{self.cyl}.translateX", lock=True))
 
+    def test_temporarily_unlock_attributes_scoped(self):
+        """Passing explicit attributes must scope the unlock to only those.
+
+        Bug: the ``attributes`` parameter was accepted but never used —
+        ``temporarily_unlock`` always unlocked the full standard TRS set
+        regardless of what was passed in, silently unlocking sibling
+        attributes the caller never asked to touch.
+        Fixed: 2026-07-01
+        """
+        cmds.setAttr(f"{self.cyl}.translateX", lock=True)
+        cmds.setAttr(f"{self.cyl}.translateY", lock=True)
+
+        with Attributes.temporarily_unlock(self.cyl, ["translateX"]):
+            self.assertFalse(cmds.getAttr(f"{self.cyl}.translateX", lock=True))
+            self.assertTrue(
+                cmds.getAttr(f"{self.cyl}.translateY", lock=True),
+                "translateY should remain locked — it was not in the scoped list",
+            )
+
+        self.assertTrue(cmds.getAttr(f"{self.cyl}.translateX", lock=True))
+        self.assertTrue(cmds.getAttr(f"{self.cyl}.translateY", lock=True))
+
     def test_filter_attributes(self):
         """Test filtering attributes via Attributes."""
         attrs = ["translateX", "translateY", "translateZ", "rotateX", "visibility"]

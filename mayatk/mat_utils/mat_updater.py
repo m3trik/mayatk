@@ -346,7 +346,11 @@ class MatUpdater(ptk.LoggingMixin):
                     continue
 
                 # Move files if requested
-                if move_to_folder:
+                if move_to_folder and config_obj.get("dry_run", False):
+                    cls.logger.info(
+                        f"[Dry Run] Skipping move/copy to '{move_to_folder}'."
+                    )
+                elif move_to_folder:
                     import shutil
 
                     target_folder = move_to_folder

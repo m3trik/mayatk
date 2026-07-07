@@ -1506,20 +1506,22 @@ class SelectionMacros:
         invert = []
         for obj in objects:
             if cmds.selectType(query=1, vertex=1):  # vertex
-                selectedVertices = cmds.filterExpand(
-                    selection, selectionMask=31, expand=1
+                selectedVertices = (
+                    cmds.filterExpand(selection, selectionMask=31, expand=1) or []
                 )
-                allVertices = cmds.filterExpand(obj + ".v[*]", sm=31)
+                allVertices = cmds.filterExpand(obj + ".v[*]", sm=31) or []
                 invert += {v for v in allVertices if v not in selectedVertices}
 
             elif cmds.selectType(query=1, edge=1):  # edge
-                edges = cmds.filterExpand(selection, selectionMask=32, expand=1)
-                allEdges = cmds.filterExpand(obj + ".e[*]", sm=32)
+                edges = cmds.filterExpand(selection, selectionMask=32, expand=1) or []
+                allEdges = cmds.filterExpand(obj + ".e[*]", sm=32) or []
                 invert += {e for e in allEdges if e not in edges}
 
             elif cmds.selectType(query=1, facet=1):  # face
-                selectedFaces = cmds.filterExpand(selection, selectionMask=34, expand=1)
-                allFaces = cmds.filterExpand(obj + ".f[*]", sm=34)
+                selectedFaces = (
+                    cmds.filterExpand(selection, selectionMask=34, expand=1) or []
+                )
+                allFaces = cmds.filterExpand(obj + ".f[*]", sm=34) or []
                 invert += {f for f in allFaces if f not in selectedFaces}
 
         cmds.select(invert, replace=1)

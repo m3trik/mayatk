@@ -14,7 +14,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>Create Shader Network</string>
+   <string>Dynamic Pipe</string>
   </property>
   <property name="tabShape">
    <enum>QTabWidget::Triangular</enum>
@@ -71,7 +71,7 @@
          </font>
         </property>
         <property name="text">
-         <string>CREATE STINGRAY SHADER</string>
+         <string>DYNAMIC PIPE</string>
         </property>
        </widget>
       </item>
