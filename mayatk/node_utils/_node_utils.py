@@ -980,43 +980,6 @@ class NodeUtils(ptk.HelpMixin):
                 filtered.append(t)
         return filtered
 
-    # -------------------------------------------------------------------------
-    # Persistent Data Nodes
-    # -------------------------------------------------------------------------
-
-    @staticmethod
-    def ensure_data_node(node_name: str, attr_name: str) -> str:
-        """Get or create a name-locked network node with a writable string attribute.
-
-        The node's **name** is locked to protect it from accidental
-        renaming; the node itself is left unlocked so callers can
-        write to data attributes without friction.  Existing nodes
-        that were locked in older scenes are transparently unlocked
-        and migrated.
-
-        Returns:
-            str: The (possibly newly created) network node's name.
-        """
-        if cmds.objExists(node_name):
-            node = node_name
-        else:
-            node = cmds.createNode("network", name=node_name)
-
-        # Temporarily fully-unlock if a previous version locked the
-        # node entirely (migration).
-        is_locked = cmds.lockNode(node, q=True, lock=True)[0]
-        if is_locked:
-            cmds.lockNode(node, lock=False)
-
-        if not cmds.attributeQuery(attr_name, node=node, exists=True):
-            cmds.addAttr(node, longName=attr_name, dataType="string")
-
-        # Lock the name only — prevents renaming while keeping
-        # attributes writable (Maya 2025 compatible).
-        cmds.lockNode(node, lock=False, lockName=True)
-
-        return node
-
 
 # -----------------------------------------------------------------------------
 

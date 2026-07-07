@@ -3,7 +3,8 @@
 """Tests for ``DataNodes`` — shared scene data node management.
 
 Covers node creation, idempotency, proxy attr mirroring,
-animation curve visibility through proxies, and legacy carrier migration.
+animation curve visibility through proxies, and the internal/export
+string channels.
 """
 import unittest
 import sys
@@ -200,99 +201,88 @@ class TestMirrorAttr(MayaTkTestCase):
             )
 
 
-# ── migrate_legacy_carriers ──────────────────────────────────────────────
+# ── internal string channels ─────────────────────────────────────────────
 
 
-class TestMigrateLegacyCarriers(MayaTkTestCase):
-    """migrate_legacy_carriers moves old carrier data to the new nodes."""
+class TestInternalStrings(MayaTkTestCase):
+    """set_internal_string / get_internal_string on data_internal."""
 
-    def _make_legacy_carrier(self, name="audio_events", enum_str="None:footstep"):
-        """Create a carrier matching the old _create_audio_carrier pattern."""
-        node = cmds.group(empty=True, name=name)
-        cmds.addAttr(
-            node,
-            longName="audio_trigger",
-            attributeType="enum",
-            enumName=enum_str,
-            keyable=True,
-        )
-        cmds.lockNode(node, lock=False, lockName=True)
-        return node
-
-    def test_migrates_single_carrier(self):
-        carrier = self._make_legacy_carrier()
-        cmds.currentTime(1)
-        cmds.setKeyframe(carrier, attribute="audio_trigger", value=0)
-        cmds.currentTime(10)
-        cmds.setKeyframe(carrier, attribute="audio_trigger", value=1)
-
-        migrated = DataNodes.migrate_legacy_carriers()
-
-        self.assertEqual(migrated, [carrier])
-        self.assertFalse(cmds.objExists(str(carrier)), "Old carrier should be deleted")
-        self.assertTrue(cmds.objExists(DataNodes.INTERNAL))
+    def test_set_creates_attr_and_returns_node(self):
+        node = DataNodes.set_internal_string("probe_channel", "hello")
+        self.assertEqual(node, DataNodes.INTERNAL)
         self.assertTrue(
-            cmds.attributeQuery("audio_trigger", node=DataNodes.INTERNAL, exists=True)
+            cmds.attributeQuery("probe_channel", node=DataNodes.INTERNAL, exists=True)
         )
 
-        # Anim curves should be on internal now
-        curves = (
-            cmds.listConnections(
-                f"{DataNodes.INTERNAL}.audio_trigger", type="animCurve"
+    def test_get_round_trips(self):
+        DataNodes.set_internal_string("probe_channel", "payload")
+        self.assertEqual(DataNodes.get_internal_string("probe_channel"), "payload")
+
+    def test_get_missing_returns_none(self):
+        self.assertIsNone(DataNodes.get_internal_string("never_set"))
+        DataNodes.ensure_internal()
+        self.assertIsNone(DataNodes.get_internal_string("never_set"))
+
+    def test_get_empty_returns_none(self):
+        DataNodes.set_internal_string("probe_channel", "")
+        self.assertIsNone(DataNodes.get_internal_string("probe_channel"))
+
+    def test_overwrite(self):
+        DataNodes.set_internal_string("probe_channel", "one")
+        DataNodes.set_internal_string("probe_channel", "two")
+        self.assertEqual(DataNodes.get_internal_string("probe_channel"), "two")
+
+    def test_not_mirrored_to_export(self):
+        """Internal channels must never leak onto the FBX export node."""
+        DataNodes.set_internal_string("probe_channel", "secret")
+        if cmds.objExists(DataNodes.EXPORT):
+            self.assertFalse(
+                cmds.attributeQuery("probe_channel", node=DataNodes.EXPORT, exists=True)
             )
-            or []
-        )
-        self.assertTrue(len(curves) > 0, "Anim curves should be reconnected")
 
-    def test_migrates_string_attrs(self):
-        carrier = self._make_legacy_carrier()
-        cmds.addAttr(carrier, longName="audio_file_map", dataType="string")
-        cmds.setAttr(
-            f"{carrier}.audio_file_map", "footstep=/sfx/step.wav", type="string"
-        )
 
-        DataNodes.migrate_legacy_carriers()
+# ── export string channels ───────────────────────────────────────────────
 
+
+class TestExportStrings(MayaTkTestCase):
+    """set_export_string / get_export_string on data_export."""
+
+    def test_set_creates_attr_and_returns_node(self):
+        node = DataNodes.set_export_string("probe_channel", "hello")
+        self.assertEqual(node, DataNodes.EXPORT)
         self.assertTrue(
-            cmds.attributeQuery("audio_file_map", node=DataNodes.INTERNAL, exists=True)
+            cmds.attributeQuery("probe_channel", node=DataNodes.EXPORT, exists=True)
         )
-        val = cmds.getAttr(f"{DataNodes.INTERNAL}.audio_file_map")
-        self.assertEqual(val, "footstep=/sfx/step.wav")
 
-    def test_does_not_touch_data_export(self):
-        """data_export should not be considered a legacy carrier."""
+    def test_get_round_trips(self):
+        DataNodes.set_export_string("probe_channel", "payload")
+        self.assertEqual(DataNodes.get_export_string("probe_channel"), "payload")
+
+    def test_get_missing_returns_none(self):
+        self.assertIsNone(DataNodes.get_export_string("never_set"))
         DataNodes.ensure_export()
-        DataNodes.mirror_attr("audio_trigger", attributeType="enum", enumName="None")
+        self.assertIsNone(DataNodes.get_export_string("never_set"))
 
-        migrated = DataNodes.migrate_legacy_carriers()
-        self.assertEqual(migrated, [], "data_export should not be migrated")
-        self.assertTrue(cmds.objExists(DataNodes.EXPORT))
+    def test_empty_value_does_not_create_carrier(self):
+        """Clearing a channel must never create data_export just to hold ''."""
+        result = DataNodes.set_export_string("probe_channel", "")
+        self.assertIsNone(result)
+        self.assertFalse(cmds.objExists(DataNodes.EXPORT))
 
-    def test_no_op_on_clean_scene(self):
-        migrated = DataNodes.migrate_legacy_carriers()
-        self.assertEqual(migrated, [])
-
-    def test_migrates_multiple_carriers(self):
-        c1 = self._make_legacy_carrier("audio_events")
-        c2 = self._make_legacy_carrier("audio_events1", "None:gunshot")
-
-        migrated = DataNodes.migrate_legacy_carriers()
-
-        self.assertEqual(len(migrated), 2)
-        self.assertFalse(cmds.objExists(str(c1)))
-        self.assertFalse(cmds.objExists(str(c2)))
-        self.assertTrue(cmds.objExists(DataNodes.INTERNAL))
-
-    def test_creates_proxy_on_export(self):
-        """Migration should set up the mirror_attr proxy."""
-        self._make_legacy_carrier()
-        DataNodes.migrate_legacy_carriers()
-
-        self.assertTrue(cmds.objExists(DataNodes.EXPORT))
+    def test_empty_value_clears_existing_channel(self):
+        DataNodes.set_export_string("probe_channel", "payload")
+        node = DataNodes.set_export_string("probe_channel", "")
+        self.assertEqual(node, DataNodes.EXPORT)
+        self.assertIsNone(DataNodes.get_export_string("probe_channel"))
+        # The attr itself stays (carrier not torn down), only the value clears.
         self.assertTrue(
-            cmds.attributeQuery("audio_trigger", node=DataNodes.EXPORT, exists=True),
-            "Proxy should exist on export node after migration",
+            cmds.attributeQuery("probe_channel", node=DataNodes.EXPORT, exists=True)
         )
+
+    def test_overwrite(self):
+        DataNodes.set_export_string("probe_channel", "one")
+        DataNodes.set_export_string("probe_channel", "two")
+        self.assertEqual(DataNodes.get_export_string("probe_channel"), "two")
 
 
 if __name__ == "__main__":

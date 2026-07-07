@@ -39,26 +39,56 @@ class TestAudioClipsExport(MayaTkTestCase):
         audio_utils.write_key("jump", frame=28, value=0)
 
     def test_prepare_for_export_stamps_manifest(self):
-        """prepare_for_export writes ``audio_manifest`` on both data_internal and data_export."""
+        """prepare_for_export writes ``audio_manifest`` as a plain export channel."""
         self._seed_tracks()
         manifest = AudioClips.prepare_for_export()
 
         from mayatk.node_utils.data_nodes import DataNodes
 
-        for node in (DataNodes.INTERNAL, DataNodes.EXPORT):
-            self.assertTrue(
-                cmds.attributeQuery(
-                    AudioClips.MANIFEST_ATTR, node=node, exists=True
-                ),
-                f"{node}.{AudioClips.MANIFEST_ATTR} should exist",
-            )
-        stored = cmds.getAttr(f"{DataNodes.INTERNAL}.{AudioClips.MANIFEST_ATTR}") or ""
-        proxy = cmds.getAttr(f"{DataNodes.EXPORT}.{AudioClips.MANIFEST_ATTR}") or ""
+        stored = DataNodes.get_export_string(AudioClips.MANIFEST_ATTR) or ""
         self.assertEqual(manifest, stored)
-        self.assertEqual(stored, proxy, "Proxy on data_export should mirror data_internal")
+        # A regenerated artifact lives ONLY on data_export — no internal copy.
+        self.assertFalse(
+            cmds.attributeQuery(
+                AudioClips.MANIFEST_ATTR, node=DataNodes.INTERNAL, exists=True
+            ),
+            "manifest must not be authored on data_internal (derived artifact)",
+        )
         # Maya frames 10/24 are shifted by playback_min=1 in the wire format
         self.assertIn("9:footstep", stored)
         self.assertIn("23:jump",    stored)
+
+    def test_prepare_for_export_migrates_legacy_proxy(self):
+        """A pre-taxonomy mirror_attr manifest pair is replaced by the plain channel."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        # Recreate the old shape: authored on internal, proxied on export.
+        DataNodes.mirror_attr(AudioClips.MANIFEST_ATTR, dataType="string")
+        cmds.setAttr(
+            f"{DataNodes.INTERNAL}.{AudioClips.MANIFEST_ATTR}",
+            "1:legacy",
+            type="string",
+        )
+
+        self._seed_tracks()
+        manifest = AudioClips.prepare_for_export()
+
+        self.assertIn("9:footstep", manifest)
+        self.assertEqual(DataNodes.get_export_string(AudioClips.MANIFEST_ATTR), manifest)
+        self.assertFalse(
+            cmds.addAttr(
+                f"{DataNodes.EXPORT}.{AudioClips.MANIFEST_ATTR}",
+                query=True,
+                usedAsProxy=True,
+            ),
+            "export channel should be a plain attr after migration, not a proxy",
+        )
+        self.assertFalse(
+            cmds.attributeQuery(
+                AudioClips.MANIFEST_ATTR, node=DataNodes.INTERNAL, exists=True
+            ),
+            "legacy internal source attr should be dropped",
+        )
 
     def test_prepare_for_export_is_idempotent(self):
         """Repeated calls overwrite cleanly; no duplicate attrs."""

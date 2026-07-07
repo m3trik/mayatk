@@ -240,7 +240,7 @@ class _TaskActionsMixin(_TaskDataMixin):
         without deleting driver nodes.  After export, the layer is deleted
         to restore the original scene state non-destructively.
         """
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         self.logger.info("Analyzing scene for bake requirements...")
         baker = SmartBake(
@@ -265,7 +265,11 @@ class _TaskActionsMixin(_TaskDataMixin):
 
         result = baker.bake(analysis)
 
-        # Store layer names and curves for cleanup after export
+        # Store the restore-manifest session for cleanup after export
+        # (SmartBake.restore() reverses the layer, IK state, and visibility).
+        if result.session_id:
+            self._bake_session_id = result.session_id
+        # Legacy fallback path (no session recorded).
         if result.override_layer:
             self._bake_override_layer = result.override_layer
         # Build detailed log message
@@ -400,7 +404,9 @@ class _TaskActionsMixin(_TaskDataMixin):
 
         Makes a silently-empty export distinguishable from a populated one — the
         single most useful signal that the carrier reached the FBX with content.
-        Reads the channels generically; no-ops when the carrier is absent.  Pure
+        Channel-agnostic: every user-defined string attr on the carrier is
+        summarized by entry count (JSON array / dict-of-list / whitespace-token
+        wire string), so new producers show up with no exporter edits.  Pure
         logging convenience — fully best-effort so it can never abort the export.
         """
         try:
@@ -410,20 +416,28 @@ class _TaskActionsMixin(_TaskDataMixin):
             if not cmds.objExists(DataNodes.EXPORT):
                 return
 
-            parts = []
-            meta_raw = DataNodes.get_export_string(DataNodes.SHOT_METADATA)
-            if meta_raw:
-                n_shots = len(json.loads(meta_raw).get("shots", []))
-                if n_shots:
-                    parts.append(f"{n_shots} shot(s)")
+            def entry_count(raw: str) -> int:
+                try:
+                    data = json.loads(raw)
+                except ValueError:
+                    return len(raw.split())  # wire strings, e.g. "frame:label …"
+                if isinstance(data, list):
+                    return len(data)
+                if isinstance(data, dict):
+                    for value in data.values():
+                        if isinstance(value, list):
+                            return len(value)
+                return 1
 
-            # ``audio_manifest`` is the Audio channel's wire name (whitespace-
-            # joined ``frame:label`` events); read directly to stay decoupled.
-            if cmds.attributeQuery("audio_manifest", node=DataNodes.EXPORT, exists=True):
-                manifest = cmds.getAttr(f"{DataNodes.EXPORT}.audio_manifest") or ""
-                n_audio = len(manifest.split())
-                if n_audio:
-                    parts.append(f"{n_audio} audio event(s)")
+            parts = []
+            for attr in cmds.listAttr(DataNodes.EXPORT, userDefined=True) or []:
+                plug = f"{DataNodes.EXPORT}.{attr}"
+                if cmds.getAttr(plug, type=True) != "string":
+                    continue
+                raw = cmds.getAttr(plug) or ""
+                if raw:
+                    n = entry_count(raw)
+                    parts.append(f"{attr} ({n} entr{'y' if n == 1 else 'ies'})")
 
             if parts:
                 self.logger.info("Embedded on data_export: " + ", ".join(parts) + ".")
@@ -450,22 +464,19 @@ class _TaskActionsMixin(_TaskDataMixin):
     def _refresh_scene_data_node(self):
         """Refresh ``data_export`` channels from the live metadata producers.
 
-        Each producer no-ops when it has nothing to write (no shots / no audio
-        carrier), so a metadata-free scene leaves no node behind.  Guarded per
-        producer so an absent or erroring subsystem never blocks the export.
+        Delegates to :meth:`FbxUtils.run_export_preparers` — the single
+        producer registry (session preparers + known producers), so a new
+        metadata system ships without touching the exporter.  Each producer
+        no-ops when it has nothing to write (no shots / no audio carrier),
+        leaving no node behind in a metadata-free scene, and is isolated so
+        an absent or erroring subsystem never blocks the export.
         """
         try:
-            from mayatk.anim_utils.shots._shots import ShotStore
+            from mayatk.env_utils.fbx_utils import FbxUtils
 
-            ShotStore.refresh_export_view()
+            FbxUtils.run_export_preparers()
         except Exception:
-            self.logger.debug("Shots data-node refresh skipped.", exc_info=True)
-        try:
-            from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
-
-            AudioClips.prepare_for_export()
-        except Exception:
-            self.logger.debug("Audio data-node refresh skipped.", exc_info=True)
+            self.logger.debug("data_export refresh skipped.", exc_info=True)
 
     def apply_declared_takes(self):
         """Export each shot as a named Unity clip, plus embed shot metadata.
@@ -1503,7 +1514,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "smart_bake": {
                 "widget_type": "QCheckBox",
                 "setText": "Smart Bake",
-                "setToolTip": "Intelligently bake constraints, driven keys, expressions, IK, motion paths, and blend shapes to keyframes.\nAuto-detects time range from drivers, deletes driver nodes after baking.",
+                "setToolTip": "Intelligently bake constraints, driven keys, expressions, IK, motion paths, and blend shapes to keyframes.\nAuto-detects time range from drivers. Bakes to an override layer; the pre-bake scene state is restored after export.",
                 "setChecked": True,
             },
             "optimize_keys": {

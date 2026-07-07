@@ -42,8 +42,11 @@ from mayatk.anim_utils.shots._detection import (
     regions_from_selected_keys,
 )
 
-NODE_NAME = "shotStore"
-ATTR_NAME = "shotData"
+ATTR_NAME = "shot_store"  # string channel on the shared ``data_internal`` node
+# Pre-consolidation carrier: a dedicated network node. Folded into
+# ``data_internal`` on first load (see MayaScenePersistence._migrate_legacy).
+LEGACY_NODE_NAME = "shotStore"
+LEGACY_ATTR_NAME = "shotData"
 _DEFAULT_FPS = 24.0
 
 
@@ -92,7 +95,14 @@ class ScenePersistence(Protocol):
 
 
 class MayaScenePersistence:
-    """Persist ShotStore data to a Maya network-node attribute.
+    """Persist ShotStore data to a string channel on ``data_internal``.
+
+    The store rides the shared :class:`DataNodes` internal carrier (the same
+    node SmartBake uses for its session manifests) so it persists with the
+    scene but never exports — ``data_internal`` is a ``network`` node and
+    can't serialise into an FBX.  Scenes written before the consolidation
+    used a dedicated ``shotStore`` network node; that carrier is folded into
+    ``data_internal`` transparently on first load.
 
     Registers ``SceneOpened`` / ``NewSceneOpened`` subscriptions via
     :class:`ScriptJobManager` so that :attr:`ShotStore._active` is
@@ -101,12 +111,7 @@ class MayaScenePersistence:
     across scene switches.
     """
 
-    def __init__(
-        self,
-        node_name: str = NODE_NAME,
-        attr_name: str = ATTR_NAME,
-    ):
-        self._node_name = node_name
+    def __init__(self, attr_name: str = ATTR_NAME):
         self._attr_name = attr_name
         self._before_save_cb_id = None  # OpenMaya callback id
         self._scene_subs_installed = False
@@ -116,33 +121,60 @@ class MayaScenePersistence:
         if cmds is None:
             return
         import json
-        from mayatk.node_utils._node_utils import NodeUtils
+        from mayatk.node_utils.data_nodes import DataNodes
 
         # Persistence writes must not pollute the undo queue.  They
         # fire via evalDeferred AFTER an UndoChunk closes and would
         # otherwise become the top undo entry, preventing the real
         # operation (e.g. keyframe move) from being undone.
+        prev_undo_state = cmds.undoInfo(q=True, state=True)
         cmds.undoInfo(stateWithoutFlush=False)
         try:
-            node = NodeUtils.ensure_data_node(self._node_name, self._attr_name)
-            cmds.setAttr(f"{node}.{self._attr_name}", json.dumps(data), type="string")
+            DataNodes.set_internal_string(self._attr_name, json.dumps(data))
         finally:
-            cmds.undoInfo(stateWithoutFlush=True)
+            cmds.undoInfo(stateWithoutFlush=prev_undo_state)
 
     def load(self) -> Optional[Dict[str, Any]]:
         if cmds is None:
             return None
         import json
+        from mayatk.node_utils.data_nodes import DataNodes
 
-        if not cmds.objExists(self._node_name):
-            return None
-        node = self._node_name
-        if not cmds.attributeQuery(self._attr_name, node=node, exists=True):
-            return None
-        raw = cmds.getAttr(f"{node}.{self._attr_name}")
+        raw = DataNodes.get_internal_string(self._attr_name)
+        if raw is None:
+            raw = self._migrate_legacy()
         if not raw:
             return None
         return json.loads(raw)
+
+    def _migrate_legacy(self) -> Optional[str]:
+        """Fold the pre-consolidation ``shotStore`` node into ``data_internal``.
+
+        Reads the old dedicated carrier once, rewrites its payload onto the
+        shared channel, and deletes the old node.  Undo-safe and effectively
+        idempotent — the legacy node is gone after the first call.
+        """
+        if not cmds.objExists(LEGACY_NODE_NAME):
+            return None
+        # The attr is the carrier's signature — a node that merely shares the
+        # name (a user transform called "shotStore") must be left untouched.
+        if not cmds.attributeQuery(LEGACY_ATTR_NAME, node=LEGACY_NODE_NAME, exists=True):
+            return None
+        raw = cmds.getAttr(f"{LEGACY_NODE_NAME}.{LEGACY_ATTR_NAME}") or None
+
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        prev_undo_state = cmds.undoInfo(q=True, state=True)
+        cmds.undoInfo(stateWithoutFlush=False)
+        try:
+            if raw:
+                DataNodes.set_internal_string(self._attr_name, raw)
+            # The legacy carrier had its name locked — unlock before delete.
+            cmds.lockNode(LEGACY_NODE_NAME, lock=False, lockName=False)
+            cmds.delete(LEGACY_NODE_NAME)
+        finally:
+            cmds.undoInfo(stateWithoutFlush=prev_undo_state)
+        return raw
 
     # ---- scene lifecycle subscriptions ------------------------------------
 
@@ -627,7 +659,17 @@ class ShotStore:
     def clear_active(cls) -> None:
         """Reset the active store and persistence backend."""
         cls._active = None
-        cls._persistence = None
+        if cls._persistence is not None:
+            # Tear down the backend's scene callbacks — dropping the
+            # reference alone leaks them, and a leaked kBeforeSave
+            # callback can write the OLD store's data into a new scene.
+            remove = getattr(cls._persistence, "remove_callbacks", None)
+            if remove is not None:
+                try:
+                    remove()
+                except Exception:
+                    pass
+            cls._persistence = None
 
     # ---- invalidation listeners (class-level) ----------------------------
 
@@ -988,10 +1030,13 @@ class ShotStore:
 
     def set_object_hidden(self, obj_name: str, hidden: bool = True) -> None:
         """Show or hide *obj_name* in the sequencer UI."""
+        if hidden == (obj_name in self.hidden_objects):
+            return
         if hidden:
             self.hidden_objects.add(obj_name)
         else:
             self.hidden_objects.discard(obj_name)
+        self.mark_dirty()
 
     # ---- pinning ---------------------------------------------------------
 
@@ -1006,20 +1051,31 @@ class ShotStore:
         'missing' indicator when they no longer exist in the scene.
         Non-pinned objects are silently removed from tracks.
         """
+        if pinned == (obj_name in self.pinned_objects):
+            return
         if pinned:
             self.pinned_objects.add(obj_name)
         else:
             self.pinned_objects.discard(obj_name)
+        self.mark_dirty()
 
     # ---- object removal --------------------------------------------------
 
     def remove_object_from_shots(self, obj_name: str) -> None:
         """Remove *obj_name* from every shot's object list."""
+        changed = False
         for shot in self.shots:
             if obj_name in shot.objects:
                 shot.objects.remove(obj_name)
-        self.pinned_objects.discard(obj_name)
-        self.hidden_objects.discard(obj_name)
+                changed = True
+        if obj_name in self.pinned_objects:
+            self.pinned_objects.discard(obj_name)
+            changed = True
+        if obj_name in self.hidden_objects:
+            self.hidden_objects.discard(obj_name)
+            changed = True
+        if changed:
+            self.mark_dirty()
 
     # ---- serialisation ---------------------------------------------------
 
@@ -1118,6 +1174,10 @@ class ShotStore:
         if store is not None and store.shots:
             store.publish_export_view()
 
+    #: Explicit user opt-out (``disable_auto_export``) — session-global; wins
+    #: over the automatic registration that authoring a shot performs.
+    _auto_export_disabled = False
+
     @classmethod
     def enable_auto_export(cls) -> None:
         """Make **every** FBX export this session carry the active store's shots.
@@ -1127,20 +1187,37 @@ class ShotStore:
         Export, the Game Exporter, or a raw ``cmds.file`` export all emit one
         named clip per shot plus the embedded ``shot_metadata``, with no Scene
         Exporter and no staleness window.  Clip naming follows the active store's
-        ``clip_name_strategy``.  Opt-in and session-global; an export of unrelated
-        sub-assets in the same scene will also receive the take state.  Idempotent.
-        Call :func:`disable_auto_export` to remove it.
+        ``clip_name_strategy``.  Session-global, and automatic once a store with
+        shots is saved (authoring opts you in); an export of unrelated sub-assets
+        in the same scene will also receive the take state.  Idempotent.  Call
+        :func:`disable_auto_export` to remove it for the session.
         """
-        from mayatk.env_utils.fbx_utils import FbxUtils
+        cls._auto_export_disabled = False
+        cls._register_export_preparer()
 
-        FbxUtils.register_export_preparer("shots", cls.refresh_export_view)
+    @classmethod
+    def disable_auto_export(cls) -> None:
+        """Remove the before-export preparer for the rest of the session.
 
-    @staticmethod
-    def disable_auto_export() -> None:
-        """Remove the before-export preparer installed by :func:`enable_auto_export`."""
+        An explicit opt-out: the automatic registration performed by
+        :meth:`save` respects it and won't re-install the hook.
+        """
+        cls._auto_export_disabled = True
         from mayatk.env_utils.fbx_utils import FbxUtils
 
         FbxUtils.unregister_export_preparer("shots")
+
+    @classmethod
+    def _register_export_preparer(cls) -> None:
+        """Install the session preparer unless the user explicitly opted out."""
+        if cls._auto_export_disabled:
+            return
+        try:
+            from mayatk.env_utils.fbx_utils import FbxUtils
+
+            FbxUtils.register_export_preparer("shots", cls.refresh_export_view)
+        except Exception:  # outside Maya / hooks unavailable — never block a save
+            pass
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ShotStore":
@@ -1258,16 +1335,23 @@ class ShotStore:
         """Persist via the configured backend (no-op if none set).
 
         Also writes detection preferences to QSettings so they survive
-        across scenes even when the shots settings panel is not opened.
+        across scenes even when the shots settings panel is not opened,
+        and — since saving shots means the user is authoring them —
+        installs the before-export preparer so any FBX export ships the
+        current export view (see :meth:`enable_auto_export`).
         """
-        self._dirty = False
         if self._persistence is not None:
             self._persistence.save(self.to_dict())
+        # Clear only after a successful write — clearing first would
+        # silently discard the pending changes if the backend raises.
+        self._dirty = False
         if self.auto_publish_export:
             try:
                 self.publish_export_view()
             except Exception:  # never let export projection break a save
                 pass
+        if self.shots:
+            type(self)._register_export_preparer()
         self._save_user_prefs()
 
     # ---- detection convenience -------------------------------------------

@@ -318,9 +318,27 @@ class SceneExporter(ptk.LoggingMixin):
                 if self.create_log_file:
                     self.close_file_handlers()
         finally:
-            # Clean up the override animation layer created by smart_bake.
-            # Deleting the layer restores the original scene state
-            # non-destructively (constraints resume, undo history intact).
+            # Restore the scene state recorded by smart_bake's session
+            # manifest: deletes the override layer, re-enables IK handles
+            # (bakeResults' disableImplicitControl zeroes ikBlend even when
+            # baking to a layer), and restores any baked visibility.
+            _session = getattr(self.task_manager, "_bake_session_id", None)
+            if _session:
+                try:
+                    from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+                    restore = SmartBake.restore(_session)
+                    if restore.success:
+                        self.logger.info(
+                            f"Restored pre-bake scene state (session '{_session}')."
+                        )
+                        self.task_manager._bake_override_layer = None
+                except Exception as e:
+                    # Never mask an export exception from inside finally —
+                    # the layer-delete fallback below still runs.
+                    self.logger.error(f"SmartBake restore failed: {e}")
+                self.task_manager._bake_session_id = None
+            # Fallback for bakes recorded without a session manifest.
             _layer = getattr(self.task_manager, "_bake_override_layer", None)
             if _layer and cmds.objExists(_layer):
                 cmds.delete(_layer)

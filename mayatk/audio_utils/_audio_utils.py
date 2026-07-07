@@ -391,6 +391,15 @@ class AudioUtils(ptk.HelpMixin):
             keyable=True,
             hidden=True,
         )
+        # Creating a track = authoring audio: install the before-export
+        # preparer so any FBX export ships a fresh manifest (respects an
+        # explicit AudioClips.disable_auto_export opt-out).
+        try:
+            from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
+
+            AudioClips._register_export_preparer()
+        except Exception:  # never let hook wiring block authoring
+            pass
         return full
 
     @classmethod

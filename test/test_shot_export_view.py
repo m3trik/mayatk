@@ -145,8 +145,13 @@ class TestExportRoundTrip(MayaTkTestCase):
         super().setUp()
         FbxUtils.reset_takes()  # global FBX state — start clean
         ShotStore.clear_active()
+        ShotStore._auto_export_disabled = False  # session opt-out — start clean
 
     def tearDown(self):
+        # Authoring a store auto-registers the "shots" preparer — tear the
+        # session hook down so it can't leak into other suites.
+        ShotStore.disable_auto_export()
+        ShotStore._auto_export_disabled = False
         ShotStore.clear_active()
         super().tearDown()
 
@@ -216,6 +221,9 @@ class TestExportRoundTrip(MayaTkTestCase):
             self.assertFalse(mel.eval("FBXExportSplitAnimationIntoTakes -q"))
         finally:
             FbxUtils.disable_auto_takes()
+            # Authoring the store auto-registered the "shots" preparer, which
+            # also holds the hook — drop it too before asserting teardown.
+            ShotStore.disable_auto_export()
         self.assertFalse(FbxUtils.is_auto_takes_enabled())
 
     def test_enable_auto_export_republishes_fresh(self):
