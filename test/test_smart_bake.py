@@ -103,7 +103,7 @@ class TestSmartBake(unittest.TestCase):
     def test_analyze_constraint_driven_object(self):
         """Verify analysis correctly identifies constraint-driven channels."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         # Create parent constrained object
         cube = cmds.polyCube(name="test_cube")[0]
@@ -125,7 +125,7 @@ class TestSmartBake(unittest.TestCase):
     def test_analyze_already_keyed_object(self):
         """Verify analysis detects already-keyed channels."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="keyed_cube")[0]
 
@@ -143,7 +143,7 @@ class TestSmartBake(unittest.TestCase):
     def test_analyze_mixed_keyed_and_constrained(self):
         """Verify analysis handles object with both keys and constraints."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="mixed_cube")[0]
         locator = cmds.spaceLocator(name="mixed_loc")[0]
@@ -171,7 +171,7 @@ class TestSmartBake(unittest.TestCase):
     def test_analyze_muted_constraint_skipped(self):
         """Verify muted constraints are not included in bake analysis."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="muted_cube")[0]
         locator = cmds.spaceLocator(name="muted_loc")[0]
@@ -194,7 +194,7 @@ class TestSmartBake(unittest.TestCase):
     def test_time_range_from_constraint_target(self):
         """Verify time range is detected from constraint target animation."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="range_cube")[0]
         locator = cmds.spaceLocator(name="range_loc")[0]
@@ -213,7 +213,7 @@ class TestSmartBake(unittest.TestCase):
     def test_time_range_fallback_to_playback(self):
         """Verify fallback to playback range when no driver animation."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cmds.playbackOptions(minTime=1, maxTime=100)
 
@@ -235,7 +235,7 @@ class TestSmartBake(unittest.TestCase):
     def test_bake_creates_keyframes(self):
         """Verify baking creates keyframes on driven channels."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="bake_cube")[0]
         locator = cmds.spaceLocator(name="bake_loc")[0]
@@ -245,7 +245,14 @@ class TestSmartBake(unittest.TestCase):
         cmds.setKeyframe(locator, attribute="tx", time=1, value=0)
         cmds.setKeyframe(locator, attribute="tx", time=10, value=10)
 
-        baker = SmartBake(objects=[cube], delete_inputs=True)
+        # delete_inputs is a base-layer behavior (ignored under the
+        # nondestructive layer default).
+        baker = SmartBake(
+            objects=[cube],
+            delete_inputs=True,
+            use_override_layer=False,
+            backup_file=False,
+        )
         result = baker.execute()
 
         # Verify bake result
@@ -263,7 +270,7 @@ class TestSmartBake(unittest.TestCase):
     def test_bake_preserves_existing_keys(self):
         """Verify baking preserves keys outside bake range."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="preserve_cube")[0]
         locator = cmds.spaceLocator(name="preserve_loc")[0]
@@ -292,7 +299,7 @@ class TestSmartBake(unittest.TestCase):
     def test_empty_scene_no_objects(self):
         """Verify graceful handling of empty scene."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         # Empty scene with no transforms (only default cameras)
         all_transforms = cmds.ls(type="transform", long=True) or []
@@ -308,7 +315,7 @@ class TestSmartBake(unittest.TestCase):
     def test_object_with_no_connections(self):
         """Verify objects with no incoming connections are skipped."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="isolated_cube")[0]
         # No constraints, no keys, nothing
@@ -322,7 +329,7 @@ class TestSmartBake(unittest.TestCase):
     def test_deleted_object_during_bake(self):
         """Verify handling when referenced object no longer exists."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="deleted_cube")[0]
         locator = cmds.spaceLocator(name="del_loc")[0]
@@ -349,7 +356,7 @@ class TestSmartBake(unittest.TestCase):
     def test_multiple_constraints_on_same_object(self):
         """Verify handling multiple constraints affecting same object."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="multi_const_cube")[0]
         loc1 = cmds.spaceLocator(name="loc1")[0]
@@ -376,7 +383,7 @@ class TestSmartBake(unittest.TestCase):
     def test_constraint_chain(self):
         """Verify baking works with constraint chains (A constrains B constrains C)."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cubeA = cmds.polyCube(name="chainA")[0]
         cubeB = cmds.polyCube(name="chainB")[0]
@@ -399,7 +406,7 @@ class TestSmartBake(unittest.TestCase):
     def test_pairblend_intermediate_node(self):
         """Verify tracing through pairBlend nodes (IK/FK blend)."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="pairblend_cube")[0]
         locator = cmds.spaceLocator(name="pb_loc")[0]
@@ -421,7 +428,7 @@ class TestSmartBake(unittest.TestCase):
     def test_unitconversion_intermediate_node(self):
         """Verify tracing through unitConversion nodes."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         # Create joint (uses degrees internally, radians in connections)
         joint = cmds.joint(name="test_joint")
@@ -440,7 +447,7 @@ class TestSmartBake(unittest.TestCase):
     def test_driven_key_with_animated_driver(self):
         """Verify driven key detection when driver has animation."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         driver = cmds.polyCube(name="sdk_driver")[0]
         driven = cmds.polyCube(name="sdk_driven")[0]
@@ -470,7 +477,7 @@ class TestSmartBake(unittest.TestCase):
     def test_expression_with_time_reference(self):
         """Verify expression detection with time-based expression."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="time_expr_cube")[0]
         cmds.expression(s=f"{cube}.ty = sin(time * 2) * 5", name="sine_expression")
@@ -484,7 +491,7 @@ class TestSmartBake(unittest.TestCase):
     def test_scale_constraint(self):
         """Verify scale constraints are detected."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="scale_cube")[0]
         locator = cmds.spaceLocator(name="scale_loc")[0]
@@ -504,7 +511,7 @@ class TestSmartBake(unittest.TestCase):
     def test_aim_constraint(self):
         """Verify aim constraints are detected."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="aim_cube")[0]
         target = cmds.polyCube(name="aim_target")[0]
@@ -522,7 +529,7 @@ class TestSmartBake(unittest.TestCase):
     def test_bake_with_sample_by(self):
         """Verify sample_by parameter affects key density."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="sample_cube")[0]
         locator = cmds.spaceLocator(name="sample_loc")[0]
@@ -543,7 +550,7 @@ class TestSmartBake(unittest.TestCase):
     def test_long_path_names(self):
         """Verify handling of long DAG path names with namespaces."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         # Create nested hierarchy
         grp1 = cmds.group(empty=True, name="root_group")
@@ -567,7 +574,7 @@ class TestSmartBake(unittest.TestCase):
     def test_non_transform_objects_ignored(self):
         """Verify non-transform nodes don't cause errors."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="shape_test_cube")[0]
         shape = cmds.listRelatives(cube, shapes=True)[0]
@@ -582,7 +589,7 @@ class TestSmartBake(unittest.TestCase):
     def test_optimize_keys_option(self):
         """Verify optimize_keys option calls AnimUtils.optimize_keys."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="optimize_cube")[0]
         locator = cmds.spaceLocator(name="opt_loc")[0]
@@ -607,7 +614,7 @@ class TestSmartBake(unittest.TestCase):
         Fixed: 2026-03-07 — uses cmds.animLayer(layer, q=True, animCurves=True).
         """
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="layer_opt_cube")[0]
         locator = cmds.spaceLocator(name="layer_opt_loc")[0]
@@ -643,7 +650,7 @@ class TestSmartBake(unittest.TestCase):
     def test_override_layer_cleanup_restores_scene(self):
         """Verify deleting the override layer restores the scene state."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="restore_cube")[0]
         locator = cmds.spaceLocator(name="restore_loc")[0]
@@ -683,7 +690,7 @@ class TestSmartBake(unittest.TestCase):
     def test_classmethod_run(self):
         """Verify SmartBake.run() classmethod works correctly."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="run_cube")[0]
         locator = cmds.spaceLocator(name="run_loc")[0]
@@ -700,7 +707,7 @@ class TestSmartBake(unittest.TestCase):
 
     def test_bake_result_properties(self):
         """Verify BakeResult dataclass properties work correctly."""
-        from mayatk.anim_utils.smart_bake import BakeResult
+        from mayatk.anim_utils.smart_bake._smart_bake import BakeResult
 
         # Empty result
         empty_result = BakeResult()
@@ -714,7 +721,7 @@ class TestSmartBake(unittest.TestCase):
 
     def test_bake_analysis_properties(self):
         """Verify BakeAnalysis dataclass properties work correctly."""
-        from mayatk.anim_utils.smart_bake import BakeAnalysis
+        from mayatk.anim_utils.smart_bake._smart_bake import BakeAnalysis
 
         # Empty analysis
         empty = BakeAnalysis(object="test")
@@ -735,7 +742,7 @@ class TestSmartBake(unittest.TestCase):
     def test_constraint_with_multiple_targets(self):
         """Verify constraints with multiple targets (blended) are handled."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="blend_cube")[0]
         loc1 = cmds.spaceLocator(name="blend_loc1")[0]
@@ -759,7 +766,7 @@ class TestSmartBake(unittest.TestCase):
     def test_delete_inputs_removes_constraints(self):
         """Verify delete_inputs removes constraint nodes after baking."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="delete_test_cube")[0]
         locator = cmds.spaceLocator(name="del_test_loc")[0]
@@ -768,7 +775,12 @@ class TestSmartBake(unittest.TestCase):
         cmds.setKeyframe(locator, attribute="tx", time=1, value=0)
         cmds.setKeyframe(locator, attribute="tx", time=10, value=10)
 
-        baker = SmartBake(objects=[cube], delete_inputs=True)
+        baker = SmartBake(
+            objects=[cube],
+            delete_inputs=True,
+            use_override_layer=False,
+            backup_file=False,
+        )
         result = baker.execute()
 
         # Constraint should be deleted
@@ -778,14 +790,19 @@ class TestSmartBake(unittest.TestCase):
     def test_delete_inputs_removes_expressions(self):
         """Verify delete_inputs removes expression nodes after baking."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="expr_del_cube")[0]
         expr = cmds.expression(s=f"{cube}.ty = time * 2", name="test_expr")
 
         cmds.playbackOptions(minTime=1, maxTime=10)
 
-        baker = SmartBake(objects=[cube], delete_inputs=True)
+        baker = SmartBake(
+            objects=[cube],
+            delete_inputs=True,
+            use_override_layer=False,
+            backup_file=False,
+        )
         result = baker.execute()
 
         # Expression should be deleted
@@ -794,7 +811,7 @@ class TestSmartBake(unittest.TestCase):
     def test_visibility_channel(self):
         """Verify visibility channel can be baked from expressions."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="vis_cube")[0]
         # Expression that toggles visibility based on time
@@ -816,7 +833,7 @@ class TestSmartBake(unittest.TestCase):
     def test_joints_included_in_default_query(self):
         """Verify joints are included when querying all objects for baking."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         # Create a joint chain
         cmds.select(clear=True)
@@ -841,7 +858,7 @@ class TestSmartBake(unittest.TestCase):
     def test_ik_chain_detection(self):
         """Verify joints in IK chains are detected as needing bake."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         # Create a joint chain
         cmds.select(clear=True)
@@ -872,7 +889,7 @@ class TestSmartBake(unittest.TestCase):
     def test_motion_path_detection(self):
         """Verify objects attached to motion paths are detected."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         # Create a curve path
         curve = cmds.curve(
@@ -901,7 +918,7 @@ class TestSmartBake(unittest.TestCase):
     def test_blend_shape_sdk_detection(self):
         """Verify blend shapes driven by SDKs are detected."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         # Create base and target meshes
         base = cmds.polyCube(name="bs_base")[0]
@@ -941,7 +958,7 @@ class TestSmartBake(unittest.TestCase):
     def test_animation_layer_passthrough(self):
         """Verify animation layers are traced through properly."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         cube = cmds.polyCube(name="layer_cube")[0]
 
@@ -967,7 +984,7 @@ class TestSmartBake(unittest.TestCase):
     def test_multiply_divide_passthrough(self):
         """Verify connections through multiplyDivide nodes are traced."""
         from maya import cmds
-        from mayatk.anim_utils.smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         # Create a multiply/divide setup
         driver = cmds.polyCube(name="mult_driver")[0]
@@ -994,6 +1011,499 @@ class TestSmartBake(unittest.TestCase):
         self.assertTrue(
             analysis[driven].already_keyed or analysis[driven].driven_channels
         )
+
+
+class TestLayerBakeCorrectness(unittest.TestCase):
+    """Layer-mode bakes must capture the driver's true per-frame motion.
+
+    Regression: _create_override_layer pre-registered the bake attributes
+    onto the fresh layer (create_animation_layer(attributes=...)) before
+    bakeResults(destinationLayer=...) targeted it. That combination writes a
+    flat constant — the value live at registration time — at every sampled
+    frame, so a constrained object read back motionless WHILE baked (and the
+    scene exporter's FBX pass, which samples the evaluated scene with the
+    layer live, exported flat animation). bakeResults must be handed an
+    EMPTY layer and wire the attributes itself.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        from maya import cmds
+
+        cmds.file(new=True, force=True)
+        cmds.playbackOptions(minTime=1, maxTime=10)
+
+    def tearDown(self):
+        if self.maya_available:
+            from maya import cmds
+
+            cmds.file(new=True, force=True)
+
+    def test_layer_bake_matches_driver_motion_while_live(self):
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube = cmds.polyCube(name="lbc_cube")[0]
+        loc = cmds.spaceLocator(name="lbc_loc")[0]
+        cmds.setKeyframe(loc, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(loc, attribute="translateX", time=10, value=5)
+        cmds.parentConstraint(loc, cube)
+
+        result = SmartBake(objects=[cube]).execute()
+        self.assertTrue(result.success)
+        self.assertTrue(cmds.objExists(result.override_layer))
+
+        # WHILE the layer is live, the cube must track the locator exactly —
+        # including mid-range frames whose value depends on the locator's
+        # own (auto/spline) tangent shape, not a hardcoded linear ramp.
+        for frame in (1, 3, 5, 7, 10):
+            cmds.currentTime(frame)
+            self.assertAlmostEqual(
+                cmds.getAttr(f"{cube}.tx"),
+                cmds.getAttr(f"{loc}.tx"),
+                places=3,
+                msg=f"baked cube diverges from driver at frame {frame}",
+            )
+
+        # And the layer's baked curve itself must not be a flat constant.
+        layer_curves = (
+            cmds.animLayer(result.override_layer, query=True, animCurves=True) or []
+        )
+        self.assertTrue(layer_curves)
+        tx_curves = [c for c in layer_curves if "translateX" in c]
+        self.assertTrue(tx_curves, f"no translateX curve on layer: {layer_curves}")
+        values = cmds.keyframe(tx_curves[0], query=True, valueChange=True) or []
+        self.assertGreater(
+            len(set(round(v, 4) for v in values)),
+            1,
+            f"baked layer curve is a flat constant: {values}",
+        )
+
+
+class TestNondestructiveRestore(unittest.TestCase):
+    """SmartBake restore manifest: bake() records, restore() reverses.
+
+    Contract:
+    - Every bake with restorable=True (default) pushes a session manifest
+      persisted on the data_internal node (survives save/reopen).
+    - SmartBake.restore() reverses the most recent session (LIFO) or a
+      named one: deletes the override layer, unmutes drivers to their
+      recorded states, re-enables IK handles, restores visibility curves
+      and values, and reconnects/unstashes base-layer driver networks.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        from maya import cmds
+
+        cmds.file(new=True, force=True)
+        cmds.playbackOptions(minTime=1, maxTime=10)
+
+    def tearDown(self):
+        if self.maya_available:
+            from maya import cmds
+
+            cmds.file(new=True, force=True)
+
+    # -- helpers ---------------------------------------------------------
+
+    def _constraint_scene(self, prefix="ndr"):
+        """Keyed locator parent-constraining a cube. Returns (cube, locator, constraint)."""
+        from maya import cmds
+
+        cube = cmds.polyCube(name=f"{prefix}_cube")[0]
+        loc = cmds.spaceLocator(name=f"{prefix}_loc")[0]
+        cmds.setKeyframe(loc, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(loc, attribute="translateX", time=10, value=5)
+        constraint = cmds.parentConstraint(loc, cube)[0]
+        return cube, loc, constraint
+
+    def _sdk_scene(self, prefix="sdk"):
+        """SDK driver.tx -> driven.ty (0->0, 10->5), driver keyed over time."""
+        from maya import cmds
+
+        driver = cmds.polyCube(name=f"{prefix}_driver")[0]
+        driven = cmds.polyCube(name=f"{prefix}_driven")[0]
+        cmds.setDrivenKeyframe(
+            f"{driven}.ty", currentDriver=f"{driver}.tx", driverValue=0, value=0
+        )
+        cmds.setDrivenKeyframe(
+            f"{driven}.ty", currentDriver=f"{driver}.tx", driverValue=10, value=5
+        )
+        cmds.setKeyframe(driver, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(driver, attribute="translateX", time=10, value=10)
+        return driver, driven
+
+    # -- session recording -----------------------------------------------
+
+    def test_default_is_override_layer(self):
+        """Nondestructive layer mode is the default."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        self.assertTrue(SmartBake().use_override_layer)
+
+    def test_bake_records_session(self):
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        cube, loc, constraint = self._constraint_scene()
+        result = SmartBake(objects=[cube]).execute()
+
+        self.assertTrue(result.success)
+        self.assertIsNotNone(result.session_id)
+        self.assertIn(result.session_id, SmartBake.list_sessions())
+        # Manifest persists on data_internal (never data_export).
+        self.assertTrue(DataNodes.get_internal_string(BakeSessionStore.ATTR))
+        if cmds.objExists(DataNodes.EXPORT):
+            self.assertFalse(
+                cmds.attributeQuery(
+                    BakeSessionStore.ATTR, node=DataNodes.EXPORT, exists=True
+                )
+            )
+
+    def test_restore_layer_mode(self):
+        """Restore deletes the override layer and pops the session."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube, loc, constraint = self._constraint_scene()
+        result = SmartBake(objects=[cube]).execute()
+        self.assertTrue(cmds.objExists(result.override_layer))
+
+        restore = SmartBake.restore()
+        self.assertTrue(restore.success)
+        self.assertFalse(cmds.objExists(result.override_layer))
+        self.assertEqual(SmartBake.list_sessions(), [])
+        # Constraint still drives the cube.
+        cmds.currentTime(10)
+        self.assertAlmostEqual(cmds.getAttr(f"{cube}.tx"), 5.0, places=3)
+
+    # -- IK (latent-bug regression) ---------------------------------------
+
+    def test_ik_survives_layer_bake_and_restore(self):
+        """IK must work while baked (true per-frame layer curves) and after
+        restore (handle still enabled, chain live).
+
+        History: layer bakes originally went through a PRE-REGISTERED layer
+        (create_animation_layer(attributes=...) then bakeResults onto it),
+        which both flattened the baked curves AND left ikBlend zeroed after
+        layer delete — the chain read permanently dead. With bakeResults
+        handed an empty layer, curves are correct and ikBlend stays 1.0; the
+        manifest still records/restores ikBlend as insurance for base-layer
+        bakes, where disableImplicitControl genuinely disables the handle.
+        """
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        j1 = cmds.joint(position=(0, 0, 0))
+        j2 = cmds.joint(position=(2, 0, 0))
+        j3 = cmds.joint(position=(4, 0, 0))
+        handle = cmds.ikHandle(startJoint=j1, endEffector=j3)[0]
+        cmds.setKeyframe(handle, attribute="translateY", time=1, value=0)
+        cmds.setKeyframe(handle, attribute="translateY", time=10, value=3)
+
+        result = SmartBake(objects=[j1, j2]).execute()
+        self.assertTrue(result.success)
+        # Empty-layer bake path leaves the handle enabled.
+        self.assertEqual(cmds.getAttr(f"{handle}.ikBlend"), 1.0)
+        # Baked layer curves carry real IK motion, not a flat constant.
+        cmds.currentTime(10)
+        baked_rot = abs(cmds.getAttr(f"{j1}.rotateY")) + abs(
+            cmds.getAttr(f"{j1}.rotateZ")
+        )
+        self.assertGreater(baked_rot, 0.1, "baked joint motion is flat")
+
+        restore = SmartBake.restore()
+        self.assertTrue(restore.success)
+        self.assertEqual(cmds.getAttr(f"{handle}.ikBlend"), 1.0)
+        cmds.currentTime(10)
+        rotation = abs(cmds.getAttr(f"{j1}.rotateY")) + abs(cmds.getAttr(f"{j1}.rotateZ"))
+        self.assertGreater(rotation, 0.1, "IK no longer drives the chain after restore")
+
+    # -- driver muting -----------------------------------------------------
+
+    def test_mute_states_restored(self):
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube, loc, constraint = self._constraint_scene()
+        SmartBake(objects=[cube], mute_drivers=True).execute()
+        self.assertEqual(cmds.getAttr(f"{constraint}.nodeState"), 2)
+
+        restore = SmartBake.restore()
+        self.assertTrue(restore.success)
+        self.assertEqual(cmds.getAttr(f"{constraint}.nodeState"), 0)
+
+    # -- inherited visibility ----------------------------------------------
+
+    def test_vis_hijack_original_curve_survives_restore(self):
+        """Baking inherited vis onto a child with its OWN vis keys must not
+        destroy the original animation once restored."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        parent = cmds.group(empty=True, name="vis_parent")
+        child_short = cmds.polyCube(name="vis_child")[0]
+        cmds.parent(child_short, parent)
+        child = cmds.ls(child_short, long=True)[0]
+
+        # Child's own show/hide animation.
+        cmds.setKeyframe(child, attribute="visibility", time=1, value=1)
+        cmds.setKeyframe(child, attribute="visibility", time=10, value=0)
+        # Parent toggles visibility (inherited at runtime, invisible to FBX).
+        cmds.setKeyframe(parent, attribute="visibility", time=3, value=0)
+        cmds.setKeyframe(parent, attribute="visibility", time=6, value=1)
+
+        result = SmartBake(
+            objects=[child], bake_inherited_visibility=True
+        ).execute()
+        self.assertIn("v", result.baked.get(child, []))
+        # Bake merged keys into the child's curve (more than the original 2).
+        baked_times = cmds.keyframe(f"{child}.visibility", query=True, timeChange=True)
+        self.assertGreater(len(baked_times), 2)
+
+        restore = SmartBake.restore()
+        self.assertTrue(restore.success)
+        times = cmds.keyframe(f"{child}.visibility", query=True, timeChange=True)
+        values = cmds.keyframe(f"{child}.visibility", query=True, valueChange=True)
+        self.assertEqual(times, [1.0, 10.0])
+        self.assertEqual(values, [1.0, 0.0])
+
+    def test_vis_static_value_restored(self):
+        """A child with no vis curve gets its static value back and the baked
+        curve removed."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        parent = cmds.group(empty=True, name="vis_parent2")
+        child_short = cmds.polyCube(name="vis_child2")[0]
+        cmds.parent(child_short, parent)
+        child = cmds.ls(child_short, long=True)[0]
+        cmds.setKeyframe(parent, attribute="visibility", time=3, value=0)
+        cmds.setKeyframe(parent, attribute="visibility", time=6, value=1)
+
+        SmartBake(objects=[child], bake_inherited_visibility=True).execute()
+        self.assertTrue(
+            cmds.listConnections(
+                f"{child}.visibility", source=True, destination=False, type="animCurve"
+            )
+        )
+
+        restore = SmartBake.restore()
+        self.assertTrue(restore.success)
+        self.assertFalse(
+            cmds.listConnections(
+                f"{child}.visibility", source=True, destination=False, type="animCurve"
+            )
+        )
+        self.assertEqual(cmds.getAttr(f"{child}.visibility"), 1.0)
+
+    # -- base-layer (destructive-mode) round trips --------------------------
+
+    def test_sdk_base_layer_round_trip(self):
+        """Base-layer bake destroys the SDK curve in place; restore rebuilds it."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        driver, driven = self._sdk_scene()
+        SmartBake(objects=[driven], use_override_layer=False).execute()
+        # Confirm destruction: plug curve is now time-based.
+        plug_curve = cmds.listConnections(
+            f"{driven}.ty", source=True, destination=False
+        )[0]
+        self.assertTrue(cmds.nodeType(plug_curve).startswith("animCurveT"))
+
+        restore = SmartBake.restore()
+        self.assertTrue(restore.success)
+        plug_curve = cmds.listConnections(
+            f"{driven}.ty", source=True, destination=False, skipConversionNodes=True
+        )[0]
+        self.assertTrue(
+            cmds.nodeType(plug_curve).startswith("animCurveU"),
+            f"expected SDK curve back, got {cmds.nodeType(plug_curve)}",
+        )
+        # SDK relationship evaluates: driver at 10 -> driven.ty == 5.
+        cmds.currentTime(10)
+        self.assertAlmostEqual(cmds.getAttr(f"{driven}.ty"), 5.0, places=3)
+
+    def test_blendshape_sdk_base_layer_round_trip(self):
+        """Blend-shape weight aliases must survive the base-layer
+        snapshot/stash path (attributeQuery can't resolve alias attrs)."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        base = cmds.polyCube(name="bsr_base")[0]
+        target = cmds.polyCube(name="bsr_target")[0]
+        cmds.select(f"{target}.vtx[*]")
+        cmds.move(0, 1, 0, relative=True)
+        blend_shape = cmds.blendShape(target, base, name="bsr_blendShape")[0]
+        cmds.delete(target)
+
+        driver = cmds.polyCube(name="bsr_driver")[0]
+        weight_plug = f"{blend_shape}.bsr_target"
+        cmds.setDrivenKeyframe(
+            weight_plug, currentDriver=f"{driver}.tx", driverValue=0, value=0
+        )
+        cmds.setDrivenKeyframe(
+            weight_plug, currentDriver=f"{driver}.tx", driverValue=10, value=1
+        )
+        cmds.setKeyframe(driver, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(driver, attribute="translateX", time=10, value=10)
+
+        result = SmartBake(objects=[base], use_override_layer=False).execute()
+        self.assertIn(blend_shape, result.baked)
+
+        restore = SmartBake.restore()
+        self.assertTrue(restore.success)
+        # SDK drives the weight again: driver at 10 -> weight == 1.
+        cmds.currentTime(10)
+        self.assertAlmostEqual(cmds.getAttr(weight_plug), 1.0, places=3)
+
+    def test_constraint_base_layer_round_trip(self):
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube, loc, constraint = self._constraint_scene(prefix="base")
+        SmartBake(objects=[cube], use_override_layer=False).execute()
+        self.assertTrue(
+            cmds.listConnections(
+                f"{cube}.tx", source=True, destination=False, type="animCurve"
+            ),
+            "expected baked curve on cube.tx",
+        )
+
+        restore = SmartBake.restore()
+        self.assertTrue(restore.success)
+        self.assertFalse(
+            cmds.listConnections(
+                f"{cube}.tx", source=True, destination=False, type="animCurve"
+            ),
+            "baked curve should be gone after restore",
+        )
+        cmds.currentTime(10)
+        self.assertAlmostEqual(cmds.getAttr(f"{cube}.tx"), 5.0, places=3)
+
+    # -- session semantics ---------------------------------------------------
+
+    def test_lifo_restore_order(self):
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube_a, _, _ = self._constraint_scene(prefix="a")
+        result_a = SmartBake(objects=[cube_a]).execute()
+        cube_b, _, _ = self._constraint_scene(prefix="b")
+        result_b = SmartBake(objects=[cube_b]).execute()
+
+        SmartBake.restore()  # pops B
+        self.assertFalse(cmds.objExists(result_b.override_layer))
+        self.assertTrue(cmds.objExists(result_a.override_layer))
+        SmartBake.restore()  # pops A
+        self.assertFalse(cmds.objExists(result_a.override_layer))
+        self.assertEqual(SmartBake.list_sessions(), [])
+
+    def test_cross_session_restore(self):
+        """The manifest persists in the scene file — restore works after reopen."""
+        import os
+        import tempfile
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube, loc, constraint = self._constraint_scene(prefix="xs")
+        result = SmartBake(objects=[cube], mute_drivers=True).execute()
+        layer = result.override_layer
+
+        tmp_dir = tempfile.mkdtemp()
+        scene_path = os.path.join(tmp_dir, "cross_session.ma")
+        try:
+            cmds.file(rename=scene_path)
+            cmds.file(save=True, type="mayaAscii")
+            cmds.file(new=True, force=True)
+            cmds.file(scene_path, open=True, force=True)
+
+            self.assertTrue(cmds.objExists(layer))
+            restore = SmartBake.restore()
+            self.assertTrue(restore.success)
+            self.assertFalse(cmds.objExists(layer))
+            self.assertEqual(cmds.getAttr(f"{constraint}.nodeState"), 0)
+            cmds.currentTime(10)
+            self.assertAlmostEqual(cmds.getAttr(f"{cube}.tx"), 5.0, places=3)
+        finally:
+            cmds.file(new=True, force=True)
+            if os.path.exists(scene_path):
+                os.remove(scene_path)
+            os.rmdir(tmp_dir)
+
+    def test_delete_inputs_marks_non_restorable(self):
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube, loc, constraint = self._constraint_scene(prefix="del")
+        result = SmartBake(
+            objects=[cube],
+            use_override_layer=False,
+            delete_inputs=True,
+            backup_file=False,  # explicit opt-out of the auto-backup
+        ).execute()
+        self.assertTrue(result.success)
+
+        restore = SmartBake.restore()
+        self.assertFalse(restore.success)
+        self.assertTrue(restore.warnings)
+        # The dead session is popped so older sessions stay reachable.
+        self.assertEqual(SmartBake.list_sessions(), [])
+
+    def test_restore_missing_layer_warns_gracefully(self):
+        """A hand-deleted layer must not make restore raise."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube, loc, constraint = self._constraint_scene(prefix="gone")
+        result = SmartBake(objects=[cube]).execute()
+        cmds.delete(result.override_layer)
+
+        restore = SmartBake.restore()  # must not raise
+        self.assertEqual(SmartBake.list_sessions(), [])
+        self.assertTrue(restore.warnings)
+
+    def test_session_context_manager(self):
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube, loc, constraint = self._constraint_scene(prefix="ctx")
+        with SmartBake.session(objects=[cube]) as result:
+            self.assertTrue(result.success)
+            self.assertTrue(cmds.objExists(result.override_layer))
+        self.assertFalse(cmds.objExists(result.override_layer))
+        self.assertEqual(SmartBake.list_sessions(), [])
 
 
 # -----------------------------------------------------------------------------
