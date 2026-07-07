@@ -106,5 +106,7 @@ class Recovery(ptk.LoggingMixin):
                 cls.logger.info(f"Tween customizations: {successful} applied")
                 return True
 
+        # The rebuild itself succeeded — a scene without tween meshes to
+        # restore is a successful recovery, not a failure.
         cls.logger.warning("Basic animation fixed, but no tweens found to restore")
-        return False
+        return True

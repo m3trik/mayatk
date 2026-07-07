@@ -18,6 +18,9 @@ class Validator(ptk.LoggingMixin):
     def validate_meshes(cls, mesh1: str, mesh2: str) -> bool:
         """Validate that both objects are compatible meshes."""
         for i, mesh in enumerate([mesh1, mesh2], 1):
+            if not mesh or not cmds.objExists(str(mesh)):
+                cls.logger.error(f"Object {i} ({mesh}) does not exist")
+                return False
             shape = NodeUtils.get_shape(mesh)
             if not shape or cmds.nodeType(shape) != "mesh":
                 cls.logger.error(f"Object {i} ({mesh}) is not a polygon mesh")

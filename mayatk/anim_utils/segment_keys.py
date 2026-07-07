@@ -1,6 +1,7 @@
 # coding=utf-8
 import html as _html
 import logging
+import math
 from typing import List, Dict, Optional, Union, Any, Tuple, Callable
 
 try:
@@ -1351,8 +1352,9 @@ class SegmentKeys(SegmentKeysInfo):
         time_range: Optional[Tuple[float, float]] = None,
         remove_flat_at_dest: bool = False,
     ):
-        """Shift keys on curves by offset using a two-pass move to avoid
-        'Cannot move keys' errors when destination frames already have keys.
+        """Shift keys on curves by offset in a single relative move,
+        optionally pre-cleaning static (flat/hold) keys at the destination
+        so they can't collide with the incoming keys.
 
         Args:
             curves: List of animation curves to shift.
@@ -1501,12 +1503,15 @@ class SegmentKeys(SegmentKeysInfo):
                 # Check for overlap if avoid_overlap is enabled
                 if avoid_overlap and previous_end is not None:
                     if target_start < previous_end:
-                        overlap_count = 1
-                        while target_start < previous_end:
-                            target_start = (
-                                start_frame + (i * spacing) + (overlap_count * spacing)
-                            )
-                            overlap_count += 1
+                        if spacing > 0:
+                            # Skip forward whole intervals to clear the overlap.
+                            skips = math.ceil((previous_end - target_start) / spacing)
+                            target_start += skips * spacing
+                        else:
+                            # Non-positive spacing can never clear an overlap
+                            # by skipping intervals (the old loop hung Maya
+                            # here) — butt against the previous group instead.
+                            target_start = previous_end
 
                 shift_amount = target_start - group_start
                 previous_end = target_start + duration

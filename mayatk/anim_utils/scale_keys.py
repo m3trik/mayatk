@@ -1,7 +1,6 @@
 # coding=utf-8
 """Dedicated scale-keys module to keep AnimUtils lean and testable."""
-from dataclasses import dataclass, field, replace
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 try:
     import maya.cmds as cmds
@@ -90,19 +89,19 @@ class ScaleKeys:
             channel_box_attrs = cmds.channelBox(
                 "mainChannelBox", query=True, selectedMainAttributes=True
             )
+            if not channel_box_attrs:
+                # Without this guard an empty channel-box selection would
+                # silently disable the filter and scale ALL attributes.
+                cmds.warning(
+                    "Channel Box Attrs Only is enabled but no attributes are "
+                    "selected in the Channel Box. Select attributes or "
+                    "disable this option."
+                )
+                objects = []
 
-        if selected_keys_only and not by_speed:
-            all_selected_keys = cmds.keyframe(query=True, sl=True, tc=True)
-            if not all_selected_keys:
-                # Will handle in execute
-                pass
-
-        group_mode_normalized = self._normalize_group_mode(group_mode)
-        if group_mode_normalized not in {
-            "single_group",
-            "per_object",
-            "overlap_groups",
-        }:
+        try:
+            group_mode_normalized = self._normalize_group_mode(group_mode)
+        except ValueError:
             cmds.warning(
                 f"Unsupported group_mode '{group_mode}'. Falling back to 'single_group'."
             )
@@ -143,6 +142,7 @@ class ScaleKeys:
         self.object_info: List[Dict[str, Any]] = []
         self.segments: List[Dict[str, Any]] = []
         self.diagnostics: Dict[str, Any] = {}
+        self._last_global_pivot: Optional[float] = None
 
     # Input normalization helpers
     @staticmethod
@@ -340,106 +340,6 @@ class ScaleKeys:
             return 0
         return self.utils._move_curve_keys(curve, time_pairs, allow_merge=allow_merge)
 
-    @staticmethod
-    def _execute_shift_operation(
-        curves: List[Any],
-        offset: float,
-        time_range: Optional[Tuple[float, float]] = None,
-    ) -> int:
-        """Execute a shift operation directly."""
-        keys_scaled = 0
-        for curve in curves:
-            if not cmds.objExists(curve):
-                continue
-
-            kwargs = {
-                "edit": True,
-                "relative": True,
-                "timeChange": offset,
-            }
-            if time_range:
-                kwargs["time"] = time_range
-                if not cmds.keyframe(curve, query=True, time=time_range):
-                    continue
-                keys_scaled += cmds.keyframe(
-                    curve, query=True, keyframeCount=True, time=time_range
-                )
-            else:
-                keys_scaled += cmds.keyframe(curve, query=True, keyframeCount=True)
-
-            cmds.keyframe(curve, **kwargs)
-        return keys_scaled
-
-    @staticmethod
-    def _filter_curves_by_channel_box(
-        curves: Optional[List[str]],
-        channel_box_attrs: Optional[List[str]],
-    ) -> List[str]:
-        """Restrict curves to those whose attributes are selected in the channel box."""
-
-        if not curves:
-            return []
-
-        if not channel_box_attrs:
-            return [str(curve) for curve in curves]
-
-        # Parse channel box attrs into full names and simple names (last component)
-        allowed_full: Set[str] = set()
-        allowed_simple: Set[str] = set()
-
-        for attr in channel_box_attrs:
-            if not attr:
-                continue
-            attr_lower = str(attr).lower()
-            allowed_full.add(attr_lower)
-            # Extract simple name (last component after . or |) using func parameter
-            if "." in attr_lower:
-                parts = ptk.split_delimited_string(
-                    attr_lower, delimiter=".", func=lambda x: x[-1:]
-                )
-                allowed_simple.add(parts[0])
-            elif "|" in attr_lower:
-                parts = ptk.split_delimited_string(
-                    attr_lower, delimiter="|", func=lambda x: x[-1:]
-                )
-                allowed_simple.add(parts[0])
-            else:
-                allowed_simple.add(attr_lower)
-
-        if not allowed_full and not allowed_simple:
-            return [str(curve) for curve in curves]
-
-        filtered: List[str] = []
-        for curve in curves:
-            curve_str = str(curve)
-            if not cmds.objExists(curve_str):
-                continue
-
-            connections = (
-                cmds.listConnections(
-                    curve_str, plugs=True, destination=True, source=False
-                )
-                or []
-            )
-
-            for conn in connections:
-                # conn is a plug string "node.attrPath"; attrName is the leaf attribute.
-                if "." not in conn:
-                    continue
-                node_part, _, attr_path = conn.partition(".")
-                attr_leaf = attr_path.split(".")[-1]
-                if not attr_leaf:
-                    continue
-
-                attr_key = attr_leaf.lower()
-                node_short = node_part.split("|")[-1].split(":")[-1]
-                full_name = f"{node_short}.{attr_leaf}".lower()
-                if attr_key in allowed_simple or full_name in allowed_full:
-                    filtered.append(curve_str)
-                    break
-
-        return filtered
-
     # Processing helpers
 
     def _execute_speed_scale(
@@ -593,7 +493,7 @@ class ScaleKeys:
 
         self._execute_overlap_prevention(overlap_groups_data)
 
-        return keys_scaled
+        return keys_scaled, processed_objects
 
     def _execute_uniform_scale(
         self,
@@ -679,6 +579,9 @@ class ScaleKeys:
 
                 if global_pivot is None:
                     global_pivot = group_pivot
+                    # Surface for execute()'s report — the uniform-scale
+                    # summary prints the pivot in single_group mode.
+                    self._last_global_pivot = group_pivot
             else:
                 group_pivot = None
 
@@ -748,11 +651,12 @@ class ScaleKeys:
 
                 # Maya time-range queries can miss boundary keys due to floating point
                 # representation (eg. 517.5000001 vs 517.5). Expand slightly to ensure
-                # endpoints are included.
+                # endpoints are included — a large epsilon (e.g. 0.5) would pull in
+                # genuinely out-of-range keys up to half a frame away.
                 query_time_arg = None
                 if time_arg:
                     try:
-                        eps = 0.5
+                        eps = 1e-3
                         query_time_arg = (
                             float(time_arg[0]) - eps,
                             float(time_arg[1]) + eps,
@@ -1125,8 +1029,6 @@ class ScaleKeys:
         self,
         keys_scaled: int,
         processed_objects: int,
-        min_target_start: Optional[float],
-        max_target_end: Optional[float],
     ) -> None:
         if keys_scaled > 0:
             mode_label = {
@@ -1134,11 +1036,6 @@ class ScaleKeys:
                 "per_object": "per-object",
                 "overlap_groups": "overlap-group",
             }[self.group_mode]
-            range_info = ""
-            if min_target_start is not None and max_target_end is not None:
-                range_info = (
-                    f" (target range: {min_target_start:.2f} -> {max_target_end:.2f})"
-                )
 
             speed_info = (
                 f"{float(self.factor):.3f} units/frame"
@@ -1146,7 +1043,7 @@ class ScaleKeys:
                 else f"{float(self.factor):.2f}x speed"
             )
             om.MGlobal.displayInfo(
-                f"Retimed {keys_scaled} keyframes to {speed_info} using {mode_label} ranges (objects processed={processed_objects}){range_info}."
+                f"Retimed {keys_scaled} keyframes to {speed_info} using {mode_label} ranges (objects processed={processed_objects})."
             )
         else:
             cmds.warning(
@@ -1353,6 +1250,27 @@ class ScaleKeys:
         )
 
         if not self.segments:
+            # Diagnose WHY nothing was collected so _warn_no_targets can
+            # emit its specific message: if an unfiltered probe finds
+            # segments, an active filter removed everything.
+            if self.channel_box_attrs or self.ignore:
+                probe = SegmentKeys.collect_segments(
+                    self.objects_list,
+                    split_static=self.split_static,
+                    selected_keys_only=self.selected_keys_only,
+                    time_range=(
+                        (self.base_start, self.base_end)
+                        if self.range_specified
+                        else None
+                    ),
+                    ignore_visibility_holds=ignore_visibility_holds,
+                    ignore_holds=ignore_holds,
+                )
+                if probe:
+                    if self.channel_box_attrs:
+                        self.diagnostics["filtered_by_channel_box"] = True
+                    elif self.ignore:
+                        self.diagnostics["filtered_by_ignore"] = True
             self._warn_no_targets()
             return 0
 
@@ -1416,8 +1334,10 @@ class ScaleKeys:
             None if self.split_static else overlap_groups_data
         )
 
+        processed_objects = 0
+        self._last_global_pivot = None
         if self.by_speed:
-            keys_scaled = self._execute_speed_scale(
+            keys_scaled, processed_objects = self._execute_speed_scale(
                 processing_groups, overlap_groups_data_for_scale
             )
         else:
@@ -1446,7 +1366,7 @@ class ScaleKeys:
 
         # Reporting
         if self.by_speed:
-            self._report_speed(keys_scaled, 0, None, None)
+            self._report_speed(keys_scaled, processed_objects)
         else:
             mode_label_map = {
                 "single_group": "single-group pivot",
@@ -1454,7 +1374,7 @@ class ScaleKeys:
                 "overlap_groups": "overlap-group pivots",
             }
 
-            self._report_uniform(keys_scaled, mode_label_map, None)
+            self._report_uniform(keys_scaled, mode_label_map, self._last_global_pivot)
 
         if self.verbose and original_ranges:
             # Determine headers

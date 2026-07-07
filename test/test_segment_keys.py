@@ -1095,5 +1095,55 @@ class TestSegmentKeysEdgeCases(MayaTkTestCase if _HAS_MAYA else unittest.TestCas
             cmds.lockNode(curve, lock=False)
 
 
+class TestAuditRegressionFixes(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
+    """Regression tests for the 2026-07 anim_utils audit fixes."""
+
+    def _make_keyed_group(self, name, start, end):
+        cube = cmds.polyCube(name=name)[0]
+        cmds.setKeyframe(cube, t=start, v=0, at="tx")
+        cmds.setKeyframe(cube, t=end, v=10, at="tx")
+        curves = cmds.keyframe(cube, query=True, name=True) or []
+        return {
+            "obj": cube,
+            "start": float(start),
+            "end": float(end),
+            "duration": float(end - start),
+            "curves": curves,
+        }
+
+    def test_execute_stagger_avoid_overlap_zero_spacing_terminates(self):
+        """use_intervals + avoid_overlap with spacing=0 spun forever in
+        the overlap-resolution loop (hard Maya hang). With the fix,
+        an overlapping group butts against the previous group's end."""
+        g1 = self._make_keyed_group("stagger_zero_a", 0, 20)
+        g2 = self._make_keyed_group("stagger_zero_b", 0, 20)
+
+        SegmentKeys.execute_stagger(
+            [g1, g2],
+            start_frame=0,
+            spacing=0,
+            use_intervals=True,
+            avoid_overlap=True,
+        )
+        t2 = cmds.keyframe(g2["obj"], query=True, timeChange=True)
+        self.assertEqual(min(t2), 20.0)
+
+    def test_execute_stagger_avoid_overlap_positive_spacing(self):
+        """Positive spacing still skips forward whole intervals."""
+        g1 = self._make_keyed_group("stagger_pos_a", 0, 25)
+        g2 = self._make_keyed_group("stagger_pos_b", 0, 25)
+
+        SegmentKeys.execute_stagger(
+            [g1, g2],
+            start_frame=0,
+            spacing=10,
+            use_intervals=True,
+            avoid_overlap=True,
+        )
+        # g2's interval slot is 10, overlapping g1 (0-25) -> skips to 30.
+        t2 = cmds.keyframe(g2["obj"], query=True, timeChange=True)
+        self.assertEqual(min(t2), 30.0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

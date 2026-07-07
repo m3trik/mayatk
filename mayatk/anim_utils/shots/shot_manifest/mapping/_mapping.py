@@ -305,8 +305,10 @@ def _audio_regex(
     def _resolve(step: BuilderStep) -> None:
         if not audio_dir.is_dir():
             return
+        # Substitute the placeholder literally — str.format would parse
+        # regex brace quantifiers like \d{2} as format fields and crash.
         compiled = _re.compile(
-            pattern.format(step_id=_re.escape(step.step_id)),
+            pattern.replace("{step_id}", _re.escape(step.step_id)),
             _re.IGNORECASE,
         )
         for f in audio_dir.iterdir():

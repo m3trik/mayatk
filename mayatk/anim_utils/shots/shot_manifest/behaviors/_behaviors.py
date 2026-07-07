@@ -203,9 +203,14 @@ def resolve_keys(
     values = block_def.get("values", [])
     tangent = block_def.get("tangent", "linear")
 
-    if isinstance(anchor, (int, float)):
-        # Fractional anchor: 0.0 = start, 1.0 = end.
-        base = start + anchor * (end - start - dur) + offset
+    if isinstance(anchor, (int, float)) and not isinstance(anchor, bool):
+        # Fractional anchor: interpolate between the anchored endpoints so
+        # 0.0 is exactly the "start" placement (start + offset) and 1.0 is
+        # exactly the "end" placement (end - dur - offset) — including the
+        # offset's sign, which flips between the two ends.
+        start_pos = start + offset
+        end_pos = end - dur - offset
+        base = start_pos + anchor * (end_pos - start_pos)
     elif anchor == "end":
         base = end - dur - offset
     else:
@@ -279,10 +284,15 @@ def apply_behavior(
     node = str(obj)
     has_opacity = cmds.attributeQuery("opacity", node=node, exists=True)
 
-    # Auto-create opacity attribute when the template targets visibility.
-    # This ensures the dual-keying path is always taken, producing both
-    # opacity (smooth) and visibility (stepped) curves for FBX export.
-    needs_opacity = not has_opacity and "visibility" in template.get("attributes", {})
+    # Auto-create opacity attribute when the template targets visibility
+    # OR opacity — a template keying "opacity" directly would otherwise
+    # error on objects without the attribute. This ensures the dual-keying
+    # path is always taken, producing both opacity (smooth) and visibility
+    # (stepped) curves for FBX export.
+    template_attrs = template.get("attributes", {})
+    needs_opacity = not has_opacity and (
+        "visibility" in template_attrs or "opacity" in template_attrs
+    )
     if needs_opacity:
         from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 

@@ -240,8 +240,10 @@ class PlayblastExporter:
             )
         finally:
             cmds.workspace(fileRule=("images", old_workspace_images or "images"))
+            # getAttr returns None when the prefix was never set; setAttr
+            # rejects None for string attrs — and this is a finally block.
             cmds.setAttr(
-                "defaultRenderGlobals.imageFilePrefix", old_prefix, type="string"
+                "defaultRenderGlobals.imageFilePrefix", old_prefix or "", type="string"
             )
             cmds.setAttr("defaultRenderGlobals.animation", old_animation)
             cmds.setAttr("defaultRenderGlobals.startFrame", old_start)
@@ -502,7 +504,7 @@ class PlayblastExporter:
         if not camera_name:
             return [], {}
 
-        panels = cmds.getPanel(type="modelPanel")
+        panels = cmds.getPanel(type="modelPanel") or []
         original = {
             panel: cmds.modelEditor(panel, q=True, camera=True) for panel in panels
         }
