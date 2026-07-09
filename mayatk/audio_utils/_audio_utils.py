@@ -26,6 +26,8 @@ from typing import Dict, FrozenSet, List, Optional, Tuple
 import pythontk as ptk
 from pythontk.audio_utils._audio_utils import AudioUtils as _PtkAudioUtils
 
+from mayatk.node_utils.data_nodes import DataNodes
+
 
 @dataclass
 class TrackEvent:
@@ -55,8 +57,9 @@ logger = logging.getLogger(__name__)
 # Module-level constants (importable without the class)
 # ---------------------------------------------------------------------------
 
-CARRIER_NODE: str = "data_internal"
-"""Single carrier: the shared ``data_internal`` network node."""
+CARRIER_NODE: str = DataNodes.INTERNAL
+"""Single carrier: the shared ``data_internal`` network node (SSoT:
+:class:`mayatk.node_utils.data_nodes.DataNodes`)."""
 
 ATTR_PREFIX: str = "audio_clip_"
 """Per-track keyed enum attrs have names of the form ``audio_clip_<track_id>``."""
@@ -850,7 +853,7 @@ class AudioUtils(ptk.HelpMixin):
         return batch(auto_sync=auto_sync, undo=undo)
 
     @staticmethod
-    def detect_legacy(obj="data_internal", category="audio"):
+    def detect_legacy(obj=CARRIER_NODE, category="audio"):
         """Return True if *obj* has legacy ``<category>_trigger`` attr.
 
         See :func:`._migrate.detect_legacy` for full documentation.

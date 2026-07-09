@@ -214,8 +214,14 @@ class TestSceneExporter(MayaTkTestCase):
 
         Added: 2026-06-16
         """
-        # setUp opens a fresh untitled scene, so sceneName is empty here.
-        self.assertEqual(cmds.file(query=True, sceneName=True), "")
+        # setUp opens a fresh untitled scene — no real scene name to fall back
+        # to. The GUI reports "" here; batch/standalone reports a phantom,
+        # extensionless "<project>/untitled" path — both must abort.
+        scene = cmds.file(query=True, sceneName=True)
+        self.assertFalse(
+            scene and os.path.splitext(scene)[1],
+            f"Fresh untitled scene unexpectedly has a real scene name: {scene!r}",
+        )
 
         result = self.exporter.perform_export(
             export_dir="",

@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-07-08_
+_Generated: 2026-07-09_
 
 ## Index
 
@@ -24,7 +24,7 @@ _Generated: 2026-07-08_
 - [`anim_utils/shots/_shot_apply.py`](#anim_utils--shots--_shot_apply) — Commit resolved :class:`MovePlan`\ s to the Maya scene.
 - [`anim_utils/shots/_shot_plan.py`](#anim_utils--shots--_shot_plan) — Pure planning layer for multi-shot topology transformations.
 - [`anim_utils/shots/_shots.py`](#anim_utils--shots--_shots) — Shared shot data model and persistent store.
-- [`anim_utils/shots/shot_manifest/_shot_manifest.py`](#anim_utils--shots--shot_manifest--_shot_manifest) — Shot Manifest â€” parse structured CSVs and populate a ShotStore.
+- [`anim_utils/shots/shot_manifest/_shot_manifest.py`](#anim_utils--shots--shot_manifest--_shot_manifest) — Shot Manifest — parse structured CSVs and populate a ShotStore.
 - [`anim_utils/shots/shot_manifest/behaviors/_behaviors.py`](#anim_utils--shots--shot_manifest--behaviors--_behaviors) — Behaviors — load and apply YAML keying recipes.
 - [`anim_utils/shots/shot_manifest/behaviors/_spec.py`](#anim_utils--shots--shot_manifest--behaviors--_spec) — Schema for a *behavior* template file, defined as a dataclass.
 - [`anim_utils/shots/shot_manifest/manifest_data.py`](#anim_utils--shots--shot_manifest--manifest_data) — Constants, column layout, and pure helper functions for the Shot Manifest UI.
@@ -189,6 +189,7 @@ _Generated: 2026-07-08_
 - [`uv_utils/rizom_bridge/_rizom_bridge.py`](#uv_utils--rizom_bridge--_rizom_bridge)
 - [`uv_utils/rizom_bridge/parameters.py`](#uv_utils--rizom_bridge--parameters) — Registry of user-tunable RizomUV parameters exposed to the bridge UI.
 - [`uv_utils/rizom_bridge/rizom_bridge_slots.py`](#uv_utils--rizom_bridge--rizom_bridge_slots) — Slots for the RizomUV bridge panel.
+- [`uv_utils/uv_transform.py`](#uv_utils--uv_transform) — Dedicated UV shell-transform panel.
 - [`xform_utils/_xform_utils.py`](#xform_utils--_xform_utils)
 - [`xform_utils/matrices.py`](#xform_utils--matrices) — Matrix utilities for Maya rigging and animation.
 - [`xform_utils/pivot_watcher.py`](#xform_utils--pivot_watcher) — Real-time pivot-change notifier built on :class:`ScriptJobManager`.
@@ -198,16 +199,15 @@ _Generated: 2026-07-08_
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
 
-- **[`class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin)`](mayatk/mayatk/anim_utils/_anim_utils.py#L637)** — Animation utilities for Maya.
-  - `AnimUtils.bake(cls, objects: Union[str, List[Union[str, str]]], attributes: Optional[Union[str, List[str]]] = None, time_range: Optional[Tuple[float, float]] = None, sample_by: float = 1.0, preserve_outside_keys: bool = True, simulation: bool = False, destination_layer: Optional[str] = None, remove_baked_attr_from_layer: bool = False, bake_on_override_layer: bool = False, minimize_rotation: bool = True, sparse_anim_curve_bake: bool = False, disable_implicit_control: bool = True, control_points: bool = False, shape: bool = False, only_keyed: bool = False) -> List[str]` *(class)* — Bake animation on specified objects and attributes with smart grouping.
-  - `AnimUtils.bake_objects(cls, objects: List[Union[str, str]], attributes: Optional[List[str]] = None, time_range: Optional[Tuple[float, float]] = None, sample_by: float = 1.0, preserve_outside_keys: bool = True, simulation: bool = False, destination_layer: Optional[str] = None, remove_baked_attr_from_layer: bool = False, bake_on_override_layer: bool = False, minimize_rotation: bool = True, sparse_anim_curve_bake: bool = False, disable_implicit_control: bool = True, control_points: bool = False, shape: bool = False) -> List[str]` *(class)* — Legacy alias for bake().
-  - `AnimUtils.objects_to_curves(objects: Union[str, str, List[Union[str, str]]], recursive: bool = False, as_strings: bool = False) -> Union[List[str], List[str]]` *(static)* — Converts objects into a list of animation curves.
+- **[`class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin)`](mayatk/mayatk/anim_utils/_anim_utils.py#L661)** — Animation utilities for Maya.
+  - `AnimUtils.bake(cls, objects: Union[str, List[str]], attributes: Optional[Union[str, List[str]]] = None, time_range: Optional[Tuple[float, float]] = None, sample_by: float = 1.0, preserve_outside_keys: bool = True, simulation: bool = False, destination_layer: Optional[str] = None, remove_baked_attr_from_layer: bool = False, bake_on_override_layer: bool = False, minimize_rotation: bool = True, sparse_anim_curve_bake: bool = False, disable_implicit_control: bool = True, control_points: bool = False, shape: bool = False, only_keyed: bool = False) -> List[str]` *(class)* — Bake animation on specified objects and attributes with smart grouping.
+  - `AnimUtils.objects_to_curves(objects: Union[str, List[str]], recursive: bool = False, as_strings: bool = False) -> List[str]` *(static)* — Converts objects into a list of animation curves.
   - `AnimUtils.get_anim_curves(cls, objects: Optional[List[str]] = None, selected_keys_only: bool = False, recursive: bool = False) -> List[str]` *(class)* — Get animation curves from objects, selected keys, or all scene curves.
-  - `AnimUtils.get_static_curves(cls, objects: List[str], value_tolerance: float = 1e-05, recursive: bool = False, as_strings: bool = False) -> Union[List[str], List[str]]` *(class)* — Detects static curves (curves with constant values) that are safe
+  - `AnimUtils.get_static_curves(cls, objects: List[str], value_tolerance: float = 1e-05, recursive: bool = False, as_strings: bool = False) -> List[str]` *(class)* — Detects static curves (curves with constant values) that are safe
   - `AnimUtils.get_redundant_flat_keys(cls, objects: List[str], value_tolerance: float = 1e-05, remove: bool = False, recursive: bool = False, as_strings: bool = False) -> List[Tuple[Any, List[float]]]` *(class)* — Detects redundant flat keys in curves and optionally deletes them.
-  - `AnimUtils.simplify_curve(cls, objects: List[str], value_tolerance: float = 0.001, time_tolerance: float = 0.001, recursive: bool = False, as_strings: bool = False) -> Union[List[str], List[str]]` *(class)* — Simplify curves by removing keys that don't contribute to shape.
-  - `AnimUtils.repair_corrupted_curves(cls, objects: Optional[Union[str, str, List[Union[str, str]]]] = None, recursive: bool = True, delete_corrupted: bool = False, fix_infinite: bool = True, fix_invalid_times: bool = True, time_range_threshold: float = 1000000.0, value_threshold: float = 1000000.0, quiet: bool = False) -> Dict[str, Any]` *(class)* — Legacy wrapper maintained for backwards compatibility.
-  - `AnimUtils.optimize_keys(cls, objects: Union[str, str, List[Union[str, str]]], value_tolerance: float = 0.001, time_tolerance: float = 0.001, remove_flat_keys: bool = True, remove_static_curves: bool = True, simplify_keys: bool = False, recursive: bool = True, quiet: bool = False, stats: Optional[dict] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[str]` *(class)* — Optimize animation keys for the given objects by removing static curves,
+  - `AnimUtils.simplify_curve(cls, objects: List[str], value_tolerance: float = 0.001, time_tolerance: float = 0.001, recursive: bool = False, as_strings: bool = False) -> List[str]` *(class)* — Simplify curves by removing keys that don't contribute to shape.
+  - `AnimUtils.repair_corrupted_curves(cls, objects: Optional[Union[str, List[str]]] = None, recursive: bool = True, delete_corrupted: bool = False, fix_infinite: bool = True, fix_invalid_times: bool = True, time_range_threshold: float = 1000000.0, value_threshold: float = 1000000.0, quiet: bool = False) -> Dict[str, Any]` *(class)* — Legacy wrapper maintained for backwards compatibility.
+  - `AnimUtils.optimize_keys(cls, objects: Union[str, List[str]], value_tolerance: float = 0.001, time_tolerance: float = 0.001, remove_flat_keys: bool = True, remove_static_curves: bool = True, simplify_keys: bool = False, recursive: bool = True, quiet: bool = False, stats: Optional[dict] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[str]` *(class)* — Optimize animation keys for the given objects by removing static curves,
   - `AnimUtils.get_keyframe_times(sources: Union[str, List[str]], mode: str = 'all', from_curves: Optional[bool] = None, as_range: bool = False, time_range: Optional[Tuple[float, float]] = None) -> Union[List[float], Tuple[float, float], None]` *(static)* — Get keyframe times from objects or curves with flexible filtering options.
   - `AnimUtils.get_driver_animation_range(node: str, driver_type: str = 'auto') -> List[float]` *(static)* — Get keyframe times from a driver node's animation or its targets.
   - `AnimUtils.get_tangent_info(attr_name: str, time: float) -> Dict[str, Any]` *(static)* — Get tangent information (types, angles, and weights) for a given attribute at a specific time.
@@ -216,23 +216,23 @@ _Generated: 2026-07-08_
   - `AnimUtils.set_current_frame(time: Optional[float] = None, update: bool = True, relative: bool = False, snap_mode: Optional[str] = None, invert_snap: bool = False) -> float` *(static)* — Set the current frame on the timeslider with optional snapping.
   - `AnimUtils.move_keys_to_frame(objects=None, frame=None, time_range=None, selected_keys_only=False, retain_spacing=False, channel_box_attrs_only=False, align: str = 'auto')` *(static)* — Move keyframes to the given frame with comprehensive control options.
   - `AnimUtils.set_keys_for_attributes(objects, target_times=None, refresh_channel_box=False, **kwargs)` *(static)* — Sets keyframes for the specified attributes on given objects at given times.
-  - `AnimUtils.filter_objects_with_keys(objects: Optional[Union[str, List[str]]] = None, keys: Optional[List[str]] = None) -> List[object]` *(static)* — Filter the given objects for those with specific keys set.
+  - `AnimUtils.filter_objects_with_keys(objects: Optional[Union[str, List[str]]] = None, keys: Optional[List[str]] = None) -> List[str]` *(static)* — Filter the given objects for those with specific keys set.
   - `AnimUtils.scene_has_animation() -> bool` *(static)* — True if the scene contains any time-based animation a playblast would capture.
   - `AnimUtils.adjust_key_spacing(cls, objects: Optional[List[str]] = None, spacing: int = 1, time: Optional[int] = 0, relative: bool = True, preserve_keys: bool = False, selected_keys_only: bool = False, exact_gap: bool = False, prevent_collisions: bool = True)` *(class)* — Adjusts the spacing between keyframes for specified objects at a given time,
-  - `AnimUtils.add_intermediate_keys(objects: Union[str, str, List[Union[str, str]]], time_range: Optional[Union[int, Tuple[int, int]]] = None, percent: Optional[float] = None, include_flat: bool = False, ignore: Union[str, List[str], None] = None) -> None` *(static)* — Keys selected or animated attributes on given object(s) within a time range.
-  - `AnimUtils.remove_intermediate_keys(objects: Union[str, str, List[Union[str, str]]], time_range: Optional[Union[int, Tuple[int, int]]] = None, ignore: Union[str, List[str], None] = None) -> int` *(static)* — Removes all intermediate keyframes, keeping only the first and last key on each attribute.
-  - `AnimUtils.invert_keys(objects=None, time=None, relative=True, delete_original=False, mode='horizontal', value_pivot=0.0)` *(static)* — Invert keyframes, preferring selected keys but falling back to all keys.
-  - `AnimUtils.align_selected_keyframes(objects: Optional[List[Union[str, str]]] = None, target_frame: Optional[float] = None, use_earliest: bool = True) -> bool` *(static)* — Aligns the starting keyframes of selected keyframes in the graph editor across multiple objects.
-  - `AnimUtils.set_visibility_keys(objects: Optional[List[Union[str, str]]] = None, visible: bool = True, when: str = 'start', offset: int = 0, group_overlapping: bool = False) -> int` *(static)* — Sets visibility keyframes for objects with options for timing and grouping.
-  - `AnimUtils.snap_keys_to_frames(objects: Optional[List[Union[str, str]]] = None, method: str = 'nearest', selected_only: bool = False, time_range: Optional[Tuple[float, float]] = None) -> int` *(static)* — Snaps keyframes with decimal time values to whole frame numbers.
-  - `AnimUtils.transfer_keyframes(cls, objects: List[Union[str, object]], relative: bool = False, transfer_tangents: bool = False, optimize: bool = False)` *(class)* — Transfer keyframes from the first selected object to the subsequent objects.
-  - `AnimUtils.parse_time_range(time: Union[None, int, str, Tuple, List], recursive_callback: Optional[callable] = None) -> Union[Tuple[float, float], None, List]` *(static)* — Parse time specification into a time range tuple for keyframe operations.
+  - `AnimUtils.add_intermediate_keys(objects: Union[str, List[str]], time_range: Optional[Union[int, Tuple[int, int]]] = None, percent: Optional[float] = None, include_flat: bool = False, ignore: Union[str, List[str], None] = None) -> None` *(static)* — Keys selected or animated attributes on given object(s) within a time range.
+  - `AnimUtils.remove_intermediate_keys(objects: Union[str, List[str]], time_range: Optional[Union[int, Tuple[int, int]]] = None, ignore: Union[str, List[str], None] = None) -> int` *(static)* — Removes all intermediate keyframes, keeping only the first and last key on each attribute.
+  - `AnimUtils.invert_keys(objects=None, time=None, relative=True, delete_original=False, mode='horizontal', value_pivot=0.0)` *(static)* — Invert keyframes, preferring selected keys over all keys.
+  - `AnimUtils.align_selected_keyframes(objects: Optional[List[str]] = None, target_frame: Optional[float] = None, use_earliest: bool = True) -> bool` *(static)* — Aligns the starting keyframes of selected keyframes in the graph editor across multiple objects.
+  - `AnimUtils.set_visibility_keys(objects: Optional[List[str]] = None, visible: bool = True, when: str = 'start', offset: int = 0, group_overlapping: bool = False) -> int` *(static)* — Sets visibility keyframes for objects with options for timing and grouping.
+  - `AnimUtils.snap_keys_to_frames(objects: Optional[List[str]] = None, method: str = 'nearest', selected_only: bool = False, time_range: Optional[Tuple[float, float]] = None) -> int` *(static)* — Snaps keyframes with decimal time values to whole frame numbers.
+  - `AnimUtils.transfer_keyframes(cls, objects: List[str], relative: bool = False, transfer_tangents: bool = False, optimize: bool = False)` *(class)* — Transfer keyframes from the first selected object to the subsequent objects.
+  - `AnimUtils.parse_time_range(time: Union[None, int, str, Tuple, List]) -> Union[Tuple[float, float], None, List]` *(static)* — Parse time specification into a time range tuple for keyframe operations.
   - `AnimUtils.delete_keys(objects=None, *attributes, time=None, channel_box_only=False)` *(static)* — Deletes keyframes for specified attributes on given objects, optionally within a time range.
-  - `AnimUtils.select_keys(objects: Optional[List[Union[str, str]]] = None, *attributes: str, time: Union[None, int, str, Tuple, List] = None, channel_box_only: bool = False, add_to_selection: bool = False) -> int` *(static)* — Selects keyframes for specified attributes on given objects, optionally within a time range.
+  - `AnimUtils.select_keys(objects: Optional[List[str]] = None, *attributes: str, time: Union[None, int, str, Tuple, List] = None, channel_box_only: bool = False, add_to_selection: bool = False) -> int` *(static)* — Selects keyframes for specified attributes on given objects, optionally within a time range.
   - `AnimUtils.get_frame_ranges(objects: List[str], precision: Optional[int] = None, gap: Optional[int] = None) -> Dict[str, List[Tuple[int, int]]]` *(static)* — Calculate frame ranges for a list of objects based on their keyframes.
   - `AnimUtils.get_tied_keyframes(objects: Optional[List[str]] = None, tolerance: float = 1e-05) -> Dict[str, Dict[str, List[float]]]` *(static)* — Detects tied (bookend) keyframes for given objects.
   - `AnimUtils.tie_keyframes(objects: List[str] = None, absolute: bool = False, padding: int = 0, custom_range: Optional[Tuple[float, float]] = None)` *(static)* — Ties the keyframes of all given objects (or all keyed objects in the scene if none are provided)
-  - `AnimUtils.untie_keyframes(objects: List[str] = None, absolute: bool = False) -> Dict[str, Dict[str, List[float]]]` *(static)* — Removes bookend keyframes added by tie_keyframes, but preserves genuine animation keys.
+  - `AnimUtils.untie_keyframes(objects: List[str] = None) -> Dict[str, Dict[str, List[float]]]` *(static)* — Removes bookend keyframes added by tie_keyframes, but preserves genuine animation keys.
   - `AnimUtils.create_animation_layer(name: str = 'AnimLayer', override: bool = True, additive: bool = False, attributes: Optional[List[str]] = None, objects: Optional[List[str]] = None, weight: float = 1.0, mute: bool = False, solo: bool = False, lock: bool = False, preferred: bool = True, parent: Optional[str] = None, unique_name: bool = True, timestamp_suffix: bool = False, color: Optional[Tuple[float, float, float]] = None) -> str` *(static)* — Create an animation layer with flexible configuration options.
   - `AnimUtils.get_animation_layers(include_base: bool = False, muted_only: bool = False, active_only: bool = False) -> List[str]` *(static)* — Get all animation layers in the scene.
   - `AnimUtils.copy_keys(objects=None, mode: str = 'auto', resolution_order: Optional[Tuple[str, ...]] = None, tangent_detail: bool = False) -> Dict[str, Dict[str, Any]]` *(static)* — Copy attribute values from objects for later pasting as keys.
@@ -410,24 +410,25 @@ Dedicated scale-keys module to keep AnimUtils lean and testable.
 
 Shot-region detection — Maya animation-graph analysis.
 
-- [`detect_shot_regions(objects: Optional[List[str]] = None, gap_threshold: float = 5.0, ignore: Optional[str] = None, motion_rate: float = 0.001, min_duration: float = 2.0) -> List[Dict[str, Any]]`](mayatk/mayatk/anim_utils/shots/_detection.py#L62) — Detect animation regions by clustering per-object segments.
-- [`regions_from_selected_keys(gap_threshold: float = 5.0, key_filter: str = 'all') -> List[Dict[str, Any]]`](mayatk/mayatk/anim_utils/shots/_detection.py#L222) — Build shot regions from currently selected keyframes.
+- [`resolve_to_transform(node, cache=None, _depth=0)`](mayatk/mayatk/anim_utils/shots/_detection.py#L19) — Resolve a curve-destination node to its owning transform.
+- [`detect_shot_regions(objects: Optional[List[str]] = None, gap_threshold: float = 5.0, ignore: Optional[str] = None, motion_rate: float = 0.001, min_duration: float = 2.0) -> List[Dict[str, Any]]`](mayatk/mayatk/anim_utils/shots/_detection.py#L118) — Detect animation regions by clustering per-object segments.
+- [`regions_from_selected_keys(gap_threshold: float = 5.0, key_filter: str = 'all') -> List[Dict[str, Any]]`](mayatk/mayatk/anim_utils/shots/_detection.py#L282) — Build shot regions from currently selected keyframes.
 
 <a id="anim_utils--shots--_shot_apply"></a>
 ### `anim_utils/shots/_shot_apply.py`
 
 Commit resolved :class:`MovePlan`\ s to the Maya scene.
 
-- [`apply(store: ShotStore, plan: MovePlan, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> None`](mayatk/mayatk/anim_utils/shots/_shot_apply.py#L114) — Execute ``plan`` against the scene and ``store``.
+- [`apply(store: ShotStore, plan: MovePlan, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> None`](mayatk/mayatk/anim_utils/shots/_shot_apply.py#L128) — Execute ``plan`` against the scene and ``store``.
 
 <a id="anim_utils--shots--_shot_plan"></a>
 ### `anim_utils/shots/_shot_plan.py`
 
 Pure planning layer for multi-shot topology transformations.
 
-- [`plan_respace(store: ShotStore, gap: float, start_frame: float) -> MovePlan`](mayatk/mayatk/anim_utils/shots/_shot_plan.py#L164) — Build a plan that lays shots out sequentially with uniform gaps.
-- [`plan_ripple_downstream(store: ShotStore, pivot_shot_id: int, after_frame: float, delta: float) -> MovePlan`](mayatk/mayatk/anim_utils/shots/_shot_plan.py#L204) — Build a plan that shifts every shot starting at or after
-- [`plan_ripple_upstream(store: ShotStore, pivot_shot_id: int, before_frame: float, delta: float) -> MovePlan`](mayatk/mayatk/anim_utils/shots/_shot_plan.py#L240) — Build a plan that shifts every shot ending at or before
+- [`plan_respace(store: ShotStore, gap: float, start_frame: float) -> MovePlan`](mayatk/mayatk/anim_utils/shots/_shot_plan.py#L215) — Build a plan that lays shots out sequentially with uniform gaps.
+- [`plan_ripple_downstream(store: ShotStore, pivot_shot_id: int, after_frame: float, delta: float) -> MovePlan`](mayatk/mayatk/anim_utils/shots/_shot_plan.py#L255) — Build a plan that shifts every shot starting at or after
+- [`plan_ripple_upstream(store: ShotStore, pivot_shot_id: int, before_frame: float, delta: float) -> MovePlan`](mayatk/mayatk/anim_utils/shots/_shot_plan.py#L291) — Build a plan that shifts every shot ending at or before
 - **[`class ShotMove`](mayatk/mayatk/anim_utils/shots/_shot_plan.py#L41)** — A single shot's source and destination ranges.
   - `ShotMove.delta(self) -> float` *(property)*
   - `ShotMove.moves(self) -> bool` *(property)*
@@ -438,26 +439,26 @@ Pure planning layer for multi-shot topology transformations.
 
 Shared shot data model and persistent store.
 
-- [`resolve_clip_specs(shots: List['ShotBlock'], strategy: str = 'name') -> List[Tuple[str, int, int]]`](mayatk/mayatk/anim_utils/shots/_shots.py#L343) — Resolve ``[(clip_name, start, end), …]`` — the single source of truth for
-- **[`class ScenePersistence(Protocol)`](mayatk/mayatk/anim_utils/shots/_shots.py#L89)** — Interface for saving / loading ShotStore data.
+- [`resolve_clip_specs(shots: List['ShotBlock'], strategy: str = 'name') -> List[Tuple[str, int, int]]`](mayatk/mayatk/anim_utils/shots/_shots.py#L376) — Resolve ``[(clip_name, start, end), …]`` — the single source of truth for
+- **[`class ScenePersistence(Protocol)`](mayatk/mayatk/anim_utils/shots/_shots.py#L102)** — Interface for saving / loading ShotStore data.
   - `ScenePersistence.save(self, data: Dict[str, Any]) -> None`
   - `ScenePersistence.load(self) -> Optional[Dict[str, Any]]`
-- **[`class MayaScenePersistence`](mayatk/mayatk/anim_utils/shots/_shots.py#L97)** — Persist ShotStore data to a string channel on ``data_internal``.
+- **[`class MayaScenePersistence`](mayatk/mayatk/anim_utils/shots/_shots.py#L110)** — Persist ShotStore data to a string channel on ``data_internal``.
   - `MayaScenePersistence.save(self, data: Dict[str, Any]) -> None`
   - `MayaScenePersistence.load(self) -> Optional[Dict[str, Any]]`
   - `MayaScenePersistence.remove_callbacks(self) -> None` — Tear down every SJM subscription owned by this store.
-- **[`class ShotBlock`](mayatk/mayatk/anim_utils/shots/_shots.py#L268)** — Represents a single shot (contiguous animation range).
+- **[`class ShotBlock`](mayatk/mayatk/anim_utils/shots/_shots.py#L292)** — Represents a single shot (contiguous animation range).
   - `ShotBlock.duration(self) -> float` *(property)*
   - `ShotBlock.classify_objects(self) -> Dict[str, str]` — Return ``{obj_name: status_key}`` using stored metadata.
-- **[`class StoreEvent`](mayatk/mayatk/anim_utils/shots/_shots.py#L371)** — Base class for typed :class:`ShotStore` events.
-- **[`class ShotDefined(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L383)** — A new shot was created and added to the store.
-- **[`class ShotUpdated(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L391)** — An existing shot's fields were modified.
-- **[`class ShotRemoved(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L399)** — A shot was removed from the store.
-- **[`class ActiveShotChanged(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L407)** — The active (selected) shot changed.
-- **[`class SettingsChanged(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L415)** — Detection-relevant settings were modified.
-- **[`class BatchComplete(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L422)** — A :meth:`ShotStore.batch_update` context has exited.
-- **[`class StoreInvalidated(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L429)** — The active store was discarded (scene change / new scene).
-- **[`class ShotStore`](mayatk/mayatk/anim_utils/shots/_shots.py#L445)** — Central store for shot data with pluggable persistence.
+- **[`class StoreEvent`](mayatk/mayatk/anim_utils/shots/_shots.py#L404)** — Base class for typed :class:`ShotStore` events.
+- **[`class ShotDefined(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L416)** — A new shot was created and added to the store.
+- **[`class ShotUpdated(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L424)** — An existing shot's fields were modified.
+- **[`class ShotRemoved(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L432)** — A shot was removed from the store.
+- **[`class ActiveShotChanged(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L440)** — The active (selected) shot changed.
+- **[`class SettingsChanged(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L448)** — Detection-relevant settings were modified.
+- **[`class BatchComplete(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L455)** — A :meth:`ShotStore.batch_update` context has exited.
+- **[`class StoreInvalidated(StoreEvent)`](mayatk/mayatk/anim_utils/shots/_shots.py#L462)** — The active store was discarded (scene change / new scene).
+- **[`class ShotStore`](mayatk/mayatk/anim_utils/shots/_shots.py#L478)** — Central store for shot data with pluggable persistence.
   - `ShotStore.active_shot_id(self) -> Optional[int]` *(property)* — The currently selected shot, or ``None``.
   - `ShotStore.set_active_shot(self, shot_id: Optional[int]) -> None` — Set the active shot and notify listeners.
   - `ShotStore.notify_settings_changed(self) -> None` — Fire a ``"settings_changed"`` event.
@@ -465,8 +466,8 @@ Shared shot data model and persistent store.
   - `ShotStore.remove_listener(self, callback: Callable[[StoreEvent], None]) -> None` — Remove a previously registered listener.
   - `ShotStore.batch_update(self)` — Defer listener notifications until the block exits.
   - `ShotStore.is_gap_locked(self, left_id: str, right_id: str) -> bool` — Return whether the gap between two adjacent shots is locked.
-  - `ShotStore.lock_gap(self, left_id: str, right_id: str) -> None` — Lock a gap so its width is preserved during global respace.
-  - `ShotStore.unlock_gap(self, left_id: str, right_id: str) -> None` — Unlock a gap so it follows the global gap value.
+  - `ShotStore.lock_gap(self, left_id: int, right_id: int) -> None` — Lock a gap so its width is preserved during global respace.
+  - `ShotStore.unlock_gap(self, left_id: int, right_id: int) -> None` — Unlock a gap so it follows the global gap value.
   - `ShotStore.lock_all_gaps(self) -> None` — Lock every adjacent gap.
   - `ShotStore.unlock_all_gaps(self) -> None` — Unlock every gap.
   - `ShotStore.set_persistence(cls, backend: Optional[ScenePersistence]) -> None` *(class)* — Set the persistence backend used by :meth:`active` and :meth:`save`.
@@ -482,8 +483,6 @@ Shared shot data model and persistent store.
   - `ShotStore.shot_by_name(self, name: str) -> Optional[ShotBlock]` — Return the first shot whose name matches *name*, or ``None``.
   - `ShotStore.define_shot(self, name: str, start: float, end: float, objects: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, locked: bool = False, description: str = '') -> ShotBlock` — Create a new shot and add it to the store.
   - `ShotStore.update_shot(self, shot_id: int, *, start: Optional[float] = None, end: Optional[float] = None, name: Optional[str] = None, objects: Optional[List[str]] = None, description: Optional[str] = None, locked: Optional[bool] = None, metadata: Optional[Dict[str, Any]] = None) -> Optional[ShotBlock]` — Update fields on an existing shot.
-  - `ShotStore.ripple_shift(self, after_frame: float, delta: float, exclude_id: Optional[int] = None) -> None` — Shift all shots starting at or after *after_frame* by *delta*.
-  - `ShotStore.ripple_shift_upstream(self, before_frame: float, delta: float, exclude_id: Optional[int] = None) -> None` — Shift all shots ending at or before *before_frame* by *delta*.
   - `ShotStore.remove_shot(self, shot_id: int) -> bool` — Remove a shot by ID.
   - `ShotStore.append_shot(self, name: str, duration: float, gap: float = 0, start_frame: Optional[float] = None, objects: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, locked: bool = False, description: str = '') -> ShotBlock` — Append a shot after the last existing shot, with gap-aware placement.
   - `ShotStore.is_object_hidden(self, obj_name: str) -> bool` — Return True if *obj_name* is hidden in the sequencer UI.
@@ -510,26 +509,26 @@ Shared shot data model and persistent store.
 <a id="anim_utils--shots--shot_manifest--_shot_manifest"></a>
 ### `anim_utils/shots/shot_manifest/_shot_manifest.py`
 
-Shot Manifest â€” parse structured CSVs and populate a ShotStore.
+Shot Manifest — parse structured CSVs and populate a ShotStore.
 
-- [`resolve_duration(step: BuilderStep, initial_shot_length: float, fit_mode: FitMode, fps: float) -> Tuple[float, float, float]`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L152) — Compute final shot duration for *step* under the given fit policy.
-- [`detect_behaviors(text: str) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L337) — Return behavior names inferred from descriptive *text*.
-- [`parse_csv(filepath: str, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> List[BuilderStep]`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L502) — Parse a structured CSV into a list of :class:`BuilderStep`.
-- **[`class BuilderObject`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L32)** — One asset within a step.
-- **[`class BuilderStep`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L42)** — One step (= one future sequencer shot).
+- [`resolve_duration(step: BuilderStep, initial_shot_length: float, fit_mode: FitMode, fps: float) -> Tuple[float, float, float]`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L154) — Compute final shot duration for *step* under the given fit policy.
+- [`detect_behaviors(text: str) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L339) — Return behavior names inferred from descriptive *text*.
+- [`parse_csv(filepath: str, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> List[BuilderStep]`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L530) — Parse a structured CSV into a list of :class:`BuilderStep`.
+- **[`class BuilderObject`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L36)** — One asset within a step.
+- **[`class BuilderStep`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L46)** — One step (= one future sequencer shot).
   - `BuilderStep.display_text(self) -> str` *(property)* — Text shown in the tree Description column.
   - `BuilderStep.from_detection(cls, candidates: List[Dict]) -> Tuple[List['BuilderStep'], Dict[str, Tuple[float, float]]]` *(class)* — Convert detection candidates to BuilderSteps + pre-filled ranges.
-- **[`class PlannedShot`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L111)** — Immutable build instruction computed before any store mutation.
-- **[`class ObjectStatus`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L275)** — Assessment result for one object within a step.
-- **[`class StepStatus`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L291)** — Assessment result for one step.
+- **[`class PlannedShot`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L113)** — Immutable build instruction computed before any store mutation.
+- **[`class ObjectStatus`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L277)** — Assessment result for one object within a step.
+- **[`class StepStatus`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L293)** — Assessment result for one step.
   - `StepStatus.status(self) -> str` *(property)* — Worst-of-children rollup.
   - `StepStatus.missing_count(self) -> int` *(property)*
   - `StepStatus.total_count(self) -> int` *(property)*
-- **[`class ColumnMap(SchemaSpec)`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L356)** — Maps logical fields to CSV header names (case-insensitive).
-  - `ColumnMap.to_dict(self) -> Dict[str, Any]` — Serialise to a JSON-safe dict (tuples â†’ lists).
+- **[`class ColumnMap(SchemaSpec)`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L358)** — Maps logical fields to CSV header names (case-insensitive).
+  - `ColumnMap.to_dict(self) -> Dict[str, Any]` — Serialise to a JSON-safe dict (tuples → lists).
   - `ColumnMap.from_dict(cls, data: Dict[str, Any]) -> 'ColumnMap'` *(class)* — Reconstruct from a dict produced by :meth:`to_dict`.
-- **[`class ShotManifest`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L650)** — Creates shot store entries from parsed steps and applies behaviors.
-  - `ShotManifest.sync(self, steps: List[BuilderStep], apply_behaviors: bool = True, ranges: Optional[Dict[str, Tuple[float, float]]] = None, remove_missing: bool = True, zero_duration_fallback: bool = False, fit_mode: FitMode = DEFAULT_FIT_MODE, initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH) -> Tuple[Dict[str, str], Dict[str, list], List[StepStatus]]` — Full build pipeline: plan -> commit -> apply behaviors -> assess.
+- **[`class ShotManifest`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L705)** — Creates shot store entries from parsed steps and applies behaviors.
+  - `ShotManifest.sync(self, steps: List[BuilderStep], apply_behaviors: bool = True, ranges: Optional[Dict[str, Tuple[float, float]]] = None, remove_missing: bool = True, zero_duration_fallback: bool = False, fit_mode: FitMode = DEFAULT_FIT_MODE, initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH, skip_scene_discovery: bool = False) -> Tuple[Dict[str, str], Dict[str, list], List[StepStatus]]` — Full build pipeline: plan -> commit -> apply behaviors -> assess.
   - `ShotManifest.rewire_audio(tracks: Optional[List[str]] = None) -> Dict[str, List[str]]` *(static)* — Reconcile managed DG audio nodes with keyed track state.
   - `ShotManifest.update(self, steps: List[BuilderStep], ranges: Optional[Dict[str, Tuple[float, float]]] = None, remove_missing: bool = True, zero_duration_fallback: bool = False, fit_mode: FitMode = DEFAULT_FIT_MODE, initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH) -> Dict[str, str]` — Sync parsed steps to the ShotStore (data only, no behaviors).
   - `ShotManifest.assess(self, steps: List[BuilderStep], exists_fn: Optional[Callable[[str], bool]] = None, verify_fn: Optional[Callable] = None, keyframe_range_fn: Optional[Callable[[str], Optional[Tuple[float, float]]]] = None, audio_exists_fn: Optional[Callable[[str], bool]] = None, skip_scene_discovery: bool = False) -> List[StepStatus]` — Compare parsed steps against the current store state.
@@ -545,10 +544,10 @@ Behaviors — load and apply YAML keying recipes.
 - [`list_behaviors(search_path: Optional[Path] = None, kind: Optional[str] = None) -> List[str]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L127) — Return stem names of all available behavior templates.
 - [`resolve_keys(block_def: Dict, start: float, end: float) -> List[Dict[str, Any]]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L176) — Resolve an ``in`` or ``out`` block to absolute keyframe dicts.
 - [`apply_behavior(obj: str, behavior_name: str, start: float, end: float, attrs: Optional[List[str]] = None, search_path: Optional[Path] = None, source_path: str = '', anchor_override: Optional[str] = None) -> None`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L232) — Apply a named behavior template to an object over a time range.
-- [`verify_behavior(obj: str, behavior_name: str, start: float, end: float, search_path: Optional[Path] = None, keyframe_fn: Optional[Any] = None) -> bool`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L379) — Check whether expected behavior keyframes exist on an object.
-- [`apply_audio_clip(obj: str, start: float, end: float, source_path: str = '') -> None`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L523) — Author start/stop keys for an audio track over *(start, end)*.
-- [`compute_duration(behavior_entries: List[Dict[str, str]], fallback: float = 30, fps: Optional[float] = None) -> float`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L604) — Derive duration from the behavior templates referenced in *behavior_entries*.
-- [`apply_to_shots(shots: list, apply_fn, exists_fn=None, has_keys_fn=None, store=None) -> Dict[str, list]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L732) — Apply declared behaviors from shot metadata to Maya objects.
+- [`verify_behavior(obj: str, behavior_name: str, start: float, end: float, search_path: Optional[Path] = None, keyframe_fn: Optional[Any] = None, anchor_override: Optional[Any] = None) -> bool`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L382) — Check whether expected behavior keyframes exist on an object.
+- [`apply_audio_clip(obj: str, start: float, end: float, source_path: str = '') -> None`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L536) — Author start/stop keys for an audio track over *(start, end)*.
+- [`compute_duration(behavior_entries: List[Dict[str, str]], fallback: float = 30, fps: Optional[float] = None) -> float`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L617) — Derive duration from the behavior templates referenced in *behavior_entries*.
+- [`apply_to_shots(shots: list, apply_fn, exists_fn=None, has_keys_fn=None, store=None) -> Dict[str, list]`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L745) — Apply declared behaviors from shot metadata to Maya objects.
 
 <a id="anim_utils--shots--shot_manifest--behaviors--_spec"></a>
 ### `anim_utils/shots/shot_manifest/behaviors/_spec.py`
@@ -567,12 +566,9 @@ Schema for a *behavior* template file, defined as a dataclass.
 Constants, column layout, and pure helper functions for the Shot Manifest UI.
 
 - [`fmt_behavior(name: str) -> str`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L38) — ``'fade_in'`` → ``'Fade In'``.
-- [`unfmt_behavior(display: str) -> str`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L43) — ``'Fade In'`` → ``'fade_in'``.
-- [`short_name(dag_path: str) -> str`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L48) — Return the leaf node name from a Maya DAG path.
-- [`format_behavior_html(behaviors, broken=(), status_color=None) -> str`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L57) — Return rich-text HTML for a list of behavior names.
-- [`parse_range(raw: str) -> Optional[Tuple[float, Optional[float]]]`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L88) — Parse a range string without storing it.
-- [`try_load_maya_icons()`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L109) — Return the :class:`NodeIcons` class if Maya is available, else ``None``.
-- [`prune_to_top_boundaries(region_starts: List[float], n_steps: int) -> List[float]`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L119) — Keep only *n_steps* region starts by selecting the largest gaps.
+- [`format_behavior_html(behaviors, broken=(), status_color=None) -> str`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L43) — Return rich-text HTML for a list of behavior names.
+- [`try_load_maya_icons()`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L74) — Return the :class:`NodeIcons` class if Maya is available, else ``None``.
+- [`prune_to_top_boundaries(region_starts: List[float], n_steps: int) -> List[float]`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L84) — Keep only *n_steps* region starts by selecting the largest gaps.
 
 <a id="anim_utils--shots--shot_manifest--mapping--_mapping"></a>
 ### `anim_utils/shots/shot_manifest/mapping/_mapping.py`
@@ -607,13 +603,13 @@ Range resolution algorithm for the Shot Manifest.
 
 Switchboard slots for the Shot Manifest UI.
 
-- **[`class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L55)** — Business logic for the Shot Manifest UI.
+- **[`class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L54)** — Business logic for the Shot Manifest UI.
   - `ShotManifestController.detect(self, gap: Optional[float] = None) -> None` — Detect animation regions in the scene and populate the table.
   - `ShotManifestController.remove_callbacks(self) -> None` — Remove ShotStore listener and ScriptJobManager subscriptions.
   - `ShotManifestController.browse_csv(self) -> None` — Open a file dialog and load the selected CSV.
   - `ShotManifestController.build(self) -> None` — Build or update shots in the store from loaded steps.
   - `ShotManifestController.assess(self, skip_key_check: bool = False) -> None` — Compare CSV steps against the live Maya shots and color the tree.
-- **[`class ShotManifestSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L1944)** — Switchboard slot class â€” routes UI events to the controller.
+- **[`class ShotManifestSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L1973)** — Switchboard slot class — routes UI events to the controller.
   - `ShotManifestSlots.header_init(self, widget)` — Header menu is configured once in controller.__init__.
   - `ShotManifestSlots.btn_expand_missing(self)` — Expand all step rows that have missing objects or behaviors.
   - `ShotManifestSlots.btn_expand_extra(self)` — Expand all step rows that have scene-discovered extra objects.
@@ -626,7 +622,7 @@ Switchboard slots for the Shot Manifest UI.
 
 Tree-widget presentation mixin for the Shot Manifest controller.
 
-- **[`class ManifestTableMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/table_presenter.py#L35)** — Presentation methods for the manifest tree widget.
+- **[`class ManifestTableMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/table_presenter.py#L34)** — Presentation methods for the manifest tree widget.
   - `ManifestTableMixin.expand_missing(self) -> None` — Expand all step rows that have missing objects, behaviors, or additional objects.
   - `ManifestTableMixin.expand_extra(self) -> None` — Expand all step rows that have scene-discovered extra objects.
 
@@ -635,7 +631,7 @@ Tree-widget presentation mixin for the Shot Manifest controller.
 
 Shot Sequencer — manages per-shot animation with ripple editing.
 
-- **[`class ShotSequencer`](mayatk/mayatk/anim_utils/shots/shot_sequencer/_shot_sequencer.py#L25)** — Manages a :class:`ShotStore` and provides ripple editing and
+- **[`class ShotSequencer`](mayatk/mayatk/anim_utils/shots/shot_sequencer/_shot_sequencer.py#L24)** — Manages a :class:`ShotStore` and provides ripple editing and
   - `ShotSequencer.shots(self) -> List[ShotBlock]` *(property)*
   - `ShotSequencer.hidden_objects(self) -> set` *(property)*
   - `ShotSequencer.markers(self) -> List[Dict[str, Any]]` *(property)*
@@ -648,7 +644,6 @@ Shot Sequencer — manages per-shot animation with ripple editing.
   - `ShotSequencer.from_current_range(cls, name: str = 'Shot', objects: Optional[List[str]] = None) -> 'ShotSequencer'` *(class)* — Create a ShotSequencer with one shot spanning Maya's current
   - `ShotSequencer.reconcile_all_shots(self) -> bool` — Re-resolve stale DAG paths across every shot and persist changes.
   - `ShotSequencer.collect_object_segments(self, shot_id: int, ignore: Optional[str] = None, motion_rate: float = 0.001, ignore_holds: bool = True) -> List[Dict[str, Any]]` — Collect per-object animation segments within a shot's range.
-  - `ShotSequencer.audio_prefetch(self)` — Cache per-track audio events for the duration of the block.
   - `ShotSequencer.collect_shot_sequences(self, shot_id: int, include_audio: bool = True) -> List[Dict[str, Any]]` — Return all sequences (anim + audio) inside a shot's range.
   - `ShotSequencer.move_sequences_to_shot(self, sequences: List[Dict[str, Any]], dest_shot_id: int) -> None` — Move *sequences* (anim and/or audio) into *dest_shot_id*.
   - `ShotSequencer.fit_shot_to_content(self, shot_id: int, mode: str = 'fit') -> tuple[float, float]` — Resize a shot's boundaries to its sequence content, rippling neighbors.
@@ -662,6 +657,8 @@ Shot Sequencer — manages per-shot animation with ripple editing.
   - `ShotSequencer.scale_object_keys(self, obj: str, old_start: float, old_end: float, new_start: float, new_end: float) -> None` — Scale (and optionally shift) keyframes of *obj* from
   - `ShotSequencer.move_shot(self, shot_id: int, new_start: float) -> None` — Move an entire shot (all object keys) to *new_start*, rippling downstream.
   - `ShotSequencer.slide_shot(self, shot_id: int, new_start: float, direction: str = 'downstream', _enforce: bool = True) -> None` — Slide a shot intact to *new_start*, rippling only in *direction*.
+  - `ShotSequencer.ripple_downstream(self, shot_id: int, after_frame: float, delta: float)` — Shift all shots starting at or after *after_frame* by *delta*.
+  - `ShotSequencer.ripple_upstream(self, shot_id: int, before_frame: float, delta: float)` — Shift all shots ending at or before *before_frame* by *delta*.
   - `ShotSequencer.expand_shot(self, shot_id: int, new_end: float) -> float` — Expand a shot's end frame and ripple downstream shots.
   - `ShotSequencer.resize_object(self, shot_id: int, obj: str, old_start: float, old_end: float, new_start: float, new_end: float) -> None` — Scale one object's keys and ripple-shift all downstream shots.
   - `ShotSequencer.set_shot_duration(self, shot_id: int, new_duration: float) -> None` — Change a shot's duration and ripple-shift all downstream shots.
@@ -670,6 +667,7 @@ Shot Sequencer — manages per-shot animation with ripple editing.
   - `ShotSequencer.reorder_shots(self, shot_id_a: int, shot_id_b: int) -> None` — Swap two shots' timeline positions non-destructively.
   - `ShotSequencer.move_shot_to_position(self, shot_id: int, target_pos: int) -> None` — Move a shot to a new 1-based position in the timeline order.
   - `ShotSequencer.respace(self, gap: float = 0, start_frame: float = 1) -> None` — Redistribute all shots sequentially with uniform gaps.
+  - `ShotSequencer.apply_gap(self, gap: float, scope: str = 'all', shot_id: Optional[int] = None) -> bool` — Re-space shots so the given *gap* separates them, per *scope*.
   - `ShotSequencer.to_dict(self) -> Dict[str, Any]` — Serialise shots and settings to a plain dict.
   - `ShotSequencer.from_dict(cls, data: Dict[str, Any]) -> 'ShotSequencer'` *(class)* — Restore from serialised data.
 
@@ -727,7 +725,7 @@ Segment collection and attribute extraction for the shot sequencer.
 
 Shot navigation and combobox synchronization.
 
-- **[`class ShotNavMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_nav.py#L21)** — Mixin supplying shot selection and navigation.
+- **[`class ShotNavMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_nav.py#L19)** — Mixin supplying shot selection and navigation.
   - `ShotNavMixin.select_shot(self, shot_id: int) -> None` — Set Maya's playback range to the shot and select its objects.
   - `ShotNavMixin.on_shot_block_clicked(self, shot_name: str) -> None` — Select a shot by name when its block is clicked in the shot lane.
 
@@ -736,7 +734,7 @@ Shot navigation and combobox synchronization.
 
 Switchboard slots for the Shot Sequencer UI.
 
-- **[`class ShotSequencerController(GapManagerMixin, ClipMotionMixin, ShotNavMixin, MarkerManagerMixin, ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L61)** — Business logic controller bridging SequencerWidget ↔ ShotSequencer.
+- **[`class ShotSequencerController(GapManagerMixin, ClipMotionMixin, ShotNavMixin, MarkerManagerMixin, ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L60)** — Business logic controller bridging SequencerWidget ↔ ShotSequencer.
   - `ShotSequencerController.sequencer(self) -> Optional[ShotSequencer]` *(property)* — Return the ShotSequencer, lazily creating one from the active store.
   - `ShotSequencerController.remove_callbacks(self) -> None` — Remove Maya event callbacks and ShotStore listener (call on teardown).
   - `ShotSequencerController.on_zone_context_menu(self, zone: str, time: float, global_pos) -> None` — Build a context menu specific to the clicked zone.
@@ -757,9 +755,9 @@ Switchboard slots for the Shot Sequencer UI.
   - `ShotSequencerController.on_key_selection_changed(self, key_groups: list) -> None` — Sync the Maya Graph Editor selection to match the sequencer.
   - `ShotSequencerController.on_clip_renamed(self, clip_id: int, new_label: str) -> None` — Handle inline rename — currently a no-op (shot clips removed).
   - `ShotSequencerController.on_playhead_moved(self, frame: float) -> None` — Sync the Maya playhead to the widget playhead.
-- **[`class ShotEditDialog`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L2301)** — Lightweight dialog for creating or editing a shot.
+- **[`class ShotEditDialog`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L2354)** — Lightweight dialog for creating or editing a shot.
   - `ShotEditDialog.show(parent=None, name: str = '', start: float = 1.0, end: float = 100.0, description: str = '', title: str = 'Shot')` *(static)* — Show a modal dialog and return the result tuple or ``None``.
-- **[`class ShotSequencerSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L2363)** — Switchboard slot class — routes UI events to the controller.
+- **[`class ShotSequencerSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L2416)** — Switchboard slot class — routes UI events to the controller.
   - `ShotSequencerSlots.header_init(self, widget)` — Configure header menu.
   - `ShotSequencerSlots.btn_colors(self)` — Open the attribute color configuration dialog.
   - `ShotSequencerSlots.cmb_shot(self, index)` — Handle direct combobox selection of a shot or marker.
@@ -772,7 +770,7 @@ Switchboard slots for the Shot Sequencer UI.
 
 Switchboard slots for the Shots settings UI.
 
-- **[`class ShotsController(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shots_slots.py#L27)** — Business logic for the Shots settings panel.
+- **[`class ShotsController(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shots_slots.py#L26)** — Business logic for the Shots settings panel.
   - `ShotsController.remove_callbacks(self) -> None` — Remove store listeners and invalidation subscription (call on teardown).
   - `ShotsController.refresh_state(self) -> None` — Central enable/disable refresh for all Shots UI widgets.
   - `ShotsController.on_detection_changed(self, value: float) -> None`
@@ -791,7 +789,7 @@ Switchboard slots for the Shots settings UI.
   - `ShotsController.on_move_shot(self) -> None` — Move the active shot to the position specified by spn_move_to.
   - `ShotsController.on_trim_empty(self) -> None` — Trim empty space from the active shot's start and end.
   - `ShotsController.on_trim_all_shots(self) -> None` — Trim empty space from every shot.
-- **[`class ShotsSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shots_slots.py#L855)** — Switchboard slot class — routes UI events to the controller.
+- **[`class ShotsSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shots_slots.py#L819)** — Switchboard slot class — routes UI events to the controller.
   - `ShotsSlots.header_init(self, widget)` — Configure header help text.
   - `ShotsSlots.spn_detection(self, value)` — Detection threshold changed.
   - `ShotsSlots.cmb_detection_mode(self, index)` — Detection mode combobox changed.
@@ -882,8 +880,8 @@ Dedicated stagger-keys module to keep AnimUtils lean and testable.
 
 Unified audio system for Maya scenes.
 
-- **[`class TrackEvent`](mayatk/mayatk/audio_utils/_audio_utils.py#L31)** — One keyed play-event on a track.
-- **[`class AudioUtils(ptk.HelpMixin)`](mayatk/mayatk/audio_utils/_audio_utils.py#L81)** — Unified audio system API for Maya scenes.
+- **[`class TrackEvent`](mayatk/mayatk/audio_utils/_audio_utils.py#L33)** — One keyed play-event on a track.
+- **[`class AudioUtils(ptk.HelpMixin)`](mayatk/mayatk/audio_utils/_audio_utils.py#L84)** — Unified audio system API for Maya scenes.
   - `AudioUtils.get_snap_frames() -> bool` *(static)* — Return the global whole-frame snap default for key writes.
   - `AudioUtils.set_snap_frames(value: bool) -> None` *(static)* — Set the global whole-frame snap default for key writes.
   - `AudioUtils.validate_track_id(track_id: str) -> None` *(static)* — Raise ``ValueError`` if *track_id* violates schema rules.
@@ -919,7 +917,7 @@ Unified audio system for Maya scenes.
   - `AudioUtils.find_dg_node_for_track(track_id)` *(static)* — Return the managed DG audio node for *track_id*, or ``None``.
   - `AudioUtils.is_managed_dg(node)` *(static)* — True if *node* has the ``audio_node_source`` marker attr.
   - `AudioUtils.batch(auto_sync=True, undo=True)` *(static)* — Context manager grouping audio edits into one undo + one sync.
-  - `AudioUtils.detect_legacy(obj='data_internal', category='audio')` *(static)* — Return True if *obj* has legacy ``<category>_trigger`` attr.
+  - `AudioUtils.detect_legacy(obj=CARRIER_NODE, category='audio')` *(static)* — Return True if *obj* has legacy ``<category>_trigger`` attr.
   - `AudioUtils.migrate_legacy_triggers(obj, category='audio', keep_old_attrs=False)` *(static)* — Migrate legacy trigger keys to per-track attrs.
 
 <a id="audio_utils--audio_clips--_audio_clips"></a>
@@ -2046,7 +2044,7 @@ Maya Connection Module
   - `SceneExporter.close_file_handlers(self)` — Close and remove file handlers after logging is complete.
   - `SceneExporter.load_fbx_export_preset(self, preset_file: str = None, verify: bool = False) -> Optional[dict]` — Load an FBX export preset and optionally verify it.
   - `SceneExporter.verify_fbx_preset(self) -> dict` — Verify a set of predefined FBX export settings and log their values.
-- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L634)**
+- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L641)**
   - `SceneExporterSlots.workspace(self) -> Optional[str]` *(property)*
   - `SceneExporterSlots.presets(self) -> Dict[str, Optional[str]]` *(property)* — Return available presets, using cached values if the preset directory has not changed.
   - `SceneExporterSlots.header_init(self, widget)` — Initialize the header widget.
@@ -2939,7 +2937,6 @@ UI slots for the Channels UI.
 - **[`class DataNodes`](mayatk/mayatk/node_utils/data_nodes.py#L12)** — Manages the two shared scene data nodes.
   - `DataNodes.ensure_internal()` *(static)* — Get or create the shared network node.
   - `DataNodes.ensure_export()` *(static)* — Get or create the shared FBX export transform.
-  - `DataNodes.mirror_attr(attr_name, **add_attr_kwargs)` *(static)* — Ensure *attr_name* on ``data_internal`` with a proxy on ``data_export``.
   - `DataNodes.set_internal_string(attr: str, value: str) -> str` *(static)* — Write *value* to a plain string attr on ``data_internal`` (create if needed).
   - `DataNodes.get_internal_string(attr: str) -> Optional[str]` *(static)* — Return the string value of an internal-node channel, or ``None``.
   - `DataNodes.set_export_string(attr: str, value: str) -> Optional[str]` *(static)* — Write *value* to a plain string attr on the export node (create if needed).
@@ -3315,6 +3312,41 @@ Slots for the RizomUV bridge panel.
   - `RizomBridgeSlots.list_template_modes(self)` — Return ``[(stem, ""), ...]`` for every bundled ``.lua`` script.
   - `RizomBridgeSlots.b000(self)` — Run the chosen preset: round-trip, or one-way send when ``send`` is picked.
   - `RizomBridgeSlots.open_uv_editor(self)` — Open Maya's UV Editor (TextureViewWindow).
+
+<a id="uv_utils--uv_transform"></a>
+### `uv_utils/uv_transform.py`
+
+Dedicated UV shell-transform panel.
+
+- **[`class UvTransformSlots(ptk.LoggingMixin)`](mayatk/mayatk/uv_utils/uv_transform.py#L36)** — Switchboard slots for the UV Transform panel (``uv_transform.ui``).
+  - `UvTransformSlots.header_init(self, widget)` — Header menu — Open UV Editor + panel help.
+  - `UvTransformSlots.b023(self)` — Move To UV Space: Left
+  - `UvTransformSlots.b024(self)` — Move To UV Space: Down
+  - `UvTransformSlots.b025(self)` — Move To UV Space: Up
+  - `UvTransformSlots.b026(self)` — Move To UV Space: Right
+  - `UvTransformSlots.b034(self)` — Flip U: mirror the selected UVs horizontally about each shell's center.
+  - `UvTransformSlots.b035(self)` — Flip V: mirror the selected UVs vertically about each shell's center.
+  - `UvTransformSlots.b036(self)` — Rotate the selected UVs counter-clockwise by the s041 angle.
+  - `UvTransformSlots.b037(self)` — Rotate the selected UVs clockwise by the s041 angle.
+  - `UvTransformSlots.s041(self, value, widget)` — Rotate Angle — passive input; read by the Rotate buttons (b036/b037).
+  - `UvTransformSlots.tb005_init(self, widget)` — Initialize Straighten UV
+  - `UvTransformSlots.tb005(self, widget)` — Straighten UV
+  - `UvTransformSlots.tb006_init(self, widget)` — Initialize Distribute
+  - `UvTransformSlots.tb006(self, widget)` — Distribute: evenly space the selected UV shells horizontally or vertically.
+  - `UvTransformSlots.tb008_init(self, widget)` — Initialize Mirror UVs.
+  - `UvTransformSlots.tb008(self, widget)` — Mirror UVs (footprint-preserving by default).
+  - `UvTransformSlots.align_u_min(self)` — Align the selected UVs to their minimum U (left).
+  - `UvTransformSlots.align_u_avg(self)` — Align the selected UVs to their average U (center).
+  - `UvTransformSlots.align_u_max(self)` — Align the selected UVs to their maximum U (right).
+  - `UvTransformSlots.align_v_min(self)` — Align the selected UVs to their minimum V (bottom).
+  - `UvTransformSlots.align_v_avg(self)` — Align the selected UVs to their average V (center).
+  - `UvTransformSlots.align_v_max(self)` — Align the selected UVs to their maximum V (top).
+  - `UvTransformSlots.linear_align(self)` — Linearly align the selected UVs between their two end points.
+  - `UvTransformSlots.orient_shells(self)` — Orient each shell to run parallel with its nearest U/V axis.
+  - `UvTransformSlots.orient_edges(self)` — Orient the shell so its selected edge runs along U or V.
+  - `UvTransformSlots.gather_shells(self)` — Gather the selected shells together toward the 0-1 UV space.
+  - `UvTransformSlots.randomize_shells(self)` — Randomly offset the selected shells.
+  - `UvTransformSlots.open_uv_editor(self)` — Open Maya's UV Editor (TextureViewWindow).
 
 <a id="xform_utils--_xform_utils"></a>
 ### `xform_utils/_xform_utils.py`

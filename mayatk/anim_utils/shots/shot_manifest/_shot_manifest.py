@@ -1,12 +1,13 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Shot Manifest â€” parse structured CSVs and populate a ShotStore.
+"""Shot Manifest — parse structured CSVs and populate a ShotStore.
 
 Reads a CSV with section/step structure, auto-detects object behaviors
 from textual descriptions, and registers shots in a
 :class:`~mayatk.anim_utils.shots._shots.ShotStore`.
 """
 import csv
+import io
 import logging
 import re
 from dataclasses import dataclass, field, fields
@@ -14,7 +15,10 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 from pythontk import SchemaSpec, spec_field
 
-from mayatk.anim_utils.shots._shots import ShotStore
+from mayatk.anim_utils.shots._shots import (
+    ShotStore,
+    _resolve_long_names_keep_missing,
+)
 
 # Imported at module scope (not deferred like the other AudioUtils uses) so tests
 # can patch ``_shot_manifest.AudioUtils`` as the seam for ``_default_audio_exists``.
@@ -65,8 +69,8 @@ class BuilderStep:
             candidates: List of dicts with keys: name, start, end, objects.
 
         Returns:
-            ``(steps, ranges)`` â€” steps list and dict mapping
-            ``step_id`` â†’ ``(start, end)``.
+            ``(steps, ranges)`` — steps list and dict mapping
+            ``step_id`` → ``(start, end)``.
         """
         steps: List["BuilderStep"] = []
         ranges: Dict[str, Tuple[float, float]] = {}
@@ -75,9 +79,7 @@ class BuilderStep:
             start = cand.get("start")
             end = cand.get("end")
             if step_id is None or start is None or end is None:
-                import logging
-
-                logging.getLogger(__name__).warning(
+                log.warning(
                     "Skipping detection candidate %d: missing required "
                     "key(s) (name=%r, start=%r, end=%r)",
                     i,
@@ -402,7 +404,7 @@ class ColumnMap(SchemaSpec):
     )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialise to a JSON-safe dict (tuples â†’ lists)."""
+        """Serialise to a JSON-safe dict (tuples → lists)."""
         result: Dict[str, Any] = {}
         for f in fields(self):
             val = getattr(self, f.name)
@@ -491,12 +493,38 @@ def _resolve_columns(header: List[str], col_map: ColumnMap) -> _ResolvedColumns:
 
 _SECTION_RE = re.compile(r"^SECTION\s+([A-Z0-9]+)\s*:\s*(.*)", re.I)
 _STEP_RE = re.compile(r"^([A-Z]\d+)\.\)")
-_ALT_STEP_RE = re.compile(r"^([A-Z]{2,})$")  # non-numbered IDs: SETUP, INTRO â€¦
+_ALT_STEP_RE = re.compile(r"^([A-Z]{2,})$")  # non-numbered IDs: SETUP, INTRO …
 
 
 def _strip_cell(cell: str) -> str:
     """Strip whitespace from a CSV cell."""
     return (cell or "").strip()
+
+
+def _read_csv_rows(filepath: str) -> List[List[str]]:
+    """Read all CSV rows, tolerating non-UTF-8 encodings.
+
+    Production manifests frequently come out of Excel as cp1252; a
+    UTF-8-only read used to fail the entire load on the first accented
+    character.  The UTF-8 BOM is stripped from the raw bytes up front —
+    otherwise a BOM'd file that falls back to cp1252 (or the lossy
+    read) leaks it into the first header cell and the header never
+    resolves.  Tries UTF-8 first, then cp1252, then a lossy UTF-8 read
+    as a last resort so a stray byte can't kill the manifest.
+    """
+    with open(filepath, "rb") as fh:
+        raw = fh.read()
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    for encoding in ("utf-8", "cp1252"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    return list(csv.reader(io.StringIO(text, newline="")))
 
 
 def parse_csv(
@@ -530,94 +558,121 @@ def parse_csv(
     # Per-step accumulator for metadata_pass values (first-row-wins)
     step_pass: Dict[str, str] = {}
 
-    with open(filepath, newline="", encoding="utf-8-sig") as fh:
-        reader = csv.reader(fh)
-        for row in reader:
-            if not row:
-                continue
+    rows = _read_csv_rows(filepath)
+    for row in rows:
+        if not row:
+            continue
 
-            first = _strip_cell(row[0])
+        first = _strip_cell(row[0])
 
-            # --- section header ---
-            sec_match = _SECTION_RE.match(first)
-            if sec_match:
-                current_section = sec_match.group(1)
-                current_section_title = sec_match.group(2).strip()
-                current_step = None
-                continue
+        # --- section header ---
+        sec_match = _SECTION_RE.match(first)
+        if sec_match:
+            current_section = sec_match.group(1)
+            current_section_title = sec_match.group(2).strip()
+            current_step = None
+            continue
 
-            # --- column header row (resolve indices) ---
-            if first.lower() in step_id_aliases:
+        # --- column header row (resolve indices) ---
+        if first.lower() in step_id_aliases:
+            cols = _resolve_columns(row, col_map)
+            continue
+        # The step-ID header may not sit in the first column.  Accept a
+        # row with a matching cell anywhere — but only if it actually
+        # resolves (which also demands the description/assets headers),
+        # so a data row containing a bare alias can't hijack the column
+        # map.  Not gated on ``cols is None``: layouts repeat the header
+        # per section, and an unrecognized repeat would be misread as a
+        # continuation row of the previous step.
+        if any(_strip_cell(c).lower() in step_id_aliases for c in row):
+            try:
                 cols = _resolve_columns(row, col_map)
                 continue
+            except ValueError:
+                pass
 
-            # Skip data rows before we've seen a header
-            if cols is None:
+        # Skip data rows before we've seen a header
+        if cols is None:
+            continue
+
+        # --- step row ---
+        # Read the step ID from the resolved step column (column 0 for
+        # the default layouts) rather than assuming it sits first.
+        step_cell = (
+            _strip_cell(row[cols.step_id]) if len(row) > cols.step_id else ""
+        )
+        step_match = _STEP_RE.match(step_cell) or _ALT_STEP_RE.match(step_cell)
+        description = (
+            _strip_cell(row[cols.description])
+            if len(row) > cols.description
+            else ""
+        )
+        asset = _strip_cell(row[cols.assets]) if len(row) > cols.assets else ""
+        audio = (
+            _strip_cell(row[cols.audio])
+            if cols.audio is not None and len(row) > cols.audio
+            else ""
+        )
+
+        if step_match:
+            step_id = step_match.group(1)
+            if step_id in seen_ids:
+                log.warning("Duplicate step_id '%s' — skipping.", step_id)
+                current_step = None
                 continue
-
-            # --- step row ---
-            step_match = _STEP_RE.match(first) or _ALT_STEP_RE.match(first)
-            description = (
-                _strip_cell(row[cols.description])
-                if len(row) > cols.description
-                else ""
+            seen_ids.add(step_id)
+            step_behaviors = detect_behaviors(description)
+            # Collect metadata_pass values for this step row
+            step_pass = {}
+            for key, idx in cols.metadata_pass.items():
+                val = _strip_cell(row[idx]) if len(row) > idx else ""
+                if val:
+                    step_pass[key] = val
+            current_step = BuilderStep(
+                step_id=step_id,
+                section=current_section,
+                section_title=current_section_title,
+                description=description,
+                audio=audio,
             )
-            asset = _strip_cell(row[cols.assets]) if len(row) > cols.assets else ""
-            audio = (
-                _strip_cell(row[cols.audio])
-                if cols.audio is not None and len(row) > cols.audio
-                else ""
-            )
+            current_step._pass_through = dict(step_pass)
+            steps.append(current_step)
 
-            if step_match:
-                step_id = step_match.group(1)
-                if step_id in seen_ids:
-                    log.warning("Duplicate step_id '%s' â€” skipping.", step_id)
-                    current_step = None
-                    continue
-                seen_ids.add(step_id)
-                step_behaviors = detect_behaviors(description)
-                # Collect metadata_pass values for this step row
-                step_pass = {}
-                for key, idx in cols.metadata_pass.items():
-                    val = _strip_cell(row[idx]) if len(row) > idx else ""
-                    if val:
-                        step_pass[key] = val
-                current_step = BuilderStep(
-                    step_id=step_id,
-                    section=current_section,
-                    section_title=current_section_title,
-                    description=description,
-                    audio=audio,
+            if asset and asset.upper() not in asset_excludes:
+                obj = BuilderObject(
+                    name=asset,
+                    behaviors=list(step_behaviors),
                 )
-                current_step._pass_through = dict(step_pass)
-                steps.append(current_step)
+                current_step.objects.append(obj)
+            continue
 
-                if asset and asset.upper() not in asset_excludes:
-                    obj = BuilderObject(
-                        name=asset,
-                        behaviors=list(step_behaviors),
-                    )
-                    current_step.objects.append(obj)
-                continue
+        # --- continuation row (belongs to previous step) ---
+        if current_step is not None:
+            # Merge continuation description into the parent step
+            if description:
+                current_step.description += " " + description
 
-            # --- continuation row (belongs to previous step) ---
-            if current_step is not None:
-                # Merge continuation description into the parent step
-                if description:
-                    current_step.description += " " + description
+            if asset and asset.upper() not in asset_excludes:
+                # Own description overrides, otherwise inherit from parent step
+                row_behaviors = detect_behaviors(description) if description else []
+                behaviors = row_behaviors or detect_behaviors(
+                    current_step.description
+                )
+                obj = BuilderObject(
+                    name=asset,
+                    behaviors=list(behaviors),
+                )
+                current_step.objects.append(obj)
 
-                if asset and asset.upper() not in asset_excludes:
-                    # Own description overrides, otherwise inherit from parent step
-                    row_behaviors = detect_behaviors(description) if description else []
-                    behaviors = row_behaviors or detect_behaviors(
-                        current_step.description
-                    )
-                    obj = BuilderObject(
-                        name=asset,
-                        behaviors=list(behaviors),
-                    )
-                    current_step.objects.append(obj)
+    # A missing header row used to fail silently: every data row was
+    # skipped and the caller saw 0 steps with no explanation.
+    if cols is None and rows:
+        log.warning(
+            "No header row found in '%s' — 0 steps parsed. Expected a "
+            "column named one of %s.",
+            filepath,
+            sorted(step_id_aliases),
+        )
 
     # Apply exclude list
     if col_map.exclude_steps:
@@ -661,6 +716,10 @@ class ShotManifest:
     def __init__(self, store: ShotStore):
         self.store = store
         self._fps_cache: Optional[float] = None
+        # Per-cycle caches (cleared at the top of update()/assess()):
+        # transform → standard-attr curves, and per-curve key data.
+        self._animated_transforms: Optional[Dict[str, List[str]]] = None
+        self._curve_data: Optional[Dict[str, Tuple[list, list]]] = None
 
     @staticmethod
     def _step_metadata(
@@ -700,6 +759,7 @@ class ShotManifest:
         zero_duration_fallback: bool = False,
         fit_mode: FitMode = DEFAULT_FIT_MODE,
         initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH,
+        skip_scene_discovery: bool = False,
     ) -> Tuple[Dict[str, str], Dict[str, list], List[StepStatus]]:
         """Full build pipeline: plan -> commit -> apply behaviors -> assess.
 
@@ -707,7 +767,7 @@ class ShotManifest:
             steps: Parsed steps to build.
             apply_behaviors: If True (default), detected behaviors are
                 applied to Maya objects after updating the store.
-            ranges: Optional mapping of ``step_id`` â†’ ``(start, end)``
+            ranges: Optional mapping of ``step_id`` → ``(start, end)``
                 frame ranges.  When provided, shots are placed at these
                 positions instead of being sequentially appended.
             remove_missing: If True (default), shots in the store that
@@ -718,6 +778,10 @@ class ShotManifest:
                 explicit range are created with zero duration instead
                 of using ``compute_duration``.  Used during incremental
                 builds to avoid disrupting existing shot positions.
+            skip_scene_discovery: Forwarded to :meth:`assess` so a
+                selected-keys build only considers the selected keys'
+                objects instead of discovering every animated scene
+                object in each shot's range.
 
         Returns:
             ``(actions, behavior_result, assessment)`` tuple.
@@ -748,7 +812,7 @@ class ShotManifest:
         # reflects any key changes authored above.  Idempotent.
         self.rewire_audio()
 
-        assessment = self.assess(steps)
+        assessment = self.assess(steps, skip_scene_discovery=skip_scene_discovery)
         return actions, behavior_result, assessment
 
     # ---- rewire (markers → DG audio nodes) -----------------------------
@@ -802,6 +866,8 @@ class ShotManifest:
             | ``"locked"`` | ``"removed"``).
         """
         self._fps_cache = None
+        self._animated_transforms = None
+        self._curve_data = None
         plan = self._compute_plan(
             steps,
             ranges=ranges,
@@ -875,13 +941,12 @@ class ShotManifest:
 
             if existing is None:
                 # ---- NEW SHOT ----
-                # Fit policy is authoritative for duration.  When a
-                # range is provided, ``rng[0]`` supplies placement but
-                # ``resolve_duration`` drives the end — so ``fit_mode``
-                # and ``initial_shot_length`` always govern new-shot
-                # length, even when the slots layer has pre-computed a
-                # gap-based range_map.  ``zero_duration_fallback`` is
-                # the one opt-out (incremental/selected-keys flows).
+                # Placement comes from ``rng[0]`` (when provided) or the
+                # cursor.  Duration: a provided range pins the end
+                # (grown only when measured content exceeds it);
+                # otherwise ``fit_mode`` / ``initial_shot_length``
+                # govern.  ``zero_duration_fallback`` is the one opt-out
+                # (incremental/selected-keys flows).
                 rng = ranges.get(step.step_id) if ranges else None
                 if zero_duration_fallback and rng is not None:
                     start = rng[0] + cumulative_ripple
@@ -983,7 +1048,7 @@ class ShotManifest:
             )
             ripple_delta = 0.0
             new_audio = {o.name for o in step.objects if o.kind == "audio"}
-            if range_is_noop and new_audio and not existing.locked:
+            if range_is_noop and new_audio:
                 audio_objs = [o for o in step.objects if o.kind == "audio"]
                 new_dur = compute_duration(audio_objs, fallback=0.0)
                 current_dur = ex_end - ex_start
@@ -1087,15 +1152,19 @@ class ShotManifest:
                     continue
 
                 if ps.action == "created":
+                    # Store long DAG names (assess/classify rely on exact
+                    # long-name membership); missing objects keep their
+                    # CSV form so pinning can surface them later.
+                    obj_names = _resolve_long_names_keep_missing(ps.objects)
                     self.store.define_shot(
                         name=ps.step.step_id,
                         start=ps.start,
                         end=ps.end,
-                        objects=ps.objects,
+                        objects=obj_names,
                         metadata=ps.metadata,
                         description=ps.description,
                     )
-                    for n in ps.objects:
+                    for n in obj_names:
                         self.store.set_object_pinned(n)
                     actions[ps.step.step_id] = "created"
 
@@ -1118,47 +1187,49 @@ class ShotManifest:
                 elif ps.action == "skipped":
                     # Still update metadata/description from CSV, and
                     # reposition if an upstream ripple displaced this shot.
+                    # All writes go through update_shot so the store is
+                    # dirtied/notified (direct attribute writes are
+                    # silently lost on save).
                     if ps.existing_shot_id is not None:
                         existing = self._find_shot(ps.existing_shot_id)
                         if existing:
+                            kwargs = {}
                             if (
                                 abs(existing.start - ps.start) > 1e-6
                                 or abs(existing.end - ps.end) > 1e-6
                             ):
-                                self.store.update_shot(
-                                    existing.shot_id,
-                                    start=ps.start,
-                                    end=ps.end,
-                                )
-                            existing.metadata = ps.metadata
-                            existing.description = ps.description
+                                kwargs.update(start=ps.start, end=ps.end)
+                            if existing.metadata != ps.metadata:
+                                kwargs["metadata"] = ps.metadata
+                            if existing.description != ps.description:
+                                kwargs["description"] = ps.description
+                            if kwargs:
+                                self.store.update_shot(existing.shot_id, **kwargs)
                     actions[ps.step.step_id] = "skipped"
 
                 elif ps.action == "patched":
                     if ps.existing_shot_id is not None:
                         existing = self._find_shot(ps.existing_shot_id)
                         if existing:
+                            kwargs = {}
                             # Apply absolute position from plan — no
-                            # ripple_shift needed because the plan already
+                            # ripple pass needed because the plan already
                             # computed final positions for every shot.
                             if (
                                 abs(existing.start - ps.start) > 1e-6
                                 or abs(existing.end - ps.end) > 1e-6
                             ):
-                                self.store.update_shot(
-                                    existing.shot_id,
-                                    start=ps.start,
-                                    end=ps.end,
-                                )
-                            # Update metadata, description, objects
-                            existing.metadata = ps.metadata
-                            existing.description = ps.description
+                                kwargs.update(start=ps.start, end=ps.end)
+                            if existing.metadata != ps.metadata:
+                                kwargs["metadata"] = ps.metadata
+                            if existing.description != ps.description:
+                                kwargs["description"] = ps.description
 
-                            # Resolve long names and filter scene-discovered
-                            from mayatk.anim_utils.shots._shots import (
-                                _resolve_long_names,
-                            )
-
+                            # Merge CSV objects with scene-discovered
+                            # extras.  Long-name-resolve the CSV names;
+                            # missing objects keep their CSV form so
+                            # pinning can surface them instead of
+                            # silently dropping them.
                             csv_objs = {
                                 o.name for o in ps.step.objects if o.kind != "audio"
                             }
@@ -1169,11 +1240,18 @@ class ShotManifest:
                                         sorted(scene_objs), ps.start, ps.end
                                     )
                                 )
-                            merged = sorted(csv_objs | scene_objs)
-                            resolved = _resolve_long_names(merged)
-                            existing.objects = resolved if resolved else merged
+                            csv_resolved = _resolve_long_names_keep_missing(
+                                sorted(csv_objs)
+                            )
+                            merged = sorted(set(csv_resolved) | scene_objs)
+                            if set(existing.objects) != set(merged):
+                                kwargs["objects"] = merged
+                            # Route every write through update_shot so
+                            # the store is dirtied/notified.
+                            if kwargs:
+                                self.store.update_shot(existing.shot_id, **kwargs)
 
-                            for n in csv_objs:
+                            for n in csv_resolved:
                                 self.store.set_object_pinned(n)
 
                     actions[ps.step.step_id] = "patched"
@@ -1182,10 +1260,7 @@ class ShotManifest:
 
     def _find_shot(self, shot_id: int):
         """Return the ShotBlock with *shot_id*, or None."""
-        for s in self.store.shots:
-            if s.shot_id == shot_id:
-                return s
-        return None
+        return self.store.shot_by_id(shot_id)
 
     def _resolve_fps(self) -> float:
         """Return scene FPS, or 24 when Maya is unavailable.
@@ -1254,13 +1329,18 @@ class ShotManifest:
         if verify_fn is None:
             from mayatk.anim_utils.shots.shot_manifest.behaviors import verify_behavior
 
-            verify_fn = lambda obj, beh, s, e: verify_behavior(obj, beh, s, e)
+            verify_fn = (
+                lambda obj, beh, s, e, anchor_override=None: verify_behavior(
+                    obj, beh, s, e, anchor_override=anchor_override
+                )
+            )
 
         if audio_exists_fn is None:
             audio_exists_fn = self._default_audio_exists
 
         # Invalidate per-assess caches
         self._animated_transforms = None
+        self._curve_data = None
 
         if keyframe_range_fn is None:
             keyframe_range_fn = self._default_keyframe_range
@@ -1273,7 +1353,7 @@ class ShotManifest:
             built = shot is not None
             is_locked = built and shot.locked
 
-            # Locked shots are user-finalized â€” skip detailed checking
+            # Locked shots are user-finalized — skip detailed checking
             if is_locked:
                 obj_statuses = [
                     ObjectStatus(
@@ -1325,12 +1405,27 @@ class ShotManifest:
                 if not exists:
                     status = "missing_object"
                 elif built and obj.behaviors:
-                    # Check each declared behavior individually
-                    broken = [
-                        b
-                        for b in obj.behaviors
-                        if not verify_fn(obj.name, b, shot.start, shot.end)
-                    ]
+                    # Check each declared behavior individually, modeling
+                    # the distributed anchors apply_to_shots used to place
+                    # multi-behavior objects (idx / (total-1)) — exact-mode
+                    # verify against the template's default anchors would
+                    # permanently flag them right after a successful build.
+                    total = len(obj.behaviors)
+                    for idx, b in enumerate(obj.behaviors):
+                        anchor = idx / max(total - 1, 1) if total > 1 else None
+                        try:
+                            ok = verify_fn(
+                                obj.name,
+                                b,
+                                shot.start,
+                                shot.end,
+                                anchor_override=anchor,
+                            )
+                        except TypeError:
+                            # Caller-supplied 4-arg verify_fn (old seam).
+                            ok = verify_fn(obj.name, b, shot.start, shot.end)
+                        if not ok:
+                            broken.append(b)
                     status = "missing_behavior" if broken else "valid"
                 elif built and not obj.behaviors:
                     # User-animated: query actual keyframe extent
@@ -1352,9 +1447,7 @@ class ShotManifest:
             # Detect additional objects (in shot but not in CSV)
             additional = []
             if shot is not None:
-                from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
-                    short_name as _short,
-                )
+                from mayatk.core_utils._core_utils import leaf_name as _short
 
                 csv_short = {_short(o.name) for o in step.objects}
                 stored_extra = [n for n in shot.objects if _short(n) not in csv_short]
@@ -1376,9 +1469,11 @@ class ShotManifest:
                     )
                     additional.extend(scene_extra)
                     # Merge discovered objects into the shot so the sequencer
-                    # can display them (it reads shot.objects).
+                    # can display them (it reads shot.objects).  Mark dirty —
+                    # this mutates persisted state outside update_shot.
                     if scene_extra:
                         shot.objects = sorted(set(shot.objects) | set(scene_extra))
+                        self.store.mark_dirty()
 
             # Compute shrinkable frames (unused tail)
             shrinkable = 0.0
@@ -1417,36 +1512,65 @@ class ShotManifest:
         ``ls``/``listConnections`` calls when multiple steps are checked.
         """
         try:
-            import maya.cmds as cmds
+            import maya.cmds  # noqa: F401 — availability probe
         except ImportError:
             return []
 
-        from mayatk.anim_utils.shots._shots import _map_standard_curves_to_transforms
-
-        # Build (and cache) the map: transform â†’ [standard-attr curves]
-        animated = getattr(self, "_animated_transforms", None)
-        if animated is None:
-            animated = _map_standard_curves_to_transforms()
-            self._animated_transforms = animated
+        animated = self._transform_curve_map()
 
         found: list = []
-        from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
-            short_name as _short,
-        )
+        from mayatk.core_utils._core_utils import leaf_name as _short
 
         for obj in sorted(animated):
             if _short(obj) in exclude_names:
                 continue
-            for crv in animated[obj]:
-                vals = cmds.keyframe(crv, q=True, time=(start, end), valueChange=True)
-                if vals and (max(vals) - min(vals)) > 1e-4:
-                    found.append(obj)
-                    break
+            if any(
+                self._curve_varies_in_range(crv, start, end) for crv in animated[obj]
+            ):
+                found.append(obj)
 
         return found
 
-    @staticmethod
-    def _filter_to_animated(objects: List[str], start: float, end: float) -> List[str]:
+    def _transform_curve_map(self) -> Dict[str, List[str]]:
+        """Transform → standard-attr anim-curves map, cached per cycle.
+
+        Building this map walks every animCurve in the scene, so it is
+        computed at most once per assess/update cycle (both entry points
+        clear ``self._animated_transforms``) and shared by every
+        per-step animation check.
+        """
+        if self._animated_transforms is None:
+            from mayatk.anim_utils.shots._shots import (
+                _map_standard_curves_to_transforms,
+            )
+
+            self._animated_transforms = _map_standard_curves_to_transforms()
+        return self._animated_transforms
+
+    def _curve_varies_in_range(self, crv: str, start: float, end: float) -> bool:
+        """True if *crv*'s value varies by >1e-4 within ``[start, end]``.
+
+        Each curve's full (times, values) arrays are queried from Maya
+        once per assess/update cycle and range checks are evaluated in
+        Python — S steps × C curves used to mean S×C ranged
+        ``cmds.keyframe`` calls; now it's C.
+        """
+        if self._curve_data is None:
+            self._curve_data = {}
+        data = self._curve_data.get(crv)
+        if data is None:
+            import maya.cmds as cmds
+
+            times = cmds.keyframe(crv, q=True, timeChange=True) or []
+            values = cmds.keyframe(crv, q=True, valueChange=True) or []
+            data = self._curve_data[crv] = (times, values)
+        times, values = data
+        window = [v for t, v in zip(times, values) if start <= t <= end]
+        return bool(window) and (max(window) - min(window)) > 1e-4
+
+    def _filter_to_animated(
+        self, objects: List[str], start: float, end: float
+    ) -> List[str]:
         """Return only objects that have standard-attribute animation in [start, end].
 
         Objects animated exclusively on custom attributes (e.g.
@@ -1456,23 +1580,18 @@ class ShotManifest:
             return []
 
         try:
-            import maya.cmds as cmds
+            import maya.cmds  # noqa: F401 — availability probe
         except ImportError:
             return objects
 
-        from mayatk.anim_utils.shots._shots import _map_standard_curves_to_transforms
-
-        transform_curves = _map_standard_curves_to_transforms()
+        transform_curves = self._transform_curve_map()
         result = []
         for obj in objects:
             crvs = transform_curves.get(obj)
-            if not crvs:
-                continue
-            for crv in crvs:
-                vals = cmds.keyframe(crv, q=True, time=(start, end), valueChange=True)
-                if vals and (max(vals) - min(vals)) > 1e-4:
-                    result.append(obj)
-                    break
+            if crvs and any(
+                self._curve_varies_in_range(crv, start, end) for crv in crvs
+            ):
+                result.append(obj)
         return result
 
     @staticmethod

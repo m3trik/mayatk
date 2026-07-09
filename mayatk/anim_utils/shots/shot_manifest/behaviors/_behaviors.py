@@ -8,7 +8,7 @@ tools in the ``shots`` subpackage.
 import functools
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
 
 from pythontk import Codec, TemplateSet
 
@@ -299,6 +299,9 @@ def apply_behavior(
         OpacityAttributeMode.create([node])
         has_opacity = True
 
+    # Resolve the transform's long name once — plugs built per key below.
+    long_node = (cmds.ls(node, long=True) or [node])[0]
+
     for attr_name, attr_def in template.get("attributes", {}).items():
         if attrs and attr_name not in attrs:
             continue
@@ -336,7 +339,7 @@ def apply_behavior(
                 itt = "stepnext" if tan == "step" else tan
                 # Use explicit plug path to target the transform only —
                 # the kwarg form (attribute=) also hits the shape node.
-                attr_plug = f"{(cmds.ls(node, long=True) or [node])[0]}.{target_attr}"
+                attr_plug = f"{long_node}.{target_attr}"
                 cmds.setKeyframe(
                     attr_plug,
                     time=k["time"],
@@ -351,7 +354,7 @@ def apply_behavior(
                 if mirror_to_vis:
                     # Use longName to target only the transform —
                     # short names also match the shape node.
-                    vis_plug = f"{(cmds.ls(node, long=True) or [node])[0]}.visibility"
+                    vis_plug = f"{long_node}.visibility"
                     t = k["time"]
                     cmds.setKeyframe(
                         vis_plug,
@@ -383,6 +386,7 @@ def verify_behavior(
     end: float,
     search_path: Optional[Path] = None,
     keyframe_fn: Optional[Any] = None,
+    anchor_override: Optional[Any] = None,
 ) -> bool:
     """Check whether expected behavior keyframes exist on an object.
 
@@ -406,6 +410,11 @@ def verify_behavior(
         keyframe_fn: Callable ``(obj, attribute, time) -> list``.
             Defaults to ``cmds.keyframe(obj, q=True, at=attr, time=(t, t))``.
             Only used for ``exact`` mode.
+        anchor_override: Same semantics as :func:`apply_behavior` —
+            when the keys were placed with a distributed anchor
+            (multi-behavior objects), ``exact`` verification must model
+            the same anchor or it checks the template's default
+            positions and permanently flags the object as broken.
 
     Returns:
         ``True`` if every expected keyframe is found.
@@ -451,7 +460,11 @@ def verify_behavior(
                 if not _verify_values_in_range(obj, check_attr, block, start, end):
                     return False
             else:
-                if "anchor" not in block:
+                # Mirror apply_behavior's anchor precedence exactly:
+                # override > YAML > phase-based default.
+                if anchor_override is not None:
+                    block = dict(block, anchor=anchor_override)
+                elif "anchor" not in block:
                     block = dict(block, anchor="start" if phase == "in" else "end")
                 keys = resolve_keys(block, start, end)
                 for k in keys:
@@ -767,8 +780,12 @@ def apply_to_shots(
             to checking keyframes in range via ``cmds.keyframe``.
 
     Returns:
-        Dict with ``"applied"`` and ``"skipped"`` lists of dicts
-        containing ``object``, ``behavior``, and ``shot`` keys.
+        Dict with ``"applied"``, ``"skipped"``, and ``"failed"`` lists
+        of dicts containing ``object``, ``behavior``, and ``shot`` keys
+        (``failed`` entries also carry ``error``).  A failing entry —
+        e.g. ``setKeyframe`` on a locked/connected attribute of a
+        referenced asset — is recorded and the batch continues instead
+        of aborting the remaining behaviors mid-build.
     """
     from mayatk.audio_utils._audio_utils import AudioUtils as _audio_utils
 
@@ -822,6 +839,25 @@ def apply_to_shots(
 
     applied: list = []
     skipped: list = []
+    failed: list = []
+
+    def _record_failure(obj_name, behavior, shot, exc):
+        log.warning(
+            "Behavior '%s' on '%s' (shot %s) failed: %s",
+            behavior,
+            obj_name,
+            shot.name,
+            exc,
+        )
+        failed.append(
+            {
+                "object": obj_name,
+                "behavior": behavior,
+                "shot": shot.name,
+                "error": str(exc),
+            }
+        )
+
     for shot in shots:
         if shot.locked:
             continue
@@ -852,16 +888,20 @@ def apply_to_shots(
 
             source_path = entry.get("source_path", "") or ""
             try:
-                apply_fn(
-                    obj_name,
-                    behavior,
-                    shot.start,
-                    shot.end,
-                    source_path=source_path,
-                    anchor_override=0.0,
-                )
-            except TypeError:
-                apply_fn(obj_name, behavior, shot.start, shot.end)
+                try:
+                    apply_fn(
+                        obj_name,
+                        behavior,
+                        shot.start,
+                        shot.end,
+                        source_path=source_path,
+                        anchor_override=0.0,
+                    )
+                except TypeError:
+                    apply_fn(obj_name, behavior, shot.start, shot.end)
+            except RuntimeError as exc:
+                _record_failure(obj_name, behavior, shot, exc)
+                continue
             applied.append(
                 {"object": obj_name, "behavior": behavior, "shot": shot.name}
             )
@@ -910,27 +950,31 @@ def apply_to_shots(
 
             source_path = entry.get("source_path", "") or ""
             try:
-                if total > 1:
-                    apply_fn(
-                        obj_name,
-                        behavior,
-                        shot.start,
-                        shot.end,
-                        source_path=source_path,
-                        anchor_override=idx / max(total - 1, 1),
-                    )
-                else:
-                    apply_fn(
-                        obj_name,
-                        behavior,
-                        shot.start,
-                        shot.end,
-                        source_path=source_path,
-                    )
-            except TypeError:
-                apply_fn(obj_name, behavior, shot.start, shot.end)
+                try:
+                    if total > 1:
+                        apply_fn(
+                            obj_name,
+                            behavior,
+                            shot.start,
+                            shot.end,
+                            source_path=source_path,
+                            anchor_override=idx / max(total - 1, 1),
+                        )
+                    else:
+                        apply_fn(
+                            obj_name,
+                            behavior,
+                            shot.start,
+                            shot.end,
+                            source_path=source_path,
+                        )
+                except TypeError:
+                    apply_fn(obj_name, behavior, shot.start, shot.end)
+            except RuntimeError as exc:
+                _record_failure(obj_name, behavior, shot, exc)
+                continue
             applied.append(
                 {"object": obj_name, "behavior": behavior, "shot": shot.name}
             )
 
-    return {"applied": applied, "skipped": skipped}
+    return {"applied": applied, "skipped": skipped, "failed": failed}

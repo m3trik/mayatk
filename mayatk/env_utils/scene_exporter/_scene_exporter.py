@@ -123,7 +123,14 @@ class SceneExporter(ptk.LoggingMixin):
         # the FBX alongside the current scene file.
         if not export_dir:
             scene_path = cmds.file(query=True, sceneName=True)
-            if scene_path:
+            # A scene NAME is enough (rename-without-save still gives a real
+            # directory) — but batch/standalone reports an unsaved scene as a
+            # phantom "<project>/untitled" path where the GUI returns "", which
+            # would silently misplace the export into the default project. A
+            # real scene name always carries a type extension (Maya can't save
+            # without one; the phantom never has one) — don't probe the disk,
+            # a stray file at the phantom path must not re-legitimize it.
+            if scene_path and os.path.splitext(scene_path)[1]:
                 export_dir = os.path.dirname(scene_path)
                 self.logger.info(
                     f"No export directory given; exporting alongside the scene "

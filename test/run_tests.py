@@ -59,13 +59,33 @@ class MayaTestRunner:
         self.temp_test_dir = self.test_dir / "temp_tests"
         self.temp_test_dir.mkdir(exist_ok=True)
 
-        # Scoped by port: two concurrent invocations (e.g. a background
-        # --all run and a manual scoped check on --port) would otherwise
-        # share one file — the second run's ``unlink()``-then-rewrite
-        # clobbers the first's in-progress content, and wait_for_results'
-        # file-based fallback (which just looks for a "SUMMARY" marker) then
-        # reports the FIRST run "done" with the SECOND run's results.
-        self.results_file = self.temp_test_dir / f"test_results_{port}.txt"
+        # Scoped by port AND runner PID: two concurrent invocations would
+        # otherwise share one file — the second run's ``unlink()``-then-
+        # rewrite clobbers the first's in-progress content, and
+        # wait_for_results' file-based fallback (which just looks for a
+        # "SUMMARY" marker) then reports the FIRST run "done" with the
+        # SECOND run's results.  Port scoping alone (the first fix) still
+        # collided when both runs used the default port — observed live:
+        # a scoped run dispatched mid ``--all`` recreated the shared file
+        # and the ``--all`` runner adopted the scoped run's 8-module
+        # summary as its own.  The PID makes the path unique per runner
+        # process; the in-Maya payload embeds this same path, so both
+        # sides stay consistent.
+        self.results_file = (
+            self.temp_test_dir / f"test_results_{port}_{os.getpid()}.txt"
+        )
+        # Best-effort sweep of results files from long-gone runs so the
+        # per-run scoping doesn't accumulate stale files unboundedly.
+        try:
+            import time as _time
+
+            for stale in self.temp_test_dir.glob("test_results*.txt"):
+                if stale != self.results_file and (
+                    _time.time() - stale.stat().st_mtime > 7 * 86400
+                ):
+                    stale.unlink(missing_ok=True)
+        except OSError:
+            pass
         try:
             self.connection = maya_connection.MayaConnection.get_instance()
         except NameError:

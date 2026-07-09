@@ -26,6 +26,8 @@ class GapManagerMixin:
     * ``_save_shot_state()`` / ``_sync_to_widget()`` / ``_sync_combobox()``
     * ``_get_sequencer_widget()``
     * ``_syncing`` — bool flag
+    * ``_segment_cache`` / ``_sub_row_cache`` — dicts flushed by
+      ``_gap_edit_epilogue`` after boundary edits
     * ``logger``
     """
 
@@ -110,6 +112,34 @@ class GapManagerMixin:
         self._sync_to_widget()
         self._sync_combobox()
 
+    def _scale_shot_edge(self, shot, new_start=None, new_end=None) -> bool:
+        """Scale *shot*'s keys so one edge moves while the other stays fixed.
+
+        The single chokepoint for the four inner-scale gap edits: the
+        raw drag value is snapped through the store and clamped against
+        the opposite edge — an unclamped gap edge dragged past the
+        shot's far edge would store inverted bounds and hand
+        ``scale_object_keys`` an inverted target range.
+
+        Returns True when the shot actually changed.
+        """
+        store = self.sequencer.store
+        old_s, old_e = shot.start, shot.end
+        ns = old_s if new_start is None else store.snap(new_start)
+        ne = old_e if new_end is None else store.snap(new_end)
+        # Clamp against the fixed edge — zero duration is the floor.
+        if new_start is not None:
+            ns = min(ns, old_e)
+        if new_end is not None:
+            ne = max(ne, old_s)
+        if abs(ns - old_s) < TIME_SNAP_EPS and abs(ne - old_e) < TIME_SNAP_EPS:
+            return False
+        for obj in shot.objects:
+            self.sequencer.scale_object_keys(obj, old_s, old_e, ns, ne)
+        shot.start = ns
+        shot.end = ne
+        return True
+
     # ---- gap resize / move -----------------------------------------------
 
     def on_gap_resized(self, original_next_start: float, new_next_start: float) -> None:
@@ -150,13 +180,8 @@ class GapManagerMixin:
                 elif self.active_shot_id is not None and target.shot_id == self.active_shot_id:
                     # Inner: scale active shot (start moves, end fixed).
                     # No ripple — the shot grows/shrinks into the gap.
-                    old_s, old_e = target.start, target.end
-                    for obj in target.objects:
-                        self.sequencer.scale_object_keys(
-                            obj, old_s, old_e, new_next_start, old_e
-                        )
-                    target.start = new_next_start
-                    self.sequencer._enforce_gap_holds()
+                    if self._scale_shot_edge(target, new_start=new_next_start):
+                        self.sequencer._enforce_gap_holds()
                 else:
                     # Outer: slide adjacent shot downstream intact.
                     self.sequencer.slide_shot(
@@ -206,13 +231,8 @@ class GapManagerMixin:
                 elif self.active_shot_id is not None and target.shot_id == self.active_shot_id:
                     # Inner: scale active shot (end moves, start fixed).
                     # No ripple — the shot grows/shrinks into the gap.
-                    old_s, old_e = target.start, target.end
-                    for obj in target.objects:
-                        self.sequencer.scale_object_keys(
-                            obj, old_s, old_e, old_s, new_prev_end
-                        )
-                    target.end = new_prev_end
-                    self.sequencer._enforce_gap_holds()
+                    if self._scale_shot_edge(target, new_end=new_prev_end):
+                        self.sequencer._enforce_gap_holds()
                 else:
                     # Outer: slide adjacent shot upstream intact.
                     # Compute new start that preserves the shot's duration.
@@ -291,13 +311,7 @@ class GapManagerMixin:
                         )
                     # Inner: scale active shot's end (no ripple — the
                     # outer slide already repositioned the adjacent shot).
-                    old_s, old_e = left_shot.start, left_shot.end
-                    new_e = old_e + delta
-                    for obj in left_shot.objects:
-                        self.sequencer.scale_object_keys(
-                            obj, old_s, old_e, old_s, new_e
-                        )
-                    left_shot.end = new_e
+                    self._scale_shot_edge(left_shot, new_end=left_shot.end + delta)
 
                 elif right_is_active:
                     # Left gap of active shot.
@@ -310,13 +324,9 @@ class GapManagerMixin:
                             _enforce=False,
                         )
                     # Inner: scale active shot's start (no ripple).
-                    old_s, old_e = right_shot.start, right_shot.end
-                    new_s = old_s + delta
-                    for obj in right_shot.objects:
-                        self.sequencer.scale_object_keys(
-                            obj, old_s, old_e, new_s, old_e
-                        )
-                    right_shot.start = new_s
+                    self._scale_shot_edge(
+                        right_shot, new_start=right_shot.start + delta
+                    )
                 else:
                     # Neither flanking shot is active — outer-only.
                     if right_shot is not None:

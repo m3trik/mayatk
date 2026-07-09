@@ -73,10 +73,19 @@ class MovePlan:
     by the planner.  ``sequence`` is the execution order the executor
     must honour to avoid transient envelope collisions.  Only shots
     that actually move appear in ``sequence``.
+
+    ``parked`` lists shots whose moves form a collision cycle (each
+    would deposit keys inside another's unread source window — e.g. a
+    respace where one shot moves forward while another moves backward).
+    The executor must first shift their keys out of the way by
+    ``park_offset``, run ``sequence``, then land them at their final
+    positions (``delta - park_offset`` from the parked location).
     """
 
     moves: Dict[int, ShotMove] = field(default_factory=dict)
     sequence: List[int] = field(default_factory=list)
+    parked: List[int] = field(default_factory=list)
+    park_offset: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +97,7 @@ def _overlaps(a_lo: float, a_hi: float, b_lo: float, b_hi: float) -> bool:
     return a_lo < b_hi and b_lo < a_hi
 
 
-def _plan_sequence(moves: Dict[int, ShotMove]) -> List[int]:
+def _plan_sequence(moves: Dict[int, ShotMove]) -> tuple:
     """Topo-sort shot_ids so each shot moves before any shot whose new
     envelope lands inside its current (old) envelope.
 
@@ -96,14 +105,17 @@ def _plan_sequence(moves: Dict[int, ShotMove]) -> List[int]:
     first would deposit j's keys inside i's source window and corrupt
     i's subsequent read.  The correct order is therefore i → j.
 
-    Only shots whose ``moves`` flag is True are returned.  Raises
-    :class:`ValueError` when the dependency graph contains a cycle —
-    which would require a temporary parking pass no current caller
-    needs.
+    Only shots whose ``moves`` flag is True are considered.  Returns
+    ``(sequence, parked)``: shots left over when the dependency graph
+    contains a cycle (mixed-sign deltas, e.g. one shot moving forward
+    while another moves backward through it) can't be safely ordered
+    and are returned in ``parked`` for the executor's temp-parking
+    pass.  ``sequence`` alone is valid provided parked shots are out
+    of the way while it runs.
     """
     active = [m for m in moves.values() if m.moves]
     if not active:
-        return []
+        return [], []
 
     incoming: Dict[int, int] = {m.shot_id: 0 for m in active}
     outgoing: Dict[int, List[int]] = {m.shot_id: [] for m in active}
@@ -128,12 +140,51 @@ def _plan_sequence(moves: Dict[int, ShotMove]) -> List[int]:
             if incoming[nxt] == 0:
                 ready.append(nxt)
 
-    if len(out) != len(active):
-        raise ValueError(
-            "shot move plan contains a collision cycle — "
-            "temp-parking pass required"
-        )
-    return out
+    emitted = set(out)
+    parked = [m.shot_id for m in active if m.shot_id not in emitted]
+    return out, parked
+
+
+def _content_top(moves: Dict[int, ShotMove]) -> float:
+    """Highest finite content edge across all moves — the top of real
+    keyframe/envelope territory, excluding the +INF last-shot sentinel.
+
+    Both the park offset (which must clear it) and the applier's INF-
+    envelope cap (which must stay below the park zone that sits above it)
+    derive from this single high-water mark, so they can never disagree.
+    """
+    hi = 0.0
+    for m in moves.values():
+        hi = max(hi, m.old_end, m.new_end)
+        for v in (m.env_end, m.env_end + m.delta):
+            if v < _INF / 2:  # skip the unbounded last-shot sentinel
+                hi = max(hi, v)
+    return hi
+
+
+def _park_offset(moves: Dict[int, ShotMove], parked: List[int]) -> float:
+    """Offset that places parked envelopes beyond every other envelope.
+
+    Any offset that clears the highest old/new envelope edge works —
+    parked shots translate rigidly, so their relative layout (and thus
+    their mutual disjointness) is preserved at the parked location.  The
+    +1000 headroom leaves a wide, precision-safe gap between real content
+    and the park zone — :func:`_shot_apply.apply` caps the last shot's
+    +INF envelope just above ``_content_top`` so no move window ever
+    reaches into that zone.
+    """
+    lo = min(moves[sid].env_start for sid in parked)
+    return float(round((_content_top(moves) - lo) + 1000.0))
+
+
+def _finalize_plan(moves: Dict[int, ShotMove]) -> MovePlan:
+    """Assemble a :class:`MovePlan` from resolved moves (shared tail of
+    every plan constructor)."""
+    sequence, parked = _plan_sequence(moves)
+    park_offset = _park_offset(moves, parked) if parked else 0.0
+    return MovePlan(
+        moves=moves, sequence=sequence, parked=parked, park_offset=park_offset
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +249,7 @@ def plan_respace(
         effective_gap = locked_widths.get(i, gap)
         cursor = new_end + effective_gap
 
-    return MovePlan(moves=moves, sequence=_plan_sequence(moves))
+    return _finalize_plan(moves)
 
 
 def plan_ripple_downstream(
@@ -234,7 +285,7 @@ def plan_ripple_downstream(
             env_end=env_end,
         )
 
-    return MovePlan(moves=moves, sequence=_plan_sequence(moves))
+    return _finalize_plan(moves)
 
 
 def plan_ripple_upstream(
@@ -267,4 +318,4 @@ def plan_ripple_upstream(
             env_end=env_end,
         )
 
-    return MovePlan(moves=moves, sequence=_plan_sequence(moves))
+    return _finalize_plan(moves)

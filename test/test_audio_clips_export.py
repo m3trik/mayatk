@@ -59,11 +59,19 @@ class TestAudioClipsExport(MayaTkTestCase):
         self.assertIn("23:jump",    stored)
 
     def test_prepare_for_export_migrates_legacy_proxy(self):
-        """A pre-taxonomy mirror_attr manifest pair is replaced by the plain channel."""
+        """A pre-taxonomy proxied manifest pair is replaced by the plain channel."""
         from mayatk.node_utils.data_nodes import DataNodes
 
-        # Recreate the old shape: authored on internal, proxied on export.
-        DataNodes.mirror_attr(AudioClips.MANIFEST_ATTR, dataType="string")
+        # Recreate the old shape (what the retired ``mirror_attr`` mechanism
+        # built): authored on internal, Maya-proxied on export.
+        internal = str(DataNodes.ensure_internal())
+        export = str(DataNodes.ensure_export())
+        cmds.addAttr(internal, longName=AudioClips.MANIFEST_ATTR, dataType="string")
+        cmds.addAttr(
+            export,
+            longName=AudioClips.MANIFEST_ATTR,
+            proxy=f"{internal}.{AudioClips.MANIFEST_ATTR}",
+        )
         cmds.setAttr(
             f"{DataNodes.INTERNAL}.{AudioClips.MANIFEST_ATTR}",
             "1:legacy",

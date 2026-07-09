@@ -8,8 +8,6 @@ selection, navigation, and combobox population.
 """
 from __future__ import annotations
 
-from typing import Optional
-
 try:
     import maya.cmds as cmds
 except ImportError:
@@ -30,6 +28,7 @@ class ShotNavMixin:
     * ``_shifted_out_keys`` — dict
     * ``_cmb_mode`` / ``_cmb_mode_widget``
     * ``_prev_action`` / ``_next_action``
+    * ``_syncing`` — bool flag
     * ``_sync_to_widget()`` / ``_update_shot_nav_state()``
     * ``_visible_shots()``
     * ``_get_sequencer_widget()``
@@ -42,7 +41,16 @@ class ShotNavMixin:
         shot = self.sequencer.shot_by_id(shot_id)
         if shot is None:
             return
-        self.sequencer.store.set_active_shot(shot_id)
+        # Self-originated: every caller syncs the widget explicitly
+        # afterwards, so suppress this controller's own
+        # ActiveShotChanged full rebuild (other listeners — e.g. the
+        # Shots settings panel — still receive the event).
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            self.sequencer.store.set_active_shot(shot_id)
+        finally:
+            self._syncing = was_syncing
         self._apply_view_playback_range(shot)
 
         if not self.sequencer.store.select_on_load:
@@ -145,7 +153,12 @@ class ShotNavMixin:
         new_idx = cmb.currentIndex() + delta
         if new_idx < 0 or new_idx >= cmb.count():
             return
+        # Programmatic index change — the explicit select/sync below does
+        # the work; letting the auto-wired cmb_shot slot fire too would
+        # rebuild the widget twice.
+        cmb.blockSignals(True)
         cmb.setCurrentIndex(new_idx)
+        cmb.blockSignals(False)
         shot_id = cmb.itemData(new_idx)
         self._shifted_out_keys.clear()
         self.select_shot(shot_id)
@@ -165,7 +178,9 @@ class ShotNavMixin:
             if shot.name == shot_name:
                 for i in range(cmb.count()):
                     if cmb.itemData(i) == shot.shot_id:
+                        cmb.blockSignals(True)
                         cmb.setCurrentIndex(i)
+                        cmb.blockSignals(False)
                         break
                 self._shifted_out_keys.clear()
                 self.select_shot(shot.shot_id)

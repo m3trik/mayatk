@@ -9,7 +9,7 @@ Maya-specific :class:`~mayatk.anim_utils.shots.shot_sequencer._shot_sequencer.Sh
 from collections import defaultdict
 from typing import Optional, List
 
-from qtpy import QtWidgets, QtCore, QtGui
+from qtpy import QtWidgets, QtCore
 
 try:
     import maya.cmds as cmds
@@ -25,7 +25,6 @@ except ImportError:
 import pythontk as ptk
 
 from uitk.widgets.sequencer._sequencer import (
-    SequencerWidget,
     AttributeColorDialog,
     _COMMON_ATTRIBUTES,
     _DEFAULT_ATTRIBUTE_COLORS,
@@ -107,6 +106,7 @@ class ShotSequencerController(
         self._register_time_change_callback()
         self._register_keyframe_callback()
         self._bind_store_listener()
+        self._bind_invalidation_listener()
         # Tear down on panel close. Without this every callback above
         # outlives the panel — _on_time_changed fires on each DG time change
         # (every frame during playback) against destroyed widgets, and the
@@ -198,7 +198,9 @@ class ShotSequencerController(
             self._bound_store = store
             self._store_listener_bound = True
         except Exception:
-            pass
+            # A failed bind means the panel silently stops reacting to
+            # external shot changes — leave a trace.
+            self.logger.warning("store listener bind failed", exc_info=True)
 
     def _unbind_store_listener(self) -> None:
         """Remove the ShotStore listener."""
@@ -210,8 +212,46 @@ class ShotSequencerController(
                 store.remove_listener(self._on_store_event)
                 self._bound_store = None
         except Exception:
-            pass
+            self.logger.debug("store listener unbind failed", exc_info=True)
         self._store_listener_bound = False
+
+    def _bind_invalidation_listener(self) -> None:
+        """Track active-store swaps (scene new/open).
+
+        Without this the controller keeps its lazily-cached sequencer
+        and event listener bound to the store of the *previous* scene —
+        edits go to a dead store and external changes stop refreshing
+        the panel.
+        """
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        ShotStore.add_invalidation_listener(self._on_store_invalidated)
+
+    def _on_store_invalidated(self, event=None) -> None:
+        """Rebind to the new active store after a scene swap."""
+        self._unbind_store_listener()
+        self._sequencer = None
+        self._segment_cache.clear()
+        self._sub_row_cache.clear()
+        self._audio_segments_cache = None
+        self._last_visible_key = None
+        self._reconcile_needed = True
+        # Cross-scene state must not survive the swap: popping scene A's
+        # shot snapshots into scene B's store via on_undo would write
+        # A's boundaries onto B's shots (per-store shot_ids collide).
+        self._shot_undo_stack.clear()
+        self._shifted_out_keys.clear()
+        self._bind_store_listener()
+        # Combobox first: _sync_to_widget resolves active_shot_id through
+        # the combobox, which still holds the PREVIOUS scene's shot ids
+        # until repopulated.
+        self._sync_combobox()
+        self._sync_to_widget()
+        if self._cmb_mode == "markers":
+            # Markers mode populates the combobox from the WIDGET's
+            # marker items, which only _sync_to_widget rebuilds — re-sync
+            # so the list shows the new scene's markers, not the old.
+            self._sync_combobox()
 
     def _on_store_event(self, event: StoreEvent) -> None:
         """React to ShotStore mutations from any source (e.g. manifest build)."""
@@ -264,6 +304,9 @@ class ShotSequencerController(
         SJM owner ``self``, so a single ``unsubscribe_all`` removes them.
         """
         self._unbind_store_listener()
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        ShotStore.remove_invalidation_listener(self._on_store_invalidated)
         from mayatk.core_utils.script_job_manager import ScriptJobManager
 
         ScriptJobManager.instance().unsubscribe_all(self)
@@ -281,7 +324,14 @@ class ShotSequencerController(
         """Restore the last shot-state snapshot when Maya's undo fires."""
         if self._syncing:
             return
-        self._restore_shot_state()
+        # Guard the restore: its batch_update exit fires BatchComplete,
+        # and an unguarded _on_store_event would do a full rebuild on
+        # top of the explicit sync below (two rebuilds per Ctrl+Z).
+        self._syncing = True
+        try:
+            self._restore_shot_state()
+        finally:
+            self._syncing = False
         self._segment_cache.clear()
         self._sub_row_cache.clear()
         self._sync_to_widget()
@@ -523,6 +573,7 @@ class ShotSequencerController(
         self._segment_cache.clear()
         self._sub_row_cache.clear()
         self._sync_to_widget()
+        self._sync_combobox()
 
     def _create_shot_one_click(self) -> None:
         """Append a new shot using the configured gap and default duration."""
@@ -562,12 +613,6 @@ class ShotSequencerController(
             if s.start <= time <= s.end:
                 return s
         return None
-
-    def _on_shot_lane_double_clicked(self, time: float) -> None:
-        """Double-click on the shot lane opens the edit dialog for the shot at *time*."""
-        shot = self._find_shot_at_time(time)
-        if shot is not None:
-            self._edit_shot_dialog(shot)
 
     def _on_shot_switch_requested(self, time: float) -> None:
         """Ctrl+Shift+Click on timeline — switch to the shot at *time*."""
@@ -628,6 +673,14 @@ class ShotSequencerController(
             if sid is not None:
                 return sid
         if self.sequencer and self.sequencer.shots:
+            # The store's active shot (set by shot selection here or in
+            # the Shots settings panel) wins over the first-shot
+            # fallback — in markers mode the combobox can't provide it,
+            # and defaulting to the first shot retargets the view away
+            # from the shot being worked on after every store event.
+            store_active = self.sequencer.store.active_shot_id
+            if store_active is not None and self.sequencer.shot_by_id(store_active):
+                return store_active
             return self.sequencer.sorted_shots()[0].shot_id
         return None
 
@@ -759,7 +812,10 @@ class ShotSequencerController(
 
         Stepped (zero-duration) anim clips are skipped — they are individual
         keys, not sequences, and can't meaningfully move between shots.
-        Read-only clips (non-active visible shots) are skipped too.
+        Read-only clips (non-active visible shots) are skipped too, as are
+        single-attribute sub-row clips: a whole-object sequence move would
+        relocate EVERY attribute's keys in the span, not just the one the
+        user grabbed.
         """
         seqs = []
         seen: set = set()
@@ -768,6 +824,8 @@ class ShotSequencerController(
             if clip is None or clip.data.get("read_only"):
                 continue
             if clip.data.get("is_stepped"):
+                continue
+            if clip.data.get("attr_name"):
                 continue
             start = clip.data.get("orig_start")
             end = clip.data.get("orig_end")
@@ -914,8 +972,17 @@ class ShotSequencerController(
         h_scroll, zoom, expanded_names = self._save_viewport_state(widget)
         visible_shots = self._visible_shots(shot)
 
-        self._rebuild_content(widget, shot, visible_shots)
-        self._rebuild_decoration(widget, shot, visible_shots)
+        # bulk_updates defers the per-add scene-rect recompute (which
+        # walks every clip/marker/gap) to one pass at exit — without it
+        # a rebuild is O(n²) in clip count.
+        bulk = getattr(widget, "bulk_updates", None)
+        if callable(bulk):
+            with bulk():
+                self._rebuild_content(widget, shot, visible_shots)
+                self._rebuild_decoration(widget, shot, visible_shots)
+        else:
+            self._rebuild_content(widget, shot, visible_shots)
+            self._rebuild_decoration(widget, shot, visible_shots)
         self._restore_viewport(widget, frame, h_scroll, zoom, expanded_names)
         self._update_footer_shot_summary()
 
@@ -989,20 +1056,6 @@ class ShotSequencerController(
             f"Scene  {start:.0f}\u2013{end:.0f}  \u00b7  "
             f"{n} object{'s' if n != 1 else ''}"
         )
-
-    def _sync_decoration(self, *, frame: bool = False) -> None:
-        """Lightweight refresh: rebuild overlays/metadata without re-querying
-        Maya for animation data.  Tracks and clips are preserved."""
-        widget, shot = self._resolve_sync_target()
-        if widget is None or shot is None:
-            return
-
-        h_scroll, zoom, expanded_names = self._save_viewport_state(widget)
-        visible_shots = self._visible_shots(shot)
-
-        widget.clear_decorations(keep_range_highlight=True)
-        self._rebuild_decoration(widget, shot, visible_shots)
-        self._restore_viewport(widget, frame, h_scroll, zoom, expanded_names)
 
     def refresh(self) -> None:
         """Clear cached segments and rebuild the sequencer widget."""
@@ -2387,50 +2440,59 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         sequencer = self.controller._get_sequencer_widget()
         if sequencer is not None and hasattr(sequencer, "clip_resized"):
             sequencer.window_shortcuts = True
-            sequencer.clip_resized.connect(self.controller.on_clip_resized)
-            sequencer.clip_moved.connect(self.controller.on_clip_moved)
-            sequencer.clips_batch_moved.connect(self.controller.on_clips_batch_moved)
-            sequencer.clip_renamed.connect(self.controller.on_clip_renamed)
-            sequencer.playhead_moved.connect(self.controller.on_playhead_moved)
-            sequencer.track_hidden.connect(self.controller.hide_track)
-            sequencer.track_shown.connect(self.controller.show_track)
-            sequencer.track_deleted.connect(self.controller.delete_track)
-            sequencer.selection_changed.connect(self.controller.on_selection_changed)
-            sequencer.track_selected.connect(self.controller.on_track_selected)
-            sequencer.track_menu_requested.connect(self.controller.on_track_menu)
-            sequencer.clip_locked.connect(self.controller.on_clip_locked)
-            sequencer.undo_requested.connect(self.controller.on_undo)
-            sequencer.redo_requested.connect(self.controller.on_redo)
-            sequencer.marker_added.connect(self.controller.on_marker_added)
-            sequencer.marker_moved.connect(self.controller.on_marker_moved)
-            sequencer.marker_changed.connect(self.controller.on_marker_changed)
-            sequencer.marker_removed.connect(self.controller.on_marker_removed)
-            sequencer.gap_resized.connect(self.controller.on_gap_resized)
-            sequencer.gap_left_resized.connect(self.controller.on_gap_left_resized)
-            sequencer.gap_moved.connect(self.controller.on_gap_moved)
-            sequencer.gap_lock_changed.connect(self.controller.on_gap_lock_changed)
-            sequencer.gap_lock_all_requested.connect(self.controller.on_gap_lock_all)
-            sequencer.gap_unlock_all_requested.connect(
-                self.controller.on_gap_unlock_all
-            )
-            sequencer.clip_menu_requested.connect(self.controller.on_clip_menu)
-            sequencer.gap_menu_requested.connect(self.controller.on_gap_menu)
-            sequencer.range_highlight_changed.connect(
-                self.controller.on_range_highlight_changed
-            )
-            sequencer.zone_context_menu_requested.connect(
-                self.controller.on_zone_context_menu
-            )
-            sequencer.shot_block_clicked.connect(self.controller.on_shot_block_clicked)
-            sequencer.shot_switch_requested.connect(
-                self.controller._on_shot_switch_requested
-            )
-            sequencer.header_menu_requested.connect(self.controller.on_header_menu)
-            sequencer.keys_moved.connect(self.controller.on_keys_moved)
-            sequencer.keys_deleted.connect(self.controller.on_keys_deleted)
-            sequencer.key_selection_changed.connect(
-                self.controller.on_key_selection_changed
-            )
+
+            # (widget signal, controller slot name) wiring table.  The
+            # live connections are recorded on the widget so that a
+            # slots re-init over the same loaded UI disconnects the
+            # PREVIOUS controller first — without this both controllers
+            # stay connected and every signal double-fires (two
+            # cmds.undo() per Ctrl+Z, duplicate markers, ...).
+            wiring = [
+                ("clip_resized", "on_clip_resized"),
+                ("clip_moved", "on_clip_moved"),
+                ("clips_batch_moved", "on_clips_batch_moved"),
+                ("clip_renamed", "on_clip_renamed"),
+                ("playhead_moved", "on_playhead_moved"),
+                ("track_hidden", "hide_track"),
+                ("track_shown", "show_track"),
+                ("track_deleted", "delete_track"),
+                ("selection_changed", "on_selection_changed"),
+                ("track_selected", "on_track_selected"),
+                ("track_menu_requested", "on_track_menu"),
+                ("clip_locked", "on_clip_locked"),
+                ("undo_requested", "on_undo"),
+                ("redo_requested", "on_redo"),
+                ("marker_added", "on_marker_added"),
+                ("marker_moved", "on_marker_moved"),
+                ("marker_changed", "on_marker_changed"),
+                ("marker_removed", "on_marker_removed"),
+                ("gap_resized", "on_gap_resized"),
+                ("gap_left_resized", "on_gap_left_resized"),
+                ("gap_moved", "on_gap_moved"),
+                ("gap_lock_changed", "on_gap_lock_changed"),
+                ("gap_lock_all_requested", "on_gap_lock_all"),
+                ("gap_unlock_all_requested", "on_gap_unlock_all"),
+                ("clip_menu_requested", "on_clip_menu"),
+                ("gap_menu_requested", "on_gap_menu"),
+                ("range_highlight_changed", "on_range_highlight_changed"),
+                ("zone_context_menu_requested", "on_zone_context_menu"),
+                ("shot_switch_requested", "_on_shot_switch_requested"),
+                ("header_menu_requested", "on_header_menu"),
+                ("keys_moved", "on_keys_moved"),
+                ("keys_deleted", "on_keys_deleted"),
+                ("key_selection_changed", "on_key_selection_changed"),
+            ]
+            for sig_name, slot in getattr(sequencer, "_slots_connections", []):
+                try:
+                    getattr(sequencer, sig_name).disconnect(slot)
+                except (RuntimeError, TypeError):
+                    pass  # connection already died with the old controller
+            connections = []
+            for sig_name, slot_name in wiring:
+                slot = getattr(self.controller, slot_name)
+                getattr(sequencer, sig_name).connect(slot)
+                connections.append((sig_name, slot))
+            sequencer._slots_connections = connections
             sequencer._zone_menu_connected = True
 
             # Register Delete key shortcut for selected clips.
@@ -2470,26 +2532,50 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         self.controller._sync_to_widget()
 
     def _setup_shot_nav(self) -> None:
-        """Configure prev/next option box actions on cmb_shot."""
-        if self.controller._prev_action is not None:
-            return  # Already configured — avoid duplicating actions
+        """Configure prev/next option box actions on cmb_shot.
 
+        Every callback is late-bound through ``cmb._nav_controller`` /
+        ``cmb._nav_slots`` so a slots re-init over the same loaded UI
+        only repoints those attributes — the option-box actions and
+        menu connects are created exactly once and never duplicated
+        (the old per-controller ``_prev_action`` guard never tripped on
+        a fresh controller, stacking duplicates on the widget).
+        """
         cmb = getattr(self.ui, "cmb_shot", None)
         if cmb is None or not hasattr(cmb, "option_box"):
+            return
+
+        cmb._nav_controller = self.controller
+        cmb._nav_slots = self
+
+        _VIEW_MODE_MAP = {0: "current", 1: "adjacent", 2: "all"}
+        existing = getattr(cmb, "_shot_nav_options", None)
+        if existing is not None:
+            # Re-init: adopt the already-built options for this controller.
+            ctl = self.controller
+            ctl._prev_action = existing["prev"]
+            ctl._next_action = existing["next"]
+            ctl._view_mode_action = existing["view"]
+            ctl._holds_action = existing["holds"]
+            ctl._show_internal_holds = existing["holds"].current_state == 1
+            ctl._shot_display_mode = _VIEW_MODE_MAP.get(
+                existing["view"].current_state, "current"
+            )
+            ctl._cmb_mode_widget = getattr(self.ui, "cmb_mode", None)
             return
 
         from uitk.widgets.optionBox.options.action import ActionOption
 
         prev_opt = ActionOption(
             wrapped_widget=cmb,
-            callback=lambda: self.controller._navigate_shot(-1),
+            callback=lambda: cmb._nav_controller._navigate_shot(-1),
             icon="chevron_left",
             tooltip="Previous Shot",
             order=0,
         )
         next_opt = ActionOption(
             wrapped_widget=cmb,
-            callback=lambda: self.controller._navigate_shot(1),
+            callback=lambda: cmb._nav_controller._navigate_shot(1),
             icon="chevron_right",
             tooltip="Next Shot",
             order=1,
@@ -2500,17 +2586,17 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             {
                 "icon": "target",
                 "tooltip": "View: Current Shot (click for adjacent)",
-                "callback": lambda: self.controller._set_view_mode("adjacent"),
+                "callback": lambda: cmb._nav_controller._set_view_mode("adjacent"),
             },
             {
                 "icon": "columns",
                 "tooltip": "View: Adjacent Shots (click for all)",
-                "callback": lambda: self.controller._set_view_mode("all"),
+                "callback": lambda: cmb._nav_controller._set_view_mode("all"),
             },
             {
                 "icon": "grid",
                 "tooltip": "View: All Shots (click for current)",
-                "callback": lambda: self.controller._set_view_mode("current"),
+                "callback": lambda: cmb._nav_controller._set_view_mode("current"),
             },
         ]
         view_opt = ActionOption(
@@ -2527,7 +2613,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         # "+" button — one-click shot creation
         add_opt = ActionOption(
             wrapped_widget=cmb,
-            callback=self.controller._create_shot_one_click,
+            callback=lambda: cmb._nav_controller._create_shot_one_click(),
             icon="add",
             tooltip="New Shot",
             order=2,
@@ -2537,7 +2623,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         # Refresh button — re-collect animation data and rebuild widget
         refresh_opt = ActionOption(
             wrapped_widget=cmb,
-            callback=self.controller.refresh,
+            callback=lambda: cmb._nav_controller.refresh(),
             icon="refresh",
             tooltip="Refresh Sequencer",
             order=6,
@@ -2549,12 +2635,16 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             {
                 "icon": "eye_off",
                 "tooltip": "Show Internal Holds (off)\nClick to reveal flat-key spans in sub-rows",
-                "callback": lambda: self.controller._set_show_internal_holds(True),
+                "callback": lambda: cmb._nav_controller._set_show_internal_holds(
+                    True
+                ),
             },
             {
                 "icon": "eye",
                 "tooltip": "Show Internal Holds (on)\nClick to hide flat-key spans in sub-rows",
-                "callback": lambda: self.controller._set_show_internal_holds(False),
+                "callback": lambda: cmb._nav_controller._set_show_internal_holds(
+                    False
+                ),
             },
         ]
         holds_opt = ActionOption(
@@ -2572,16 +2662,24 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         self.controller._next_action = next_opt
         self.controller._view_mode_action = view_opt
         # Sync controller view mode from persisted button state
-        _VIEW_MODE_MAP = {0: "current", 1: "adjacent", 2: "all"}
         self.controller._shot_display_mode = _VIEW_MODE_MAP.get(
             view_opt.current_state, "current"
         )
+
+        cmb._shot_nav_options = {
+            "prev": prev_opt,
+            "next": next_opt,
+            "view": view_opt,
+            "holds": holds_opt,
+        }
 
         # Install right-click context menu on the combobox
         from qtpy import QtCore
 
         cmb.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
-        cmb.customContextMenuRequested.connect(self._cmb_context_menu)
+        cmb.customContextMenuRequested.connect(
+            lambda pos: cmb._nav_slots._cmb_context_menu(pos)
+        )
 
         # Wire the mode selector combobox (Shots / Markers)
         cmb_mode = getattr(self.ui, "cmb_mode", None)
@@ -2592,7 +2690,9 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             cmb_mode.addItem("Markers:", "markers")
             cmb_mode.setCurrentIndex(0)
             cmb_mode.blockSignals(False)
-            cmb_mode.currentIndexChanged.connect(self._on_cmb_mode_changed)
+            cmb_mode.currentIndexChanged.connect(
+                lambda i: cmb._nav_slots._on_cmb_mode_changed(i)
+            )
             self.controller._cmb_mode_widget = cmb_mode
 
     def _on_playback_range_changed(self, index: int) -> None:
@@ -2660,7 +2760,6 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         """Generate a shot from the next unregistered animation cluster."""
         if self.controller.sequencer is None or cmds is None:
             return
-        widget = self.controller._get_sequencer_widget()
         store = self.controller.sequencer.store if self.controller.sequencer else None
         cand = self.controller.sequencer.detect_next_shot(
             gap_threshold=(store.detection_threshold if store else 5.0),
@@ -2830,7 +2929,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                     ]),
                     ("Ruler / Tracks / Gaps / Markers", [
                         "<b>Ruler:</b> Click/drag to move playhead, double-click to add a marker, scroll to zoom, middle-drag to pan.",
-                        "<b>Shot Lane:</b> Click to select, double-click to open Shot Settings.",
+                        "<b>Shot Lane:</b> Right-click a shot block on the ruler to select, edit, or trim that shot.",
                         "<b>Tracks:</b> Double-click header to expand per-attribute sub-rows. Right-click to hide, delete, or reveal in Outliner.",
                         "<b>Gaps:</b> Drag body to slide adjacent shots, drag edge to resize. Right-click to lock.",
                         "<b>Markers:</b> M or double-click ruler to add. Drag to move. Right-click to edit note, color, or style.",

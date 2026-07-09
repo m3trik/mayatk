@@ -448,6 +448,9 @@ Shrink &amp; Extend: resize to fit contents exactly.</string>
          <property name="prefix">
           <string>Gap:	</string>
          </property>
+         <property name="maximum">
+          <double>100000.000000000000000</double>
+         </property>
         </widget>
        </item>
        <item>

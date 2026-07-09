@@ -25,7 +25,7 @@ except ImportError as error:
     print(__file__, error)
 
 from mayatk.anim_utils.shots._shots import ShotStore
-from mayatk.anim_utils.shots._shot_plan import MovePlan, _INF
+from mayatk.anim_utils.shots._shot_plan import MovePlan, _INF, _content_top
 
 
 # Half-frame slop used so a key exactly on the upper envelope boundary
@@ -45,13 +45,25 @@ _AUDIO_UPPER_MARGIN = 3.0e-3
 
 
 def _batch_move_keys(
-    cmds, objects: Iterable[str], env_start: float, env_end: float, delta: float
+    cmds,
+    objects: Iterable[str],
+    env_start: float,
+    env_end: float,
+    delta: float,
+    over: bool = False,
 ) -> None:
     """Shift keys inside the half-open envelope window by ``delta``.
 
     The query range is ``[env_start - eps, env_end - eps]`` so a key
     exactly on ``env_end`` (the next shot's start) stays with the next
     shot instead of being claimed by two envelopes.
+
+    ``over=True`` uses ``option="over"`` so keys may pass neighboring
+    keys on the same curve.  The park/land moves need it — they teleport
+    a shot's keys across other shots' content on shared curves, and the
+    default ``"move"`` semantics silently clamp at the first neighbor,
+    stranding keys just short of it.  Ordered (phase-1) moves keep the
+    default: the plan's topological order guarantees they never cross.
     """
     if not objects or abs(delta) < 1e-6:
         return
@@ -66,12 +78,14 @@ def _batch_move_keys(
         return
 
     tr = (env_start - _ENVELOPE_SLOP, env_end - _ENVELOPE_SLOP)
+    option = "over" if over else "move"
     for crv in curves:
         if not cmds.keyframe(crv, q=True, time=tr):
             continue
         try:
             cmds.keyframe(
-                crv, edit=True, relative=True, timeChange=delta, time=tr
+                crv, edit=True, relative=True, timeChange=delta, time=tr,
+                option=option,
             )
         except RuntimeError:
             pass
@@ -123,15 +137,39 @@ def apply(
     bounds.  All Maya writes happen inside one audio batch so derived
     DG audio nodes re-render exactly once.
 
+    Shots in ``plan.parked`` (collision cycles — mixed-sign deltas) get
+    a three-phase treatment: their keys are first shifted out of the
+    way by ``plan.park_offset``, the normal sequence runs, then each
+    parked shot lands at its final position.
+
     When Maya is unavailable only the in-memory bounds are committed.
 
     ``progress_callback`` (when given) is invoked once per shot with
     ``(current, total, message)``.
     """
-    if not plan.sequence:
+    if not plan.sequence and not plan.parked:
         return
 
-    total = len(plan.sequence)
+    total = len(plan.sequence) + len(plan.parked)
+    park = plan.park_offset
+
+    # The timeline-last shot's envelope end is the +INF sentinel (``_INF`` =
+    # 1e9) so its trailing content travels with it.  Propagating that literal
+    # 1e9 into a move window — and, after parking, into ``1e9 + park`` — is
+    # doubly hazardous: (a) at that magnitude Maya's frame->tick conversion
+    # loses ~1e-7 of precision, so a boundary key can fall on the wrong side
+    # of a query range; and (b) the unbounded window sweeps already-parked
+    # content into a second shift, stranding it past its phase-2 landing.
+    # When any shot is parked, cap +INF at the plan's real content top plus
+    # one frame.  Every real key lives at or below ``_content_top``; the park
+    # zone sits ``+1000`` frames above it (see :func:`_shot_plan._park_offset`),
+    # so a capped window clears the park zone by ~1000 frames — a wide,
+    # precision-safe margin rather than a fragile sub-frame slop — while
+    # still covering all of the last shot's own content.
+    cap = _content_top(plan.moves) + 1.0 if plan.parked else _INF
+
+    def _capped(env_end: float) -> float:
+        return env_end if env_end < _INF / 2 else cap
 
     if cmds is not None:
         from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
@@ -154,34 +192,88 @@ def apply(
                     )
                 ]
             dirty: set = set()
+            shots_by_id = {s.shot_id: s for s in store.shots}
+
+            # Phase 0 — park cycle members' keys beyond every envelope.
+            for shot_id in plan.parked:
+                move = plan.moves[shot_id]
+                shot = shots_by_id.get(shot_id)
+                if shot is None:
+                    continue
+                _batch_move_keys(
+                    cmds, shot.objects, move.env_start, _capped(move.env_end), park,
+                    over=True,
+                )
+                tids = _shift_audio_range(
+                    move.env_start, _capped(move.env_end), park, track_ids=track_ids
+                )
+                if tids:
+                    dirty.update(tids)
+
+            # Phase 1 — ordered moves.
             for i, shot_id in enumerate(plan.sequence):
                 if progress_callback:
                     progress_callback(i, total, f"Applying shot: {shot_id}")
                 move = plan.moves[shot_id]
-                shot = store.shot_by_id(shot_id)
+                shot = shots_by_id.get(shot_id)
                 if shot is None:
                     continue
                 _batch_move_keys(
-                    cmds, shot.objects, move.env_start, move.env_end, move.delta
+                    cmds, shot.objects, move.env_start, _capped(move.env_end), move.delta
                 )
                 tids = _shift_audio_range(
-                    move.env_start, move.env_end, move.delta, track_ids=track_ids
+                    move.env_start, _capped(move.env_end), move.delta, track_ids=track_ids
                 )
                 if tids:
                     dirty.update(tids)
                 shot.start = move.new_start
                 shot.end = move.new_end
+
+            # Phase 2 — land parked shots at their final positions.
+            for i, shot_id in enumerate(plan.parked):
+                if progress_callback:
+                    progress_callback(
+                        len(plan.sequence) + i, total, f"Applying shot: {shot_id}"
+                    )
+                move = plan.moves[shot_id]
+                shot = shots_by_id.get(shot_id)
+                if shot is None:
+                    continue
+                _batch_move_keys(
+                    cmds,
+                    shot.objects,
+                    move.env_start + park,
+                    _capped(move.env_end) + park,
+                    move.delta - park,
+                    over=True,
+                )
+                tids = _shift_audio_range(
+                    move.env_start + park,
+                    _capped(move.env_end) + park,
+                    move.delta - park,
+                    track_ids=track_ids,
+                )
+                if tids:
+                    dirty.update(tids)
+                shot.start = move.new_start
+                shot.end = move.new_end
+
             if dirty:
                 b.mark_dirty(dirty)
     else:
-        for i, shot_id in enumerate(plan.sequence):
+        shots_by_id = {s.shot_id: s for s in store.shots}
+        for i, shot_id in enumerate(plan.sequence + plan.parked):
             if progress_callback:
                 progress_callback(i, total, f"Applying shot: {shot_id}")
             move = plan.moves[shot_id]
-            shot = store.shot_by_id(shot_id)
+            shot = shots_by_id.get(shot_id)
             if shot is not None:
                 shot.start = move.new_start
                 shot.end = move.new_end
+
+    # Bounds were written directly (not via update_shot) — flag the
+    # store so the mutation survives a scene save.
+    store.mark_dirty()
 
     if progress_callback and total:
         progress_callback(total, total, "Done")

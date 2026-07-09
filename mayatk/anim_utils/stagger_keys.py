@@ -98,9 +98,9 @@ class StaggerKeys:
         # Get channel box attributes if requested
         channel_box_attrs = None
         if channel_box_attrs_only:
-            channel_box_attrs = cmds.channelBox(
-                "mainChannelBox", query=True, selectedMainAttributes=True
-            )
+            from mayatk.anim_utils._anim_utils import AnimUtils
+
+            channel_box_attrs = AnimUtils._get_channel_box_attrs()
             if not channel_box_attrs:
                 cmds.warning(
                     "Channel Box Attrs Only is enabled but no attributes are selected "

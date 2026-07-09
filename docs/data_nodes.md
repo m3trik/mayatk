@@ -14,8 +14,8 @@ transform.
 | `data_export` | locked, hidden `transform` (zero-scale `locator` shape) | **The FBX export surface.** This is the only node that travels into an FBX; downstream importers (Unity, etc.) read its user properties. |
 
 The split keeps *authored state* (internal) cleanly separated from the
-*export projection* (export), and lets a tool choose whether a given value is
-authored-and-mirrored or a regenerated export-only artifact (see below).
+*export projection* (export): tools author on `data_internal`, and only the
+regenerated artifacts they publish for the engine land on `data_export`.
 
 Implementation details that matter:
 
@@ -36,27 +36,9 @@ DataNodes.ensure_internal()   # -> "data_internal"   (create if missing)
 DataNodes.ensure_export()     # -> "data_export"     (create if missing)
 ```
 
-## Two ways to put data on the export surface
+## Putting data on the export surface
 
-Pick based on whether the value is **authored state** or a **regenerated
-artifact**.
-
-### 1. `mirror_attr` — proxied, authored state
-
-For values a tool authors and edits over time (enums, keyed channels). The
-attribute is created on `data_internal` (the SSoT) with a **Maya proxy** on
-`data_export` that aliases back to it. Writing the internal updates the export
-automatically through the dependency graph — zero-cost sync, no copy step.
-
-```python
-DataNodes.mirror_attr("my_flag", attributeType="enum",
-                      enumName="off:on", keyable=True)
-
-cmds.setAttr("data_internal.my_flag", 1)        # author here
-assert cmds.getAttr("data_export.my_flag") == 1 # export follows
-```
-
-### 2. `set_export_string` / `get_export_string` — plain export channels
+### `set_export_string` / `get_export_string` — plain export channels
 
 For values that are **regenerated from live state at export time** (JSON blobs,
 baked wire strings) rather than authored and edited. These are written as a
@@ -77,7 +59,7 @@ exists, and nothing is created otherwise — a producer can always call
 
 ## Scene-persistent state that never exports
 
-A third mechanism, for tool state that must survive a save but must **never**
+The second mechanism, for tool state that must survive a save but must **never**
 ride into an FBX: `set_internal_string` / `get_internal_string` write plain
 string attrs on `data_internal` (a `network` node — structurally incapable of
 serialising into an FBX).
@@ -86,6 +68,15 @@ serialising into an FBX).
 DataNodes.set_internal_string("smart_bake_sessions", json.dumps(stack))
 raw = DataNodes.get_internal_string("smart_bake_sessions")  # None if absent/empty
 ```
+
+> **Retired: `mirror_attr` (proxied authored state).** A third mechanism —
+> authoring an attr on `data_internal` with a Maya proxy aliasing it on
+> `data_export` — was removed once its only producer (the audio manifest)
+> migrated to a regenerated export channel. Old scenes still carrying the
+> proxy pair are healed in place by `AudioClips.prepare_for_export` (see
+> `_drop_legacy_manifest_proxy`). Removing it also closed an API-parity delta:
+> `btk.DataNodes` never had a proxy concept (Blender has no attr-proxy DG
+> feature).
 
 ## Export channels in use
 
@@ -103,8 +94,16 @@ FBX. Attr names are distinct, so producers compose without collision.
 constants on `DataNodes`. Audio's authoring state — the keyed `audio_clip_<id>`
 enums and the shared `audio_file_map` — lives on `data_internal` and is **not**
 exported; only the baked `audio_manifest` projection is. (Pre-2026-07 scenes
-carried `audio_manifest` as a `mirror_attr` proxy; `prepare_for_export` heals
+carried `audio_manifest` as a proxied attr pair; `prepare_for_export` heals
 them to the plain channel in place.)
+
+> `fbx_takes` is consumed **inside Maya** (`apply_takes_from_node` realizes it
+> into AnimStacks before the export), and then *also* rides out as a raw user
+> property. That duplication is intentional: the JSON is the machine-readable
+> record of which clips the FBX declares — trivially greppable by CI/pipeline
+> validators without an FBX SDK parse — and costs a few hundred bytes. Unity
+> itself never reads it; it joins `shot_metadata.clip` to the imported
+> AnimationClip names.
 
 ## Internal channels in use
 
@@ -148,7 +147,6 @@ to make sure it ships:
 | `DataNodes.INTERNAL` / `.EXPORT` | node names (`"data_internal"` / `"data_export"`) |
 | `DataNodes.FBX_TAKES` / `.SHOT_METADATA` | export-channel name constants |
 | `ensure_internal()` / `ensure_export()` | get-or-create each node (idempotent) |
-| `mirror_attr(name, **addAttr_kwargs)` | author on internal + proxy on export |
 | `set_export_string(attr, value)` | write a plain string channel on export (empty value clears, never creates) |
 | `get_export_string(attr) -> str \| None` | read a string channel (None if absent/empty) |
 | `set_internal_string(attr, value)` | write a scene-persistent, never-exported channel |
@@ -161,14 +159,19 @@ schema.
 
 ## Adding your own metadata
 
-1. **Authored, edited-over-time value** → `mirror_attr` it onto `data_internal`,
-   write to `data_internal.<attr>`.
-2. **Derived, regenerated-at-export blob** → `set_export_string(attr, json)` from
+1. **Derived, regenerated-at-export blob** → `set_export_string(attr, json)` from
    a no-arg "publish/prepare" method on your tool, then add the producer to
    `FbxUtils._KNOWN_PRODUCERS` (picked up by the Scene Exporter automatically)
    and/or register it via `FbxUtils.register_export_preparer("<name>", fn)` for
    the any-export session hook.
+2. **Authored, edited-over-time state** → author it on `data_internal`
+   (`set_internal_string`, or your own keyed attrs on the node — see Audio's
+   `audio_clip_<id>` enums), and publish an export projection via step 1.
 3. **Scene-persistent but never exported** → `set_internal_string(attr, json)`.
 4. Pick an attr name that doesn't collide with the channels above.
 5. On the engine side, read it as an FBX user property on the `data_export`
-   GameObject.
+   GameObject — see the consumer catalog in
+   [unitytk's templates README](../../unitytk/unitytk/templates/README.md).
+6. Porting the producer to Blender? Mirror it through `btk.DataNodes` — see
+   [blendertk's data_nodes.md](../../blendertk/docs/data_nodes.md) for the
+   custom-property divergence and the export requirements.
