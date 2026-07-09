@@ -983,10 +983,10 @@ _Generated: 2026-07-09_
 - `class AnchorStrategy(TubeStrategy)`
   - methods: build
 - `class TubeRig(ptk.LoggingMixin)`
-  - methods: for_mesh, rig_name, rig_group, build, generate_joint_chain, create_logic_curve, create_spline_drivers, skin_curve_to_drivers, setup_spline_twist, setup_auto_bend, setup_spline_stretch, create_start_end_locators, create_ik, create_pole_vector, bind_joint_chain, constrain_end_with_falloff
+  - methods: for_mesh, for_node, rig_name, rig_group, teardown, build, generate_joint_chain, skin_mesh, create_logic_curve, create_spline_drivers, skin_curve_to_drivers, setup_spline_twist, setup_auto_bend, setup_spline_stretch, create_ik, create_pole_vector, bind_joint_chain, constrain_end_with_falloff
 - `class RigModeConfig`
 - `class TubeRigSlots`
-  - methods: header_init, apply_mode, get_mode, get_strategy, get_tube_rig, create_joints_from_tube, create_rig_from_joints, b000, b001, b002, b003, b004
+  - methods: header_init, apply_mode, get_mode, get_strategy, get_tube_rig, create_joints_from_tube, b000, b001, b002, b003, b004
 
 ### `rig_utils/wheel_rig.py`
 - `class WheelRig(ptk.LoggingMixin)`

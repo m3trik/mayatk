@@ -18901,7 +18901,7 @@
         {
           "name": "TubePath",
           "summary": "Pure geometry analysis for tube-like meshes.",
-          "line": 78,
+          "line": 113,
           "bases": [],
           "members": [
             {
@@ -18910,7 +18910,7 @@
               "kind": "staticmethod",
               "signature": "(mesh, num_joints: int = 10, precision: int = 10, edges: list = None, use_surface_normals: bool = True) -> Tuple[List, int]",
               "summary": "Unified centerline dispatcher — picks the best algorithm.",
-              "line": 90,
+              "line": 125,
               "deprecated": false
             },
             {
@@ -18919,16 +18919,16 @@
               "kind": "staticmethod",
               "signature": "(mesh) -> Tuple[List[om.MPoint], int]",
               "summary": "Extract centerline by finding all edge loops (cross-sections) of a tube mesh.",
-              "line": 148,
+              "line": 179,
               "deprecated": false
             },
             {
               "name": "get_centerline_using_edges",
               "qualname": "TubePath.get_centerline_using_edges",
               "kind": "staticmethod",
-              "signature": "(edge_selection: List[str]) -> List[om.MPoint]",
-              "summary": "Extracts the centerline points from selected edges of the tube.",
-              "line": 250,
+              "signature": "(edge_selection: List[str]) -> List[List[float]]",
+              "summary": "Derive centerline points from selected edges of the tube.",
+              "line": 340,
               "deprecated": false
             },
             {
@@ -18937,7 +18937,7 @@
               "kind": "staticmethod",
               "signature": "(mesh, num_points: int = 10, iterations: int = 3) -> List[om.MPoint]",
               "summary": "Calculate centerline by iteratively averaging opposing surface hits.",
-              "line": 281,
+              "line": 386,
               "deprecated": false
             },
             {
@@ -18946,7 +18946,7 @@
               "kind": "staticmethod",
               "signature": "(obj, precision=10, smooth=False, window_size=1)",
               "summary": "Calculate the centerline of an object using the cross-section of its largest bounding box axis.",
-              "line": 391,
+              "line": 525,
               "deprecated": false
             }
           ]
@@ -18954,14 +18954,14 @@
         {
           "name": "TubeRigBundle",
           "summary": "",
-          "line": 465,
+          "line": 596,
           "bases": [],
           "members": []
         },
         {
           "name": "TubeStrategy",
           "summary": "",
-          "line": 479,
+          "line": 610,
           "bases": [
             "ABC"
           ],
@@ -18972,7 +18972,7 @@
               "kind": "method",
               "signature": "(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle",
               "summary": "",
-              "line": 481,
+              "line": 612,
               "deprecated": false
             }
           ]
@@ -18980,7 +18980,7 @@
         {
           "name": "FKChainStrategy",
           "summary": "",
-          "line": 485,
+          "line": 616,
           "bases": [
             "TubeStrategy"
           ],
@@ -18991,7 +18991,7 @@
               "kind": "method",
               "signature": "(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle",
               "summary": "",
-              "line": 486,
+              "line": 617,
               "deprecated": false
             }
           ]
@@ -18999,7 +18999,7 @@
         {
           "name": "SplineIKStrategy",
           "summary": "",
-          "line": 549,
+          "line": 668,
           "bases": [
             "TubeStrategy"
           ],
@@ -19010,7 +19010,7 @@
               "kind": "method",
               "signature": "(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle",
               "summary": "",
-              "line": 550,
+              "line": 669,
               "deprecated": false
             }
           ]
@@ -19018,7 +19018,7 @@
         {
           "name": "AnchorStrategy",
           "summary": "",
-          "line": 646,
+          "line": 754,
           "bases": [
             "TubeStrategy"
           ],
@@ -19029,15 +19029,15 @@
               "kind": "method",
               "signature": "(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle",
               "summary": "",
-              "line": 647,
+              "line": 755,
               "deprecated": false
             }
           ]
         },
         {
           "name": "TubeRig",
-          "summary": "Handles rigging the tube, creating joints, IK handles, and additional controls.",
-          "line": 855,
+          "summary": "Rig engine for tube-shaped meshes: joints, IK, controls, skinning.",
+          "line": 912,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -19048,7 +19048,16 @@
               "kind": "classmethod",
               "signature": "(cls, mesh) -> Optional['TubeRig']",
               "summary": "Look up an existing TubeRig instance bound to *mesh*, or return None.",
-              "line": 931,
+              "line": 982,
+              "deprecated": false
+            },
+            {
+              "name": "for_node",
+              "qualname": "TubeRig.for_node",
+              "kind": "classmethod",
+              "signature": "(cls, node) -> Optional['TubeRig']",
+              "summary": "Find the TubeRig owning *node* — the rigged mesh itself, or",
+              "line": 1009,
               "deprecated": false
             },
             {
@@ -19057,7 +19066,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Returns the rig name.",
-              "line": 962,
+              "line": 1038,
               "deprecated": false
             },
             {
@@ -19066,7 +19075,16 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "",
-              "line": 969,
+              "line": 1045,
+              "deprecated": false
+            },
+            {
+              "name": "teardown",
+              "qualname": "TubeRig.teardown",
+              "kind": "method",
+              "signature": "(self) -> None",
+              "summary": "Delete everything a previous ``build`` created — the rig group and",
+              "line": 1076,
               "deprecated": false
             },
             {
@@ -19075,7 +19093,7 @@
               "kind": "method",
               "signature": "(self, strategy: str = 'spline', **kwargs)",
               "summary": "Builds the rig using the specified strategy.",
-              "line": 997,
+              "line": 1110,
               "deprecated": false
             },
             {
@@ -19084,7 +19102,16 @@
               "kind": "method",
               "signature": "(self, centerline: List[List[float]], num_joints: int, reverse: bool = False, **kwargs) -> List[str]",
               "summary": "Generates joints along the tube's centerline.",
-              "line": 1038,
+              "line": 1165,
+              "deprecated": false
+            },
+            {
+              "name": "skin_mesh",
+              "qualname": "TubeRig.skin_mesh",
+              "kind": "method",
+              "signature": "(self, joints: List[str]) -> Optional[str]",
+              "summary": "Smooth-bind the rig's mesh to *joints* and record the skinCluster",
+              "line": 1254,
               "deprecated": false
             },
             {
@@ -19093,7 +19120,7 @@
               "kind": "method",
               "signature": "(self, centerline: List[List[float]]) -> str",
               "summary": "Creates the logic curve for Spline IK.",
-              "line": 1104,
+              "line": 1270,
               "deprecated": false
             },
             {
@@ -19102,7 +19129,7 @@
               "kind": "method",
               "signature": "(self, centerline: List[List[float]], radius: float = 1.0, num_controls: int = 3) -> Tuple[List[str], List[str], List]",
               "summary": "Creates the driver system (controls and joints) for the Spline IK curve.",
-              "line": 1126,
+              "line": 1293,
               "deprecated": false
             },
             {
@@ -19111,7 +19138,7 @@
               "kind": "method",
               "signature": "(self, curve, driver_joints)",
               "summary": "",
-              "line": 1336,
+              "line": 1458,
               "deprecated": false
             },
             {
@@ -19120,7 +19147,7 @@
               "kind": "method",
               "signature": "(self, ik_handle, start_ctrl, end_ctrl, start_up_loc=None, end_up_loc=None)",
               "summary": "Setup advanced twist for IK Spline.",
-              "line": 1343,
+              "line": 1465,
               "deprecated": false
             },
             {
@@ -19129,7 +19156,7 @@
               "kind": "method",
               "signature": "(self, start_ctrl, mid_ctrl, end_ctrl)",
               "summary": "Setup automatic bending of the mid control based on compression distance.",
-              "line": 1396,
+              "line": 1518,
               "deprecated": false
             },
             {
@@ -19138,16 +19165,7 @@
               "kind": "method",
               "signature": "(self, curve, joints, enable_stretch=True, enable_squash=True, enable_volume=True, main_control=None)",
               "summary": "",
-              "line": 1454,
-              "deprecated": false
-            },
-            {
-              "name": "create_start_end_locators",
-              "qualname": "TubeRig.create_start_end_locators",
-              "kind": "method",
-              "signature": "(self, joints: List[str], ik_handle: Optional[str] = None) -> Tuple[str, str]",
-              "summary": "",
-              "line": 1602,
+              "line": 1576,
               "deprecated": false
             },
             {
@@ -19156,7 +19174,7 @@
               "kind": "method",
               "signature": "(self, joints: List[str], **kwargs) -> Optional[str]",
               "summary": "",
-              "line": 1638,
+              "line": 1724,
               "deprecated": false
             },
             {
@@ -19165,7 +19183,7 @@
               "kind": "method",
               "signature": "(self, ik_handle, mid_joint: str, offset=(0, 5, 0)) -> str",
               "summary": "",
-              "line": 1657,
+              "line": 1743,
               "deprecated": false
             },
             {
@@ -19174,7 +19192,7 @@
               "kind": "method",
               "signature": "(self, obj, joints: List[str]) -> Optional[str]",
               "summary": "Binds the joint chain to a polygon tube with smooth skinning.",
-              "line": 1683,
+              "line": 1769,
               "deprecated": false
             },
             {
@@ -19183,7 +19201,7 @@
               "kind": "method",
               "signature": "(self, joints: 'List[str]', anchor: str, falloff: float = 5.0, joint_index: int = -1) -> 'Optional[str]'",
               "summary": "Constrains a joint in the chain to an anchor and applies distance-based skin weight falloff.",
-              "line": 1757,
+              "line": 1843,
               "deprecated": false
             }
           ]
@@ -19191,14 +19209,14 @@
         {
           "name": "RigModeConfig",
           "summary": "Defines a rig mode's strategy and available options.",
-          "line": 1879,
+          "line": 1981,
           "bases": [],
           "members": []
         },
         {
           "name": "TubeRigSlots",
           "summary": "",
-          "line": 1956,
+          "line": 2058,
           "bases": [],
           "members": [
             {
@@ -19207,7 +19225,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text.",
-              "line": 1982,
+              "line": 2108,
               "deprecated": false
             },
             {
@@ -19216,7 +19234,7 @@
               "kind": "method",
               "signature": "(self, index: int)",
               "summary": "Apply mode values and constraints to UI widgets.",
-              "line": 2005,
+              "line": 2131,
               "deprecated": false
             },
             {
@@ -19225,7 +19243,7 @@
               "kind": "method",
               "signature": "(self) -> RigModeConfig",
               "summary": "Get the current rig mode config.",
-              "line": 2040,
+              "line": 2166,
               "deprecated": false
             },
             {
@@ -19234,7 +19252,7 @@
               "kind": "method",
               "signature": "(self) -> str",
               "summary": "Get the current strategy from the mode combobox.",
-              "line": 2045,
+              "line": 2171,
               "deprecated": false
             },
             {
@@ -19242,8 +19260,8 @@
               "qualname": "TubeRigSlots.get_tube_rig",
               "kind": "method",
               "signature": "(self, obj)",
-              "summary": "Get the tube rig instance for the given object, its parent, or mesh ancestor.",
-              "line": 2049,
+              "summary": "Get the tube rig instance for the given object (the mesh, a joint,",
+              "line": 2175,
               "deprecated": false
             },
             {
@@ -19252,16 +19270,7 @@
               "kind": "method",
               "signature": "(self, obj)",
               "summary": "Creates a joint chain from a tube mesh.",
-              "line": 2076,
-              "deprecated": false
-            },
-            {
-              "name": "create_rig_from_joints",
-              "qualname": "TubeRigSlots.create_rig_from_joints",
-              "kind": "method",
-              "signature": "(self, obj, joints)",
-              "summary": "Creates a tube rig from an existing joint chain.",
-              "line": 2104,
+              "line": 2192,
               "deprecated": false
             },
             {
@@ -19270,7 +19279,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Create Tube Rig (Full Pipeline).",
-              "line": 2134,
+              "line": 2220,
               "deprecated": false
             },
             {
@@ -19279,7 +19288,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Create Joints from Tube.",
-              "line": 2166,
+              "line": 2252,
               "deprecated": false
             },
             {
@@ -19288,7 +19297,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Create IK / Controls (Preset Dependent).",
-              "line": 2178,
+              "line": 2264,
               "deprecated": false
             },
             {
@@ -19297,7 +19306,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Macros: Bind Joint Chain to Tube.",
-              "line": 2266,
+              "line": 2362,
               "deprecated": false
             },
             {
@@ -19306,7 +19315,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Macros: Constrain Both Ends of Hose to Anchors.",
-              "line": 2308,
+              "line": 2404,
               "deprecated": false
             }
           ]
