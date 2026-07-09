@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Batch scripts must materialize CRLF everywhere (incl. Linux CI wheel builds);
+# cmd.exe mis-scans goto/call labels in LF-only files.
+*.bat text eol=crlf

@@ -4,7 +4,7 @@
 
 Converts user-entered ranges + gap-detected boundaries into a fully
 resolved ``(step_id, start, end, is_user)`` list for every build step.
-This module is pure logic â€” no Qt or Maya imports.
+This module is pure logic — no Qt or Maya imports.
 """
 from typing import Dict, List, Optional, Tuple
 
@@ -34,11 +34,11 @@ def resolve_ranges(
     steps
         Ordered list of build steps from CSV or detection.
     user_ranges
-        Map of ``step_id â†’ (start, end_or_None)`` for user-entered values.
+        Map of ``step_id → (start, end_or_None)`` for user-entered values.
     gap_starts
         Detected animation-region start frames (pre-sorted).
     gap_end_map
-        Map of ``region_start â†’ region_end`` for detected regions that
+        Map of ``region_start → region_end`` for detected regions that
         have an explicit end (e.g. from ``zero_as_end`` mode).
     gap
         Inter-shot gap in frames (from ShotStore settings).
@@ -46,7 +46,7 @@ def resolve_ranges(
         When ``True``, steps without a matching detected region are
         skipped rather than placed sequentially.
     last_resolved
-        Previously resolved list â€” entries before *from_step_idx* are
+        Previously resolved list — entries before *from_step_idx* are
         reused as a frozen prefix.
     from_step_idx
         Only re-resolve from this index onward.
@@ -85,10 +85,19 @@ def resolve_ranges(
     cursor = 0.0 if use_default else 1.0  # start at 0 for default ranges
     cursor_forced = False  # True once a user range advances cursor
 
-    # Frozen prefix: reuse last-resolved values for steps before from_step_idx
+    # Frozen prefix: reuse last-resolved values for steps before
+    # from_step_idx.  last_resolved may be sparse (selected-keys mode
+    # skips unresolved steps), so entries are matched by step_id —
+    # positional copying would freeze the wrong steps' ranges and
+    # duplicate the edited step.
+    frozen_ids: set = set()
     if from_step_idx > 0 and last_resolved:
-        for i in range(min(from_step_idx, len(last_resolved), len(steps))):
-            resolved.append(last_resolved[i])
+        by_id = {entry[0]: entry for entry in last_resolved}
+        for step in steps[:from_step_idx]:
+            entry = by_id.get(step.step_id)
+            if entry is not None:
+                resolved.append(entry)
+                frozen_ids.add(step.step_id)
         # Advance cursor past the frozen prefix
         if resolved:
             _, _, prev_end, _ = resolved[-1]
@@ -102,8 +111,8 @@ def resolve_ranges(
             else:
                 break
 
-    for i, step in enumerate(steps):
-        if i < len(resolved):
+    for step in steps:
+        if step.step_id in frozen_ids:
             continue  # already in frozen prefix
 
         user = user_ranges.get(step.step_id)
@@ -168,7 +177,9 @@ def resolve_ranges(
         step_id, start, end, is_user = resolved[i]
         if end is None:
             if i + 1 < len(resolved):
-                end = resolved[i + 1][1] - gap
+                # Clamp: a next step pinned at or before start + gap
+                # would otherwise produce an inverted range (end < start).
+                end = max(start, resolved[i + 1][1] - gap)
             else:
                 step_obj = step_by_id.get(step_id)
                 objs = step_obj.objects if step_obj else []

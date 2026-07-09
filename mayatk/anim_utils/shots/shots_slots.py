@@ -7,7 +7,6 @@ Provides a single source of truth for shot-level settings
 Shot Manifest and Shot Sequencer consume via :class:`ShotStore`.
 """
 import pythontk as ptk
-from uitk import Signals
 from uitk.widgets.mixins.tooltip_mixin import fmt
 
 from mayatk.core_utils._core_utils import CoreUtils
@@ -53,12 +52,15 @@ class ShotsController(ptk.LoggingMixin):
                 w.restore_state = False
 
         # Debounce value-change signals so rapid spinner clicks / text
-        # edits coalesce into a single store update.
+        # edits coalesce into a single store update.  spn_detection is
+        # included because each change can trigger a full-scene
+        # has_animation scan via refresh_state.
         for name in (
             "spn_shot_start",
             "spn_shot_end",
             "txt_shot_name",
             "txt_shot_desc",
+            "spn_detection",
         ):
             w = getattr(self.ui, name, None)
             if w is not None:
@@ -67,8 +69,8 @@ class ShotsController(ptk.LoggingMixin):
         # Disable keyboard tracking on frame spinners so valueChanged only
         # fires on commit (Enter / focus-loss / arrow-click), not on every
         # keystroke.  Without this, clearing the text to retype a value
-        # emits valueChanged(0) mid-edit, which triggers ripple_shift with
-        # a bogus delta and corrupts all downstream shot ranges.
+        # emits valueChanged(0) mid-edit, which triggers a downstream
+        # ripple with a bogus delta and corrupts all later shot ranges.
         for name in ("spn_shot_start", "spn_shot_end"):
             w = getattr(self.ui, name, None)
             if w is not None:
@@ -99,7 +101,7 @@ class ShotsController(ptk.LoggingMixin):
 
     def _setup_hide_on_leave(self) -> None:
         """Install a polling timer that hides the window when the cursor leaves."""
-        from qtpy import QtCore, QtGui, QtWidgets
+        from qtpy import QtCore
 
         self._leave_timer = QtCore.QTimer(self.ui)
         self._leave_timer.setInterval(100)
@@ -334,13 +336,15 @@ class ShotsController(ptk.LoggingMixin):
         has_shots = bool(store.shots)
 
         # If shots exist but the persisted gap is zero, derive it from
-        # actual shot positions so the spinner reflects the scene state.
+        # actual shot positions so the spinner (and any op that reads
+        # store.gap) reflects the scene state.  In-memory only: calling
+        # mark_dirty here made a pure UI sync schedule a re-save of a
+        # freshly-opened scene; the value persists with the next real
+        # mutation instead.
         gap = store.gap
         if has_shots and gap == 0.0:
             gap = store.compute_gap()
-            if gap != store.gap:
-                store.gap = gap
-                store.mark_dirty()
+            store.gap = gap
 
         spn_gap = getattr(self.ui, "spn_gap", None)
         if spn_gap is not None:
@@ -491,22 +495,6 @@ class ShotsController(ptk.LoggingMixin):
 
     # ---- widget → store pushes -------------------------------------------
 
-    @staticmethod
-    def _has_selected_keys() -> bool:
-        """True if any keyframes are selected in the Graph Editor."""
-        try:
-            import maya.cmds as cmds
-
-            return bool(cmds.keyframe(query=True, selected=True, name=True))
-        except Exception:
-            return False
-
-    def _save(self) -> None:
-        """Persist settings to the scene."""
-        store = self._active_store()
-        if store is not None:
-            store.save()
-
     def on_detection_changed(self, value: float) -> None:
         store = self._active_store()
         if store is not None:
@@ -584,36 +572,8 @@ class ShotsController(ptk.LoggingMixin):
         )
 
         seq = ShotSequencer(store=store)
-        sorted_s = seq.sorted_shots()
-        if not sorted_s:
-            store.notify_settings_changed()
-            return
-
-
-        if scope == "all":
-            with CoreUtils.undo_chunk():
-                seq.respace(gap=store.gap, start_frame=sorted_s[0].start)
-        else:
-            active_id = store.active_shot_id
-            idx = (
-                next((i for i, s in enumerate(sorted_s) if s.shot_id == active_id), None)
-                if active_id is not None
-                else None
-            )
-            if idx is None:
-                store.notify_settings_changed()
-                return
-            with CoreUtils.undo_chunk():
-                if scope in ("start", "start_end") and idx > 0:
-                    seq.move_shot(active_id, sorted_s[idx - 1].end + store.gap)
-                    sorted_s = seq.sorted_shots()
-                    idx = next(
-                        (i for i, s in enumerate(sorted_s) if s.shot_id == active_id),
-                        idx,
-                    )
-                if scope in ("end", "start_end") and idx < len(sorted_s) - 1:
-                    seq.move_shot(sorted_s[idx + 1].shot_id, sorted_s[idx].end + store.gap)
-
+        with CoreUtils.undo_chunk():
+            seq.apply_gap(store.gap, scope=scope, shot_id=store.active_shot_id)
         store.notify_settings_changed()
 
     # ---- shot editor actions ---------------------------------------------
@@ -679,11 +639,10 @@ class ShotsController(ptk.LoggingMixin):
         )
 
         seq = ShotSequencer(store=store)
-        shifted_audio: set = set()
         with CoreUtils.undo_chunk():
             old_end = shot.end
             store.update_shot(shot.shot_id, end=value)
-            seq._ripple_downstream(shot.shot_id, old_end, delta, shifted_audio)
+            seq.ripple_downstream(shot.shot_id, old_end, delta)
 
     def on_shot_desc_changed(self, text: str) -> None:
         self._push_shot_field(description=text)
@@ -791,9 +750,13 @@ class ShotsController(ptk.LoggingMixin):
         if reply != QtWidgets.QMessageBox.Yes:
             return
 
-        for shot in list(store.shots):
-            store.remove_shot(shot.shot_id)
-        store.set_active_shot(None)
+        # One BatchComplete instead of N ShotRemoved events — each event
+        # triggers a full rebuild in every listening UI (settings panel,
+        # manifest, sequencer).
+        with store.batch_update():
+            for shot in list(store.shots):
+                store.remove_shot(shot.shot_id)
+            store.set_active_shot(None)
 
     def on_move_shot(self) -> None:
         """Move the active shot to the position specified by spn_move_to."""
@@ -815,7 +778,8 @@ class ShotsController(ptk.LoggingMixin):
         with CoreUtils.undo_chunk():
             seq.move_shot_to_position(store.active_shot_id, target_pos)
 
-        self._populate_shot_combobox(store)
+        # notify_settings_changed → _sync_from_store already rebuilds the
+        # combobox; a direct _populate call here doubled the rebuild.
         store.notify_settings_changed()
 
     def on_trim_empty(self) -> None:

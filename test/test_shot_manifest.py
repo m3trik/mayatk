@@ -16,7 +16,6 @@ Covers:
 All tests run WITHOUT Maya by mocking maya.cmds/cmds.
 """
 import sys
-import types
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -45,12 +44,9 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     BuilderStep,
     BuilderObject,
     ShotManifest,
-    ColumnMap,
     ObjectStatus,
     StepStatus,
-    parse_csv,
     detect_behaviors,
-    detect_shot_regions,
 )
 from mayatk.anim_utils.shots.shot_manifest.mapping._mapping import (
     _audio_prefix,
@@ -122,12 +118,12 @@ class TestDetectBehaviors(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Tests: ShotManifest.update (baseline ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no ranges)
+# Tests: ShotManifest.update (baseline - no ranges)
 # ---------------------------------------------------------------------------
 
 
 class TestUpdateBaseline(unittest.TestCase):
-    """Test update() without ranges ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â sequential cursor placement."""
+    """Test update() without ranges - sequential cursor placement."""
 
     def setUp(self):
         self.store = _fresh_store()
@@ -200,7 +196,7 @@ class TestUpdateWithRanges(unittest.TestCase):
         # initial_shot_length=100 so resolve_duration uses 100, matching
         # the user-supplied range widths (extend_only floor would otherwise
         # stretch each shot to 200f and ignore the upper bound).
-        actions = self.assembler.update(
+        self.assembler.update(
             self.steps, ranges=ranges, initial_shot_length=100
         )
 
@@ -221,9 +217,8 @@ class TestUpdateWithRanges(unittest.TestCase):
         mock_dur.return_value = 30.0
         # Initial build without ranges
         self.assembler.update(self.steps)
-        shots_before = {s.name: (s.start, s.end) for s in self.store.shots}
 
-        # Rebuild with ranges ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â should reposition
+        # Rebuild with ranges - should reposition
         ranges = {
             "A01": (500.0, 600.0),
             "A02": (700.0, 800.0),
@@ -234,7 +229,7 @@ class TestUpdateWithRanges(unittest.TestCase):
         shots = {s.name: s for s in self.store.shots}
         self.assertEqual(shots["A01"].start, 500.0)
         self.assertEqual(shots["A01"].end, 600.0)
-        # repositioned ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ patched
+        # repositioned -> patched
         self.assertEqual(actions["A01"], "patched")
 
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
@@ -243,7 +238,7 @@ class TestUpdateWithRanges(unittest.TestCase):
         mock_dur.return_value = 30.0
         ranges = {"A01": (100.0, 200.0)}  # only A01 has a range
         # initial_shot_length=30 so cursor-placed shots have 30-frame durations.
-        actions = self.assembler.update(
+        self.assembler.update(
             self.steps, ranges=ranges, initial_shot_length=30
         )
 
@@ -288,7 +283,7 @@ class TestUpdateWithRanges(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 # Qt setup
-from qtpy import QtWidgets, QtCore
+from qtpy import QtWidgets
 
 _app = QtWidgets.QApplication.instance()
 if _app is None:
@@ -303,8 +298,6 @@ from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
     COL_DESC,
     COL_START,
     COL_END,
-    parse_range,
-    short_name,
 )
 
 
@@ -314,7 +307,6 @@ class _ControllerHarness:
     def setup_controller(self):
         """Build a controller with a mocked switchboard and tree widget."""
         from uitk.widgets.treeWidget import TreeWidget
-        from qtpy.QtWidgets import QAbstractItemView
 
         self.tree = TreeWidget()
         self.tree.setColumnCount(5)
@@ -392,7 +384,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         """When more regions than steps, largest gaps become boundaries."""
         mock_dur.return_value = 30.0
         # 6 region starts (5 gaps) but only 3 steps.
-        # Diffs: 5, 5, 90, 5, 95 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ top 2 are 95 (idx 4) and 90 (idx 2)
+        # Diffs: 5, 5, 90, 5, 95 -> top 2 are 95 (idx 4) and 90 (idx 2)
         # Selected regions: [0, 100, 200]
         mock_regions.return_value = [
             {"name": "S", "start": 0.0, "end": 30.0, "objects": []},
@@ -436,7 +428,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
             {"name": "S", "start": 200.0, "end": 230.0, "objects": []},
         ]
 
-        # First full resolve ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â gaps assigned to all 3 steps
+        # First full resolve - gaps assigned to all 3 steps
         resolved_full = self.ctrl._resolve_ranges()
         self.assertEqual(resolved_full[0][1], 10.0)  # A01 at gap 1
         self.assertEqual(resolved_full[1][1], 100.0)  # A02 at gap 2
@@ -446,7 +438,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         resolved_partial = self.ctrl._resolve_ranges(from_step_idx=2)
         self.assertEqual(resolved_partial[0], resolved_full[0])  # A01 frozen
         self.assertEqual(resolved_partial[1], resolved_full[1])  # A02 frozen
-        # A03 re-resolves ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â gap 200 is past A02's end, so it uses it
+        # A03 re-resolves - gap 200 is past A02's end, so it uses it
         self.assertEqual(resolved_partial[2][1], 200.0)
 
     @patch(
@@ -561,7 +553,7 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
         self.ctrl._populate_table()
         self.ctrl._validate_range_collisions()
 
-        # Find A01 item Ã¢â‚¬â€ should have collision background
+        # Find A01 item - should have collision background
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
             step_data = item.data(0, Qt.UserRole)
@@ -631,33 +623,6 @@ class TestRangeReadOnlyPostBuild(unittest.TestCase, _ControllerHarness):
                 flags & Qt.ItemIsEditable,
                 f"Row {i} should not be editable post-build",
             )
-
-
-class TestParseRange(unittest.TestCase, _ControllerHarness):
-    """Test _parse_range() parsing logic."""
-
-    def setUp(self):
-        self.setup_controller()
-
-    def test_start_only(self):
-        result = parse_range("120")
-        self.assertEqual(result, (120.0, None))
-
-    def test_start_end_with_en_dash(self):
-        result = parse_range("120\u2013250")
-        self.assertEqual(result, (120.0, 250.0))
-
-    def test_start_end_with_hyphen(self):
-        result = parse_range("120-250")
-        self.assertEqual(result, (120.0, 250.0))
-
-    def test_whitespace_trimmed(self):
-        result = parse_range(" 100 - 200 ")
-        self.assertEqual(result, (100.0, 200.0))
-
-    def test_invalid_returns_none(self):
-        result = parse_range("abc")
-        self.assertIsNone(result)
 
 
 class TestRangeAbsorption(unittest.TestCase, _ControllerHarness):
@@ -776,7 +741,7 @@ class TestRemoveMissing(unittest.TestCase):
         builder.update(steps)
         self.assertEqual(len(self.store.shots), 2)
 
-        # Now update with only A01 Ã¢â‚¬â€ A02 should be removed
+        # Now update with only A01 - A02 should be removed
         steps2 = _make_steps("A01")
         actions = builder.update(steps2, remove_missing=True)
         self.assertEqual(actions.get("A02"), "removed")
@@ -793,7 +758,7 @@ class TestRemoveMissing(unittest.TestCase):
         builder.update(steps)
         self.assertEqual(len(self.store.shots), 2)
 
-        # Now update with only A01 Ã¢â‚¬â€ A02 should be kept
+        # Now update with only A01 - A02 should be kept
         steps2 = _make_steps("A01")
         actions = builder.update(steps2, remove_missing=False)
         self.assertNotIn("A02", actions)
@@ -964,7 +929,7 @@ class TestDescriptionEdit(unittest.TestCase, _ControllerHarness):
     def test_description_edit_csv_mode(self):
         """Editing Description column in CSV mode updates step.description."""
         # Steps from setup_controller (CSV mode: _csv_path is empty but
-        # steps exist Ã¢â‚¬â€ simulate CSV mode by setting a path)
+        # steps exist - simulate CSV mode by setting a path)
         self.ctrl._csv_path = "/some/file.csv"
 
         tree = self.ui.tbl_steps
@@ -1289,7 +1254,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         self.ctrl._cached_gaps = None
         resolved = self.ctrl._resolve_ranges()
 
-        # Only 1 detected region Ã¢â€ â€™ at most 1 step should have a range.
+        # Only 1 detected region -> at most 1 step should have a range.
         self.assertEqual(len(resolved), 1, "Extra steps received fallback ranges")
         self.assertEqual(resolved[0][0], "A01")
 
@@ -1854,7 +1819,7 @@ class TestSyncDetectionWidgets(unittest.TestCase, _ControllerHarness):
 
     def test_delegates_to_refresh_state(self):
         """When slot_instances has a shots controller, delegates to it."""
-        store = _fresh_store()
+        _fresh_store()
         mock_ctrl = MagicMock()
         mock_slots = MagicMock()
         mock_slots.controller = mock_ctrl
@@ -2056,7 +2021,7 @@ class TestIncrementalBuildWithUserRange(unittest.TestCase):
             "A02": (31.0, 61.0),
             "A03": (100.0, 150.0),
         }
-        actions = self.assembler.update(
+        self.assembler.update(
             steps, ranges=ranges, zero_duration_fallback=True
         )
         a03 = next(s for s in self.store.shots if s.name == "A03")
@@ -2141,31 +2106,6 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
         ranges = call_kwargs.kwargs.get("ranges") or call_kwargs[1].get("ranges")
         # B01 should be at A01's start (1)
         self.assertEqual(ranges["B01"], (1, 1))
-
-
-# ---------------------------------------------------------------------------
-# Tests: short_name helper
-# ---------------------------------------------------------------------------
-
-
-class TestShortName(unittest.TestCase):
-    """Verify the short_name() DAG-path leaf extractor."""
-
-    def test_full_dag_path(self):
-        self.assertEqual(short_name("|group1|subgrp|mesh"), "mesh")
-
-    def test_already_short(self):
-        self.assertEqual(short_name("mesh"), "mesh")
-
-    def test_single_pipe(self):
-        self.assertEqual(short_name("|root"), "root")
-
-    def test_empty_string(self):
-        self.assertEqual(short_name(""), "")
-
-    def test_none_safe(self):
-        """short_name('') returns '' â€” callers should guard against None."""
-        self.assertEqual(short_name(""), "")
 
 
 # ---------------------------------------------------------------------------
@@ -2732,7 +2672,7 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
             {"name": "Shot 1", "start": 10.0, "end": 50.0, "objects": ["ctrl"]},
         ]
 
-        regions = self.ctrl._detect_regions(5.0)
+        self.ctrl._detect_regions(5.0)
 
         mock_auto.assert_called_once()
         mock_sel.assert_not_called()

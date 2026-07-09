@@ -21,7 +21,6 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     BuilderObject,
     ColumnMap,
     ShotManifest,
-    StepStatus,
     parse_csv,
     detect_shot_regions,
     regions_from_selected_keys,
@@ -221,7 +220,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         appropriate user feedback (message box, footer, etc.).
 
         The store's detection_mode is always respected regardless of
-        whether a CSV is loaded â€” CSV defines steps, detection_mode
+        whether a CSV is loaded — CSV defines steps, detection_mode
         controls how timing boundaries are discovered.
         """
         store = self._active_store()
@@ -375,7 +374,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         start_raw = item.text(COL_START).strip()
         end_raw = item.text(COL_END).strip()
 
-        # Both empty â€” clear user range
+        # Both empty — clear user range
         if not start_raw and not end_raw:
             self._user_ranges.pop(step_data.step_id, None)
             self._refresh_ranges()
@@ -412,18 +411,29 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             self._revert_range_cell(item, step_data.step_id)
             return
 
-        # Reject start before previous step's resolved end.
+        # Reject start before the previous step's resolved end.
+        # _last_resolved may be sparse (selected-keys mode skips
+        # unresolved steps), so look up the nearest resolved
+        # predecessor by step_id — positional indexing would compare
+        # against the wrong step's end.
         step_idx = self._step_index(step_data.step_id)
         if step_idx < 0:
             return
         if step_idx > 0 and self._last_resolved:
-            if step_idx <= len(self._last_resolved):
-                _, _, prev_end, _ = self._last_resolved[step_idx - 1]
-                if prev_end is not None and start < prev_end:
-                    self._revert_range_cell(item, step_data.step_id)
-                    return
+            resolved_ends = {sid: e for sid, _, e, _ in self._last_resolved}
+            prev_end = next(
+                (
+                    resolved_ends[s.step_id]
+                    for s in reversed(self._steps[:step_idx])
+                    if resolved_ends.get(s.step_id) is not None
+                ),
+                None,
+            )
+            if prev_end is not None and start < prev_end:
+                self._revert_range_cell(item, step_data.step_id)
+                return
 
-        # Valid â€” store, clear downstream, and refresh.
+        # Valid — store, clear downstream, and refresh.
         self._user_ranges[step_data.step_id] = (start, end)
         self._cascade_from(step_idx)
         self._refresh_ranges(from_step_idx=step_idx)
@@ -497,8 +507,11 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         # ranges instead of behavior-derived micro-durations.  This also
         # covers the case where the scene has animation but the chosen
         # detection mode found no boundaries (e.g. skip_zero with no
-        # zero-valued keys).
-        default_dur = 200.0 if (not gap_starts and not use_sel) else 0
+        # zero-valued keys).  The store's initial_shot_length is the
+        # user-facing policy for new-shot sizing (default 200f).
+        default_dur = (
+            self._initial_shot_length if (not gap_starts and not use_sel) else 0
+        )
 
         resolved = resolve_ranges(
             steps=self._steps,
@@ -588,19 +601,19 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self.detect()
 
     def _on_store_event(self, event: StoreEvent) -> None:
-        """React to ShotStore mutations â€” refresh tree timing if steps are loaded."""
+        """React to ShotStore mutations — refresh tree timing if steps are loaded."""
 
         if self._building:
             return
         if isinstance(event, SettingsChanged):
-            # Detection settings changed â€” invalidate cache and re-detect.
+            # Detection settings changed — invalidate cache and re-detect.
             # Guard on _first_shown to avoid triggering detection (and
             # message boxes) before the widget is visible.
             self._cached_gaps = None
             self._cached_gap_ends = None
             if self._first_shown:
                 if self._csv_path:
-                    # CSV defines steps â€” don't replace them with detected
+                    # CSV defines steps — don't replace them with detected
                     # steps.  Just refresh auto-filled ranges so the new
                     # detection mode takes effect.
                     if self._steps:
@@ -669,7 +682,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         tree = self.ui.tbl_steps
         item = tree.itemAt(pos)
 
-        # Right-click on empty space â€” show excluded steps menu
+        # Right-click on empty space — show excluded steps menu
         if item is None:
             excluded = self._column_map.exclude_steps
             if excluded:
@@ -859,7 +872,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         """Open the Shot Sequencer UI and navigate to the shot matching *step_id*.
 
         The sequencer controller lazily wraps ``ShotStore.active()`` via
-        its ``sequencer`` property â€” no manual wiring needed here.
+        its ``sequencer`` property — no manual wiring needed here.
         """
         from mayatk.anim_utils.shots._shots import ShotStore
 
@@ -915,7 +928,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self.sb.handlers.marking_menu.show("shots")
 
         # set_active_shot fires ActiveShotChanged which the ShotsController
-        # listener handles â€” it syncs the combobox and editor fields.
+        # listener handles — it syncs the combobox and editor fields.
         store.set_active_shot(shot.shot_id)
 
     # ---- CSV loading -----------------------------------------------------
@@ -1061,7 +1074,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                         "<b>Start / End</b> \u2014 Frame range. Solid text = user-entered; dim italic = auto-filled.",
                     ]),
                     ("Editing &amp; Actions", [
-                        "Double-click Start or End to type a frame or range (e.g. '120-250'). Downstream steps re-flow.",
+                        "Double-click Start or End to type a frame. Downstream steps re-flow.",
                         "Right-click a range cell: Set Start to Current Frame, Auto-fill from Gaps, Clear Range.",
                         "<b>Assess</b> \u2014 Read-only comparison; red tint = missing, grey = locked, normal = valid.",
                         "<b>Build</b> \u2014 Create or update shots from loaded steps. Locked shots are never modified.",
@@ -1113,7 +1126,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             BEHAVIOR_STATUS_COLORS,
         )
 
-        # Keys with actual (fg, bg) colours â€” skip 'valid'/'csv_object' (None, None)
+        # Keys with actual (fg, bg) colours — skip 'valid'/'csv_object' (None, None)
         editable_keys = [
             k for k, v in PASTEL_STATUS.items() if v[0] is not None or v[1] is not None
         ]
@@ -1660,7 +1673,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             builder = ShotManifest(store)
 
             # When selected-keys mode is active, verify keys exist
-            # before proceeding â€” even if user ranges are complete.
+            # before proceeding — even if user ranges are complete.
             use_sel = self._use_selected_keys
             if use_sel:
                 self._cached_gaps = None
@@ -1678,7 +1691,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                     )
                     return
 
-            # Resolve ranges â€” short-circuit when all ranges are
+            # Resolve ranges — short-circuit when all ranges are
             # already complete (detection mode provides full ranges).
             # Incremental mode: when shots already exist and we're not
             # in selected-keys mode, use the resolver's last-cascaded
@@ -1709,7 +1722,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                         if i > 0:
                             prev_end = range_map[self._steps[i - 1].step_id][1]
                         else:
-                            # New step at the very start of the CSV â€”
+                            # New step at the very start of the CSV —
                             # find the first existing neighbor's start.
                             prev_end = next(
                                 (
@@ -1747,8 +1760,11 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                     )
                     return
 
-            # Detection mode: don't remove existing shots not in steps
-            remove = not self._is_detection_mode
+            # Detection mode: don't remove existing shots not in steps.
+            # A restricted build (selected-keys subset) must never remove
+            # either: removal semantics are only meaningful against the
+            # full CSV step list, and store removals are not undoable.
+            remove = not self._is_detection_mode and build_steps is self._steps
 
             cmds.undoInfo(openChunk=True, chunkName="ShotManifest_build")
             self._building = True
@@ -1761,11 +1777,13 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                         zero_duration_fallback=incremental,
                         fit_mode=self._fit_mode,
                         initial_shot_length=self._initial_shot_length,
+                        skip_scene_discovery=use_sel,
                     )
                     # Record the source CSV for provenance on reopen.
                     csv_path = self._csv_path or self.ui.txt_csv_path.text().strip()
-                    if csv_path:
+                    if csv_path and store.source_csv != csv_path:
                         store.source_csv = csv_path
+                        store.mark_dirty()
             finally:
                 self._building = False
                 cmds.undoInfo(closeChunk=True)
@@ -1780,6 +1798,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             n_removed = sum(1 for a in actions.values() if a == "removed")
             n_beh_applied = len(beh.get("applied", []))
             n_beh_skipped = len(beh.get("skipped", []))
+            n_beh_failed = len(beh.get("failed", []))
             parts = []
             if n_created:
                 parts.append(f"{n_created} created")
@@ -1793,7 +1812,12 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 parts.append(f"{n_beh_applied} behaviors applied")
             if n_beh_skipped:
                 parts.append(f"{n_beh_skipped} behaviors kept (existing keys)")
-            self._set_footer(f"Build complete: {', '.join(parts)}.")
+            if n_beh_failed:
+                parts.append(f"{n_beh_failed} behaviors failed (see log)")
+            self._set_footer(
+                f"Build complete: {', '.join(parts)}.",
+                color=ERROR_COLOR if n_beh_failed else "",
+            )
 
             # Sync store.gap from actual shot positions so the spinbox
             # reflects the gap the manifest produced.
@@ -1869,7 +1893,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         builder = ShotManifest(store)
         use_sel = self._use_selected_keys
 
-        # In selected-keys mode, verify keys exist before proceeding â€”
+        # In selected-keys mode, verify keys exist before proceeding —
         # but only when shots haven't been built yet (key selection is for
         # initial range discovery, not for re-assessment of existing shots).
         if use_sel and not skip_key_check and not self._is_built:
@@ -1895,6 +1919,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         # Write per-object statuses back to shot metadata so that
         # both the manifest and sequencer share the same classification.
         built_map = {s.name: s for s in store.sorted_shots()}
+        status_changed = False
         for r in results:
             shot = built_map.get(r.step_id)
             if shot is None:
@@ -1902,7 +1927,11 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             obj_status = {o.name: o.status for o in r.objects}
             for extra in r.additional_objects:
                 obj_status.setdefault(extra, "additional")
-            shot.metadata["object_status"] = obj_status
+            if shot.metadata.get("object_status") != obj_status:
+                shot.metadata["object_status"] = obj_status
+                status_changed = True
+        if status_changed:
+            store.mark_dirty()
 
         # Rebuild tree and enrich with timing from store + status
         state = self._save_tree_state()
@@ -1942,7 +1971,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
 
 class ShotManifestSlots(ptk.LoggingMixin):
-    """Switchboard slot class â€” routes UI events to the controller."""
+    """Switchboard slot class — routes UI events to the controller."""
 
     def __init__(self, switchboard, log_level="WARNING"):
         super().__init__()

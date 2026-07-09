@@ -2,8 +2,7 @@
 # coding=utf-8
 """Tests for ``DataNodes`` — shared scene data node management.
 
-Covers node creation, idempotency, proxy attr mirroring,
-animation curve visibility through proxies, and the internal/export
+Covers node creation, idempotency, and the internal/export
 string channels.
 """
 import unittest
@@ -101,104 +100,6 @@ class TestEnsureExport(MayaTkTestCase):
         DataNodes.ensure_export()
         locked = cmds.lockNode(DataNodes.EXPORT, q=True, lockName=True)[0]
         self.assertTrue(locked)
-
-
-# ── mirror_attr ──────────────────────────────────────────────────────────
-
-
-class TestMirrorAttr(MayaTkTestCase):
-    """mirror_attr creates attr on internal + proxy on export."""
-
-    def test_creates_enum_attr(self):
-        DataNodes.mirror_attr(
-            "audio_trigger",
-            attributeType="enum",
-            enumName="None:footstep",
-            keyable=True,
-        )
-        self.assertTrue(
-            cmds.attributeQuery("audio_trigger", node=DataNodes.INTERNAL, exists=True)
-        )
-        self.assertTrue(
-            cmds.attributeQuery("audio_trigger", node=DataNodes.EXPORT, exists=True)
-        )
-
-    def test_creates_string_attr(self):
-        DataNodes.mirror_attr("shot_manifest", dataType="string")
-        self.assertTrue(
-            cmds.attributeQuery("shot_manifest", node=DataNodes.INTERNAL, exists=True)
-        )
-        self.assertTrue(
-            cmds.attributeQuery("shot_manifest", node=DataNodes.EXPORT, exists=True)
-        )
-
-    def test_proxy_reads_internal_value_enum(self):
-        DataNodes.mirror_attr(
-            "audio_trigger",
-            attributeType="enum",
-            enumName="None:footstep",
-            keyable=True,
-        )
-        cmds.setAttr(f"{DataNodes.INTERNAL}.audio_trigger", 1)
-        val = cmds.getAttr(f"{DataNodes.EXPORT}.audio_trigger")
-        self.assertEqual(val, 1, "Export proxy should reflect internal value")
-
-    def test_proxy_reads_internal_value_string(self):
-        DataNodes.mirror_attr("shot_manifest", dataType="string")
-        cmds.setAttr(f"{DataNodes.INTERNAL}.shot_manifest", "test_data", type="string")
-        val = cmds.getAttr(f"{DataNodes.EXPORT}.shot_manifest")
-        self.assertEqual(val, "test_data")
-
-    def test_proxy_reads_internal_value_float(self):
-        DataNodes.mirror_attr("export_version", attributeType="float")
-        cmds.setAttr(f"{DataNodes.INTERNAL}.export_version", 3.14)
-        val = cmds.getAttr(f"{DataNodes.EXPORT}.export_version")
-        self.assertAlmostEqual(val, 3.14, places=2)
-
-    def test_idempotent(self):
-        """Calling mirror_attr twice doesn't error or duplicate."""
-        DataNodes.mirror_attr("audio_trigger", attributeType="enum", enumName="None")
-        DataNodes.mirror_attr("audio_trigger", attributeType="enum", enumName="None")
-        self.assertTrue(
-            cmds.attributeQuery("audio_trigger", node=DataNodes.INTERNAL, exists=True)
-        )
-
-    def test_anim_curve_visible_through_proxy(self):
-        """Keying internal attr should be readable from export proxy."""
-        DataNodes.mirror_attr(
-            "audio_trigger",
-            attributeType="enum",
-            enumName="None:footstep:reload",
-            keyable=True,
-        )
-        cmds.currentTime(1)
-        cmds.setAttr(f"{DataNodes.INTERNAL}.audio_trigger", 0)
-        cmds.setKeyframe(DataNodes.INTERNAL, attribute="audio_trigger")
-
-        cmds.currentTime(10)
-        cmds.setAttr(f"{DataNodes.INTERNAL}.audio_trigger", 2)
-        cmds.setKeyframe(DataNodes.INTERNAL, attribute="audio_trigger")
-
-        # Read from export at frame 10
-        cmds.currentTime(10)
-        val = cmds.getAttr(f"{DataNodes.EXPORT}.audio_trigger")
-        self.assertEqual(val, 2, "Keyed value should be visible through proxy")
-
-    def test_multiple_attrs(self):
-        """Multiple attrs can coexist."""
-        DataNodes.mirror_attr("audio_trigger", attributeType="enum", enumName="None")
-        DataNodes.mirror_attr("shot_manifest", dataType="string")
-        DataNodes.mirror_attr("export_version", attributeType="float")
-
-        for attr in ("audio_trigger", "shot_manifest", "export_version"):
-            self.assertTrue(
-                cmds.attributeQuery(attr, node=DataNodes.INTERNAL, exists=True),
-                f"{attr} missing on internal",
-            )
-            self.assertTrue(
-                cmds.attributeQuery(attr, node=DataNodes.EXPORT, exists=True),
-                f"{attr} missing on export",
-            )
 
 
 # ── internal string channels ─────────────────────────────────────────────

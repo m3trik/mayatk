@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Constants, column layout, and pure helper functions for the Shot Manifest UI."""
-from typing import List, Optional, Tuple
+from typing import List
 
 from mayatk.anim_utils.shots._shots import SHOT_PALETTE
 
@@ -40,20 +40,6 @@ def fmt_behavior(name: str) -> str:
     return name.replace("_", " ").title() if name else ""
 
 
-def unfmt_behavior(display: str) -> str:
-    """``'Fade In'`` → ``'fade_in'``."""
-    return display.strip().lower().replace(" ", "_") if display else ""
-
-
-def short_name(dag_path: str) -> str:
-    """Return the leaf node name from a Maya DAG path.
-
-    ``"|group1|subgrp|mesh"`` → ``"mesh"``.
-    Already-short names pass through unchanged.
-    """
-    return dag_path.rsplit("|", 1)[-1] if dag_path else ""
-
-
 def format_behavior_html(behaviors, broken=(), status_color=None) -> str:
     """Return rich-text HTML for a list of behavior names.
 
@@ -83,27 +69,6 @@ def format_behavior_html(behaviors, broken=(), status_color=None) -> str:
             else:
                 spans.append(display)
     return "  ".join(spans)
-
-
-def parse_range(raw: str) -> Optional[Tuple[float, Optional[float]]]:
-    """Parse a range string without storing it.
-
-    Accepts ``"120"`` (start only) or ``"120-250"`` / ``"120\u2013250"``.
-    Returns ``(start, end_or_None)`` on success, ``None`` on parse failure.
-    """
-    raw = raw.replace("\u2013", "-")  # en-dash to hyphen
-    parts = [p.strip() for p in raw.split("-", 1)]
-    try:
-        start = float(parts[0])
-    except (ValueError, IndexError):
-        return None
-    end: Optional[float] = None
-    if len(parts) == 2 and parts[1]:
-        try:
-            end = float(parts[1])
-        except ValueError:
-            pass
-    return (start, end)
 
 
 def try_load_maya_icons():

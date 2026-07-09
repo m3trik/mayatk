@@ -275,40 +275,10 @@ class AnimCurveDiagnostics:
         objects: Optional[Union[NodeLike, Sequence[NodeLike]]],
         recursive: bool,
     ) -> List[str]:
-        if objects is None:
-            return cmds.ls(type="animCurve")
+        from mayatk.anim_utils._anim_utils import AnimUtils
 
-        targets = cmds.ls(objects, flatten=True)
-        anim_curves = set()
-
-        for target in targets:
-            if not cmds.objExists(target):
-                continue
-
-            try:
-                if cmds.nodeType(target).startswith("animCurve"):
-                    anim_curves.add(target)
-                    continue
-            except Exception:
-                continue
-
-            connected = cmds.listConnections(target, type="animCurve", s=True, d=False)
-            if connected:
-                anim_curves.update(connected)
-
-            if recursive:
-                descendants = (
-                    cmds.listRelatives(target, allDescendents=True, type="transform")
-                    or []
-                )
-                for descendant in descendants:
-                    connected_desc = cmds.listConnections(
-                        descendant, type="animCurve", s=True, d=False
-                    )
-                    if connected_desc:
-                        anim_curves.update(connected_desc)
-
-        return list(anim_curves)
+        # None → every curve in the scene; otherwise batched resolution.
+        return AnimUtils.get_anim_curves(objects=objects, recursive=recursive)
 
     @staticmethod
     def _repair_curve_keys(

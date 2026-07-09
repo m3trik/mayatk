@@ -372,6 +372,28 @@ class TestComponents(MayaTkTestCase):
         soft_edges = Components.get_edges_by_normal_angle(self.cube, 0, 10)
         self.assertEqual(len(soft_edges), 0)
 
+    def test_get_edges_by_normal_angle_bound_matches_true_angle_after_freeze(self):
+        """A range bound equal to a mesh's true edge angle must include those
+        edges despite sub-ulp normal drift.
+
+        Same defect family as the set_edge_hardness threshold bug: after a
+        transform+freeze a cube's real 90° edges measure 89.9999…°, so a strict
+        bound of 90 (as the Select-Edges-By-Angle / UV-cut tools pass) would
+        silently drop them. The tolerance on both range ends keeps them in.
+        """
+        cmds.rotate(37, 12, 5, self.cube)
+        cmds.makeIdentity(self.cube, apply=True, t=True, r=True, s=True)
+
+        # Confirm the drift is present (some edges now measure just under 90).
+        _, angles = Components.get_edges_by_normal_angle(
+            self.cube, 0, 180, return_angles=True
+        )
+        self.assertTrue(any(a < 90.0 for a in angles.values()))
+
+        # A bound of exactly 90 must still catch all 12 right-angle edges.
+        hard_edges = Components.get_edges_by_normal_angle(self.cube, 90, 180)
+        self.assertEqual(len(hard_edges), 12)
+
     def test_get_edges_by_normal_angle_return_angles(self):
         """Test return_angles parameter returns edges and angle dict."""
         result = Components.get_edges_by_normal_angle(
@@ -410,6 +432,54 @@ class TestComponents(MayaTkTestCase):
 
         # Verify the cube still exists and is valid
         self.assertTrue(cmds.objExists(self.cube))
+
+    def test_set_edge_hardness_threshold_matches_true_angle_after_freeze(self):
+        """A threshold equal to a mesh's true edge angle must classify those
+        edges as "upper".
+
+        Bug: after a transform+freeze the world-space face normals drift by a
+        few sub-ulp, so a cube's real 90° edges measure 89.9999…°. With a strict
+        `>=` boundary a threshold of 90 missed them — the user had to dial in 89
+        to restore the cube's default hard normals, which is unintuitive.
+        Fixed: 2026-07-08 (boundary nudged down by Components._ANGLE_MATCH_EPS).
+        """
+        import maya.api.OpenMaya as om
+
+        # Reproduce the drift: an ordinary rotate + freeze-transform.
+        cmds.rotate(37, 12, 5, self.cube)
+        cmds.makeIdentity(self.cube, apply=True, t=True, r=True, s=True)
+
+        # Sanity: some edges now measure just under 90° (this is the drift that
+        # defeated a strict comparison).
+        _, edge_angles = Components.get_edges_by_normal_angle(
+            self.cube, 0, 180, return_angles=True
+        )
+        self.assertTrue(
+            any(a < 90.0 for a in edge_angles.values()),
+            "fixture did not reproduce sub-90° normal drift",
+        )
+
+        # "Set normals by angle" intent: harden >= threshold, soften < threshold.
+        # At threshold 90 every cube edge should harden and none should soften.
+        Components.set_edge_hardness(
+            self.cube, 90, upper_hardness=0, lower_hardness=180
+        )
+
+        sel = om.MSelectionList()
+        sel.add(self.cube)
+        dag = sel.getDagPath(0)
+        edge_iter = om.MItMeshEdge(dag)
+        soft = []
+        while not edge_iter.isDone():
+            if edge_iter.isSmooth:
+                soft.append(edge_iter.index())
+            edge_iter.next()
+        self.assertEqual(
+            soft,
+            [],
+            f"edges {soft} were softened at threshold 90 — a 90° edge must "
+            f"classify as 'upper' (>= threshold), not 'lower'",
+        )
 
     def test_set_edge_hardness_no_values(self):
         """Test set_edge_hardness early exit when no hardness values provided."""

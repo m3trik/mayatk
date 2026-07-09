@@ -4,7 +4,6 @@
 Shots are contiguous keyframe ranges ("blocks") along the timeline.
 Changing one shot's duration or position ripples downstream shots.
 """
-from contextlib import contextmanager
 from typing import List, Dict, Optional, Any
 
 try:
@@ -40,9 +39,6 @@ class ShotSequencer:
             self.store = store
         else:
             self.store = ShotStore(shots)
-        # Populated only inside :meth:`audio_prefetch` to amortise
-        # Maya reads across many ``collect_shot_sequences`` calls.
-        self._audio_events_cache: Optional[Dict[str, List[tuple]]] = None
 
     # ---- delegated properties -------------------------------------------
 
@@ -361,17 +357,12 @@ class ShotSequencer:
 
         Each dict carries ``{"kind": "audio", "obj": <track_id>, "start", "end"}``.
         Tracks with no defined stop frame fall back to ``end`` so a finite
-        range can be reported.
-
-        Inside an :meth:`audio_prefetch` block the full-track events are
-        read once and reused across calls; outside, every call reads
-        fresh (safe default — no staleness risk from external writers).
+        range can be reported.  Every call reads fresh so external audio
+        edits are never masked.
         """
         if cmds is None:
             return []
-        all_events = self._audio_events_cache
-        if all_events is None:
-            all_events = self._read_all_audio_events()
+        all_events = self._read_all_audio_events()
         sequences: List[Dict[str, Any]] = []
         for tid, events in all_events.items():
             for ev_start, ev_stop in events:
@@ -387,22 +378,6 @@ class ShotSequencer:
                     }
                 )
         return sequences
-
-    @contextmanager
-    def audio_prefetch(self):
-        """Cache per-track audio events for the duration of the block.
-
-        Intended for UI-refresh loops that call
-        :meth:`collect_shot_sequences` once per visible shot — inside the
-        block, Maya is read one time total; outside, every call reads
-        fresh so external audio edits are never masked.  Not nestable
-        safely across mutations: do not write audio inside the block.
-        """
-        self._audio_events_cache = self._read_all_audio_events()
-        try:
-            yield
-        finally:
-            self._audio_events_cache = None
 
     @staticmethod
     def _read_all_audio_events() -> Dict[str, List[tuple]]:
@@ -678,18 +653,34 @@ class ShotSequencer:
         # keyframe extents directly to find true min/max.
         outer_start = outer_end = None
         if mode in ("extend", "fit") and shot.objects:
+            # Keys owned by OTHER shots must never be attributed to this
+            # shot: with shared objects, an unbounded probe would drag
+            # this shot's bounds over a neighbor and the follow-up
+            # ripple would shift every other shot's keys.  Keys in gaps
+            # (fade tails) still count.
+            other_spans = [
+                (s.start - 1e-6, s.end + 1e-6)
+                for s in self.store.shots
+                if s.shot_id != shot_id
+            ]
+
+            def _owned_elsewhere(t: float) -> bool:
+                return any(lo <= t <= hi for lo, hi in other_spans)
+
             for obj in shot.objects:
                 kt = cmds.keyframe(obj, q=True) or []
-                if not kt:
-                    continue
-                lo, hi = min(kt), max(kt)
-                # Only consider keys outside the current shot bounds —
-                # in-bounds keys are already covered by ``sequences`` and
-                # double-counting causes spurious ripples.
-                if lo < shot.start:
-                    outer_start = lo if outer_start is None else min(outer_start, lo)
-                if hi > shot.end:
-                    outer_end = hi if outer_end is None else max(outer_end, hi)
+                for t in kt:
+                    # Only consider keys outside the current shot bounds —
+                    # in-bounds keys are already covered by ``sequences``
+                    # and double-counting causes spurious ripples.
+                    if shot.start <= t <= shot.end or _owned_elsewhere(t):
+                        continue
+                    if t < shot.start:
+                        outer_start = (
+                            t if outer_start is None else min(outer_start, t)
+                        )
+                    else:
+                        outer_end = t if outer_end is None else max(outer_end, t)
 
         if not sequences and outer_start is None and outer_end is None:
             return 0.0, 0.0
@@ -728,16 +719,16 @@ class ShotSequencer:
 
         from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
-        shifted_audio: set = set()
         with audio_utils.batch():
             shot.start = new_start
             shot.end = new_end
             if abs(tail_delta) > 1e-6:
-                self._ripple_downstream(shot_id, old_end, tail_delta, shifted_audio)
+                self.ripple_downstream(shot_id, old_end, tail_delta)
             if abs(head_delta) > 1e-6:
-                self._ripple_upstream(shot_id, old_start, head_delta, shifted_audio)
+                self.ripple_upstream(shot_id, old_start, head_delta)
 
         self._enforce_gap_holds()
+        self.store.mark_dirty()
         return head_delta, tail_delta
 
     def trim_shot_to_content(self, shot_id: int) -> tuple[float, float]:
@@ -1046,11 +1037,9 @@ class ShotSequencer:
 
     @staticmethod
     def _shift_audio(
-        cmds,
         old_start: float,
         old_end: float,
         delta: float,
-        shifted: Optional[set] = None,
     ) -> None:
         """Shift audio clips whose timeline position falls within a range.
 
@@ -1060,13 +1049,9 @@ class ShotSequencer:
         re-renders derived DG audio nodes in a single sync.
 
         Parameters:
-            cmds: Unused (retained for historical signature).
             old_start: Start of the time range to shift.
             old_end: End of the time range to shift.
             delta: Frames to add to each audio key.
-            shifted: Unused (per-node dedup was needed for the legacy
-                offset-attr path; the new per-track primitive is
-                intrinsically dedup-safe).
         """
         if abs(delta) < 1e-6:
             return
@@ -1081,7 +1066,6 @@ class ShotSequencer:
         self,
         shot: "ShotBlock",
         new_start: float,
-        shifted_audio: Optional[set] = None,
     ) -> None:
         """Shift all content (object keys and audio) for *shot* to *new_start*.
 
@@ -1093,8 +1077,6 @@ class ShotSequencer:
         Parameters:
             shot: The shot to move.
             new_start: Desired first frame after the move.
-            shifted_audio: Optional set forwarded to :meth:`_shift_audio`
-                to prevent double-shifting nodes across sequential calls.
         """
         new_start = self.store.snap(new_start)
         old_start = shot.start
@@ -1107,7 +1089,7 @@ class ShotSequencer:
 
         if cmds is not None:
             self._batch_move_keys(cmds, shot.objects, old_start, old_end, new_start)
-            self._shift_audio(cmds, old_start, old_end, delta, shifted_audio)
+            self._shift_audio(old_start, old_end, delta)
 
         shot.start = new_start
         shot.end = self.store.snap(new_start + duration)
@@ -1166,16 +1148,15 @@ class ShotSequencer:
         if start_expanded:
             start_delta = shot.start - prior_start  # negative
             if abs(start_delta) > 1e-6:
-                shifted_audio: set = set()
-                self._ripple_upstream(shot_id, prior_start, start_delta, shifted_audio)
+                self.ripple_upstream(shot_id, prior_start, start_delta)
 
         # Ripple downstream by however much the shot tail grew
         if end_expanded:
             end_delta = shot.end - prior_end  # positive
             if abs(end_delta) > 1e-6:
-                if not start_expanded:
-                    shifted_audio = set()
-                self._ripple_downstream(shot_id, prior_end, end_delta, shifted_audio)
+                self.ripple_downstream(shot_id, prior_end, end_delta)
+        if start_expanded or end_expanded:
+            self.store.mark_dirty()
         # Do NOT call _enforce_gap_holds() here — it iterates ALL objects
         # in every pre-gap shot and sets out-tangents to "step", corrupting
         # tangent types on objects the user didn't touch.  Gap holds are
@@ -1266,27 +1247,7 @@ class ShotSequencer:
             shot_id: The shot to move.
             new_start: Desired new start frame.
         """
-        shot = self.shot_by_id(shot_id)
-        if shot is None:
-            raise ValueError(f"No shot with id {shot_id}")
-
-        old_start = shot.start
-        old_end = shot.end
-        delta = new_start - old_start
-        if abs(delta) < 1e-6:
-            return
-
-        shifted_audio: set = set()
-        self._move_shot_content(shot, new_start, shifted_audio)
-
-        # Ripple every downstream shot by the same delta
-        for s in self.sorted_shots():
-            if s.shot_id == shot_id:
-                continue
-            if s.start >= old_end - 1e-6:
-                self._move_shot_content(s, s.start + delta, shifted_audio)
-
-        self._enforce_gap_holds()
+        self.slide_shot(shot_id, new_start, direction="downstream")
 
     def slide_shot(
         self,
@@ -1321,32 +1282,42 @@ class ShotSequencer:
         if abs(delta) < 1e-6:
             return
 
-        shifted_audio: set = set()
-        self._move_shot_content(shot, new_start, shifted_audio)
-
+        # Vacate the destination side before moving the pivot: when the
+        # pivot moves TOWARD the shots about to ripple, moving it first
+        # would deposit its keys inside a neighbor's not-yet-read
+        # envelope and shared-object curves would be shifted twice.
         if direction == "downstream":
-            self._ripple_downstream(shot_id, old_end, delta, shifted_audio)
+            if delta > 0:
+                self.ripple_downstream(shot_id, old_end, delta)
+                self._move_shot_content(shot, new_start)
+            else:
+                self._move_shot_content(shot, new_start)
+                self.ripple_downstream(shot_id, old_end, delta)
         elif direction == "upstream":
-            self._ripple_upstream(shot_id, old_start, delta, shifted_audio)
+            if delta < 0:
+                self.ripple_upstream(shot_id, old_start, delta)
+                self._move_shot_content(shot, new_start)
+            else:
+                self._move_shot_content(shot, new_start)
+                self.ripple_upstream(shot_id, old_start, delta)
 
         if _enforce:
             self._enforce_gap_holds()
+        self.store.mark_dirty()
 
-    def _ripple_downstream(
+    def ripple_downstream(
         self,
         shot_id: int,
         after_frame: float,
         delta: float,
-        shifted_audio: Optional[set] = None,
     ):
         """Shift all shots starting at or after *after_frame* by *delta*.
 
         Routes through :mod:`_shot_plan` and :mod:`_shot_apply` so
         the whole downstream topology is resolved before any keyframe
         is touched — preventing envelope collisions between moved and
-        not-yet-moved shots.  The ``shifted_audio`` argument is retained
-        for signature compatibility and is unused (audio dedup is
-        intrinsic to the audio batch primitive).
+        not-yet-moved shots.  The public ripple entry point for
+        callers outside the sequencer (settings panel, clip motion).
         """
         from mayatk.anim_utils.shots._shot_plan import (
             plan_ripple_downstream,
@@ -1356,17 +1327,16 @@ class ShotSequencer:
         plan = plan_ripple_downstream(self.store, shot_id, after_frame, delta)
         apply(self.store, plan)
 
-    def _ripple_upstream(
+    def ripple_upstream(
         self,
         shot_id: int,
         before_frame: float,
         delta: float,
-        shifted_audio: Optional[set] = None,
     ):
         """Shift all shots ending at or before *before_frame* by *delta*.
 
         Routes through the plan/executor pair — see
-        :meth:`_ripple_downstream` for the rationale.
+        :meth:`ripple_downstream` for the rationale.
         """
         from mayatk.anim_utils.shots._shot_plan import (
             plan_ripple_upstream,
@@ -1463,7 +1433,7 @@ class ShotSequencer:
         delta = new_end - shot.end
         old_end = shot.end
         shot.end = self.store.snap(new_end)
-        self._ripple_downstream(shot_id, old_end, delta)
+        self.ripple_downstream(shot_id, old_end, delta)
         self._enforce_gap_holds()
         return delta
 
@@ -1508,8 +1478,9 @@ class ShotSequencer:
         # Ripple downstream shots by the change at the tail
         delta = shot.end - prior_end
         if abs(delta) > 1e-6:
-            self._ripple_downstream(shot_id, prior_end, delta)
+            self.ripple_downstream(shot_id, prior_end, delta)
         self._enforce_gap_holds()
+        self.store.mark_dirty()
 
     def set_shot_duration(self, shot_id: int, new_duration: float) -> None:
         """Change a shot's duration and ripple-shift all downstream shots.
@@ -1538,8 +1509,9 @@ class ShotSequencer:
         shot.end = new_end
 
         # Shift downstream shots
-        self._ripple_downstream(shot_id, old_end, delta)
+        self.ripple_downstream(shot_id, old_end, delta)
         self._enforce_gap_holds()
+        self.store.mark_dirty()
 
     def resize_shot(
         self,
@@ -1573,7 +1545,6 @@ class ShotSequencer:
         if abs(new_start - old_start) < 1e-6 and abs(new_end - old_end) < 1e-6:
             return
 
-        shifted_audio: set = set()
 
         # Scale keyframes within this shot
         for obj in shot.objects:
@@ -1584,15 +1555,16 @@ class ShotSequencer:
         # Shift downstream shots by however much the tail moved
         tail_delta = new_end - old_end
         if abs(tail_delta) > 1e-6:
-            self._ripple_downstream(shot_id, old_end, tail_delta, shifted_audio)
+            self.ripple_downstream(shot_id, old_end, tail_delta)
 
         # Shift upstream shots by however much the head moved
         head_delta = new_start - old_start
         if abs(head_delta) > 1e-6:
-            self._ripple_upstream(shot_id, old_start, head_delta, shifted_audio)
+            self.ripple_upstream(shot_id, old_start, head_delta)
 
         if _enforce:
             self._enforce_gap_holds()
+        self.store.mark_dirty()
 
     def set_shot_start(
         self, shot_id: int, new_start: float, ripple: bool = True
@@ -1617,12 +1589,17 @@ class ShotSequencer:
         from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
         with audio_utils.batch():
-            # Move this shot's content (animation + audio).
-            self._move_shot_content(shot, new_start)
-
-            if ripple:
-                self._ripple_downstream(shot_id, old_end, delta)
+            # Vacate the destination side first for forward moves (see
+            # slide_shot) so the pivot's keys can't be double-shifted.
+            if ripple and delta > 0:
+                self.ripple_downstream(shot_id, old_end, delta)
+                self._move_shot_content(shot, new_start)
+            else:
+                self._move_shot_content(shot, new_start)
+                if ripple:
+                    self.ripple_downstream(shot_id, old_end, delta)
         self._enforce_gap_holds()
+        self.store.mark_dirty()
 
     def reorder_shots(self, shot_id_a: int, shot_id_b: int) -> None:
         """Swap two shots' timeline positions non-destructively.
@@ -1676,7 +1653,7 @@ class ShotSequencer:
                 # 1) Park first shot's keys at temp offset
                 for obj in a.objects:
                     self.move_object_keys(obj, first_start, first_end, _PARK)
-                self._shift_audio(None, first_start, first_end, _PARK - first_start)
+                self._shift_audio(first_start, first_end, _PARK - first_start)
 
                 # 2) Move second shot to the first shot's original position
                 for obj in b.objects:
@@ -1684,7 +1661,6 @@ class ShotSequencer:
                         obj, second_start, second_end, new_second_start
                     )
                 self._shift_audio(
-                    None,
                     second_start,
                     second_end,
                     new_second_start - second_start,
@@ -1694,7 +1670,7 @@ class ShotSequencer:
                 parked_end = _PARK + first_dur
                 for obj in a.objects:
                     self.move_object_keys(obj, _PARK, parked_end, new_first_start)
-                self._shift_audio(None, _PARK, parked_end, new_first_start - _PARK)
+                self._shift_audio(_PARK, parked_end, new_first_start - _PARK)
 
             # 4) Update ShotBlock ranges
             a.start = new_first_start
@@ -1715,7 +1691,7 @@ class ShotSequencer:
                                 self.move_object_keys(
                                     obj, s.start, s.end, s.start + delta
                                 )
-                            self._shift_audio(None, s.start, s.end, delta)
+                            self._shift_audio(s.start, s.end, delta)
                         s.start = self.store.snap(s.start + delta)
                         s.end = self.store.snap(s.end + delta)
         self._enforce_gap_holds()
@@ -1793,8 +1769,7 @@ class ShotSequencer:
                     if abs(old_start - new_start) > 1e-6:
                         for obj in s.objects:
                             self.move_object_keys(obj, old_start, old_end, park_offset)
-                        self._shift_audio(
-                            None, old_start, old_end, park_offset - old_start
+                        self._shift_audio(old_start, old_end, park_offset - old_start
                         )
                         parked[s.shot_id] = (park_offset, park_offset + s.duration)
                         park_offset += s.duration + 1000
@@ -1804,13 +1779,14 @@ class ShotSequencer:
                     new_start = new_positions[sid][0]
                     for obj in shot.objects:
                         self.move_object_keys(obj, park_s, park_e, new_start)
-                    self._shift_audio(None, park_s, park_e, new_start - park_s)
+                    self._shift_audio(park_s, park_e, new_start - park_s)
 
             # Update ShotBlock ranges
             for s in new_order:
                 s.start, s.end = new_positions[s.shot_id]
 
         self._enforce_gap_holds()
+        self.store.mark_dirty()
 
     # ---- timing redistribution -------------------------------------------
 
@@ -1838,6 +1814,59 @@ class ShotSequencer:
         plan = plan_respace(self.store, gap, start_frame)
         apply(self.store, plan)
         self._enforce_gap_holds()
+
+    def apply_gap(
+        self,
+        gap: float,
+        scope: str = "all",
+        shot_id: Optional[int] = None,
+    ) -> bool:
+        """Re-space shots so the given *gap* separates them, per *scope*.
+
+        Parameters:
+            gap: Desired gap width in frames.
+            scope: ``"all"`` respaces every shot from the first shot's
+                current start.  ``"start"`` moves *shot_id* so it sits
+                *gap* after its predecessor; ``"end"`` moves the
+                successor so it sits *gap* after *shot_id*;
+                ``"start_end"`` does both.
+            shot_id: Anchor shot for the scoped modes (typically the
+                active shot).  Ignored for ``"all"``.
+
+        Returns:
+            ``True`` when any shot was repositioned.
+        """
+        sorted_s = self.sorted_shots()
+        if not sorted_s:
+            return False
+
+        if scope == "all":
+            self.respace(gap=gap, start_frame=sorted_s[0].start)
+            return True
+
+        if shot_id is None:
+            return False
+        idx = next(
+            (i for i, s in enumerate(sorted_s) if s.shot_id == shot_id), None
+        )
+        if idx is None:
+            return False
+
+        moved = False
+        if scope in ("start", "start_end") and idx > 0:
+            self.move_shot(shot_id, sorted_s[idx - 1].end + gap)
+            moved = True
+            # move_shot ripples neighbors — re-derive the ordering before
+            # positioning the successor.
+            sorted_s = self.sorted_shots()
+            idx = next(
+                (i for i, s in enumerate(sorted_s) if s.shot_id == shot_id),
+                idx,
+            )
+        if scope in ("end", "start_end") and idx < len(sorted_s) - 1:
+            self.move_shot(sorted_s[idx + 1].shot_id, sorted_s[idx].end + gap)
+            moved = True
+        return moved
 
     # ---- serialisation ---------------------------------------------------
 

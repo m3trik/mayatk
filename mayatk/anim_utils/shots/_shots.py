@@ -11,8 +11,17 @@ backend that implements ``save(data)`` / ``load() -> dict | None``.
 :class:`MayaScenePersistence` is the default backend when Maya is
 available.
 """
-import maya.cmds as cmds
-import maya.mel as mel
+import logging
+
+try:
+    import maya.cmds as cmds
+    import maya.mel as mel
+except ImportError:
+    # Maya-soft: the planner chain (_shot_plan → _shots) and headless
+    # tests import this module without Maya; every cmds use below is
+    # guarded by ``if cmds is None`` checks.
+    cmds = None  # type: ignore[assignment]
+    mel = None  # type: ignore[assignment]
 
 from dataclasses import dataclass, field
 from typing import (
@@ -40,7 +49,11 @@ from mayatk.anim_utils.shots._detection import (
     detect_shot_regions,
     _filter_flat_objects,
     regions_from_selected_keys,
+    resolve_to_transform,
 )
+from mayatk.core_utils._core_utils import leaf_name
+
+_log = logging.getLogger(__name__)
 
 ATTR_NAME = "shot_store"  # string channel on the shared ``data_internal`` node
 # Pre-consolidation carrier: a dedicated network node. Folded into
@@ -221,6 +234,17 @@ class MayaScenePersistence:
 
     def _on_time_unit_changed(self) -> None:
         """Rescale shot timings when the scene framerate changes."""
+        try:
+            import maya.api.OpenMaya as om
+
+            # During a file read Maya can fire timeUnitChanged before
+            # the SceneOpened invalidation — rescaling the OLD scene's
+            # still-active store here would mark it dirty and flush its
+            # data onto the NEW scene's carrier node.
+            if om.MFileIO.isReadingFile():
+                return
+        except Exception:
+            pass
         store = ShotStore._active
         if store is None or not store.shots:
             return
@@ -311,11 +335,20 @@ class ShotBlock:
         statuses = self.metadata.get("object_status", {})
         raw_csv = self.metadata.get("csv_objects", [])
         csv_objs = set((e["name"] if isinstance(e, dict) else e) for e in raw_csv)
+        # Metadata is keyed by CSV (short) names while shot.objects hold
+        # long DAG paths after a manifest sync — fall back to leaf-name
+        # comparison so every object doesn't degrade to
+        # "scene_discovered" on the first re-sync.
+        status_by_leaf = {leaf_name(k): v for k, v in statuses.items()}
+        csv_leaves = {leaf_name(n) for n in csv_objs}
         result: Dict[str, str] = {}
         for obj in self.objects:
+            leaf = leaf_name(obj)
             if obj in statuses:
                 result[obj] = statuses[obj]
-            elif csv_objs and obj not in csv_objs:
+            elif leaf in status_by_leaf:
+                result[obj] = status_by_leaf[leaf]
+            elif csv_objs and obj not in csv_objs and leaf not in csv_leaves:
                 result[obj] = "scene_discovered"
             else:
                 result[obj] = "valid"
@@ -558,7 +591,9 @@ class ShotStore:
             try:
                 cb(event)
             except Exception:
-                pass
+                # A broken listener must not break the store, but a
+                # silent swallow leaves the UI dead with no trace.
+                _log.warning("shot store listener failed", exc_info=True)
 
     @contextmanager
     def batch_update(self):
@@ -572,15 +607,22 @@ class ShotStore:
             yield
         finally:
             self._batch_depth -= 1
-            if self._batch_depth == 0 and self._batch_events:
-                self._batch_events.clear()
-                _evt = BatchComplete()
-                for cb in self._listeners:
-                    try:
-                        cb(_evt)
-                    except Exception:
-                        pass
+            if self._batch_depth == 0:
+                if self._batch_events:
+                    self._batch_events.clear()
+                    _evt = BatchComplete()
+                    for cb in self._listeners:
+                        try:
+                            cb(_evt)
+                        except Exception:
+                            _log.warning(
+                                "shot store listener failed", exc_info=True
+                            )
                 # Synchronous flush — batch = single atomic write.
+                # Runs even with no accumulated events: mark_dirty
+                # inside a batch defers its flush to here, and mutators
+                # that don't notify (pin/hide/gap-lock) would otherwise
+                # leave the dirty store unscheduled for save.
                 self._flush_dirty()
 
     # ---- gap locking -----------------------------------------------------
@@ -589,23 +631,35 @@ class ShotStore:
         """Return whether the gap between two adjacent shots is locked."""
         return (left_id, right_id) in self.locked_gaps
 
-    def lock_gap(self, left_id: str, right_id: str) -> None:
+    def lock_gap(self, left_id: int, right_id: int) -> None:
         """Lock a gap so its width is preserved during global respace."""
-        self.locked_gaps.add((left_id, right_id))
+        key = (left_id, right_id)
+        if key not in self.locked_gaps:
+            self.locked_gaps.add(key)
+            self.mark_dirty()
 
-    def unlock_gap(self, left_id: str, right_id: str) -> None:
+    def unlock_gap(self, left_id: int, right_id: int) -> None:
         """Unlock a gap so it follows the global gap value."""
-        self.locked_gaps.discard((left_id, right_id))
+        if (left_id, right_id) in self.locked_gaps:
+            self.locked_gaps.discard((left_id, right_id))
+            self.mark_dirty()
 
     def lock_all_gaps(self) -> None:
         """Lock every adjacent gap."""
         sorted_shots = self.sorted_shots()
+        before = len(self.locked_gaps)
         for i in range(len(sorted_shots) - 1):
-            self.locked_gaps.add((sorted_shots[i].shot_id, sorted_shots[i + 1].shot_id))
+            self.locked_gaps.add(
+                (sorted_shots[i].shot_id, sorted_shots[i + 1].shot_id)
+            )
+        if len(self.locked_gaps) != before:
+            self.mark_dirty()
 
     def unlock_all_gaps(self) -> None:
         """Unlock every gap."""
-        self.locked_gaps.clear()
+        if self.locked_gaps:
+            self.locked_gaps.clear()
+            self.mark_dirty()
 
     # ---- singleton / persistence -----------------------------------------
 
@@ -704,7 +758,9 @@ class ShotStore:
             try:
                 cb(event)
             except Exception:
-                pass
+                _log.warning(
+                    "shot store invalidation listener failed", exc_info=True
+                )
 
     # ---- cross-scene user preferences ------------------------------------
 
@@ -908,6 +964,14 @@ class ShotStore:
             shot.start = self.snap(start)
         if end is not None:
             shot.end = self.snap(end)
+        # Guard against inverted bounds (e.g. an end spinner typed below
+        # the shot's start): clamp to a zero-duration shot at the edited
+        # edge — downstream envelope/respace math assumes start <= end.
+        if shot.end < shot.start:
+            if start is not None and end is None:
+                shot.start = shot.end
+            else:
+                shot.end = shot.start
         if name is not None:
             shot.name = name
         if objects is not None:
@@ -922,56 +986,6 @@ class ShotStore:
         self._notify(ShotUpdated(shot=shot))
         self.mark_dirty()
         return shot
-
-    def ripple_shift(
-        self,
-        after_frame: float,
-        delta: float,
-        exclude_id: Optional[int] = None,
-    ) -> None:
-        """Shift all shots starting at or after *after_frame* by *delta*.
-
-        Parameters:
-            after_frame: Only shots whose start is >= this value are moved.
-            delta: Frames to add (positive) or subtract (negative).
-            exclude_id: Optional shot id to skip (the shot being resized).
-        """
-        if abs(delta) < 1e-6:
-            return
-        delta = self.snap(delta)
-        for s in self.sorted_shots():
-            if s.shot_id == exclude_id:
-                continue
-            if s.start >= after_frame - 1e-6:
-                s.start = self.snap(s.start + delta)
-                s.end = self.snap(s.end + delta)
-        self.mark_dirty()
-
-    def ripple_shift_upstream(
-        self,
-        before_frame: float,
-        delta: float,
-        exclude_id: Optional[int] = None,
-    ) -> None:
-        """Shift all shots ending at or before *before_frame* by *delta*.
-
-        Upstream counterpart of :meth:`ripple_shift`.
-
-        Parameters:
-            before_frame: Only shots whose end is <= this value are moved.
-            delta: Frames to add (positive) or subtract (negative).
-            exclude_id: Optional shot id to skip (the shot being resized).
-        """
-        if abs(delta) < 1e-6:
-            return
-        delta = self.snap(delta)
-        for s in self.sorted_shots():
-            if s.shot_id == exclude_id:
-                continue
-            if s.end <= before_frame + 1e-6:
-                s.start = self.snap(s.start + delta)
-                s.end = self.snap(s.end + delta)
-        self.mark_dirty()
 
     def remove_shot(self, shot_id: int) -> bool:
         """Remove a shot by ID.  Returns ``True`` if found."""
@@ -1129,7 +1143,7 @@ class ShotStore:
             {
                 "clip": clip,
                 "description": shot.description or "",
-                "objects": [o.rsplit("|", 1)[-1] for o in shot.objects],
+                "objects": [leaf_name(o) for o in shot.objects],
                 "section": (shot.metadata or {}).get("section", ""),
             }
             for (clip, _s, _e), shot in zip(specs, sorted_s)
@@ -1296,13 +1310,16 @@ class ShotStore:
         if not old_fps or abs(new_fps - old_fps) < 0.01:
             return
         ratio = new_fps / old_fps
+        # Route through snap() so sub-frame bounds survive a time-unit
+        # change when snap_whole_frames is off (bare round() quantized
+        # them unconditionally).
         for shot in self.shots:
-            shot.start = round(shot.start * ratio)
-            shot.end = round(shot.end * ratio)
+            shot.start = self.snap(shot.start * ratio)
+            shot.end = self.snap(shot.end * ratio)
         self.gap = round(self.gap * ratio, 2)
         for marker in self.markers:
             if "time" in marker:
-                marker["time"] = round(marker["time"] * ratio)
+                marker["time"] = self.snap(marker["time"] * ratio)
         self.scene_fps = new_fps
         self.mark_dirty()
         self._notify(BatchComplete())
@@ -1371,21 +1388,16 @@ class ShotStore:
         curves = cmds.ls(type="animCurve") or []
         if not curves:
             return False
-        # Check a sample — if any curve drives a transform, we have animation
-        for crv in curves[:50]:
-            conns = cmds.listConnections(crv, d=True, s=False) or []
-            for node in conns:
-                if cmds.nodeType(node) == "transform":
-                    return True
-                parents = (
-                    cmds.listRelatives(
-                        node, parent=True, type="transform", fullPath=True
-                    )
-                    or []
-                )
-                if parents:
-                    return True
-        return False
+        # One batched connection query over every curve — sampling a
+        # subset here previously false-negatived scenes whose first
+        # curves drove non-transform nodes (blendshapes, materials).
+        conns = set(cmds.listConnections(curves, d=True, s=False) or [])
+        if not conns:
+            return False
+        if cmds.ls(list(conns), type="transform"):
+            return True
+        node_cache: dict = {}
+        return any(resolve_to_transform(n, cache=node_cache) for n in conns)
 
     @property
     def is_detection_relevant(self) -> bool:
@@ -1463,16 +1475,22 @@ class ShotStore:
             import maya.cmds as cmds
         except ImportError:
             return {s.shot_id: "valid" for s in self.shots}
-        result: Dict[int, str] = {}
-        for shot in self.shots:
-            if not shot.objects:
-                result[shot.shot_id] = "valid"
-                continue
-            existing = cmds.ls(shot.objects, long=True) or []
-            result[shot.shot_id] = (
-                "valid" if len(existing) == len(shot.objects) else "missing_object"
+        # Resolve the union of all shot objects in one ls call instead
+        # of one per shot.  Objects are stored as long names (the
+        # _resolve_long_names SSoT), so exact membership is the
+        # contract — no second-guessing via objExists.
+        all_objs = {obj for shot in self.shots for obj in shot.objects}
+        existing = (
+            set(cmds.ls(list(all_objs), long=True) or []) if all_objs else set()
+        )
+        return {
+            shot.shot_id: (
+                "valid"
+                if all(obj in existing for obj in shot.objects)
+                else "missing_object"
             )
-        return result
+            for shot in self.shots
+        }
 
 
 def _resolve_long_names(names):
@@ -1489,3 +1507,24 @@ def _resolve_long_names(names):
     if not names:
         return []
     return cmds.ls(names, long=True) or []
+
+
+def _resolve_long_names_keep_missing(names):
+    """Long-name-resolve *names*, keeping the caller's form for entries
+    that don't (yet) exist in the scene.
+
+    Unlike :func:`_resolve_long_names`, nothing is dropped: missing
+    objects stay tracked under their original name so the pinned-object
+    system can surface them as "missing" instead of silently losing
+    them.  Ambiguous short names (multiple scene matches) also keep the
+    caller's form.
+    """
+    try:
+        import maya.cmds as cmds
+    except ImportError:
+        return list(names) if names else []
+    resolved = []
+    for n in names:
+        hits = cmds.ls(n, long=True) or []
+        resolved.append(hits[0] if len(hits) == 1 else n)
+    return resolved

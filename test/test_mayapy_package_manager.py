@@ -21,6 +21,13 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parent.parent.parent  # _scripts/
 WRAPPER_PATH = _REPO / "mayatk" / "mayatk" / "env_utils" / "mayapy-package-manager.bat"
 GENERIC_PATH = _REPO / "m3trik" / "package-manager.bat"
+# The shared menu is mirrored next to the wrapper (by m3trik/scripts/sync_shared_bat.py)
+# so it ships in the wheel — after a bare pip install there is no m3trik/ to fall back to.
+MIRROR_PATH = WRAPPER_PATH.parent / "package-manager.bat"
+
+
+def _norm_eol(data: bytes) -> bytes:
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 LABEL_DEF_RE = re.compile(r"^\s*:([A-Za-z_][A-Za-z0-9_]*)\s*$")
 GOTO_RE = re.compile(r"\bgoto\s+([A-Za-z_:][A-Za-z0-9_]*)", re.IGNORECASE)
@@ -194,6 +201,18 @@ class TestMayapyWrapper(_StructuralChecks, unittest.TestCase):
         text = "\n".join(self.analyzer.lines).lower()
         self.assertIn("package-manager.bat", text, "Wrapper must call the shared package-manager.bat")
         self.assertRegex(text, r'call\s+"%generic%"', "Wrapper must `call` the resolved generic")
+
+    def test_shared_menu_mirrored_next_to_wrapper(self):
+        # The wrapper's first handoff candidate is `%~dp0package-manager.bat` (the wheel case).
+        # The mirror must exist beside the wrapper and match the m3trik SSoT verbatim; if this
+        # fails, run `python m3trik/scripts/sync_shared_bat.py`.
+        self.assertTrue(MIRROR_PATH.is_file(), f"Shared menu not mirrored next to wrapper: {MIRROR_PATH}")
+        if GENERIC_PATH.is_file():
+            self.assertEqual(
+                _norm_eol(MIRROR_PATH.read_bytes()),
+                _norm_eol(GENERIC_PATH.read_bytes()),
+                "Mirror drifted from the m3trik SSoT — run m3trik/scripts/sync_shared_bat.py",
+            )
 
 
 def _find_mayapy():

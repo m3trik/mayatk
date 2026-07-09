@@ -31,7 +31,6 @@ from mayatk.anim_utils.shots.shot_manifest.behaviors import (
 from mayatk.audio_utils._audio_utils import AudioUtils
 import maya.cmds as cmds
 
-import maya.mel as mel
 compute_waveform_envelope = AudioUtils.compute_waveform_envelope
 
 # ---------------------------------------------------------------------------
@@ -145,7 +144,7 @@ class TestSequencer(unittest.TestCase):
     # ---- reorder ---------------------------------------------------------
 
     def test_reorder_equal_duration(self):
-        """Swap two shots of equal duration Ã¢â‚¬â€ positions swap, gap preserved."""
+        """Swap two shots of equal duration - positions swap, gap preserved."""
         seq = ShotSequencer(
             [
                 ShotBlock(0, "A", 0, 40, ["a"]),
@@ -167,7 +166,7 @@ class TestSequencer(unittest.TestCase):
         self.assertEqual(c.end, 140)
 
     def test_reorder_different_duration_ripples(self):
-        """Swap shots of different durations Ã¢â‚¬â€ downstream shots ripple."""
+        """Swap shots of different durations - downstream shots ripple."""
         seq = ShotSequencer(
             [
                 ShotBlock(0, "Short", 0, 20, ["s"]),  # 20 frames
@@ -183,7 +182,7 @@ class TestSequencer(unittest.TestCase):
         self.assertEqual(long_shot.end, 50)
         self.assertEqual(short_shot.start, 60)
         self.assertEqual(short_shot.end, 80)
-        # Old region ended at 80, new region ends at 80 Ã¢â‚¬â€ no ripple
+        # Old region ended at 80, new region ends at 80 - no ripple
         tail = seq.shot_by_id(2)
         self.assertEqual(tail.start, 90)
 
@@ -1082,9 +1081,6 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     parse_csv,
     BuilderObject,
     BuilderStep,
-    ObjectStatus,
-    StepStatus,
-    ColumnMap,
     ShotManifest,
 )
 
@@ -1762,7 +1758,7 @@ class TestSelectiveRebuild(unittest.TestCase):
             has_keys_fn=lambda *_: True,
         )
 
-        # Behavior should NOT have been applied (existing keys Ã¢â€ â€™ skip)
+        # Behavior should NOT have been applied (existing keys -> skip)
         mock_apply.assert_not_called()
         self.assertTrue(len(result["skipped"]) > 0)
 
@@ -2104,47 +2100,10 @@ class TestShotStore(unittest.TestCase):
         result = store.compute_gap()
         self.assertEqual(result, result // 1)  # is a whole number
 
-    # ---- ripple_shift tests -----------------------------------------------
-
-    def test_ripple_shift_moves_downstream(self):
-        """ripple_shift pushes downstream shots by delta."""
-        from mayatk.anim_utils.shots._shots import ShotStore
-
-        store = ShotStore()
-        store.define_shot(name="A", start=10, end=10)  # zero-range
-        store.define_shot(name="B", start=11, end=11)
-        store.define_shot(name="C", start=12, end=12)
-        # Expand A's end to 40, then ripple downstream
-        store.update_shot(0, end=40)
-        store.ripple_shift(after_frame=10, delta=30, exclude_id=0)
-        self.assertAlmostEqual(store.shot_by_name("B").start, 41)
-        self.assertAlmostEqual(store.shot_by_name("B").end, 41)
-        self.assertAlmostEqual(store.shot_by_name("C").start, 42)
-        self.assertAlmostEqual(store.shot_by_name("C").end, 42)
-
-    def test_ripple_shift_no_delta_noop(self):
-        """Zero delta does nothing."""
-        from mayatk.anim_utils.shots._shots import ShotStore
-
-        store = ShotStore()
-        store.define_shot(name="A", start=10, end=40)
-        store.define_shot(name="B", start=50, end=80)
-        store.ripple_shift(after_frame=40, delta=0)
-        self.assertAlmostEqual(store.shot_by_name("B").start, 50)
-
-    def test_ripple_shift_skips_upstream(self):
-        """Shots before after_frame are not affected."""
-        from mayatk.anim_utils.shots._shots import ShotStore
-
-        store = ShotStore()
-        store.define_shot(name="A", start=10, end=40)
-        store.define_shot(name="B", start=50, end=80)
-        store.define_shot(name="C", start=90, end=120)
-        store.ripple_shift(after_frame=50, delta=20, exclude_id=1)
-        self.assertAlmostEqual(store.shot_by_name("A").start, 10)
-        self.assertAlmostEqual(store.shot_by_name("A").end, 40)
-        self.assertAlmostEqual(store.shot_by_name("C").start, 110)
-        self.assertAlmostEqual(store.shot_by_name("C").end, 140)
+    # NOTE: ShotStore.ripple_shift/_upstream were removed — they were the
+    # interleaved resolve→mutate shape the plan/apply split replaced.
+    # Ripple behavior is pinned in test_shot_plan.py and via
+    # ShotSequencer.ripple_downstream/ripple_upstream below.
 
     def test_sorted_shots_timeline_order(self):
         """sorted_shots returns shots in start-time order regardless of creation."""
@@ -2409,7 +2368,7 @@ class TestRespace(unittest.TestCase):
 
 
 class TestApplyBehaviors(unittest.TestCase):
-    """Test apply_to_shots() from behaviors module Ã¢â‚¬â€ pure Python with mocks."""
+    """Test apply_to_shots() from behaviors module - pure Python with mocks."""
 
     def test_apply_behaviors_calls_engine(self):
         """apply_to_shots should call apply_fn for declared behaviors."""
@@ -2822,13 +2781,9 @@ class TestRenderedRowColors(unittest.TestCase):
         from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
             HEADERS,
             COL_STEP,
-            COL_SECTION,
             COL_DESC,
             COL_BEHAVIORS,
-            COL_START,
-            COL_END,
             PASTEL_STATUS,
-            BEHAVIOR_STATUS_COLORS,
             fmt_behavior,
         )
 
@@ -2886,7 +2841,7 @@ class TestRenderedRowColors(unittest.TestCase):
         tree._child_row_color = QColor(0, 0, 0, 55)
         tree._parent_row_color = QColor(255, 255, 255, 12)
 
-        # Column tints Ã¢â‚¬â€ darken Step and Behaviors columns
+        # Column tints - darken Step and Behaviors columns
         tree.set_column_tint(COL_STEP, QColor(0, 0, 0, 45))
         tree.set_column_tint(COL_BEHAVIORS, QColor(0, 0, 0, 45))
 
@@ -3206,7 +3161,7 @@ class TestMarkerPersistence(unittest.TestCase):
 
 
 class TestDetectShots(unittest.TestCase):
-    """detect_shots() logic Ã¢â‚¬â€ pure clustering tests without Maya."""
+    """detect_shots() logic - pure clustering tests without Maya."""
 
     def test_detect_shots_exists(self):
         """ShotSequencer should have a detect_shots method."""
@@ -3524,14 +3479,23 @@ class TestShotStoreListeners(unittest.TestCase):
         self.assertEqual(received, [])
 
     def test_stale_zero_end_does_not_corrupt_upstream(self):
-        """Simulates the debounce race: a stale on_shot_end_changed(0)
-        firing after a real shot becomes active must not shift upstream shots.
+        """A stale on_shot_end_changed(0) firing after a real shot becomes
+        active must not shift upstream shots.
 
-        Bug: _sync_shot_editor set spinners to 0 without blockSignals when
-        shot was None.  The debounce timer fired 400ms later, after an
-        active shot was set, producing delta = 0 - shot.end and rippling
-        all shots with start >= 0.
-        Fixed: 2026-04-04
+        Original bug (2026-04-04): _sync_shot_editor set spinners to 0
+        without blockSignals when shot was None.  The debounce timer fired
+        400ms later, after an active shot was set, producing
+        delta = 0 - shot.end and rippling all shots with start >= 0.  That
+        was fixed at the controller layer with blockSignals in
+        _sync_shot_editor.
+
+        Store-level defense (2026-07-08): update_shot now clamps inverted
+        bounds.  A stale end=0 on a shot at start=2520 snaps end back to
+        2520 instead of persisting a zero end, so the follow-up user edit
+        reads old_end=2520 (not 0) and ripples with after_frame=2520 --
+        upstream shots are out of range and stay put.  This test pins that
+        store-level protection: even if the stale signal reaches
+        update_shot, upstream shots cannot be corrupted.
         """
         from mayatk.anim_utils.shots._shots import ShotStore
 
@@ -3542,18 +3506,17 @@ class TestShotStoreListeners(unittest.TestCase):
         store.define_shot(name="A10", start=2520, end=2760)
         store.set_active_shot(store.shot_by_name("A09").shot_id)
 
-        # Simulate what the stale debounce would do: value=0 for A09.end
+        seq = ShotSequencer(store=store)
+
+        # Simulate what the stale debounce would do: value=0 for A09.end.
         old_end = store.shot_by_name("A09").end  # 2520
         stale_value = 0
         delta = stale_value - old_end  # -2520
-        # This MUST NOT happen â€” the fix prevents the signal from
-        # ever reaching on_shot_end_changed.  But verify that upstream
-        # shots would not survive such a call.
         with store.batch_update():
             store.update_shot(store.active_shot_id, end=stale_value)
-            store.ripple_shift(old_end, delta, exclude_id=store.active_shot_id)
+            seq.ripple_downstream(store.active_shot_id, old_end, delta)
 
-        # Upstream shots (start < old_end) must be untouched
+        # Upstream shots (start < old_end) must be untouched.
         a01 = store.shot_by_name("A01")
         a02 = store.shot_by_name("A02")
         self.assertAlmostEqual(a01.start, 400, msg="Upstream A01 start corrupted")
@@ -3561,32 +3524,39 @@ class TestShotStoreListeners(unittest.TestCase):
         self.assertAlmostEqual(a02.start, 680, msg="Upstream A02 start corrupted")
         self.assertAlmostEqual(a02.end, 1000, msg="Upstream A02 end corrupted")
 
-        # Downstream A10 should have shifted
+        # Downstream A10 should have shifted by the ripple.
         a10 = store.shot_by_name("A10")
         self.assertAlmostEqual(a10.start, 0, msg="A10 start not shifted")
         self.assertAlmostEqual(a10.end, 240, msg="A10 end not shifted")
 
-        # Now simulate the user editing A09.end to 2620 when store has end=0
-        old_end2 = store.shot_by_name("A09").end  # 0
+        # The inverted-bounds clamp snapped A09.end back to its start (2520)
+        # instead of persisting the stale 0.
+        self.assertAlmostEqual(
+            store.shot_by_name("A09").end,
+            2520,
+            msg="Stale end=0 must be clamped to start, not persisted",
+        )
+
+        # Now the user edits A09.end to 2620.  Because the clamp kept
+        # old_end at 2520 (not 0), the ripple uses after_frame=2520 and
+        # cannot reach the upstream shots.
+        old_end2 = store.shot_by_name("A09").end  # 2520 (clamped, not 0)
         user_value = 2620
-        delta2 = user_value - old_end2  # 2620
+        delta2 = user_value - old_end2  # 100
         with store.batch_update():
             store.update_shot(store.active_shot_id, end=user_value)
-            store.ripple_shift(old_end2, delta2, exclude_id=store.active_shot_id)
+            seq.ripple_downstream(store.active_shot_id, old_end2, delta2)
 
-        # Upstream A01/A02 get shifted because after_frame=0 matches
-        # everything â€” this is the OBSERVED BUG.  The fix must prevent
-        # the stale value=0 from ever reaching on_shot_end_changed.
+        # Upstream A01/A02 stay put -- the store-level clamp prevented the
+        # after_frame=0 ripple that used to corrupt them.
         a01 = store.shot_by_name("A01")
         a02 = store.shot_by_name("A02")
-        # After the two-step corruption: A01 was at 400, unaffected by
-        # first ripple (start<2520), but shifted by +2620 in second.
         self.assertAlmostEqual(
             a01.start,
-            3020,
-            msg="This test demonstrates the OBSERVED corruption; "
-            "the real fix is blockSignals in _sync_shot_editor",
+            400,
+            msg="Store clamp must prevent the stale-zero upstream corruption",
         )
+        self.assertAlmostEqual(a02.start, 680, msg="Upstream A02 start corrupted")
 
 
 class TestColumnMap(unittest.TestCase):
@@ -3915,7 +3885,6 @@ from mayatk.anim_utils.shots.shot_manifest.mapping import (
     discover,
     load_mapping,
     resolve,
-    DEFAULT_DIR,
 )
 
 
@@ -4239,6 +4208,452 @@ class TestMappingResolver(unittest.TestCase):
                 resolve(csv_path, mapping=mapping)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: 2026-07 shots-system optimization pass
+# ---------------------------------------------------------------------------
+
+
+class TestRescaleToFpsSnapPolicy(unittest.TestCase):
+    """rescale_to_fps must honor snap_whole_frames instead of bare round().
+
+    Bug: a time-unit change unconditionally quantized sub-frame shot
+    bounds and marker times even when whole-frame snapping was off.
+    """
+
+    def test_snapping_off_preserves_subframe_bounds(self):
+        store = ShotStore()
+        store.snap_whole_frames = False
+        store.scene_fps = 24.0
+        store.define_shot(name="A", start=10.5, end=20.25)
+        store.markers.append({"time": 5.25})
+        store.rescale_to_fps(48.0)
+        shot = store.shot_by_name("A")
+        self.assertAlmostEqual(shot.start, 21.0)
+        self.assertAlmostEqual(shot.end, 40.5)
+        self.assertAlmostEqual(store.markers[0]["time"], 10.5)
+
+    def test_snapping_on_rounds_bounds(self):
+        store = ShotStore()
+        store.snap_whole_frames = True
+        store.scene_fps = 24.0
+        store.define_shot(name="A", start=10, end=20)
+        store.rescale_to_fps(30.0)
+        shot = store.shot_by_name("A")
+        self.assertEqual(shot.start, round(10 * 30.0 / 24.0))
+        self.assertEqual(shot.end, round(20 * 30.0 / 24.0))
+
+
+class TestHasAnimationBeyondSampleWindow(unittest.TestCase):
+    """has_animation must consider every curve, not a 50-curve sample.
+
+    Bug: scenes whose first curves drove non-transform nodes (materials,
+    blendshapes) false-negatived even though transform animation existed.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def test_material_only_animation_is_not_shot_animation(self):
+        for _ in range(60):
+            mat = cmds.shadingNode("lambert", asShader=True)
+            cmds.setKeyframe(mat, attribute="colorR", time=1, value=0)
+            cmds.setKeyframe(mat, attribute="colorR", time=10, value=1)
+        self.assertFalse(ShotStore.has_animation())
+
+    def test_transform_curve_found_beyond_first_fifty(self):
+        # 60 material curves created FIRST so the transform curve sits
+        # beyond the old 50-curve sampling window.
+        for _ in range(60):
+            mat = cmds.shadingNode("lambert", asShader=True)
+            cmds.setKeyframe(mat, attribute="colorR", time=1, value=0)
+        loc = cmds.spaceLocator()[0]
+        cmds.setKeyframe(loc, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(loc, attribute="translateX", time=10, value=5)
+        self.assertTrue(ShotStore.has_animation())
+
+
+class TestAssessBatched(unittest.TestCase):
+    """assess() resolves the union of shot objects in one pass."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def test_valid_and_missing(self):
+        loc = cmds.spaceLocator()[0]
+        loc_long = cmds.ls(loc, long=True)[0]
+        store = ShotStore()
+        store.define_shot(name="A", start=0, end=10, objects=[loc_long])
+        store.define_shot(
+            name="B", start=20, end=30, objects=[loc_long, "|missing_xyz_123"]
+        )
+        store.define_shot(name="C", start=40, end=50, objects=[])
+        result = store.assess()
+        self.assertEqual(result[store.shot_by_name("A").shot_id], "valid")
+        self.assertEqual(
+            result[store.shot_by_name("B").shot_id], "missing_object"
+        )
+        self.assertEqual(result[store.shot_by_name("C").shot_id], "valid")
+
+
+class TestApplyGap(unittest.TestCase):
+    """ShotSequencer.apply_gap -- engine home for the gap-scope algorithm
+    that previously lived inline in the Shots settings slot."""
+
+    def _make(self):
+        store = ShotStore()
+        store.define_shot(name="A", start=0, end=10)
+        store.define_shot(name="B", start=20, end=30)
+        store.define_shot(name="C", start=40, end=50)
+        return ShotSequencer(store=store), store
+
+    def test_scope_all_respaces(self):
+        seq, store = self._make()
+        self.assertTrue(seq.apply_gap(5, scope="all"))
+        shots = seq.sorted_shots()
+        self.assertAlmostEqual(shots[0].start, 0)
+        self.assertAlmostEqual(shots[1].start, 15)
+        self.assertAlmostEqual(shots[2].start, 30)
+        for s in shots:
+            self.assertAlmostEqual(s.end - s.start, 10)
+
+    def test_scope_start_moves_anchor_after_predecessor(self):
+        seq, store = self._make()
+        b = store.shot_by_name("B")
+        self.assertTrue(seq.apply_gap(2, scope="start", shot_id=b.shot_id))
+        a = store.shot_by_name("A")
+        self.assertAlmostEqual(b.start, a.end + 2)
+
+    def test_scope_end_moves_successor(self):
+        seq, store = self._make()
+        b = store.shot_by_name("B")
+        self.assertTrue(seq.apply_gap(3, scope="end", shot_id=b.shot_id))
+        c = store.shot_by_name("C")
+        self.assertAlmostEqual(c.start, b.end + 3)
+
+    def test_empty_store_returns_false(self):
+        seq = ShotSequencer(store=ShotStore())
+        self.assertFalse(seq.apply_gap(5, scope="all"))
+
+    def test_unknown_anchor_returns_false(self):
+        seq, _store = self._make()
+        self.assertFalse(seq.apply_gap(5, scope="start", shot_id=999))
+
+
+class TestParseCSVRobustness(unittest.TestCase):
+    """Header placement + encoding tolerance for manifest CSV loads.
+
+    Bugs: a header row whose step column was not cell 0 (or a CSV not
+    encoded as UTF-8) silently produced 0 steps / a hard decode error.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self._tmp_dir, ignore_errors=True)
+
+    def _write_rows(self, rows, encoding="utf-8"):
+        import csv as _csv
+
+        path = os.path.join(self._tmp_dir, "fixture.csv")
+        with open(path, "w", newline="", encoding=encoding) as f:
+            w = _csv.writer(f)
+            w.writerows(rows)
+        return path
+
+    def test_header_not_in_first_column(self):
+        # Includes a per-section header repeat (standard layout): the
+        # second header row must be re-detected, not misread as a
+        # continuation row of A02.
+        path = self._write_rows(
+            [
+                ["", "Step", "Contents", "Asset"],
+                ["", "A01.)", "Arrow fades in.", "ARROW_01"],
+                ["", "A02.)", "Checklist fades out.", "CHECK_01"],
+                ["", "Step", "Contents", "Asset"],
+                ["", "B01.)", "Rudder fades in.", "RUDDER_01"],
+            ]
+        )
+        steps = parse_csv(path)
+        self.assertEqual([s.step_id for s in steps], ["A01", "A02", "B01"])
+        a02 = steps[1]
+        self.assertNotIn("Contents", a02.description)
+        self.assertEqual([o.name for o in a02.objects], ["CHECK_01"])
+
+    def test_cp1252_encoded_csv_loads(self):
+        path = self._write_rows(
+            [
+                ["Step", "Contents", "Asset"],
+                ["A01.)", "Fl\xe8che fades in – d\xe9tail.", "ARROW_01"],
+            ],
+            encoding="cp1252",
+        )
+        steps = parse_csv(path)
+        self.assertEqual(len(steps), 1)
+        self.assertIn("fades in", steps[0].description)
+
+    def test_bom_with_cp1252_body_still_finds_header(self):
+        """Excel 'CSV UTF-8' (BOM) with a pasted cp1252 byte: the BOM
+        must be stripped from the RAW bytes before the fallback decode,
+        or it leaks into the first header cell and 0 steps parse."""
+        path = os.path.join(self._tmp_dir, "bom_mixed.csv")
+        body = 'Step,Contents,Asset\r\nA01.),Fl\xe8che fades in.,ARROW_01\r\n'
+        with open(path, "wb") as f:
+            f.write(b"\xef\xbb\xbf" + body.encode("cp1252"))
+        steps = parse_csv(path)
+        self.assertEqual([s.step_id for s in steps], ["A01"])
+
+    def test_no_header_returns_empty_not_crash(self):
+        path = self._write_rows(
+            [
+                ["A01.)", "Arrow fades in.", "ARROW_01"],
+                ["A02.)", "Checklist fades out.", "CHECK_01"],
+            ]
+        )
+        self.assertEqual(parse_csv(path), [])
+
+
+class TestRangeResolverClamp(unittest.TestCase):
+    """A pinned next-start at or before start + gap must not invert the
+    auto-resolved end of the preceding step."""
+
+    def test_next_start_before_cursor_clamps(self):
+        from mayatk.anim_utils.shots.shot_manifest.range_resolver import (
+            resolve_ranges,
+        )
+        from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
+            BuilderStep,
+        )
+
+        steps = [
+            BuilderStep(
+                step_id=sid, section="A", section_title="", description=""
+            )
+            for sid in ("A01", "A02")
+        ]
+        # A02 pinned to start almost immediately after A01 starts; with
+        # gap wider than the spacing, A01's derived end used to invert.
+        resolved = resolve_ranges(
+            steps,
+            user_ranges={"A01": (100.0, None), "A02": (102.0, 200.0)},
+            gap_starts=[],
+            gap_end_map={},
+            gap=10.0,
+            use_selected_keys=False,
+            last_resolved=[],
+        )
+        by_id = {sid: (start, end) for sid, start, end, _ in resolved}
+        start, end = by_id["A01"]
+        self.assertGreaterEqual(end, start)
+
+
+class TestRangeResolverSparseFrozenPrefix(unittest.TestCase):
+    """last_resolved can be SPARSE in selected-keys mode (unresolved
+    steps are skipped), so the frozen prefix must be matched by step_id
+    — positional copying froze the wrong steps' ranges and duplicated
+    the edited step."""
+
+    def test_sparse_prefix_freezes_by_id(self):
+        from mayatk.anim_utils.shots.shot_manifest.range_resolver import (
+            resolve_ranges,
+        )
+        from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
+            BuilderStep,
+        )
+
+        steps = [
+            BuilderStep(step_id=sid, section="A", section_title="", description="")
+            for sid in ("A01", "A02", "A03")
+        ]
+        # Previously: only A01 resolved (A02 had no matching region),
+        # A03 user-pinned.  User then edits A03 → re-resolve from idx 2.
+        last = [
+            ("A01", 0.0, 50.0, False),
+            ("A03", 500.0, 700.0, True),
+        ]
+        resolved = resolve_ranges(
+            steps,
+            user_ranges={"A03": (550.0, 700.0)},
+            gap_starts=[560.0],
+            gap_end_map={},
+            gap=10.0,
+            use_selected_keys=True,
+            last_resolved=last,
+            from_step_idx=2,
+        )
+        ids = [entry[0] for entry in resolved]
+        self.assertEqual(
+            ids.count("A03"), 1, "edited step must not be duplicated"
+        )
+        by_id = {entry[0]: entry for entry in resolved}
+        self.assertEqual(
+            (by_id["A01"][1], by_id["A01"][2]),
+            (0.0, 50.0),
+            "A01 must keep its frozen range",
+        )
+        self.assertEqual((by_id["A03"][1], by_id["A03"][2]), (550.0, 700.0))
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — 2026-07 full-system review pass
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateShotInvertedClamp(unittest.TestCase):
+    """update_shot must clamp inverted bounds (end < start) to a
+    zero-duration shot — downstream envelope/respace math assumes
+    ordered bounds."""
+
+    def _store(self):
+        store = ShotStore()
+        store.define_shot(name="A", start=10, end=20)
+        return store
+
+    def test_end_below_start_clamps(self):
+        store = self._store()
+        shot = store.shot_by_name("A")
+        store.update_shot(shot.shot_id, end=5)
+        self.assertEqual(shot.start, shot.end)
+        self.assertEqual(shot.start, 10)
+
+    def test_start_above_end_clamps(self):
+        store = self._store()
+        shot = store.shot_by_name("A")
+        store.update_shot(shot.shot_id, start=25)
+        self.assertEqual(shot.start, shot.end)
+        self.assertEqual(shot.end, 20)
+
+
+class TestDirtyFlagCoverage(unittest.TestCase):
+    """Mutations that bypass update_shot must still reach the save path."""
+
+    def test_gap_lock_marks_dirty(self):
+        store = ShotStore()
+        store.define_shot(name="A", start=0, end=10)
+        store.define_shot(name="B", start=20, end=30)
+        a = store.shot_by_name("A")
+        b = store.shot_by_name("B")
+        store._dirty = False
+        store.lock_gap(a.shot_id, b.shot_id)
+        self.assertTrue(store._dirty, "lock_gap must mark dirty (it is serialized)")
+        store._dirty = False
+        store.unlock_all_gaps()
+        self.assertTrue(store._dirty)
+
+    def test_eventless_dirty_batch_still_flushes(self):
+        """A batch that marks dirty without accumulating events must
+        flush on exit — pin/hide mutators don't notify."""
+        store = ShotStore()
+        flushes = []
+        store._flush_dirty = lambda: flushes.append(1)
+        with store.batch_update():
+            store.set_object_pinned("pCube1")
+        self.assertTrue(flushes, "dirty batch with zero events was not flushed")
+
+
+class TestClassifyObjectsLeafFallback(unittest.TestCase):
+    """Metadata is keyed by CSV short names while shot.objects hold long
+    DAG paths after a manifest sync — classification must fall back to
+    leaf-name comparison instead of degrading to scene_discovered."""
+
+    def test_long_path_matches_short_metadata(self):
+        shot = ShotBlock(
+            1,
+            "A01",
+            0,
+            10,
+            objects=["|GEO|ARROW_01", "|GEO|EXTRA_99"],
+            metadata={
+                "object_status": {"ARROW_01": "missing_behavior"},
+                "csv_objects": [{"name": "ARROW_01"}],
+            },
+        )
+        result = shot.classify_objects()
+        self.assertEqual(result["|GEO|ARROW_01"], "missing_behavior")
+        self.assertEqual(result["|GEO|EXTRA_99"], "scene_discovered")
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestResolveToTransformSubclasses(unittest.TestCase):
+    """resolve_to_transform must treat transform SUBCLASSES (joints) as
+    their own owner — the old nodeType check resolved a keyed joint to
+    its parent, so shot moves left the joint's keys behind."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def test_child_joint_resolves_to_itself(self):
+        from mayatk.anim_utils.shots._detection import resolve_to_transform
+
+        grp = cmds.group(em=True, name="rig_grp")
+        cmds.select(grp)
+        jnt = cmds.joint(name="root_jnt")
+        resolved = resolve_to_transform(jnt)
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.rsplit("|", 1)[-1], "root_jnt")
+
+    def test_root_joint_resolves_to_itself(self):
+        from mayatk.anim_utils.shots._detection import resolve_to_transform
+
+        cmds.select(clear=True)
+        jnt = cmds.joint(name="lone_jnt")
+        resolved = resolve_to_transform(jnt)
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.rsplit("|", 1)[-1], "lone_jnt")
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestFitShotSharedObjectClamp(unittest.TestCase):
+    """fit/extend must never attribute keys owned by ANOTHER shot to the
+    shot being fitted — with shared objects the old unbounded probe
+    dragged the shot over its neighbor and rippled the whole timeline."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def test_extend_ignores_neighbor_owned_keys(self):
+        loc = cmds.spaceLocator(name="shared_loc")[0]
+        loc_long = cmds.ls(loc, long=True)[0]
+        for t in (10, 20, 120, 130):
+            cmds.setKeyframe(loc, attribute="translateX", time=t, value=t)
+
+        store = ShotStore()
+        store.snap_whole_frames = False
+        a = store.define_shot(name="A", start=0, end=50, objects=[loc_long])
+        store.define_shot(name="B", start=100, end=200, objects=[loc_long])
+        seq = ShotSequencer(store=store)
+
+        seq.extend_shot_to_fit(a.shot_id)
+
+        self.assertLessEqual(
+            store.shot_by_id(a.shot_id).end,
+            50,
+            "shot A extended over keys owned by shot B",
+        )
+        # B's keys must not have moved (no spurious ripple).
+        times = cmds.keyframe(loc, q=True, timeChange=True) or []
+        self.assertIn(120.0, times)
+        self.assertIn(130.0, times)
 
 
 if __name__ == "__main__":

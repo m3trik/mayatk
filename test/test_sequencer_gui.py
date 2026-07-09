@@ -23,8 +23,6 @@ import sys
 import os
 import maya.cmds as cmds
 
-import maya.mel as mel
-
 # --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
 from contextlib import contextmanager as _contextmanager
 
@@ -88,7 +86,7 @@ except Exception:
 # ---------------------------------------------------------------------------
 os.environ.setdefault("QT_API", "pyside6")
 try:
-    from qtpy import QtWidgets, QtCore
+    from qtpy import QtWidgets
 
     _app = QtWidgets.QApplication.instance()
     if _app is None:
@@ -104,7 +102,6 @@ if HAS_MAYA and HAS_QT:
     from uitk.widgets.sequencer._sequencer import SequencerWidget
     from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
         ShotSequencer,
-        ShotBlock,
     )
     from mayatk.anim_utils.shots._shots import ShotStore
     from mayatk.anim_utils.segment_keys import SegmentKeys
@@ -601,7 +598,7 @@ class TestWidgetWithEngine(unittest.TestCase):
         return track_ids
 
     def test_full_population(self):
-        track_ids = self._populate_widget()
+        self._populate_widget()
         _process_events()
         self.assertEqual(len(self.widget.tracks()), 2)
         self.assertGreaterEqual(len(self.widget.clips()), 2)
@@ -1083,7 +1080,6 @@ class TestShotResizePreservesObjects(unittest.TestCase):
         with _pm_undo_chunk():
             seq.resize_shot(0, 0, 40)
         cmds.undo()
-        shot = seq.shot_by_id(0)
         times_after = sorted(
             t for c in curves for t in (cmds.keyframe(c, q=True, timeChange=True) or [])
         )

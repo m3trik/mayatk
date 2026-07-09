@@ -2780,47 +2780,6 @@ class TestZoneContextMenu(ControllerTestCase):
             mock_lane.assert_called_once_with(100.0, QtCore.QPoint(0, 0))
 
 
-class TestShotLaneDoubleClick(ControllerTestCase):
-    """Verify double-click on shot lane opens the edit dialog."""
-
-    def setUp(self):
-        super().setUp()
-        self.widget.shot_lane_double_clicked.connect(
-            self.ctrl._on_shot_lane_double_clicked
-        )
-        # Prevent _edit_shot_dialog from opening a blocking QDialog in tests
-        self._edit_patcher = patch.object(self.ctrl, "_edit_shot_dialog")
-        self._mock_edit = self._edit_patcher.start()
-
-    def tearDown(self):
-        self._edit_patcher.stop()
-        super().tearDown()
-
-    def test_double_click_emits_signal(self):
-        """shot_lane_double_clicked signal should carry the time value."""
-        received = []
-        self.widget.shot_lane_double_clicked.connect(received.append)
-        self.widget.shot_lane_double_clicked.emit(150.0)
-        self.assertEqual(received, [150.0])
-
-    def test_double_click_calls_edit_dialog(self):
-        """Double-click at a shot's time should open _edit_shot_dialog for that shot."""
-        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
-        self._do_initial_sync()
-
-        shot = self.ctrl.sequencer.sorted_shots()[0]
-        self.ctrl._on_shot_lane_double_clicked(150.0)
-        self._mock_edit.assert_called_once_with(shot)
-
-    def test_double_click_in_gap_does_nothing(self):
-        """Double-click in a gap (no shot) should not call _edit_shot_dialog."""
-        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
-        self._do_initial_sync()
-
-        self.ctrl._on_shot_lane_double_clicked(50.0)  # before any shot
-        self._mock_edit.assert_not_called()
-
-
 class TestFindShotAtTime(ControllerTestCase):
     """Verify _find_shot_at_time helper."""
 

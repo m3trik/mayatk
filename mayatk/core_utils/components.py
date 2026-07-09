@@ -258,6 +258,15 @@ class GetComponentsMixin:
 class Components(GetComponentsMixin, ptk.HelpMixin):
     """ """
 
+    # Tolerance (degrees) for classifying an edge's normal angle against a
+    # threshold. World-space face normals carry sub-ulp float drift after any
+    # transform+freeze, so a mesh's true right-angle edges measure 89.9999…°
+    # rather than exactly 90°. Comparing with a strict boundary would then miss
+    # them; nudging the boundary down by this epsilon absorbs the drift. 1e-3°
+    # is ~45× the observed drift yet far below any artistically meaningful
+    # angle, so it never merges genuinely distinct edges.
+    _ANGLE_MATCH_EPS: float = 1e-3
+
     @staticmethod
     def map_components_to_objects(components_list):
         """Map a list of components to their respective objects.
@@ -914,7 +923,14 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         high_angle: float = 180,
         return_angles: bool = False,
     ):
-        """Return edges whose adjacent face-normal angle falls within a range."""
+        """Return edges whose adjacent face-normal angle falls within a range.
+
+        The range is matched with a small tolerance (``_ANGLE_MATCH_EPS``) on
+        both ends so an edge whose *true* angle sits exactly on a bound (e.g. a
+        cube's 90° edges against a bound of 90) is reliably included despite the
+        sub-ulp float drift world-space face normals carry after a
+        transform+freeze — otherwise those edges would silently fall outside.
+        """
         edges = cmds.ls(
             cls.convert_component_type(
                 objects, "edge", returned_type="str", flatten=True
@@ -922,6 +938,9 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             or [],
             flatten=True,
         ) or []
+
+        low = low_angle - cls._ANGLE_MATCH_EPS
+        high = high_angle + cls._ANGLE_MATCH_EPS
 
         filtered_edges = []
         edge_angles = {}
@@ -933,7 +952,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             if angle is None:
                 continue
             edge_angles[str(edge)] = angle
-            if low_angle <= angle <= high_angle:
+            if low <= angle <= high:
                 filtered_edges.append(edge)
 
         if return_angles:
@@ -1022,6 +1041,11 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
 
         saved_selection = cmds.ls(sl=True, long=True) or []
 
+        # Split at a boundary nudged below the threshold so an edge whose *true*
+        # angle equals it (e.g. a cube's 90° edges) still classifies as "upper".
+        # See _ANGLE_MATCH_EPS for why the raw threshold is unreliable.
+        boundary = angle_threshold - cls._ANGLE_MATCH_EPS
+
         for obj, edges in object_to_edges.items():
             if unlock_normals:
                 for obj_path in object_to_paths[obj]:
@@ -1030,12 +1054,12 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
                     cmds.select(obj_path, replace=True)
                     cmds.polySetToFaceNormal()
             upper_edges = (
-                [e for e in edges if edge_angles[str(e)] >= angle_threshold]
+                [e for e in edges if edge_angles[str(e)] >= boundary]
                 if upper_hardness is not None
                 else []
             )
             lower_edges = (
-                [e for e in edges if edge_angles[str(e)] < angle_threshold]
+                [e for e in edges if edge_angles[str(e)] < boundary]
                 if lower_hardness is not None
                 else []
             )

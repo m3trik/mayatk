@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional, Tuple, Union, List
+from typing import Optional, Tuple, Union
 import numpy as np
 from scipy.spatial import KDTree
 
@@ -244,104 +244,12 @@ class GeometryMatcher:
         try:
             pts = mesh_points(shape, world=True)
             points = np.array([(p.x, p.y, p.z) for p in pts])
-            if len(points) < 3:
+            flat = ptk.PointCloud.pca_basis(points)
+            if flat is None:
                 return None
-
-            centroid = np.mean(points, axis=0)
-            centered = points - centroid
-            cov = np.cov(centered, rowvar=False)
-            evals, evecs = np.linalg.eigh(cov)
-
-            order = np.argsort(evals)[::-1]  # descending: axes[0] = largest
-            axes = [evecs[:, i] for i in order]
-            axes = self._stabilize_axes(axes, evals[order], centered)
-
-            x_axis, y_axis = axes[0], axes[1]
-            # Right-handed
-            z_axis = np.cross(x_axis, y_axis)
-
-            mat = np.eye(4)
-            mat[0, :3] = x_axis
-            mat[1, :3] = y_axis
-            mat[2, :3] = z_axis
-            return _np_to_mmatrix(mat)
-
+            return _np_to_mmatrix(np.array(flat, dtype=float).reshape(4, 4))
         except Exception:
             return None
-
-    @staticmethod
-    def _stabilize_axes(
-        axes: List[np.ndarray], evals: np.ndarray, centered: np.ndarray
-    ) -> List[np.ndarray]:
-        """Make a PCA frame deterministic for identical geometry.
-
-        ``eigh`` returns sign-arbitrary eigenvectors, and inside a degenerate
-        (rotationally symmetric) eigen-subspace ANY orthogonal basis is
-        valid — float noise then spins each copy's frame differently, so
-        identical parts canonicalize to different local geometry and every
-        comparison falls into the expensive robust path (and can outright
-        fail at tight tolerance: a 15°-grid spin search cannot exactly align
-        an 18°-per-segment cylinder).
-
-        Anchors, all derived from the geometry itself (consistent across
-        copies that share vertex order): the third moment along each axis
-        fixes signs; the vertex farthest from the symmetry axis orients
-        degenerate subspaces (immune to where vertex 0 happens to sit —
-        first-vertex anchoring breaks on cones and lathed shapes whose
-        leading vertex lies ON the axis).
-        """
-        ref = centered[0]
-        span = max(abs(float(evals[0])), 1e-12)
-
-        def anchored(vec: np.ndarray) -> np.ndarray:
-            skew = float(np.sum(np.dot(centered, vec) ** 3))
-            anchor = skew if abs(skew) > 1e-9 * span else float(np.dot(ref, vec))
-            return -vec if anchor < 0 else vec
-
-        def plane_anchor(axis: np.ndarray) -> Optional[np.ndarray]:
-            """Unit direction ⊥ *axis* toward the vertex farthest from it."""
-            offsets = centered - np.outer(np.dot(centered, axis), axis)
-            radii = np.linalg.norm(offsets, axis=1)
-            best = int(np.argmax(radii))
-            if radii[best] <= 1e-9:
-                return None  # all vertices on the axis
-            return offsets[best] / radii[best]
-
-        def eigh_fallback() -> List[np.ndarray]:
-            return [anchored(a) for a in axes]
-
-        degenerate = [
-            abs(float(evals[i]) - float(evals[i + 1])) < 0.05 * span
-            for i in range(2)
-        ]
-
-        if all(degenerate):
-            # Fully symmetric (sphere-like): anchor to the farthest vertex,
-            # then the farthest off-that-axis vertex.
-            norms = np.linalg.norm(centered, axis=1)
-            best = int(np.argmax(norms))
-            if norms[best] > 1e-9:
-                a = centered[best] / norms[best]
-                b = plane_anchor(a)
-                if b is not None:
-                    return [a, b, np.cross(a, b)]
-            return eigh_fallback()  # point-like geometry — nothing to anchor
-
-        for i in range(2):
-            if degenerate[i]:
-                # Re-anchor the degenerate pair (i, i+1) within its plane.
-                other_idx = 2 - 2 * i  # the non-degenerate axis
-                other = anchored(axes[other_idx])
-                a = plane_anchor(other)
-                if a is None:
-                    break  # degenerate geometry — fall through
-                axes_out: List[np.ndarray] = [None, None, None]  # type: ignore[list-item]
-                axes_out[other_idx] = other
-                axes_out[i] = a
-                axes_out[i + 1] = np.cross(other, a)
-                return axes_out
-
-        return eigh_fallback()
 
     def get_mesh_signature(self, transform: str) -> Optional[Tuple]:
         """Lightweight signature for quick rejection.
@@ -367,19 +275,7 @@ class GeometryMatcher:
             try:
                 pts = mesh_points(mesh, world=False)
                 points = np.array([(p.x, p.y, p.z) for p in pts])
-                if len(points) > 3:
-                    centroid = np.mean(points, axis=0)
-                    centered = points - centroid
-
-                    cov = np.cov(centered, rowvar=False)
-                    evals, _ = np.linalg.eigh(cov)
-
-                    # Normalize for scale invariance (uniform scale only)
-                    max_eval = np.max(evals)
-                    if max_eval > 1e-6:
-                        evals = evals / max_eval
-
-                    pca_sig = tuple(sorted([self.quantize(e, 3) for e in evals]))
+                pca_sig = ptk.PointCloud.pca_eigenvalue_signature(points, 3)
             except Exception as e:
                 if self.verbose:
                     logger.debug(f"PCA failed for {transform}: {e}")
@@ -439,164 +335,40 @@ class GeometryMatcher:
     # scores ~-1.0.
     NORMAL_AGREEMENT_THRESHOLD = 0.8
 
-    def _normals_agree(self, m1: str, m2: str, idx=None, idx_valid=None) -> bool:
-        """True when per-vertex normals of the two shapes align.
-
-        ``idx`` maps each m1 vertex to its geometrically-matched m2 vertex:
-        ``None`` = same ordering, an (N,) array = one pairing each, an
-        (N, K) array = K nearest candidates per vertex with ``idx_valid``
-        masking which of them sit within the positional tolerance. CAD hard
-        edges duplicate a position with different normals, so a single
-        nearest-neighbor pairing can pick the wrong coincident twin and veto
-        a true copy — with candidates, each vertex scores by its
-        best-agreeing twin. Degrades to True when normals can't be read —
-        the positional match then stands alone, as before.
-        """
-        n1 = self._object_normals(m1)
-        n2 = self._object_normals(m2)
-        if n1 is None or n2 is None or len(n1) != len(n2):
-            return True
-        if idx is None:
-            dots = np.sum(n1 * n2, axis=1)
-        elif getattr(idx, "ndim", 1) == 1:
-            dots = np.sum(n1 * n2[idx], axis=1)
-        else:
-            cand = np.einsum("pki,pi->pk", n2[idx], n1)
-            if idx_valid is not None:
-                cand = np.where(idx_valid, cand, -np.inf)
-            dots = cand.max(axis=1)
-        # A true copy aligns EVERY normal (float noise cannot drive a ~1 dot
-        # below zero) — a single flipped normal rejects the match.
-        return (
-            float(dots.mean()) >= self.NORMAL_AGREEMENT_THRESHOLD
-            and not bool((dots < 0.0).any())
-        )
-
     def _are_meshes_identical_uncached(
         self, m1: str, m2: str, t1: str, t2: str
     ) -> Tuple[bool, Optional["om.MMatrix"]]:
-        pts1_array = self._object_points(m1)
-        pts2_array = self._object_points(m2)
-        if len(pts1_array) != len(pts2_array):
-            return False, None
+        """Delegate the 3-stage compare to ``ptk.PointCloud.match_clouds``.
 
-        # Fast path: ordered compare (vectorized). A failed normal check
-        # falls through rather than rejecting — the PCA path can still find
-        # a rotation aligning both points AND normals (e.g. a flipped-
-        # authored plate matches under a 180° in-plane-axis rotation).
-        if len(pts1_array) == 0 or float(
-            np.max(np.linalg.norm(pts1_array - pts2_array, axis=1))
-        ) <= self.tolerance:
-            if self.check_uvs:
-                if not self._are_uvs_identical(m1, m2):
-                    if self.verbose:
-                        logger.debug(f"UV mismatch for {t1} vs {t2}")
-                    return False, None
+        The whole verification pipeline (fast ordered → unordered KDTree
+        identity with K-twin normal gating → RMS-uniform-scale + robust PCA
+        with the flip-free normal gate) is the shared DCC-neutral
+        implementation; this adapter only extracts Maya data and converts
+        the returned row-major matrix to ``om.MMatrix``. The UV check is
+        injected as a lazy callback so it fires exactly where it used to
+        (on a stage-1/2 positional success, hard-rejecting on mismatch).
+        """
+        uvs_identical = None
+        if self.check_uvs:
+            uvs_identical = lambda: self._are_uvs_identical(m1, m2)  # noqa: E731
 
-            if len(pts1_array) == 0 or self._normals_agree(m1, m2):
-                if self.verbose:
-                    logger.debug(f"Fast path matched for {t1} vs {t2}")
-                return True, None
-            if self.verbose:
-                logger.debug(
-                    f"Fast path normals disagree for {t1} vs {t2}; trying PCA"
-                )
-
-        # Intermediate check: unordered identity
-        # If vertices are reordered but geometry matches in local space, the
-        # fast path fails but this succeeds. Prefer identity over a possibly
-        # ambiguous PCA transform. K nearest candidates per vertex — hard
-        # edges duplicate positions, and the wrong coincident twin must not
-        # veto the match (see _normals_agree).
-        tree = KDTree(pts2_array)
-        k_twins = min(4, len(pts2_array))
-        dists, nn_idx = tree.query(pts1_array, k=k_twins)
-        if k_twins == 1:
-            dists, nn_idx = dists[:, None], nn_idx[:, None]
-        if np.max(dists[:, 0]) <= self.tolerance:
-            if self.check_uvs:
-                if not self._are_uvs_identical(m1, m2):
-                    if self.verbose:
-                        logger.debug(f"UV mismatch for {t1} vs {t2}")
-                    return False, None
-
-            idx_valid = dists <= self.tolerance
-            idx_valid[:, 0] = True  # the nearest is always a candidate
-            if self._normals_agree(m1, m2, idx=nn_idx, idx_valid=idx_valid):
-                if self.verbose:
-                    logger.debug(f"Unordered Identity match for {t1} vs {t2}")
-                return True, None
-            if self.verbose:
-                logger.debug(
-                    f"Unordered normals disagree for {t1} vs {t2}; trying PCA"
-                )
-
-        # Center both vert clouds for the PCA alignment below.
-        # Deliberately NO pure-translation acceptance here: a frozen-at-offset
-        # cube must remain distinct from a transform-translated one in strict
-        # leaf-instancing.
-        c1 = np.mean(pts1_array, axis=0)
-        c2 = np.mean(pts2_array, axis=0)
-
-        pts1_array = pts1_array - c1
-        pts2_array = pts2_array - c2
-
-        scale = 1.0
-        if self.scale_tolerance > 0:
-            # UNIFORM-scale matching: normalize the candidate's RMS radius
-            # onto the prototype's, then run the SAME rigid verification
-            # (rotation search, strict tolerance, normals gate). Uniform
-            # scale preserves proportions and normals, and Maya carries it
-            # on the instance transform. The per-axis whitening this
-            # replaces erased ALL proportion information — a flat lid
-            # whitened into the same unit cloud as a tall body and
-            # "matched" at a loose tolerance.
-            r1 = float(np.sqrt((pts1_array**2).sum(axis=1).mean()))
-            r2 = float(np.sqrt((pts2_array**2).sum(axis=1).mean()))
-            if r1 < 1e-12 or r2 < 1e-12:
-                return False, None
-            scale = r1 / r2
-            if abs(scale - 1.0) > 1e-9:
-                pts2_array = pts2_array * scale
-                if self.verbose:
-                    logger.debug(
-                        f"Uniform-scale normalize {t2} onto {t1}: s={scale:.6f}"
-                    )
-
-        # Robust PCA Alignment (handles baked rotations and symmetry).
-        # Normals participate in candidate selection so a symmetric shape is
-        # never matched to its flipped twin (positions tie; shading doesn't).
-        matrix_list = ptk.PointCloud.pca_transform(
-            pts1_array,
-            pts2_array,
+        matched, matrix_list = ptk.PointCloud.match_clouds(
+            self._object_points(m1),
+            self._object_points(m2),
             tolerance=self.tolerance,
-            robust=True,
+            scale_tolerance=self.scale_tolerance,
             normals_a=self._object_normals(m1),
             normals_b=self._object_normals(m2),
             normal_threshold=self.NORMAL_AGREEMENT_THRESHOLD,
+            uvs_identical=uvs_identical,
         )
-
-        if matrix_list:
-            # matrix_list is a flat 16-element list (row-major)
-            m_combined = np.array(matrix_list, dtype=float).reshape(4, 4)
-            if scale != 1.0:
-                # The rotation was solved with the candidate pre-scaled by
-                # ``scale`` (p1·M ≈ scale·p2): fold the scale back out so
-                # the matrix maps the prototype's geometry onto the
-                # candidate's true size (verified against a synthetic 0.6×
-                # baked-scale copy — the instance transform carries the
-                # scale).
-                m_combined[:3, :3] /= scale
-
-            # Translation: T = C2 - (M_combined * C1)
-            v_c1 = np.array([c1[0], c1[1], c1[2], 1.0])
-            transformed = v_c1 @ m_combined
-            m_combined[3, 0] = c2[0] - transformed[0]
-            m_combined[3, 1] = c2[1] - transformed[1]
-            m_combined[3, 2] = c2[2] - transformed[2]
-            return True, _np_to_mmatrix(m_combined)
-
-        return False, None
+        if not matched:
+            if self.verbose:
+                logger.debug(f"No geometric match for {t1} vs {t2}")
+            return False, None
+        if matrix_list is None:
+            return True, None
+        return True, _np_to_mmatrix(np.array(matrix_list, dtype=float).reshape(4, 4))
 
     def _are_uvs_identical(self, m1: str, m2: str) -> bool:
         """Compare UVs of two meshes (assumes identical vertex order)."""
@@ -670,6 +442,11 @@ class GeometryMatcher:
 
         if len(pts1) != len(pts2):
             return False
+        if len(pts1) == 0:
+            # match_clouds declares two empty clouds identical (stage-1
+            # short-circuit) — honor the same convention instead of crashing
+            # the KDTree query on a zero-size array.
+            return True
 
         # Identity if matrix is None or an MMatrix-equivalent identity
         if matrix is None:
@@ -853,7 +630,7 @@ class GeometryMatcher:
                     if all_compatible:
                         if self.verbose:
                             logger.debug(
-                                f"Updated relative transform to robust candidate"
+                                "Updated relative transform to robust candidate"
                             )
                         relative_transform = indep_mtx
                         processed_pairs.append((c1, c2))

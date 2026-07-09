@@ -20,16 +20,15 @@ from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
     STEP_ICON_COLOR,
     PASTEL_STATUS,
     COL_STEP,
-    COL_SECTION,
     COL_DESC,
     COL_BEHAVIORS,
     COL_START,
     COL_END,
     fmt_behavior,
     format_behavior_html,
-    short_name,
     try_load_maya_icons,
 )
+from mayatk.core_utils._core_utils import leaf_name
 
 
 class ManifestTableMixin:
@@ -37,16 +36,16 @@ class ManifestTableMixin:
 
     Expects the host class to provide:
 
-    - ``self.ui``  â€“ the loaded UI with ``tbl_steps`` tree widget.
-    - ``self._steps``  â€“ current list of :class:`BuilderStep`.
-    - ``self._user_ranges``  â€“ dict of user-entered range overrides.
-    - ``self._last_resolved``  â€“ last resolved range list.
-    - ``self._last_results``  â€“ last assessment result list.
-    - ``self._is_built``  â€“ whether shots have been built.
-    - ``self._resolve_ranges()``  â€“ range resolution entry point.
-    - ``self._update_build_button()``  â€“ button-state refresh.
-    - ``self._set_footer(text, *, color)``  â€“ footer label helper.
-    - ``self._settings``  â€“ :class:`SettingsManager` instance.
+    - ``self.ui``  – the loaded UI with ``tbl_steps`` tree widget.
+    - ``self._steps``  – current list of :class:`BuilderStep`.
+    - ``self._user_ranges``  – dict of user-entered range overrides.
+    - ``self._last_resolved``  – last resolved range list.
+    - ``self._last_results``  – last assessment result list.
+    - ``self._is_built``  – whether shots have been built.
+    - ``self._resolve_ranges()``  – range resolution entry point.
+    - ``self._update_build_button()``  – button-state refresh.
+    - ``self._set_footer(text, *, color)``  – footer label helper.
+    - ``self._settings``  – :class:`SettingsManager` instance.
     """
 
     @staticmethod
@@ -103,17 +102,27 @@ class ManifestTableMixin:
 
     # -- behavior label widgets --------------------------------------------
 
-    def _color_behavior_label(self, obj, label) -> None:
+    def _color_behavior_label(self, obj, label, step_id: str = None) -> None:
         """Set the label HTML and tooltip using the latest assessment data.
 
         Looks up the object in ``_last_results`` and colours broken
         behaviors accordingly.  Falls back to plain formatting when no
         assessment data is available.
+
+        Parameters:
+            step_id: When given, only that step's assessment is
+                consulted — the same object can appear in several steps
+                with different statuses (e.g. fade_in verified in A01,
+                fade_out broken in A05), so a first-match scan would
+                colour this row from another step's result.
         """
         broken: list = []
         status_color = None
         obj_st = None
-        for r in getattr(self, "_last_results", None) or []:
+        results = getattr(self, "_last_results", None) or []
+        if step_id is not None:
+            results = [r for r in results if r.step_id == step_id]
+        for r in results:
             obj_map = {o.name: o for o in r.objects}
             obj_st = obj_map.get(obj.name)
             if obj_st is not None:
@@ -145,7 +154,9 @@ class ManifestTableMixin:
         else:
             label.setToolTip("")
 
-    def _make_behavior_label(self, obj, tree, child_item, choices) -> None:
+    def _make_behavior_label(
+        self, obj, tree, child_item, choices, step_id: str = None
+    ) -> None:
         """Create a clickable label for the Behaviors cell.
 
         The menu lists all behaviors available for this object's *kind*,
@@ -187,19 +198,21 @@ class ManifestTableMixin:
                 chk.setChecked(raw_name in obj.behaviors)
                 chk.setProperty("behavior_raw", raw_name)
                 cbs.append(chk)
-            menu.on_hidden.connect(lambda: self._on_behaviors_changed(obj, label, cbs))
+            menu.on_hidden.connect(
+                lambda: self._on_behaviors_changed(obj, label, cbs, step_id)
+            )
             menu.show()
 
-        self._color_behavior_label(obj, label)
+        self._color_behavior_label(obj, label, step_id=step_id)
         label.clicked.connect(_show_menu)
         tree.setItemWidget(child_item, COL_BEHAVIORS, label)
 
-    def _on_behaviors_changed(self, obj, label, checkboxes) -> None:
+    def _on_behaviors_changed(self, obj, label, checkboxes, step_id=None) -> None:
         """Update BuilderObject.behaviors when checkboxes change."""
         obj.behaviors = [
             chk.property("behavior_raw") for chk in checkboxes if chk.isChecked()
         ]
-        self._color_behavior_label(obj, label)
+        self._color_behavior_label(obj, label, step_id=step_id)
         self._update_build_button()
 
     def _reapply_behavior(self, step_id: str, obj: BuilderObject) -> None:
@@ -217,17 +230,24 @@ class ManifestTableMixin:
                 )
                 return
 
-            for b in obj.behaviors:
-                apply_behavior(
-                    obj.name,
-                    b,
-                    shot.start,
-                    shot.end,
-                    source_path=obj.source_path,
-                )
+            import maya.cmds as cmds
+
+            # Single undo entry for the whole re-apply (mirrors build()).
+            # Distribute anchors exactly like apply_to_shots so re-applied
+            # keys land where the build placed them.
+            total = len(obj.behaviors)
+            cmds.undoInfo(openChunk=True, chunkName="ShotManifest_reapply")
+            try:
+                for idx, b in enumerate(obj.behaviors):
+                    kwargs = {"source_path": obj.source_path}
+                    if total > 1:
+                        kwargs["anchor_override"] = idx / max(total - 1, 1)
+                    apply_behavior(obj.name, b, shot.start, shot.end, **kwargs)
+            finally:
+                cmds.undoInfo(closeChunk=True)
 
             # Re-assess so the UI reflects the fixed state.
-            # Skip the selected-keys guard â€” we just applied known
+            # Skip the selected-keys guard — we just applied known
             # behaviors and only need a status refresh.
             self.assess(skip_key_check=True)
         except Exception as exc:
@@ -258,7 +278,7 @@ class ManifestTableMixin:
             )
             # Child rows: object name in Description column, behavior label
             for obj in step.objects:
-                display = short_name(obj.name) if self._use_short_names else obj.name
+                display = leaf_name(obj.name) if self._use_short_names else obj.name
                 if obj.kind == "audio":
                     child = tree.create_item(
                         ["", "", display, "", "", ""],
@@ -279,14 +299,21 @@ class ManifestTableMixin:
                     child.setToolTip(COL_DESC, obj.name)
                 if obj.kind not in _kind_cache:
                     _kind_cache[obj.kind] = list(list_behaviors(kind=obj.kind))
-                self._make_behavior_label(obj, tree, child, _kind_cache[obj.kind])
+                self._make_behavior_label(
+                    obj, tree, child, _kind_cache[obj.kind], step.step_id
+                )
 
-        # Restrict editability: only Range column on parent rows, pre-build
+        # Restrict editability: only Range column on parent rows, and only
+        # for steps that aren't built yet — per row, not all-or-nothing,
+        # so new steps added to a partially built CSV stay editable.
         from qtpy.QtCore import Qt as _Qt
 
-        editable = not self._is_built
         for i in range(tree.topLevelItemCount()):
             parent = tree.topLevelItem(i)
+            step = parent.data(0, _Qt.UserRole)
+            editable = isinstance(step, BuilderStep) and not self._step_is_built(
+                step.step_id
+            )
             if editable:
                 parent.setFlags(parent.flags() | _Qt.ItemIsEditable)
             else:
@@ -314,7 +341,7 @@ class ManifestTableMixin:
         # Row tints via delegate (fillRect bypasses Maya QSS stripping).
         tree._child_row_color = QColor(0, 0, 0, 55)
 
-        # Column tints â€” darken Step and Behaviors columns
+        # Column tints — darken Step and Behaviors columns
         tree.clear_column_tints()
         tree.set_column_tint(COL_STEP, QColor(0, 0, 0, 45))
         tree.set_column_tint(COL_BEHAVIORS, QColor(0, 0, 0, 45))
@@ -340,8 +367,6 @@ class ManifestTableMixin:
                     )
 
         # Column widths
-        from qtpy.QtWidgets import QHeaderView
-
         header = tree.header()
         header.setMinimumSectionSize(60)
         header.resizeSection(COL_STEP, 140)
@@ -377,7 +402,7 @@ class ManifestTableMixin:
             return resolved
 
         from qtpy.QtCore import Qt
-        from qtpy.QtGui import QColor, QBrush, QFont
+        from qtpy.QtGui import QColor, QBrush
 
         tree = self.ui.tbl_steps
         dim = QBrush(QColor(PASTEL_STATUS["locked"][0]))
@@ -434,7 +459,7 @@ class ManifestTableMixin:
         dim = QBrush(QColor(PASTEL_STATUS["locked"][0]))
         collisions = 0
 
-        # Build a map of step_id â†’ tree item for quick lookup
+        # Build a map of step_id → tree item for quick lookup
         item_map: dict = {}
         resolved_map: dict = {}
         for i in range(tree.topLevelItemCount()):
@@ -601,7 +626,7 @@ class ManifestTableMixin:
                 ]
                 parent.setToolTip(beh_col, "\n".join(lines))
 
-            # Color child rows â€” only problem statuses
+            # Color child rows — only problem statuses
             obj_status_map = {o.name: o for o in step_status.objects}
             for j in range(parent.childCount()):
                 child = parent.child(j)
@@ -616,7 +641,9 @@ class ManifestTableMixin:
                 if obj_st.behaviors:
                     beh_widget = tree.itemWidget(child, beh_col)
                     if beh_widget is not None:
-                        self._color_behavior_label(child_data, beh_widget)
+                        self._color_behavior_label(
+                            child_data, beh_widget, step_id=step_status.step_id
+                        )
 
                 if obj_st.status == "valid":
                     # Re-resolve icon: initial formatting may have set a
@@ -670,7 +697,7 @@ class ManifestTableMixin:
                 node_icons_cls = try_load_maya_icons()
                 for extra_name in step_status.additional_objects:
                     display = (
-                        short_name(extra_name) if self._use_short_names else extra_name
+                        leaf_name(extra_name) if self._use_short_names else extra_name
                     )
                     extra_item = tree.create_item(
                         ["", "", display, "scene", ""],

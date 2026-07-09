@@ -19,20 +19,18 @@ class DataNodes:
     ``data_export`` (locked, hidden transform) is the FBX export surface —
     its attrs ride into the FBX as user properties.
 
-    Three mechanisms, by the nature of the value:
+    Two mechanisms, by the nature of the value:
 
     - :meth:`set_export_string` — regenerated-at-export artifacts (JSON
       manifests, wire strings) as plain string channels on ``data_export``.
     - :meth:`set_internal_string` — scene-persistent state that must never
       export (restore manifests, app state).
-    - :meth:`mirror_attr` — authored, edited-over-time values: the attr
-      lives on ``data_internal`` with a Maya proxy on ``data_export`` that
-      aliases it (zero-cost sync through the dependency graph)::
 
-        DataNodes.mirror_attr("my_flag", attributeType="enum",
-                              enumName="off:on", keyable=True)
-        cmds.setAttr("data_internal.my_flag", 1)      # author here
-        assert cmds.getAttr("data_export.my_flag") == 1
+    A third mechanism (``mirror_attr`` — authored on ``data_internal`` with a
+    Maya proxy aliasing it on ``data_export``) was retired once its only
+    producer migrated to a regenerated export channel; old scenes carrying the
+    proxy pair are healed by that producer (see
+    ``AudioClips._drop_legacy_manifest_proxy``).
     """
 
     INTERNAL = "data_internal"
@@ -135,40 +133,6 @@ class DataNodes:
         return node
 
     # ------------------------------------------------------------------
-    # Attribute mirroring
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def mirror_attr(attr_name, **add_attr_kwargs):
-        """Ensure *attr_name* on ``data_internal`` with a proxy on ``data_export``.
-
-        If the attribute already exists on both nodes with the proxy
-        link, this is a no-op.
-
-        Parameters:
-            attr_name: Long name of the attribute.
-            **add_attr_kwargs: Passed to ``cmds.addAttr`` when creating
-                the attribute on ``data_internal`` (e.g.
-                ``attributeType="enum"``, ``enumName="None"``).
-        """
-        internal = DataNodes.ensure_internal()
-        export = DataNodes.ensure_export()
-        internal_str = str(internal)
-        export_str = str(export)
-
-        # Create on internal if missing.
-        if not cmds.attributeQuery(attr_name, node=internal_str, exists=True):
-            cmds.addAttr(internal_str, longName=attr_name, **add_attr_kwargs)
-
-        # Create proxy on export if missing.
-        if not cmds.attributeQuery(attr_name, node=export_str, exists=True):
-            cmds.addAttr(
-                export_str,
-                longName=attr_name,
-                proxy=f"{internal_str}.{attr_name}",
-            )
-
-    # ------------------------------------------------------------------
     # Internal string channels (plain attrs on the internal node)
     # ------------------------------------------------------------------
 
@@ -209,10 +173,10 @@ class DataNodes:
         """Write *value* to a plain string attr on the export node (create if needed).
 
         Generic carrier for export-time data (e.g. ``fbx_takes``,
-        ``shot_metadata``).  Unlike :meth:`mirror_attr`, this is a plain attr on
-        ``data_export`` — these channels are regenerated export artifacts, not
-        tool-authored state, so they don't belong on the ``data_internal`` SSoT.
-        The value rides into the FBX as a user property.
+        ``shot_metadata``).  These channels are regenerated export artifacts,
+        not tool-authored state, so they live as plain attrs on ``data_export``
+        rather than on the ``data_internal`` SSoT.  The value rides into the
+        FBX as a user property.
 
         An empty *value* clears the channel without creating the carrier just
         to hold an empty manifest (matching the blendertk mirror): the attr is

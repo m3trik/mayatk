@@ -103,7 +103,7 @@
           </size>
          </property>
          <property name="toolTip">
-          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;b&gt;Spline (Hose/Cable):&lt;/b&gt;&lt;br/&gt;Uses IK Spline solver for smooth, flexible tubes.&lt;br/&gt;&lt;i&gt;Good for: Hoses, cables, organic tubes.&lt;/i&gt;&lt;br/&gt;&lt;i&gt;Sets: 10 joints, spline controls with stretch/twist.&lt;/i&gt;&lt;/p&gt;&lt;p&gt;&lt;b&gt;Anchor (Piston):&lt;/b&gt;&lt;br/&gt;Creates a 2-joint system with aim constraint.&lt;br/&gt;&lt;i&gt;Good for: Hydraulic pistons, mechanical connections.&lt;/i&gt;&lt;br/&gt;&lt;i&gt;Sets: 2 joints, distance-based scaling.&lt;/i&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;b&gt;Spline (Hose/Cable):&lt;/b&gt;&lt;br/&gt;Uses IK Spline solver for smooth, flexible tubes.&lt;br/&gt;&lt;i&gt;Good for: Hoses, cables, organic tubes.&lt;/i&gt;&lt;br/&gt;&lt;i&gt;Sets: joint per edge loop, spline controls with stretch/twist.&lt;/i&gt;&lt;/p&gt;&lt;p&gt;&lt;b&gt;Anchor (Piston/Hydraulic):&lt;/b&gt;&lt;br/&gt;Creates a 2-joint system constrained to the tube ends.&lt;br/&gt;&lt;i&gt;Good for: Hydraulic pistons, mechanical connections.&lt;/i&gt;&lt;br/&gt;&lt;i&gt;Sets: 2 joints, distance-based scaling.&lt;/i&gt;&lt;/p&gt;&lt;p&gt;&lt;b&gt;FK Chain (Tail/Tentacle):&lt;/b&gt;&lt;br/&gt;Nested FK controls, one per joint.&lt;br/&gt;&lt;i&gt;Good for: Tails, tentacles, hand-keyed tubes.&lt;/i&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
          </property>
          <item>
           <property name="text">

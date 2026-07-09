@@ -90,7 +90,13 @@ class ClipMotionMixin:
     * ``sequencer`` — :class:`ShotSequencer` instance
     * ``_get_sequencer_widget()``
     * ``_shifted_out_keys`` — dict
+    * ``_segment_cache`` / ``_sub_row_cache`` — dicts (flushed after
+      boundary-moving edits)
+    * ``_audio_segments_cache`` — invalidated after audio-clip moves
+    * ``_syncing`` — bool re-entrancy guard shared with the store listener
     * ``_save_shot_state()`` / ``_sync_to_widget()`` / ``_sync_combobox()``
+    * ``_gap_edit_epilogue()`` — shared post-edit cleanup
+      (:class:`~.gap_manager.GapManagerMixin`)
     * ``_set_footer()``
     * ``logger``
     """
@@ -139,7 +145,11 @@ class ClipMotionMixin:
                 self.sequencer.resize_object(
                     shot_id, obj_name, orig_start, orig_end, new_start, new_end
                 )
-        self._sync_to_widget()
+        # Full edit epilogue: resize_object can move shot boundaries and
+        # ripple downstream — without the cache flush, adjacent/all view
+        # keeps painting downstream shots from stale segments, and the
+        # combobox range labels go stale.
+        self._gap_edit_epilogue()
         label = f"{obj_name}.{attr_name}" if attr_name else obj_name
         dur = int(new_end - new_start)
         self._set_footer(
@@ -177,6 +187,10 @@ class ClipMotionMixin:
             new_end = new_start + full_dur
             clip.data["orig_start"] = new_start
             clip.data["orig_end"] = new_end
+            # The audio segment cache still holds the pre-move span —
+            # the immediate rebuild would snap the clip back to its old
+            # position until the keyframe debounce fires.
+            self._audio_segments_cache = None
             self._expand_shot_for_clip(clip, new_start, new_end)
             return True
 
@@ -255,6 +269,9 @@ class ClipMotionMixin:
             return True
 
         shot = self.sequencer.shot_by_id(shot_id)
+        # shot_by_id returns the live ShotBlock — capture the pre-move
+        # bounds by value for the post-move staleness check below.
+        pre_bounds = (shot.start, shot.end) if shot else None
         self.logger.debug(
             "[ANIM MOVE] obj=%s orig=(%s,%s) new_start=%s delta=%s "
             "shot=%s range=(%s,%s) shift=%s",
@@ -287,6 +304,19 @@ class ClipMotionMixin:
                 shot_after.start,
                 shot_after.end,
             )
+        # move_object_in_shot may have expanded the boundary and rippled
+        # downstream — cached segments for the other visible shots are
+        # stale until flushed.
+        if (
+            pre_bounds is not None
+            and shot_after is not None
+            and (
+                abs(shot_after.start - pre_bounds[0]) > FLOAT_ZERO_EPS
+                or abs(shot_after.end - pre_bounds[1]) > FLOAT_ZERO_EPS
+            )
+        ):
+            self._segment_cache.clear()
+            self._sub_row_cache.clear()
         return True
 
     def _expand_shot_for_clip(self, clip, new_start: float, new_end: float) -> None:
@@ -316,22 +346,32 @@ class ClipMotionMixin:
         prior_end = shot.end
         expanded_start = min(shot.start, new_start)
         expanded_end = max(shot.end, new_end)
-        if expanded_start != prior_start or expanded_end != prior_end:
-            self.sequencer.store.update_shot(
-                shot_id, start=expanded_start, end=expanded_end
-            )
-            # Ripple upstream/downstream so adjacent shots stay in order
-            shifted_audio: set = set()
-            start_delta = expanded_start - prior_start
-            if abs(start_delta) > 1e-6:
-                self.sequencer._ripple_upstream(
-                    shot_id, prior_start, start_delta, shifted_audio
+        start_delta = expanded_start - prior_start
+        end_delta = expanded_end - prior_end
+        # One epsilon gate for the whole block: an exact != here with
+        # epsilon-gated ripples below could update the shot yet skip
+        # both ripples on sub-epsilon drift, desyncing neighbors.
+        if abs(start_delta) > 1e-6 or abs(end_delta) > 1e-6:
+            # Guard the store event so the mid-drag update_shot doesn't
+            # trigger a full widget rebuild — the caller syncs once at
+            # the end of the move (same pattern as the gap handlers).
+            was_syncing = self._syncing
+            self._syncing = True
+            try:
+                self.sequencer.store.update_shot(
+                    shot_id, start=expanded_start, end=expanded_end
                 )
-            end_delta = expanded_end - prior_end
-            if abs(end_delta) > 1e-6:
-                self.sequencer._ripple_downstream(
-                    shot_id, prior_end, end_delta, shifted_audio
-                )
+                # Ripple upstream/downstream so adjacent shots stay in order
+                if abs(start_delta) > 1e-6:
+                    self.sequencer.ripple_upstream(
+                        shot_id, prior_start, start_delta
+                    )
+                if abs(end_delta) > 1e-6:
+                    self.sequencer.ripple_downstream(
+                        shot_id, prior_end, end_delta
+                    )
+            finally:
+                self._syncing = was_syncing
             # Downstream/upstream shots may have moved — flush stale cache
             # so _sync_to_widget re-collects their segments.
             self._segment_cache.clear()

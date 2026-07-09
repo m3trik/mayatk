@@ -45,10 +45,12 @@ python -m pytest test/mock_tests/ -q
 
 `run_tests.py` launches Maya via `MayaConnection`
 (`mayatk/env_utils/maya_connection.py`), waits for results (`--no-wait` for
-fire-and-forget), writes `test/temp_tests/test_results_<port>.txt` (scoped by
-`--port` so concurrent invocations don't clobber each other's results), and
-updates the `docs/README.md` test badge (`--no-badge` to skip). `--keep-maya`
-leaves the launched instance open afterward.
+fire-and-forget), writes `test/temp_tests/test_results_<port>_<pid>.txt`
+(scoped by port **and** runner PID so concurrent invocations — even on the
+same default port — can't clobber each other's results; stale files are
+swept after 7 days), and updates the `docs/README.md` test badge
+(`--no-badge` to skip). `--keep-maya` leaves the launched instance open
+afterward.
 
 ## Static checks (no Maya)
 

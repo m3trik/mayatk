@@ -120,8 +120,8 @@ class TestSequencerAudioShift(MayaTkTestCase):
     # --- move_shot_to_position --------------------------------------------
 
     def test_move_shot_to_position_shifts_audio(self):
-        s1 = self._add_shot(10.0, 30.0)  # dur 20
-        s2 = self._add_shot(30.0, 50.0)  # dur 20
+        self._add_shot(10.0, 30.0)  # dur 20
+        self._add_shot(30.0, 50.0)  # dur 20
         s3 = self._add_shot(50.0, 80.0)  # dur 30
         self._author_audio("narr_s1", frame=15.0)
         self._author_audio("narr_s3", frame=55.0)
@@ -150,8 +150,8 @@ class TestSequencerAudioShift(MayaTkTestCase):
     # --- respace -----------------------------------------------------------
 
     def test_respace_shifts_audio_on_all_moved_shots(self):
-        s1 = self._add_shot(10.0, 30.0)
-        s2 = self._add_shot(50.0, 80.0)  # gap 20, respace collapses to 0
+        self._add_shot(10.0, 30.0)
+        self._add_shot(50.0, 80.0)  # gap 20, respace collapses to 0
         self._author_audio("narr_r1", frame=15.0)
         self._author_audio("narr_r2", frame=55.0)
 

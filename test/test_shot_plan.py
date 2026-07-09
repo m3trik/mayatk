@@ -15,12 +15,10 @@ if scripts_dir not in sys.path:
 
 from mayatk.anim_utils.shots._shots import ShotBlock, ShotStore
 from mayatk.anim_utils.shots._shot_plan import (
-    MovePlan,
     ShotMove,
     plan_respace,
     plan_ripple_downstream,
     plan_ripple_upstream,
-    _INF,
 )
 
 
@@ -225,6 +223,105 @@ class TestRespaceRoundTrip(unittest.TestCase):
 
         restored = {s.shot_id: (s.start, s.end) for s in store.sorted_shots()}
         self.assertEqual(restored, orig)
+
+
+class TestRespaceCollisionParking(unittest.TestCase):
+    """Mixed-sign respace deltas form an ordering cycle (a forward mover
+    and a backward mover each land in the other's unread envelope).
+    The planner must park the cycle members instead of raising, and the
+    executor must land them at their final positions."""
+
+    def setUp(self):
+        # apply() under mayapy scans scene audio carriers — start from a
+        # clean scene so a previous module's leftovers can't be shifted.
+        # Headless (no maya module) the import fails and apply() takes
+        # the bounds-only path, so nothing to reset.
+        try:
+            import maya.cmds as _cmds
+
+            _cmds.file(new=True, force=True)
+        except Exception:
+            pass
+
+    def _cycle_store(self):
+        # gap 30: B moves forward (+29), C moves backward (-21) — the
+        # exact reproduction that used to raise "collision cycle".
+        return _store(
+            [
+                ShotBlock(1, "A", 0, 10, []),
+                ShotBlock(2, "B", 11, 20, []),
+                ShotBlock(3, "C", 100, 110, []),
+            ]
+        )
+
+    def test_cycle_members_are_parked_not_raised(self):
+        plan = plan_respace(self._cycle_store(), gap=30, start_frame=0)
+        moving = {sid for sid, m in plan.moves.items() if m.moves}
+        self.assertTrue(plan.parked, "cycle members must be parked")
+        self.assertEqual(set(plan.sequence) | set(plan.parked), moving)
+        self.assertEqual(
+            set(plan.sequence) & set(plan.parked), set(), "disjoint partition"
+        )
+        # The park offset must clear every old/new envelope edge.
+        self.assertGreater(plan.park_offset, 110)
+
+    def test_apply_commits_final_positions(self):
+        from mayatk.anim_utils.shots._shot_apply import apply
+
+        store = self._cycle_store()
+        apply(store, plan_respace(store, gap=30, start_frame=0))
+        by_name = {s.name: s for s in store.shots}
+        self.assertAlmostEqual(by_name["A"].start, 0)
+        self.assertAlmostEqual(by_name["A"].end, 10)
+        self.assertAlmostEqual(by_name["B"].start, 40)
+        self.assertAlmostEqual(by_name["B"].end, 49)
+        self.assertAlmostEqual(by_name["C"].start, 79)
+        self.assertAlmostEqual(by_name["C"].end, 89)
+
+
+class TestParkedKeysSingleShift(unittest.TestCase):
+    """Parked shots must not double-shift already-parked content.
+
+    The timeline-last cycle member's envelope is the +INF sentinel; unless
+    every move window's +INF end is capped below the park zone (the
+    ``_content_top + 1`` cap in ``apply``), it re-shifts content parked
+    before it — keys whenever the shots share an object, audio
+    unconditionally — and phase 2 then lands a window that no longer
+    contains the strayed content.  Key moves during park/land must also use
+    ``option="over"``: the default "move" semantics clamp at the first
+    neighboring key on a shared curve instead of teleporting past it.
+    """
+
+    def setUp(self):
+        try:
+            import maya.cmds as cmds
+        except ImportError:
+            self.skipTest("requires maya.cmds (run under mayapy)")
+        self.cmds = cmds
+        cmds.file(new=True, force=True)
+
+    def test_shared_object_keys_land_exactly_once(self):
+        from mayatk.anim_utils.shots._shot_apply import apply
+
+        cmds = self.cmds
+        cube = cmds.polyCube(name="parked_keys_cube")[0]
+        for frame in (11, 20, 100, 110):
+            cmds.setKeyframe(cube, attribute="translateX", time=frame, value=frame)
+
+        store = _store(
+            [
+                ShotBlock(1, "A", 0, 10, []),
+                ShotBlock(2, "B", 11, 20, [cube]),
+                ShotBlock(3, "C", 100, 110, [cube]),
+            ]
+        )
+        plan = plan_respace(store, gap=30, start_frame=0)
+        self.assertEqual(set(plan.parked), {2, 3}, "repro requires B and C parked")
+        apply(store, plan)
+
+        times = sorted(cmds.keyframe(cube, q=True, timeChange=True) or [])
+        # B: 11..20 shifts +29 -> 40..49; C: 100..110 shifts -21 -> 79..89.
+        self.assertEqual(times, [40.0, 49.0, 79.0, 89.0])
 
 
 if __name__ == "__main__":

@@ -73,8 +73,6 @@ class TestExportViewLogic(QuickTestCase):
         # AND the metadata join key.  Names must reduce to strictly [A-Za-z0-9_]
         # (what Unity preserves verbatim on FBX import) for the join to hold —
         # spaces, punctuation, unicode, and collisions must not leak through.
-        import re
-
         store = _store_with(
             [
                 ShotBlock(0, "Shot 01", 1, 10),  # space

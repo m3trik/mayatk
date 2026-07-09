@@ -2,11 +2,11 @@
 
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
-_Generated: 2026-07-08_
+_Generated: 2026-07-09_
 
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin)`
-  - methods: bake, bake_objects, objects_to_curves, get_anim_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, optimize_keys, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range
+  - methods: bake, objects_to_curves, get_anim_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, optimize_keys, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range
 
 ### `anim_utils/blendshape_animator/_blendshape_animator.py` — Main workflow facade for blendShape morph-animation creation, editing, and export.
 - `class BlendshapeAnimator(ptk.LoggingMixin)`
@@ -65,6 +65,7 @@ _Generated: 2026-07-08_
   - methods: collect_segments, get_scene_info, format_scene_info_text, format_scene_info_html, print_scene_info, group_segments, merge_groups_sharing_curves, shift_curves, execute_stagger
 
 ### `anim_utils/shots/_detection.py` — Shot-region detection — Maya animation-graph analysis.
+- `resolve_to_transform(node, cache=None, _depth=0)`
 - `detect_shot_regions(objects: Optional[List[str]] = None, gap_threshold: float = 5.0, ignore: Optional[str] = None, motion_rate: float = 0.001, min_duration: float = 2.0) -> List[Dict[str, Any]]`
 - `regions_from_selected_keys(gap_threshold: float = 5.0, key_filter: str = 'all') -> List[Dict[str, Any]]`
 
@@ -96,9 +97,9 @@ _Generated: 2026-07-08_
 - `class BatchComplete(StoreEvent)`
 - `class StoreInvalidated(StoreEvent)`
 - `class ShotStore`
-  - methods: active_shot_id, set_active_shot, notify_settings_changed, add_listener, remove_listener, batch_update, is_gap_locked, lock_gap, unlock_gap, lock_all_gaps, unlock_all_gaps, set_persistence, active, set_active, clear_active, add_invalidation_listener, remove_invalidation_listener, snap, compute_gap, sorted_shots, shot_by_id, shot_by_name, define_shot, update_shot, ripple_shift, ripple_shift_upstream, remove_shot, append_shot, is_object_hidden, set_object_hidden, is_object_pinned, set_object_pinned, remove_object_from_shots, to_dict, to_export_view, publish_export_view, refresh_export_view, enable_auto_export, disable_auto_export, from_dict, rescale_to_fps, mark_dirty, save, has_animation, is_detection_relevant, detect_regions, detect_and_define, assess
+  - methods: active_shot_id, set_active_shot, notify_settings_changed, add_listener, remove_listener, batch_update, is_gap_locked, lock_gap, unlock_gap, lock_all_gaps, unlock_all_gaps, set_persistence, active, set_active, clear_active, add_invalidation_listener, remove_invalidation_listener, snap, compute_gap, sorted_shots, shot_by_id, shot_by_name, define_shot, update_shot, remove_shot, append_shot, is_object_hidden, set_object_hidden, is_object_pinned, set_object_pinned, remove_object_from_shots, to_dict, to_export_view, publish_export_view, refresh_export_view, enable_auto_export, disable_auto_export, from_dict, rescale_to_fps, mark_dirty, save, has_animation, is_detection_relevant, detect_regions, detect_and_define, assess
 
-### `anim_utils/shots/shot_manifest/_shot_manifest.py` — Shot Manifest â€” parse structured CSVs and populate a ShotStore.
+### `anim_utils/shots/shot_manifest/_shot_manifest.py` — Shot Manifest — parse structured CSVs and populate a ShotStore.
 - `resolve_duration(step: BuilderStep, initial_shot_length: float, fit_mode: FitMode, fps: float) -> Tuple[float, float, float]`
 - `detect_behaviors(text: str) -> List[str]`
 - `parse_csv(filepath: str, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> List[BuilderStep]`
@@ -120,7 +121,7 @@ _Generated: 2026-07-08_
 - `list_behaviors(search_path: Optional[Path] = None, kind: Optional[str] = None) -> List[str]`
 - `resolve_keys(block_def: Dict, start: float, end: float) -> List[Dict[str, Any]]`
 - `apply_behavior(obj: str, behavior_name: str, start: float, end: float, attrs: Optional[List[str]] = None, search_path: Optional[Path] = None, source_path: str = '', anchor_override: Optional[str] = None) -> None`
-- `verify_behavior(obj: str, behavior_name: str, start: float, end: float, search_path: Optional[Path] = None, keyframe_fn: Optional[Any] = None) -> bool`
+- `verify_behavior(obj: str, behavior_name: str, start: float, end: float, search_path: Optional[Path] = None, keyframe_fn: Optional[Any] = None, anchor_override: Optional[Any] = None) -> bool`
 - `apply_audio_clip(obj: str, start: float, end: float, source_path: str = '') -> None`
 - `compute_duration(behavior_entries: List[Dict[str, str]], fallback: float = 30, fps: Optional[float] = None) -> float`
 - `apply_to_shots(shots: list, apply_fn, exists_fn=None, has_keys_fn=None, store=None) -> Dict[str, list]`
@@ -134,10 +135,7 @@ _Generated: 2026-07-08_
 
 ### `anim_utils/shots/shot_manifest/manifest_data.py` — Constants, column layout, and pure helper functions for the Shot Manifest UI.
 - `fmt_behavior(name: str) -> str`
-- `unfmt_behavior(display: str) -> str`
-- `short_name(dag_path: str) -> str`
 - `format_behavior_html(behaviors, broken=(), status_color=None) -> str`
-- `parse_range(raw: str) -> Optional[Tuple[float, Optional[float]]]`
 - `try_load_maya_icons()`
 - `prune_to_top_boundaries(region_starts: List[float], n_steps: int) -> List[float]`
 
@@ -169,7 +167,7 @@ _Generated: 2026-07-08_
 
 ### `anim_utils/shots/shot_sequencer/_shot_sequencer.py` — Shot Sequencer — manages per-shot animation with ripple editing.
 - `class ShotSequencer`
-  - methods: shots, hidden_objects, markers, is_object_hidden, set_object_hidden, sorted_shots, shot_by_id, shot_by_name, define_shot, from_current_range, reconcile_all_shots, collect_object_segments, audio_prefetch, collect_shot_sequences, move_sequences_to_shot, fit_shot_to_content, trim_shot_to_content, extend_shot_to_fit, detect_shots, detect_next_shot, move_object_keys, move_stepped_keys, move_object_in_shot, scale_object_keys, move_shot, slide_shot, expand_shot, resize_object, set_shot_duration, resize_shot, set_shot_start, reorder_shots, move_shot_to_position, respace, to_dict, from_dict
+  - methods: shots, hidden_objects, markers, is_object_hidden, set_object_hidden, sorted_shots, shot_by_id, shot_by_name, define_shot, from_current_range, reconcile_all_shots, collect_object_segments, collect_shot_sequences, move_sequences_to_shot, fit_shot_to_content, trim_shot_to_content, extend_shot_to_fit, detect_shots, detect_next_shot, move_object_keys, move_stepped_keys, move_object_in_shot, scale_object_keys, move_shot, slide_shot, ripple_downstream, ripple_upstream, expand_shot, resize_object, set_shot_duration, resize_shot, set_shot_start, reorder_shots, move_shot_to_position, respace, apply_gap, to_dict, from_dict
 
 ### `anim_utils/shots/shot_sequencer/clip_motion.py` — Clip motion, resize, and key-scaling logic for the shot sequencer.
 - `curves_for_attr(obj_name: str, attr_name: str) -> list`
@@ -927,7 +925,7 @@ _Generated: 2026-07-08_
 
 ### `node_utils/data_nodes.py`
 - `class DataNodes`
-  - methods: ensure_internal, ensure_export, mirror_attr, set_internal_string, get_internal_string, set_export_string, get_export_string
+  - methods: ensure_internal, ensure_export, set_internal_string, get_internal_string, set_export_string, get_export_string
 
 ### `nurbs_utils/_nurbs_utils.py`
 - `class NurbsUtils(ptk.HelpMixin)`
@@ -985,10 +983,10 @@ _Generated: 2026-07-08_
 - `class AnchorStrategy(TubeStrategy)`
   - methods: build
 - `class TubeRig(ptk.LoggingMixin)`
-  - methods: for_mesh, rig_name, rig_group, build, generate_joint_chain, create_logic_curve, create_spline_drivers, skin_curve_to_drivers, setup_spline_twist, setup_auto_bend, setup_spline_stretch, create_start_end_locators, create_ik, create_pole_vector, bind_joint_chain, constrain_end_with_falloff
+  - methods: for_mesh, for_node, rig_name, rig_group, teardown, build, generate_joint_chain, skin_mesh, create_logic_curve, create_spline_drivers, skin_curve_to_drivers, setup_spline_twist, setup_auto_bend, setup_spline_stretch, create_ik, create_pole_vector, bind_joint_chain, constrain_end_with_falloff
 - `class RigModeConfig`
 - `class TubeRigSlots`
-  - methods: header_init, apply_mode, get_mode, get_strategy, get_tube_rig, create_joints_from_tube, create_rig_from_joints, b000, b001, b002, b003, b004
+  - methods: header_init, apply_mode, get_mode, get_strategy, get_tube_rig, create_joints_from_tube, b000, b001, b002, b003, b004
 
 ### `rig_utils/wheel_rig.py`
 - `class WheelRig(ptk.LoggingMixin)`
@@ -1060,6 +1058,10 @@ _Generated: 2026-07-08_
 ### `uv_utils/rizom_bridge/rizom_bridge_slots.py` — Slots for the RizomUV bridge panel.
 - `class RizomBridgeSlots(MayaBridgeSlotsBase)`
   - methods: params_module, template_dir, make_bridge, list_template_modes, b000, open_uv_editor
+
+### `uv_utils/uv_transform.py` — Dedicated UV shell-transform panel.
+- `class UvTransformSlots(ptk.LoggingMixin)`
+  - methods: header_init, b023, b024, b025, b026, b034, b035, b036, b037, s041, tb005_init, tb005, tb006_init, tb006, tb008_init, tb008, align_u_min, align_u_avg, align_u_max, align_v_min, align_v_avg, align_v_max, linear_align, orient_shells, orient_edges, gather_shells, randomize_shells, open_uv_editor
 
 ### `xform_utils/_xform_utils.py`
 - `get_translation(node, world: bool = False)`

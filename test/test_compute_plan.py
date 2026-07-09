@@ -31,7 +31,6 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     BuilderStep,
     BuilderObject,
     ShotManifest,
-    PlannedShot,
 )
 from mayatk.anim_utils.shots.shot_manifest.behaviors import compute_duration
 
@@ -254,7 +253,7 @@ class TestExecutePlan(MayaTkTestCase):
         }
 
         # Now run full update() which does plan+execute
-        actions = self.manifest.update(steps)
+        self.manifest.update(steps)
 
         shots = {s.name: s for s in self.store.sorted_shots()}
         for step_id, (exp_start, exp_end) in plan_positions.items():
@@ -438,7 +437,7 @@ class TestCumulativeRipple(MayaTkTestCase):
             "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
             side_effect=mock_compute,
         ):
-            actions = self.manifest.update(steps)
+            self.manifest.update(steps)
 
         shots = {s.name: s for s in self.store.sorted_shots()}
 
@@ -729,7 +728,7 @@ class TestBuildDurationEncompasses(MayaTkTestCase):
 
         # fit_contents lets behavior-driven duration win over the 200f
         # initial_shot_length default that extend_only would impose.
-        actions = self.manifest.update(steps, fit_mode="fit_contents")
+        self.manifest.update(steps, fit_mode="fit_contents")
         shots = self.store.sorted_shots()
 
         # S1 should be 30 frames (fade_in=15 + fade_out=15)
