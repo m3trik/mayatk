@@ -898,7 +898,17 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             new_dir = os.path.normpath(text.strip())
 
             is_valid = os.path.isdir(new_dir)
-            changed = new_dir != self.current_working_dir
+            # Compare *normalized* paths. ``current_working_dir`` often comes
+            # from Maya (``cmds.workspace(q=True, rd=True)``) with forward
+            # slashes and a trailing separator, so a raw ``!=`` against the
+            # ``os.path.normpath``-ed input reads as "changed" on every startup
+            # and fires a redundant ``_update_workspace_combo()`` (the combo is
+            # already populated by ``cmb000_init``) — which double-logged the
+            # "No workspaces" warning.
+            current = self.current_working_dir or ""
+            changed = os.path.normcase(new_dir) != os.path.normcase(
+                os.path.normpath(current)
+            )
 
             self.logger.debug(
                 f"update_current_dir: new_dir='{new_dir}', current='{self.current_working_dir}', is_valid={is_valid}, changed={changed}, recursive={self.recursive_search}"
@@ -1940,7 +1950,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     def header_init(self, widget):
         """Initialize the header for the reference manager."""
-        widget.config_buttons("refresh", "menu", "collapse", "hide")
+        # Gesture-scoped window: pin button + auto-hide on key_show release.
+        widget.config_buttons("refresh", "menu", "collapse", "pin")
         widget.refresh_requested.connect(self.btn_refresh)
         widget.menu.add_presets = True
         widget.menu.presets.preset_dir = "mayatk/reference_manager"

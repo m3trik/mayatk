@@ -1,5 +1,130 @@
 # mayatk — API Changes
 
-_Diff vs prior baseline. Generated 2026-07-09._
+_Diff vs prior baseline. Generated 2026-07-10._
 
-No public API changes since last refresh.
+## Removed (29)
+
+- `uv_utils/uv_transform.py::UvTransformSlots` — was `(class)`
+- `uv_utils/uv_transform.py::UvTransformSlots.align_u_avg` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.align_u_max` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.align_u_min` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.align_v_avg` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.align_v_max` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.align_v_min` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.b023` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.b024` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.b025` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.b026` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.b034` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.b035` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.b036` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.b037` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.gather_shells` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.header_init` — was `(self, widget)`
+- `uv_utils/uv_transform.py::UvTransformSlots.linear_align` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.open_uv_editor` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.orient_edges` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.orient_shells` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.randomize_shells` — was `(self)`
+- `uv_utils/uv_transform.py::UvTransformSlots.s041` — was `(self, value, widget)`
+- `uv_utils/uv_transform.py::UvTransformSlots.tb005` — was `(self, widget)`
+- `uv_utils/uv_transform.py::UvTransformSlots.tb005_init` — was `(self, widget)`
+- `uv_utils/uv_transform.py::UvTransformSlots.tb006` — was `(self, widget)`
+- `uv_utils/uv_transform.py::UvTransformSlots.tb006_init` — was `(self, widget)`
+- `uv_utils/uv_transform.py::UvTransformSlots.tb008` — was `(self, widget)`
+- `uv_utils/uv_transform.py::UvTransformSlots.tb008_init` — was `(self, widget)`
+
+## Added (68)
+
+- `nurbs_utils/_nurbs_utils.py::NurbsUtils.get_arc_lengths(cls, curve, points) -> List[float]`
+- `nurbs_utils/_nurbs_utils.py::NurbsUtils.get_curve_length(cls, curve) -> float`
+- `rig_utils/shadow_rig.py::ShadowRig.bake(self, start=None, end=None)`
+- `rig_utils/shadow_rig.py::ShadowRig.bake_planes(cls, planes=None, start=None, end=None)`
+- `rig_utils/shadow_rig.py::ShadowRig.find_shadow_planes(cls, nodes=None)`
+- `rig_utils/shadow_rig.py::ShadowRig.refresh_export_metadata(cls)`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.b002(self)`
+- `rig_utils/skinning.py::CurveWeights(class)`
+- `rig_utils/skinning.py::CurveWeights.effective_degree(degree: int, num_joints: int) -> int`
+- `rig_utils/skinning.py::CurveWeights.joint_stations(cls, joints: List[str], curve) -> List[float]`
+- `rig_utils/skinning.py::CurveWeights.solve(cls, mesh, joints: List[str], curve: Optional[str] = None, centerline: Optional[Sequence] = None, profile: Union[str, Callable] = 'smoothstep', degree: int = 3) -> Tuple[List[float], List[str]]`
+- `rig_utils/skinning.py::SkinUtils(class)`
+- `rig_utils/skinning.py::SkinUtils.add_delta_mush(cls, mesh, smoothing_iterations: int = 10, smoothing_step: float = 0.5, pin_border_vertices: bool = True, name: Optional[str] = None) -> str`
+- `rig_utils/skinning.py::SkinUtils.apply_falloff(cls, skin_cluster, target_influence, center, radius: float = 5.0, profile: Union[str, Callable] = 'linear', source_influence: Optional[str] = None, add_influence: bool = True, undoable: bool = True) -> int`
+- `rig_utils/skinning.py::SkinUtils.bind(cls, mesh, joints, bind_method: str = 'closest', skinning_method: str = 'classic', max_influences: int = 4, dropoff_rate: float = 4.0, weight_distribution: float = 0.5, remove_unused_influences: bool = False, heatmap_falloff: float = 0.68, bind_fallback: bool = True, name: Optional[str] = None) -> str`
+- `rig_utils/skinning.py::SkinUtils.bind_to_curve(cls, mesh, joints, curve: Optional[str] = None, centerline: Optional[Sequence] = None, profile: Union[str, Callable] = 'smoothstep', degree: int = 3, skinning_method: str = 'dqs', max_influences: Optional[int] = None, name: Optional[str] = None, **bind_kwargs) -> str`
+- `rig_utils/skinning.py::SkinUtils.copy_weights(cls, source_mesh, target_mesh, surface_association: str = 'closestPoint', influence_association: Sequence[str] = ('label', 'oneToOne', 'closestJoint'), bind_target_if_needed: bool = True) -> str`
+- `rig_utils/skinning.py::SkinUtils.export_weights(cls, mesh, file_path: Optional[str] = None) -> str`
+- `rig_utils/skinning.py::SkinUtils.get_influences(cls, skin_cluster, long_names: bool = False) -> List[str]`
+- `rig_utils/skinning.py::SkinUtils.get_skin_cluster(mesh) -> Optional[str]`
+- `rig_utils/skinning.py::SkinUtils.get_weights(cls, skin_cluster, vertices: Optional[Sequence[int]] = None) -> Tuple[List[float], List[str]]`
+- `rig_utils/skinning.py::SkinUtils.import_weights(cls, mesh, file_path: str, method: str = 'index') -> None`
+- `rig_utils/skinning.py::SkinUtils.mirror_weights(cls, mesh, axis: str = 'YZ', positive_to_negative: bool = True, surface_association: str = 'closestPoint', influence_association: Sequence[str] = ('label', 'closestJoint', 'oneToOne')) -> None`
+- `rig_utils/skinning.py::SkinUtils.normalize_weights(cls, skin_cluster) -> None`
+- `rig_utils/skinning.py::SkinUtils.prune_weights(cls, skin_cluster, below: float = 0.001) -> None`
+- `rig_utils/skinning.py::SkinUtils.set_max_influences(cls, skin_cluster, max_influences: int, enforce: bool = True) -> None`
+- `rig_utils/skinning.py::SkinUtils.set_skinning_method(cls, skin_cluster, method: str = 'dqs') -> None`
+- `rig_utils/skinning.py::SkinUtils.set_vertex_weights(cls, skin_cluster, vertex_weights: Dict[int, Dict[str, float]], undoable: bool = True) -> None`
+- `rig_utils/skinning.py::SkinUtils.set_weights(cls, skin_cluster, weights: Sequence[float], influences: Optional[List[str]] = None, vertices: Optional[Sequence[int]] = None, normalize: bool = True, undoable: bool = False) -> List[float]`
+- `rig_utils/skinning.py::SkinUtils.unbind(cls, mesh) -> bool`
+- `rig_utils/tube_rig.py::TubePath.estimate_radius(mesh, centerline: List) -> Optional[float]`
+- `rig_utils/tube_rig.py::TubeRig.create_anchor_controls(self, joints: List[str], size: float = 1.0, enable_stretch: bool = True) -> List[str]`
+- `rig_utils/tube_rig.py::TubeRig.create_anchor_joints(self, centerline: List, radius: float = 1.0) -> List[str]`
+- `rig_utils/tube_rig.py::TubeRig.create_fk_controls(self, joints: List[str], size: float = 1.0) -> List[str]`
+- `rig_utils/tube_rig.py::TubeRig.create_spline_controls(self, joints: List[str], centerline: Optional[List] = None, size: float = 1.0, num_controls: int = 3, enable_stretch: bool = True, enable_squash: bool = True, enable_volume: bool = True, enable_twist: bool = True, enable_auto_bend: bool = False) -> Tuple[List[str], str, str]`
+- `rig_utils/tube_rig.py::TubeRig.estimate_tube_radius(self, centerline: List = None) -> Optional[float]`
+- `rig_utils/tube_rig.py::TubeRig.resolve_centerline(self, num_joints: int = -1, edges: list = None) -> Tuple[List, int]`
+- `rig_utils/tube_rig.py::TubeRig.resolve_sizes(self, centerline: List = None, joint_radius: float = -1.0) -> Tuple[float, float]`
+- `ui_utils/hotkey_collisions.py::ensure_editable_hotkey_set(name: str = MACRO_HOTKEY_SET) -> str`
+- `uv_utils/shell_xform.py::ShellXformSlots(class)`
+- `uv_utils/shell_xform.py::ShellXformSlots.align_u_avg(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.align_u_max(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.align_u_min(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.align_v_avg(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.align_v_max(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.align_v_min(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.b023(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.b024(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.b025(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.b026(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.b034(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.b035(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.b036(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.b037(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.gather_shells(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.header_init(self, widget)`
+- `uv_utils/shell_xform.py::ShellXformSlots.linear_align(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.open_uv_editor(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.orient_edges(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.orient_shells(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.randomize_shells(self)`
+- `uv_utils/shell_xform.py::ShellXformSlots.s041(self, value, widget)`
+- `uv_utils/shell_xform.py::ShellXformSlots.tb005(self, widget)`
+- `uv_utils/shell_xform.py::ShellXformSlots.tb005_init(self, widget)`
+- `uv_utils/shell_xform.py::ShellXformSlots.tb006(self, widget)`
+- `uv_utils/shell_xform.py::ShellXformSlots.tb006_init(self, widget)`
+- `uv_utils/shell_xform.py::ShellXformSlots.tb008(self, widget)`
+- `uv_utils/shell_xform.py::ShellXformSlots.tb008_init(self, widget)`
+
+## Signature changed (7)
+
+- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.bake_fused`
+  - was: `(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, uv_set: Optional[str] = None, map_size: Optional[int] = None, create_uvs: bool = True, dilate: bool = True, dilate_iterations: Optional[int] = None, alpha_threshold: float = 0.001, prefix: str = 'lightmap_', suffix: str = '', backend: str = 'arnold', on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Any] = None) -> Dict[str, str]`
+  - now: `(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, uv_set: Optional[str] = None, map_size: Optional[int] = None, create_uvs: bool = True, dilate: bool = True, dilate_iterations: Optional[int] = None, alpha_threshold: float = 0.001, prefix: str = 'lightmap_', suffix: str = '', backend: str = 'arnold', on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Any] = None, shader: Optional[str] = None, batch: bool = False) -> Dict[str, str]`
+- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.bake_separated`
+  - was: `(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'lightmap_irr_', **kwargs) -> Dict[str, str]`
+  - now: `(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'lightmap_irr_', batch: bool = True, **kwargs) -> Dict[str, str]`
+- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.commit_lightmap`
+  - was: `(self, mapping: Dict[str, str], intensity: float = 1.0, scale_offsets: Optional[Dict[str, List[float]]] = None) -> Dict[str, str]`
+  - now: `(self, mapping: Dict[str, str], intensity: float = 1.0, scale_offsets: Optional[Dict[str, List[float]]] = None, uv_rects: Optional[Dict[str, List[float]]] = None) -> Dict[str, str]`
+- `mat_utils/texture_baker.py::TextureBaker.bake`
+  - was: `(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'bake_', suffix: str = '', backend: str = 'auto', uv_set: Optional[Union[str, Dict[str, str]]] = None, on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Union[Callable[[str], str], Dict[str, str]]] = None) -> Dict[str, str]`
+  - now: `(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'bake_', suffix: str = '', backend: str = 'auto', uv_set: Optional[Union[str, Dict[str, str]]] = None, on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Union[Callable[[str], str], Dict[str, str]]] = None, shader: Optional[str] = None, batch: bool = False) -> Dict[str, str]`
+- `rig_utils/shadow_rig.py::ShadowRig.create`
+  - was: `(cls, targets, light_pos=(5, 10, 5), texture_res=512, axis='auto', source_name='shadow_source', recursive=True, mode='stretch')`
+  - now: `(cls, targets, light_pos=(5, 10, 5), texture_res=512, axis='auto', source_name='shadow_source', recursive=True, mode='stretch', ground_height=0.0)`
+- `rig_utils/tube_rig.py::TubeRig.bind_joint_chain`
+  - was: `(self, obj, joints: List[str]) -> Optional[str]`
+  - now: `(self, obj, joints: List[str], curve: Optional[str] = None, centerline: Optional[List] = None) -> Optional[str]`
+- `rig_utils/tube_rig.py::TubeRig.skin_mesh`
+  - was: `(self, joints: List[str]) -> Optional[str]`
+  - now: `(self, joints: List[str], curve: Optional[str] = None, centerline: Optional[List] = None, skinning_method: str = 'dqs', mesh: Optional[str] = None) -> Optional[str]`

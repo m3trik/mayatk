@@ -179,6 +179,13 @@ class TestBakeNaming(unittest.TestCase):
         self.assertEqual(os.path.basename(p2), "Shared_Lightmap_1.exr")
         self.assertEqual(os.path.basename(p3), "Shared_Lightmap_2.exr")
 
+    def test_unique_path_honors_effective_format(self):
+        # bake() overrides the requested format with the backend's effective
+        # one (Arnold RTT has no format flag; it always writes EXR).
+        b = TextureBaker(file_format="png")
+        path = b._unique_path("/out", "Card", set(), "exr")
+        self.assertEqual(os.path.basename(path), "Card.exr")
+
 
 @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
 class TestBakeStemEndToEnd(MayaTkTestCase):
@@ -201,6 +208,91 @@ class TestBakeStemEndToEnd(MayaTkTestCase):
         self.assertEqual(seen[-1], (1, 1))  # final completion tick → 100%
 
 
+@unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+class TestPinnedRenderSettings(MayaTkTestCase):
+    """render_settings are pinned on defaultArnoldRenderOptions, then restored."""
+
+    def test_settings_set_during_bake_and_restored_after(self):
+        from mtoa.core import createOptions
+
+        createOptions()
+        node = "defaultArnoldRenderOptions"
+        cmds.setAttr(f"{node}.GIDiffuseDepth", 1)  # a known pre-bake state
+
+        b = TextureBaker(render_settings={"GIDiffuseDepth": 4})
+        with b._pinned_render_settings("arnold"):
+            self.assertEqual(cmds.getAttr(f"{node}.GIDiffuseDepth"), 4)
+        self.assertEqual(cmds.getAttr(f"{node}.GIDiffuseDepth"), 1)  # restored
+
+    def test_unknown_attr_is_skipped_not_fatal(self):
+        b = TextureBaker(render_settings={"NoSuchArnoldAttr": 7, "GIDiffuseDepth": 2})
+        with b._pinned_render_settings("arnold"):
+            self.assertEqual(
+                cmds.getAttr("defaultArnoldRenderOptions.GIDiffuseDepth"), 2
+            )
+
+    def test_non_arnold_backend_is_a_noop(self):
+        b = TextureBaker(render_settings={"GIDiffuseDepth": 4})
+        with b._pinned_render_settings("convertSolidTx"):
+            pass  # must not require or touch the Arnold options node
+
+    def test_batch_bakes_all_objects_in_one_call(self):
+        # Batch mode: one RTT call for the whole selection (7.45x measured);
+        # per-shape files must map back to the right objects with the same
+        # naming convention as the per-object loop.
+        a = cmds.polyCube(name="batchA")[0]
+        b = cmds.polyCube(name="batchB")[0]
+        tmp = tempfile.mkdtemp(prefix="bake_batch_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        ticks = []
+        result = TextureBaker(resolution=16, samples=1, file_format="exr").bake(
+            [a, b], output_dir=tmp, prefix="", suffix="_LM", backend="arnold",
+            batch=True,
+            on_progress=lambda d, t, n: ticks.append((d, t)) or True,
+        )
+        self.assertEqual(len(result), 2)
+        names = sorted(os.path.basename(p) for p in result.values())
+        self.assertEqual(names, ["batchA_LM.exr", "batchB_LM.exr"])
+        for p in result.values():
+            self.assertTrue(os.path.exists(p))
+        # One cancellable start tick + the final completion tick.
+        self.assertEqual(ticks[0], (0, 2))
+        self.assertEqual(ticks[-1], (2, 2))
+
+    def test_batch_duplicate_shape_leaves_fall_back_to_loop(self):
+        # RTT names batch output by shape leaf -- duplicates would overwrite
+        # each other, so the batch must detect them and fall back per-object
+        # (which dir-diffs between calls and stays collision-free).
+        a = cmds.polyCube(name="dupBatch")[0]
+        cmds.group(a, name="dupBatchGrp")
+        la = cmds.ls("dupBatchGrp|dupBatch", long=True)[0]
+        lb = cmds.ls(cmds.polyCube(name="dupBatch")[0], long=True)[0]
+        tmp = tempfile.mkdtemp(prefix="bake_dupbatch_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        result = TextureBaker(resolution=16, samples=1, file_format="exr").bake(
+            [la, lb], output_dir=tmp, prefix="", suffix="", backend="arnold",
+            batch=True,
+        )
+        self.assertEqual(len(result), 2)  # both baked despite the collision
+        self.assertNotEqual(result[la], result[lb])  # distinct files
+        for p in result.values():
+            self.assertTrue(os.path.exists(p))
+
+    def test_arnold_format_request_is_pinned_to_exr(self):
+        # A png request with the Arnold backend must yield real .exr output
+        # (RTT has no format flag), not EXR bytes behind a .png name.
+        cube = cmds.polyCube(name="fmtCube")[0]
+        tmp = tempfile.mkdtemp(prefix="bake_fmt_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        result = TextureBaker(resolution=16, samples=1, file_format="png").bake(
+            [cube], output_dir=tmp, backend="arnold"
+        )
+        self.assertTrue(result)
+        path = next(iter(result.values()))
+        self.assertTrue(path.endswith(".exr"), path)
+        self.assertTrue(os.path.exists(path))
+
+
 def run_tests():
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
@@ -210,6 +302,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestBakeProgressCallback))
     suite.addTests(loader.loadTestsFromTestCase(TestBakeNaming))
     suite.addTests(loader.loadTestsFromTestCase(TestBakeStemEndToEnd))
+    suite.addTests(loader.loadTestsFromTestCase(TestPinnedRenderSettings))
     return unittest.TextTestRunner(verbosity=2).run(suite)
 
 

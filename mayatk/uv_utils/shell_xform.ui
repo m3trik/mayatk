@@ -68,7 +68,7 @@
          </font>
         </property>
         <property name="text">
-         <string>UV Transform</string>
+         <string>Shell Xform</string>
         </property>
        </widget>
       </item>

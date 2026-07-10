@@ -322,6 +322,8 @@ except Exception as e:
             "test_mat_utils",
             "test_xform_utils",
             "test_rig_utils",
+            "test_shadow_rig",
+            "test_skinning",
             "test_env_utils",
             "test_scale_keys",
             "test_stagger_keys",
@@ -458,7 +460,19 @@ except Exception as e:
             results_summary = []
 
             # Snapshot real Maya modules so tests that mock sys.modules
-            # don't pollute later test modules.
+            # don't pollute later test modules. Import the core ones first so
+            # the snapshot is complete — a key missing here can never be
+            # restored, so a mock injected for it would survive the
+            # per-module cleanup (and the package ATTRIBUTE it binds would
+            # reroute every later `import maya.cmds as cmds`).
+            for _k in (
+                "maya.cmds", "maya.mel",
+                "maya.api.OpenMaya", "maya.api.OpenMayaAnim",
+            ):
+                try:
+                    __import__(_k)
+                except Exception:
+                    pass
             _real_module_keys = (
                 "maya", "maya.cmds", "maya.mel", "maya.OpenMaya", "maya.OpenMayaUI",
                 "maya.api", "maya.api.OpenMaya", "maya.api.OpenMayaAnim",
@@ -558,9 +572,27 @@ except Exception as e:
                         f.write(f"  {{str(e)}}\\n")
                 finally:
                     # Restore real Maya modules in case the just-loaded
-                    # test patched sys.modules with mocks.
+                    # test patched sys.modules with mocks; evict entries for
+                    # keys that had no real module to snapshot (a leftover
+                    # fake would short-circuit the next real import).
+                    for _k in _real_module_keys:
+                        if _k in _real_modules_snapshot:
+                            sys.modules[_k] = _real_modules_snapshot[_k]
+                        else:
+                            sys.modules.pop(_k, None)
+                    # Also restore the parent-package ATTRIBUTES:
+                    # `import maya.cmds as cmds` resolves via
+                    # getattr(maya, 'cmds') BEFORE falling back to
+                    # sys.modules, so a leaked attribute mock reroutes every
+                    # later module's import even after sys.modules is
+                    # restored (this is how a single leaked mock broke every
+                    # module alphabetically after its test file).
                     for _k, _real_mod in _real_modules_snapshot.items():
-                        sys.modules[_k] = _real_mod
+                        if "." in _k:
+                            _parent_name, _child_name = _k.rsplit(".", 1)
+                            _parent_mod = _real_modules_snapshot.get(_parent_name)
+                            if _parent_mod is not None:
+                                setattr(_parent_mod, _child_name, _real_mod)
                     # Clear cached mayatk modules so the next test re-imports
                     # against the restored real Maya modules.
                     for _k in [k for k in list(sys.modules.keys()) if k.startswith("mayatk")]:

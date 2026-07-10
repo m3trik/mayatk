@@ -253,6 +253,11 @@ class FbxUtils(ptk.HelpMixin):
             "AudioClips",
             "prepare_for_export",
         ),
+        "shadow": (
+            "mayatk.rig_utils.shadow_rig",
+            "ShadowRig",
+            "refresh_export_metadata",
+        ),
     }
 
     @staticmethod

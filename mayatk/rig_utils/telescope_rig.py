@@ -185,6 +185,8 @@ class TelescopeRigSlots(ptk.LoggingMixin):
         # Connect Signals
         self.ui.btn_build.clicked.connect(self.build_rig)
 
+        self._init_tooltips()
+
     def _on_log_link_clicked(self, url) -> None:
         """Dispatch clickable ``action://`` links from the log panel."""
         from mayatk.ui_utils._ui_utils import UiUtils
@@ -196,21 +198,66 @@ class TelescopeRigSlots(ptk.LoggingMixin):
         widget.set_help_text(
             fmt(
                 title="Telescope Rig",
-                body="Build a telescoping segment rig where segments extend "
-                "and retract between a base and end locator, driven by their "
-                "distance.",
+                body="Build a telescoping segment rig where nested segments "
+                "extend and retract between a base and end locator, driven by "
+                "the distance between them.",
+                sections=[
+                    (
+                        "Selection order",
+                        [
+                            "<b>Base</b> locator — selected first.",
+                            "<b>Segments</b> — min 2, in extension order.",
+                            "<b>End</b> locator — selected last.",
+                        ],
+                    ),
+                ],
                 steps=[
-                    "Place locators / segments and select them <b>in order</b>:",
-                    "  &nbsp;1. Base locator (first)",
-                    "  &nbsp;2. Segments (min 2, in extension order)",
-                    "  &nbsp;3. End locator (last)",
+                    "Select the base, the segments, and the end locator in "
+                    "that order.",
                     "Set <b>Collapsed Distance</b> — the base-to-end distance "
-                    "at which segments are fully retracted.",
+                    "at which the segments are fully retracted.",
                     "Press <b>Build</b> to wire driven keys on each segment.",
                 ],
                 notes=[
                     "Build results stream to the log panel; locator names are "
                     "rendered as clickable <i>action://</i> links that select "
+                    "the node in Maya.",
+                ],
+            )
+        )
+
+    def _init_tooltips(self):
+        """Set the polished (uitk ``fmt``) tooltips for every option and action."""
+        ui = self.ui
+
+        ui.spin_collapsed.setToolTip(
+            fmt(
+                title="Collapsed Distance",
+                body="Base-to-end distance at which the segments are fully "
+                "retracted (nested). As the end locator pulls farther than "
+                "this, the segments slide apart to bridge the gap.",
+                notes=[
+                    "Pose the rig fully collapsed first, then enter that "
+                    "base-to-end distance here.",
+                ],
+            )
+        )
+        ui.btn_build.setToolTip(
+            fmt(
+                title="Build Telescope Rig",
+                body="Wires distance-driven keys onto each segment so they "
+                "extend and retract as the gap between the base and end "
+                "locators changes.",
+                steps=[
+                    "Select the <b>base</b> locator first.",
+                    "<b>Shift</b>-select the <b>segments</b> in extension "
+                    "order <i>(min 2)</i>.",
+                    "<b>Shift</b>-select the <b>end</b> locator last.",
+                    "Press <b>Build Telescope Rig</b>.",
+                ],
+                notes=[
+                    "Needs at least 4 objects: base + 2 segments + end.",
+                    "Node names in the log are clickable links that select "
                     "the node in Maya.",
                 ],
             )

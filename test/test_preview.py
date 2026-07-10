@@ -23,7 +23,11 @@ except ImportError:
     QtWidgets = None
 
 from base_test import MayaTkTestCase
-from mayatk.core_utils.preview import Preview, apply_result_selection
+from mayatk.core_utils.preview import (
+    CleanupContract,
+    Preview,
+    apply_result_selection,
+)
 import maya.cmds as cmds
 
 
@@ -297,6 +301,56 @@ class TestPreview(MayaTkTestCase):
 
         self.assertFalse(self.chk.isChecked())
         self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
+
+
+class TestCleanupContractAttrRestore(MayaTkTestCase):
+    """attr-snapshot restore across value types (Qt-free, direct contract)."""
+
+    def test_rollback_restores_string_attr(self):
+        """A snapshotted STRING channel must restore on rollback — a bare
+        setAttr raises on string attrs (they need type="string"), which the
+        restore loop previously swallowed, leaving the mutated value behind
+        (regression: data_export producer channels — e.g. shadow_metadata —
+        snapshotted by a previewed op)."""
+        node = cmds.createNode("transform", name="contract_str_node")
+        cmds.addAttr(node, ln="payload", dt="string")
+        cmds.setAttr(f"{node}.payload", "before", type="string")
+
+        contract = CleanupContract()
+        contract.record_modification(node, "payload")
+        cmds.setAttr(f"{node}.payload", "after", type="string")
+        contract.rollback()
+
+        self.assertEqual(cmds.getAttr(f"{node}.payload"), "before")
+
+    def test_rollback_restores_float_attr(self):
+        """The pre-existing scalar path still restores (guard for the new
+        string branch not disturbing it)."""
+        node = cmds.createNode("transform", name="contract_flt_node")
+        contract = CleanupContract()
+        contract.record_modification(node, "translateY")
+        cmds.setAttr(f"{node}.translateY", 5.0)
+        contract.rollback()
+        self.assertAlmostEqual(cmds.getAttr(f"{node}.translateY"), 0.0, places=5)
+
+    def test_rollback_deletes_attr_added_after_snapshot(self):
+        """Recording an attr that does not exist yet must roll back by
+        DELETING it (regression: previewing a shadow rig in a scene whose
+        data_export carrier pre-existed — created by Shots/Audio — left a
+        stale shadow_metadata channel behind after canceling the preview,
+        because the missing-attr getAttr raised and the snapshot was
+        silently skipped)."""
+        node = cmds.createNode("transform", name="contract_new_attr_node")
+        contract = CleanupContract()
+        contract.record_modification(node, "payload")
+        cmds.addAttr(node, ln="payload", dt="string")
+        cmds.setAttr(f"{node}.payload", "added by op", type="string")
+        contract.rollback()
+
+        self.assertFalse(
+            cmds.attributeQuery("payload", node=node, exists=True),
+            "attr added after the snapshot survived rollback",
+        )
 
 
 @unittest.skipIf(QtWidgets is None, "Qt not available")

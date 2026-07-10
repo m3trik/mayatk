@@ -2,18 +2,18 @@
 # coding=utf-8
 """Dedicated UV shell-transform panel.
 
-Provides :class:`UvTransformSlots` — the Switchboard slots class for the
-``uv_transform.ui`` panel. It gathers every UV shell transform into one
+Provides :class:`ShellXformSlots` — the Switchboard slots class for the
+``shell_xform.ui`` panel. It gathers every UV shell transform into one
 polished, grouped window: the four move-to-UV-space arrows, Flip / Rotate,
 the Straighten / Mirror / Distribute tools, plus Align / Orient shell
 helpers.
 
 The panel is co-located with its engine (:class:`mayatk.UvUtils`) and
 discovered automatically by :class:`mayatk.ui_utils.MayaUiHandler`, so
-``self.sb.handlers.marking_menu.show("uv_transform")`` works from anywhere
-with no explicit registration (the tentacle UV panel exposes it via a
-single ``Transform`` button). Blender ships the mirror panel in
-``blendertk.uv_utils.uv_transform`` (a subset — the Maya-only align /
+``self.sb.handlers.marking_menu.show("shell_xform")`` works from anywhere
+with no explicit registration (the tentacle UV panel's Transform group
+exposes it via a ``More..`` button). Blender ships the mirror panel in
+``blendertk.uv_utils.shell_xform`` (a subset — the Maya-only align /
 orient ops have no bpy analogue).
 """
 try:
@@ -33,8 +33,8 @@ from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.uv_utils._uv_utils import UvUtils
 
 
-class UvTransformSlots(ptk.LoggingMixin):
-    """Switchboard slots for the UV Transform panel (``uv_transform.ui``).
+class ShellXformSlots(ptk.LoggingMixin):
+    """Switchboard slots for the Shell Xform panel (``shell_xform.ui``).
 
     Composition over inheritance: the slots dispatch to :class:`mayatk.UvUtils`
     and Maya's native UV commands. Widget naming follows the cross-DCC parity
@@ -57,7 +57,7 @@ class UvTransformSlots(ptk.LoggingMixin):
         self.logger.setLevel(log_level)
 
         self.sb = switchboard
-        self.ui = self.sb.loaded_ui.uv_transform
+        self.ui = self.sb.loaded_ui.shell_xform
 
         # The move-pad icons are installed on the next event-loop tick: the
         # switchboard builds this slots instance mid-load, so the child widgets
@@ -74,7 +74,8 @@ class UvTransformSlots(ptk.LoggingMixin):
 
     def header_init(self, widget):
         """Header menu — Open UV Editor + panel help."""
-        widget.config_buttons("menu", "collapse", "hide")
+        # Gesture-scoped window: pin button + auto-hide on key_show release.
+        widget.config_buttons("menu", "collapse", "pin")
         widget.menu.add(
             "QPushButton",
             setText="Open UV Editor",
@@ -84,7 +85,7 @@ class UvTransformSlots(ptk.LoggingMixin):
         widget.menu.open_uv_editor.clicked.connect(self.open_uv_editor)
         widget.set_help_text(
             fmt(
-                title="UV Transform",
+                title="Shell Xform",
                 body="Move, flip, rotate, align, orient, and distribute the "
                 "selected UV shells.",
                 steps=[
@@ -407,5 +408,5 @@ class UvTransformSlots(ptk.LoggingMixin):
 if __name__ == "__main__":
     from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
 
-    ui = MayaUiHandler.instance().get("uv_transform", reload=True)
+    ui = MayaUiHandler.instance().get("shell_xform", reload=True)
     ui.show(pos="screen", app_exec=True)

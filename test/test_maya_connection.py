@@ -36,6 +36,22 @@ class TestMayaConnection(MayaTkTestCase):
         self.assertIsNone(conn.mode)
         self.assertFalse(conn.is_connected)
 
+    def test_get_available_port_skips_bound_but_not_listening(self):
+        # Regression (2026-07-09): a hung Maya can hold a bound socket without
+        # listening. A connect probe reads that as "free", the runner launches
+        # a new Maya on it, its commandPort can't bind, and the port never
+        # opens. The availability check must be bind-based.
+        import socket
+
+        squatter = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        squatter.bind(("127.0.0.1", 0))  # bound, deliberately NOT listening
+        squatted = squatter.getsockname()[1]
+        try:
+            picked = MayaConnection.get_available_port(start_port=squatted)
+            self.assertNotEqual(picked, squatted)
+        finally:
+            squatter.close()
+
     @unittest.skipUnless(MAYA_AVAILABLE, "Maya not available")
     def test_detect_mode_interactive(self):
         """Test mode detection inside Maya."""

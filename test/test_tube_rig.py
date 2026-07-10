@@ -304,6 +304,95 @@ class TestJointChainRobustness(unittest.TestCase):
         self.assertLess(abs(xs[0] - (-5.0)), 0.3, f"start at x={xs[0]}")
         self.assertLess(abs(xs[-1] - 5.0), 0.3, f"end at x={xs[-1]}")
 
+    def test_triangulated_tube_fallback_covers_ends(self):
+        """Regression: triangulated meshes (imported/booleaned geo) have no
+        quad loops, so the centerline silently fell back to surface-normal
+        sampling whose end estimates were pulled ~1 radius inward by the cap
+        planes — ~20% of the tube was left unrigged."""
+        tube = _make_tube()  # spans x in [-5, 5]
+        cmds.polyTriangulate(tube)
+        cmds.delete(tube, ch=True)
+        pts, n = TubePath.get_centerline(tube, num_joints=-1)
+        self.assertGreaterEqual(len(pts), 2)
+        xs = sorted(p[0] for p in pts)
+        self.assertLess(abs(xs[0] - (-5.0)), 0.35, f"start at x={xs[0]}")
+        self.assertLess(abs(xs[-1] - 5.0), 0.35, f"end at x={xs[-1]}")
+
+    def test_for_node_after_create_joints_only(self):
+        """The step workflow (b001 'Create Joints' → b002 'Create Controls')
+        never calls build(), and only build() registered the rig group — so
+        looking the rig up from a selected joint always missed and b002
+        silently spun up a second rig with a mangled name."""
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="StepWise")
+        centerline, n = TubePath.get_centerline(tube, num_joints=-1)
+        joints = rig.generate_joint_chain(centerline, num_joints=n)
+        self.assertIs(TubeRig.for_node(joints[-1]), rig)
+
+    def test_group_selection_resolves_to_tube(self):
+        """Regression (live 2026-07-09): selecting the GROUP containing the
+        tube (common outliner pick) crashed ``get_centerline`` —
+        ``polyListComponentConversion`` expands a group's descendants to
+        edges, but ``polySelect`` drops non-mesh transforms, dying with
+        'This command requires at least 1 argument...; found 0'."""
+        tube = _make_tube()  # spans x in [-5, 5]
+        grp = cmds.group(tube, name="Hose_GRP")
+        pts, _ = TubePath.get_centerline(grp, num_joints=-1)
+        xs = sorted(p[0] for p in pts)
+        self.assertLess(abs(xs[0] - (-5.0)), 0.3, f"start at x={xs[0]}")
+        self.assertLess(abs(xs[-1] - 5.0), 0.3, f"end at x={xs[-1]}")
+        # Full build from the group selection (b000 path) must also work.
+        rig = TubeRig(grp, rig_name="GroupSel")
+        rig.build(strategy="spline", num_joints=-1)
+        self.assertTrue(rig.bundle.joints)
+        self.assertTrue(
+            cmds.ls(cmds.listHistory(tube) or [], type="skinCluster"),
+            "mesh was not skinned when the rig was built from its group",
+        )
+
+    def test_multi_shape_transform_uses_first_shape(self):
+        """Same live crash, second trigger: a transform carrying a leftover
+        second mesh shape made ``polySelect``'s shape resolution ambiguous."""
+        tube = _make_tube()  # spans x in [-5, 5]
+        extra = cmds.polyCylinder(r=1, h=4, sy=2, sx=8, ax=(1, 0, 0))[0]
+        extra_shape = cmds.listRelatives(extra, shapes=True)[0]
+        cmds.parent(extra_shape, tube, shape=True, relative=True)
+        cmds.delete(extra)
+        pts, _ = TubePath.get_centerline(tube, num_joints=-1)
+        xs = sorted(p[0] for p in pts)
+        self.assertLess(abs(xs[0] - (-5.0)), 0.3, f"start at x={xs[0]}")
+        self.assertLess(abs(xs[-1] - 5.0), 0.3, f"end at x={xs[-1]}")
+
+    def test_meshless_input_raises_cleanly(self):
+        """An empty group used to reach the sampler fallback and die with
+        the cryptic \"The source attribute 'None.outMesh' cannot be
+        found\" — it must raise a clear ValueError instead."""
+        grp = cmds.group(empty=True, name="NoMesh_GRP")
+        with self.assertRaisesRegex(ValueError, "[Nn]o polygon mesh"):
+            TubePath.get_centerline(grp, num_joints=-1)
+
+    def test_rig_name_with_illegal_characters(self):
+        """Regression: user-typed rig names flow verbatim from the UI
+        (txt000) into ``cmds.ls`` patterns and node names. 'hose-01' /
+        'my rig' raised RuntimeError in the stale-joint sweep before any
+        joint was created; names Maya auto-sanitizes on createNode (leading
+        digit, '*') no longer matched the sweep pattern, so reruns
+        accumulated duplicate chains."""
+        tube = _make_tube()
+        centerline, n = TubePath.get_centerline(tube, num_joints=-1)
+        for bad_name in ("hose-01", "my rig", "hose*", "1hose"):
+            rig = TubeRig(tube, rig_name=bad_name)
+            joints = rig.generate_joint_chain(centerline, num_joints=n)
+            self.assertEqual(len(joints), n, f"rig_name={bad_name!r}")
+            self.assertTrue(all(cmds.objExists(str(j)) for j in joints))
+            count_first = len(cmds.ls(type="joint"))
+            rig.generate_joint_chain(centerline, num_joints=n)  # rerun replaces
+            self.assertEqual(
+                len(cmds.ls(type="joint")),
+                count_first,
+                f"rerun accumulated joints for rig_name={bad_name!r}",
+            )
+
 
 class TestGetCenterlineUsingEdges(unittest.TestCase):
     """``get_centerline_using_edges`` must return points on the tube's
@@ -424,6 +513,575 @@ class TestTubeRigCleanExport(unittest.TestCase):
         self.assertAlmostEqual(
             ws[0], 2.0, places=3, msg="Spline Joint X scale incorrect"
         )
+
+
+def _make_tube_longitudinal_first_edge(
+    stations=8,
+    sides=6,
+    length=14.0,
+    radius=1.0,
+    name="longEdgeTube",
+    capped=True,
+    end_tilt=0.0,
+):
+    """A tube whose edge 0 is LONGITUDINAL.
+
+    Maya numbers edges in face-creation order, so authoring face 0 with its
+    first edge running down the tube guarantees ``e[0]`` is longitudinal —
+    the seed orientation that transposes edge-loop traversal (user-modeled
+    pipes commonly have this layout; polyCylinder does not).
+
+    Parameters:
+        capped (bool): False leaves the ends as open boundary rings.
+        end_tilt (float): Shears each end station along X by
+            ``end_tilt * radius * cos(a)`` — an angled opening whose rim
+            extends past the ring centroid's plane (user-modeled pipe ends
+            are commonly cut at an angle).
+    """
+    import maya.api.OpenMaya as om
+
+    points = []
+    for s in range(stations):
+        x = -length / 2 + length * s / (stations - 1)
+        for k in range(sides):
+            a = 2.0 * math.pi * k / sides
+            tilt = 0.0
+            if end_tilt and s in (0, stations - 1):
+                tilt = end_tilt * radius * math.cos(a) * (1 if s else -1)
+            points.append(
+                om.MPoint(x + tilt, radius * math.cos(a), radius * math.sin(a))
+            )
+
+    def vid(s, k):
+        return s * sides + (k % sides)
+
+    counts, connects = [], []
+    for s in range(stations - 1):
+        for k in range(sides):
+            counts.append(4)
+            # First edge vid(s,k) -> vid(s+1,k) is longitudinal.
+            connects += [vid(s, k), vid(s + 1, k), vid(s + 1, k + 1), vid(s, k + 1)]
+    if capped:
+        cap_start = len(points)
+        points.append(om.MPoint(-length / 2, 0, 0))
+        cap_end = len(points)
+        points.append(om.MPoint(length / 2, 0, 0))
+        for k in range(sides):  # cap fans
+            counts.append(3)
+            connects += [cap_start, vid(0, k + 1), vid(0, k)]
+            counts.append(3)
+            connects += [cap_end, vid(stations - 1, k), vid(stations - 1, k + 1)]
+
+    fn = om.MFnMesh()
+    transform_obj = fn.create(points, counts, connects)
+    transform = om.MFnDagNode(transform_obj).setName(name)
+    cmds.sets(f"{transform}.f[*]", forceElement="initialShadingGroup")
+    return transform
+
+
+class TestEdgeLoopOrientation(unittest.TestCase):
+    """Regression (2026-07-09, live report): auto-joints clustered in a ring
+    near one bend on a user-modeled pipe. ``get_edge_loop_centers`` seeded
+    from ``all_edges[0]`` assuming it was circumferential; on meshes where
+    e[0] is longitudinal the loop/ring traversal transposes and every
+    "cross-section centre" is a longitudinal-strip centroid — a small ring
+    of points around the mesh centroid instead of a path down the tube."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def test_longitudinal_first_edge_tube(self):
+        length, stations = 14.0, 8
+        tube = _make_tube_longitudinal_first_edge(length=length, stations=stations)
+
+        # The edge-loop path itself must find the cross-section rings — a
+        # sampler fallback also spans the tube, so assert the unit directly
+        # (closed pentagon/hex rings come back from polySelect with the seed
+        # edge repeated; the closure test must not misread that as open).
+        centers, count = TubePath.get_edge_loop_centers(tube)
+        self.assertGreaterEqual(
+            count,
+            stations - 1,
+            f"edge-loop path found only {count} cross-sections of {stations}",
+        )
+
+        pts, resolved = TubePath.get_centerline(tube, num_joints=-1)
+        self.assertGreaterEqual(resolved, 4)
+        xs = [p[0] for p in pts]
+        span = max(xs) - min(xs)
+        self.assertGreater(
+            span,
+            0.8 * length,
+            f"centerline collapsed: x-span {span:.2f} of {length} "
+            f"(longitudinal loops mistaken for cross-sections)",
+        )
+        for p in pts:
+            r = math.hypot(p[1], p[2])
+            self.assertLess(
+                r, 0.35, f"centerline point off-axis by {r:.3f} (radius=1)"
+            )
+
+    def test_open_angled_tube_ends_stay_on_axis(self):
+        """Regression (2026-07-09, live report): on an OPEN tube whose ends
+        are cut at an angle, ``_complete_cap_ends`` appended a RIM vertex as
+        the "end centre" (there is no cap for the past-the-end seed to hit,
+        and an angled rim projects beyond the end ring's centroid plane) —
+        hooking the end joints off-axis toward an opening vertex."""
+        tube = _make_tube_longitudinal_first_edge(
+            name="openAngledTube", capped=False, end_tilt=0.8
+        )
+        pts, _ = TubePath.get_centerline(tube, num_joints=-1)
+        self.assertGreaterEqual(len(pts), 4)
+        for p in pts:
+            r = math.hypot(p[1], p[2])
+            self.assertLess(
+                r,
+                0.35,
+                f"end centerline point hooked to the rim: off-axis by {r:.3f} "
+                f"(radius=1)",
+            )
+
+
+class TestTubeRigSkinning(unittest.TestCase):
+    """Precision skinning wired through SkinUtils (2026-07-09).
+
+    Every strategy now solves analytic arc-length weights along its
+    centerline/IK curve (ring-uniform, smooth cubic basis — max 4
+    influences) and binds with dual quaternion skinning.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _mesh_skin_cluster(self, mesh):
+        clusters = cmds.ls(cmds.listHistory(mesh) or [], type="skinCluster")
+        self.assertEqual(len(clusters), 1)
+        return clusters[0]
+
+    def _rings_by_x(self, mesh):
+        rings = {}
+        for i, (x, _, _) in enumerate(_all_vertex_positions(mesh)):
+            rings.setdefault(round(x, 3), []).append(i)
+        return rings
+
+    def test_spline_build_dqs_parametric(self):
+        from mayatk.rig_utils.skinning import SkinUtils
+
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="SkinSpline")
+        rig.build(strategy="spline")
+
+        sc = self._mesh_skin_cluster(tube)
+        self.assertEqual(cmds.getAttr(f"{sc}.skinningMethod"), 1, "expected DQS")
+
+        weights, influences = SkinUtils.get_weights(sc)
+        n = len(influences)
+        for v in range(len(weights) // n):
+            row = weights[v * n : (v + 1) * n]
+            self.assertAlmostEqual(sum(row), 1.0, places=6)
+            # Cubic basis: at most degree + 1 = 4 influences per vertex.
+            self.assertLessEqual(len([w for w in row if w > 1e-9]), 4)
+        # Ring-uniform: every vertex in a cross-section shares its weights.
+        for x, verts in self._rings_by_x(tube).items():
+            for i in range(n):
+                column = [weights[v * n + i] for v in verts]
+                self.assertLess(
+                    max(column) - min(column),
+                    1e-4,
+                    f"ring x={x} influence {i} is not uniform",
+                )
+
+    def test_anchor_build_parametric_midpoint(self):
+        from mayatk.rig_utils.skinning import SkinUtils
+
+        tube = _make_tube()  # spans x in [-5, 5]
+        rig = TubeRig(tube, rig_name="SkinAnchor")
+        rig.build(strategy="anchor")
+
+        sc = self._mesh_skin_cluster(tube)
+        weights, influences = SkinUtils.get_weights(sc)
+        n = len(influences)
+        mid_ring = self._rings_by_x(tube).get(0.0) or []
+        self.assertTrue(mid_ring)
+        for v in mid_ring:
+            row = weights[v * n : (v + 1) * n]
+            for w in (row[0], row[-1]):
+                self.assertLess(abs(w - 0.5), 0.05, f"midpoint weights {row}")
+
+    def test_fk_build_skinned(self):
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="SkinFK")
+        rig.build(strategy="fk")
+
+        sc = self._mesh_skin_cluster(tube)
+        self.assertEqual(cmds.getAttr(f"{sc}.skinningMethod"), 1, "expected DQS")
+
+
+class TestStepOneClickParity(unittest.TestCase):
+    """The step-by-step operations (UI Steps 1/2/3) must run the same rig
+    methods as the one-click build — same components, same skinning."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _mesh_skin_cluster(self, mesh):
+        clusters = cmds.ls(cmds.listHistory(mesh) or [], type="skinCluster")
+        self.assertEqual(len(clusters), 1)
+        return clusters[0]
+
+    def test_spline_step_sequence_matches_one_click(self):
+        """Step 1 → 2 → 3 assembled by hand must yield the one-click result:
+        IK handle + drivers + a DQS parametric bind (max 4 influences)."""
+        from mayatk.rig_utils.skinning import SkinUtils
+
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="StepSpline")
+
+        centerline, n = rig.resolve_centerline(-1)
+        joint_radius, size = rig.resolve_sizes(centerline, -1.0)
+        joints = rig.generate_joint_chain(centerline, num_joints=n, radius=joint_radius)
+        controls, ik_handle, curve = rig.create_spline_controls(
+            joints, centerline=centerline, size=size
+        )
+        sc = rig.bind_joint_chain(tube, joints)
+
+        self.assertTrue(cmds.objExists(str(ik_handle)))
+        self.assertTrue(cmds.objExists(str(curve)))
+        self.assertEqual(len(controls), 3)
+        self.assertEqual(sc, self._mesh_skin_cluster(tube))
+        self.assertEqual(cmds.getAttr(f"{sc}.skinningMethod"), 1, "expected DQS")
+        weights, influences = SkinUtils.get_weights(sc)
+        n_inf = len(influences)
+        for v in range(len(weights) // n_inf):
+            row = weights[v * n_inf : (v + 1) * n_inf]
+            self.assertAlmostEqual(sum(row), 1.0, places=6)
+            self.assertLessEqual(
+                len([w for w in row if w > 1e-9]), 4, "parametric bind expected"
+            )
+
+    def test_anchor_step_sequence(self):
+        """Anchor Steps 1+2 (create_anchor_joints/controls) must reproduce the
+        strategy's structure: sibling end joints, constrained controls, and a
+        working distance-stretch network."""
+        tube = _make_tube()  # spans x in [-5, 5]
+        rig = TubeRig(tube, rig_name="StepAnchor")
+
+        centerline, _ = rig.resolve_centerline(2)
+        joint_radius, size = rig.resolve_sizes(centerline, -1.0)
+        joints = rig.create_anchor_joints(centerline, radius=joint_radius)
+        controls = rig.create_anchor_controls(joints, size=size)
+        sc = rig.bind_joint_chain(tube, joints)
+
+        self.assertTrue(sc)
+        self.assertEqual(len(joints), 2)
+        # Siblings, not a chain.
+        j2_parents = cmds.listRelatives(joints[1], parent=True, fullPath=True) or []
+        self.assertNotIn(str(joints[0]).split("|")[-1], str(j2_parents[0]))
+        # Stretch drives the start joint's scaleX.
+        self.assertTrue(
+            cmds.listConnections(f"{joints[0]}.scaleX", source=True, destination=False)
+        )
+        # Controls constrain their joints.
+        for jnt in joints:
+            self.assertTrue(cmds.listRelatives(jnt, type="pointConstraint"))
+            self.assertTrue(cmds.listRelatives(jnt, type="orientConstraint"))
+        self.assertEqual(len(controls), 2)
+
+    def test_fk_step_sequence(self):
+        """FK Step 2 must create one nested control per joint (the old b002
+        fallback wrongly built an RP-solver IK instead)."""
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="StepFK")
+
+        centerline, n = rig.resolve_centerline(5)
+        joint_radius, size = rig.resolve_sizes(centerline, -1.0)
+        joints = rig.generate_joint_chain(centerline, num_joints=5, radius=joint_radius)
+        controls = rig.create_fk_controls(joints, size=size)
+
+        self.assertEqual(len(controls), len(joints))
+        self.assertFalse(cmds.ls(type="ikHandle"), "FK must not create IK handles")
+        for jnt in joints:
+            self.assertTrue(
+                cmds.listRelatives(jnt, type="parentConstraint"),
+                f"{jnt} is not constrained to its control",
+            )
+
+    def test_one_click_reverse(self):
+        """The Reverse Direction option must be honored by the one-click
+        build (previously only Step 1 respected it)."""
+        tube = _make_tube()  # spans x in [-5, 5]
+        rig = TubeRig(tube, rig_name="Rev")
+        rig.build(strategy="spline", num_joints=5, reverse=True)
+        xs = [_ws(j)[0] for j in rig.bundle.joints]
+        self.assertGreater(xs[0], 4.0, f"root joint at x={xs[0]} — not reversed")
+        self.assertLess(xs[-1], -4.0, f"end joint at x={xs[-1]} — not reversed")
+
+    def test_anchor_controls_reject_wrong_joint_count(self):
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="Reject")
+        centerline, n = rig.resolve_centerline(3)
+        joints = rig.generate_joint_chain(centerline, num_joints=3, radius=0.5)
+        with self.assertRaises(ValueError):
+            rig.create_anchor_controls(joints)
+
+    def test_rebind_replaces_skin_cluster(self):
+        """Re-running the bind step must replace the existing skinCluster,
+        not fail on an already-bound mesh."""
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="Rebind")
+        centerline, n = rig.resolve_centerline(-1)
+        joints = rig.generate_joint_chain(centerline, num_joints=n, radius=0.5)
+        first = rig.bind_joint_chain(tube, joints)
+        self.assertTrue(first)
+        second = rig.bind_joint_chain(tube, joints)
+        self.assertTrue(second)
+        self.assertEqual(len(self._mesh_skin_cluster_list(tube)), 1)
+
+    def _mesh_skin_cluster_list(self, mesh):
+        return cmds.ls(cmds.listHistory(mesh) or [], type="skinCluster")
+
+
+class TestNameCollisionSafety(unittest.TestCase):
+    """Builds must not fail on short-name ambiguity when nodes sharing the
+    rig's names already exist elsewhere (a second rig, debris, a re-run).
+
+    Regression: ``Controls.create`` returned the control's PRE-parent path,
+    which no longer resolves once a same-named control exists — every later
+    constraint on it raised 'No object matches name'. The control builders
+    now re-derive each control's path from its group after reparenting."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _build(self, strategy, num_joints, **kwargs):
+        tube = _make_tube()
+        # Pre-seed debris that collides with this rig's control names.
+        for nm in ("Dup_start_CTRL", "Dup_1_CTRL", "Dup_mid_CTRL"):
+            grp = cmds.group(empty=True, name=f"{nm}_debris_GRP")
+            cmds.group(empty=True, name=nm, parent=grp)  # same leaf, different path
+        rig = TubeRig(tube, rig_name="Dup")
+        rig.build(strategy=strategy, num_joints=num_joints, **kwargs)  # must not raise
+        return rig
+
+    def test_spline_build_under_control_name_collision(self):
+        # auto_bend exercises the follow-group + auto-bend hierarchy inserts,
+        # whose stored control paths must survive restructuring under collision.
+        rig = self._build("spline", 6, enable_auto_bend=True)
+        for c in rig.bundle.controls:
+            self.assertTrue(cmds.objExists(c), f"control {c} missing")
+            self.assertTrue(
+                cmds.ls(c, long=True), f"control {c} not resolvable"
+            )
+
+    def test_fk_build_under_control_name_collision(self):
+        rig = self._build("fk", 6)
+        # Each FK control must actually constrain its joint (proves the
+        # re-derived control path was the real node, not a stale twin).
+        for jnt in rig.bundle.joints:
+            self.assertTrue(cmds.listRelatives(jnt, type="parentConstraint"))
+
+    def test_anchor_build_under_control_name_collision(self):
+        rig = self._build("anchor", 2)
+        for jnt in rig.bundle.joints:
+            self.assertTrue(cmds.listRelatives(jnt, type="pointConstraint"))
+
+
+class TestEndConstraints(unittest.TestCase):
+    """'Add End Constraints' (b004) regression — 2026-07-10 live report: the
+    utility did nothing (or errored) regardless of anchor selection order.
+
+    Chain joints are the wrong constraint target on every built rig
+    (probe-verified): spline joints are IK-driven so a direct constraint is
+    silently overridden, anchor joints already carry control constraints
+    ('Object is already connected'), and FK joints blend 50/50 against their
+    control's constraint. The anchor constraint must route through the rig's
+    end controls."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _rigged_tube(self, strategy, num_joints):
+        tube = _make_tube()  # spans x in [-5, 5]
+        rig = TubeRig(tube, rig_name=f"EC{strategy}")
+        rig.build(strategy=strategy, num_joints=num_joints)
+        a1 = cmds.polyCylinder(r=0.4, h=0.8)[0]
+        cmds.xform(a1, ws=True, t=(-5, 0, 0))
+        a2 = cmds.polyCylinder(r=0.4, h=0.8)[0]
+        cmds.xform(a2, ws=True, t=(5, 0, 0))
+        return tube, rig, a1, a2
+
+    def _constrain_and_move(self, tube, rig, a1, a2):
+        """Constrain both ends, move the +X anchor up 3, return the vertical
+        motion of the tube's extreme end and start vertices."""
+        joints = [str(j) for j in rig.bundle.joints]
+        self.assertIsNotNone(
+            rig.constrain_end_with_falloff(joints, a1, falloff=2.0, joint_index=0)
+        )
+        self.assertIsNotNone(
+            rig.constrain_end_with_falloff(joints, a2, falloff=2.0, joint_index=-1)
+        )
+        before = _all_vertex_positions(tube)
+        cmds.xform(a2, ws=True, t=(5, 3, 0))
+        cmds.refresh()
+        after = _all_vertex_positions(tube)
+        end_i = max(range(len(before)), key=lambda i: before[i][0])
+        start_i = min(range(len(before)), key=lambda i: before[i][0])
+        return (
+            after[end_i][1] - before[end_i][1],
+            after[start_i][1] - before[start_i][1],
+        )
+
+    def test_spline_end_follows_anchor(self):
+        tube, rig, a1, a2 = self._rigged_tube("spline", -1)
+        dy_end, dy_start = self._constrain_and_move(tube, rig, a1, a2)
+        self.assertGreater(
+            dy_end, 2.5, f"tube end did not follow the anchor (dy={dy_end:.2f})"
+        )
+        self.assertLess(abs(dy_start), 0.3, "opposite end must stay pinned")
+        # The whole end assembly moved coherently — the end control follows.
+        ctrl_y = cmds.xform(str(rig.bundle.controls[-1]), q=True, ws=True, t=True)[1]
+        self.assertGreater(ctrl_y, 2.5, "end control did not follow the anchor")
+
+    def test_anchor_end_follows_anchor(self):
+        # Pre-fix this RAISED ('Object is already connected').
+        tube, rig, a1, a2 = self._rigged_tube("anchor", 2)
+        dy_end, dy_start = self._constrain_and_move(tube, rig, a1, a2)
+        self.assertGreater(dy_end, 2.5, f"tube end dy={dy_end:.2f}")
+        self.assertLess(abs(dy_start), 0.3)
+
+    def test_fk_end_follows_anchor_fully(self):
+        # Pre-fix the joint got exactly HALF the motion (constraint fight).
+        tube, rig, a1, a2 = self._rigged_tube("fk", 8)
+        dy_end, dy_start = self._constrain_and_move(tube, rig, a1, a2)
+        self.assertGreater(
+            dy_end, 2.5, f"FK end blended 50/50 against its control (dy={dy_end:.2f})"
+        )
+        self.assertLess(abs(dy_start), 0.3)
+
+
+class TestHoseNaturalBehavior(unittest.TestCase):
+    """Constrained-hose behavior (2026-07-10 live report: 'the tube still
+    moves away from its end constraints').
+
+    Root cause measured: the mid control stayed nailed to its build position
+    (carrying both anchors +5 moved the tube middle only 1.18), and
+    compression accordioned dead-straight. Intermediate controls now ride
+    between the end controls via point-constrained follow groups, and
+    auto-bend defaults on (attr dv 0.5) so compression bows the hose."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def _constrained_hose(self, **build_kwargs):
+        tube = _make_tube()  # spans x in [-5, 5]
+        rig = TubeRig(tube, rig_name="Hose")
+        rig.build(strategy="spline", num_joints=-1, **build_kwargs)
+        a1 = cmds.polyCylinder(r=0.4, h=0.8)[0]
+        cmds.xform(a1, ws=True, t=(-5, 0, 0))
+        a2 = cmds.polyCylinder(r=0.4, h=0.8)[0]
+        cmds.xform(a2, ws=True, t=(5, 0, 0))
+        joints = [str(j) for j in rig.bundle.joints]
+        rig.constrain_end_with_falloff(joints, a1, falloff=2.0, joint_index=0)
+        rig.constrain_end_with_falloff(joints, a2, falloff=2.0, joint_index=-1)
+        return tube, rig, a1, a2
+
+    @staticmethod
+    def _mid_section_y(mesh):
+        pts = _all_vertex_positions(mesh)
+        mid = [p for p in pts if abs(p[0]) < 1.0]
+        return sum(p[1] for p in mid) / max(len(mid), 1)
+
+    def test_carrying_anchors_carries_whole_hose(self):
+        """Moving both anchors must carry the tube BODY, not just its tips
+        (pre-fix the middle moved 1.18 of 5.0)."""
+        tube, rig, a1, a2 = self._constrained_hose()
+        cmds.xform(a1, ws=True, t=(-5, 5, 0))
+        cmds.xform(a2, ws=True, t=(5, 5, 0))
+        cmds.refresh()
+        self.assertGreater(
+            self._mid_section_y(tube),
+            4.5,
+            "tube middle lagged its end constraints",
+        )
+        # The mid control itself carries no constraint — the follow group
+        # above it does — so it stays hand-animatable on top.
+        mid_ctrl = str(rig.bundle.controls[1])
+        self.assertFalse(
+            cmds.listRelatives(mid_ctrl, type="pointConstraint"),
+            "mid control must stay unconstrained (follow group takes it)",
+        )
+
+    def test_compression_bows_not_accordions(self):
+        """Compressing the hose must bow it outward, not accordion it
+        dead-straight (auto-bend on by default, attr dv 0.5)."""
+        tube, rig, a1, a2 = self._constrained_hose(enable_auto_bend=True)
+        cmds.xform(a2, ws=True, t=(1, 0, 0))  # compress by 4
+        cmds.refresh()
+        pts = _all_vertex_positions(tube)
+        max_y = max(abs(p[1]) for p in pts)
+        self.assertGreater(
+            max_y, 1.5, f"hose accordioned straight (max |y| = {max_y:.2f})"
+        )
+        # End stays near its anchor while the slack bows out.
+        end_x = max(p[0] for p in pts)
+        self.assertLess(abs(end_x - 1.0), 0.7, f"end at x={end_x:.2f}, anchor at 1")
+
+
+class TestProportionalSizing(unittest.TestCase):
+    """Rig components scale to the measured tube radius (2026-07-09)."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    @staticmethod
+    def _make_tube_r(radius, h=20.0):
+        tube = cmds.polyCylinder(r=radius, h=h, sy=10, sx=12, ax=(1, 0, 0))[0]
+        cmds.makeIdentity(tube, apply=True, t=1, r=1, s=1, n=0, pn=1)
+        return tube
+
+    @staticmethod
+    def _max_dim(node):
+        # Measure the control's own curve shape — a transform-level bbox
+        # would include child controls/locators parented beneath it.
+        shapes = cmds.listRelatives(str(node), shapes=True, fullPath=True) or [node]
+        bb = cmds.exactWorldBoundingBox(shapes)
+        return max(bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2])
+
+    def test_estimate_radius(self):
+        tube = self._make_tube_r(3.0)
+        rig = TubeRig(tube, rig_name="RadEst")
+        r = rig.estimate_tube_radius()
+        self.assertIsNotNone(r)
+        # A 12-gon reads slightly under the circumscribed radius (apothem).
+        self.assertAlmostEqual(r, 3.0, delta=0.45)
+
+    def test_controls_scale_with_mesh(self):
+        """Same build on a 3x-radius tube must yield ~3x-sized controls."""
+        sizes = {}
+        for radius in (1.0, 3.0):
+            cmds.file(new=True, force=True)
+            tube = self._make_tube_r(radius)
+            rig = TubeRig(tube, rig_name=f"Prop{int(radius)}")
+            rig.build(strategy="spline", num_joints=5)
+            sizes[radius] = self._max_dim(rig.bundle.controls[0])
+        ratio = sizes[3.0] / sizes[1.0]
+        self.assertAlmostEqual(ratio, 3.0, delta=0.6, msg=f"control ratio {ratio}")
+
+    def test_auto_joint_radius(self):
+        """Joint Size = Auto (-1) derives the display radius from the tube."""
+        tube = self._make_tube_r(3.0)
+        rig = TubeRig(tube, rig_name="AutoJnt")
+        rig.build(strategy="spline", num_joints=5, radius=-1.0)
+        jr = cmds.getAttr(f"{rig.bundle.joints[0]}.radius")
+        self.assertAlmostEqual(jr, 1.5, delta=0.3)
+
+    def test_explicit_joint_radius_respected(self):
+        """An explicit Joint Size must pass through untouched."""
+        tube = self._make_tube_r(3.0)
+        rig = TubeRig(tube, rig_name="ExplJnt")
+        rig.build(strategy="spline", num_joints=5, radius=2.0)
+        jr = cmds.getAttr(f"{rig.bundle.joints[0]}.radius")
+        self.assertAlmostEqual(jr, 2.0, places=5)
 
 
 if __name__ == "__main__":

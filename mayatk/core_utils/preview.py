@@ -222,9 +222,20 @@ class CleanupContract:
     def add_file(self, path) -> None:
         self.files.append(Path(path))
 
+    #: Sentinel snapshot value: the attr did not exist at record time, so
+    #: rollback must DELETE it (the op added it onto a pre-existing node)
+    #: rather than restore a value. Without it the getAttr raised and the
+    #: snapshot was silently skipped — canceling a preview left the freshly
+    #: added channel (e.g. shadow_metadata on an existing data_export
+    #: carrier) behind with stale data.
+    _ATTR_ABSENT = object()
+
     def record_modification(self, node: str, attr: str) -> None:
         if cmds.objExists(node):
             try:
+                if not cmds.attributeQuery(attr, node=node, exists=True):
+                    self.attr_snapshots.append((node, attr, self._ATTR_ABSENT))
+                    return
                 value = cmds.getAttr(f"{node}.{attr}")
                 self.attr_snapshots.append((node, attr, value))
             except Exception:
@@ -340,12 +351,21 @@ class CleanupContract:
                 if not cmds.objExists(node):
                     continue
                 try:
-                    if (
+                    if value is self._ATTR_ABSENT:
+                        if cmds.attributeQuery(attr, node=node, exists=True):
+                            cmds.deleteAttr(f"{node}.{attr}")
+                    elif (
                         isinstance(value, (list, tuple))
                         and len(value) == 1
                         and isinstance(value[0], (list, tuple))
                     ):
                         cmds.setAttr(f"{node}.{attr}", *value[0], type="double3")
+                    elif isinstance(value, str):
+                        # Bare setAttr raises on string attrs (they need the
+                        # type flag) — without this branch a snapshotted
+                        # string channel (e.g. a data_export producer attr)
+                        # silently failed to restore into the except below.
+                        cmds.setAttr(f"{node}.{attr}", value, type="string")
                     else:
                         cmds.setAttr(f"{node}.{attr}", value)
                 except Exception:

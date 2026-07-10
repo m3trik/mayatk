@@ -69,6 +69,24 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
     _PRESETS: ClassVar[Dict[str, Callable[..., str]]] = {}
 
     @staticmethod
+    def _addressable(node) -> str:
+        """Shortest unambiguous name for *node*: the bare leaf when it
+        resolves to exactly one node, else the full DAG path.
+
+        A control's short name goes ambiguous the instant a same-named node
+        exists elsewhere (a second rig, a re-run) — returning the bare leaf
+        then would raise 'More than one object matches name' on every later
+        use. Keeps the leaf in the common (unique) case so callers and tests
+        that address controls by short name are unaffected.
+        """
+        s = str(node)
+        leaf = s.split("|")[-1]
+        if len(cmds.ls(leaf) or []) == 1:
+            return leaf
+        matches = cmds.ls(s, long=True) or []
+        return matches[0] if matches else s
+
+    @staticmethod
     def _merge_curve_shapes(
         target_transform: str,
         source_transforms: Iterable[str],
@@ -350,7 +368,12 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         if offset_group:
             grp_name = f"{base}{group_suffix}" if group_suffix else f"{base}_GRP"
             grp = cmds.group(em=True, n=grp_name)
-            cmds.parent(ctrl, grp)
+            # Recapture the control after the move — parenting can rename it
+            # (a same-named control elsewhere makes the short name ambiguous,
+            # so Maya returns a path-qualified name). Dropping this return
+            # leaves ``ctrl`` pointing at the pre-parent path, which no longer
+            # resolves under a collision.
+            ctrl = cmds.parent(ctrl, grp)[0]
             top = grp
 
         if match is not None:
@@ -359,8 +382,20 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         if parent is not None:
             try:
                 top = cmds.parent(top, str(parent))[0]
+                if grp is not None:
+                    grp = top  # the group moved with the top node
             except Exception:
                 pass
+
+        # The names above go stale/ambiguous after the moves; resolve each to
+        # its shortest UNAMBIGUOUS form (bare leaf when unique, full DAG path
+        # only when a same-named node forces it). Deriving the control from
+        # its group guarantees the right node under a collision.
+        if grp is not None:
+            grp = cls._addressable(grp)
+            ctrl = cls._addressable(f"{grp}|{ctrl.split('|')[-1]}")
+        else:
+            ctrl = top = cls._addressable(top)
 
         cls._apply_wire_color(ctrl, color)
 

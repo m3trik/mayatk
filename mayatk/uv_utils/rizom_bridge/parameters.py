@@ -186,7 +186,7 @@ PARAMS: "dict[str, AttributeSpec]" = {
     ),
     "MIX": AttributeSpec(
         key="MIX",
-        label="Mutations",
+        label="Mix",
         kind="float",
         default=1.0,
         minimum=0.0,
@@ -224,8 +224,19 @@ PARAMS: "dict[str, AttributeSpec]" = {
         tooltip="Solver minimum angle threshold for triangle stability.",
     ),
     # ------------------------------------------------------------------
-    # Auto-seam detection (ZomSelect Auto={SharpEdges={AngleMin=...}})
+    # Auto-seam detection (ZomSelect Auto={...})
     # ------------------------------------------------------------------
+    "WELD_SEAMS": AttributeSpec(
+        key="WELD_SEAMS",
+        label="Weld First",
+        kind="bool",
+        default=True,
+        tooltip=(
+            "Weld ALL existing seams before auto-seaming so the result is\n"
+            "a clean re-unwrap of the surface. Off = keep the incoming\n"
+            "seams and only add the newly detected cuts on top."
+        ),
+    ),
     "SHARP_ANGLE": AttributeSpec(
         key="SHARP_ANGLE",
         label="Sharp Angle",
@@ -237,8 +248,22 @@ PARAMS: "dict[str, AttributeSpec]" = {
         decimals=1,
         tooltip=(
             "Dihedral angle (degrees) above which an edge is treated as a seam.\n"
-            "Lower = more cuts (hard-surface, ~39).\n"
-            "Higher = fewer cuts on smooth surfaces (organic, ~80)."
+            "Lower = more cuts; ~39 suits most hard-surface meshes."
+        ),
+    ),
+    "DEVELOPABILITY": AttributeSpec(
+        key="DEVELOPABILITY",
+        label="Developability",
+        kind="float",
+        default=0.5,
+        minimum=0.0,
+        maximum=1.0,
+        step=0.05,
+        decimals=2,
+        tooltip=(
+            "Mosaic segmentation threshold (organic unwrap).\n"
+            "Lower = fewer, larger islands that flatten with more distortion;\n"
+            "higher = more, flatter islands with more seams."
         ),
     ),
     # ------------------------------------------------------------------

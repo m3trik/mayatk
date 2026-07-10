@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>220</width>
-    <height>331</height>
+    <width>200</width>
+    <height>316</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -22,7 +22,7 @@
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>
-     <width>220</width>
+     <width>200</width>
      <height>0</height>
     </size>
    </property>
@@ -102,9 +102,6 @@
            <height>19</height>
           </size>
          </property>
-         <property name="toolTip">
-          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;b&gt;Spline (Hose/Cable):&lt;/b&gt;&lt;br/&gt;Uses IK Spline solver for smooth, flexible tubes.&lt;br/&gt;&lt;i&gt;Good for: Hoses, cables, organic tubes.&lt;/i&gt;&lt;br/&gt;&lt;i&gt;Sets: joint per edge loop, spline controls with stretch/twist.&lt;/i&gt;&lt;/p&gt;&lt;p&gt;&lt;b&gt;Anchor (Piston/Hydraulic):&lt;/b&gt;&lt;br/&gt;Creates a 2-joint system constrained to the tube ends.&lt;br/&gt;&lt;i&gt;Good for: Hydraulic pistons, mechanical connections.&lt;/i&gt;&lt;br/&gt;&lt;i&gt;Sets: 2 joints, distance-based scaling.&lt;/i&gt;&lt;/p&gt;&lt;p&gt;&lt;b&gt;FK Chain (Tail/Tentacle):&lt;/b&gt;&lt;br/&gt;Nested FK controls, one per joint.&lt;br/&gt;&lt;i&gt;Good for: Tails, tentacles, hand-keyed tubes.&lt;/i&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-         </property>
          <item>
           <property name="text">
            <string>Spline (Hose/Cable)</string>
@@ -131,9 +128,6 @@
            <height>19</height>
           </size>
          </property>
-         <property name="toolTip">
-          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Custom rig name. If empty, the mesh object's name will be used.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-         </property>
          <property name="frame">
           <bool>false</bool>
          </property>
@@ -148,17 +142,17 @@
     <item>
      <widget class="QToolBox" name="toolbox_steps">
       <property name="currentIndex">
-       <number>0</number>
+       <number>3</number>
       </property>
       <property name="tabSpacing">
-       <number>0</number>
+       <number>6</number>
       </property>
       <widget class="QWidget" name="page_joints">
        <property name="geometry">
         <rect>
          <x>0</x>
          <y>0</y>
-         <width>216</width>
+         <width>185</width>
          <height>112</height>
         </rect>
        </property>
@@ -195,9 +189,6 @@
             <height>19</height>
            </size>
           </property>
-          <property name="toolTip">
-           <string>Number of joints to create. Set to -1 (Auto) to place one joint at each edge ring for precise mesh-following.</string>
-          </property>
           <property name="buttonSymbols">
            <enum>QAbstractSpinBox::NoButtons</enum>
           </property>
@@ -229,9 +220,6 @@
             <height>19</height>
            </size>
           </property>
-          <property name="toolTip">
-           <string>Number of driver controls for Spline IK. Increase for complex shapes.</string>
-          </property>
           <property name="buttonSymbols">
            <enum>QAbstractSpinBox::NoButtons</enum>
           </property>
@@ -250,7 +238,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QDoubleSpinBox" name="s002">
+         <widget class="SpinBox" name="s002">
           <property name="minimumSize">
            <size>
             <width>0</width>
@@ -263,9 +251,6 @@
             <height>19</height>
            </size>
           </property>
-          <property name="toolTip">
-           <string>Joint display radius in the viewport (also used for control scale).</string>
-          </property>
           <property name="buttonSymbols">
            <enum>QAbstractSpinBox::NoButtons</enum>
           </property>
@@ -276,13 +261,13 @@
            <number>1</number>
           </property>
           <property name="minimum">
-           <double>0.100000000000000</double>
+           <double>-1.000000000000000</double>
           </property>
           <property name="maximum">
            <double>1000.000000000000000</double>
           </property>
           <property name="value">
-           <double>1.000000000000000</double>
+           <double>-1.000000000000000</double>
           </property>
          </widget>
         </item>
@@ -299,9 +284,6 @@
             <width>999</width>
             <height>19</height>
            </size>
-          </property>
-          <property name="toolTip">
-           <string>Create the joint chain in reverse order (swap start/end).</string>
           </property>
           <property name="text">
            <string>Reverse Direction</string>
@@ -324,9 +306,6 @@
             <width>999</width>
             <height>28</height>
            </size>
-          </property>
-          <property name="toolTip">
-           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Creates a joint chain along the tube centerline.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Select:&lt;/b&gt; A polygon tube mesh &lt;i&gt;or&lt;/i&gt; an edge loop running along the tube.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
           </property>
           <property name="layoutDirection">
            <enum>Qt::RightToLeft</enum>
@@ -380,9 +359,6 @@
             <height>19</height>
            </size>
           </property>
-          <property name="toolTip">
-           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Enable stretch behavior.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Spline:&lt;/b&gt; Joints scale along X to match curve length.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Anchor:&lt;/b&gt; Start joint scales toward end based on distance.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-          </property>
           <property name="text">
            <string>Enable Stretch</string>
           </property>
@@ -407,9 +383,6 @@
             <width>999</width>
             <height>19</height>
            </size>
-          </property>
-          <property name="toolTip">
-           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Enable advanced twist (Spline only).&lt;/p&gt;&lt;p&gt;Controls twist distribution along the tube using Start/End rotation.&lt;/p&gt;&lt;p&gt;Adds a &lt;b&gt;roll&lt;/b&gt; attribute to the end control.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
           </property>
           <property name="text">
            <string>Enable Twist</string>
@@ -436,9 +409,6 @@
             <height>19</height>
            </size>
           </property>
-          <property name="toolTip">
-           <string>Enable squash behavior (compression scaling).</string>
-          </property>
           <property name="text">
            <string>Enable Squash</string>
           </property>
@@ -463,9 +433,6 @@
             <width>999</width>
             <height>19</height>
            </size>
-          </property>
-          <property name="toolTip">
-           <string>Enable volume preservation (bulging when squashed, thinning when stretched).</string>
           </property>
           <property name="text">
            <string>Volume Preservation</string>
@@ -492,9 +459,6 @@
             <height>19</height>
            </size>
           </property>
-          <property name="toolTip">
-           <string>Enable auto-bend for mid control based on compression.</string>
-          </property>
           <property name="text">
            <string>Auto-Bend (Mid)</string>
           </property>
@@ -516,9 +480,6 @@
             <width>999</width>
             <height>32</height>
            </size>
-          </property>
-          <property name="toolTip">
-           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Creates IK handle and control rig based on preset.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Spline:&lt;/b&gt; Creates IK Spline with Start/Mid/End controls, twist, and stretch.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Anchor:&lt;/b&gt; Creates aim-based controls for pistons.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Select:&lt;/b&gt; The root joint of the chain.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
           </property>
           <property name="layoutDirection">
            <enum>Qt::RightToLeft</enum>
@@ -572,9 +533,6 @@
             <height>32</height>
            </size>
           </property>
-          <property name="toolTip">
-           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Binds the joint chain to the tube mesh using smooth skinning.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Select:&lt;/b&gt; The root joint, then the tube mesh.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-          </property>
           <property name="layoutDirection">
            <enum>Qt::RightToLeft</enum>
           </property>
@@ -585,68 +543,13 @@
         </item>
        </layout>
       </widget>
-      <widget class="QWidget" name="page_utility">
-       <property name="geometry">
-        <rect>
-         <x>0</x>
-         <y>0</y>
-         <width>106</width>
-         <height>32</height>
-        </rect>
-       </property>
-       <attribute name="label">
-        <string>Utility</string>
-       </attribute>
-       <layout class="QVBoxLayout" name="vLayout_utility">
-        <property name="spacing">
-         <number>1</number>
-        </property>
-        <property name="leftMargin">
-         <number>0</number>
-        </property>
-        <property name="topMargin">
-         <number>0</number>
-        </property>
-        <property name="rightMargin">
-         <number>0</number>
-        </property>
-        <property name="bottomMargin">
-         <number>0</number>
-        </property>
-        <item>
-         <widget class="QPushButton" name="b004">
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>32</height>
-           </size>
-          </property>
-          <property name="maximumSize">
-           <size>
-            <width>999</width>
-            <height>32</height>
-           </size>
-          </property>
-          <property name="toolTip">
-           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Constrains both ends of the tube to anchor objects with falloff weighting.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Select:&lt;/b&gt; Root joint, then start anchor, then end anchor.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-          </property>
-          <property name="layoutDirection">
-           <enum>Qt::RightToLeft</enum>
-          </property>
-          <property name="text">
-           <string>Add End Constraints</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </widget>
       <widget class="QWidget" name="page_macro">
        <property name="geometry">
         <rect>
          <x>0</x>
          <y>0</y>
-         <width>110</width>
-         <height>32</height>
+         <width>196</width>
+         <height>69</height>
         </rect>
        </property>
        <attribute name="label">
@@ -688,14 +591,63 @@
             <bold>true</bold>
            </font>
           </property>
-          <property name="toolTip">
-           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Runs all steps automatically: Create Joints → Create Controls → Bind Skin.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Select:&lt;/b&gt; A polygon tube mesh &lt;i&gt;or&lt;/i&gt; an edge loop running along the tube.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-          </property>
           <property name="layoutDirection">
            <enum>Qt::RightToLeft</enum>
           </property>
           <property name="text">
            <string>Full Rig (All Steps)</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="page_utility">
+       <property name="geometry">
+        <rect>
+         <x>0</x>
+         <y>0</y>
+         <width>196</width>
+         <height>69</height>
+        </rect>
+       </property>
+       <attribute name="label">
+        <string>Utility</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="vLayout_utility">
+        <property name="spacing">
+         <number>1</number>
+        </property>
+        <property name="leftMargin">
+         <number>0</number>
+        </property>
+        <property name="topMargin">
+         <number>0</number>
+        </property>
+        <property name="rightMargin">
+         <number>0</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <widget class="QPushButton" name="b004">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>32</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>999</width>
+            <height>32</height>
+           </size>
+          </property>
+          <property name="layoutDirection">
+           <enum>Qt::RightToLeft</enum>
+          </property>
+          <property name="text">
+           <string>Add End Constraints</string>
           </property>
          </widget>
         </item>

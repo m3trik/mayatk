@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
-_Generated: 2026-07-09_
+_Generated: 2026-07-10_
 
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin)`
@@ -929,7 +929,7 @@ _Generated: 2026-07-09_
 
 ### `nurbs_utils/_nurbs_utils.py`
 - `class NurbsUtils(ptk.HelpMixin)`
-  - methods: loft, create_curve_between_two_objs, duplicate_along_curve, angle_loft_between_two_curves, get_closest_cv, get_cv_info, getCrossProductOfCurves
+  - methods: loft, create_curve_between_two_objs, duplicate_along_curve, angle_loft_between_two_curves, get_curve_length, get_arc_lengths, get_closest_cv, get_cv_info, getCrossProductOfCurves
 
 ### `nurbs_utils/curve_to_tube.py` — Sweep a circular profile along NURBS curve(s) to build a tube.
 - `class CurveToTube(ptk.LoggingMixin)`
@@ -960,9 +960,15 @@ _Generated: 2026-07-09_
 
 ### `rig_utils/shadow_rig.py`
 - `class ShadowRig(ptk.LoggingMixin)`
-  - methods: create_contact_locator, get_or_create_shadow_source, create_shadow_plane, create_silhouette_texture, create_material, setup_expression, create
+  - methods: create_contact_locator, get_or_create_shadow_source, create_shadow_plane, create_silhouette_texture, create_material, setup_expression, bake, refresh_export_metadata, find_shadow_planes, bake_planes, create
 - `class ShadowRigSlots`
-  - methods: header_init, b001, perform_operation
+  - methods: header_init, b001, b002, perform_operation
+
+### `rig_utils/skinning.py` — Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
+- `class CurveWeights(ptk.HelpMixin)`
+  - methods: effective_degree, joint_stations, solve
+- `class SkinUtils(ptk.HelpMixin)`
+  - methods: get_skin_cluster, get_influences, bind, unbind, get_weights, set_weights, set_vertex_weights, prune_weights, normalize_weights, set_max_influences, set_skinning_method, copy_weights, mirror_weights, export_weights, import_weights, apply_falloff, add_delta_mush, bind_to_curve
 
 ### `rig_utils/telescope_rig.py`
 - `class TelescopeRig(ptk.LoggingMixin)`
@@ -972,7 +978,7 @@ _Generated: 2026-07-09_
 
 ### `rig_utils/tube_rig.py`
 - `class TubePath`
-  - methods: get_centerline, get_edge_loop_centers, get_centerline_using_edges, get_centerline_from_surface_normals, get_centerline_from_bounding_box
+  - methods: get_centerline, get_edge_loop_centers, estimate_radius, get_centerline_using_edges, get_centerline_from_surface_normals, get_centerline_from_bounding_box
 - `class TubeRigBundle`
 - `class TubeStrategy(ABC)`
   - methods: build
@@ -983,7 +989,7 @@ _Generated: 2026-07-09_
 - `class AnchorStrategy(TubeStrategy)`
   - methods: build
 - `class TubeRig(ptk.LoggingMixin)`
-  - methods: for_mesh, for_node, rig_name, rig_group, teardown, build, generate_joint_chain, skin_mesh, create_logic_curve, create_spline_drivers, skin_curve_to_drivers, setup_spline_twist, setup_auto_bend, setup_spline_stretch, create_ik, create_pole_vector, bind_joint_chain, constrain_end_with_falloff
+  - methods: for_mesh, for_node, rig_name, rig_group, teardown, build, resolve_centerline, estimate_tube_radius, resolve_sizes, generate_joint_chain, create_anchor_joints, skin_mesh, create_logic_curve, create_spline_drivers, skin_curve_to_drivers, create_spline_controls, create_fk_controls, create_anchor_controls, setup_spline_twist, setup_auto_bend, setup_spline_stretch, create_ik, create_pole_vector, bind_joint_chain, constrain_end_with_falloff
 - `class RigModeConfig`
 - `class TubeRigSlots`
   - methods: header_init, apply_mode, get_mode, get_strategy, get_tube_rig, create_joints_from_tube, b000, b001, b002, b003, b004
@@ -1012,6 +1018,7 @@ _Generated: 2026-07-09_
 - `parse_qt_sequence(sequence: str) -> Optional[dict]`
 - `keystring_to_token(ks: list) -> str`
 - `live_hotkey_map() -> dict`
+- `ensure_editable_hotkey_set(name: str = MACRO_HOTKEY_SET) -> str`
 - `maya_collision_checker(sequence, scope, ui_name, method_name)`
 
 ### `ui_utils/maya_bridge_slots.py` — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
@@ -1059,8 +1066,8 @@ _Generated: 2026-07-09_
 - `class RizomBridgeSlots(MayaBridgeSlotsBase)`
   - methods: params_module, template_dir, make_bridge, list_template_modes, b000, open_uv_editor
 
-### `uv_utils/uv_transform.py` — Dedicated UV shell-transform panel.
-- `class UvTransformSlots(ptk.LoggingMixin)`
+### `uv_utils/shell_xform.py` — Dedicated UV shell-transform panel.
+- `class ShellXformSlots(ptk.LoggingMixin)`
   - methods: header_init, b023, b024, b025, b026, b034, b035, b036, b037, s041, tb005_init, tb005, tb006_init, tb006, tb008_init, tb008, align_u_min, align_u_avg, align_u_max, align_v_min, align_v_avg, align_v_max, linear_align, orient_shells, orient_edges, gather_shells, randomize_shells, open_uv_editor
 
 ### `xform_utils/_xform_utils.py`

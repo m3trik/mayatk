@@ -120,8 +120,10 @@ class MacroManagerSlots:
                     ]),
                     ("Presets (header menu)", [
                         "Save the current bindings as a named set, or load one.",
-                        "The shipped <b>default</b> preset is the startup set "
-                        "applied by <b>apply_saved_macros()</b>.",
+                        "The shipped <b>default</b> preset is all-unbound — "
+                        "loading it clears every macro hotkey. "
+                        "<b>apply_saved_macros()</b> applies your <i>active</i> "
+                        "preset instead when one is set.",
                     ]),
                 ],
             )

@@ -1,5 +1,7 @@
 {
-    "description": "Mobile / Quest VR — balanced resolution and samples.",
+    "description": "Mobile / Quest VR — balanced resolution, samples and GI bounces.",
     "resolution": 1024,
-    "samples": 4
+    "samples": 4,
+    "gi_depth": 2,
+    "gi_samples": 4
 }

@@ -273,6 +273,38 @@ def _is_hotkey_set_editable() -> bool:
     return bool(current) and current != "Maya_Default"
 
 
+# Name of the user hotkey set created when an editable set is needed while the
+# locked factory set is active. One well-known name so repeated calls (and
+# every mayatk tool) converge on the same set instead of accumulating copies.
+MACRO_HOTKEY_SET = "mayatk"
+
+
+def ensure_editable_hotkey_set(name: str = MACRO_HOTKEY_SET) -> str:
+    """Make the *current* hotkey set editable; return the resulting set name.
+
+    Maya refuses hotkey edits while the locked factory set (``Maya_Default``)
+    is active — ``cmds.hotkey`` raises — which is why a binding assigned on a
+    fresh Maya silently never lands ("the hotkey does nothing"). Maya's own
+    Hotkey Editor resolves this by prompting to duplicate the factory set;
+    this is the scripted equivalent: when the active set is locked, switch to
+    the user set *name* (created on first use, sourced from the current set so
+    every default binding carries over). No-op when the active set is already
+    editable.
+
+    Raises:
+        RuntimeError: when hotkey sets can't be managed at all (headless).
+    """
+    if _is_hotkey_set_editable():
+        return _current_hotkey_set()
+    if cmds.hotkeySet(name, query=True, exists=True):
+        cmds.hotkeySet(name, edit=True, current=True)
+    else:
+        cmds.hotkeySet(
+            name, source=_current_hotkey_set() or "Maya_Default", current=True
+        )
+    return name
+
+
 def _unbind_maya_hotkey(parsed: dict) -> None:
     """Clear Maya's press (and release) binding for the parsed key combo.
 

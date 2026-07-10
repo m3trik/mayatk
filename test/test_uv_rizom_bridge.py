@@ -3,8 +3,9 @@
 """Test Suite for mayatk.uv_utils.rizom_bridge.
 
 Regression coverage for the Maya-side of the bridge -- export path only.
-RizomUV invocation is exercised by the standalone smoketest under
-``temp_tests/`` because it needs the external executable.
+RizomUV invocation (and every Lua preset) is exercised by the standalone
+``test/rizom_headless_probe.py`` because it needs the external executable
+-- run it after ANY edit to ``scripts/*.lua`` or ``templates/*.lua``.
 
 Tests here run inside a live Maya session via ``run_tests.py`` and catch
 the failure modes the standalone smoketest cannot:
@@ -20,7 +21,12 @@ from pathlib import Path
 
 import maya.cmds as cmds
 
-from mayatk.uv_utils.rizom_bridge._rizom_bridge import RizomUVBridge
+from mayatk.uv_utils.rizom_bridge._rizom_bridge import (
+    RizomUVBridge,
+    _parse_rizom_version,
+    _SCRIPT_DIR,
+)
+from mayatk.uv_utils.rizom_bridge import parameters as _params
 
 from base_test import MayaTkTestCase
 
@@ -92,8 +98,9 @@ class TestRizomBridgeExport(MayaTkTestCase):
         # Add a few unrelated cubes so the test mirrors the bulk-export shape.
         extras = [cmds.polyCube(name=f"extra_{i}")[0] for i in range(5)]
 
+        exported = [inside_long, outside_long] + extras
         # Should not raise.
-        self.bridge._export_objects([inside_long, outside_long] + extras)
+        self.bridge._export_objects(exported)
 
         self.assertTrue(
             Path(self.export_path).exists(),
@@ -101,6 +108,114 @@ class TestRizomBridgeExport(MayaTkTestCase):
         )
         self.assertGreater(
             Path(self.export_path).stat().st_size, 0, "FBX is empty."
+        )
+        # Every exported object must land on its OWN map key -- colliding
+        # leaf names used to collapse to one key, cross-wiring the UV
+        # transfer (both SWITCH_GEOs would receive the same shell).
+        self.assertEqual(
+            len(self.bridge._export_name_map), len(exported),
+            f"Expected one unique map key per export, got: "
+            f"{self.bridge._export_name_map}",
+        )
+        # ... and on its own destination: both SWITCH_GEOs must be mapped
+        # as distinct transfer targets.
+        destinations = list(self.bridge._export_name_map.values())
+        self.assertEqual(
+            len(set(destinations)), len(exported),
+            f"Transfer destinations are not unique: {destinations}",
+        )
+        switch_geos = [
+            d for d in destinations
+            if d.split("|")[-1].split(":")[-1] == "SWITCH_GEO"
+        ]
+        self.assertEqual(
+            len(switch_geos), 2,
+            f"Both name-colliding originals should be mapped: {destinations}",
+        )
+
+
+class TestRizomBridgeLogic(MayaTkTestCase):
+    """Pure-logic regressions: no export, no RizomUV run."""
+
+    def setUp(self):
+        super().setUp()
+        self.bridge = RizomUVBridge(rizom_path="not-used.exe")
+
+    def test_parse_rizom_version_handles_install_dir_variants(self):
+        """The parser must survive every real-world install-dir naming."""
+        cases = {
+            r"C:\Program Files\Rizom Lab\RizomUV 2020.1\Rizomuv_VS.exe": (2020, 1),
+            r"C:\Program Files\Rizom Lab\RizomUV VS RS 2022.2\rizomuv.exe": (2022, 2),
+            r"C:\Program Files\Rizom Lab\RizomUV_2024\rizomuv.exe": (2024, 0),
+            r"C:\Program Files\Rizom Lab\RizomUV VS RS 2023.10.1\rizomuv.exe": (2023, 10, 1),
+            r"C:\tools\bin\someapp.exe": (0, 0),
+        }
+        for path, expected in cases.items():
+            self.assertEqual(
+                _parse_rizom_version(path), expected,
+                f"Version mis-parsed for {path}",
+            )
+
+    def test_script_path_property_after_raw_content(self):
+        """Setting raw Lua content must leave script_path readable.
+
+        Regression: _prepare_script_file stored a plain str, so the
+        script_path getter crashed on .as_posix().
+        """
+        self.bridge.script_path = 'ZomSelect({PrimType="Edge"})'
+        resolved = self.bridge.script_path
+        self.assertIsInstance(resolved, str)
+        self.assertTrue(resolved.endswith(".lua"), resolved)
+        self.assertTrue(Path(resolved).is_file(), resolved)
+
+    def test_export_path_rejects_non_fbx(self):
+        """OBJ was a trap -- the exporter always wrote FBX data."""
+        with self.assertRaises(ValueError):
+            self.bridge.export_path = "C:/temp/out.obj"
+
+    def test_passthrough_script_still_substitutes_params(self):
+        """A script with its own ZomLoad/ZomSave skips the wrapper but must
+        still get version-stripping + placeholder substitution."""
+        self.bridge._params = {"ITERATIONS": 25}
+        raw = (
+            'ZomLoad({File={Path="x.fbx"}})\n'
+            "ZomUnfold({Iterations=__ITERATIONS__})\n"
+            'ZomSave({File={Path="x.fbx"}})\n'
+        )
+        rendered = self.bridge._construct_full_script(raw)
+        self.assertIn("Iterations=25", rendered)
+        self.assertNotIn("__ITERATIONS__", rendered)
+        # Not double-wrapped: exactly one ZomLoad.
+        self.assertEqual(rendered.count("ZomLoad"), 1)
+
+    def test_unwrap_presets_reference_expected_tokens(self):
+        """Panel visibility is driven by the tokens each preset references."""
+        hard = (_SCRIPT_DIR / "unwrap_hard.lua").read_text(encoding="utf-8")
+        organic = (_SCRIPT_DIR / "unwrap_organic.lua").read_text(encoding="utf-8")
+
+        hard_keys = _params.referenced_keys(hard)
+        organic_keys = _params.referenced_keys(organic)
+
+        self.assertIn("WELD_SEAMS", hard_keys)
+        self.assertIn("SHARP_ANGLE", hard_keys)
+        self.assertNotIn("DEVELOPABILITY", hard_keys)
+
+        self.assertIn("WELD_SEAMS", organic_keys)
+        self.assertIn("DEVELOPABILITY", organic_keys)
+        # Organic segmentation no longer keys off dihedral angle.
+        self.assertNotIn("SHARP_ANGLE", organic_keys)
+
+    def test_param_labels_are_unique(self):
+        """Two widgets with the same label are indistinguishable in the panel.
+
+        Regression: MIX was labeled 'Mutations', colliding with
+        PACK_MAX_MUTATIONS.
+        """
+        labels = [spec.label for spec in _params.PARAMS.values()]
+        self.assertEqual(
+            len(labels), len(set(labels)),
+            f"Duplicate parameter labels: "
+            f"{[l for l in labels if labels.count(l) > 1]}",
         )
 
 
