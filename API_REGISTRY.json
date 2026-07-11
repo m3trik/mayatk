@@ -8273,7 +8273,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Dict[str, str]",
               "summary": "Discover every ``m_*`` macro callable, mapped to its annotation.",
-              "line": 207,
+              "line": 214,
               "deprecated": false
             },
             {
@@ -8282,7 +8282,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> str",
               "summary": "Humanize a macro name for display, e.g.",
-              "line": 235,
+              "line": 242,
               "deprecated": false
             },
             {
@@ -8291,7 +8291,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> str",
               "summary": "Default category for a macro, derived from the ``*Macros`` mixin that",
-              "line": 253,
+              "line": 260,
               "deprecated": false
             },
             {
@@ -8300,7 +8300,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Sorted distinct default categories across all discoverable macros.",
-              "line": 270,
+              "line": 277,
               "deprecated": false
             },
             {
@@ -8309,7 +8309,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> str",
               "summary": "Return a macro's full (dedented) docstring — the single source of",
-              "line": 282,
+              "line": 289,
               "deprecated": false
             },
             {
@@ -8318,7 +8318,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Dict[str, dict]",
               "summary": "Return the *live* key + category for every available macro.",
-              "line": 297,
+              "line": 304,
               "deprecated": false
             },
             {
@@ -8327,7 +8327,7 @@
               "kind": "classmethod",
               "signature": "(cls, bindings: Dict[str, dict]) -> None",
               "summary": "Apply a binding set ``{name: {\"key\", \"cat\"}}``.",
-              "line": 339,
+              "line": 366,
               "deprecated": false
             },
             {
@@ -8336,7 +8336,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, key: Optional[str] = None) -> None",
               "summary": "Unbind ``name``'s hotkey (the runtime command itself is kept).",
-              "line": 369,
+              "line": 457,
               "deprecated": false
             },
             {
@@ -8345,7 +8345,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, key: Optional[str] = None) -> None",
               "summary": "Clear ``name``'s hotkey and delete its (non-default) runtime command.",
-              "line": 395,
+              "line": 483,
               "deprecated": false
             },
             {
@@ -8354,7 +8354,7 @@
               "kind": "classmethod",
               "signature": "(cls, bindings: Dict[str, dict]) -> Dict[str, List[str]]",
               "summary": "Return ``{normalized_key: [macro, ...]}`` for keys bound more than once.",
-              "line": 409,
+              "line": 497,
               "deprecated": false
             },
             {
@@ -8363,7 +8363,7 @@
               "kind": "classmethod",
               "signature": "(cls, sequence: str) -> str",
               "summary": "Convert a Qt key-sequence string (``\"Ctrl+Shift+I\"``) to a Maya token.",
-              "line": 454,
+              "line": 542,
               "deprecated": false
             },
             {
@@ -8372,7 +8372,7 @@
               "kind": "classmethod",
               "signature": "(cls, key: str) -> str",
               "summary": "Convert a Maya key token (``\"ctl+sht+i\"``) to a Qt key-sequence string.",
-              "line": 478,
+              "line": 566,
               "deprecated": false
             },
             {
@@ -8381,7 +8381,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Return all preset names (built-in + user, user shadows built-in).",
-              "line": 511,
+              "line": 599,
               "deprecated": false
             },
             {
@@ -8390,7 +8390,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> Dict[str, dict]",
               "summary": "Return the binding set stored under *name* (``_meta`` stripped).",
-              "line": 516,
+              "line": 604,
               "deprecated": false
             },
             {
@@ -8399,7 +8399,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, bindings: Optional[Dict[str, dict]] = None) -> str",
               "summary": "Save *bindings* (default: the current bindings) as user preset *name*.",
-              "line": 522,
+              "line": 610,
               "deprecated": false
             },
             {
@@ -8408,7 +8408,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> bool",
               "summary": "Delete a *user* preset (built-ins are read-only).",
-              "line": 539,
+              "line": 627,
               "deprecated": false
             },
             {
@@ -8417,7 +8417,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[str]",
               "summary": "The last-selected/applied preset name, or ``None``.",
-              "line": 544,
+              "line": 632,
               "deprecated": false
             },
             {
@@ -8426,7 +8426,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: Optional[str]) -> None",
               "summary": "Set (or clear, with ``None``) the active-preset pointer.",
-              "line": 549,
+              "line": 637,
               "deprecated": false
             },
             {
@@ -8435,7 +8435,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: Optional[str] = None) -> None",
               "summary": "Apply a saved preset/template's bindings to Maya on demand.",
-              "line": 554,
+              "line": 642,
               "deprecated": false
             }
           ]
@@ -8443,7 +8443,7 @@
         {
           "name": "DisplayMacros",
           "summary": "",
-          "line": 583,
+          "line": 671,
           "bases": [],
           "members": [
             {
@@ -8452,7 +8452,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle Component Id Display through vertices, edges, faces, UVs, and off.",
-              "line": 587,
+              "line": 675,
               "deprecated": false
             },
             {
@@ -8461,7 +8461,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle face normals, vertex normals, tangents, and off.",
-              "line": 623,
+              "line": 711,
               "deprecated": false
             },
             {
@@ -8470,7 +8470,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle Soft Edge Display.",
-              "line": 685,
+              "line": 773,
               "deprecated": false
             },
             {
@@ -8479,7 +8479,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle visibility of the selected objects, keeping them selected.",
-              "line": 704,
+              "line": 792,
               "deprecated": false
             },
             {
@@ -8488,7 +8488,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle the display of UV border edges for the given objects.",
-              "line": 714,
+              "line": 802,
               "deprecated": false
             },
             {
@@ -8497,7 +8497,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Toggle Back-Face Culling on selected objects, or on all objects if none are selected.",
-              "line": 744,
+              "line": 832,
               "deprecated": false
             },
             {
@@ -8506,7 +8506,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Isolate the current selection in the active 3D viewport.",
-              "line": 769,
+              "line": 857,
               "deprecated": false
             },
             {
@@ -8515,7 +8515,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Cycle the display state of all selected objects based on the first object's state.",
-              "line": 790,
+              "line": 878,
               "deprecated": false
             },
             {
@@ -8524,7 +8524,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Toggle Wireframe Display on selected objects, or on all objects if none are selected.",
-              "line": 844,
+              "line": 932,
               "deprecated": false
             },
             {
@@ -8533,7 +8533,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggle grid and image plane visibility.",
-              "line": 865,
+              "line": 953,
               "deprecated": false
             },
             {
@@ -8542,7 +8542,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Frame the selection, cycling zoom level on repeated presses.",
-              "line": 888,
+              "line": 976,
               "deprecated": false
             },
             {
@@ -8551,7 +8551,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects) -> None",
               "summary": "Toggle smooth mesh preview.",
-              "line": 947,
+              "line": 1035,
               "deprecated": false
             },
             {
@@ -8560,7 +8560,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles the wireframe display state.",
-              "line": 987,
+              "line": 1075,
               "deprecated": false
             },
             {
@@ -8569,7 +8569,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle the viewport's default-material override.",
-              "line": 1019,
+              "line": 1107,
               "deprecated": false
             },
             {
@@ -8578,7 +8578,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Toggles viewport display mode between wireframe, smooth shaded with textures off,",
-              "line": 1049,
+              "line": 1137,
               "deprecated": false
             },
             {
@@ -8587,7 +8587,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Toggles viewport lighting between different states: default, all lights, active lights,",
-              "line": 1098,
+              "line": 1186,
               "deprecated": false
             }
           ]
@@ -8595,7 +8595,7 @@
         {
           "name": "EditMacros",
           "summary": "",
-          "line": 1138,
+          "line": 1226,
           "bases": [],
           "members": [
             {
@@ -8604,7 +8604,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None)",
               "summary": "Group the given objects (or selection), center the pivot, and rename the group.",
-              "line": 1143,
+              "line": 1231,
               "deprecated": false
             },
             {
@@ -8613,7 +8613,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)",
               "summary": "Combine multiple meshes.",
-              "line": 1154,
+              "line": 1242,
               "deprecated": false
             },
             {
@@ -8622,7 +8622,7 @@
               "kind": "staticmethod",
               "signature": "(objects, repair_mesh=True, keep_boolean=True, **kwargs)",
               "summary": "Perform a boolean operation on two meshes using cmds, managing shorthand and full parameter names d…",
-              "line": 1182,
+              "line": 1270,
               "deprecated": false
             },
             {
@@ -8631,7 +8631,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle lock/unlock vertex normals.",
-              "line": 1226,
+              "line": 1314,
               "deprecated": false
             },
             {
@@ -8640,7 +8640,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Paste and rename by removing 'pasted__' prefix and reference file names,",
-              "line": 1266,
+              "line": 1354,
               "deprecated": false
             },
             {
@@ -8649,7 +8649,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Enable the multi-component selection mask.",
-              "line": 1333,
+              "line": 1421,
               "deprecated": false
             },
             {
@@ -8658,7 +8658,7 @@
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.001) -> None",
               "summary": "Merge vertices within a small distance tolerance.",
-              "line": 1348,
+              "line": 1436,
               "deprecated": false
             }
           ]
@@ -8666,7 +8666,7 @@
         {
           "name": "SelectionMacros",
           "summary": "",
-          "line": 1394,
+          "line": 1482,
           "bases": [],
           "members": [
             {
@@ -8675,7 +8675,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set object selection mask.",
-              "line": 1398,
+              "line": 1486,
               "deprecated": false
             },
             {
@@ -8684,7 +8684,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set vertex selection mask.",
-              "line": 1406,
+              "line": 1494,
               "deprecated": false
             },
             {
@@ -8693,7 +8693,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set edge selection mask.",
-              "line": 1412,
+              "line": 1500,
               "deprecated": false
             },
             {
@@ -8702,7 +8702,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set face selection mask.",
-              "line": 1418,
+              "line": 1506,
               "deprecated": false
             },
             {
@@ -8711,7 +8711,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the current selection of geometry or components.",
-              "line": 1424,
+              "line": 1512,
               "deprecated": false
             },
             {
@@ -8720,7 +8720,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle selectability of the given objects.",
-              "line": 1442,
+              "line": 1530,
               "deprecated": false
             },
             {
@@ -8729,7 +8729,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles between UV shell and UV component selection.",
-              "line": 1501,
+              "line": 1589,
               "deprecated": false
             },
             {
@@ -8738,7 +8738,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the component selection on the currently selected objects.",
-              "line": 1525,
+              "line": 1613,
               "deprecated": false
             }
           ]
@@ -8746,7 +8746,7 @@
         {
           "name": "UiMacros",
           "summary": "",
-          "line": 1557,
+          "line": 1645,
           "bases": [],
           "members": [
             {
@@ -8755,7 +8755,7 @@
               "kind": "staticmethod",
               "signature": "(toggle_menu: bool = True, toggle_panels: bool = True) -> None",
               "summary": "Toggle UI toolbars and menu bar in sync.",
-              "line": 1561,
+              "line": 1649,
               "deprecated": false
             }
           ]
@@ -8763,7 +8763,7 @@
         {
           "name": "AnimationMacros",
           "summary": "",
-          "line": 1593,
+          "line": 1681,
           "bases": [],
           "members": [
             {
@@ -8772,7 +8772,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 1598,
+              "line": 1686,
               "deprecated": false
             },
             {
@@ -8781,7 +8781,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Un-set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 1608,
+              "line": 1696,
               "deprecated": false
             }
           ]
@@ -8789,7 +8789,7 @@
         {
           "name": "Macros",
           "summary": "",
-          "line": 1620,
+          "line": 1708,
           "bases": [
             "MacroManager",
             "DisplayMacros",
