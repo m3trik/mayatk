@@ -17,7 +17,7 @@ classifiers = [
 
 # Dependencies - exclude optional system deps (qtpy)
 dependencies = [
-    "pythontk>=0.8.82",
+    "pythontk>=0.8.84",
     "uitk>=1.3.5",
     "unitytk>=0.0.1",
 ]
