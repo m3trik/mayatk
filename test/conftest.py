@@ -37,37 +37,61 @@ mock_cmds.scriptJob.side_effect = lambda **kw: 999 if "event" in kw else True
 mock_cmds.undoInfo = MagicMock()
 
 # ---------------------------------------------------------------------------
-# Inject into sys.modules — must happen before any mayatk import.
+# Inject into sys.modules — must happen before any mayatk import, and ONLY
+# when a real Maya is not importable (plain pytest). Under mayapy/Maya the
+# injection is session-wide sabotage: ``import maya.cmds as cmds`` resolves
+# through the maya PACKAGE ATTRIBUTE first, and in a fresh test session where
+# nothing has imported cmds yet the hasattr guard below sees no attribute and
+# binds the MOCK onto the real maya package — with no restore path, every
+# test module that runs later in the suite silently gets a MagicMock cmds.
+# The import probe itself closes that window: importing the real maya.cmds
+# also sets the package attribute via the normal import machinery.
 # ---------------------------------------------------------------------------
 
-sys.modules.setdefault("maya", types.ModuleType("maya"))
-sys.modules.setdefault("maya.api", types.ModuleType("maya.api"))
-sys.modules["maya.api.OpenMaya"] = mock_om2
-sys.modules.setdefault("maya.api.OpenMayaAnim", MagicMock())
-sys.modules["maya.cmds"] = mock_cmds
-sys.modules.setdefault("maya.mel", MagicMock())
-sys.modules.setdefault("maya.OpenMaya", MagicMock())
-sys.modules.setdefault("maya.OpenMayaUI", MagicMock())
 
-# Bind each injected submodule as an attribute on its parent package so that
-# attribute access (``import maya`` then ``maya.cmds``) resolves to the same
-# mock as the ``sys.modules`` entry.  Direct ``sys.modules`` injection bypasses
-# the import machinery that normally sets this attribute, so without it
-# ``maya.cmds`` raises ``AttributeError`` under the mock even though
-# ``import maya.cmds`` works.  Guarded with ``hasattr`` so a real ``maya``
-# module (e.g. under mayapy) is never clobbered.
-for _parent, _child in (
-    ("maya", "cmds"),
-    ("maya", "mel"),
-    ("maya", "OpenMaya"),
-    ("maya", "OpenMayaUI"),
-    ("maya", "api"),
-    ("maya.api", "OpenMaya"),
-    ("maya.api", "OpenMayaAnim"),
-):
-    _parent_mod = sys.modules[_parent]
-    if not hasattr(_parent_mod, _child):
-        setattr(_parent_mod, _child, sys.modules[f"{_parent}.{_child}"])
+def _real_maya_importable() -> bool:
+    existing = sys.modules.get("maya.cmds")
+    if existing is not None:
+        return not isinstance(existing, MagicMock)
+    try:
+        import importlib
+
+        importlib.import_module("maya.cmds")
+        return True
+    except Exception:
+        return False
+
+
+_HAVE_REAL_MAYA = _real_maya_importable()
+
+if not _HAVE_REAL_MAYA:
+    sys.modules.setdefault("maya", types.ModuleType("maya"))
+    sys.modules.setdefault("maya.api", types.ModuleType("maya.api"))
+    sys.modules["maya.api.OpenMaya"] = mock_om2
+    sys.modules.setdefault("maya.api.OpenMayaAnim", MagicMock())
+    sys.modules["maya.cmds"] = mock_cmds
+    sys.modules.setdefault("maya.mel", MagicMock())
+    sys.modules.setdefault("maya.OpenMaya", MagicMock())
+    sys.modules.setdefault("maya.OpenMayaUI", MagicMock())
+
+    # Bind each injected submodule as an attribute on its parent package so
+    # that attribute access (``import maya`` then ``maya.cmds``) resolves to
+    # the same mock as the ``sys.modules`` entry.  Direct ``sys.modules``
+    # injection bypasses the import machinery that normally sets this
+    # attribute, so without it ``maya.cmds`` raises ``AttributeError`` under
+    # the mock even though ``import maya.cmds`` works.
+    for _parent, _child in (
+        ("maya", "cmds"),
+        ("maya", "mel"),
+        ("maya", "OpenMaya"),
+        ("maya", "OpenMayaUI"),
+        ("maya", "api"),
+        ("maya.api", "OpenMaya"),
+        ("maya.api", "OpenMayaAnim"),
+    ):
+        _parent_mod = sys.modules[_parent]
+        if not hasattr(_parent_mod, _child):
+            setattr(_parent_mod, _child, sys.modules[f"{_parent}.{_child}"])
 
 
 # ---------------------------------------------------------------------------

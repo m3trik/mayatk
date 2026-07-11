@@ -25,6 +25,7 @@ tentacle lighting UI, custom scripts) decide what to do with the output.
 :meth:`TextureBaker.assign_to_diffuse` is provided as an optional,
 reversible helper for previewing the result in the viewport.
 """
+import contextlib
 import glob
 import os
 import time
@@ -84,6 +85,7 @@ class TextureBaker(ptk.LoggingMixin):
         resolution: int = 2048,
         samples: int = 5,
         file_format: str = "png",
+        render_settings: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
         # Per-instance knobs -- overriding ``TextureBaker.resolution`` at the
@@ -91,6 +93,14 @@ class TextureBaker(ptk.LoggingMixin):
         self.resolution = resolution
         self.samples = samples
         self.file_format = file_format
+        # ``defaultArnoldRenderOptions`` attrs to pin for the bake (e.g.
+        # {"GIDiffuseDepth": 3, "GIDiffuseSamples": 4}). The RTT command only
+        # takes aa_samples as a flag -- GI depth/samples come from the scene's
+        # render options, so an untouched scene bakes at Arnold's 1-bounce,
+        # 2-sample defaults AND the user's settings leak into the bake. This
+        # dict is snapshot/set/restored around the bake (Arnold backend only),
+        # making quality deterministic. None/empty leaves the scene untouched.
+        self.render_settings: Dict[str, Any] = dict(render_settings or {})
         # State for assign_to_diffuse / restore_diffuse_connections.
         # Each entry: (color_attr, prev_source_plug, prev_static_value, baked_path).
         # prev_source_plug is "" if the slot was driven by a static setAttr.
@@ -129,12 +139,14 @@ class TextureBaker(ptk.LoggingMixin):
         uv_set: Optional[Union[str, Dict[str, str]]] = None,
         on_progress: Optional[Callable[[int, int, str], bool]] = None,
         stem: Optional[Union[Callable[[str], str], Dict[str, str]]] = None,
+        shader: Optional[str] = None,
+        batch: bool = False,
     ) -> Dict[str, str]:
-        """Bake lighting per object to PNG files.
+        """Bake lighting per object to texture files (EXR on Arnold).
 
         Parameters:
             objects: Mesh transforms to bake. Defaults to current selection.
-            output_dir: Where the PNG files go. Created if missing.
+            output_dir: Where the baked files go. Created if missing.
                 Defaults to ``<scene_dir>/baked_lighting``.
             prefix: Filename prefix wrapped around the output stem.
             suffix: Filename suffix. Final name is ``{prefix}{stem}{suffix}.{fmt}``
@@ -164,7 +176,25 @@ class TextureBaker(ptk.LoggingMixin):
                 last_name)`` call on completion so a determinate bar reaches
                 100%. Return ``False`` to cancel the remaining bakes. Lets a UI
                 drive a progress bar without this primitive knowing about Qt;
-                exceptions from it never break the bake.
+                exceptions from it never break the bake. In ``batch`` mode
+                there is one opaque render call, so only the initial
+                ``(0, total)`` tick (cancellable) and the final completion
+                tick fire.
+            shader: Optional shader node to bake with instead of each object's
+                assigned material (Arnold's ``-shader`` override). MEASURED
+                (mtoa 5.4.5): the override applies **per shape being baked** --
+                every other object, selected or not, keeps its real material
+                during that shape's render. That makes it a native white-card
+                for lighting-only bakes: correct neighbor bounce/color bleed
+                with no material swapping. Ignored (warned) by convertSolidTx.
+            batch: Bake every object in ONE ``arnoldRenderToTexture`` call
+                instead of per-object calls. The per-object loop re-translates
+                the whole scene N times; batching amortizes it (measured 7.45x
+                on 8 objects in a 40-object scene). Requires the Arnold
+                backend and unique shape leaf names (RTT names files after the
+                shape leaf, so duplicates would overwrite each other) -- when
+                either fails, this falls back to the per-object loop with a
+                warning. Mid-run cancellation is unavailable in batch mode.
 
         Returns:
             ``{long_object_name: absolute_file_path}`` for every successful bake.
@@ -189,6 +219,34 @@ class TextureBaker(ptk.LoggingMixin):
         os.makedirs(output_dir, exist_ok=True)
 
         backend = self._resolve_backend(backend)
+        # arnoldRenderToTexture has no format flag and always writes EXR --
+        # honor that in the output paths instead of renaming EXR bytes to a
+        # mismatched extension (which the dir-diff glob would then also miss).
+        fmt = self.file_format
+        if backend == "arnold" and fmt.lower() != "exr":
+            self.logger.warning(
+                "Arnold RTT always writes EXR (requested %r); output uses .exr.",
+                fmt,
+            )
+            fmt = "exr"
+        if shader and backend != "arnold":
+            # The override is semantic, not cosmetic: bake_separated's white
+            # card rides it to produce LIGHTING-ONLY maps. Dropping it and
+            # baking the real materials via convertSolidTx would commit
+            # albedo x lighting as a "lightmap" (the engine composites albedo
+            # twice) — fail loud instead of silently changing what the maps
+            # mean.
+            self.logger.error(
+                "shader= override requires the Arnold backend (mtoa "
+                "unavailable?); bake aborted rather than baking the real "
+                "materials."
+            )
+            return {}
+        if batch and backend != "arnold":
+            self.logger.warning(
+                "batch=True requires the Arnold backend; using per-object bakes."
+            )
+            batch = False
         self.logger.info(
             "Baking %d object(s) -> %s (backend=%s, %dx%d)",
             len(objects), output_dir, backend, self.resolution, self.resolution,
@@ -199,52 +257,66 @@ class TextureBaker(ptk.LoggingMixin):
         used: set = set()
         last_leaf = ""
         cancelled = False
-        for i, obj in enumerate(objects):
-            long_name = cmds.ls(obj, long=True)
-            if not long_name:
-                self.logger.warning("Skipping unknown object: %s", obj)
-                continue
-            long_name = long_name[0]
-            leaf = long_name.rsplit("|", 1)[-1].replace(":", "_")
-            last_leaf = leaf
-            if not self._tick(on_progress, i, total, leaf):
-                self.logger.info("Bake cancelled by caller at %d/%d.", i, total)
-                cancelled = True
-                break
-            name = ptk.StrUtils.apply_affix(
-                self._resolve_stem(stem, long_name, leaf), prefix, suffix
-            )
-            out_path = self._unique_path(output_dir, name, used)
-            target_set = uv_set.get(long_name) if isinstance(uv_set, dict) else uv_set
-            prev_uv: Dict[str, str] = {}
-            try:
-                if target_set:
-                    prev_uv = self._set_current_uv_set(long_name, target_set)
-                if backend == "arnold":
-                    # Arnold names the file after the mesh shape, so the actual
-                    # written path is detected by _bake_with_arnold (dir-diff)
-                    # rather than assumed; map it to our prefixed convention.
-                    arnold_out = self._bake_with_arnold(long_name, output_dir)
-                    if arnold_out and os.path.abspath(arnold_out) != os.path.abspath(
-                        out_path
-                    ):
-                        os.replace(arnold_out, out_path)
-                else:
-                    self._bake_with_convert_solid_tx(long_name, out_path)
-            except Exception as e:
-                self.logger.error("Bake failed for %s: %s", long_name, e)
-                continue
-            finally:
-                self._restore_uv_sets(prev_uv)
-
-            if os.path.exists(out_path):
-                results[long_name] = out_path
-                self.logger.info("Baked %s -> %s", leaf, out_path)
-            else:
-                self.logger.warning(
-                    "Bake reported success for %s but output missing: %s",
-                    leaf, out_path,
+        with self._pinned_render_settings(backend):
+            if batch:
+                batched = self._bake_with_arnold_batch(
+                    objects, output_dir, prefix, suffix, uv_set,
+                    on_progress, stem, fmt, shader,
                 )
+                if batched is not None:
+                    return batched
+                # Unbatchable (duplicate shape leaves) -> per-object loop.
+            for i, obj in enumerate(objects):
+                long_name = cmds.ls(obj, long=True)
+                if not long_name:
+                    self.logger.warning("Skipping unknown object: %s", obj)
+                    continue
+                long_name = long_name[0]
+                leaf = long_name.rsplit("|", 1)[-1].replace(":", "_")
+                last_leaf = leaf
+                if not self._tick(on_progress, i, total, leaf):
+                    self.logger.info("Bake cancelled by caller at %d/%d.", i, total)
+                    cancelled = True
+                    break
+                name = ptk.StrUtils.apply_affix(
+                    self._resolve_stem(stem, long_name, leaf), prefix, suffix
+                )
+                out_path = self._unique_path(output_dir, name, used, fmt)
+                target_set = (
+                    uv_set.get(long_name) if isinstance(uv_set, dict) else uv_set
+                )
+                prev_uv: Dict[str, str] = {}
+                try:
+                    if target_set:
+                        prev_uv = self._set_current_uv_set(long_name, target_set)
+                    if backend == "arnold":
+                        # Arnold names the file after the mesh shape, so the
+                        # actual written path is detected by _bake_with_arnold
+                        # (dir-diff) rather than assumed; map it to our
+                        # prefixed convention.
+                        arnold_out = self._bake_with_arnold(
+                            long_name, output_dir, shader
+                        )
+                        if arnold_out and os.path.abspath(
+                            arnold_out
+                        ) != os.path.abspath(out_path):
+                            os.replace(arnold_out, out_path)
+                    else:
+                        self._bake_with_convert_solid_tx(long_name, out_path)
+                except Exception as e:
+                    self.logger.error("Bake failed for %s: %s", long_name, e)
+                    continue
+                finally:
+                    self._restore_uv_sets(prev_uv)
+
+                if os.path.exists(out_path):
+                    results[long_name] = out_path
+                    self.logger.info("Baked %s -> %s", leaf, out_path)
+                else:
+                    self.logger.warning(
+                        "Bake reported success for %s but output missing: %s",
+                        leaf, out_path,
+                    )
 
         # Final completion tick so a determinate progress bar reaches 100%
         # (the per-object ticks above report the count STARTED, i.e. 0..N-1).
@@ -292,17 +364,22 @@ class TextureBaker(ptk.LoggingMixin):
             return leaf
         return resolved or leaf
 
-    def _unique_path(self, output_dir: str, name: str, used: set) -> str:
+    def _unique_path(
+        self, output_dir: str, name: str, used: set, fmt: Optional[str] = None
+    ) -> str:
         """Collision-free output path for *name*, tracking *used* across the bake.
 
         Objects that share a material (texture-set stem) or have duplicate leaf
         names would otherwise resolve to the same file and overwrite each other;
-        the second gets ``{name}_1``, the third ``{name}_2``, and so on.
+        the second gets ``{name}_1``, the third ``{name}_2``, and so on. *fmt*
+        is the backend's effective format (Arnold is always EXR); default
+        ``file_format``.
         """
-        candidate = os.path.join(output_dir, f"{name}.{self.file_format}")
+        fmt = fmt or self.file_format
+        candidate = os.path.join(output_dir, f"{name}.{fmt}")
         k = 1
         while candidate in used:
-            candidate = os.path.join(output_dir, f"{name}_{k}.{self.file_format}")
+            candidate = os.path.join(output_dir, f"{name}_{k}.{fmt}")
             k += 1
         used.add(candidate)
         return candidate
@@ -324,6 +401,46 @@ class TextureBaker(ptk.LoggingMixin):
             f"Unknown backend: {requested!r}. "
             "Expected 'auto', 'arnold', or 'convertSolidTx'."
         )
+
+    @contextlib.contextmanager
+    def _pinned_render_settings(self, backend: str):
+        """Pin :attr:`render_settings` on ``defaultArnoldRenderOptions`` for the bake.
+
+        RTT's only quality flag is ``aa_samples``; GI bounce depth / diffuse
+        samples are read from the scene's render options at translate time.
+        Snapshotting and restoring exactly the attrs we set keeps the bake
+        deterministic without permanently touching the user's render setup.
+        No-op for non-Arnold backends or an empty dict.
+        """
+        if backend != "arnold" or not self.render_settings:
+            yield
+            return
+        try:  # the options node only exists after mtoa initializes it
+            from mtoa.core import createOptions
+
+            createOptions()
+        except Exception as e:
+            self.logger.warning("Could not ensure Arnold options node: %s", e)
+            yield
+            return
+
+        node = "defaultArnoldRenderOptions"
+        snapshot: Dict[str, Any] = {}
+        for attr, value in self.render_settings.items():
+            try:
+                snapshot[attr] = cmds.getAttr(f"{node}.{attr}")
+                cmds.setAttr(f"{node}.{attr}", value)
+            except (RuntimeError, ValueError) as e:
+                snapshot.pop(attr, None)  # unknown attr -> leave untouched
+                self.logger.warning("Render setting %s not applied: %s", attr, e)
+        try:
+            yield
+        finally:
+            for attr, value in snapshot.items():
+                try:
+                    cmds.setAttr(f"{node}.{attr}", value)
+                except RuntimeError as e:
+                    self.logger.warning("Render setting %s not restored: %s", attr, e)
 
     # ------------------------------------------------------------------
     # UV-set targeting (both backends sample the current set)
@@ -389,33 +506,182 @@ class TextureBaker(ptk.LoggingMixin):
         # The cmd signature is convertSolidTx(material, geom, ...).
         cmds.convertSolidTx(sg, obj, **kwargs)
 
-    def _bake_with_arnold(self, obj: str, output_dir: str) -> Optional[str]:
+    def _rtt_kwargs(self, output_dir: str, shader: Optional[str]) -> Dict[str, Any]:
+        """The ``arnoldRenderToTexture`` call args (single source for both paths)."""
+        kwargs: Dict[str, Any] = dict(
+            folder=output_dir,
+            resolution=self.resolution,
+            aa_samples=self.samples,
+        )
+        if shader:
+            # Per-shape override (measured): only the shape being baked wears
+            # it; every other object keeps its real material for that render.
+            kwargs["shader"] = str(shader)
+        return kwargs
+
+    def _bake_with_arnold(
+        self, obj: str, output_dir: str, shader: Optional[str] = None
+    ) -> Optional[str]:
         """Bake one mesh via Arnold's ``arnoldRenderToTexture``.
 
         Arnold names the output after the mesh *shape* (e.g. ``pCubeShape``),
         not the transform, so the written file is found by diffing the output
-        directory rather than assuming a name. Returns the written path (the
-        caller maps it to the prefixed convention), or None if none appeared.
+        directory rather than assuming a name (output is always ``.exr`` --
+        the command has no format flag). A multi-shape transform writes one
+        file per shape; the one matching a shape leaf name is preferred and
+        the extras are logged. Returns the written path (the caller maps it
+        to the prefixed convention), or None if none appeared.
         """
-        pattern = os.path.join(output_dir, f"*.{self.file_format}")
+        pattern = os.path.join(output_dir, "*.exr")
         before = set(glob.glob(pattern))
         prev = cmds.ls(selection=True, long=True) or []
         cmds.select(obj, replace=True)
         try:
-            cmds.arnoldRenderToTexture(
-                folder=output_dir,
-                resolution=self.resolution,
-                aa_samples=self.samples,
-                format=self.file_format,
-                all_uvs=False,
-            )
+            cmds.arnoldRenderToTexture(**self._rtt_kwargs(output_dir, shader))
         finally:
             if prev:
                 cmds.select(prev, replace=True)
             else:
                 cmds.select(clear=True)
         new = sorted(set(glob.glob(pattern)) - before)
-        return new[-1] if new else None
+        if len(new) <= 1:
+            return new[-1] if new else None
+        # Multiple shapes wrote multiple files; keep the one named after one
+        # of this transform's shape leaves (deterministic), not sorted()[-1].
+        shapes = cmds.listRelatives(
+            obj, shapes=True, noIntermediate=True, fullPath=True
+        ) or []
+        leaves = {s.rsplit("|", 1)[-1].rsplit(":", 1)[-1] for s in shapes}
+        matches = [
+            p for p in new
+            if os.path.splitext(os.path.basename(p))[0] in leaves
+        ]
+        self.logger.warning(
+            "%s wrote %d maps (multi-shape transform); keeping %s.",
+            obj, len(new), os.path.basename((matches or new)[-1]),
+        )
+        return (matches or new)[-1]
+
+    def _bake_with_arnold_batch(
+        self,
+        objects: List[str],
+        output_dir: str,
+        prefix: str,
+        suffix: str,
+        uv_set: Optional[Union[str, Dict[str, str]]],
+        on_progress: Optional[Callable[[int, int, str], bool]],
+        stem: Optional[Union[Callable[[str], str], Dict[str, str]]],
+        fmt: str,
+        shader: Optional[str],
+    ) -> Optional[Dict[str, str]]:
+        """Bake every object in ONE RTT call; map per-shape files to objects.
+
+        Returns the results dict, or ``None`` when the selection can't be
+        batched (duplicate shape leaf names -- RTT names files by shape leaf,
+        so duplicates would silently overwrite each other); the caller then
+        falls back to the per-object loop.
+        """
+        longs: List[str] = []
+        leaves: Dict[str, List[str]] = {}
+        for obj in objects:
+            long_name = cmds.ls(obj, long=True)
+            if not long_name:
+                self.logger.warning("Skipping unknown object: %s", obj)
+                continue
+            long_name = long_name[0]
+            shapes = cmds.listRelatives(
+                long_name, shapes=True, noIntermediate=True, fullPath=True
+            ) or []
+            raw_leaves = [s.rsplit("|", 1)[-1] for s in shapes]
+            leaves[long_name] = [l.rsplit(":", 1)[-1] for l in raw_leaves]
+            if any(":" in l for l in raw_leaves):
+                # A namespaced shape's RTT filename is NOT its raw leaf (":"
+                # is illegal in Windows filenames), so the stem match below
+                # would miss every referenced asset. The per-object path
+                # detects its file by dir-diff and is immune.
+                self.logger.warning(
+                    "Namespaced shape names in the batch (RTT filename "
+                    "mapping is ambiguous); falling back to per-object bakes."
+                )
+                return None
+            longs.append(long_name)
+        if not longs:
+            return {}
+        flat = [l for ls in leaves.values() for l in ls]
+        if len(set(flat)) != len(flat):
+            self.logger.warning(
+                "Duplicate shape leaf names in the batch (RTT names output "
+                "files by shape leaf); falling back to per-object bakes."
+            )
+            return None
+
+        total = len(longs)
+        first_leaf = longs[0].rsplit("|", 1)[-1].replace(":", "_")
+        last_leaf = longs[-1].rsplit("|", 1)[-1].replace(":", "_")
+        if not self._tick(on_progress, 0, total, first_leaf):
+            self.logger.info("Bake cancelled by caller before batch start.")
+            return {}
+
+        prev_uv: Dict[str, str] = {}
+        for long_name in longs:
+            target = uv_set.get(long_name) if isinstance(uv_set, dict) else uv_set
+            if target:
+                prev_uv.update(self._set_current_uv_set(long_name, target))
+
+        pattern = os.path.join(output_dir, "*.exr")
+        before = set(glob.glob(pattern))
+        prev_sel = cmds.ls(selection=True, long=True) or []
+        cmds.select(longs, replace=True)
+        try:
+            cmds.arnoldRenderToTexture(**self._rtt_kwargs(output_dir, shader))
+        except Exception as e:
+            self.logger.error("Batch bake failed: %s", e)
+            # Mirror the per-object path's guarantee: a determinate progress
+            # bar still reaches 100% on failure (empty results tell the tale).
+            self._tick(on_progress, total, total, last_leaf)
+            return {}
+        finally:
+            if prev_sel:
+                cmds.select(prev_sel, replace=True)
+            else:
+                cmds.select(clear=True)
+            self._restore_uv_sets(prev_uv)
+
+        by_stem = {
+            os.path.splitext(os.path.basename(p))[0]: p
+            for p in set(glob.glob(pattern)) - before
+        }
+        results: Dict[str, str] = {}
+        used: set = set()
+        for long_name in longs:
+            leaf = long_name.rsplit("|", 1)[-1].replace(":", "_")
+            matches = [l for l in leaves[long_name] if l in by_stem]
+            if not matches:
+                self.logger.warning(
+                    "Batch bake produced no output for %s.", long_name
+                )
+                continue
+            if len(matches) > 1:
+                # Match the per-object path's multi-shape transparency: only
+                # the first shape's map is claimed under the object's name.
+                self.logger.warning(
+                    "%s wrote %d maps (multi-shape transform); claiming %s, "
+                    "leaving %s in %s.",
+                    long_name, len(matches), matches[0],
+                    ", ".join(matches[1:]), output_dir,
+                )
+            raw = by_stem[matches[0]]
+            name = ptk.StrUtils.apply_affix(
+                self._resolve_stem(stem, long_name, leaf), prefix, suffix
+            )
+            out_path = self._unique_path(output_dir, name, used, fmt)
+            if os.path.abspath(raw) != os.path.abspath(out_path):
+                os.replace(raw, out_path)
+            results[long_name] = out_path
+            self.logger.info("Baked %s -> %s", leaf, out_path)
+
+        self._tick(on_progress, total, total, last_leaf)
+        return results
 
     @staticmethod
     def _first_shading_group(obj: str) -> Optional[str]:

@@ -571,9 +571,18 @@ class MayaConnection:
             except Exception:
                 return False
 
-        # Wait for port to be actually listening
-        # Maya takes a while to load (UI + UserSetup), giving it 3 minutes
-        if AppLauncher.wait_for_ready(process, timeout=180, check_fn=check_port_open):
+        # Wait for port to be actually listening. Maya takes a while to load
+        # (UI + UserSetup + plugin autoload); a cold start on a laptop can
+        # exceed 3 minutes, which made the runner give up and orphan a Maya
+        # that opened its port moments later. Default 6 minutes, overridable
+        # via MAYATK_PORT_TIMEOUT for slower/faster machines.
+        try:
+            port_timeout = int(os.environ.get("MAYATK_PORT_TIMEOUT", "360"))
+        except ValueError:
+            port_timeout = 360
+        if AppLauncher.wait_for_ready(
+            process, timeout=port_timeout, check_fn=check_port_open
+        ):
             print("[MayaConnection] Maya Command Port is ready.")
             return True
 
@@ -665,17 +674,26 @@ class MayaConnection:
         import os
 
         for port in range(start_port, start_port + max_check):
-            # 1. Check TCP Port
-            is_tcp_free = False
+            # 1. Check TCP Port: try to BIND it, not connect to it. A hung
+            #    (zombie) Maya can hold a bound-but-not-listening socket that a
+            #    connect probe reads as "free", yet the new Maya's commandPort
+            #    still fails to bind — the runner then waits on a port that can
+            #    never open (root cause of the 2026-07-09 launch hangs: one
+            #    zombie squatted 7002 across three consecutive launches). If
+            #    this bind succeeds, a new Maya can bind it too.
             try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                # If we successfully connect (0), the port is taken.
-                # If we fail (non-zero), the port is likely free.
-                if s.connect_ex(("localhost", port)) != 0:
-                    is_tcp_free = True
-                s.close()
+                from pythontk import NetUtils
+
+                is_tcp_free = NetUtils.is_port_bindable(port)
+            except AttributeError:
+                # Published pythontk without is_port_bindable yet (wheel
+                # lag): fall back to the legacy connect probe. Fail OPEN —
+                # failing closed here reads EVERY port as busy and kills
+                # port-mode launching outright (worse than missing only the
+                # rare zombie-squatter case the bind probe exists for).
+                is_tcp_free = not NetUtils.is_port_open("127.0.0.1", port)
             except Exception:
-                pass
+                is_tcp_free = False
 
             if not is_tcp_free:
                 continue

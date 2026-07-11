@@ -1,6 +1,6 @@
 -- Hard-surface auto-unwrap pipeline.
--- Detects sharp dihedral edges (modeled creases), handles, and pipes as
--- seams, then cuts, unfolds, and packs.
+-- Welds existing seams (optional), detects sharp dihedral edges (modeled
+-- creases), handles, and pipes as seams, then cuts, unfolds, and packs.
 --
 -- Use this for mechanical / architectural / hard-edge meshes whose seams
 -- already exist in the topology as crisp angles. For smooth sculpted /
@@ -8,6 +8,17 @@
 --
 -- Auto.* key is SharpEdges (NOT HardEdge) -- RizomUV silently drops any
 -- unknown key inside Auto={...}, so a typo here makes the cutter no-op.
+-- Verify any Lua change against a live run:
+-- test/rizom_headless_probe.py (2020.1 access-violates on
+-- fields it doesn't know).
+
+-- 0. Weld First (default on): weld ALL existing seams so the auto-seam
+--    re-cuts from a clean surface. Off = keep the incoming seams and only
+--    add the newly detected cuts on top.
+if __WELD_SEAMS__ then
+    ZomSelect({PrimType="Edge", WorkingSet="Visible&UnLocked", Select=true, All=true, ResetBefore=true})
+    ZomWeld({PrimType="Edge", WorkingSet="Visible&UnLocked"})
+end
 
 -- 1. Auto-detect seams. SharpEdges.AngleMin = dihedral threshold in degrees.
 ZomSelect({

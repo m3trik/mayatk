@@ -1,27 +1,6 @@
 {
     "_meta": {
-        "version": 1
-    },
-    "m_back_face_culling": {"key": "1", "cat": "Display"},
-    "m_isolate_selected": {"key": "2", "cat": "Display"},
-    "m_wireframe": {"key": "3", "cat": "Display"},
-    "m_shading": {"key": "4", "cat": "Display"},
-    "m_lighting": {"key": "6", "cat": "Display"},
-    "m_grid_and_image_planes": {"key": "F1", "cat": "Display"},
-    "m_cycle_display_state": {"key": "F2", "cat": "Display"},
-    "m_smooth_preview": {"key": "F3", "cat": "Display"},
-    "m_multi_component": {"key": "F5", "cat": "Edit"},
-    "m_frame": {"key": "f", "cat": "Display"},
-    "m_object_selection": {"key": "sht+q", "cat": "Selection"},
-    "m_vertex_selection": {"key": "sht+w", "cat": "Selection"},
-    "m_edge_selection": {"key": "sht+e", "cat": "Selection"},
-    "m_face_selection": {"key": "sht+r", "cat": "Selection"},
-    "m_invert_selection": {"key": "ctl+sht+i", "cat": "Selection"},
-    "m_paste_and_rename": {"key": "ctl+v", "cat": "Edit"},
-    "m_toggle_panels": {"key": "9", "cat": "UI"},
-    "m_toggle_UV_select_type": {"key": "sht+t", "cat": "Selection"},
-    "m_merge_vertices": {"key": "ctl+m", "cat": "Edit"},
-    "m_group": {"key": "ctl+g", "cat": "Edit"},
-    "m_set_selected_keys": {"key": "alt+s", "cat": "Animation"},
-    "m_unset_selected_keys": {"key": "alt+ctl+s", "cat": "Animation"}
+        "version": 1,
+        "description": "Shipped default: every macro unbound. Loading it clears all macro hotkeys; bindings are opt-in via user presets."
+    }
 }

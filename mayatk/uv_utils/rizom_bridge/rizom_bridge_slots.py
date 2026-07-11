@@ -110,7 +110,7 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
     # open_uv_editor + the base's open_templates_folder / refresh_templates).
     HEADER_MENU_ITEMS = (
         (
-            "Open UV Editor", "btnopen_uv_editor",
+            "Open UV Editor", "btn_open_uv_editor",
             "Open Maya's UV Editor for inspecting the result.", "open_uv_editor",
         ),
         (

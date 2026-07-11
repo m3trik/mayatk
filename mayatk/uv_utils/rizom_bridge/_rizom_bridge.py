@@ -35,18 +35,53 @@ _RIZOM_SCAN_GLOBS = (
     r"{program_files}\Rizom Lab\*\rizomuv.exe",
 )
 
+# Version segment inside a Rizom install-dir name. Anchored on a 4-digit
+# year (every supported release is year-versioned) so it survives the
+# naming variants: "RizomUV 2020.1", "RizomUV_2022", "RizomUV VS RS 2022.2".
+_VERSION_RE = re.compile(r"(\d{4}(?:\.\d+)*)")
+
+
+def _parse_rizom_version(exe_path) -> "tuple[int, ...]":
+    """Parse ``(major, minor, ...)`` from *exe_path*'s install-dir name.
+
+    Walks the path's parents looking for a folder whose name mentions
+    Rizom and contains a year-anchored version. The result is padded to
+    at least length 2 (``(2020, 1)`` / ``(2022, 0)``) so single-segment
+    names still compare correctly against the ``(year, minor)`` gates in
+    :data:`parameters.MIN_VERSIONS` -- Python's lexicographic tuple
+    compare otherwise treats ``(2025,)`` as *less than* ``(2022, 0)``.
+
+    Returns ``(0, 0)`` when nothing parses.
+    """
+    for parent in Path(exe_path).resolve().parents:
+        if "rizom" not in parent.name.lower():
+            continue
+        matches = _VERSION_RE.findall(parent.name)
+        if matches:
+            parsed = tuple(int(p) for p in matches[-1].split("."))
+            return parsed if len(parsed) >= 2 else parsed + (0,) * (2 - len(parsed))
+    return (0, 0)
+
 
 class RizomUVBridge(ptk.LoggingMixin):
-    def __init__(self, rizom_path=None):
+    # Namespace the round-trip FBX is imported into; created fresh per run
+    # and removed again during cleanup.
+    _IMPORT_NAMESPACE = "RizomUVImport"
+
+    def __init__(self, rizom_path=None, timeout=600):
         """Initialize the RizomUV bridge.
 
         Parameters:
             rizom_path: Explicit path to the RizomUV executable.
                 If *None*, ``AppLauncher`` searches PATH / registry
                 using the candidates in ``_RIZOM_APP_NAMES``.
+            timeout: Max seconds to wait for the headless round-trip run
+                before killing RizomUV. Simple meshes finish in seconds;
+                dense meshes with high pack mutations can take minutes.
         """
         super().__init__()
         self._rizom_path = rizom_path
+        self.timeout = timeout
         self._export_path = None  # Default to None, to be set during processing
         self._script_path = None  # Stores the path to the UV script file
         # Mapping of exported (temporary suffixed) transform short names -> original transform str
@@ -86,21 +121,14 @@ class RizomUVBridge(ptk.LoggingMixin):
 
     @property
     def rizom_version(self) -> "tuple[int, ...]":
-        """Parse the Rizom version from the install directory name.
+        """The installed Rizom version, parsed from the install-dir name.
 
-        Returns a ``(major, minor, patch, ...)`` tuple suitable for direct
-        comparison with the gates in
-        :data:`mayatk.uv_utils.rizom_bridge.parameters.MIN_VERSIONS`. The
-        parsed tuple is padded to at least length 2 (``(2025, 0)`` rather
-        than bare ``(2025,)``) so a single-segment install name still
-        compares correctly against the registered ``(year, minor)`` gates
-        -- Python's lexicographic tuple compare otherwise treats
-        ``(2025,)`` as *less than* ``(2022, 0)``.
-
-        Returns ``(0, 0)`` when no version can be extracted -- conservative
-        choice that gates *every* version-flagged param off, matching what
-        a fresh / unknown Rizom install would need anyway. A debug log is
-        emitted so the user can tell why the panel might be missing knobs.
+        Delegates to :func:`_parse_rizom_version`; see there for the
+        comparison semantics. Returns ``(0, 0)`` when no version can be
+        extracted -- conservative choice that gates *every*
+        version-flagged param off, matching what a fresh / unknown Rizom
+        install would need anyway. A debug log is emitted so the user can
+        tell why the panel might be missing knobs.
         """
         path = self.rizom_path
         if not path:
@@ -108,19 +136,13 @@ class RizomUVBridge(ptk.LoggingMixin):
                 "rizom_version: no executable resolved yet -> (0, 0)."
             )
             return (0, 0)
-        for parent in Path(path).resolve().parents:
-            m = re.search(
-                r"RizomUV[\s_-]*(\d+(?:\.\d+)*)", parent.name, flags=re.IGNORECASE
+        version = _parse_rizom_version(path)
+        if version == (0, 0):
+            self.logger.debug(
+                f"rizom_version: could not parse version from {path!r}; "
+                f"gating all version-flagged params off -> (0, 0)."
             )
-            if m:
-                parsed = tuple(int(p) for p in m.group(1).split("."))
-                # Pad to at least length 2 so '(2025,)' >= '(2022, 0)' works.
-                return parsed if len(parsed) >= 2 else parsed + (0,) * (2 - len(parsed))
-        self.logger.debug(
-            f"rizom_version: could not parse version from {path!r}; "
-            f"gating all version-flagged params off -> (0, 0)."
-        )
-        return (0, 0)
+        return version
 
     @property
     def export_path(self):
@@ -137,10 +159,12 @@ class RizomUVBridge(ptk.LoggingMixin):
 
     @export_path.setter
     def export_path(self, value):
-        if value and not (
-            value.lower().endswith(".obj") or value.lower().endswith(".fbx")
-        ):
-            raise ValueError("The specified export path must end with '.obj' or '.fbx'")
+        # FBX only: the exporter, wrapper flags (UseUVSetNames) and the
+        # namespace re-import are all FBX-shaped. The old '.obj' option was
+        # a trap -- the export step always wrote FBX data regardless of the
+        # extension, so an .obj path produced a file Rizom couldn't parse.
+        if value and not value.lower().endswith(".fbx"):
+            raise ValueError("The specified export path must end with '.fbx'")
         self._export_path = Path(value)
 
     @property
@@ -175,12 +199,17 @@ class RizomUVBridge(ptk.LoggingMixin):
                     file is loaded from ``scripts/<preset>.lua``. Mutually
                     exclusive with *uv_script*.
             params: Optional dict of placeholder overrides
-                    (e.g. ``{"MARGIN": 0.005, "ITERATIONS": 25}``).
-                    Keys map to ``__KEY__`` tokens in the script.
+                    (e.g. ``{"ITERATIONS": 25, "WELD_SEAMS": False}``).
+                    Keys map to ``__KEY__`` tokens in the script (see
+                    ``parameters.PARAMS`` for the registered set).
                     Unknown keys are passed through verbatim.
         """
         if not objects:
             raise ValueError("No objects specified for processing.")
+
+        original_transforms = NodeUtils.get_transform_node(objects)
+        if not original_transforms:
+            raise ValueError("No valid transform nodes supplied for processing.")
 
         resolved = self._resolve_script(uv_script=uv_script, preset=preset)
         if resolved is not None:
@@ -190,26 +219,20 @@ class RizomUVBridge(ptk.LoggingMixin):
 
         chunk_name = f"RizomUV: {preset or 'script'}"
         with CoreUtils.undo_chunk(chunk_name):
-            self._export_objects(objects)
+            self._export_objects(original_transforms)
             self._execute_uv_script()
 
             # Directly work with transforms for imported objects for consistency
             imported_transforms = self._import_objects()
-            # Ensure only transforms are passed to the transfer method
-            original_transforms = NodeUtils.get_transform_node(objects)
             self._transfer_uvs_and_cleanup(imported_transforms, original_transforms)
 
         self._announce_handoff(preset or "script", len(original_transforms))
 
     def _import_objects(self):
-        """Updated to ensure transform nodes are returned."""
+        """Import the RizomUV-processed FBX and return its transform nodes."""
         self.logger.debug(f"Importing objects from: {self.export_path}")
 
-        # Determine file type
-        file_ext = Path(self.export_path).suffix.lower()
-
-        # Ensure we have a unique namespace that doesn't conflict
-        import_namespace = "RizomUVImport"
+        import_namespace = self._IMPORT_NAMESPACE
 
         # Remove the namespace if it already exists to ensure clean import
         if cmds.namespace(exists=import_namespace):
@@ -221,65 +244,54 @@ class RizomUVBridge(ptk.LoggingMixin):
         self.logger.debug(f"Created namespace: {import_namespace}")
 
         try:
-            if file_ext == ".fbx":
-                # Ensure FBX plugin is loaded first
-                if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
-                    self.logger.debug("Loading FBX plugin...")
-                    cmds.loadPlugin("fbxmaya")
+            # Ensure FBX plugin is loaded first
+            if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
+                self.logger.debug("Loading FBX plugin...")
+                cmds.loadPlugin("fbxmaya")
 
-                self.logger.debug("Importing FBX using Maya file command...")
+            self.logger.debug("Importing FBX using Maya file command...")
 
-                # Use Maya's file command for reliable namespace import
-                import_cmd = f'file -import -type "FBX" -ignoreVersion -mergeNamespacesOnClash false -namespace "{import_namespace}" -options "fbx" -pr "{self.export_path}";'
-                self.logger.debug(f"Executing command: {import_cmd}")
-                mel.eval(import_cmd)
+            # Use Maya's file command for reliable namespace import
+            import_cmd = f'file -import -type "FBX" -ignoreVersion -mergeNamespacesOnClash false -namespace "{import_namespace}" -options "fbx" -pr "{self.export_path}";'
+            self.logger.debug(f"Executing command: {import_cmd}")
+            mel.eval(import_cmd)
 
-                # Get all objects in the namespace - try different approaches
-                imported_objs = cmds.ls(f"{import_namespace}:*", type="transform") or []
-                self.logger.debug(f"Transform objects in namespace: {imported_objs}")
+            # Get all objects in the namespace - try different approaches
+            imported_objs = cmds.ls(f"{import_namespace}:*", type="transform") or []
+            self.logger.debug(f"Transform objects in namespace: {imported_objs}")
 
-                # If no transforms found, check for any nodes in the namespace
-                if not imported_objs:
-                    all_namespace_nodes = cmds.ls(f"{import_namespace}:*") or []
-                    self.logger.debug(f"All nodes in namespace: {all_namespace_nodes}")
+            # If no transforms found, check for any nodes in the namespace
+            if not imported_objs:
+                all_namespace_nodes = cmds.ls(f"{import_namespace}:*") or []
+                self.logger.debug(f"All nodes in namespace: {all_namespace_nodes}")
 
-                    # Try to find shapes and get their transforms
-                    shape_nodes = cmds.ls(f"{import_namespace}:*", type="mesh") or []
-                    if shape_nodes:
-                        imported_objs = []
-                        for shape in shape_nodes:
-                            transforms = cmds.listRelatives(
-                                shape, parent=True, type="transform"
-                            ) or []
-                            if transforms:
-                                imported_objs.extend(transforms)
-                        self.logger.debug(f"Transforms found from shapes: {imported_objs}")
+                # Try to find shapes and get their transforms
+                shape_nodes = cmds.ls(f"{import_namespace}:*", type="mesh") or []
+                if shape_nodes:
+                    imported_objs = []
+                    for shape in shape_nodes:
+                        transforms = cmds.listRelatives(
+                            shape, parent=True, type="transform"
+                        ) or []
+                        if transforms:
+                            imported_objs.extend(transforms)
+                    self.logger.debug(f"Transforms found from shapes: {imported_objs}")
 
-                # If still no objects found in namespace, look for suffix objects anywhere
-                if not imported_objs:
-                    self.logger.debug(
-                        f"No objects found in namespace, searching for suffix '{self._temp_suffix}' anywhere..."
-                    )
-                    all_transforms = cmds.ls(type="transform") or []
-                    suffix_objects = [
-                        t
-                        for t in all_transforms
-                        if leaf_name(t).endswith(self._temp_suffix)
-                    ]
-                    self.logger.debug(
-                        f"Found {len(suffix_objects)} objects with suffix: {suffix_objects}"
-                    )
-                    imported_objs = suffix_objects
-
-            else:  # .obj
-                imported_objs = cmds.file(
-                    self.export_path,
-                    i=True,
-                    namespace=import_namespace,
-                    returnNewNodes=True,
-                    type="OBJ",
-                ) or []
-                self.logger.debug(f"OBJ import returned: {imported_objs}")
+            # If still no objects found in namespace, look for suffix objects anywhere
+            if not imported_objs:
+                self.logger.debug(
+                    f"No objects found in namespace, searching for suffix '{self._temp_suffix}' anywhere..."
+                )
+                all_transforms = cmds.ls(type="transform") or []
+                suffix_objects = [
+                    t
+                    for t in all_transforms
+                    if leaf_name(t).endswith(self._temp_suffix)
+                ]
+                self.logger.debug(
+                    f"Found {len(suffix_objects)} objects with suffix: {suffix_objects}"
+                )
+                imported_objs = suffix_objects
 
         except Exception as e:
             self.logger.warning(f"Import failed: {e}")
@@ -288,12 +300,9 @@ class RizomUVBridge(ptk.LoggingMixin):
                 self.logger.debug("Trying import without namespace as final fallback...")
                 existing_transforms = set(cmds.ls(type="transform") or [])
 
-                if file_ext == ".fbx":
-                    mel.eval(
-                        f'file -import -type "FBX" -ignoreVersion -options "fbx" -pr "{self.export_path}";'
-                    )
-                else:
-                    cmds.file(self.export_path, i=True, type="OBJ")
+                mel.eval(
+                    f'file -import -type "FBX" -ignoreVersion -options "fbx" -pr "{self.export_path}";'
+                )
 
                 new_transforms = set(cmds.ls(type="transform") or [])
                 imported_objs = list(new_transforms - existing_transforms)
@@ -323,10 +332,14 @@ class RizomUVBridge(ptk.LoggingMixin):
         return imported_transforms
 
     def _export_objects(self, objects):
-        """Export specified Maya objects to an FBX (preferred) or OBJ file after duplicating with a unique suffix.
+        """Export specified Maya objects to an FBX file after duplicating with a unique suffix.
 
         Strategy:
-        1. Duplicate each original transform and append a temp suffix so names are unique.
+        1. Duplicate each original transform and append an indexed temp suffix
+           so leaf names are globally unique -- two originals sharing a leaf
+           name under different parents (``|grpA|mesh`` / ``|grpB|mesh``)
+           would otherwise collapse to the same map key and cross-wire the
+           UV transfer on re-import.
         2. Export only the duplicated (suffixed) transforms so re-import will not overwrite originals.
         3. Delete the duplicates locally (their geometry lives inside the exported file now).
         4. Later, on import, we detect suffixed names and map them back to originals for UV transfer.
@@ -339,10 +352,10 @@ class RizomUVBridge(ptk.LoggingMixin):
             raise ValueError("No valid transform nodes supplied for export.")
 
         duplicates = []
-        for orig in original_transforms:
+        for i, orig in enumerate(original_transforms):
             try:
                 dup = cmds.duplicate(orig, rr=True, ic=True)[0]
-                new_name = f"{leaf_name(orig)}{self._temp_suffix}"
+                new_name = f"{leaf_name(orig)}_{i}{self._temp_suffix}"
                 dup = cmds.rename(dup, new_name)
                 # Resolve to full DAG path so cmds.select can disambiguate when
                 # two duplicates collapse to the same leaf name in different parents.
@@ -350,8 +363,13 @@ class RizomUVBridge(ptk.LoggingMixin):
                 if dup_long:
                     dup = dup_long[0]
                 duplicates.append(dup)
-                # Store mapping using short (namespace-free) name
-                self._export_name_map[short_name(new_name)] = orig
+                # Key on the name cmds.rename actually RETURNED, not the one
+                # requested — a stale *__RZTMP survivor from a crashed run
+                # makes Maya uniquify the rename (…RZTMP1), and a map keyed on
+                # the request would silently skip that object's UV transfer
+                # on re-import. Short (namespace-free) to match import-side
+                # lookups.
+                self._export_name_map[short_name(leaf_name(dup))] = orig
             except Exception as dup_err:
                 self.logger.warning(f"Failed to duplicate {orig}: {dup_err}")
         self.logger.debug(
@@ -401,9 +419,7 @@ class RizomUVBridge(ptk.LoggingMixin):
         if (
             self._script_path
         ):  # Assuming _script_path is set to a valid path or script content
-            user_script_content = Path(
-                self._script_path
-            ).read_text()  # Reads the script content if _script_path is a file path
+            user_script_content = Path(self._script_path).read_text(encoding="utf-8")
         else:
             user_script_content = ""  # Default script content if not provided
 
@@ -445,16 +461,17 @@ class RizomUVBridge(ptk.LoggingMixin):
         pre_mtime = export_file.stat().st_mtime if export_file.exists() else 0
         pre_size = export_file.stat().st_size if export_file.exists() else 0
 
-        self.logger.debug(f"Executing command: {exe} -cfi {self._script_path}")
+        self.logger.debug(f"Executing command: {exe} -cfi {self.script_path}")
         try:
             result = AppLauncher.run(
                 exe,
-                args=["-cfi", self._script_path],
-                timeout=120,
+                args=["-cfi", self.script_path],
+                timeout=self.timeout,
             )
         except subprocess.TimeoutExpired as e:
             raise RuntimeError(
-                "RizomUV did not exit within 120s -- killed."
+                f"RizomUV did not exit within {self.timeout}s -- killed. "
+                f"For dense meshes, raise RizomUVBridge(timeout=...)."
             ) from e
         except FileNotFoundError as e:
             raise RuntimeError(f"RizomUV executable not runnable: {e}") from e
@@ -471,7 +488,9 @@ class RizomUVBridge(ptk.LoggingMixin):
             # could be any of dozens of incompatible field names). Tail the
             # last 2 KB of each stream so a panicking Rizom that dumps MB of
             # crash text doesn't blow up the log.
-            tail = lambda s, n=2048: (s or "")[-n:].rstrip()
+            def tail(s, n=2048):
+                return (s or "")[-n:].rstrip()
+
             stdout_tail = tail(result.stdout)
             stderr_tail = tail(result.stderr)
             ver = self.rizom_version
@@ -511,65 +530,50 @@ class RizomUVBridge(ptk.LoggingMixin):
             )
 
     def _transfer_uvs_and_cleanup(self, imported_objects, original_objects):
-        """Transfer UVs from imported objects back to the original objects and clean up."""
-        self.logger.debug("Starting UV transfer...")
+        """Transfer UVs from imported objects back to the original objects and clean up.
+
+        Cleanup (delete imports, drop the import namespace, restore the
+        selection) runs in a ``finally`` so a failed transfer never leaves
+        the temporary import nodes in the scene.
+        """
+        self.logger.debug(
+            f"Starting UV transfer: {len(imported_objects or [])} imported, "
+            f"{len(original_objects or [])} original."
+        )
         self.logger.debug(f"Imported objects: {imported_objects}")
         self.logger.debug(f"Original objects: {original_objects}")
-        self.logger.debug(
-            f"Number of imported: {len(imported_objects) if imported_objects else 0}"
-        )
-        self.logger.debug(
-            f"Number of original: {len(original_objects) if original_objects else 0}"
-        )
 
-        if not imported_objects or not original_objects:
-            self.logger.warning("No objects to transfer UVs between!")
-            return
+        try:
+            if not imported_objects or not original_objects:
+                self.logger.warning("No objects to transfer UVs between!")
+                return
 
-        # Build ordered source/destination lists using the export mapping
-        src_list = []
-        dst_list = []
-        for imp in imported_objects:
-            short = short_name(imp)
-            if short in self._export_name_map:
-                dst = self._export_name_map[short]
-                src_list.append(imp)
-                dst_list.append(dst)
-            else:
-                self.logger.debug(
-                    f"Imported object {imp} not found in export map; skipping."
-                )
-
-        self.logger.info(
-            f"Transferring UVs to {len(dst_list)} object(s)."
-        )
-
-        if not src_list or not dst_list:
-            self.logger.warning("No valid mapped object pairs for UV transfer.")
-        else:
-            # Attempt a batch transfer if lengths match
-            if len(src_list) == len(dst_list):
-                try:
-                    self.logger.debug("Attempting batch UV transfer...")
-                    UvUtils.transfer_uvs(src_list, dst_list)
-                    self.logger.debug("Batch UV transfer completed successfully!")
-                except Exception as batch_err:
-                    self.logger.warning(
-                        f"Batch UV transfer failed ({batch_err}); attempting pairwise transfers..."
+            # Build ordered (source, destination) pairs using the export mapping
+            pairs = []
+            for imp in imported_objects:
+                dst = self._export_name_map.get(short_name(imp))
+                if dst is None:
+                    self.logger.debug(
+                        f"Imported object {imp} not found in export map; skipping."
                     )
-                    for s, d in zip(src_list, dst_list):
-                        try:
-                            UvUtils.transfer_uvs([s], [d])
-                            self.logger.debug(f"Pairwise UV transfer success: {s} -> {d}")
-                        except Exception as pair_err:
-                            self.logger.error(
-                                f"Pairwise UV transfer failed for {s} -> {d}: {pair_err}"
-                            )
-            else:
+                    continue
+                pairs.append((imp, dst))
+
+            if not pairs:
+                self.logger.warning("No valid mapped object pairs for UV transfer.")
+                return
+
+            self.logger.info(f"Transferring UVs to {len(pairs)} object(s).")
+            src_list = [s for s, _ in pairs]
+            dst_list = [d for _, d in pairs]
+            try:
+                UvUtils.transfer_uvs(src_list, dst_list)
+                self.logger.debug("Batch UV transfer completed successfully!")
+            except Exception as batch_err:
                 self.logger.warning(
-                    "Source/Destination list length mismatch; skipping batch transfer."
+                    f"Batch UV transfer failed ({batch_err}); attempting pairwise transfers..."
                 )
-                for s, d in zip(src_list, dst_list):
+                for s, d in pairs:
                     try:
                         UvUtils.transfer_uvs([s], [d])
                         self.logger.debug(f"Pairwise UV transfer success: {s} -> {d}")
@@ -577,12 +581,28 @@ class RizomUVBridge(ptk.LoggingMixin):
                         self.logger.error(
                             f"Pairwise UV transfer failed for {s} -> {d}: {pair_err}"
                         )
-
-        self.logger.debug("Cleaning up imported objects...")
-        cmds.delete(imported_objects)
-        cmds.namespace(removeNamespace="RizomUVImport", mergeNamespaceWithRoot=True)
-        cmds.select(original_objects)
-        self.logger.debug("Cleanup completed.")
+        finally:
+            # Each step guarded individually -- a cleanup failure inside a
+            # ``finally`` would otherwise mask the in-flight transfer error.
+            self.logger.debug("Cleaning up imported objects...")
+            if imported_objects:
+                try:
+                    cmds.delete(imported_objects)
+                except Exception as cleanup_err:
+                    self.logger.warning(
+                        f"Failed to delete imported nodes: {cleanup_err}"
+                    )
+            try:
+                if cmds.namespace(exists=self._IMPORT_NAMESPACE):
+                    cmds.namespace(
+                        removeNamespace=self._IMPORT_NAMESPACE,
+                        mergeNamespaceWithRoot=True,
+                    )
+                if original_objects:
+                    cmds.select(original_objects)
+            except Exception as cleanup_err:
+                self.logger.warning(f"Post-transfer cleanup failed: {cleanup_err}")
+            self.logger.debug("Cleanup completed.")
 
     # -- Script resolution helpers -----------------------------------------
 
@@ -617,14 +637,11 @@ class RizomUVBridge(ptk.LoggingMixin):
     def _construct_full_script(self, user_script):
         """Wrap *user_script* inside the ZomLoad / ZomSave / ZomQuit boilerplate.
 
-        If the user script already contains ``ZomLoad`` / ``ZomSave`` /
-        ``ZomQuit``, the wrapper is skipped and the script is returned as-is.
+        If the user script already contains ``ZomLoad`` / ``ZomSave``, the
+        wrapper is skipped -- but version-stripping and placeholder
+        substitution still run, so a custom script can use the registered
+        ``__KEY__`` tokens and stay safe on older Rizom.
         """
-        # If the script already handles its own load/save, pass it through
-        if "ZomLoad" in user_script and "ZomSave" in user_script:
-            self.logger.debug("User script contains ZomLoad/ZomSave; using as-is.")
-            return user_script
-
         from mayatk.uv_utils.rizom_bridge import parameters as _params
 
         export_path_normalized = str(self.export_path).replace("\\", "/")
@@ -646,6 +663,12 @@ class RizomUVBridge(ptk.LoggingMixin):
         # resolved param values; the wrapper then sees the (already-substituted)
         # user_script as a single block.
         user_script = StrUtils.replace_delimited(user_script, param_context)
+
+        # If the script handles its own load/save, pass it through (already
+        # stripped + substituted above).
+        if "ZomLoad" in user_script and "ZomSave" in user_script:
+            self.logger.debug("User script contains ZomLoad/ZomSave; using as-is.")
+            return user_script
 
         # FBX={UseUVSetNames=true} (nested table) preserves Maya's UV-set
         # name across the round-trip; the bare ``FBX=true`` form is silently
@@ -669,14 +692,16 @@ class RizomUVBridge(ptk.LoggingMixin):
         self.logger.debug(f"Constructed full script:\n{full_script}")
         return full_script
 
-    def _prepare_script_file(self, script_contents):
-        """Prepare and save the Lua script file for RizomUV, returning the file path."""
-        script_filename = Path(tempfile.gettempdir(), "riz_uv_script.lua").as_posix()
-        with open(script_filename, "w") as file:
-            file.write(script_contents)
-        # Convert to a Path object and then get a POSIX-style string
-        self._script_path = script_filename
-        return script_filename
+    def _prepare_script_file(self, script_contents) -> Path:
+        """Save the Lua script for RizomUV; returns (and stores) its Path.
+
+        ``_script_path`` must stay a ``Path`` -- the public ``script_path``
+        property calls ``.as_posix()`` on it.
+        """
+        script_path = Path(tempfile.gettempdir(), "riz_uv_script.lua")
+        script_path.write_text(script_contents, encoding="utf-8")
+        self._script_path = script_path
+        return script_path
 
     def _announce_handoff(self, preset: str, transform_count: int) -> None:
         """Log the final success summary at the end of :meth:`process_with_rizomuv`.
@@ -914,8 +939,11 @@ class RizomUVBridge(ptk.LoggingMixin):
             self.logger.warning(f"Texture collection failed: {e}")
             return ""
 
-        existing = [p for p in paths if p and os.path.isfile(p)]
-        missing_count = len(paths) - len(existing)
+        # Order-preserving dedupe -- shared shading networks report the same
+        # file once per assignment.
+        unique_paths = list(dict.fromkeys(paths))
+        existing = [p for p in unique_paths if p and os.path.isfile(p)]
+        missing_count = len(unique_paths) - len(existing)
         if missing_count:
             self.logger.warning(
                 f"Skipping {missing_count} texture(s) whose source files don't exist."

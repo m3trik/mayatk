@@ -78,9 +78,6 @@
            <height>19</height>
           </size>
          </property>
-         <property name="toolTip">
-          <string>Rig behavior mode. Stretch: plane scales/translates without rotation. Orbit: plane rotates to face away from light.</string>
-         </property>
          <item>
           <property name="text">
            <string>Mode: Stretch</string>
@@ -95,9 +92,6 @@
        </item>
        <item>
         <widget class="QCheckBox" name="chk_combine">
-         <property name="toolTip">
-          <string>If checked, creates a single shadow for the selected object and all its descendants.</string>
-         </property>
          <property name="text">
           <string>Include Children</string>
          </property>
@@ -120,9 +114,6 @@
            <height>19</height>
           </size>
          </property>
-         <property name="toolTip">
-          <string>Name for the shadow source locator. Use different names to create separate sources.</string>
-         </property>
          <property name="text">
           <string>shadow_source</string>
          </property>
@@ -144,9 +135,6 @@
            <width>16777215</width>
            <height>19</height>
           </size>
-         </property>
-         <property name="toolTip">
-          <string>Resolution of the generated silhouette texture.</string>
          </property>
          <property name="currentIndex">
           <number>0</number>
@@ -201,9 +189,6 @@
            <width>16777215</width>
            <height>19</height>
           </size>
-         </property>
-         <property name="toolTip">
-          <string>Projection axis for the silhouette.</string>
          </property>
          <item>
           <property name="text">
@@ -260,9 +245,6 @@
        </item>
        <item>
         <widget class="QCheckBox" name="chk_preview">
-         <property name="toolTip">
-          <string>Preview the shadow rig live before committing. Tweak options to refresh; Create Shadow finalizes.</string>
-         </property>
          <property name="text">
           <string>Preview</string>
          </property>
@@ -278,6 +260,25 @@
          </property>
          <property name="text">
           <string>Create Shadow</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="b002">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="text">
+          <string>Bake to Keyframes</string>
          </property>
         </widget>
        </item>

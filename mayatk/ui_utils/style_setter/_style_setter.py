@@ -32,10 +32,12 @@ same ``StyleSetter`` API), not undocumented drift.
 
 Scope boundary — deliberately narrow: a style here only ever touches the specific keys its JSON
 defines (the viewport background + grid + dormant polygon-edge color for the shipped "Blender"
-style). It never calls Maya's own bulk factory-reset (``rf=True``) on ``displayRGBColor`` /
-``colorIndex`` / ``displayColor``, which would also blank out hundreds of unrelated colors
-(node editor, hypergraph, script editor syntax, …) that have nothing to do with "the look" and
-that this tool has no business touching.
+style, and the same keys' factory values for the shipped "Maya" restore counterpart — captured
+from a virgin-``MAYA_APP_DIR`` Maya 2025.3, since ``displayRGBColor(resetToFactory=True)`` does
+NOT restore ``backgroundTop``/``backgroundBottom``). It never calls Maya's own bulk factory-reset
+(``rf=True``) on ``displayRGBColor`` / ``colorIndex`` / ``displayColor``, which would also blank
+out hundreds of unrelated colors (node editor, hypergraph, script editor syntax, …) that have
+nothing to do with "the look" and that this tool has no business touching.
 
 ``import maya.cmds`` is a module-level import (mayatk convention — these modules require a live
 Maya runtime to import, unlike blendertk's DCC-optional ``bpy``). All three underlying commands
@@ -58,7 +60,7 @@ STYLES_DIR = os.path.join(_HERE, "styles")
 
 # ---- shipped-style discovery ----------------------------------------------------------------
 def list_styles():
-    """Names of the shipped color styles (e.g. ``["Blender"]``)."""
+    """Names of the shipped color styles (e.g. ``["Blender", "Maya"]``)."""
     return sorted(os.path.splitext(os.path.basename(p))[0] for p in glob.glob(os.path.join(STYLES_DIR, "*.json")))
 
 

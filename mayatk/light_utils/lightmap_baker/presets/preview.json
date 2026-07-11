@@ -1,5 +1,7 @@
 {
-    "description": "Fast iteration / preview — low resolution, few samples.",
+    "description": "Fast iteration / preview — low resolution, few samples, single bounce.",
     "resolution": 256,
-    "samples": 2
+    "samples": 2,
+    "gi_depth": 1,
+    "gi_samples": 2
 }

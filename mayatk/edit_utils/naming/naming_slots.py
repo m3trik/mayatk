@@ -27,6 +27,8 @@ class NamingSlots(Naming, ptk.LoggingMixin):
 
     def header_init(self, widget):
         """Configure header menu with tool description and workflow instructions."""
+        # Gesture-scoped window: pin button + auto-hide on key_show release.
+        widget.config_buttons("menu", "collapse", "pin")
         widget.menu.add("Separator", setTitle="Scope")
         widget.menu.add(
             "QComboBox",
@@ -96,6 +98,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
 
     def txt000_init(self, widget):
         """Initialize Find"""
+        widget.restore_state = False  # Don't persist the search text across sessions.
         widget.option_box.menu.setTitle("Find")
         # Add clear button to the menu option box
         widget.option_box.clear_option = True
@@ -164,6 +167,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
 
     def txt001_init(self, widget):
         """Initialize Rename"""
+        widget.restore_state = False  # Don't persist the rename text across sessions.
         widget.option_box.menu.setTitle("Rename")
         # Add clear button to the menu option box
         widget.option_box.clear_option = True
@@ -329,11 +333,11 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             setToolTip="The number of characters to delete.",
         )
         widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Trailing",
-            setObjectName="chk005",
-            setChecked=True,
-            setToolTip="Whether to delete characters from the rear of the name.",
+            "QComboBox",
+            addItems=["Leading", "Trailing"],
+            setCurrentText="Trailing",
+            setObjectName="cmb002",
+            setToolTip="Which end of the name to delete characters from.",
         )
 
     def tb002(self, widget):
@@ -341,7 +345,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         sel = cmds.ls(selection=True) or []
         kwargs = {
             "num_chars": widget.option_box.menu.s000.value(),
-            "trailing": widget.option_box.menu.chk005.isChecked(),
+            "trailing": widget.option_box.menu.cmb002.currentText() == "Trailing",
         }
         self.strip_chars(sel, **kwargs)
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # coding=utf-8
 import math
+import re
 from typing import Dict, List, Tuple, Optional
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.rig_utils._rig_utils import RigUtils
 from mayatk.rig_utils.controls import Controls
+from mayatk.rig_utils.skinning import SkinUtils
 from mayatk.edit_utils.naming._naming import Naming
 from mayatk.core_utils._core_utils import leaf_name, short_name
 
@@ -48,6 +50,38 @@ def _long_path(node) -> Optional[str]:
         return s
     res = cmds.ls(s, long=True) or []
     return res[0] if res else s
+
+
+def _resolve_mesh_shape(obj) -> Optional[str]:
+    """Full path of the first non-intermediate mesh shape for *obj*, or None.
+
+    Accepts a mesh transform, a mesh shape, a component, or a GROUP —
+    outliner picks often land on the group, and ``polySelect`` /
+    ``closestPointOnMesh`` reject non-mesh transforms even though
+    ``polyListComponentConversion`` silently expands their descendants.
+    Warns and uses the first shape when several qualify.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, (set, list, tuple)):
+        obj = next(iter(obj), None)
+    s = str(obj).split(".")[0] if obj is not None else ""
+    if not s or not cmds.objExists(s):
+        return None
+    shapes = [
+        sh for sh in NodeUtils.get_shapes(s) if cmds.objectType(sh) == "mesh"
+    ]
+    if not shapes:  # group / non-shape transform — descend to child meshes
+        shapes = cmds.listRelatives(
+            s, allDescendents=True, type="mesh", fullPath=True, noIntermediate=True
+        ) or []
+    if not shapes:
+        return None
+    if len(shapes) > 1:
+        cmds.warning(
+            f"Multiple mesh shapes under '{s}'; using {shapes[0]}."
+        )
+    return shapes[0]
 
 
 def _parent_to(child, parent) -> str:
@@ -110,6 +144,30 @@ def _path_end_directions(points) -> Tuple["om.MVector", "om.MVector"]:
     return (p[1] - p[0]).normal(), (p[3] - p[2]).normal()
 
 
+def _world_x_axis(node) -> "om.MVector":
+    """World-space X axis of a transform (a joint's down-the-bone direction)."""
+    m = cmds.xform(str(node), q=True, ws=True, matrix=True)
+    v = om.MVector(m[0], m[1], m[2])
+    return v.normal() if v.length() > 1e-6 else om.MVector(1, 0, 0)
+
+
+def _control_path(nodes, group_path: str) -> str:
+    """Long path of a control whose offset group was just reparented to
+    *group_path*.
+
+    ``ControlNodes.control`` is captured before we move the group, so it goes
+    stale the moment the group is reparented (and outright wrong when a
+    same-named control exists elsewhere). With an offset group the control is
+    the group's direct child (``<group_path>|<control_leaf>``); with none,
+    the callers reparent the control itself, so *group_path* already IS the
+    control's post-reparent path — the stored ``nodes.control`` would be the
+    stale pre-reparent address.
+    """
+    if nodes.group is None:
+        return str(group_path)
+    return f"{group_path}|{leaf_name(nodes.control)}"
+
+
 class TubePath:
     """Pure geometry analysis for tube-like meshes.
 
@@ -155,7 +213,14 @@ class TubePath:
             pts = TubePath.get_centerline_using_edges(edges)
             return pts, (len(pts) if num_joints == -1 else num_joints)
 
-        pts, loop_count = TubePath.get_edge_loop_centers(mesh)
+        # Resolve to the actual mesh shape up front: a group pick or a
+        # multi-shape transform crashes polySelect / closestPointOnMesh
+        # downstream even though component conversion appears to work.
+        shape = _resolve_mesh_shape(mesh)
+        if not shape:
+            raise ValueError(f"No polygon mesh found under '{mesh}'.")
+
+        pts, loop_count = TubePath.get_edge_loop_centers(shape)
         if len(pts) >= 2:
             return pts, (loop_count if num_joints == -1 else num_joints)
 
@@ -163,17 +228,40 @@ class TubePath:
         resolved = 10 if num_joints == -1 else num_joints
         if use_surface_normals:
             pts = TubePath.get_centerline_from_surface_normals(
-                mesh, num_points=resolved
+                shape, num_points=resolved
             )
         else:
             pts = TubePath.get_centerline_from_bounding_box(
-                mesh, precision=precision, smooth=True
+                shape, precision=precision, smooth=True
             )
+        # Sampled end estimates get pulled inboard by the cap planes (~one
+        # radius on triangulated tubes) — extend to the true cap centres, as
+        # the edge-loop path already does.
+        if len(pts) >= 2:
+            pts = TubePath._complete_cap_ends(shape, pts)
         return pts, resolved
 
     # ------------------------------------------------------------------
     # Algorithm: Edge-loop centres (topology-accurate)
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _loop_is_closed(mesh, loop_edges: List[int]) -> bool:
+        """True when an edge loop forms a closed cycle (#verts == #unique edges).
+
+        Open paths — longitudinal loops that terminate at caps or open
+        boundaries — carry one extra vertex. This is the topology-exact test
+        for "is this loop a circumferential cross-section". Counts UNIQUE
+        edges because ``polySelect -q -edgeLoop`` signals closure by repeating
+        the seed edge at the end of the returned list.
+        """
+        unique_edges = set(loop_edges)
+        edges = [f"{mesh}.e[{i}]" for i in unique_edges]
+        verts = cmds.ls(
+            cmds.polyListComponentConversion(edges, fromEdge=True, toVertex=True),
+            flatten=True,
+        )
+        return len({str(v) for v in verts}) == len(unique_edges)
 
     @staticmethod
     def get_edge_loop_centers(mesh) -> Tuple[List[om.MPoint], int]:
@@ -190,7 +278,9 @@ class TubePath:
                 - centerline_points: List of center points for each edge loop
                 - num_loops: Number of edge loops found (natural joint count)
         """
-        mesh = NodeUtils.get_transform_node(mesh)
+        # Resolve to the mesh shape: polySelect rejects groups and is
+        # ambiguous on multi-shape transforms (idempotent for shape input).
+        mesh = _resolve_mesh_shape(mesh)
         if not mesh:
             return [], 0
 
@@ -201,10 +291,31 @@ class TubePath:
         if not all_edges:
             return [], 0
 
-        # Start with first edge, get its edge loop (one circular cross-section).
-        # all_edges[0] is a component path string like "mesh.e[12]" — extract the index.
-        first_edge_idx = int(str(all_edges[0]).rsplit("[", 1)[-1].rstrip("]"))
-        first_loop = cmds.polySelect(mesh, q=True, edgeLoop=first_edge_idx)
+        # Seed with a CLOSED (circumferential) edge loop. An arbitrary first
+        # edge may be LONGITUDINAL (common on user-modeled pipes; polyCylinder
+        # just happens to number a rim edge first) — seeding from one
+        # transposes the loop/ring traversal, and every "cross-section centre"
+        # becomes a longitudinal-strip centroid: a small ring of points around
+        # the mesh centroid instead of a path down the tube. Closure is the
+        # topology-exact discriminator: a cross-section cycle has
+        # #verts == #edges, while longitudinal loops end open at caps or
+        # boundaries (#verts == #edges + 1). Skip edges already covered by a
+        # rejected loop, so the scan is bounded by the number of distinct
+        # loops, not the edge count.
+        first_loop = None
+        checked_edges = set()
+        for edge in all_edges:
+            edge_idx = int(str(edge).rsplit("[", 1)[-1].rstrip("]"))
+            if edge_idx in checked_edges:
+                continue
+            loop = cmds.polySelect(mesh, q=True, edgeLoop=edge_idx)
+            if not loop:
+                checked_edges.add(edge_idx)
+                continue
+            checked_edges.update(loop)
+            if len(loop) >= 3 and TubePath._loop_is_closed(mesh, loop):
+                first_loop = loop
+                break
         if not first_loop:
             return [], 0
 
@@ -221,10 +332,17 @@ class TubePath:
             # Boundary rings on capped tubes degenerate to a single edge (cap
             # fan triangles break loop traversal) — their midpoint is off-axis,
             # so skip them; _complete_cap_ends recovers the true cap centres.
+            # Open paths (partial arcs from irregular topology) are skipped
+            # too: an arc's centroid sits off the tube axis.
             if not loop_edges or len(loop_edges) < 3:
                 continue
+            if not TubePath._loop_is_closed(mesh, loop_edges):
+                continue
 
-            loop_key = tuple(sorted(loop_edges))
+            # Canonical key over UNIQUE edges: polySelect repeats the seed
+            # edge on closed loops, and the duplicate's sort position would
+            # otherwise vary with the seed, defeating the visited-set.
+            loop_key = tuple(sorted(set(loop_edges)))
             if loop_key in visited_loops:
                 continue
             visited_loops.add(loop_key)
@@ -232,9 +350,9 @@ class TubePath:
             # Collect unique vertex names in this loop.
             loop_vert_names = set()
             for e_idx in loop_edges:
-                # Full DAG path (resolved at line 193, matching the component
-                # base used above) — keeps the component unambiguous when
-                # another mesh shares this one's short name.
+                # Full shape path (resolved above, matching the component
+                # base used for the loop queries) — keeps the component
+                # unambiguous when another mesh shares this short name.
                 edge = f"{mesh}.e[{e_idx}]"
                 verts = cmds.polyListComponentConversion(
                     edge, fromEdge=True, toVertex=True
@@ -272,11 +390,16 @@ class TubePath:
     def _complete_cap_ends(mesh, centers: List[om.MPoint]) -> List[om.MPoint]:
         """Extend a loop-centre path to the mesh's true ends.
 
-        Capped tubes lose their boundary rings to degenerate loop queries, so
-        the path stops one band short of each cap. The closest surface point
-        past each end is the on-axis cap centre (the perpendicular foot of an
-        on-axis seed); it is only appended when the surface actually extends
-        past the current end.
+        Tubes can lose their end rings to degenerate loop queries (cap fans,
+        boundary-adjacent topology), leaving the path one band short. The
+        closest surface point past each end tells how far the surface really
+        extends; the appended end centre is that hit's projection ONTO THE
+        TANGENT AXIS. Using the raw hit is wrong on OPEN tubes: with no cap
+        for the seed to hit, the closest point is a RIM vertex one
+        wall-radius off-axis (an angle-cut opening also projects past the end
+        ring's centroid plane) — appending it hooks the end joint toward an
+        opening vertex. Projecting keeps the recovered end on-axis for caps
+        and open/angled rims alike.
         """
         shape = NodeUtils.get_shape(mesh)
         if not shape:
@@ -303,8 +426,10 @@ class TubePath:
                 )
                 hit = cmds.getAttr(f"{cpom}.position")[0]
                 hit_v = om.MVector(hit[0], hit[1], hit[2])
-                if (hit_v - c_end) * tangent > spacing * 0.25:
-                    pt = om.MPoint(hit_v.x, hit_v.y, hit_v.z)
+                along = (hit_v - c_end) * tangent
+                if along > spacing * 0.25:
+                    end_v = c_end + tangent * along
+                    pt = om.MPoint(end_v.x, end_v.y, end_v.z)
                     if end == 0:
                         prepend = pt
                     else:
@@ -331,6 +456,78 @@ class TubePath:
             ) > min_dist:
                 result.append(p)
         return result
+
+    # ------------------------------------------------------------------
+    # Measurement: tube radius (drives proportional rig sizing)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def estimate_radius(mesh, centerline: List) -> Optional[float]:
+        """Estimate the tube's radius: median distance from interior
+        centerline points to the surface.
+
+        Points within one probe length (half the smallest bounding-box
+        dimension ≈ the tube-radius upper bound) of either end are excluded —
+        their nearest surface is the cap plane, which reads near zero and
+        poisons the estimate. Tubes too short to have interior points fall
+        back to the single arc-midpoint sample.
+
+        Returns:
+            The estimated radius, or None when no mesh/centerline is usable.
+        """
+        shape = _resolve_mesh_shape(mesh)
+        if not shape or not centerline or len(centerline) < 2:
+            return None
+
+        pts = [om.MPoint(float(p[0]), float(p[1]), float(p[2])) for p in centerline]
+        arc = [0.0]
+        for a, b in zip(pts, pts[1:]):
+            arc.append(arc[-1] + om.MVector(b - a).length())
+        total = arc[-1]
+        if total < 1e-6:
+            return None
+
+        bbox = cmds.exactWorldBoundingBox(shape)
+        dims = [abs(bbox[3] - bbox[0]), abs(bbox[4] - bbox[1]), abs(bbox[5] - bbox[2])]
+        probe = 0.5 * min((d for d in dims if d > 1e-6), default=1.0)
+
+        interior = [
+            p for p, d in zip(pts, arc) if d >= probe and (total - d) >= probe
+        ]
+        if not interior:
+            # Tube shorter than ~2 radii: interpolate the arc midpoint.
+            half = total / 2
+            i = next(i for i in range(1, len(arc)) if arc[i] >= half)
+            t = (half - arc[i - 1]) / max(arc[i] - arc[i - 1], 1e-9)
+            a, b = pts[i - 1], pts[i]
+            interior = [
+                om.MPoint(
+                    a.x + (b.x - a.x) * t,
+                    a.y + (b.y - a.y) * t,
+                    a.z + (b.z - a.z) * t,
+                )
+            ]
+
+        stride = max(1, len(interior) // 15)
+        samples = interior[::stride]
+
+        cpom = cmds.createNode("closestPointOnMesh")
+        try:
+            cmds.connectAttr(f"{shape}.outMesh", f"{cpom}.inMesh")
+            cmds.connectAttr(f"{shape}.worldMatrix[0]", f"{cpom}.inputMatrix")
+            dists = []
+            for p in samples:
+                cmds.setAttr(f"{cpom}.inPosition", p.x, p.y, p.z, type="double3")
+                hit = cmds.getAttr(f"{cpom}.position")[0]
+                d = om.MVector(hit[0] - p.x, hit[1] - p.y, hit[2] - p.z).length()
+                if d > 1e-6:
+                    dists.append(d)
+            if not dists:
+                return None
+            dists.sort()
+            return dists[len(dists) // 2]
+        finally:
+            cmds.delete(cpom)
 
     # ------------------------------------------------------------------
     # Algorithm: User-selected edges (manual override)
@@ -614,132 +811,61 @@ class TubeStrategy(ABC):
 
 
 class FKChainStrategy(TubeStrategy):
+    """Joints → nested FK controls → parametric skin.
+
+    Thin composition of the same ``TubeRig`` step methods the UI's
+    step-by-step buttons call — one-click and step-by-step run identical
+    code with identical parameters by construction.
+    """
+
     def build(self, rig: "TubeRig", **kwargs) -> TubeRigBundle:
         rig.logger.info("Building FK Chain Rig...")
-        num_joints = kwargs.get("num_joints", 10)
-        radius = kwargs.get("radius", 1.0)
-
-        centerline, num_joints = TubePath.get_centerline(rig.mesh, num_joints)
-
-        # 1. Main Tube Skeleton (auto-oriented X-down by generate_joint_chain)
-        joints = rig.generate_joint_chain(
-            centerline, num_joints=num_joints, radius=radius
+        centerline, num_joints = rig.resolve_centerline(
+            kwargs.get("num_joints", -1), edges=kwargs.get("edges")
         )
+        if kwargs.get("reverse"):
+            centerline = list(centerline)[::-1]
+        joint_radius, size = rig.resolve_sizes(centerline, kwargs.get("radius", -1.0))
 
-        # 2. Create FK Controls
-        controls = []
-        parent_ctrl = str(rig.rig_group)
-
-        # Create control hierarchy
-        for i, jnt in enumerate(joints):
-            ctrl_name = f"{rig.rig_name}_{i+1}_CTRL"
-            scale = radius * 3
-
-            nodes = Controls.create(
-                "diamond",
-                name=ctrl_name,
-                size=scale,
-                axis="x",
-                color=(1, 1, 0),
-                return_nodes=True,
-            )
-            ctrl = nodes.control
-            grp = nodes.group if nodes.group else ctrl
-
-            # Match joint transform via parentConstraint (clean matrix transfer)
-            temp_const = cmds.parentConstraint(str(jnt), str(grp))
-            cmds.delete(temp_const)
-
-            grp = _parent_to(grp, parent_ctrl)
-
-            # Standard FK: joint follows control
-            cmds.parentConstraint(str(ctrl), str(jnt), mo=True)
-
-            controls.append(ctrl)
-            parent_ctrl = str(ctrl)
-
-        # 3. Skin Mesh
-        rig.skin_mesh(joints)
+        joints = rig.generate_joint_chain(
+            centerline, num_joints=num_joints, radius=joint_radius
+        )
+        controls = rig.create_fk_controls(joints, size=size)
+        rig.skin_mesh(joints, centerline=centerline)
 
         rig.logger.info("FK Chain Build Complete.")
         return TubeRigBundle(rig_group=rig.rig_group, joints=joints, controls=controls)
 
 
 class SplineIKStrategy(TubeStrategy):
+    """Joints → spline-IK control rig → parametric skin along the IK curve."""
+
     def build(self, rig: "TubeRig", **kwargs) -> TubeRigBundle:
         rig.logger.info("Building Spline IK Rig...")
-        num_joints = kwargs.get("num_joints", 10)
-        num_controls = kwargs.get("num_controls", 3)
-        radius = kwargs.get("radius", 1.0)
-        enable_stretch = kwargs.get("enable_stretch", True)
-        enable_squash = kwargs.get("enable_squash", True)
-        enable_volume = kwargs.get("enable_volume", True)
-        enable_twist = kwargs.get("enable_twist", True)
-        enable_auto_bend = kwargs.get("enable_auto_bend", False)
+        centerline, num_joints = rig.resolve_centerline(
+            kwargs.get("num_joints", -1), edges=kwargs.get("edges")
+        )
+        if kwargs.get("reverse"):
+            # Reverse before anything derives from the path so the joints,
+            # the IK curve, and the skin solve all share one direction.
+            centerline = list(centerline)[::-1]
+        joint_radius, size = rig.resolve_sizes(centerline, kwargs.get("radius", -1.0))
 
-        centerline, num_joints = TubePath.get_centerline(rig.mesh, num_joints)
-
-        # 1. Main Tube Skeleton (auto-oriented X-down by generate_joint_chain)
         joints = rig.generate_joint_chain(
-            centerline, num_joints=num_joints, radius=radius
+            centerline, num_joints=num_joints, radius=joint_radius
         )
-
-        # 2. Logic Curve
-        curve = rig.create_logic_curve(centerline)
-
-        # 3. Create IK Spline using RigUtils
-        ik_name = f"{rig.rig_name}_ikHandle"
-        ik_handle = RigUtils.create_ik_handle(
-            joints[0],
-            joints[-1],
-            solver="ikSplineSolver",
-            name=ik_name,
-            parent=rig.rig_group,
-            curve=curve,
-            createCurve=False,
+        controls, ik_handle, curve = rig.create_spline_controls(
+            joints,
+            centerline=centerline,
+            size=size,
+            num_controls=kwargs.get("num_controls", 3),
+            enable_stretch=kwargs.get("enable_stretch", True),
+            enable_squash=kwargs.get("enable_squash", True),
+            enable_volume=kwargs.get("enable_volume", True),
+            enable_twist=kwargs.get("enable_twist", True),
+            enable_auto_bend=kwargs.get("enable_auto_bend", False),
         )
-        cmds.setAttr(f"{ik_handle}.visibility", False)
-
-        # 4. Driver System (Enhanced with Visual Tangents or N-Point)
-        controls, driver_joints, up_locs = rig.create_spline_drivers(
-            centerline, radius, num_controls
-        )
-        rig.skin_curve_to_drivers(curve, driver_joints)
-
-        # Unpack controls
-        start_ctrl = controls[0]
-        end_ctrl = controls[-1]
-        # Mid control is the middle-most control, or None if only 2 (unlikely for spline)
-        mid_idx = int(len(controls) / 2)
-        mid_ctrl = controls[mid_idx] if len(controls) > 2 else None
-
-        start_up_loc, end_up_loc = up_locs
-
-        # 5. Advanced Twist Setup (optional)
-        if enable_twist:
-            rig.setup_spline_twist(
-                ik_handle, start_ctrl, end_ctrl, start_up_loc, end_up_loc
-            )
-
-        # 6. Auto Bend (Mid Control Logic) - Only supports 3-point system properly for now
-        if enable_auto_bend and num_controls == 3 and mid_ctrl:
-            rig.setup_auto_bend(start_ctrl, mid_ctrl, end_ctrl)
-        elif enable_auto_bend and num_controls != 3:
-            rig.logger.warning("Auto Bend is only available with 3 controls. Skipping.")
-
-        # 7. Setup Stretch / Squash
-        if enable_stretch or enable_squash:
-            rig.setup_spline_stretch(
-                curve,
-                joints,
-                enable_stretch,
-                enable_squash,
-                enable_volume,
-                main_control=start_ctrl,
-            )
-
-        # Skin Mesh
-        rig.skin_mesh(joints)
+        rig.skin_mesh(joints, curve=curve)
 
         rig.logger.info("Spline IK Build Complete.")
         return TubeRigBundle(
@@ -752,155 +878,29 @@ class SplineIKStrategy(TubeStrategy):
 
 
 class AnchorStrategy(TubeStrategy):
+    """Two end joints → anchor controls with distance stretch → parametric skin."""
+
     def build(self, rig: "TubeRig", **kwargs) -> TubeRigBundle:
         rig.logger.info("Building Anchor Rig...")
-        centerline, _ = TubePath.get_centerline(rig.mesh, num_joints=2)
+        centerline, _ = rig.resolve_centerline(2, edges=kwargs.get("edges"))
         if len(centerline) < 2:
             raise ValueError("Could not determine centerline")
+        if kwargs.get("reverse"):
+            centerline = list(centerline)[::-1]
+        joint_radius, size = rig.resolve_sizes(centerline, kwargs.get("radius", -1.0))
 
-        # First/last centerline points are the true tube ends (edge-loop
-        # centres include the end loops); orient frames from local tangents
-        # so curved tubes get correct end frames.
-        start_pos = om.MVector(centerline[0])
-        end_pos = om.MVector(centerline[-1])
-        dir_start, dir_end = _path_end_directions(centerline)
-        start_rot = _frame_rotation(dir_start)
-        end_rot = _frame_rotation(-dir_end)  # X points back into the tube
-
-        radius = kwargs.get("radius", 1.0)
-        enable_stretch = kwargs.get("enable_stretch", True)
-
-        # Create Controls (oriented along tube axis). NB: ``Controls.create``
-        # exposes ``size=`` for the uniform scale; ``scale=`` is silently
-        # absorbed by the preset builder's ``**_`` kwargs and does nothing.
-        rig_grp = str(rig.rig_group)
-
-        start_nodes = Controls.box(
-            name=f"{rig.rig_name}_start",
-            size=radius * 4,
-            color=(0, 1, 1),
-            return_nodes=True,
+        joints = rig.create_anchor_joints(centerline, radius=joint_radius)
+        controls = rig.create_anchor_controls(
+            joints, size=size, enable_stretch=kwargs.get("enable_stretch", True)
         )
-        target = str(start_nodes.group) if start_nodes.group else str(start_nodes.control)
-        cmds.xform(
-            target,
-            ws=True,
-            t=(start_pos.x, start_pos.y, start_pos.z),
-            ro=_euler_deg(start_rot),
-        )
-        _parent_to(target, rig_grp)
-        start_ctrl = start_nodes.control
-
-        end_nodes = Controls.box(
-            name=f"{rig.rig_name}_end",
-            size=radius * 4,
-            color=(0, 1, 1),
-            return_nodes=True,
-        )
-        end_target = str(end_nodes.group) if end_nodes.group else str(end_nodes.control)
-        cmds.xform(
-            end_target,
-            ws=True,
-            t=(end_pos.x, end_pos.y, end_pos.z),
-            ro=_euler_deg(end_rot),
-        )
-        _parent_to(end_target, rig_grp)
-        end_ctrl = end_nodes.control
-
-        # Create joint group (separate from controls for clean export)
-        joint_grp = cmds.group(empty=True, name=f"{rig.rig_name}_joints_GRP")
-        joint_grp = _parent_to(joint_grp, rig_grp)
-
-        # Create Joints in their own hierarchy. Both are oriented X-down-the-
-        # tube (baked into jointOrient) — the distance-driven stretch scales
-        # ``scaleX``, which must run along the tube, not world X.
-        def _make_anchor_joint(suffix, pos, x_dir):
-            cmds.select(clear=True)
-            jnt = cmds.createNode("joint", name=f"{rig.rig_name}_{suffix}_jnt")
-            cmds.xform(jnt, ws=True, t=(pos.x, pos.y, pos.z))
-            cmds.xform(jnt, ws=True, ro=_euler_deg(_frame_rotation(x_dir)))
-            cmds.makeIdentity(jnt, apply=True, r=True)  # bake into jointOrient
-            jnt = _parent_to(jnt, joint_grp)
-            cmds.setAttr(f"{jnt}.radius", radius)
-            return jnt
-
-        j1 = _make_anchor_joint("start", start_pos, dir_start)
-        j2 = _make_anchor_joint("end", end_pos, dir_end)
-
-        joints = [j1, j2]
-
-        # Constrain joints to follow control position and rotation
-        cmds.pointConstraint(start_ctrl, j1, mo=True)
-        cmds.pointConstraint(end_ctrl, j2, mo=True)
-
-        # Orient constraints: joints follow control rotation (allows rotatable tube ends)
-        cmds.orientConstraint(start_ctrl, j1, mo=True)
-        cmds.orientConstraint(end_ctrl, j2, mo=True)
-
-        # Scale logic: Distance-based stretch (optional)
-        if enable_stretch:
-            # Use simple distanceBetween node, but compensate for rig scale
-            # to avoid double transforms.  Measure distance in the rig's
-            # local space via multMatrix.
-            start_ctrl_s = str(start_ctrl)
-            end_ctrl_s = str(end_ctrl)
-            rig_grp_s = str(rig.rig_group)
-
-            start_local_mm = cmds.createNode(
-                "multMatrix", name=f"{rig.rig_name}_start_local_MM"
-            )
-            cmds.connectAttr(
-                f"{start_ctrl_s}.worldMatrix[0]",
-                f"{start_local_mm}.matrixIn[0]",
-                force=True,
-            )
-            cmds.connectAttr(
-                f"{rig_grp_s}.worldInverseMatrix[0]",
-                f"{start_local_mm}.matrixIn[1]",
-                force=True,
-            )
-
-            end_local_mm = cmds.createNode(
-                "multMatrix", name=f"{rig.rig_name}_end_local_MM"
-            )
-            cmds.connectAttr(
-                f"{end_ctrl_s}.worldMatrix[0]",
-                f"{end_local_mm}.matrixIn[0]",
-                force=True,
-            )
-            cmds.connectAttr(
-                f"{rig_grp_s}.worldInverseMatrix[0]",
-                f"{end_local_mm}.matrixIn[1]",
-                force=True,
-            )
-
-            dist_node = cmds.createNode("distanceBetween", name=f"{rig.rig_name}_dist")
-            cmds.connectAttr(
-                f"{start_local_mm}.matrixSum", f"{dist_node}.inMatrix1", force=True
-            )
-            cmds.connectAttr(
-                f"{end_local_mm}.matrixSum", f"{dist_node}.inMatrix2", force=True
-            )
-
-            initial_dist = (end_pos - start_pos).length()
-
-            norm_md = cmds.createNode("multiplyDivide", name=f"{rig.rig_name}_scale_MD")
-            cmds.setAttr(f"{norm_md}.operation", 2)  # Divide
-            cmds.connectAttr(f"{dist_node}.distance", f"{norm_md}.input1X", force=True)
-            cmds.setAttr(f"{norm_md}.input2X", initial_dist)
-
-            # Start joint scales to stretch toward end
-            cmds.connectAttr(f"{norm_md}.outputX", f"{j1}.scaleX", force=True)
-
-        # Smooth Skin the mesh to the joints
-        rig.skin_mesh(joints)
+        rig.skin_mesh(joints, centerline=centerline)
 
         rig.logger.info("Anchor Rig Build Complete.")
         return TubeRigBundle(
             rig_group=rig.rig_group,
             joints=joints,
             anchors=None,
-            controls=[start_ctrl, end_ctrl],
+            controls=controls,
         )
 
 
@@ -945,16 +945,35 @@ class TubeRig(ptk.LoggingMixin):
     _instances: Dict[str, "TubeRig"] = {}
 
     def __init__(self, obj, rig_name: str = None, rig_group: str = None):
+        if rig_name:
+            # The UI's free-text field flows in verbatim. Illegal characters
+            # crash the stale-sweep ``cmds.ls`` pattern ('hose-01', 'my rig'),
+            # and names Maya auto-sanitizes on createNode (leading digit, '*')
+            # would no longer match that pattern, accumulating chains on rerun.
+            rig_name = Naming.strip_illegal_chars(rig_name)
+            if rig_name[0].isdigit():
+                rig_name = f"_{rig_name}"
         self._rig_name = rig_name
         self._rig_group = rig_group  # Only assigned if explicitly passed (else will be handled by property)
         if isinstance(obj, (set, list, tuple)):
             obj = next(iter(obj))
-        obj = NodeUtils.get_transform_node(obj)
-        if not obj:
-            raise ValueError(f"Invalid object: `{obj}` {type(obj)}")
-        if isinstance(obj, (set, list, tuple)):
-            obj = obj[0]
-        self.mesh = str(obj)
+        # Prefer the mesh transform even when a GROUP was picked (common
+        # outliner selection) — everything downstream (centerline, skinning)
+        # needs the mesh, not its group.
+        shape = _resolve_mesh_shape(obj)
+        if shape:
+            self.mesh = (
+                NodeUtils.get_parent(shape, type=None, full_path=True) or str(shape)
+            )
+        else:
+            # No mesh anywhere below — keep accepting plain transforms
+            # (b002 constructs a TubeRig from a joint after a restart).
+            resolved = NodeUtils.get_transform_node(obj)
+            if not resolved:
+                raise ValueError(f"Invalid object: `{obj}` {type(obj)}")
+            if isinstance(resolved, (set, list, tuple)):
+                resolved = resolved[0]
+            self.mesh = str(resolved)
         self._mesh_uuid = TubeRig._uuid(self.mesh)
         if self._mesh_uuid:
             TubeRig._instances[self._mesh_uuid] = self
@@ -1059,6 +1078,13 @@ class TubeRig(ptk.LoggingMixin):
                 self.logger.info(f"Creating rig group: {rig_name}")
                 self._rig_group = cmds.group(empty=True, name=rig_name)
                 cmds.makeIdentity(self._rig_group, apply=True, t=1, r=1, s=1, n=0)
+            # Register the group so for_node() resolves joints/controls
+            # parented under it back to this rig — the step workflow (b001
+            # 'Create Joints' → b002) materializes the group here without
+            # ever calling build().
+            grp_uuid = TubeRig._uuid(self._rig_group)
+            if grp_uuid:
+                TubeRig._instances[grp_uuid] = self
         return str(self._rig_group)
 
     @rig_group.setter
@@ -1133,12 +1159,6 @@ class TubeRig(ptk.LoggingMixin):
 
         self.bundle = strat.build(self, **kwargs)
 
-        # Register the rig group so for_node() can resolve joints/controls
-        # (anything under the group) back to this rig.
-        grp_uuid = TubeRig._uuid(self.rig_group)
-        if grp_uuid:
-            TubeRig._instances[grp_uuid] = self
-
         # Populate legacy attributes for backward compatibility
         self.joints = self.bundle.joints
 
@@ -1156,6 +1176,75 @@ class TubeRig(ptk.LoggingMixin):
             self.end_loc = self.bundle.controls[-1]
 
         return self
+
+    # ------------------------------------------------------------------
+    # Measurement (shared by strategies and the step-by-step UI)
+    # ------------------------------------------------------------------
+
+    def resolve_centerline(
+        self, num_joints: int = -1, edges: list = None
+    ) -> Tuple[List, int]:
+        """Extract this rig's tube centerline.
+
+        Single source for the extraction parameters so the step-by-step UI
+        and the one-click strategies stay in lock-step.
+
+        Parameters:
+            num_joints: Requested joint count; ``-1`` = one per edge loop.
+            edges: Optional user-selected edges to derive the path from.
+
+        Returns:
+            Tuple of (centerline_points, resolved_num_joints).
+        """
+        return TubePath.get_centerline(
+            self.mesh, num_joints=num_joints, precision=50, edges=edges
+        )
+
+    def estimate_tube_radius(self, centerline: List = None) -> Optional[float]:
+        """Measure the tube's radius from the mesh surface.
+
+        Uses the given centerline when provided, else the current joint
+        positions, else a fresh centerline extraction. Returns None when the
+        rig has no resolvable mesh (e.g. constructed from a bare joint).
+        """
+        shape = _resolve_mesh_shape(self.mesh)
+        if not shape:
+            return None
+        pts = list(centerline) if centerline else None
+        if not pts:
+            joints = [str(j) for j in (self.joints or []) if cmds.objExists(str(j))]
+            if len(joints) >= 2:
+                pts = [_xform_t_ws(j) for j in joints]
+        if not pts:
+            try:
+                pts, _ = TubePath.get_centerline(shape, num_joints=-1)
+            except ValueError:
+                return None
+        return TubePath.estimate_radius(shape, pts)
+
+    def resolve_sizes(
+        self, centerline: List = None, joint_radius: float = -1.0
+    ) -> Tuple[float, float]:
+        """Resolve (joint_display_radius, control_base_size) from the tube.
+
+        The control base size is the measured tube radius — every control
+        multiplier is tuned against it, so rigs stay proportional to the mesh
+        regardless of scene scale. ``joint_radius`` <= 0 means Auto (half the
+        tube radius). Without a resolvable mesh (step mode from a bare joint
+        selection) the tube radius falls back to the joints' own display
+        radii, which Auto-sized joints carry at half tube radius.
+        """
+        tube_radius = self.estimate_tube_radius(centerline)
+        if not tube_radius:
+            radii = [
+                cmds.getAttr(f"{j}.radius")
+                for j in (self.joints or [])
+                if cmds.objExists(str(j))
+            ]
+            tube_radius = max(radii) * 2.0 if radii else 1.0
+        if joint_radius is None or joint_radius <= 0:
+            joint_radius = tube_radius * 0.5
+        return joint_radius, tube_radius
 
     # ------------------------------------------------------------------
     # Joint Creation
@@ -1247,23 +1336,136 @@ class TubeRig(ptk.LoggingMixin):
         self.joints = joints
         return joints
 
+    @CoreUtils.undoable
+    def create_anchor_joints(
+        self, centerline: List, radius: float = 1.0
+    ) -> List[str]:
+        """Create the anchor rig's two end joints from the tube centerline.
+
+        Both joints are oriented X-down-the-tube (baked into jointOrient) —
+        the distance-driven stretch scales ``scaleX``, which must run along
+        the tube, not world X. They are *siblings* under a joint group, not a
+        chain: the start joint's stretch scale must not propagate to the end
+        joint, which stays pinned to its anchor.
+
+        Any previous ``<rig_name>_start_jnt`` / ``<rig_name>_end_jnt`` joints
+        (and their group) are replaced, mirroring ``generate_joint_chain``'s
+        rerun semantics.
+        """
+        if not centerline or len(centerline) < 2:
+            raise ValueError("Anchor joints need a centerline with at least 2 points.")
+
+        start_pos = om.MVector(centerline[0])
+        end_pos = om.MVector(centerline[-1])
+        dir_start, dir_end = _path_end_directions(centerline)
+
+        stale = cmds.ls(
+            f"{self.rig_name}_start_jnt*",
+            f"{self.rig_name}_end_jnt*",
+            type="joint",
+            long=True,
+        ) or []
+        stale += cmds.ls(f"{self.rig_name}_joints_GRP*", type="transform", long=True) or []
+        if stale:
+            self.logger.info(
+                f"Replacing {len(stale)} existing '{self.rig_name}' anchor node(s)."
+            )
+            for n in stale:
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+        # Joint group (separate from controls for clean export)
+        joint_grp = cmds.group(empty=True, name=f"{self.rig_name}_joints_GRP")
+        joint_grp = _parent_to(joint_grp, str(self.rig_group))
+
+        def _make_anchor_joint(suffix, pos, x_dir):
+            cmds.select(clear=True)
+            jnt = cmds.createNode("joint", name=f"{self.rig_name}_{suffix}_jnt")
+            cmds.xform(jnt, ws=True, t=(pos.x, pos.y, pos.z))
+            cmds.xform(jnt, ws=True, ro=_euler_deg(_frame_rotation(x_dir)))
+            cmds.makeIdentity(jnt, apply=True, r=True)  # bake into jointOrient
+            jnt = _parent_to(jnt, joint_grp)
+            cmds.setAttr(f"{jnt}.radius", radius)
+            return jnt
+
+        j1 = _make_anchor_joint("start", start_pos, dir_start)
+        j2 = _make_anchor_joint("end", end_pos, dir_end)
+
+        self.joints = [j1, j2]
+        return [j1, j2]
+
     # ------------------------------------------------------------------
     # Curves & IK
     # ------------------------------------------------------------------
 
-    def skin_mesh(self, joints: List[str]) -> Optional[str]:
-        """Smooth-bind the rig's mesh to *joints* and record the skinCluster
-        (``constrain_end_with_falloff`` and re-builds depend on it)."""
+    def skin_mesh(
+        self,
+        joints: List[str],
+        curve: Optional[str] = None,
+        centerline: Optional[List] = None,
+        skinning_method: str = "dqs",
+        mesh: Optional[str] = None,
+    ) -> Optional[str]:
+        """Smooth-bind the mesh to *joints* and record the skinCluster
+        (``constrain_end_with_falloff`` and re-builds depend on it).
+
+        With a *curve* or *centerline* (every strategy has one in hand at skin
+        time), weights are solved analytically along it — ring-uniform, a
+        C2-smooth cubic basis spanning up to 4 joints so bends spread
+        smoothly instead of hinging at each joint — via
+        ``SkinUtils.bind_to_curve``; if that solve fails (e.g. joints that
+        don't order along the path), a geodesic-voxel bind is used instead.
+        Both default to dual quaternion skinning for volume-preserving bends
+        and twist.
+
+        An existing skinCluster on the mesh is replaced (re-running the bind
+        step re-binds, mirroring ``generate_joint_chain``'s rerun semantics).
+        ``mesh`` defaults to the rig's own mesh.
+        """
+        joints = [str(j) for j in joints]
+        mesh = str(mesh) if mesh else str(self.mesh)
+        name = f"{self.rig_name}_skinCluster"
+
+        existing = SkinUtils.get_skin_cluster(mesh)
+        if existing:
+            self.logger.info(
+                f"Replacing existing skinCluster '{existing}' on {leaf_name(mesh)}."
+            )
+            # unbind (not delete): a bare delete leaves orphan bindPose/
+            # dagPose nodes and joint lockInfluenceWeights attrs behind —
+            # re-running Bind Skin N times accumulated N orphan dagPoses.
+            SkinUtils.unbind(mesh)
+
+        if curve or centerline:
+            try:
+                self.skin_cluster = SkinUtils.bind_to_curve(
+                    mesh,
+                    joints,
+                    curve=str(curve) if curve else None,
+                    centerline=centerline,
+                    profile="smoothstep",
+                    skinning_method=skinning_method,
+                    name=name,
+                )
+                return self.skin_cluster
+            except Exception as e:
+                # bind_to_curve solves before binding, so a failure here
+                # leaves the mesh unbound and the fallback safe.
+                self.logger.warning(
+                    f"Parametric skinning failed ({e}); falling back to geodesic bind."
+                )
         try:
-            result = cmds.skinCluster(
-                [str(j) for j in joints], str(self.mesh), toSelectedBones=True
+            self.skin_cluster = SkinUtils.bind(
+                mesh,
+                joints,
+                bind_method="geodesic",
+                skinning_method=skinning_method,
+                max_influences=4,
+                name=name,
             )
         except Exception as e:
             self.logger.warning(f"Failed to skin mesh: {e}")
             return None
-        self.skin_cluster = (
-            result[0] if isinstance(result, (list, tuple)) else result
-        )
         return self.skin_cluster
 
     @CoreUtils.undoable
@@ -1329,7 +1531,7 @@ class TubeRig(ptk.LoggingMixin):
                 _set_r_ws(grp, _euler_deg(rot))
 
             grp = _parent_to(grp, parent if parent else rig_grp)
-            return nodes.control
+            return _control_path(nodes, grp)
 
         driver_grp = cmds.group(empty=True, name=f"{self.rig_name}_driver_GRP")
         driver_grp = _parent_to(driver_grp, rig_grp)
@@ -1434,6 +1636,34 @@ class TubeRig(ptk.LoggingMixin):
                 cmds.parentConstraint(str(ctrl), jnt, mo=True)
                 driver_joints.append(jnt)
 
+        # Natural drape: intermediate controls ride between the end controls
+        # via a follow group above their offset group — point-constrained by
+        # arc position, offset maintained. Carrying or posing the ends then
+        # carries the whole hose (without this, the mid control stays nailed
+        # to its build position and the tube body lags its end constraints).
+        # The controls themselves stay free for hand-animated offsets on top.
+        for i, ctrl in enumerate(controls[1:-1], start=1):
+            t = i / (len(controls) - 1)
+            offset_grp = (
+                NodeUtils.get_parent(str(ctrl), type=None, full_path=True)
+                or str(ctrl)
+            )
+            follow = cmds.group(
+                empty=True, name=f"{self.rig_name}_follow_{i}_GRP"
+            )
+            cmds.delete(cmds.parentConstraint(offset_grp, follow))
+            parent = NodeUtils.get_parent(offset_grp, type=None, full_path=True)
+            if parent:
+                follow = _parent_to(follow, parent)
+            offset_grp = _parent_to(offset_grp, follow)
+            # Moving the offset group changed the control's DAG path — refresh
+            # the list entry (downstream consumers: auto-bend, the bundle,
+            # the end-constraint resolver) to the canonical path.
+            moved = f"{offset_grp}|{leaf_name(ctrl)}"
+            controls[i] = (cmds.ls(moved, long=True) or [moved])[0]
+            cmds.pointConstraint(str(controls[0]), follow, mo=True, weight=1.0 - t)
+            cmds.pointConstraint(str(controls[-1]), follow, mo=True, weight=t)
+
         # Up Locators (Start/End Twist Anchors). Parented under the controls —
         # the IK handle's "Object Rotation Up" twist reads the locators'
         # *rotation*, so they must inherit it from the controls (a
@@ -1460,6 +1690,264 @@ class TubeRig(ptk.LoggingMixin):
             cmds.skinCluster(driver_joints, curve, toSelectedBones=True)
         except Exception as e:
             self.logger.warning(f"Failed to skin curve: {e}")
+
+    # ------------------------------------------------------------------
+    # Control Rigs (shared by strategies and the step-by-step UI)
+    # ------------------------------------------------------------------
+
+    @CoreUtils.undoable
+    def create_spline_controls(
+        self,
+        joints: List[str],
+        centerline: Optional[List] = None,
+        size: float = 1.0,
+        num_controls: int = 3,
+        enable_stretch: bool = True,
+        enable_squash: bool = True,
+        enable_volume: bool = True,
+        enable_twist: bool = True,
+        enable_auto_bend: bool = False,
+    ) -> Tuple[List[str], str, str]:
+        """Build the complete spline-IK control rig over an existing joint chain:
+        logic curve, IK handle, driver controls, and the optional twist /
+        auto-bend / stretch systems.
+
+        Parameters:
+            joints: The joint chain (root first).
+            centerline: Path for the IK curve; defaults to the joint positions.
+            size: Control base size — pass the tube radius for proportional
+                controls (``resolve_sizes``).
+            num_controls: Driver control count (3 = start/mid/end + tangents).
+            enable_*: Feature toggles, matching the one-click build options.
+
+        Returns:
+            Tuple of (controls, ik_handle, curve).
+        """
+        joints = [str(j) for j in joints]
+        if len(joints) < 2:
+            raise ValueError("Spline IK needs a chain of at least 2 joints.")
+        if centerline is None:
+            centerline = [_xform_t_ws(j) for j in joints]
+
+        curve = self.create_logic_curve(centerline)
+        ik_handle = self.create_ik(
+            joints, solver="ikSplineSolver", curve=curve, createCurve=False
+        )
+        cmds.setAttr(f"{ik_handle}.visibility", False)
+
+        controls, driver_joints, up_locs = self.create_spline_drivers(
+            centerline, size, num_controls
+        )
+        self.skin_curve_to_drivers(curve, driver_joints)
+
+        start_ctrl = controls[0]
+        end_ctrl = controls[-1]
+        mid_idx = int(len(controls) / 2)
+        mid_ctrl = controls[mid_idx] if len(controls) > 2 else None
+        start_up_loc, end_up_loc = up_locs
+
+        if enable_twist:
+            self.setup_spline_twist(
+                ik_handle, start_ctrl, end_ctrl, start_up_loc, end_up_loc
+            )
+
+        if enable_auto_bend:
+            if num_controls == 3 and mid_ctrl:
+                self.setup_auto_bend(start_ctrl, mid_ctrl, end_ctrl)
+            else:
+                self.logger.warning(
+                    "Auto Bend is only available with 3 controls. Skipping."
+                )
+
+        # Hierarchy inserts above the intermediate controls (follow groups,
+        # auto-bend) change their absolute DAG paths — resolve the canonical
+        # paths once everything is in place, before anything records them.
+        controls = [self._rig_scoped_path(c) for c in controls]
+        start_ctrl = controls[0]
+
+        if enable_stretch or enable_squash:
+            self.setup_spline_stretch(
+                curve,
+                joints,
+                enable_stretch,
+                enable_squash,
+                enable_volume,
+                main_control=start_ctrl,
+            )
+
+        self.ik_handle = ik_handle
+        return controls, ik_handle, curve
+
+    @CoreUtils.undoable
+    def create_fk_controls(self, joints: List[str], size: float = 1.0) -> List[str]:
+        """Build a nested FK control hierarchy — one diamond per joint, each
+        joint parent-constrained to its control.
+
+        Parameters:
+            joints: The joint chain (root first).
+            size: Control base size — pass the tube radius for proportional
+                controls (``resolve_sizes``).
+        """
+        joints = [str(j) for j in joints]
+        if not joints:
+            raise ValueError("FK controls need at least 1 joint.")
+
+        controls: List[str] = []
+        parent_ctrl = str(self.rig_group)
+
+        for i, jnt in enumerate(joints):
+            nodes = Controls.create(
+                "diamond",
+                name=f"{self.rig_name}_{i+1}_CTRL",
+                size=size * 3,
+                axis="x",
+                color=(1, 1, 0),
+                return_nodes=True,
+            )
+            grp = nodes.group if nodes.group else nodes.control
+
+            # Match joint transform via parentConstraint (clean matrix transfer)
+            temp_const = cmds.parentConstraint(str(jnt), str(grp))
+            cmds.delete(temp_const)
+
+            grp = _parent_to(grp, parent_ctrl)
+            ctrl = _control_path(nodes, grp)
+
+            # Standard FK: joint follows control
+            cmds.parentConstraint(ctrl, str(jnt), mo=True)
+
+            controls.append(ctrl)
+            parent_ctrl = ctrl
+
+        return controls
+
+    @CoreUtils.undoable
+    def create_anchor_controls(
+        self, joints: List[str], size: float = 1.0, enable_stretch: bool = True
+    ) -> List[str]:
+        """Build the anchor/piston controls over the two end joints
+        (``create_anchor_joints``): a box control per end constraining its
+        joint, plus the optional distance-driven stretch network.
+
+        The joints must be independent transforms — if the end joint is
+        parented under the start joint, it is moved out first (a chained
+        child would inherit the stretch scale and defeat the pinned-end
+        behavior).
+
+        Parameters:
+            joints: Exactly two end joints, start first.
+            size: Control base size — pass the tube radius for proportional
+                controls (``resolve_sizes``).
+            enable_stretch: Wire the distance-driven ``scaleX`` stretch.
+        """
+        joints = [str(j) for j in joints]
+        if len(joints) != 2:
+            raise ValueError(f"Anchor rigs use exactly 2 joints (got {len(joints)}).")
+        j1, j2 = joints
+
+        j1_long, j2_long = _long_path(j1), _long_path(j2)
+        if j1_long and j2_long and j2_long.startswith(f"{j1_long}|"):
+            self.logger.info(
+                "Anchor end joint was chained under the start joint — "
+                "unparenting so stretch scale can't propagate to it."
+            )
+            j2 = _parent_to(
+                j2, NodeUtils.get_parent(j1, type=None, full_path=True)
+            )
+            self.joints = [j1, j2]
+
+        start_pos = om.MVector(*_xform_t_ws(j1))
+        end_pos = om.MVector(*_xform_t_ws(j2))
+        # Joint X axes carry the tube-end tangents (baked by
+        # create_anchor_joints); the end control's frame is mirrored so its
+        # X points back into the tube.
+        dir_start = _world_x_axis(j1)
+        dir_end = _world_x_axis(j2)
+        start_rot = _frame_rotation(dir_start)
+        end_rot = _frame_rotation(-dir_end)
+
+        rig_grp = str(self.rig_group)
+
+        # NB: ``Controls.create`` exposes ``size=`` for the uniform scale;
+        # ``scale=`` is silently absorbed by the preset builder's ``**_``
+        # kwargs and does nothing.
+        def _make_anchor_ctrl(suffix, pos, rot):
+            nodes = Controls.box(
+                name=f"{self.rig_name}_{suffix}",
+                size=size * 4,
+                color=(0, 1, 1),
+                return_nodes=True,
+            )
+            target = str(nodes.group) if nodes.group else str(nodes.control)
+            cmds.xform(
+                target, ws=True, t=(pos.x, pos.y, pos.z), ro=_euler_deg(rot)
+            )
+            target = _parent_to(target, rig_grp)
+            return _control_path(nodes, target)
+
+        start_ctrl = _make_anchor_ctrl("start", start_pos, start_rot)
+        end_ctrl = _make_anchor_ctrl("end", end_pos, end_rot)
+
+        # Joints follow control position and rotation (rotatable tube ends)
+        cmds.pointConstraint(start_ctrl, j1, mo=True)
+        cmds.pointConstraint(end_ctrl, j2, mo=True)
+        cmds.orientConstraint(start_ctrl, j1, mo=True)
+        cmds.orientConstraint(end_ctrl, j2, mo=True)
+
+        if enable_stretch:
+            # Measure the control distance in the rig's local space via
+            # multMatrix so scaling the rig group can't double-transform.
+            start_local_mm = cmds.createNode(
+                "multMatrix", name=f"{self.rig_name}_start_local_MM"
+            )
+            cmds.connectAttr(
+                f"{str(start_ctrl)}.worldMatrix[0]",
+                f"{start_local_mm}.matrixIn[0]",
+                force=True,
+            )
+            cmds.connectAttr(
+                f"{rig_grp}.worldInverseMatrix[0]",
+                f"{start_local_mm}.matrixIn[1]",
+                force=True,
+            )
+
+            end_local_mm = cmds.createNode(
+                "multMatrix", name=f"{self.rig_name}_end_local_MM"
+            )
+            cmds.connectAttr(
+                f"{str(end_ctrl)}.worldMatrix[0]",
+                f"{end_local_mm}.matrixIn[0]",
+                force=True,
+            )
+            cmds.connectAttr(
+                f"{rig_grp}.worldInverseMatrix[0]",
+                f"{end_local_mm}.matrixIn[1]",
+                force=True,
+            )
+
+            dist_node = cmds.createNode(
+                "distanceBetween", name=f"{self.rig_name}_dist"
+            )
+            cmds.connectAttr(
+                f"{start_local_mm}.matrixSum", f"{dist_node}.inMatrix1", force=True
+            )
+            cmds.connectAttr(
+                f"{end_local_mm}.matrixSum", f"{dist_node}.inMatrix2", force=True
+            )
+
+            initial_dist = (end_pos - start_pos).length()
+
+            norm_md = cmds.createNode(
+                "multiplyDivide", name=f"{self.rig_name}_scale_MD"
+            )
+            cmds.setAttr(f"{norm_md}.operation", 2)  # Divide
+            cmds.connectAttr(f"{dist_node}.distance", f"{norm_md}.input1X", force=True)
+            cmds.setAttr(f"{norm_md}.input2X", initial_dist)
+
+            # Start joint scales to stretch toward end
+            cmds.connectAttr(f"{norm_md}.outputX", f"{j1}.scaleX", force=True)
+
+        return [start_ctrl, end_ctrl]
 
     @CoreUtils.undoable
     def setup_spline_twist(
@@ -1522,9 +2010,12 @@ class TubeRig(ptk.LoggingMixin):
         end_ctrl = str(end_ctrl)
         rig_grp = str(self.rig_group)
 
+        # dv 0.5: a hose compressed by d bows out by d/2 — visible, natural
+        # slack out of the box (dv=0 made an "enabled" auto-bend a silent
+        # no-op until the animator discovered the attribute).
         if not cmds.attributeQuery("autoBend", node=start_ctrl, exists=True):
             cmds.addAttr(
-                start_ctrl, ln="autoBend", at="double", min=0, max=5, dv=0.0, k=True
+                start_ctrl, ln="autoBend", at="double", min=0, max=5, dv=0.5, k=True
             )
 
         # Identify the mid control's offset group (parented to rig_group).
@@ -1767,9 +2258,20 @@ class TubeRig(ptk.LoggingMixin):
 
     @CoreUtils.undoable
     def bind_joint_chain(
-        self, obj, joints: List[str]
+        self,
+        obj,
+        joints: List[str],
+        curve: Optional[str] = None,
+        centerline: Optional[List] = None,
     ) -> Optional[str]:
-        """Binds the joint chain to a polygon tube with smooth skinning."""
+        """Bind the joint chain to a polygon tube with smooth skinning.
+
+        Weights are parametric along the tube — identical to the one-click
+        build's bind step. Without an explicit *curve*/*centerline*, the
+        centerline is re-extracted from the mesh (falling back to the joint
+        positions); if the parametric solve fails, ``skin_mesh`` falls back
+        to a geodesic bind.
+        """
         self.logger.debug(f"Tube mesh: {obj} ({type(obj).__name__})")
         objs = list(dict.fromkeys(cmds.ls(obj, objectsOnly=True, flatten=True) or []))
         if not objs:
@@ -1814,30 +2316,102 @@ class TubeRig(ptk.LoggingMixin):
             f"Creating skinCluster with {len(joints)} joints on {leaf_name(transform)}"
         )
 
-        try:
-            skin_cluster_result = cmds.skinCluster(
-                joints,
-                transform,
-                toSelectedBones=True,
-                maximumInfluences=4,
-                weightDistribution=0.5,
-            )
-            skin_cluster = (
-                skin_cluster_result[0]
-                if isinstance(skin_cluster_result, (list, tuple))
-                else skin_cluster_result
-            )
-            self.logger.debug(f"SkinCluster created: {skin_cluster}")
-        except Exception as e:
-            self.logger.error(f"Error creating skinCluster: {e}")
-            return None
+        # Parity with the one-click build: parametric ring-uniform weights
+        # along the tube centerline (joint positions when extraction fails).
+        if not curve and not centerline:
+            try:
+                centerline, _ = TubePath.get_centerline(transform, num_joints=-1)
+            except Exception:
+                centerline = None
+            if not centerline or len(centerline) < 2:
+                centerline = [_xform_t_ws(j) for j in joints]
 
-        self.skin_cluster = skin_cluster
+        skin_cluster = self.skin_mesh(
+            joints, curve=curve, centerline=centerline, mesh=transform
+        )
+        if skin_cluster:
+            self.logger.debug(f"SkinCluster created: {skin_cluster}")
         return skin_cluster
 
     # ------------------------------------------------------------------
     # Anchor Constraints
     # ------------------------------------------------------------------
+
+    def _rig_scoped_path(self, node) -> str:
+        """Canonical long path of this rig's node named like *node* (matched
+        by leaf name, scoped to the rig group).
+
+        Hierarchy inserts (follow groups, auto-bend) invalidate absolute
+        paths captured earlier; leaf names stay unique *within* the rig, so
+        a rig-group-scoped leaf lookup recovers the true path even when the
+        same leaf exists in other rigs.
+        """
+        leaf = leaf_name(node)
+        matches = cmds.ls(leaf, long=True) or []
+        grp = (
+            _long_path(str(self._rig_group))
+            if self._rig_group and cmds.objExists(str(self._rig_group))
+            else None
+        )
+        if grp:
+            scoped = [m for m in matches if m.startswith(f"{grp}|")]
+            matches = scoped or matches
+        return matches[0] if matches else str(node)
+
+    def _end_control(self, index: int) -> Optional[str]:
+        """Long path of the rig's start (``0``) or end (``-1``) control, or
+        None when the rig has no controls (bare chain).
+
+        Prefers the live build's records; falls back to the naming
+        conventions of the three control builders so post-restart rigs
+        (empty registry) still resolve. Ambiguous short-name matches are
+        narrowed to this rig's group.
+        """
+        recorded = self.start_loc if index == 0 else self.end_loc
+        from_bundle = (
+            self.bundle.controls[0 if index == 0 else -1]
+            if self.bundle and self.bundle.controls
+            else None
+        )
+        for c in (recorded, from_bundle):
+            if c and cmds.objExists(str(c)):
+                return _long_path(str(c))
+
+        grp = (
+            _long_path(self._rig_group)
+            if self._rig_group and cmds.objExists(str(self._rig_group))
+            else None
+        )
+
+        def _narrow(matches):
+            if not matches:
+                return None
+            if len(matches) > 1 and grp:
+                scoped = [m for m in matches if m.startswith(f"{grp}|")]
+                matches = scoped or matches
+            return matches[0]
+
+        suffix = "start" if index == 0 else "end"
+        named = _narrow(
+            cmds.ls(f"{self.rig_name}_{suffix}_CTRL", type="transform", long=True)
+            or []
+        )
+        if named:
+            return named
+
+        # Numbered controls (FK chains, N-point spline drivers).
+        numbered = []
+        for m in cmds.ls(f"{self.rig_name}_*_CTRL", type="transform", long=True) or []:
+            match = re.fullmatch(
+                rf"{re.escape(self.rig_name)}_(?:ctrl_)?(\d+)_CTRL", leaf_name(m)
+            )
+            if match:
+                numbered.append((int(match.group(1)), m))
+        if numbered:
+            numbered.sort(key=lambda t: t[0])
+            wanted = numbered[0][0] if index == 0 else numbered[-1][0]
+            return _narrow([m for n, m in numbered if n == wanted])
+        return None
 
     @CoreUtils.undoable
     def constrain_end_with_falloff(
@@ -1866,7 +2440,6 @@ class TubeRig(ptk.LoggingMixin):
         constrained_joint = str(joints[joint_index])
         anchor = str(anchor)
         anchor_pos = _xform_t_ws(anchor)
-        anchor_pos_v = om.MVector(*anchor_pos)
 
         # Create anchor joint at anchor location
         joint_name = Naming.generate_unique_name(f"{self.rig_name}_anchor_jnt")
@@ -1887,20 +2460,26 @@ class TubeRig(ptk.LoggingMixin):
         # Fully constrain anchor_joint to the anchor geo (position + orientation)
         cmds.parentConstraint(anchor, anchor_joint, mo=False)
 
-        # Avoid driving the joint directly if it's IK-controlled.
-        is_end_joint = False
-        if self.ik_handle:
-            ik_handle_s = str(self.ik_handle)
-            ee = cmds.ikHandle(ik_handle_s, q=True, ee=True)
-            if ee:
-                ee_parents = cmds.listRelatives(ee, parent=True, fullPath=True) or []
-                end_jnt = ee_parents[0] if ee_parents else ee
-                is_end_joint = (
-                    end_jnt == constrained_joint
-                    or short_name(end_jnt) == short_name(constrained_joint)
-                )
-        if is_end_joint:
-            cmds.parentConstraint(anchor_joint, str(self.ik_handle), mo=False)
+        # Route the constraint through the rig's end CONTROL when one exists.
+        # The chain joints are the wrong target on every built rig
+        # (probe-verified): spline joints are IK-driven, so a direct
+        # parentConstraint is silently overridden (and translating a spline
+        # ikHandle is ignored outright by the solver); anchor joints already
+        # carry control constraints, so a second driver raises 'Object is
+        # already connected'; FK joints blend 50/50 against their control's
+        # constraint. Driving the control moves the whole end assembly
+        # (curve drivers, twist locators) coherently. Bare chains with no
+        # controls keep the direct joint constraint.
+        idx = joint_index % len(joints)
+        target_ctrl = None
+        if idx == 0:
+            target_ctrl = self._end_control(0)
+        elif idx == len(joints) - 1:
+            target_ctrl = self._end_control(-1)
+        if target_ctrl:
+            # mo=True: follow the anchor's motion without snapping to it —
+            # the falloff weighting below handles the contact region.
+            cmds.parentConstraint(anchor_joint, target_ctrl, mo=True)
         else:
             cmds.parentConstraint(anchor_joint, constrained_joint, mo=False)
 
@@ -1923,39 +2502,24 @@ class TubeRig(ptk.LoggingMixin):
                 f"{constrained_joint}; skipping falloff weighting."
             )
         else:
-            influences = (
-                cmds.skinCluster(skin_cluster, q=True, influence=True) or []
-            )
-            inf_short = {short_name(i) for i in influences}
-            if short_name(anchor_joint) not in inf_short:
-                cmds.skinCluster(
-                    skin_cluster,
-                    edit=True,
-                    addInfluence=anchor_joint,
-                    weight=0.0,
-                )
-
             try:
-                geo = (cmds.skinCluster(skin_cluster, q=True, geometry=True) or [None])[0]
-                if not geo:
-                    raise RuntimeError(f"No geometry on skinCluster {skin_cluster}")
-                # One batched position fetch — a per-vertex pointPosition loop
-                # is prohibitively slow on dense meshes.
-                flat = cmds.xform(f"{geo}.vtx[*]", q=True, ws=True, t=True) or []
-                for i in range(len(flat) // 3):
-                    pos_v = om.MVector(flat[i * 3], flat[i * 3 + 1], flat[i * 3 + 2])
-                    d = (pos_v - anchor_pos_v).length()
-                    if d > falloff:
-                        continue
-                    w = max(min(1.0 - (d / falloff), 1.0), 0.0)
-                    cmds.skinPercent(
-                        skin_cluster,
-                        f"{geo}.vtx[{i}]",
-                        transformValue=[
-                            (anchor_joint, w),
-                            (constrained_joint, 1.0 - w),
-                        ],
-                    )
+                # No source_influence: the anchor takes w = 1 - d/falloff and
+                # the REMAINDER redistributes across the vertex's existing
+                # influences (skinPercent semantics). Blending against the
+                # end joint alone would zero the solver's neighbor-joint
+                # weights inside the radius and snap back to them at the
+                # boundary — a visible crease in the constrained end's blend
+                # zone. Redistribution is continuous at the boundary (w -> 0
+                # leaves the row untouched) and keeps the smooth basis intact.
+                SkinUtils.apply_falloff(
+                    skin_cluster,
+                    target_influence=anchor_joint,
+                    center=anchor_pos,
+                    radius=falloff,
+                    profile="linear",
+                    add_influence=True,
+                    undoable=True,
+                )
                 self.logger.debug(
                     f"Applied falloff weights from {anchor_joint} "
                     f"(joint index {joint_index}) over distance {falloff}"
@@ -2012,7 +2576,7 @@ RIG_MODES: List[RigModeConfig] = [
         enable_stretch=True,
         enable_squash=True,
         enable_volume=True,
-        enable_auto_bend=False,
+        enable_auto_bend=True,  # hoses bow on compression, not accordion
         enable_twist=True,
     ),
     RigModeConfig(
@@ -2029,6 +2593,8 @@ RIG_MODES: List[RigModeConfig] = [
         num_controls_editable=False,
         twist_editable=False,
         volume_editable=False,  # AnchorStrategy implements no volume system
+        squash_editable=False,  # ...nor squash
+        auto_bend_editable=False,  # ...nor a mid control to bend
     ),
     RigModeConfig(
         name="FK Chain (Tail/Tentacle)",
@@ -2062,8 +2628,10 @@ class TubeRigSlots:
         self.ui = self.sb.loaded_ui.tube_rig
 
         # Configure SpinBox custom display
-        # -1 indicates "Auto" mode where joint count is derived from edge loops
+        # -1 indicates "Auto": joint count derived from edge loops; joint size
+        # derived from the measured tube radius.
         self.ui.s000.setCustomDisplayValues(-1, "Auto")
+        self.ui.s002.setCustomDisplayValues(-1, "Auto")
 
         # Populate the mode combobox. The mode names are self-describing under the
         # "Global Options" group, so the combo carries no extra label: the old
@@ -2079,6 +2647,12 @@ class TubeRigSlots:
         # Apply initial mode
         if len(RIG_MODES) > 0:
             self.apply_mode(0)
+
+        # Auto-Bend needs the 3-control spline layout — keep the checkbox
+        # gated as the control count changes (apply_mode syncs it per mode).
+        self.ui.s001.valueChanged.connect(self._sync_auto_bend_gate)
+
+        self._init_tooltips()
 
         # Keep the window tall enough for the selected step. QToolBox wraps each
         # page in a QScrollArea whose minimum under-reports its content height, so
@@ -2112,21 +2686,266 @@ class TubeRigSlots:
                 title="Tube Rig",
                 body="Generate joint rigs along tube-shaped meshes. The tool "
                 "auto-detects the tube's centerline via edge loops or surface "
-                "normals.",
-                steps=[
-                    "Select a tube mesh.",
-                    "Pick a <b>Mode</b> preset — each mode preconfigures joint "
-                    "count, controls, and constraint topology.",
-                    "Adjust <b>Joints</b> (or set to <i>Auto</i> to derive from "
-                    "edge loops) and the mode-specific parameters.",
-                    "Press <b>Build</b>.",
+                "normals, and sizes controls to the measured tube radius.",
+                sections=[
+                    (
+                        "Quick start (One-Click)",
+                        [
+                            "Select a tube mesh.",
+                            "Pick a <b>Mode</b> preset — irrelevant options "
+                            "disable per mode.",
+                            "Press <b>Full Rig</b> — it runs Steps 1 → 2 → 3 "
+                            "with the parameter values set in each step page.",
+                        ],
+                    ),
+                    (
+                        "Step-by-step",
+                        [
+                            "<b>Step 1</b> creates the joints, <b>Step 2</b> "
+                            "the controls, <b>Step 3</b> the skin bind — the "
+                            "same operations One-Click runs, one at a time.",
+                            "Each step's tooltip states exactly what to "
+                            "select, and in what order.",
+                        ],
+                    ),
                 ],
                 notes=[
-                    "<b>Joints = Auto</b> reads the tube's longitudinal edge "
-                    "loops and places one joint per loop.",
+                    "<b>Joints = Auto</b> reads the tube's edge loops and "
+                    "places one joint per loop.",
+                    "Re-running a step replaces that step's previous result.",
                 ],
             )
         )
+
+    def _init_tooltips(self):
+        """Set the polished (uitk ``fmt``) tooltips for every option and step."""
+        ui = self.ui
+
+        ui.cmb_preset.setToolTip(
+            fmt(
+                title="Rig Mode",
+                body="Selects the build strategy and presets the step "
+                "parameters below. Options a mode doesn't support are "
+                "disabled while it is active.",
+                sections=[
+                    (
+                        "Spline (Hose/Cable)",
+                        [
+                            "IK-spline chain with start / mid / end controls.",
+                            "Good for: hoses, cables, organic tubes.",
+                            "Supports: stretch, squash, volume, twist, auto-bend.",
+                        ],
+                    ),
+                    (
+                        "Anchor (Piston)",
+                        [
+                            "Two independent end joints with distance-driven stretch.",
+                            "Good for: pistons, hydraulics, struts.",
+                            "Always exactly 2 joints; stretch only.",
+                        ],
+                    ),
+                    (
+                        "FK Chain (Tail/Tentacle)",
+                        [
+                            "Nested FK controls, one per joint.",
+                            "Good for: tails, tentacles, hand-keyed tubes.",
+                        ],
+                    ),
+                ],
+            )
+        )
+        ui.txt000.setToolTip(
+            fmt(
+                title="Rig Name",
+                body="Base name for every node the rig creates (group, "
+                "joints, controls, skinCluster).",
+                notes=["Empty = derived from the mesh name."],
+            )
+        )
+        ui.s000.setToolTip(
+            fmt(
+                title="Number of Joints",
+                body="Joint count along the tube centerline.",
+                rows=[
+                    ("Auto", "one joint per edge loop (most precise)"),
+                    ("N", "evenly resampled along the centerline"),
+                ],
+                notes=["Anchor rigs always use exactly 2 end joints."],
+            )
+        )
+        ui.s001.setToolTip(
+            fmt(
+                title="Number of Controls",
+                body="Driver control count for the Spline rig. Increase for "
+                "complex shapes.",
+                notes=[
+                    "<b>Auto-Bend</b> requires exactly 3 controls.",
+                    "FK rigs create one control per joint instead.",
+                ],
+            )
+        )
+        ui.s002.setToolTip(
+            fmt(
+                title="Joint Size",
+                body="Joint display radius in the viewport.",
+                rows=[("Auto", "half the measured tube radius")],
+                notes=[
+                    "Display only — control sizes always scale to the "
+                    "measured tube radius."
+                ],
+            )
+        )
+        ui.chk000.setToolTip(
+            fmt(
+                title="Reverse Direction",
+                body="Builds the joint chain from the far end (swaps "
+                "start/end).",
+                notes=["Applies to Step 1 and the One-Click build."],
+            )
+        )
+        ui.chk_stretch.setToolTip(
+            fmt(
+                title="Stretch",
+                bullets=[
+                    "<b>Spline:</b> joints scale along the tube to follow "
+                    "the curve length.",
+                    "<b>Anchor:</b> the start joint stretches toward the "
+                    "end control.",
+                ],
+            )
+        )
+        ui.chk_twist.setToolTip(
+            fmt(
+                title="Twist",
+                body="Advanced spline twist driven by the start/end control "
+                "rotation.",
+                notes=[
+                    "Spline only. Adds a <b>roll</b> attribute to the end "
+                    "control."
+                ],
+            )
+        )
+        ui.chk_squash.setToolTip(
+            fmt(
+                title="Squash",
+                body="Joints compress when the curve shortens.",
+                notes=["Spline only."],
+            )
+        )
+        ui.chk_volume.setToolTip(
+            fmt(
+                title="Volume Preservation",
+                body="Bulges when squashed, thins when stretched.",
+                notes=["Spline only."],
+            )
+        )
+        ui.chk_auto_bend.setToolTip(
+            fmt(
+                title="Auto-Bend (Mid)",
+                body="The mid control bows outward automatically as the ends "
+                "compress toward each other.",
+                notes=["Spline only — requires exactly <b>3</b> controls."],
+            )
+        )
+        ui.b001.setToolTip(
+            fmt(
+                title="Step 1 — Create Joints",
+                body="Places this rig's joints along the tube's centerline.",
+                steps=[
+                    "Select the tube mesh <i>(or an edge loop running down "
+                    "it)</i>.",
+                    "Press <b>Create Joints</b>.",
+                ],
+                notes=[
+                    "Anchor mode creates its 2 end joints instead of a chain.",
+                    "Re-running replaces this rig's previous joints.",
+                ],
+            )
+        )
+        ui.b002.setToolTip(
+            fmt(
+                title="Step 2 — Create Controls",
+                body="Builds the active mode's control rig on the joints "
+                "from Step 1.",
+                steps=[
+                    "Select the root joint <i>(Anchor: either or both end "
+                    "joints)</i>.",
+                    "Press <b>Create IK / Controls</b>.",
+                ],
+                sections=[
+                    (
+                        "Creates",
+                        [
+                            "<b>Spline:</b> IK spline, start/mid/end controls, "
+                            "twist, stretch, auto-bend.",
+                            "<b>Anchor:</b> two end controls with distance "
+                            "stretch.",
+                            "<b>FK:</b> nested FK controls, one per joint.",
+                        ],
+                    ),
+                ],
+                notes=["Control size is proportional to the tube's radius."],
+            )
+        )
+        ui.b003.setToolTip(
+            fmt(
+                title="Step 3 — Bind Skin",
+                body="Smooth-binds the tube mesh to the joints with "
+                "ring-uniform parametric weights — the same solver the "
+                "One-Click build uses.",
+                steps=[
+                    "Select the root joint.",
+                    "<b>Shift</b>-select the tube mesh <i>last</i>.",
+                    "Press <b>Bind Joints to Mesh</b>.",
+                ],
+                notes=["Re-running replaces the mesh's existing skinCluster."],
+            )
+        )
+        ui.b004.setToolTip(
+            fmt(
+                title="Constrain Ends to Anchors",
+                body="Constrains both tube ends to external anchor objects "
+                "(each end's control follows its anchor) with "
+                "distance-falloff skin weighting at the contact points.",
+                steps=[
+                    "Select the root joint.",
+                    "<b>Shift</b>-select the two anchor objects.",
+                    "Press <b>Add End Constraints</b>.",
+                ],
+                notes=[
+                    "Requires a bound tube — run <b>Step 3</b> first.",
+                    "Anchors auto-assign to their nearest tube end — "
+                    "selection order doesn't matter.",
+                    "Falloff spans ≈2× the tube radius.",
+                ],
+            )
+        )
+        ui.b000.setToolTip(
+            fmt(
+                title="One-Click Rig",
+                body="Runs <b>Step 1 → Step 2 → Step 3</b> in order, using "
+                "the parameter values set in each step's page.",
+                steps=[
+                    "Select the tube mesh <i>(or an edge loop running down "
+                    "it)</i>.",
+                    "Press <b>Full Rig</b>.",
+                ],
+                notes=[
+                    "Rebuilding on an already-rigged mesh tears the old rig "
+                    "down first."
+                ],
+            )
+        )
+
+    def _sync_auto_bend_gate(self, *_):
+        """Gate Auto-Bend on the 3-control spline layout."""
+        mode = self.get_mode()
+        allowed = bool(
+            mode and mode.auto_bend_editable and int(self.ui.s001.value()) == 3
+        )
+        self.ui.chk_auto_bend.setEnabled(allowed)
+        if not allowed:
+            self.ui.chk_auto_bend.setChecked(False)
 
     def apply_mode(self, index: int):
         """Apply mode values and constraints to UI widgets."""
@@ -2143,9 +2962,8 @@ class TubeRigSlots:
         self.ui.s000.setEnabled(mode.num_joints_editable)
 
         # Step 1.5: Controls Count
-        if hasattr(self.ui, "s001"):
-            self.ui.s001.setValue(mode.num_controls)
-            self.ui.s001.setEnabled(mode.num_controls_editable)
+        self.ui.s001.setValue(mode.num_controls)
+        self.ui.s001.setEnabled(mode.num_controls_editable)
 
         # Step 2: Controls
         self.ui.chk_stretch.setChecked(mode.enable_stretch)
@@ -2163,6 +2981,8 @@ class TubeRigSlots:
         self.ui.chk_twist.setChecked(mode.enable_twist)
         self.ui.chk_twist.setEnabled(mode.twist_editable)
 
+        self._sync_auto_bend_gate()
+
     def get_mode(self) -> RigModeConfig:
         """Get the current rig mode config."""
         mode = self.ui.cmb_preset.currentData()
@@ -2177,66 +2997,117 @@ class TubeRigSlots:
         a control, or anything under the rig group); create one if none exists."""
         if obj is None:
             return None
-        # Resolve shapes / components down to their transform so the cache key
-        # space stays consistent.
-        target = NodeUtils.get_transform_node(str(obj)) or str(obj)
-
-        rig = TubeRig.for_node(target)
+        # for_node resolves raw nodes itself — pre-resolving a joint through
+        # get_transform_node yields a *list*, which defeats the lookup.
+        rig = TubeRig.for_node(str(obj))
         if rig is not None:
             return rig
 
-        # Fallback: instantiate a new TubeRig on the resolved transform.
+        # New rig: bind to the mesh transform when one resolves (tolerates
+        # group picks); otherwise keep the plain transform (b002 constructs
+        # from a joint after a restart, when the registry is empty).
+        shape = _resolve_mesh_shape(obj)
+        if shape:
+            target = (
+                NodeUtils.get_parent(shape, type=None, full_path=True) or str(shape)
+            )
+        else:
+            target = NodeUtils.get_transform_node(str(obj)) or str(obj)
+            if isinstance(target, (set, list, tuple)):
+                target = next(iter(target), str(obj))
         rig_name = self.ui.txt000.text() or f"{short_name(target)}_RIG"
         return TubeRig(target, rig_name=rig_name)
 
+    def _expand_step_joints(self, joints: List[str]) -> List[str]:
+        """Expand a single joint to its full rig joint set (b002/b003/b004).
+
+        A single joint expands to its chain; for Anchor rigs (sibling end
+        joints, no chain) it expands to the joints sharing its parent group.
+        """
+        joints = [str(j) for j in joints]
+        if len(joints) != 1:
+            return joints
+        if self.get_strategy() == "anchor":
+            parent = NodeUtils.get_parent(joints[0], type=None, full_path=True)
+            siblings = (
+                cmds.listRelatives(parent, children=True, type="joint", fullPath=True)
+                if parent
+                else None
+            )
+            if siblings and len(siblings) == 2:
+                return [str(j) for j in siblings]
+            return joints
+        return [str(j) for j in RigUtils.get_joint_chain_from_root(joints[0])]
+
+    def _selected_step_joints(self) -> List[str]:
+        """The selected joints for a step operation, chain-expanded."""
+        sel = cmds.ls(selection=True, flatten=True) or []
+        return self._expand_step_joints(cmds.ls(sel, type="joint", flatten=True) or [])
+
+    def _existing_controls(self, tube_rig) -> Optional[str]:
+        """First pre-existing control-rig node for *tube_rig*, or None.
+
+        Delegates control lookup to ``TubeRig._end_control`` — the SSoT for
+        the builders' naming conventions (a hand-rolled name check here
+        previously tested ``<rig>_start``, which never exists: the builders
+        suffix ``_CTRL``, so leftover anchor controls went undetected).
+        """
+        ik = f"{tube_rig.rig_name}_ikHandle"
+        if cmds.objExists(ik):
+            return ik
+        return tube_rig._end_control(0) or tube_rig._end_control(-1)
+
     def create_joints_from_tube(self, obj):
-        """Creates a joint chain from a tube mesh."""
-        num_joints = self.ui.s000.value()
+        """Step 1 — create this rig's joints from the tube mesh (mode-aware)."""
+        strategy = self.get_strategy()
+        num_joints = 2 if strategy == "anchor" else self.ui.s000.value()
         edges = cmds.filterExpand(selectionMask=32)  # optional user edge selection
 
-        centerline_points, num_joints = TubePath.get_centerline(
-            obj,
-            num_joints=num_joints,
-            precision=50,
-            edges=edges,
-        )
+        tube_rig = self.get_tube_rig(obj)
+        try:
+            centerline, num_joints = tube_rig.resolve_centerline(
+                num_joints, edges=edges
+            )
+        except ValueError as e:  # e.g. selection resolves to no polygon mesh
+            self.sb.message_box(str(e))
+            return []
 
-        if not centerline_points or len(centerline_points) < 2:
+        if not centerline or len(centerline) < 2:
             self.sb.message_box(
                 "Failed to extract a valid centerline from the tube mesh."
             )
             return []
 
-        tube_rig = self.get_tube_rig(obj)
-        joints = tube_rig.generate_joint_chain(
-            centerline=centerline_points,
-            num_joints=num_joints,
-            radius=self.ui.s002.value(),
-            reverse=self.ui.chk000.isChecked(),
+        if self.ui.chk000.isChecked():
+            centerline = list(centerline)[::-1]
+
+        joint_radius, _ = tube_rig.resolve_sizes(centerline, self.ui.s002.value())
+        if strategy == "anchor":
+            return tube_rig.create_anchor_joints(centerline, radius=joint_radius)
+        return tube_rig.generate_joint_chain(
+            centerline=centerline, num_joints=num_joints, radius=joint_radius
         )
-        return joints
 
     @CoreUtils.undoable
     def b000(self):
-        """Create Tube Rig (Full Pipeline)."""
+        """One-Click Rig — runs Steps 1 → 2 → 3 with the step parameters."""
         try:
             obj, *_ = cmds.ls(selection=True, objectsOnly=True, flatten=True)
         except ValueError:
             self.sb.message_box("Select a single polygon tube mesh to create a rig.")
             return
 
-        # Determine strategy from preset
         strategy = self.get_strategy()
-
         tube_rig = self.get_tube_rig(obj)
 
         try:
             tube_rig.build(
                 strategy=strategy,
                 num_joints=self.ui.s000.value(),
-                # Retrieve num_controls from s001 if available, else default to 3
-                num_controls=self.ui.s001.value() if hasattr(self.ui, "s001") else 3,
+                num_controls=self.ui.s001.value(),
                 radius=self.ui.s002.value(),
+                reverse=self.ui.chk000.isChecked(),
+                edges=cmds.filterExpand(selectionMask=32),
                 enable_stretch=self.ui.chk_stretch.isChecked(),
                 enable_squash=self.ui.chk_squash.isChecked(),
                 enable_volume=self.ui.chk_volume.isChecked(),
@@ -2250,169 +3121,182 @@ class TubeRigSlots:
 
     @CoreUtils.undoable
     def b001(self):
-        """Create Joints from Tube."""
+        """Step 1: Create Joints from Tube."""
         try:
             obj, *_ = cmds.ls(selection=True, objectsOnly=True, flatten=True)
         except ValueError:
-            self.sb.message_box("Select a single polygon tube mesh to create a rig.")
+            self.sb.message_box(
+                "Select the tube mesh (or an edge loop on it) to create joints."
+            )
             return
 
         joints = self.create_joints_from_tube(obj)
-        self.sb.message_box(f"Joints created: {len(joints)}")
+        if joints:  # failures already message-boxed their reason
+            self.sb.message_box(f"Joints created: {len(joints)}")
 
     @CoreUtils.undoable
     def b002(self):
-        """Create IK / Controls (Preset Dependent)."""
-        # Determine strategy from preset
+        """Step 2: Create IK / Controls (mode dependent)."""
         strategy = self.get_strategy()
 
-        try:
-            sel = cmds.ls(selection=True, flatten=True)
-            joints = cmds.ls(sel, type="joint")
-        except ValueError:
-            self.sb.message_box("Select the root joint.")
-            return
-
+        joints = self._selected_step_joints()
         if not joints:
-            self.sb.message_box("No joints selected.")
+            self.sb.message_box(
+                "Select the root joint created in Step 1.\n"
+                "(Anchor: either or both end joints.)"
+            )
+            return
+        if strategy == "anchor" and len(joints) != 2:
+            self.sb.message_box(
+                f"Anchor rigs use exactly 2 end joints (got {len(joints)}).\n"
+                "Run Step 1 in Anchor mode to create them."
+            )
+            return
+        if strategy == "spline" and len(joints) < 2:
+            self.sb.message_box(
+                "Spline IK needs a chain of at least 2 joints — select its root."
+            )
             return
 
-        # Ensure we have the full chain
-        if len(joints) < 2:
-            joints = RigUtils.get_joint_chain_from_root(joints[0])
-
-        # Get rig instance
         tube_rig = self.get_tube_rig(joints[0])
-        # Ensure tube_rig knows about these joints (if they were created manually or via b001)
-        tube_rig.joints = joints
+        tube_rig.joints = joints  # step-created or manual chains alike
 
-        if strategy == "spline":
-            # 1. Get centerline from joints for perfect alignment
-            centerline = [_xform_t_ws(j) for j in joints]
-            radius = self.ui.s002.value()
-            num_controls = self.ui.s001.value() if hasattr(self.ui, "s001") else 3
-            enable_stretch = self.ui.chk_stretch.isChecked()
-            enable_squash = self.ui.chk_squash.isChecked()
-            enable_volume = self.ui.chk_volume.isChecked()
-            enable_twist = self.ui.chk_twist.isChecked()
-
-            # 2. Create Curve
-            curve = tube_rig.create_logic_curve(centerline)
-
-            # 3. Create IK Handle
-            ik_name = f"{tube_rig.rig_name}_ikHandle"
-            ik_handle = tube_rig.create_ik(
-                joints,
-                solver="ikSplineSolver",
-                curve=curve,
-                createCurve=False,
-                name=ik_name,
+        existing = self._existing_controls(tube_rig)
+        if existing:
+            self.sb.message_box(
+                f"Controls already exist for '{tube_rig.rig_name}' ({existing}).\n"
+                "Delete the previous controls or rebuild with One-Click Rig."
             )
-            cmds.setAttr(f"{ik_handle}.visibility", False)
+            return
 
-            # 4. Create Drivers
-            controls, driver_joints, up_locs = tube_rig.create_spline_drivers(
-                centerline, radius, num_controls
-            )
-            tube_rig.skin_curve_to_drivers(curve, driver_joints)
+        # Control size follows the measured tube radius (falls back to the
+        # joints' display radii when the rig has no resolvable mesh).
+        _, size = tube_rig.resolve_sizes(joint_radius=self.ui.s002.value())
 
-            # 5. Setup Advanced Systems (based on user options)
-            start_ctrl, end_ctrl = controls[0], controls[-1]
-            start_up_loc, end_up_loc = up_locs
-            if enable_twist:
-                tube_rig.setup_spline_twist(
-                    ik_handle, start_ctrl, end_ctrl, start_up_loc, end_up_loc
-                )
-            if enable_stretch or enable_squash:
-                tube_rig.setup_spline_stretch(
-                    curve,
+        try:
+            if strategy == "spline":
+                controls, _, _ = tube_rig.create_spline_controls(
                     joints,
-                    enable_stretch,
-                    enable_squash,
-                    enable_volume,
-                    main_control=start_ctrl,
+                    size=size,
+                    num_controls=self.ui.s001.value(),
+                    enable_stretch=self.ui.chk_stretch.isChecked(),
+                    enable_squash=self.ui.chk_squash.isChecked(),
+                    enable_volume=self.ui.chk_volume.isChecked(),
+                    enable_twist=self.ui.chk_twist.isChecked(),
+                    enable_auto_bend=self.ui.chk_auto_bend.isChecked(),
                 )
+                kind = "Spline IK"
+            elif strategy == "anchor":
+                controls = tube_rig.create_anchor_controls(
+                    joints,
+                    size=size,
+                    enable_stretch=self.ui.chk_stretch.isChecked(),
+                )
+                kind = "Anchor"
+            else:
+                controls = tube_rig.create_fk_controls(joints, size=size)
+                kind = "FK"
+        except ValueError as e:
+            self.sb.message_box(str(e))
+            return
 
-            ctrl_names = ", ".join(leaf_name(c) for c in controls)
-            self.sb.message_box(
-                f"Spline IK Rig created on {len(joints)} joints.\nControls: {ctrl_names}"
-            )
-
-        elif strategy == "anchor":
-            # Implement Granular Anchor Logic if needed, or warn
-            # For now, replicate AnchorStrategy logic roughly, or assume user uses b000 for Anchor.
-            # But let's try to support it using standard methods if possible.
-            # Anchor wraps start/end creation.
-            self.sb.message_box(
-                "Anchor mode split-operation not yet fully implemented in b002. Use 'Full Rig' (b000) for Anchor rigs."
-            )
-
-        else:
-            # Fallback to Legacy RP Solver (standard 3-joint IK)
-            # Create IK handle
-            ik_handle = tube_rig.create_ik(joints, solver="ikRPsolver")
-
-            # Create pole vector control with mid joint offset
-            mid_joint_index = int(len(joints) / 2)
-            mid_joint = joints[mid_joint_index]
-            tube_rig.create_pole_vector(ik_handle, mid_joint=mid_joint)
-            self.sb.message_box("Standard RP IK & Pole Vector created.")
+        ctrl_names = ", ".join(leaf_name(c) for c in controls)
+        self.sb.message_box(
+            f"{kind} controls created on {len(joints)} joints.\nControls: {ctrl_names}"
+        )
 
     @CoreUtils.undoable
     def b003(self):
-        """Macros: Bind Joint Chain to Tube."""
-        try:
-            *joints, obj = cmds.ls(selection=True, flatten=True)
-        except ValueError:
+        """Step 3: Bind Joint Chain to Tube."""
+        sel = cmds.ls(selection=True, flatten=True) or []
+        if len(sel) < 2:
             self.sb.message_box(
-                "Select at least one joint and then a tube mesh.\nUsage: [Root Joint] + [Tube Mesh]"
+                "Select the root joint, then Shift-select the tube mesh last.\n"
+                "Usage: [Root Joint] → [Tube Mesh]"
+            )
+            return
+        obj = sel[-1]
+
+        if not _resolve_mesh_shape(obj):
+            self.sb.message_box(
+                f"'{leaf_name(obj)}' is not a polygon mesh — select the tube "
+                "mesh last."
             )
             return
 
-        if not joints:
-            self.sb.message_box(
-                "No joints selected. Select the root joint and then a tube mesh."
-            )
-            return
-
-        # Order the joints by hierarchy
-        joints = cmds.ls(joints, type="joint", flatten=True)
-        if not joints:
-            self.sb.message_box(
-                "No joint objects found in selection. Select joints, not other object types."
-            )
-            return
-
+        joints = self._selected_step_joints()
         if len(joints) < 2:
-            joints = RigUtils.get_joint_chain_from_root(joints[0])
-        if self.ui.chk000.isChecked():
-            joints = RigUtils.invert_joint_chain(joints[0], keep_original=False)
+            self.sb.message_box(
+                "Select the root joint of the chain (at least 2 joints), then "
+                "the tube mesh."
+            )
+            return
 
         tube_rig = self.get_tube_rig(obj)
-        if not tube_rig:
-            self.sb.message_box("No tube rig found for the selected object.")
-            return
-
-        # Bind joint chain to the tube mesh
         skin_cluster = tube_rig.bind_joint_chain(obj, joints)
         if not skin_cluster:
-            self.sb.message_box("Failed to bind joint chain to the tube.")
+            self.sb.message_box(
+                "Failed to bind the joint chain — see the Script Editor for "
+                "details."
+            )
             return
-        self.sb.message_box(f"Tube rig created: {tube_rig.rig_name}")
+        self.sb.message_box(
+            f"Skinned '{leaf_name(obj)}' to {len(joints)} joints "
+            f"({leaf_name(skin_cluster)})."
+        )
 
     @CoreUtils.undoable
     def b004(self):
-        """Macros: Constrain Both Ends of Hose to Anchors."""
-        sel = cmds.ls(selection=True, flatten=True)
+        """Utility: Constrain Both Ends of Hose to Anchors."""
+        sel = cmds.ls(selection=True, flatten=True) or []
         if len(sel) < 3:
-            self.sb.message_box("Select root joint, start anchor, and end anchor.")
+            self.sb.message_box(
+                "Select the root joint, then the start anchor, then the end "
+                "anchor (in that order)."
+            )
             return
-        *joints, start_anchor, end_anchor = sel
+        *joint_sel, start_anchor, end_anchor = sel
+
+        root = cmds.ls(joint_sel, type="joint", flatten=True) or []
+        if not root:
+            self.sb.message_box("The first selection must be the rig's root joint.")
+            return
+        joints = self._expand_step_joints([root[0]])
+        if len(joints) < 2:
+            self.sb.message_box(
+                "Could not derive the joint chain from the selection — "
+                "select the rig's ROOT joint (the chain start)."
+            )
+            return
 
         tube_rig = self.get_tube_rig(joints[0])
-        joints = RigUtils.get_joint_chain_from_root(joints[0])
 
-        falloff = 0.3  # fixed falloff
+        # Falloff weighting needs a bound mesh — fail up front with the fix.
+        bound = tube_rig.skin_cluster or (
+            cmds.listConnections(f"{joints[0]}.worldMatrix[0]", type="skinCluster")
+        )
+        if not bound:
+            self.sb.message_box(
+                "The joints aren't bound to a mesh yet — run Step 3 "
+                "(Bind Skin) first."
+            )
+            return
+
+        # Assign each anchor to its nearest tube end — selection order can't
+        # cross the constraints.
+        p_start = om.MVector(*_xform_t_ws(joints[0]))
+        p_end = om.MVector(*_xform_t_ws(joints[-1]))
+        a_first = om.MVector(*_xform_t_ws(start_anchor))
+        a_second = om.MVector(*_xform_t_ws(end_anchor))
+        crossed = (a_first - p_start).length() + (a_second - p_end).length() > (
+            a_second - p_start
+        ).length() + (a_first - p_end).length()
+        if crossed:
+            start_anchor, end_anchor = end_anchor, start_anchor
+
+        # Falloff proportional to the tube: ≈2× its radius.
+        _, size = tube_rig.resolve_sizes(joint_radius=self.ui.s002.value())
+        falloff = size * 2.0
 
         start_result = tube_rig.constrain_end_with_falloff(
             joints, start_anchor, falloff=falloff, joint_index=0

@@ -1,0 +1,18 @@
+{
+  "_meta": {
+    "description": "Restores Maya's factory-default viewport colors for exactly the keys the Blender style overrides — the undo/restore counterpart to Blender.json. Same targeted-overlay scope: only these keys are touched; Maya's hundreds of unrelated colors are never bulk-reset.",
+    "source": "Maya 2025.3 GUI launched with a virgin MAYA_APP_DIR (true factory prefs), queried live via displayRGBColor/displayColor/colorIndex, 2026-07-09. Note: displayRGBColor(resetToFactory=True) does NOT restore backgroundTop/backgroundBottom, so a factory-prefs capture is the only reliable source.",
+    "background": "Maya's factory background is the blue-gray gradient (top 0.535/0.617/0.702 -> bottom 0.052) with 0.36 flat gray when gradient mode is off. All three keys are restored so the result is correct in both modes.",
+    "grid": "Factory dormant grid palette color (resolved via displayColor('grid', dormant=True) to a colorIndex slot at apply time, matching how the Blender style overrode it).",
+    "polyEdge": "Factory DORMANT (deselected) polygon edge color — the light blue of unselected edges in component mode."
+  },
+  "rgb": {
+    "background": [0.36, 0.36, 0.36, 1.0],
+    "backgroundTop": [0.535, 0.617, 0.702, 1.0],
+    "backgroundBottom": [0.052, 0.052, 0.052, 1.0]
+  },
+  "display_color": {
+    "grid": { "dormant": [0.25, 0.25, 0.25] },
+    "polyEdge": { "dormant": [0.392, 0.863, 1.0] }
+  }
+}

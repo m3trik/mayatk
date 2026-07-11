@@ -115,6 +115,13 @@ class MacroManager(ptk.HelpMixin):
                                             Delete, Backspace (Will only work when modifiers are specified)
             default (bool): Indicate that this run time command is a default command. Default run time commands will not be saved to preferences.
             delete_existing = Delete any existing (non-default) runtime commands of the given name.
+
+        Note:
+            Binds *in addition to* any chord already assigned to this macro —
+            deleting the runtime command does not release its old hotkey, so
+            rebinding here leaves the previous chord live (multi-bound).
+            :meth:`apply_bindings` handles releasing the stale chord (it diffs
+            the live registry); prefer it for rebinds.
         """
         command = f"if 'm_slots' not in globals(): from {cls.__module__} import {cls.__name__}; global m_slots; m_slots = {cls.__name__}();\nm_slots.{name}();"
 
@@ -151,6 +158,18 @@ class MacroManager(ptk.HelpMixin):
         )
 
         # set hotkey
+        # Maya refuses hotkey edits while the locked factory set (Maya_Default,
+        # the fresh-install default) is active — cmds.hotkey raises and the
+        # binding silently never lands ("the hotkey does nothing"). Switch to /
+        # create an editable user set first, exactly what Maya's own Hotkey
+        # Editor prompts to do. Best-effort: headless has no hotkey-set
+        # registry (hotkeySet raises), where the hotkey call below is inert.
+        try:
+            from mayatk.ui_utils.hotkey_collisions import ensure_editable_hotkey_set
+
+            ensure_editable_hotkey_set()
+        except Exception:
+            pass
         ctl, alt, sht, key = cls._parse_key(key)
         cmds.hotkey(
             keyShortcut=key, name=nameCommand, ctl=ctl, alt=alt, sht=sht
@@ -161,10 +180,12 @@ class MacroManager(ptk.HelpMixin):
     # ------------------------------------------------------------------
     # The methods below are the single source of truth for discovering,
     # querying, applying, clearing, and persisting macro bindings. Both the
-    # ``MacroManager`` UI panel and the ``userSetup`` startup path are thin
-    # consumers; nothing here imports Qt or the switchboard. A *binding* is a
-    # ``{"key": <maya-token>, "cat": <category>}`` dict; a *binding set* maps
-    # macro name -> binding and is exactly what a preset file stores.
+    # ``MacroManager`` UI panel and the tentacle launch path (``TclMaya``
+    # applies the active preset on construction, via ``apply_saved_macros``)
+    # are thin consumers; nothing here imports Qt or the switchboard. A
+    # *binding* is a ``{"key": <maya-token>, "cat": <category>}`` dict; a
+    # *binding set* maps macro name -> binding and is exactly what a preset
+    # file stores.
 
     MACRO_PREFIX = "m_"
     PRESET_NAME = "macro_manager"
@@ -322,21 +343,115 @@ class MacroManager(ptk.HelpMixin):
         return bindings
 
     @classmethod
+    def _key_bound_to(cls, name: str, key: str) -> bool:
+        """True when Maya's live hotkey for *key* invokes *name*'s command.
+
+        A deterministic, per-key check — unlike
+        :func:`~mayatk.ui_utils.hotkey_collisions.live_hotkey_map`, which returns
+        only ONE of a multi-bound command's chords (and not always the same one).
+        Used to decide whether a macro's desired binding is already in place
+        without re-applying it. False outside an interactive Maya.
+        """
+        if cmds is None or not key:
+            return False
+        ctl, alt, sht, k = cls._parse_key(key)
+        try:
+            return (
+                cmds.hotkey(k, query=True, name=True, ctl=ctl, alt=alt, sht=sht) or ""
+            ) == f"{name}Command"
+        except Exception:
+            return False
+
+    @classmethod
     def apply_bindings(cls, bindings: Dict[str, dict]) -> None:
         """Apply a binding set ``{name: {"key", "cat"}}``.
 
         An entry with a falsy ``key`` clears that macro's hotkey instead of
         setting one. ``set_macro`` remains the single low-level applier.
+        Resilient per entry — one bad chord logs and continues rather than
+        aborting the rest of the preset.
+
+        Idempotent: each entry is diffed against the live hotkey registry and
+        only *actual* differences are (re)applied. This is what makes the
+        launch-time re-apply (``apply_saved_macros`` from the DCC entry point)
+        the deterministic source of truth without churn — a preset that already
+        matches Maya's live bindings is a no-op. Re-applying an unchanged
+        binding otherwise recreates its ``runTimeCommand`` and forces a prefs
+        flush, spamming the Script Editor with "Saving hotkeys…" on every launch
+        even though nothing changed.
+
+        A rebind (target key differs from the live one) releases the stale
+        chord first, since ``set_macro`` only *adds* a binding — otherwise the
+        command stays multi-bound and never converges. The stale chord is left
+        alone when it is itself a target key of this same preset, because a
+        (chord-swapping / -chaining) sibling binding will claim it.
+
+        Prefs are flushed only when at least one binding was applied (a
+        ``cmds.hotkey`` edit lives only in the in-memory set; Maya persists
+        hotkeys on a *clean* exit only, so a crash would otherwise lose the
+        applied set — but with nothing applied there is nothing to persist).
         """
+        # Read the live registry once, but only when there is something to
+        # diff — the shipped ``default`` preset is empty, so the common launch
+        # path would otherwise scan the registry for nothing.
+        live = cls.get_current_bindings() if (cmds is not None and bindings) else {}
+        # Normalized keys this preset assigns — a stale chord in this set will be
+        # re-claimed by its target binding, so clearing it would clobber that.
+        target_keys = {
+            cls._normalize_key(s["key"])
+            for s in (bindings or {}).values()
+            if isinstance(s, dict) and s.get("key")
+        }
+        changed = False
         for name, spec in (bindings or {}).items():
             if not isinstance(spec, dict):
                 continue
             key = spec.get("key")
             cat = spec.get("cat")
-            if not key:
-                cls.clear_hotkey(name)
-                continue
-            cls.set_macro(name, key=key, cat=cat)
+            current = live.get(name, {})
+            live_key = current.get("key", "")
+            try:
+                if not key:
+                    if not live_key:
+                        continue  # already unbound — nothing to clear
+                    cls.clear_hotkey(name)
+                    changed = True
+                    continue
+                # No-op when the TARGET chord is already live for this command
+                # AND the category matches. Query the target key DIRECTLY rather
+                # than trusting ``live_key`` (from live_hotkey_map): a command
+                # bound to several chords (e.g. an extra key added in Maya's
+                # Hotkey Editor) collapses to ONE, non-deterministically-chosen
+                # entry in live_hotkey_map. When that entry isn't the preset key,
+                # the old ``normalize(live_key) == normalize(key)`` check
+                # spuriously failed and re-applied + savePrefs'd — on some
+                # launches but not others, which is why the "Saving hotkeys…"
+                # spam looked random. The per-key query is deterministic.
+                key_matches = cls._key_bound_to(name, key)
+                cat_matches = not cat or cat == current.get("cat")
+                if key_matches and cat_matches:
+                    continue
+                if (
+                    live_key
+                    and cls._normalize_key(live_key) != cls._normalize_key(key)
+                    and cls._normalize_key(live_key) not in target_keys
+                ):
+                    # Rebinding to a different chord: release the old one first.
+                    # set_macro only *adds* a binding, so without this the
+                    # command stays multi-bound — the stale chord keeps firing
+                    # the macro. Skip when the stale chord is a target key of
+                    # this preset: a sibling binding will claim it (chord swap /
+                    # chain), so clearing here would clobber that.
+                    cls.clear_hotkey(name, key=live_key)
+                cls.set_macro(name, key=key, cat=cat)
+                changed = True
+            except Exception as error:  # one bad chord must not abort the set
+                print(f"# Error: {__file__}: apply_bindings({name}): {error} #")
+        if cmds is not None and changed:
+            try:
+                cmds.savePrefs(hotkeys=True)
+            except Exception:
+                pass  # headless / batch: nothing to persist
 
     @classmethod
     def clear_hotkey(cls, name: str, key: Optional[str] = None) -> None:

@@ -25,6 +25,14 @@ GENERIC_PATH = _REPO / "m3trik" / "package-manager.bat"
 # so it ships in the wheel — after a bare pip install there is no m3trik/ to fall back to.
 MIRROR_PATH = WRAPPER_PATH.parent / "package-manager.bat"
 
+# The smoke test's wrapper cold-starts its own ``mayapy`` to detect Maya. That is
+# fast in isolation but can be slow under load (a full-suite run launches its own
+# Maya, and cold interpreter starts on a busy/laptop machine are slow — see the
+# root CLAUDE.md session-safety note). A tight timeout flaked the whole suite on a
+# TimeoutExpired that was purely contention, not a wrapper hang; give real headroom
+# while still catching a genuine hang.
+SMOKE_TIMEOUT = 120
+
 
 def _norm_eol(data: bytes) -> bytes:
     return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
@@ -247,7 +255,7 @@ class TestSmokeRun(unittest.TestCase):
         proc = subprocess.run(
             ["cmd.exe", "/c", str(WRAPPER_PATH), self.maya_version],
             input=("\n".join(["0"] + [""] * 5) + "\n").encode("utf-8"),
-            capture_output=True, timeout=40, cwd=str(WRAPPER_PATH.parent),
+            capture_output=True, timeout=SMOKE_TIMEOUT, cwd=str(WRAPPER_PATH.parent),
         )
         out = (proc.stdout or b"").decode("utf-8", errors="replace")
         err = (proc.stderr or b"").decode("utf-8", errors="replace")

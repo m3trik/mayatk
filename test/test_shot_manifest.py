@@ -96,6 +96,25 @@ def _fresh_store():
     return store
 
 
+def _mock_undo_info(test_case):
+    """Neutralize undo bracketing during a controller ``build()`` WITHOUT
+    leaking the mock.
+
+    Under mayapy, ``maya.cmds`` is the real shared module — a bare
+    ``_cmds.undoInfo = MagicMock()`` (the old pattern here) permanently
+    replaced the real function for every test module that runs later in the
+    suite: their undo chunks silently stopped opening and ``cmds.undo()``
+    reverted only single commands (test_skinning's undo test failed exactly
+    this way under ``--all``). ``patch.object`` restores the original (or
+    removes the attribute if it was genuinely missing) when the test ends.
+    """
+    import maya.cmds as _cmds
+
+    patcher = patch.object(_cmds, "undoInfo", MagicMock(), create=True)
+    patcher.start()
+    test_case.addCleanup(patcher.stop)
+
+
 # ---------------------------------------------------------------------------
 # Tests: detect_behaviors
 # ---------------------------------------------------------------------------
@@ -1042,13 +1061,7 @@ class TestBuildDetectionMode(unittest.TestCase, _ControllerHarness):
         )
         mock_manifest_cls.return_value = mock_builder
 
-        # Ensure maya.cmds mock has undoInfo (may be lost when
-        # test_sequencer.py runs first and clobbers sys.modules)
-        import maya.cmds as _cmds
-
-        if not hasattr(_cmds, "undoInfo") or not callable(_cmds.undoInfo):
-
-            _cmds.undoInfo = MagicMock()
+        _mock_undo_info(self)
 
         self.ctrl.build()
 
@@ -1183,11 +1196,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         mock_builder = MagicMock()
         mock_manifest_cls.return_value = mock_builder
 
-        import maya.cmds as _cmds
-
-        if not hasattr(_cmds, "undoInfo") or not callable(_cmds.undoInfo):
-
-            _cmds.undoInfo = MagicMock()
+        _mock_undo_info(self)
 
         self.ctrl._cached_gaps = None
         self.ctrl.build()
@@ -1224,11 +1233,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         mock_builder = MagicMock()
         mock_manifest_cls.return_value = mock_builder
 
-        import maya.cmds as _cmds
-
-        if not hasattr(_cmds, "undoInfo") or not callable(_cmds.undoInfo):
-
-            _cmds.undoInfo = MagicMock()
+        _mock_undo_info(self)
 
         self.ctrl._cached_gaps = None
         self.ctrl.build()
@@ -1289,11 +1294,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         )
         mock_manifest_cls.return_value = mock_builder
 
-        import maya.cmds as _cmds
-
-        if not hasattr(_cmds, "undoInfo") or not callable(_cmds.undoInfo):
-
-            _cmds.undoInfo = MagicMock()
+        _mock_undo_info(self)
 
         self.ctrl._cached_gaps = None
         self.ctrl.build()
@@ -1733,7 +1734,7 @@ class TestIncrementalBuild(unittest.TestCase, _ControllerHarness):
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
         mock_cls.return_value = mock_builder
-        import maya.cmds as _cmds; _cmds.undoInfo = MagicMock()
+        _mock_undo_info(self)
 
         self.ctrl.build()
 
@@ -1792,7 +1793,7 @@ class TestCsvModeRespectsDetectionMode(unittest.TestCase, _ControllerHarness):
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
         mock_cls.return_value = mock_builder
-        import maya.cmds as _cmds; _cmds.undoInfo = MagicMock()
+        _mock_undo_info(self)
 
         with patch(
             "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
@@ -2055,7 +2056,7 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
         mock_cls.return_value = mock_builder
-        import maya.cmds as _cmds; _cmds.undoInfo = MagicMock()
+        _mock_undo_info(self)
 
         # CSV order: A01, A02, B01(new), A03
         self.ctrl._steps = _make_steps("A01", "A02", "B01", "A03")
@@ -2075,7 +2076,7 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
         mock_cls.return_value = mock_builder
-        import maya.cmds as _cmds; _cmds.undoInfo = MagicMock()
+        _mock_undo_info(self)
 
         # CSV order: A01, B01(new), B02(new), A02, A03
         self.ctrl._steps = _make_steps("A01", "B01", "B02", "A02", "A03")
@@ -2095,7 +2096,7 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
         mock_cls.return_value = mock_builder
-        import maya.cmds as _cmds; _cmds.undoInfo = MagicMock()
+        _mock_undo_info(self)
 
         # CSV order: B01(new), A01, A02, A03
         self.ctrl._steps = _make_steps("B01", "A01", "A02", "A03")

@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.12.77"
+__version__ = "0.12.79"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -147,6 +147,7 @@ DEFAULT_INCLUDE = {
     # Rig utils
     "rig_utils.controls": "Controls",
     "rig_utils.shadow_rig": "ShadowRig",
+    "rig_utils.skinning": ["SkinUtils", "CurveWeights"],
     # UV utils
     "uv_utils.rizom_bridge._rizom_bridge": "RizomUVBridge",
     # Scene exporter

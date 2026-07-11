@@ -331,10 +331,7 @@ class WheelRigSlots:
         self.ui.on_close.connect(self.cleanup)
 
         # 3) Setup Tooltips
-        self.ui.b000.setToolTip(
-            "<b>Rig Rotation</b><br>"
-            "Select wheel objects, then the driver (last), and click to create or update the rig."
-        )
+        self._init_tooltips()
 
         # 4) World-space mode flag (toggled via header menu)
         self._use_world_space = False
@@ -346,13 +343,16 @@ class WheelRigSlots:
             "QCheckBox",
             setText="World Space (decomposeMatrix)",
             setObjectName="chk_world_space",
-            setToolTip=(
-                "When checked, wheel rotation reads from a decomposeMatrix\n"
-                "node connected to the driver's worldMatrix.  This captures\n"
-                "movement from parent transforms, not just local translate.\n\n"
-                "When unchecked (default), the expression reads the driver's\n"
-                "local translate directly \u2014 simpler and sufficient when the\n"
-                "driver itself is being animated."
+            setToolTip=fmt(
+                title="World Space (decomposeMatrix)",
+                bullets=[
+                    "<b>On</b> \u2014 rotation reads a decomposeMatrix on the "
+                    "driver's <i>worldMatrix</i>, so movement inherited from "
+                    "parent transforms is captured.",
+                    "<b>Off</b> (default) \u2014 reads the driver's local "
+                    "translate directly. Simpler, and sufficient when the "
+                    "driver itself is animated.",
+                ],
             ),
             setChecked=False,
         )
@@ -501,13 +501,81 @@ class WheelRigSlots:
 
         self.ui.s000.setText(str(round(wheel_size, 3)))
 
+    def _init_tooltips(self):
+        """Set the polished (uitk ``fmt``) tooltips for every option and action."""
+        ui = self.ui
+
+        ui.txt000.setToolTip(
+            fmt(
+                title="Rig Name",
+                body="Base name for the expression (and its decomposeMatrix "
+                "node, in World Space mode) that this rig creates.",
+                notes=["Empty = derived from the driver (control) name."],
+            )
+        )
+        ui.s000.setToolTip(
+            fmt(
+                title="Wheel Height",
+                body="Wheel diameter, used to convert the driver's travel into "
+                "rotation — a larger wheel turns slower over the same distance.",
+                notes=[
+                    "Use the <b>Get Wheel Size</b> option box to auto-detect "
+                    "this from the selected object's bounding box.",
+                ],
+            )
+        )
+        ui.cmb000.setToolTip(
+            fmt(
+                title="Movement → Rotation Axis",
+                body="Which translation axis drives which rotation axis.",
+                rows=[
+                    ("Move X → Rotate Z", "sideways X travel rolls on Z"),
+                    ("Move Y → Rotate Y", "vertical Y travel spins on Y"),
+                    ("Move Z → Rotate X", "forward Z travel pitches on X (default)"),
+                ],
+            )
+        )
+        ui.chk010.setToolTip(
+            fmt(
+                title="Freeze Transforms",
+                body="Freezes <b>translation</b> on the driver and wheel(s) "
+                "before rigging, so travel is measured from a clean zero.",
+                notes=[
+                    "Rotation is preserved (needed for mirrored-wheel "
+                    "auto-flip).",
+                ],
+            )
+        )
+        ui.b000.setToolTip(
+            fmt(
+                title="Rig Rotation",
+                body="Creates (or updates) the expression that spins the "
+                "wheel(s) from the driver's movement.",
+                steps=[
+                    "Select one or more <b>wheel</b> objects.",
+                    "<b>Shift</b>-select the <b>driver / control</b> last.",
+                    "Press <b>Rig Rotation</b>.",
+                ],
+                notes=[
+                    "Freeze or correctly set transforms first (or tick "
+                    "<b>Freeze Transforms</b>).",
+                    "Re-running on the same driver updates the existing "
+                    "expression in place — no duplicates.",
+                ],
+            )
+        )
+
     def s000_init(self, widget):
         """Initialize the wheel height slider."""
         widget.option_box.menu.add(
             "QPushButton",
             setText="Get Wheel Size",
             setObjectName="b010",
-            setToolTip="Determine wheel diameter from the selected object's bounding box,\nbased on the current movement axis.",
+            setToolTip=fmt(
+                title="Get Wheel Size",
+                body="Sets <b>Wheel Height</b> from the selected object's "
+                "bounding box, based on the current movement axis.",
+            ),
         )
         widget.option_box.menu.b010.clicked.connect(self.set_wheel_height)
 

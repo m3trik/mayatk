@@ -5,7 +5,7 @@ Test Suite for mayatk.env_utils.reference_manager module
 """
 import unittest
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, PropertyMock
 import mayatk.env_utils.reference_manager as ref_mgr
 
 
@@ -893,6 +893,83 @@ class TestWorkspaceHistory(unittest.TestCase):
             controller2.ui.cmb000.itemText(controller2.ui.cmb000.currentIndex()),
             "ProjectC",
         )
+
+
+class TestUpdateCurrentDirNormalization(unittest.TestCase):
+    """``update_current_dir`` must treat a normalization-only difference as
+    *unchanged*.
+
+    Regression: ``current_working_dir`` comes from Maya's
+    ``cmds.workspace(q=True, rd=True)`` (forward slashes + trailing separator).
+    Comparing it raw against the ``os.path.normpath``-ed text input read as
+    "changed" on every startup, firing a redundant ``_update_workspace_combo()``
+    on top of the one from ``cmb000_init`` — which double-logged the
+    "No workspaces in ..." warning when the folder had none.
+    Added: 2026-07-10
+    """
+
+    def setUp(self):
+        self.slot = MockSlot()
+        self.slot.ui.settings = MockSettings()
+        self.slot.ui.txt000 = MockLineEdit("")
+        self.slot.ui.cmb000 = MockComboBox()
+        self.slot.ui.tbl000 = QtWidgets.QTableWidget()
+
+        self.controller = ref_mgr.ReferenceManagerController.__new__(
+            ref_mgr.ReferenceManagerController
+        )
+        self.controller.slot = self.slot
+        self.controller.sb = self.slot.sb
+        self.controller.ui = self.slot.ui
+        self.controller.logger = MockLogger()
+        self.controller._last_dir_valid = None
+        self.controller._updating_directory = False
+        self.controller._recursive_search = True  # read by the debug log line
+        # Spy on the populate + footer so we can assert exact call counts.
+        self.controller._update_workspace_combo = MagicMock()
+        self.controller._update_workspace_footer = MagicMock()
+
+    def _run(self, txt_text, current_working_dir):
+        """Drive update_current_dir with txt000=txt_text and a fixed cwd."""
+        self.controller.ui.txt000.setText(txt_text)
+        with patch.object(
+            ref_mgr.ReferenceManagerController,
+            "current_working_dir",
+            new_callable=PropertyMock,
+        ) as cwd, patch("os.path.isdir", return_value=True):
+            cwd.return_value = current_working_dir
+            self.controller.update_current_dir()
+
+    def test_trailing_separator_is_not_a_change(self):
+        """A trailing separator alone (Maya's rd path) must not repopulate.
+
+        Cross-platform: ``os.path.normpath`` strips the trailing separator on
+        every OS, so this holds under both nt and posix path semantics.
+        """
+        self._run("O:/Projects/shot_010/", "O:/Projects/shot_010")
+        self.controller._update_workspace_combo.assert_not_called()
+
+    @unittest.skipUnless(os.name == "nt", "Windows path semantics (case + \\)")
+    def test_maya_forwardslash_vs_windows_backslash_not_changed(self):
+        """The real regression: Maya's forward-slash/trailing-sep ``rd`` path
+        vs the ``normpath``-ed backslash text must read as *unchanged*.
+
+        Windows-only by nature — the bug exists because Maya returns forward
+        slashes while the OS is case-insensitive and backslash-separated, which
+        ``os.path.normcase(os.path.normpath(...))`` reconciles. On POSIX these
+        would be genuinely different paths.
+        """
+        # cwd from cmds.workspace(rd=True); txt000 as the user/os would spell it
+        self._run("O:\\Projects\\shot_010", "O:/Projects/Shot_010/")
+        self.controller._update_workspace_combo.assert_not_called()
+
+    def test_genuinely_different_dir_triggers_repopulate(self):
+        """A real directory change must still repopulate the combo (guard).
+
+        Cross-platform: different basenames differ under any path semantics.
+        """
+        self._run("O:/Projects/shot_020", "O:/Projects/shot_010")
+        self.controller._update_workspace_combo.assert_called_once()
 
 
 if __name__ == "__main__":

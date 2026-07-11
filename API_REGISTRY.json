@@ -1,7 +1,7 @@
 {
   "name": "mayatk",
   "source_root": "mayatk/mayatk",
-  "generated_at": "2026-07-09",
+  "generated_at": "2026-07-10",
   "modules": [
     {
       "relpath": "anim_utils/_anim_utils.py",
@@ -6660,7 +6660,7 @@
           "kind": "function",
           "signature": "() -> None",
           "summary": "",
-          "line": 970,
+          "line": 990,
           "deprecated": false
         },
         {
@@ -6669,7 +6669,7 @@
           "kind": "function",
           "signature": "(widget, results, *, object_mode: bool = False, defer: bool = False) -> None",
           "summary": "Select the operation's result(s) — or explicitly deselect them — per a",
-          "line": 974,
+          "line": 994,
           "deprecated": false
         }
       ],
@@ -6704,7 +6704,7 @@
               "kind": "method",
               "signature": "(self, node: str, attr: str) -> None",
               "summary": "",
-              "line": 225,
+              "line": 233,
               "deprecated": false
             },
             {
@@ -6713,7 +6713,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 334,
+              "line": 345,
               "deprecated": false
             }
           ]
@@ -6721,7 +6721,7 @@
         {
           "name": "Preview",
           "summary": "Hermetic preview orchestrator (H1).",
-          "line": 472,
+          "line": 492,
           "bases": [],
           "members": [
             {
@@ -6730,7 +6730,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "",
-              "line": 489,
+              "line": 509,
               "deprecated": false
             },
             {
@@ -6739,7 +6739,7 @@
               "kind": "method",
               "signature": "(self, enable_on_show: bool, disable_on_hide: bool) -> None",
               "summary": "",
-              "line": 595,
+              "line": 615,
               "deprecated": false
             },
             {
@@ -6748,7 +6748,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 610,
+              "line": 630,
               "deprecated": false
             },
             {
@@ -6757,7 +6757,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 614,
+              "line": 634,
               "deprecated": false
             },
             {
@@ -6766,7 +6766,7 @@
               "kind": "method",
               "signature": "(self, state: bool) -> None",
               "summary": "",
-              "line": 619,
+              "line": 639,
               "deprecated": false
             },
             {
@@ -6775,7 +6775,7 @@
               "kind": "method",
               "signature": "(self, objects: List[Any]) -> bool",
               "summary": "",
-              "line": 671,
+              "line": 691,
               "deprecated": false
             },
             {
@@ -6784,7 +6784,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 681,
+              "line": 701,
               "deprecated": false
             },
             {
@@ -6793,7 +6793,7 @@
               "kind": "method",
               "signature": "(self, *args) -> None",
               "summary": "Roll back the previous preview and re-run perform_operation.",
-              "line": 806,
+              "line": 826,
               "deprecated": false
             },
             {
@@ -6802,7 +6802,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Roll back the preview without committing.",
-              "line": 831,
+              "line": 851,
               "deprecated": false
             },
             {
@@ -6811,7 +6811,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Commit: rollback the hermetic version, then replay under undo.",
-              "line": 858,
+              "line": 878,
               "deprecated": false
             },
             {
@@ -6820,7 +6820,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 946,
+              "line": 966,
               "deprecated": false
             },
             {
@@ -6829,7 +6829,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "",
-              "line": 959,
+              "line": 979,
               "deprecated": false
             },
             {
@@ -6838,7 +6838,7 @@
               "kind": "property",
               "signature": "(self) -> int",
               "summary": "",
-              "line": 963,
+              "line": 983,
               "deprecated": false
             },
             {
@@ -6847,7 +6847,7 @@
               "kind": "method",
               "signature": "(self) -> List[str]",
               "summary": "",
-              "line": 966,
+              "line": 986,
               "deprecated": false
             }
           ]
@@ -7193,7 +7193,7 @@
               "kind": "property",
               "signature": "(self) -> List[str]",
               "summary": "Return the currently selected objects, or an empty list if no objects are selected.",
-              "line": 449,
+              "line": 451,
               "deprecated": false
             },
             {
@@ -7202,7 +7202,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[object]",
               "summary": "Return the currently selected button in the button group.",
-              "line": 457,
+              "line": 459,
               "deprecated": false
             },
             {
@@ -7211,7 +7211,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[Tuple[float, float, float]]",
               "summary": "Return the color of the selected button, or None if no button is selected.",
-              "line": 465,
+              "line": 467,
               "deprecated": false
             },
             {
@@ -7220,7 +7220,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Reset Colors",
-              "line": 475,
+              "line": 477,
               "deprecated": false
             },
             {
@@ -7229,7 +7229,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Apply selected color to selected objects.",
-              "line": 485,
+              "line": 487,
               "deprecated": false
             },
             {
@@ -7238,7 +7238,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Select objects by the currently selected color.",
-              "line": 499,
+              "line": 501,
               "deprecated": false
             },
             {
@@ -7247,7 +7247,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Pick up the selected object's wireframe color into the active color button (eyedropper).",
-              "line": 517,
+              "line": 519,
               "deprecated": false
             }
           ]
@@ -7353,7 +7353,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Explode button",
-              "line": 264,
+              "line": 266,
               "deprecated": false
             },
             {
@@ -7362,7 +7362,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Un-explode selected button",
-              "line": 268,
+              "line": 270,
               "deprecated": false
             },
             {
@@ -7371,7 +7371,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Un-explode all button",
-              "line": 272,
+              "line": 274,
               "deprecated": false
             },
             {
@@ -7380,7 +7380,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Toggle Exlode",
-              "line": 276,
+              "line": 278,
               "deprecated": false
             }
           ]
@@ -7731,7 +7731,7 @@
               "kind": "method",
               "signature": "(self, objects, contract)",
               "summary": "",
-              "line": 222,
+              "line": 224,
               "deprecated": false
             }
           ]
@@ -7916,7 +7916,7 @@
               "kind": "method",
               "signature": "(self, objects, contract)",
               "summary": "",
-              "line": 122,
+              "line": 124,
               "deprecated": false
             }
           ]
@@ -8202,7 +8202,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Populate the category filter combobox.",
-              "line": 208,
+              "line": 210,
               "deprecated": false
             },
             {
@@ -8211,7 +8211,7 @@
               "kind": "method",
               "signature": "(self, index)",
               "summary": "Category filter changed — refresh the table.",
-              "line": 219,
+              "line": 221,
               "deprecated": false
             },
             {
@@ -8220,7 +8220,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "One-time table setup, then (re)populate.",
-              "line": 227,
+              "line": 229,
               "deprecated": false
             }
           ]
@@ -8273,7 +8273,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Dict[str, str]",
               "summary": "Discover every ``m_*`` macro callable, mapped to its annotation.",
-              "line": 193,
+              "line": 214,
               "deprecated": false
             },
             {
@@ -8282,7 +8282,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> str",
               "summary": "Humanize a macro name for display, e.g.",
-              "line": 221,
+              "line": 242,
               "deprecated": false
             },
             {
@@ -8291,7 +8291,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> str",
               "summary": "Default category for a macro, derived from the ``*Macros`` mixin that",
-              "line": 239,
+              "line": 260,
               "deprecated": false
             },
             {
@@ -8300,7 +8300,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Sorted distinct default categories across all discoverable macros.",
-              "line": 256,
+              "line": 277,
               "deprecated": false
             },
             {
@@ -8309,7 +8309,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> str",
               "summary": "Return a macro's full (dedented) docstring — the single source of",
-              "line": 268,
+              "line": 289,
               "deprecated": false
             },
             {
@@ -8318,7 +8318,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Dict[str, dict]",
               "summary": "Return the *live* key + category for every available macro.",
-              "line": 283,
+              "line": 304,
               "deprecated": false
             },
             {
@@ -8327,7 +8327,7 @@
               "kind": "classmethod",
               "signature": "(cls, bindings: Dict[str, dict]) -> None",
               "summary": "Apply a binding set ``{name: {\"key\", \"cat\"}}``.",
-              "line": 325,
+              "line": 366,
               "deprecated": false
             },
             {
@@ -8336,7 +8336,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, key: Optional[str] = None) -> None",
               "summary": "Unbind ``name``'s hotkey (the runtime command itself is kept).",
-              "line": 342,
+              "line": 457,
               "deprecated": false
             },
             {
@@ -8345,7 +8345,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, key: Optional[str] = None) -> None",
               "summary": "Clear ``name``'s hotkey and delete its (non-default) runtime command.",
-              "line": 368,
+              "line": 483,
               "deprecated": false
             },
             {
@@ -8354,7 +8354,7 @@
               "kind": "classmethod",
               "signature": "(cls, bindings: Dict[str, dict]) -> Dict[str, List[str]]",
               "summary": "Return ``{normalized_key: [macro, ...]}`` for keys bound more than once.",
-              "line": 382,
+              "line": 497,
               "deprecated": false
             },
             {
@@ -8363,7 +8363,7 @@
               "kind": "classmethod",
               "signature": "(cls, sequence: str) -> str",
               "summary": "Convert a Qt key-sequence string (``\"Ctrl+Shift+I\"``) to a Maya token.",
-              "line": 427,
+              "line": 542,
               "deprecated": false
             },
             {
@@ -8372,7 +8372,7 @@
               "kind": "classmethod",
               "signature": "(cls, key: str) -> str",
               "summary": "Convert a Maya key token (``\"ctl+sht+i\"``) to a Qt key-sequence string.",
-              "line": 451,
+              "line": 566,
               "deprecated": false
             },
             {
@@ -8381,7 +8381,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Return all preset names (built-in + user, user shadows built-in).",
-              "line": 484,
+              "line": 599,
               "deprecated": false
             },
             {
@@ -8390,7 +8390,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> Dict[str, dict]",
               "summary": "Return the binding set stored under *name* (``_meta`` stripped).",
-              "line": 489,
+              "line": 604,
               "deprecated": false
             },
             {
@@ -8399,7 +8399,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, bindings: Optional[Dict[str, dict]] = None) -> str",
               "summary": "Save *bindings* (default: the current bindings) as user preset *name*.",
-              "line": 495,
+              "line": 610,
               "deprecated": false
             },
             {
@@ -8408,7 +8408,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> bool",
               "summary": "Delete a *user* preset (built-ins are read-only).",
-              "line": 512,
+              "line": 627,
               "deprecated": false
             },
             {
@@ -8417,7 +8417,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[str]",
               "summary": "The last-selected/applied preset name, or ``None``.",
-              "line": 517,
+              "line": 632,
               "deprecated": false
             },
             {
@@ -8426,7 +8426,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: Optional[str]) -> None",
               "summary": "Set (or clear, with ``None``) the active-preset pointer.",
-              "line": 522,
+              "line": 637,
               "deprecated": false
             },
             {
@@ -8435,7 +8435,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: Optional[str] = None) -> None",
               "summary": "Apply a saved preset/template's bindings to Maya on demand.",
-              "line": 527,
+              "line": 642,
               "deprecated": false
             }
           ]
@@ -8443,7 +8443,7 @@
         {
           "name": "DisplayMacros",
           "summary": "",
-          "line": 556,
+          "line": 671,
           "bases": [],
           "members": [
             {
@@ -8452,7 +8452,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle Component Id Display through vertices, edges, faces, UVs, and off.",
-              "line": 560,
+              "line": 675,
               "deprecated": false
             },
             {
@@ -8461,7 +8461,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle face normals, vertex normals, tangents, and off.",
-              "line": 596,
+              "line": 711,
               "deprecated": false
             },
             {
@@ -8470,7 +8470,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle Soft Edge Display.",
-              "line": 658,
+              "line": 773,
               "deprecated": false
             },
             {
@@ -8479,7 +8479,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle visibility of the selected objects, keeping them selected.",
-              "line": 677,
+              "line": 792,
               "deprecated": false
             },
             {
@@ -8488,7 +8488,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle the display of UV border edges for the given objects.",
-              "line": 687,
+              "line": 802,
               "deprecated": false
             },
             {
@@ -8497,7 +8497,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Toggle Back-Face Culling on selected objects, or on all objects if none are selected.",
-              "line": 717,
+              "line": 832,
               "deprecated": false
             },
             {
@@ -8506,7 +8506,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Isolate the current selection in the active 3D viewport.",
-              "line": 742,
+              "line": 857,
               "deprecated": false
             },
             {
@@ -8515,7 +8515,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Cycle the display state of all selected objects based on the first object's state.",
-              "line": 763,
+              "line": 878,
               "deprecated": false
             },
             {
@@ -8524,7 +8524,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Toggle Wireframe Display on selected objects, or on all objects if none are selected.",
-              "line": 817,
+              "line": 932,
               "deprecated": false
             },
             {
@@ -8533,7 +8533,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggle grid and image plane visibility.",
-              "line": 838,
+              "line": 953,
               "deprecated": false
             },
             {
@@ -8542,7 +8542,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Frame the selection, cycling zoom level on repeated presses.",
-              "line": 861,
+              "line": 976,
               "deprecated": false
             },
             {
@@ -8551,7 +8551,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects) -> None",
               "summary": "Toggle smooth mesh preview.",
-              "line": 920,
+              "line": 1035,
               "deprecated": false
             },
             {
@@ -8560,7 +8560,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles the wireframe display state.",
-              "line": 960,
+              "line": 1075,
               "deprecated": false
             },
             {
@@ -8569,7 +8569,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle the viewport's default-material override.",
-              "line": 992,
+              "line": 1107,
               "deprecated": false
             },
             {
@@ -8578,7 +8578,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Toggles viewport display mode between wireframe, smooth shaded with textures off,",
-              "line": 1022,
+              "line": 1137,
               "deprecated": false
             },
             {
@@ -8587,7 +8587,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Toggles viewport lighting between different states: default, all lights, active lights,",
-              "line": 1071,
+              "line": 1186,
               "deprecated": false
             }
           ]
@@ -8595,7 +8595,7 @@
         {
           "name": "EditMacros",
           "summary": "",
-          "line": 1111,
+          "line": 1226,
           "bases": [],
           "members": [
             {
@@ -8604,7 +8604,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None)",
               "summary": "Group the given objects (or selection), center the pivot, and rename the group.",
-              "line": 1116,
+              "line": 1231,
               "deprecated": false
             },
             {
@@ -8613,7 +8613,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)",
               "summary": "Combine multiple meshes.",
-              "line": 1127,
+              "line": 1242,
               "deprecated": false
             },
             {
@@ -8622,7 +8622,7 @@
               "kind": "staticmethod",
               "signature": "(objects, repair_mesh=True, keep_boolean=True, **kwargs)",
               "summary": "Perform a boolean operation on two meshes using cmds, managing shorthand and full parameter names d…",
-              "line": 1155,
+              "line": 1270,
               "deprecated": false
             },
             {
@@ -8631,7 +8631,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle lock/unlock vertex normals.",
-              "line": 1199,
+              "line": 1314,
               "deprecated": false
             },
             {
@@ -8640,7 +8640,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Paste and rename by removing 'pasted__' prefix and reference file names,",
-              "line": 1239,
+              "line": 1354,
               "deprecated": false
             },
             {
@@ -8649,7 +8649,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Enable the multi-component selection mask.",
-              "line": 1306,
+              "line": 1421,
               "deprecated": false
             },
             {
@@ -8658,7 +8658,7 @@
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.001) -> None",
               "summary": "Merge vertices within a small distance tolerance.",
-              "line": 1321,
+              "line": 1436,
               "deprecated": false
             }
           ]
@@ -8666,7 +8666,7 @@
         {
           "name": "SelectionMacros",
           "summary": "",
-          "line": 1367,
+          "line": 1482,
           "bases": [],
           "members": [
             {
@@ -8675,7 +8675,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set object selection mask.",
-              "line": 1371,
+              "line": 1486,
               "deprecated": false
             },
             {
@@ -8684,7 +8684,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set vertex selection mask.",
-              "line": 1379,
+              "line": 1494,
               "deprecated": false
             },
             {
@@ -8693,7 +8693,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set edge selection mask.",
-              "line": 1385,
+              "line": 1500,
               "deprecated": false
             },
             {
@@ -8702,7 +8702,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set face selection mask.",
-              "line": 1391,
+              "line": 1506,
               "deprecated": false
             },
             {
@@ -8711,7 +8711,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the current selection of geometry or components.",
-              "line": 1397,
+              "line": 1512,
               "deprecated": false
             },
             {
@@ -8720,7 +8720,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle selectability of the given objects.",
-              "line": 1415,
+              "line": 1530,
               "deprecated": false
             },
             {
@@ -8729,7 +8729,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles between UV shell and UV component selection.",
-              "line": 1474,
+              "line": 1589,
               "deprecated": false
             },
             {
@@ -8738,7 +8738,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the component selection on the currently selected objects.",
-              "line": 1498,
+              "line": 1613,
               "deprecated": false
             }
           ]
@@ -8746,7 +8746,7 @@
         {
           "name": "UiMacros",
           "summary": "",
-          "line": 1530,
+          "line": 1645,
           "bases": [],
           "members": [
             {
@@ -8755,7 +8755,7 @@
               "kind": "staticmethod",
               "signature": "(toggle_menu: bool = True, toggle_panels: bool = True) -> None",
               "summary": "Toggle UI toolbars and menu bar in sync.",
-              "line": 1534,
+              "line": 1649,
               "deprecated": false
             }
           ]
@@ -8763,7 +8763,7 @@
         {
           "name": "AnimationMacros",
           "summary": "",
-          "line": 1566,
+          "line": 1681,
           "bases": [],
           "members": [
             {
@@ -8772,7 +8772,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 1571,
+              "line": 1686,
               "deprecated": false
             },
             {
@@ -8781,7 +8781,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Un-set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 1581,
+              "line": 1696,
               "deprecated": false
             }
           ]
@@ -8789,7 +8789,7 @@
         {
           "name": "Macros",
           "summary": "",
-          "line": 1593,
+          "line": 1708,
           "bases": [
             "MacroManager",
             "DisplayMacros",
@@ -8927,7 +8927,7 @@
               "kind": "method",
               "signature": "(self, objects, contract)",
               "summary": "",
-              "line": 104,
+              "line": 106,
               "deprecated": false
             }
           ]
@@ -9043,7 +9043,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "Get current valid suffixes from tb003 widget fields.",
-              "line": 78,
+              "line": 80,
               "deprecated": false
             },
             {
@@ -9052,7 +9052,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Find",
-              "line": 97,
+              "line": 99,
               "deprecated": false
             },
             {
@@ -9061,7 +9061,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Find: filter/select scene objects whose name matches the search pattern.",
-              "line": 127,
+              "line": 130,
               "deprecated": false
             },
             {
@@ -9070,7 +9070,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Rename",
-              "line": 165,
+              "line": 168,
               "deprecated": false
             },
             {
@@ -9079,7 +9079,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Rename: rename matched objects (find → replace, with regex / suffix options).",
-              "line": 190,
+              "line": 194,
               "deprecated": false
             },
             {
@@ -9088,7 +9088,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Convert Case",
-              "line": 231,
+              "line": 235,
               "deprecated": false
             },
             {
@@ -9097,7 +9097,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Convert Case",
-              "line": 241,
+              "line": 245,
               "deprecated": false
             },
             {
@@ -9106,7 +9106,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Suffix By Location",
-              "line": 254,
+              "line": 258,
               "deprecated": false
             },
             {
@@ -9115,7 +9115,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Suffix By Location",
-              "line": 296,
+              "line": 300,
               "deprecated": false
             },
             {
@@ -9124,7 +9124,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Strip Chars",
-              "line": 321,
+              "line": 325,
               "deprecated": false
             },
             {
@@ -9133,7 +9133,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Strip Chars: remove a number of leading/trailing characters from the selected names.",
-              "line": 339,
+              "line": 343,
               "deprecated": false
             },
             {
@@ -9142,7 +9142,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Suffix By Type",
-              "line": 348,
+              "line": 352,
               "deprecated": false
             },
             {
@@ -9151,7 +9151,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Suffix By Type",
-              "line": 433,
+              "line": 437,
               "deprecated": false
             }
           ]
@@ -10175,7 +10175,7 @@
               "kind": "staticmethod",
               "signature": "(include_known: bool = True) -> None",
               "summary": "Refresh every producer's ``data_export`` channel once, right now.",
-              "line": 259,
+              "line": 264,
               "deprecated": false
             },
             {
@@ -10184,7 +10184,7 @@
               "kind": "staticmethod",
               "signature": "(name: str, prepare: Callable[[], Any]) -> None",
               "summary": "Run *prepare* before every FBX export this session (installs the hook).",
-              "line": 291,
+              "line": 296,
               "deprecated": false
             },
             {
@@ -10193,7 +10193,7 @@
               "kind": "staticmethod",
               "signature": "(name: str) -> None",
               "summary": "Remove a preparer;",
-              "line": 305,
+              "line": 310,
               "deprecated": false
             },
             {
@@ -10202,7 +10202,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Realize declared takes on **every** FBX export — shot-agnostic, no preparer.",
-              "line": 311,
+              "line": 316,
               "deprecated": false
             },
             {
@@ -10211,7 +10211,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear the explicit enable;",
-              "line": 324,
+              "line": 329,
               "deprecated": false
             },
             {
@@ -10220,7 +10220,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Return whether the auto-takes export hook is currently registered.",
-              "line": 381,
+              "line": 386,
               "deprecated": false
             }
           ]
@@ -11220,7 +11220,7 @@
           "kind": "function",
           "signature": "(**kwargs)",
           "summary": "Wrapper for MayaConnection.open_command_ports.",
-          "line": 1213,
+          "line": 1231,
           "deprecated": false
         },
         {
@@ -11229,7 +11229,7 @@
           "kind": "function",
           "signature": "(mel_port=7001, python_port=7002)",
           "summary": "Wrapper for MayaConnection.toggle_command_ports.",
-          "line": 1218,
+          "line": 1236,
           "deprecated": false
         },
         {
@@ -11238,7 +11238,7 @@
           "kind": "function",
           "signature": "(mel_start=7001, python_start=7002, max_offset=50, tag_window=True)",
           "summary": "Wrapper for MayaConnection.open_available_command_ports.",
-          "line": 1223,
+          "line": 1241,
           "deprecated": false
         }
       ],
@@ -11318,7 +11318,7 @@
               "kind": "staticmethod",
               "signature": "(port: int) -> Optional[int]",
               "summary": "Find the process ID (PID) listening on the given TCP port.",
-              "line": 591,
+              "line": 600,
               "deprecated": false
             },
             {
@@ -11327,7 +11327,7 @@
               "kind": "staticmethod",
               "signature": "(port: Optional[int] = None, pid: Optional[int] = None, force: bool = False) -> bool",
               "summary": "Close a Maya instance identified by Port or PID.",
-              "line": 622,
+              "line": 631,
               "deprecated": false
             },
             {
@@ -11336,7 +11336,7 @@
               "kind": "staticmethod",
               "signature": "(start_port: int = 7002, max_check: int = 100) -> int",
               "summary": "Find an available port starting from start_port.",
-              "line": 658,
+              "line": 667,
               "deprecated": false
             },
             {
@@ -11345,7 +11345,7 @@
               "kind": "method",
               "signature": "(self, launch: bool = True, app_path: Optional[str] = None, launch_args: Optional[List[str]] = None) -> bool",
               "summary": "Verify the port is reachable;",
-              "line": 757,
+              "line": 775,
               "deprecated": false
             },
             {
@@ -11354,7 +11354,7 @@
               "kind": "method",
               "signature": "(self, code: str, timeout: int = 30, capture_output: bool = False, wait_for_response: bool = False, output_callback: Optional[Callable[[str], None]] = None) -> Optional[str]",
               "summary": "Execute Python code in Maya.",
-              "line": 852,
+              "line": 870,
               "deprecated": false
             },
             {
@@ -11363,7 +11363,7 @@
               "kind": "method",
               "signature": "(self, last_n_chars: Optional[int] = None) -> Optional[str]",
               "summary": "Get the full content of the Maya Script Editor history.",
-              "line": 931,
+              "line": 949,
               "deprecated": false
             },
             {
@@ -11372,7 +11372,7 @@
               "kind": "method",
               "signature": "(self, code: str, timeout: int = 30, mirror_to_script_output: bool = False) -> tuple[Optional[str], Optional[str]]",
               "summary": "Execute code and capture the Script Editor output generated by the execution.",
-              "line": 963,
+              "line": 981,
               "deprecated": false
             },
             {
@@ -11381,7 +11381,7 @@
               "kind": "method",
               "signature": "(self) -> bool",
               "summary": "Clear the Maya Script Editor history.",
-              "line": 1027,
+              "line": 1045,
               "deprecated": false
             },
             {
@@ -11390,7 +11390,7 @@
               "kind": "method",
               "signature": "(self, force: bool = False) -> None",
               "summary": "Shut down the connected Maya session and reset state.",
-              "line": 1156,
+              "line": 1174,
               "deprecated": false
             },
             {
@@ -11399,7 +11399,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Disconnect from Maya.",
-              "line": 1191,
+              "line": 1209,
               "deprecated": false
             }
           ]
@@ -11921,7 +11921,7 @@
               "kind": "method",
               "signature": "(self, workspace_path: str, invalidate: bool = True) -> bool",
               "summary": "Set the current workspace for browsing and refresh the file list.",
-              "line": 938,
+              "line": 948,
               "deprecated": false
             },
             {
@@ -11930,7 +11930,7 @@
               "kind": "method",
               "signature": "(self, invalidate=False)",
               "summary": "Refresh the file list for the table widget.",
-              "line": 1071,
+              "line": 1081,
               "deprecated": false
             },
             {
@@ -11939,7 +11939,7 @@
               "kind": "method",
               "signature": "(self, file_names, file_list)",
               "summary": "",
-              "line": 1303,
+              "line": 1313,
               "deprecated": false
             },
             {
@@ -11948,7 +11948,7 @@
               "kind": "method",
               "signature": "(self, file_path: str, set_workspace: bool = True)",
               "summary": "Open a scene file, optionally setting the workspace to match the file.",
-              "line": 1502,
+              "line": 1512,
               "deprecated": false
             },
             {
@@ -11957,7 +11957,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 1548,
+              "line": 1558,
               "deprecated": false
             },
             {
@@ -11966,7 +11966,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 1555,
+              "line": 1565,
               "deprecated": false
             },
             {
@@ -11975,7 +11975,7 @@
               "kind": "method",
               "signature": "(self, namespaces)",
               "summary": "Unlink specific references.",
-              "line": 1575,
+              "line": 1585,
               "deprecated": false
             },
             {
@@ -11984,7 +11984,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 1590,
+              "line": 1600,
               "deprecated": false
             },
             {
@@ -11993,7 +11993,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Save the current scene to the workspace, prompting for a name.",
-              "line": 1621,
+              "line": 1631,
               "deprecated": false
             },
             {
@@ -12002,7 +12002,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Rename the scene file at the right-clicked row.",
-              "line": 1711,
+              "line": 1721,
               "deprecated": false
             },
             {
@@ -12011,7 +12011,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Delete the scene file at the right-clicked row.",
-              "line": 1802,
+              "line": 1812,
               "deprecated": false
             }
           ]
@@ -12019,7 +12019,7 @@
         {
           "name": "ReferenceManagerSlots",
           "summary": "UI event handlers and widget initialization for the Reference Manager interface.",
-          "line": 1862,
+          "line": 1872,
           "bases": [
             "ptk.HelpMixin",
             "ptk.LoggingMixin"
@@ -12031,7 +12031,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the header for the reference manager.",
-              "line": 1941,
+              "line": 1951,
               "deprecated": false
             },
             {
@@ -12040,7 +12040,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "",
-              "line": 2083,
+              "line": 2094,
               "deprecated": false
             },
             {
@@ -12049,7 +12049,7 @@
               "kind": "method",
               "signature": "(self, item)",
               "summary": "Handle double-click to prepare item for editing.",
-              "line": 2243,
+              "line": 2254,
               "deprecated": false
             },
             {
@@ -12058,7 +12058,7 @@
               "kind": "method",
               "signature": "(self, item)",
               "summary": "Handle item changes when user renames a file via inline edit.",
-              "line": 2264,
+              "line": 2275,
               "deprecated": false
             },
             {
@@ -12067,7 +12067,7 @@
               "kind": "method",
               "signature": "(self, editor, hint)",
               "summary": "Handle when the rename editor is closed.",
-              "line": 2351,
+              "line": 2362,
               "deprecated": false
             },
             {
@@ -12076,7 +12076,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the containing folder of the right-clicked scene file in the file explorer.",
-              "line": 2504,
+              "line": 2515,
               "deprecated": false
             },
             {
@@ -12085,7 +12085,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the text input for the current working directory with pin values.",
-              "line": 2533,
+              "line": 2544,
               "deprecated": false
             },
             {
@@ -12094,7 +12094,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the filter text input with filtering options.",
-              "line": 2594,
+              "line": 2605,
               "deprecated": false
             },
             {
@@ -12103,7 +12103,7 @@
               "kind": "method",
               "signature": "(self, text)",
               "summary": "Handle the filter text input.",
-              "line": 2640,
+              "line": 2651,
               "deprecated": false
             },
             {
@@ -12112,7 +12112,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "",
-              "line": 2646,
+              "line": 2657,
               "deprecated": false
             },
             {
@@ -12121,7 +12121,7 @@
               "kind": "method",
               "signature": "(self, index, widget)",
               "summary": "Handle workspace selection changes.",
-              "line": 2650,
+              "line": 2661,
               "deprecated": false
             },
             {
@@ -12130,7 +12130,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the recursive search toggle.",
-              "line": 2673,
+              "line": 2684,
               "deprecated": false
             },
             {
@@ -12139,7 +12139,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the ignore empty workspaces toggle.",
-              "line": 2712,
+              "line": 2723,
               "deprecated": false
             },
             {
@@ -12148,7 +12148,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the ignore case checkbox.",
-              "line": 2761,
+              "line": 2772,
               "deprecated": false
             },
             {
@@ -12157,7 +12157,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide binary checkbox.",
-              "line": 2766,
+              "line": 2777,
               "deprecated": false
             },
             {
@@ -12166,7 +12166,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the filter by suffix checkbox.",
-              "line": 2771,
+              "line": 2782,
               "deprecated": false
             },
             {
@@ -12175,7 +12175,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide suffix checkbox.",
-              "line": 2776,
+              "line": 2787,
               "deprecated": false
             },
             {
@@ -12184,7 +12184,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide extension checkbox.",
-              "line": 2781,
+              "line": 2792,
               "deprecated": false
             },
             {
@@ -12193,7 +12193,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Toggle visibility of the Notes (metadata) column.",
-              "line": 2786,
+              "line": 2797,
               "deprecated": false
             },
             {
@@ -12202,7 +12202,7 @@
               "kind": "method",
               "signature": "(self, text)",
               "summary": "Handle suffix text changes.",
-              "line": 2803,
+              "line": 2814,
               "deprecated": false
             },
             {
@@ -12211,7 +12211,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the filter by folder structure checkbox.",
-              "line": 2819,
+              "line": 2830,
               "deprecated": false
             },
             {
@@ -12220,7 +12220,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Browse for a root directory.",
-              "line": 2824,
+              "line": 2835,
               "deprecated": false
             },
             {
@@ -12229,7 +12229,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the current directory in the file explorer.",
-              "line": 2841,
+              "line": 2852,
               "deprecated": false
             },
             {
@@ -12238,7 +12238,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Set dir to current workspace.",
-              "line": 2846,
+              "line": 2857,
               "deprecated": false
             },
             {
@@ -12247,7 +12247,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the scene file at the right-clicked row.",
-              "line": 2851,
+              "line": 2862,
               "deprecated": false
             },
             {
@@ -12256,7 +12256,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Toggle reference state for the right-clicked row.",
-              "line": 2865,
+              "line": 2876,
               "deprecated": false
             },
             {
@@ -12265,7 +12265,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unlink and import the reference at the right-clicked row.",
-              "line": 2872,
+              "line": 2883,
               "deprecated": false
             },
             {
@@ -12274,7 +12274,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Save the current scene to the workspace.",
-              "line": 2884,
+              "line": 2895,
               "deprecated": false
             },
             {
@@ -12283,7 +12283,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Refresh the file list.",
-              "line": 2888,
+              "line": 2899,
               "deprecated": false
             },
             {
@@ -12292,7 +12292,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Convert all references to assemblies.",
-              "line": 2892,
+              "line": 2903,
               "deprecated": false
             },
             {
@@ -12301,7 +12301,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unlink and import all references.",
-              "line": 2896,
+              "line": 2907,
               "deprecated": false
             },
             {
@@ -12310,7 +12310,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Remove all references from the scene.",
-              "line": 2900,
+              "line": 2911,
               "deprecated": false
             }
           ]
@@ -13604,7 +13604,7 @@
         {
           "name": "LightmapBaker",
           "summary": "Orchestrate the lightmap workflow: bake -> dilate -> engine export prep.",
-          "line": 62,
+          "line": 65,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -13615,7 +13615,7 @@
               "kind": "staticmethod",
               "signature": "() -> 'ptk.PresetStore'",
               "summary": "Shared store of lightmap quality presets (built-in + user tiers).",
-              "line": 119,
+              "line": 142,
               "deprecated": false
             },
             {
@@ -13624,25 +13624,25 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, **overrides) -> 'LightmapBaker'",
               "summary": "Construct a baker from a named quality preset.",
-              "line": 130,
+              "line": 153,
               "deprecated": false
             },
             {
               "name": "bake_fused",
               "qualname": "LightmapBaker.bake_fused",
               "kind": "method",
-              "signature": "(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, uv_set: Optional[str] = None, map_size: Optional[int] = None, create_uvs: bool = True, dilate: bool = True, dilate_iterations: Optional[int] = None, alpha_threshold: float = 0.001, prefix: str = 'lightmap_', suffix: str = '', backend: str = 'arnold', on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Any] = None) -> Dict[str, str]",
+              "signature": "(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, uv_set: Optional[str] = None, map_size: Optional[int] = None, create_uvs: bool = True, dilate: bool = True, dilate_iterations: Optional[int] = None, alpha_threshold: float = 0.001, prefix: str = 'lightmap_', suffix: str = '', backend: str = 'arnold', on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Any] = None, shader: Optional[str] = None, batch: bool = False) -> Dict[str, str]",
               "summary": "Bake a fused HDR lightmap per object into the UV2 channel.",
-              "line": 152,
+              "line": 180,
               "deprecated": false
             },
             {
               "name": "bake_separated",
               "qualname": "LightmapBaker.bake_separated",
               "kind": "method",
-              "signature": "(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'lightmap_irr_', **kwargs) -> Dict[str, str]",
+              "signature": "(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'lightmap_irr_', batch: bool = True, **kwargs) -> Dict[str, str]",
               "summary": "Bake a **lighting-only** (white-card) irradiance lightmap per object.",
-              "line": 260,
+              "line": 304,
               "deprecated": false
             },
             {
@@ -13651,7 +13651,7 @@
               "kind": "method",
               "signature": "(self, mapping: Dict[str, str]) -> Dict[str, str]",
               "summary": "Make the fused bake each object's live appearance (non-destructive).",
-              "line": 370,
+              "line": 404,
               "deprecated": false
             },
             {
@@ -13660,7 +13660,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> List[str]",
               "summary": "Undo :meth:`commit_unlit` -- restore the source material + UV order.",
-              "line": 439,
+              "line": 473,
               "deprecated": false
             },
             {
@@ -13669,16 +13669,16 @@
               "kind": "method",
               "signature": "(self, mapping: Dict[str, str], output_dir: Optional[str] = None, prefix: str = '', suffix: str = '_Lightmap') -> Dict[str, Tuple[str, List[float]]]",
               "summary": "Consolidate per-object lightmaps into one atlas EXR per primary material.",
-              "line": 493,
+              "line": 527,
               "deprecated": false
             },
             {
               "name": "commit_lightmap",
               "qualname": "LightmapBaker.commit_lightmap",
               "kind": "method",
-              "signature": "(self, mapping: Dict[str, str], intensity: float = 1.0, scale_offsets: Optional[Dict[str, List[float]]] = None) -> Dict[str, str]",
+              "signature": "(self, mapping: Dict[str, str], intensity: float = 1.0, scale_offsets: Optional[Dict[str, List[float]]] = None, uv_rects: Optional[Dict[str, List[float]]] = None) -> Dict[str, str]",
               "summary": "Record a lighting-only bake for the engine (fully non-destructive).",
-              "line": 653,
+              "line": 923,
               "deprecated": false
             },
             {
@@ -13687,7 +13687,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> List[str]",
               "summary": "Undo :meth:`commit_lightmap` -- drop the markers + republish.",
-              "line": 773,
+              "line": 1145,
               "deprecated": false
             },
             {
@@ -13696,7 +13696,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> List[str]",
               "summary": "Undo any lightmap wiring -- fused commit and/or lighting-only marker.",
-              "line": 806,
+              "line": 1188,
               "deprecated": false
             }
           ]
@@ -13704,7 +13704,7 @@
         {
           "name": "LightmapBakerSlots",
           "summary": "Switchboard slots for the ``lightmap_baker.ui`` panel.",
-          "line": 885,
+          "line": 1336,
           "bases": [
             "ptk.LoggingMixin",
             "ptk.HelpMixin"
@@ -13716,7 +13716,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Configure the header menu and help text.",
-              "line": 971,
+              "line": 1422,
               "deprecated": false
             },
             {
@@ -13725,7 +13725,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Populate the Quality combobox from the shared preset store.",
-              "line": 1076,
+              "line": 1534,
               "deprecated": false
             },
             {
@@ -13734,7 +13734,7 @@
               "kind": "method",
               "signature": "(self, index, widget) -> None",
               "summary": "Apply the selected preset's dials to the Resolution / Samples fields.",
-              "line": 1087,
+              "line": 1545,
               "deprecated": false
             },
             {
@@ -13743,7 +13743,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Populate the bake-level (Mode) combobox;",
-              "line": 1092,
+              "line": 1550,
               "deprecated": false
             },
             {
@@ -13752,7 +13752,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Populate the Packing combobox;",
-              "line": 1103,
+              "line": 1561,
               "deprecated": false
             },
             {
@@ -13761,7 +13761,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Populate the Scope combobox;",
-              "line": 1114,
+              "line": 1572,
               "deprecated": false
             },
             {
@@ -13770,7 +13770,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Populate the Resolution combobox (value carried as item data);",
-              "line": 1146,
+              "line": 1604,
               "deprecated": false
             },
             {
@@ -13779,7 +13779,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Add the Prefix / Suffix / Auto picker to the name-affix field.",
-              "line": 1168,
+              "line": 1626,
               "deprecated": false
             },
             {
@@ -13788,7 +13788,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Bake lightmaps for the selection in the chosen Mode (revert → bake → commit).",
-              "line": 1198,
+              "line": 1662,
               "deprecated": false
             },
             {
@@ -13797,7 +13797,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Undo the bake wiring on the selected objects (or all baked ones).",
-              "line": 1302,
+              "line": 1767,
               "deprecated": false
             },
             {
@@ -13806,7 +13806,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open the project's sourceimages folder (where bakes go) in Explorer.",
-              "line": 1316,
+              "line": 1781,
               "deprecated": false
             }
           ]
@@ -16625,7 +16625,7 @@
         {
           "name": "TextureBaker",
           "summary": "Bake scene lighting per object to a texture file (PNG, EXR, ...).",
-          "line": 61,
+          "line": 62,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -16636,16 +16636,16 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "True if the ``mtoa`` plugin is loaded AND its bake cmd is registered.",
-              "line": 105,
+              "line": 115,
               "deprecated": false
             },
             {
               "name": "bake",
               "qualname": "TextureBaker.bake",
               "kind": "method",
-              "signature": "(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'bake_', suffix: str = '', backend: str = 'auto', uv_set: Optional[Union[str, Dict[str, str]]] = None, on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Union[Callable[[str], str], Dict[str, str]]] = None) -> Dict[str, str]",
-              "summary": "Bake lighting per object to PNG files.",
-              "line": 122,
+              "signature": "(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'bake_', suffix: str = '', backend: str = 'auto', uv_set: Optional[Union[str, Dict[str, str]]] = None, on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Union[Callable[[str], str], Dict[str, str]]] = None, shader: Optional[str] = None, batch: bool = False) -> Dict[str, str]",
+              "summary": "Bake lighting per object to texture files (EXR on Arnold).",
+              "line": 132,
               "deprecated": false
             },
             {
@@ -16654,7 +16654,7 @@
               "kind": "method",
               "signature": "(self, mapping: Dict[str, str]) -> None",
               "summary": "Wire each baked PNG into the object's material color slot.",
-              "line": 444,
+              "line": 710,
               "deprecated": false
             },
             {
@@ -16663,7 +16663,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Undo :meth:`assign_to_diffuse` -- reconnects previous drivers.",
-              "line": 500,
+              "line": 766,
               "deprecated": false
             }
           ]
@@ -18163,7 +18163,7 @@
         {
           "name": "NurbsUtils",
           "summary": "",
-          "line": 19,
+          "line": 21,
           "bases": [
             "ptk.HelpMixin"
           ],
@@ -18174,7 +18174,7 @@
               "kind": "classmethod",
               "signature": "(cls, uniform=True, close=False, degree=3, autoReverse=False, sectionSpans=1, range_=False, polygon=True, reverseSurfaceNormals=True, angle_loft_between_two_curves=False, angleLoftSpans=6)",
               "summary": "Create a loft between two selections.",
-              "line": 24,
+              "line": 26,
               "deprecated": false
             },
             {
@@ -18183,7 +18183,7 @@
               "kind": "classmethod",
               "signature": "(cls, start, end)",
               "summary": "Create a bezier curve between starting and end object(s).",
-              "line": 124,
+              "line": 126,
               "deprecated": false
             },
             {
@@ -18192,7 +18192,7 @@
               "kind": "staticmethod",
               "signature": "(path, start, count=6, geometry='Instancer')",
               "summary": "Duplicate objects along a given curve using MASH.",
-              "line": 198,
+              "line": 200,
               "deprecated": false
             },
             {
@@ -18201,7 +18201,25 @@
               "kind": "classmethod",
               "signature": "(cls, start, end, count=6, cleanup=False, uniform=1, close=0, autoReverse=0, degree=3, sectionSpans=1, range=0, polygon=1, reverseSurfaceNormals=0)",
               "summary": "Perform a loft between two nurbs curves or polygon sets of edges (that will be extracted as curves).",
-              "line": 244,
+              "line": 246,
+              "deprecated": false
+            },
+            {
+              "name": "get_curve_length",
+              "qualname": "NurbsUtils.get_curve_length",
+              "kind": "classmethod",
+              "signature": "(cls, curve) -> float",
+              "summary": "World-space arc length of the given curve (transform or shape).",
+              "line": 322,
+              "deprecated": false
+            },
+            {
+              "name": "get_arc_lengths",
+              "qualname": "NurbsUtils.get_arc_lengths",
+              "kind": "classmethod",
+              "signature": "(cls, curve, points) -> List[float]",
+              "summary": "Arc length along *curve* of the closest curve point to each given point.",
+              "line": 327,
               "deprecated": false
             },
             {
@@ -18210,7 +18228,7 @@
               "kind": "staticmethod",
               "signature": "(x, curves, tolerance=0.0)",
               "summary": "Find the closest control vertex between the given vertices, CVs, or objects and each of the given c…",
-              "line": 311,
+              "line": 354,
               "deprecated": false
             },
             {
@@ -18219,7 +18237,7 @@
               "kind": "classmethod",
               "signature": "(cls, c, returned_type='cv', filter_=[])",
               "summary": "Get a dict containing CV's of the given curve(s) and their corresponding point positions (based on…",
-              "line": 351,
+              "line": 394,
               "deprecated": false
             },
             {
@@ -18228,7 +18246,7 @@
               "kind": "classmethod",
               "signature": "(cls, curves, normalize=1, values=False)",
               "summary": "Get the cross product of two vectors using points derived from the given curves.",
-              "line": 440,
+              "line": 483,
               "deprecated": false
             }
           ]
@@ -18699,7 +18717,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, builder: Callable[..., str]) -> None",
               "summary": "Register a new control preset.",
-              "line": 269,
+              "line": 287,
               "deprecated": false
             },
             {
@@ -18708,7 +18726,7 @@
               "kind": "classmethod",
               "signature": "(cls, preset: str = 'diamond', name: Optional[str] = None, *, size: float = 1.0, axis: str = 'y', match: Any = None, parent: Optional[str] = None, color: Union[int, Tuple[float, float, float], None] = None, offset_group: bool = True, group_suffix: str = '_GRP', ctrl_suffix: str = '_CTRL', freeze: bool = True, tag_as_controller: bool = True, return_nodes: bool = False, **kwargs) -> Union[str, ControlNodes]",
               "summary": "Create a NURBS control.",
-              "line": 282,
+              "line": 300,
               "deprecated": false
             },
             {
@@ -18717,7 +18735,7 @@
               "kind": "classmethod",
               "signature": "(cls, controls: Iterable[Any], name: Optional[str] = None, *, parent: Optional[str] = None, match: Any = None, color: Union[int, Tuple[float, float, float], None] = None, delete_sources: bool = True, ctrl_suffix: str = '_CTRL') -> str",
               "summary": "Combine multiple control transforms into a single selectable transform.",
-              "line": 379,
+              "line": 414,
               "deprecated": false
             }
           ]
@@ -18743,7 +18761,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Create a locator at the lowest point of the combined objects to act as the shadow anchor.",
-              "line": 66,
+              "line": 126,
               "deprecated": false
             },
             {
@@ -18752,7 +18770,7 @@
               "kind": "method",
               "signature": "(self, position=(5, 10, 5), source_name='shadow_source')",
               "summary": "Get existing shadow source or create a new one.",
-              "line": 93,
+              "line": 153,
               "deprecated": false
             },
             {
@@ -18760,8 +18778,8 @@
               "qualname": "ShadowRig.create_shadow_plane",
               "kind": "method",
               "signature": "(self)",
-              "summary": "Create a simple quad for the shadow with pivot at near edge.",
-              "line": 125,
+              "summary": "Create a simple quad for the shadow with the keyable shadow attrs.",
+              "line": 195,
               "deprecated": false
             },
             {
@@ -18769,8 +18787,8 @@
               "qualname": "ShadowRig.create_silhouette_texture",
               "kind": "method",
               "signature": "(self, size=512, axis='auto', recursive=True, *, uniform_alpha=False, falloff_source=None, falloff_power=0.8, vertical_weight=0.3, blur_amount=1.5)",
-              "summary": "Create silhouette texture using Maya API triangle rasterization.",
-              "line": 207,
+              "summary": "Create the silhouette texture via ``pythontk.ImgUtils.rasterize_silhouette``.",
+              "line": 316,
               "deprecated": false
             },
             {
@@ -18779,7 +18797,7 @@
               "kind": "method",
               "signature": "(self, shader_type='stingray', stingray_opacity_mode='transparent')",
               "summary": "Create material with the silhouette texture.",
-              "line": 532,
+              "line": 414,
               "deprecated": false
             },
             {
@@ -18788,16 +18806,52 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Create expression to warp shadow based on light position.",
-              "line": 627,
+              "line": 515,
+              "deprecated": false
+            },
+            {
+              "name": "bake",
+              "qualname": "ShadowRig.bake",
+              "kind": "method",
+              "signature": "(self, start=None, end=None)",
+              "summary": "Bake this rig's driven channels to keyframes and remove the live",
+              "line": 670,
+              "deprecated": false
+            },
+            {
+              "name": "refresh_export_metadata",
+              "qualname": "ShadowRig.refresh_export_metadata",
+              "kind": "classmethod",
+              "signature": "(cls)",
+              "summary": "Republish the ``shadow_metadata`` channel on the ``data_export``",
+              "line": 726,
+              "deprecated": false
+            },
+            {
+              "name": "find_shadow_planes",
+              "qualname": "ShadowRig.find_shadow_planes",
+              "kind": "classmethod",
+              "signature": "(cls, nodes=None)",
+              "summary": "Shadow planes = transforms carrying the stamped ``basePlaneSize``",
+              "line": 773,
+              "deprecated": false
+            },
+            {
+              "name": "bake_planes",
+              "qualname": "ShadowRig.bake_planes",
+              "kind": "classmethod",
+              "signature": "(cls, planes=None, start=None, end=None)",
+              "summary": "Bake shadow planes' expression-driven channels to keyframes and",
+              "line": 801,
               "deprecated": false
             },
             {
               "name": "create",
               "qualname": "ShadowRig.create",
               "kind": "classmethod",
-              "signature": "(cls, targets, light_pos=(5, 10, 5), texture_res=512, axis='auto', source_name='shadow_source', recursive=True, mode='stretch')",
+              "signature": "(cls, targets, light_pos=(5, 10, 5), texture_res=512, axis='auto', source_name='shadow_source', recursive=True, mode='stretch', ground_height=0.0)",
               "summary": "Create a projected shadow for Unity export.",
-              "line": 834,
+              "line": 861,
               "deprecated": false
             }
           ]
@@ -18805,7 +18859,7 @@
         {
           "name": "ShadowRigSlots",
           "summary": "",
-          "line": 896,
+          "line": 927,
           "bases": [],
           "members": [
             {
@@ -18814,7 +18868,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text.",
-              "line": 918,
+              "line": 952,
               "deprecated": false
             },
             {
@@ -18823,7 +18877,16 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Reset to Defaults: Resets all UI widgets to their default values.",
-              "line": 953,
+              "line": 1132,
+              "deprecated": false
+            },
+            {
+              "name": "b002",
+              "qualname": "ShadowRigSlots.b002",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Bake to Keyframes: bake selected (or all) shadow planes' expressions",
+              "line": 1136,
               "deprecated": false
             },
             {
@@ -18832,7 +18895,223 @@
               "kind": "method",
               "signature": "(self, objects, contract)",
               "summary": "Build the shadow rig for the given targets.",
-              "line": 957,
+              "line": 1157,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relpath": "rig_utils/skinning.py",
+      "summary": "Skinning utilities: binding, batch weight I/O, transfer, procedural weights.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "CurveWeights",
+          "summary": "Analytic, ring-uniform skin weights for a joint chain along a curve.",
+          "line": 43,
+          "bases": [
+            "ptk.HelpMixin"
+          ],
+          "members": [
+            {
+              "name": "effective_degree",
+              "qualname": "CurveWeights.effective_degree",
+              "kind": "staticmethod",
+              "signature": "(degree: int, num_joints: int) -> int",
+              "summary": "The basis degree actually solvable: *degree* clamped to [1, num_joints - 1].",
+              "line": 75,
+              "deprecated": false
+            },
+            {
+              "name": "joint_stations",
+              "qualname": "CurveWeights.joint_stations",
+              "kind": "classmethod",
+              "signature": "(cls, joints: List[str], curve) -> List[float]",
+              "summary": "Arc length of each joint's closest curve point, in input order.",
+              "line": 80,
+              "deprecated": false
+            },
+            {
+              "name": "solve",
+              "qualname": "CurveWeights.solve",
+              "kind": "classmethod",
+              "signature": "(cls, mesh, joints: List[str], curve: Optional[str] = None, centerline: Optional[Sequence] = None, profile: Union[str, Callable] = 'smoothstep', degree: int = 3) -> Tuple[List[float], List[str]]",
+              "summary": "Compute per-vertex weights from arc-length stations along a curve.",
+              "line": 100,
+              "deprecated": false
+            }
+          ]
+        },
+        {
+          "name": "SkinUtils",
+          "summary": "Skinning: binding, batch weight I/O, transfer, falloffs, delta mush.",
+          "line": 188,
+          "bases": [
+            "ptk.HelpMixin"
+          ],
+          "members": [
+            {
+              "name": "get_skin_cluster",
+              "qualname": "SkinUtils.get_skin_cluster",
+              "kind": "staticmethod",
+              "signature": "(mesh) -> Optional[str]",
+              "summary": "Return the first skinCluster in the mesh's history, or None.",
+              "line": 205,
+              "deprecated": false
+            },
+            {
+              "name": "get_influences",
+              "qualname": "SkinUtils.get_influences",
+              "kind": "classmethod",
+              "signature": "(cls, skin_cluster, long_names: bool = False) -> List[str]",
+              "summary": "Influence names in PHYSICAL order (``MFnSkinCluster.influenceObjects()``).",
+              "line": 215,
+              "deprecated": false
+            },
+            {
+              "name": "bind",
+              "qualname": "SkinUtils.bind",
+              "kind": "classmethod",
+              "signature": "(cls, mesh, joints, bind_method: str = 'closest', skinning_method: str = 'classic', max_influences: int = 4, dropoff_rate: float = 4.0, weight_distribution: float = 0.5, remove_unused_influences: bool = False, heatmap_falloff: float = 0.68, bind_fallback: bool = True, name: Optional[str] = None) -> str",
+              "summary": "Smooth-bind *mesh* to *joints* with the full skinCluster arg surface.",
+              "line": 274,
+              "deprecated": false
+            },
+            {
+              "name": "unbind",
+              "qualname": "SkinUtils.unbind",
+              "kind": "classmethod",
+              "signature": "(cls, mesh) -> bool",
+              "summary": "Remove the mesh's skinCluster (restores the pre-bind shape).",
+              "line": 369,
+              "deprecated": false
+            },
+            {
+              "name": "get_weights",
+              "qualname": "SkinUtils.get_weights",
+              "kind": "classmethod",
+              "signature": "(cls, skin_cluster, vertices: Optional[Sequence[int]] = None) -> Tuple[List[float], List[str]]",
+              "summary": "Read weights in one batched API call.",
+              "line": 386,
+              "deprecated": false
+            },
+            {
+              "name": "set_weights",
+              "qualname": "SkinUtils.set_weights",
+              "kind": "classmethod",
+              "signature": "(cls, skin_cluster, weights: Sequence[float], influences: Optional[List[str]] = None, vertices: Optional[Sequence[int]] = None, normalize: bool = True, undoable: bool = False) -> List[float]",
+              "summary": "Write weights in one batched call.",
+              "line": 401,
+              "deprecated": false
+            },
+            {
+              "name": "set_vertex_weights",
+              "qualname": "SkinUtils.set_vertex_weights",
+              "kind": "classmethod",
+              "signature": "(cls, skin_cluster, vertex_weights: Dict[int, Dict[str, float]], undoable: bool = True) -> None",
+              "summary": "Sparse per-vertex write with skinPercent semantics.",
+              "line": 489,
+              "deprecated": false
+            },
+            {
+              "name": "prune_weights",
+              "qualname": "SkinUtils.prune_weights",
+              "kind": "classmethod",
+              "signature": "(cls, skin_cluster, below: float = 0.001) -> None",
+              "summary": "Zero weights below the threshold and renormalize.",
+              "line": 567,
+              "deprecated": false
+            },
+            {
+              "name": "normalize_weights",
+              "qualname": "SkinUtils.normalize_weights",
+              "kind": "classmethod",
+              "signature": "(cls, skin_cluster) -> None",
+              "summary": "Normalize all weights to sum 1 per vertex.",
+              "line": 574,
+              "deprecated": false
+            },
+            {
+              "name": "set_max_influences",
+              "qualname": "SkinUtils.set_max_influences",
+              "kind": "classmethod",
+              "signature": "(cls, skin_cluster, max_influences: int, enforce: bool = True) -> None",
+              "summary": "Set the influence cap;",
+              "line": 581,
+              "deprecated": false
+            },
+            {
+              "name": "set_skinning_method",
+              "qualname": "SkinUtils.set_skinning_method",
+              "kind": "classmethod",
+              "signature": "(cls, skin_cluster, method: str = 'dqs') -> None",
+              "summary": "Set the blend method: \"classic\" | \"dqs\" | \"blended\".",
+              "line": 613,
+              "deprecated": false
+            },
+            {
+              "name": "copy_weights",
+              "qualname": "SkinUtils.copy_weights",
+              "kind": "classmethod",
+              "signature": "(cls, source_mesh, target_mesh, surface_association: str = 'closestPoint', influence_association: Sequence[str] = ('label', 'oneToOne', 'closestJoint'), bind_target_if_needed: bool = True) -> str",
+              "summary": "Copy skin weights between meshes;",
+              "line": 627,
+              "deprecated": false
+            },
+            {
+              "name": "mirror_weights",
+              "qualname": "SkinUtils.mirror_weights",
+              "kind": "classmethod",
+              "signature": "(cls, mesh, axis: str = 'YZ', positive_to_negative: bool = True, surface_association: str = 'closestPoint', influence_association: Sequence[str] = ('label', 'closestJoint', 'oneToOne')) -> None",
+              "summary": "Mirror weights across a plane (\"YZ\" | \"XY\" | \"XZ\") on the same mesh.",
+              "line": 666,
+              "deprecated": false
+            },
+            {
+              "name": "export_weights",
+              "qualname": "SkinUtils.export_weights",
+              "kind": "classmethod",
+              "signature": "(cls, mesh, file_path: Optional[str] = None) -> str",
+              "summary": "Export skin weights to XML (cmds.deformerWeights).",
+              "line": 692,
+              "deprecated": false
+            },
+            {
+              "name": "import_weights",
+              "qualname": "SkinUtils.import_weights",
+              "kind": "classmethod",
+              "signature": "(cls, mesh, file_path: str, method: str = 'index') -> None",
+              "summary": "Import skin weights from XML and renormalize.",
+              "line": 722,
+              "deprecated": false
+            },
+            {
+              "name": "apply_falloff",
+              "qualname": "SkinUtils.apply_falloff",
+              "kind": "classmethod",
+              "signature": "(cls, skin_cluster, target_influence, center, radius: float = 5.0, profile: Union[str, Callable] = 'linear', source_influence: Optional[str] = None, add_influence: bool = True, undoable: bool = True) -> int",
+              "summary": "Distance-based weight falloff around *center*.",
+              "line": 747,
+              "deprecated": false
+            },
+            {
+              "name": "add_delta_mush",
+              "qualname": "SkinUtils.add_delta_mush",
+              "kind": "classmethod",
+              "signature": "(cls, mesh, smoothing_iterations: int = 10, smoothing_step: float = 0.5, pin_border_vertices: bool = True, name: Optional[str] = None) -> str",
+              "summary": "Add a deltaMush finishing pass (softens residual skinning artifacts).",
+              "line": 823,
+              "deprecated": false
+            },
+            {
+              "name": "bind_to_curve",
+              "qualname": "SkinUtils.bind_to_curve",
+              "kind": "classmethod",
+              "signature": "(cls, mesh, joints, curve: Optional[str] = None, centerline: Optional[Sequence] = None, profile: Union[str, Callable] = 'smoothstep', degree: int = 3, skinning_method: str = 'dqs', max_influences: Optional[int] = None, name: Optional[str] = None, **bind_kwargs) -> str",
+              "summary": "One-call precision bind for tube-like meshes.",
+              "line": 848,
               "deprecated": false
             }
           ]
@@ -18877,7 +19156,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text.",
-              "line": 194,
+              "line": 196,
               "deprecated": false
             },
             {
@@ -18886,7 +19165,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 220,
+              "line": 267,
               "deprecated": false
             }
           ]
@@ -18901,7 +19180,7 @@
         {
           "name": "TubePath",
           "summary": "Pure geometry analysis for tube-like meshes.",
-          "line": 113,
+          "line": 171,
           "bases": [],
           "members": [
             {
@@ -18910,7 +19189,7 @@
               "kind": "staticmethod",
               "signature": "(mesh, num_joints: int = 10, precision: int = 10, edges: list = None, use_surface_normals: bool = True) -> Tuple[List, int]",
               "summary": "Unified centerline dispatcher — picks the best algorithm.",
-              "line": 125,
+              "line": 183,
               "deprecated": false
             },
             {
@@ -18919,7 +19198,16 @@
               "kind": "staticmethod",
               "signature": "(mesh) -> Tuple[List[om.MPoint], int]",
               "summary": "Extract centerline by finding all edge loops (cross-sections) of a tube mesh.",
-              "line": 179,
+              "line": 267,
+              "deprecated": false
+            },
+            {
+              "name": "estimate_radius",
+              "qualname": "TubePath.estimate_radius",
+              "kind": "staticmethod",
+              "signature": "(mesh, centerline: List) -> Optional[float]",
+              "summary": "Estimate the tube's radius: median distance from interior",
+              "line": 465,
               "deprecated": false
             },
             {
@@ -18928,7 +19216,7 @@
               "kind": "staticmethod",
               "signature": "(edge_selection: List[str]) -> List[List[float]]",
               "summary": "Derive centerline points from selected edges of the tube.",
-              "line": 340,
+              "line": 537,
               "deprecated": false
             },
             {
@@ -18937,7 +19225,7 @@
               "kind": "staticmethod",
               "signature": "(mesh, num_points: int = 10, iterations: int = 3) -> List[om.MPoint]",
               "summary": "Calculate centerline by iteratively averaging opposing surface hits.",
-              "line": 386,
+              "line": 583,
               "deprecated": false
             },
             {
@@ -18946,7 +19234,7 @@
               "kind": "staticmethod",
               "signature": "(obj, precision=10, smooth=False, window_size=1)",
               "summary": "Calculate the centerline of an object using the cross-section of its largest bounding box axis.",
-              "line": 525,
+              "line": 722,
               "deprecated": false
             }
           ]
@@ -18954,14 +19242,14 @@
         {
           "name": "TubeRigBundle",
           "summary": "",
-          "line": 596,
+          "line": 793,
           "bases": [],
           "members": []
         },
         {
           "name": "TubeStrategy",
           "summary": "",
-          "line": 610,
+          "line": 807,
           "bases": [
             "ABC"
           ],
@@ -18972,15 +19260,15 @@
               "kind": "method",
               "signature": "(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle",
               "summary": "",
-              "line": 612,
+              "line": 809,
               "deprecated": false
             }
           ]
         },
         {
           "name": "FKChainStrategy",
-          "summary": "",
-          "line": 616,
+          "summary": "Joints → nested FK controls → parametric skin.",
+          "line": 813,
           "bases": [
             "TubeStrategy"
           ],
@@ -18991,15 +19279,15 @@
               "kind": "method",
               "signature": "(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle",
               "summary": "",
-              "line": 617,
+              "line": 821,
               "deprecated": false
             }
           ]
         },
         {
           "name": "SplineIKStrategy",
-          "summary": "",
-          "line": 668,
+          "summary": "Joints → spline-IK control rig → parametric skin along the IK curve.",
+          "line": 840,
           "bases": [
             "TubeStrategy"
           ],
@@ -19010,15 +19298,15 @@
               "kind": "method",
               "signature": "(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle",
               "summary": "",
-              "line": 669,
+              "line": 843,
               "deprecated": false
             }
           ]
         },
         {
           "name": "AnchorStrategy",
-          "summary": "",
-          "line": 754,
+          "summary": "Two end joints → anchor controls with distance stretch → parametric skin.",
+          "line": 880,
           "bases": [
             "TubeStrategy"
           ],
@@ -19029,7 +19317,7 @@
               "kind": "method",
               "signature": "(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle",
               "summary": "",
-              "line": 755,
+              "line": 883,
               "deprecated": false
             }
           ]
@@ -19048,7 +19336,7 @@
               "kind": "classmethod",
               "signature": "(cls, mesh) -> Optional['TubeRig']",
               "summary": "Look up an existing TubeRig instance bound to *mesh*, or return None.",
-              "line": 982,
+              "line": 1001,
               "deprecated": false
             },
             {
@@ -19057,7 +19345,7 @@
               "kind": "classmethod",
               "signature": "(cls, node) -> Optional['TubeRig']",
               "summary": "Find the TubeRig owning *node* — the rigged mesh itself, or",
-              "line": 1009,
+              "line": 1028,
               "deprecated": false
             },
             {
@@ -19066,7 +19354,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Returns the rig name.",
-              "line": 1038,
+              "line": 1057,
               "deprecated": false
             },
             {
@@ -19075,7 +19363,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "",
-              "line": 1045,
+              "line": 1064,
               "deprecated": false
             },
             {
@@ -19084,7 +19372,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Delete everything a previous ``build`` created — the rig group and",
-              "line": 1076,
+              "line": 1102,
               "deprecated": false
             },
             {
@@ -19093,7 +19381,34 @@
               "kind": "method",
               "signature": "(self, strategy: str = 'spline', **kwargs)",
               "summary": "Builds the rig using the specified strategy.",
-              "line": 1110,
+              "line": 1136,
+              "deprecated": false
+            },
+            {
+              "name": "resolve_centerline",
+              "qualname": "TubeRig.resolve_centerline",
+              "kind": "method",
+              "signature": "(self, num_joints: int = -1, edges: list = None) -> Tuple[List, int]",
+              "summary": "Extract this rig's tube centerline.",
+              "line": 1184,
+              "deprecated": false
+            },
+            {
+              "name": "estimate_tube_radius",
+              "qualname": "TubeRig.estimate_tube_radius",
+              "kind": "method",
+              "signature": "(self, centerline: List = None) -> Optional[float]",
+              "summary": "Measure the tube's radius from the mesh surface.",
+              "line": 1203,
+              "deprecated": false
+            },
+            {
+              "name": "resolve_sizes",
+              "qualname": "TubeRig.resolve_sizes",
+              "kind": "method",
+              "signature": "(self, centerline: List = None, joint_radius: float = -1.0) -> Tuple[float, float]",
+              "summary": "Resolve (joint_display_radius, control_base_size) from the tube.",
+              "line": 1225,
               "deprecated": false
             },
             {
@@ -19102,16 +19417,25 @@
               "kind": "method",
               "signature": "(self, centerline: List[List[float]], num_joints: int, reverse: bool = False, **kwargs) -> List[str]",
               "summary": "Generates joints along the tube's centerline.",
-              "line": 1165,
+              "line": 1254,
+              "deprecated": false
+            },
+            {
+              "name": "create_anchor_joints",
+              "qualname": "TubeRig.create_anchor_joints",
+              "kind": "method",
+              "signature": "(self, centerline: List, radius: float = 1.0) -> List[str]",
+              "summary": "Create the anchor rig's two end joints from the tube centerline.",
+              "line": 1340,
               "deprecated": false
             },
             {
               "name": "skin_mesh",
               "qualname": "TubeRig.skin_mesh",
               "kind": "method",
-              "signature": "(self, joints: List[str]) -> Optional[str]",
-              "summary": "Smooth-bind the rig's mesh to *joints* and record the skinCluster",
-              "line": 1254,
+              "signature": "(self, joints: List[str], curve: Optional[str] = None, centerline: Optional[List] = None, skinning_method: str = 'dqs', mesh: Optional[str] = None) -> Optional[str]",
+              "summary": "Smooth-bind the mesh to *joints* and record the skinCluster",
+              "line": 1401,
               "deprecated": false
             },
             {
@@ -19120,7 +19444,7 @@
               "kind": "method",
               "signature": "(self, centerline: List[List[float]]) -> str",
               "summary": "Creates the logic curve for Spline IK.",
-              "line": 1270,
+              "line": 1472,
               "deprecated": false
             },
             {
@@ -19129,7 +19453,7 @@
               "kind": "method",
               "signature": "(self, centerline: List[List[float]], radius: float = 1.0, num_controls: int = 3) -> Tuple[List[str], List[str], List]",
               "summary": "Creates the driver system (controls and joints) for the Spline IK curve.",
-              "line": 1293,
+              "line": 1495,
               "deprecated": false
             },
             {
@@ -19138,7 +19462,34 @@
               "kind": "method",
               "signature": "(self, curve, driver_joints)",
               "summary": "",
-              "line": 1458,
+              "line": 1688,
+              "deprecated": false
+            },
+            {
+              "name": "create_spline_controls",
+              "qualname": "TubeRig.create_spline_controls",
+              "kind": "method",
+              "signature": "(self, joints: List[str], centerline: Optional[List] = None, size: float = 1.0, num_controls: int = 3, enable_stretch: bool = True, enable_squash: bool = True, enable_volume: bool = True, enable_twist: bool = True, enable_auto_bend: bool = False) -> Tuple[List[str], str, str]",
+              "summary": "Build the complete spline-IK control rig over an existing joint chain:",
+              "line": 1699,
+              "deprecated": false
+            },
+            {
+              "name": "create_fk_controls",
+              "qualname": "TubeRig.create_fk_controls",
+              "kind": "method",
+              "signature": "(self, joints: List[str], size: float = 1.0) -> List[str]",
+              "summary": "Build a nested FK control hierarchy — one diamond per joint, each",
+              "line": 1782,
+              "deprecated": false
+            },
+            {
+              "name": "create_anchor_controls",
+              "qualname": "TubeRig.create_anchor_controls",
+              "kind": "method",
+              "signature": "(self, joints: List[str], size: float = 1.0, enable_stretch: bool = True) -> List[str]",
+              "summary": "Build the anchor/piston controls over the two end joints",
+              "line": 1825,
               "deprecated": false
             },
             {
@@ -19147,7 +19498,7 @@
               "kind": "method",
               "signature": "(self, ik_handle, start_ctrl, end_ctrl, start_up_loc=None, end_up_loc=None)",
               "summary": "Setup advanced twist for IK Spline.",
-              "line": 1465,
+              "line": 1953,
               "deprecated": false
             },
             {
@@ -19156,7 +19507,7 @@
               "kind": "method",
               "signature": "(self, start_ctrl, mid_ctrl, end_ctrl)",
               "summary": "Setup automatic bending of the mid control based on compression distance.",
-              "line": 1518,
+              "line": 2006,
               "deprecated": false
             },
             {
@@ -19165,7 +19516,7 @@
               "kind": "method",
               "signature": "(self, curve, joints, enable_stretch=True, enable_squash=True, enable_volume=True, main_control=None)",
               "summary": "",
-              "line": 1576,
+              "line": 2067,
               "deprecated": false
             },
             {
@@ -19174,7 +19525,7 @@
               "kind": "method",
               "signature": "(self, joints: List[str], **kwargs) -> Optional[str]",
               "summary": "",
-              "line": 1724,
+              "line": 2215,
               "deprecated": false
             },
             {
@@ -19183,16 +19534,16 @@
               "kind": "method",
               "signature": "(self, ik_handle, mid_joint: str, offset=(0, 5, 0)) -> str",
               "summary": "",
-              "line": 1743,
+              "line": 2234,
               "deprecated": false
             },
             {
               "name": "bind_joint_chain",
               "qualname": "TubeRig.bind_joint_chain",
               "kind": "method",
-              "signature": "(self, obj, joints: List[str]) -> Optional[str]",
-              "summary": "Binds the joint chain to a polygon tube with smooth skinning.",
-              "line": 1769,
+              "signature": "(self, obj, joints: List[str], curve: Optional[str] = None, centerline: Optional[List] = None) -> Optional[str]",
+              "summary": "Bind the joint chain to a polygon tube with smooth skinning.",
+              "line": 2260,
               "deprecated": false
             },
             {
@@ -19201,7 +19552,7 @@
               "kind": "method",
               "signature": "(self, joints: 'List[str]', anchor: str, falloff: float = 5.0, joint_index: int = -1) -> 'Optional[str]'",
               "summary": "Constrains a joint in the chain to an anchor and applies distance-based skin weight falloff.",
-              "line": 1843,
+              "line": 2417,
               "deprecated": false
             }
           ]
@@ -19209,14 +19560,14 @@
         {
           "name": "RigModeConfig",
           "summary": "Defines a rig mode's strategy and available options.",
-          "line": 1981,
+          "line": 2545,
           "bases": [],
           "members": []
         },
         {
           "name": "TubeRigSlots",
           "summary": "",
-          "line": 2058,
+          "line": 2624,
           "bases": [],
           "members": [
             {
@@ -19225,7 +19576,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text.",
-              "line": 2108,
+              "line": 2682,
               "deprecated": false
             },
             {
@@ -19234,7 +19585,7 @@
               "kind": "method",
               "signature": "(self, index: int)",
               "summary": "Apply mode values and constraints to UI widgets.",
-              "line": 2131,
+              "line": 2950,
               "deprecated": false
             },
             {
@@ -19243,7 +19594,7 @@
               "kind": "method",
               "signature": "(self) -> RigModeConfig",
               "summary": "Get the current rig mode config.",
-              "line": 2166,
+              "line": 2986,
               "deprecated": false
             },
             {
@@ -19252,7 +19603,7 @@
               "kind": "method",
               "signature": "(self) -> str",
               "summary": "Get the current strategy from the mode combobox.",
-              "line": 2171,
+              "line": 2991,
               "deprecated": false
             },
             {
@@ -19261,7 +19612,7 @@
               "kind": "method",
               "signature": "(self, obj)",
               "summary": "Get the tube rig instance for the given object (the mesh, a joint,",
-              "line": 2175,
+              "line": 2995,
               "deprecated": false
             },
             {
@@ -19269,8 +19620,8 @@
               "qualname": "TubeRigSlots.create_joints_from_tube",
               "kind": "method",
               "signature": "(self, obj)",
-              "summary": "Creates a joint chain from a tube mesh.",
-              "line": 2192,
+              "summary": "Step 1 — create this rig's joints from the tube mesh (mode-aware).",
+              "line": 3060,
               "deprecated": false
             },
             {
@@ -19278,8 +19629,8 @@
               "qualname": "TubeRigSlots.b000",
               "kind": "method",
               "signature": "(self)",
-              "summary": "Create Tube Rig (Full Pipeline).",
-              "line": 2220,
+              "summary": "One-Click Rig — runs Steps 1 → 2 → 3 with the step parameters.",
+              "line": 3092,
               "deprecated": false
             },
             {
@@ -19287,8 +19638,8 @@
               "qualname": "TubeRigSlots.b001",
               "kind": "method",
               "signature": "(self)",
-              "summary": "Create Joints from Tube.",
-              "line": 2252,
+              "summary": "Step 1: Create Joints from Tube.",
+              "line": 3123,
               "deprecated": false
             },
             {
@@ -19296,8 +19647,8 @@
               "qualname": "TubeRigSlots.b002",
               "kind": "method",
               "signature": "(self)",
-              "summary": "Create IK / Controls (Preset Dependent).",
-              "line": 2264,
+              "summary": "Step 2: Create IK / Controls (mode dependent).",
+              "line": 3138,
               "deprecated": false
             },
             {
@@ -19305,8 +19656,8 @@
               "qualname": "TubeRigSlots.b003",
               "kind": "method",
               "signature": "(self)",
-              "summary": "Macros: Bind Joint Chain to Tube.",
-              "line": 2362,
+              "summary": "Step 3: Bind Joint Chain to Tube.",
+              "line": 3209,
               "deprecated": false
             },
             {
@@ -19314,8 +19665,8 @@
               "qualname": "TubeRigSlots.b004",
               "kind": "method",
               "signature": "(self)",
-              "summary": "Macros: Constrain Both Ends of Hose to Anchors.",
-              "line": 2404,
+              "summary": "Utility: Constrain Both Ends of Hose to Anchors.",
+              "line": 3249,
               "deprecated": false
             }
           ]
@@ -19385,7 +19736,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header menu with mode toggle and instructions.",
-              "line": 342,
+              "line": 339,
               "deprecated": false
             },
             {
@@ -19439,7 +19790,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the wheel height slider.",
-              "line": 504,
+              "line": 568,
               "deprecated": false
             },
             {
@@ -19448,7 +19799,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Update the rig name placeholder based on the driver (last selected).",
-              "line": 521,
+              "line": 589,
               "deprecated": false
             },
             {
@@ -19457,7 +19808,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unsubscribe from the centralized ScriptJobManager.",
-              "line": 532,
+              "line": 600,
               "deprecated": false
             },
             {
@@ -19466,7 +19817,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[WheelRig]",
               "summary": "Get or create the wheel rig attached to the selected control.",
-              "line": 537,
+              "line": 605,
               "deprecated": false
             },
             {
@@ -19475,7 +19826,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Create or update Wheel Rig.",
-              "line": 575,
+              "line": 643,
               "deprecated": false
             }
           ]
@@ -19981,12 +20332,21 @@
           "deprecated": false
         },
         {
+          "name": "ensure_editable_hotkey_set",
+          "qualname": "ensure_editable_hotkey_set",
+          "kind": "function",
+          "signature": "(name: str = MACRO_HOTKEY_SET) -> str",
+          "summary": "Make the *current* hotkey set editable;",
+          "line": 282,
+          "deprecated": false
+        },
+        {
           "name": "maya_collision_checker",
           "qualname": "maya_collision_checker",
           "kind": "function",
           "signature": "(sequence, scope, ui_name, method_name)",
           "summary": "Check a proposed binding against Maya's active hotkey set.",
-          "line": 303,
+          "line": 335,
           "deprecated": false
         }
       ],
@@ -20259,7 +20619,7 @@
           "kind": "function",
           "signature": "()",
           "summary": "Names of the shipped color styles (e.g.",
-          "line": 60,
+          "line": 62,
           "deprecated": false
         },
         {
@@ -20268,7 +20628,7 @@
           "kind": "function",
           "signature": "(name, persist=False)",
           "summary": "Switch Maya's viewport colors to the named style — a targeted overlay of just the keys",
-          "line": 95,
+          "line": 97,
           "deprecated": false
         },
         {
@@ -20277,7 +20637,7 @@
           "kind": "function",
           "signature": "()",
           "summary": "Ordered ``{display_name: token}`` of everything a style-selector combo offers: each shipped",
-          "line": 111,
+          "line": 113,
           "deprecated": false
         },
         {
@@ -20286,7 +20646,7 @@
           "kind": "function",
           "signature": "(name, persist=False)",
           "summary": "Apply a selection from :func:`list_templates` by its token — a shipped style name, applied",
-          "line": 122,
+          "line": 124,
           "deprecated": false
         }
       ],
@@ -20294,7 +20654,7 @@
         {
           "name": "StyleSetter",
           "summary": "Public namespace for the style-setter helpers (``mtk.StyleSetter.set_style(\"Blender\")`` …).",
-          "line": 130,
+          "line": 132,
           "bases": [],
           "members": []
         }
@@ -20505,7 +20865,7 @@
         {
           "name": "RizomUVBridge",
           "summary": "",
-          "line": 39,
+          "line": 66,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -20516,7 +20876,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "Resolve the RizomUV executable path.",
-              "line": 60,
+              "line": 95,
               "deprecated": false
             },
             {
@@ -20524,8 +20884,8 @@
               "qualname": "RizomUVBridge.rizom_version",
               "kind": "property",
               "signature": "(self) -> 'tuple[int, ...]'",
-              "summary": "Parse the Rizom version from the install directory name.",
-              "line": 88,
+              "summary": "The installed Rizom version, parsed from the install-dir name.",
+              "line": 123,
               "deprecated": false
             },
             {
@@ -20534,7 +20894,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "Lazy initialization of the export path.",
-              "line": 126,
+              "line": 148,
               "deprecated": false
             },
             {
@@ -20543,7 +20903,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "Get the path to the UV script file as a POSIX string.",
-              "line": 147,
+              "line": 171,
               "deprecated": false
             },
             {
@@ -20552,7 +20912,7 @@
               "kind": "method",
               "signature": "(self, objects, uv_script=None, preset=None, params=None)",
               "summary": "Run the full export -> RizomUV -> re-import workflow.",
-              "line": 161,
+              "line": 185,
               "deprecated": false
             },
             {
@@ -20561,7 +20921,7 @@
               "kind": "method",
               "signature": "(self, objects, params=None)",
               "summary": "Export *objects* and open them in a fresh RizomUV session.",
-              "line": 697,
+              "line": 722,
               "deprecated": false
             }
           ]
@@ -20578,7 +20938,7 @@
           "kind": "function",
           "signature": "(script_text: str) -> 'set[str]'",
           "summary": "Registered keys present in *script_text* (delegates to uitk.bridge).",
-          "line": 296,
+          "line": 321,
           "deprecated": false
         },
         {
@@ -20587,7 +20947,7 @@
           "kind": "function",
           "signature": "() -> 'dict[str, Any]'",
           "summary": "Return ``{key: default}`` for every registered parameter.",
-          "line": 301,
+          "line": 326,
           "deprecated": false
         },
         {
@@ -20596,7 +20956,7 @@
           "kind": "function",
           "signature": "(values: 'dict[str, Any]') -> 'dict[str, str]'",
           "summary": "Format *values* for ``StrUtils.replace_delimited`` using Lua literals.",
-          "line": 306,
+          "line": 331,
           "deprecated": false
         },
         {
@@ -20605,7 +20965,7 @@
           "kind": "function",
           "signature": "(script_text: str, version: 'tuple[int, ...]') -> str",
           "summary": "Drop every line that references a placeholder requiring a newer Rizom.",
-          "line": 351,
+          "line": 376,
           "deprecated": false
         }
       ],
@@ -20683,13 +21043,13 @@
       ]
     },
     {
-      "relpath": "uv_utils/uv_transform.py",
+      "relpath": "uv_utils/shell_xform.py",
       "summary": "Dedicated UV shell-transform panel.",
       "functions": [],
       "classes": [
         {
-          "name": "UvTransformSlots",
-          "summary": "Switchboard slots for the UV Transform panel (``uv_transform.ui``).",
+          "name": "ShellXformSlots",
+          "summary": "Switchboard slots for the Shell Xform panel (``shell_xform.ui``).",
           "line": 36,
           "bases": [
             "ptk.LoggingMixin"
@@ -20697,7 +21057,7 @@
           "members": [
             {
               "name": "header_init",
-              "qualname": "UvTransformSlots.header_init",
+              "qualname": "ShellXformSlots.header_init",
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Header menu — Open UV Editor + panel help.",
@@ -20706,245 +21066,245 @@
             },
             {
               "name": "b023",
-              "qualname": "UvTransformSlots.b023",
+              "qualname": "ShellXformSlots.b023",
               "kind": "method",
               "signature": "(self)",
               "summary": "Move To UV Space: Left",
-              "line": 123,
+              "line": 124,
               "deprecated": false
             },
             {
               "name": "b024",
-              "qualname": "UvTransformSlots.b024",
+              "qualname": "ShellXformSlots.b024",
               "kind": "method",
               "signature": "(self)",
               "summary": "Move To UV Space: Down",
-              "line": 127,
+              "line": 128,
               "deprecated": false
             },
             {
               "name": "b025",
-              "qualname": "UvTransformSlots.b025",
+              "qualname": "ShellXformSlots.b025",
               "kind": "method",
               "signature": "(self)",
               "summary": "Move To UV Space: Up",
-              "line": 131,
+              "line": 132,
               "deprecated": false
             },
             {
               "name": "b026",
-              "qualname": "UvTransformSlots.b026",
+              "qualname": "ShellXformSlots.b026",
               "kind": "method",
               "signature": "(self)",
               "summary": "Move To UV Space: Right",
-              "line": 135,
+              "line": 136,
               "deprecated": false
             },
             {
               "name": "b034",
-              "qualname": "UvTransformSlots.b034",
+              "qualname": "ShellXformSlots.b034",
               "kind": "method",
               "signature": "(self)",
               "summary": "Flip U: mirror the selected UVs horizontally about each shell's center.",
-              "line": 153,
+              "line": 154,
               "deprecated": false
             },
             {
               "name": "b035",
-              "qualname": "UvTransformSlots.b035",
+              "qualname": "ShellXformSlots.b035",
               "kind": "method",
               "signature": "(self)",
               "summary": "Flip V: mirror the selected UVs vertically about each shell's center.",
-              "line": 157,
+              "line": 158,
               "deprecated": false
             },
             {
               "name": "b036",
-              "qualname": "UvTransformSlots.b036",
+              "qualname": "ShellXformSlots.b036",
               "kind": "method",
               "signature": "(self)",
               "summary": "Rotate the selected UVs counter-clockwise by the s041 angle.",
-              "line": 194,
+              "line": 195,
               "deprecated": false
             },
             {
               "name": "b037",
-              "qualname": "UvTransformSlots.b037",
+              "qualname": "ShellXformSlots.b037",
               "kind": "method",
               "signature": "(self)",
               "summary": "Rotate the selected UVs clockwise by the s041 angle.",
-              "line": 198,
+              "line": 199,
               "deprecated": false
             },
             {
               "name": "s041",
-              "qualname": "UvTransformSlots.s041",
+              "qualname": "ShellXformSlots.s041",
               "kind": "method",
               "signature": "(self, value, widget)",
               "summary": "Rotate Angle — passive input; read by the Rotate buttons (b036/b037).",
-              "line": 202,
+              "line": 203,
               "deprecated": false
             },
             {
               "name": "tb005_init",
-              "qualname": "UvTransformSlots.tb005_init",
+              "qualname": "ShellXformSlots.tb005_init",
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Straighten UV",
-              "line": 206,
+              "line": 207,
               "deprecated": false
             },
             {
               "name": "tb005",
-              "qualname": "UvTransformSlots.tb005",
+              "qualname": "ShellXformSlots.tb005",
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Straighten UV",
-              "line": 238,
+              "line": 239,
               "deprecated": false
             },
             {
               "name": "tb006_init",
-              "qualname": "UvTransformSlots.tb006_init",
+              "qualname": "ShellXformSlots.tb006_init",
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Distribute",
-              "line": 256,
+              "line": 257,
               "deprecated": false
             },
             {
               "name": "tb006",
-              "qualname": "UvTransformSlots.tb006",
+              "qualname": "ShellXformSlots.tb006",
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Distribute: evenly space the selected UV shells horizontally or vertically.",
-              "line": 273,
+              "line": 274,
               "deprecated": false
             },
             {
               "name": "tb008_init",
-              "qualname": "UvTransformSlots.tb008_init",
+              "qualname": "ShellXformSlots.tb008_init",
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Mirror UVs.",
-              "line": 284,
+              "line": 285,
               "deprecated": false
             },
             {
               "name": "tb008",
-              "qualname": "UvTransformSlots.tb008",
+              "qualname": "ShellXformSlots.tb008",
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Mirror UVs (footprint-preserving by default).",
-              "line": 321,
+              "line": 322,
               "deprecated": false
             },
             {
               "name": "align_u_min",
-              "qualname": "UvTransformSlots.align_u_min",
+              "qualname": "ShellXformSlots.align_u_min",
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their minimum U (left).",
-              "line": 342,
+              "line": 343,
               "deprecated": false
             },
             {
               "name": "align_u_avg",
-              "qualname": "UvTransformSlots.align_u_avg",
+              "qualname": "ShellXformSlots.align_u_avg",
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their average U (center).",
-              "line": 346,
+              "line": 347,
               "deprecated": false
             },
             {
               "name": "align_u_max",
-              "qualname": "UvTransformSlots.align_u_max",
+              "qualname": "ShellXformSlots.align_u_max",
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their maximum U (right).",
-              "line": 350,
+              "line": 351,
               "deprecated": false
             },
             {
               "name": "align_v_min",
-              "qualname": "UvTransformSlots.align_v_min",
+              "qualname": "ShellXformSlots.align_v_min",
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their minimum V (bottom).",
-              "line": 354,
+              "line": 355,
               "deprecated": false
             },
             {
               "name": "align_v_avg",
-              "qualname": "UvTransformSlots.align_v_avg",
+              "qualname": "ShellXformSlots.align_v_avg",
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their average V (center).",
-              "line": 358,
+              "line": 359,
               "deprecated": false
             },
             {
               "name": "align_v_max",
-              "qualname": "UvTransformSlots.align_v_max",
+              "qualname": "ShellXformSlots.align_v_max",
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their maximum V (top).",
-              "line": 362,
+              "line": 363,
               "deprecated": false
             },
             {
               "name": "linear_align",
-              "qualname": "UvTransformSlots.linear_align",
+              "qualname": "ShellXformSlots.linear_align",
               "kind": "method",
               "signature": "(self)",
               "summary": "Linearly align the selected UVs between their two end points.",
-              "line": 366,
+              "line": 367,
               "deprecated": false
             },
             {
               "name": "orient_shells",
-              "qualname": "UvTransformSlots.orient_shells",
+              "qualname": "ShellXformSlots.orient_shells",
               "kind": "method",
               "signature": "(self)",
               "summary": "Orient each shell to run parallel with its nearest U/V axis.",
-              "line": 371,
+              "line": 372,
               "deprecated": false
             },
             {
               "name": "orient_edges",
-              "qualname": "UvTransformSlots.orient_edges",
+              "qualname": "ShellXformSlots.orient_edges",
               "kind": "method",
               "signature": "(self)",
               "summary": "Orient the shell so its selected edge runs along U or V.",
-              "line": 379,
+              "line": 380,
               "deprecated": false
             },
             {
               "name": "gather_shells",
-              "qualname": "UvTransformSlots.gather_shells",
+              "qualname": "ShellXformSlots.gather_shells",
               "kind": "method",
               "signature": "(self)",
               "summary": "Gather the selected shells together toward the 0-1 UV space.",
-              "line": 391,
+              "line": 392,
               "deprecated": false
             },
             {
               "name": "randomize_shells",
-              "qualname": "UvTransformSlots.randomize_shells",
+              "qualname": "ShellXformSlots.randomize_shells",
               "kind": "method",
               "signature": "(self)",
               "summary": "Randomly offset the selected shells.",
-              "line": 395,
+              "line": 396,
               "deprecated": false
             },
             {
               "name": "open_uv_editor",
-              "qualname": "UvTransformSlots.open_uv_editor",
+              "qualname": "ShellXformSlots.open_uv_editor",
               "kind": "method",
               "signature": "(self)",
               "summary": "Open Maya's UV Editor (TextureViewWindow).",
-              "line": 400,
+              "line": 401,
               "deprecated": false
             }
           ]

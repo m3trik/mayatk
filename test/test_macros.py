@@ -143,8 +143,19 @@ class TestSetMacro(MayaTkTestCase):
         self.assertTrue(cmds.runTimeCommand(self.TEST_MACRO_NAME, exists=True))
 
 
+@unittest.skipIf(
+    cmds.about(batch=True),
+    "cmds.selectMode(query=...) is unreliable in batch/standalone mode — it "
+    "returns False regardless of the actual mode, so these assertions only "
+    "hold in the GUI-connected runner (run_tests.py port mode).",
+)
 class TestSelectionMacros(MayaTkTestCase):
-    """Selection-mode macros work headlessly via cmds.selectMode."""
+    """Selection-mode macros — assert the live selectMode/selectType state.
+
+    GUI-only: the macros themselves run headlessly, but the *query* side lies
+    under mayapy standalone (see the class skip), so the suite verifies them
+    where the query is trustworthy.
+    """
 
     def test_vertex_selection_sets_component_mode(self):
         cube = cmds.polyCube(name="sel_cube")[0]
@@ -448,6 +459,29 @@ class TestMacroPresentation(QuickTestCase):
             self.assertEqual(spec.get("cat"), Macros.macro_category(name), name)
 
 
+class _NoPrefsFlush:
+    """Mixin: block ``cmds.savePrefs`` for the test.
+
+    The test harness runs against the developer's REAL Maya prefs (no
+    ``MAYA_APP_DIR`` sandbox), so an integration test that drives the real
+    ``apply_bindings`` would otherwise flush its throwaway hotkey bindings
+    (F7/F8/F9, ...) into the user's ``userHotkeys_*.mel``. That pollution is
+    exactly what seeded the stale chords the launch-time preset re-apply then
+    fought (and re-saved) on every launch. In-memory hotkey edits are fine —
+    the test Maya is force-closed, so nothing persists unless savePrefs runs.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+
+        from mayatk.edit_utils import macros
+
+        patcher = mock.patch.object(macros.cmds, "savePrefs", create=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
 class _TempPresetRoot:
     """Mixin: redirect the shared preset root to a throwaway dir per test."""
 
@@ -481,9 +515,18 @@ class TestPresetRoundTrip(_TempPresetRoot, QuickTestCase):
         self.assertFalse(Macros.delete_preset(Macros.DEFAULT_PRESET))
 
     def test_load_preset_strips_meta(self):
-        data = Macros.load_preset(Macros.DEFAULT_PRESET)
-        self.assertNotIn("_meta", data)
-        self.assertIn("m_wireframe", data)
+        Macros.save_preset("unittest_meta", {"m_wireframe": {"key": "3", "cat": "Display"}})
+        try:
+            data = Macros.load_preset("unittest_meta")
+            self.assertNotIn("_meta", data)
+            self.assertIn("m_wireframe", data)
+        finally:
+            Macros.delete_preset("unittest_meta")
+
+    def test_shipped_default_is_all_unbound(self):
+        # Contract: the shipped 'default' preset carries NO bindings — loading
+        # it clears every macro hotkey. Bindings are opt-in via user presets.
+        self.assertEqual(Macros.load_preset(Macros.DEFAULT_PRESET), {})
 
     def test_save_load_delete_round_trip(self):
         bindings = {
@@ -498,7 +541,7 @@ class TestPresetRoundTrip(_TempPresetRoot, QuickTestCase):
         self.assertNotIn("unittest_set", Macros.list_presets())
 
 
-class TestApplyBindings(_TempPresetRoot, MayaTkTestCase):
+class TestApplyBindings(_NoPrefsFlush, _TempPresetRoot, MayaTkTestCase):
     """apply_bindings / set_macros parity + clear/unset (needs Maya)."""
 
     NAMES = ("m_wireframe", "m_group", "m_object_selection")
@@ -583,11 +626,265 @@ class TestLiveHotkeyIntrospection(QuickTestCase):
             self.assertEqual(hotkey_collisions.live_hotkey_map(), {})
 
 
-class TestApplySavedMacros(_TempPresetRoot, MayaTkTestCase):
-    """Startup path: apply_saved_macros() applies the shipped default set."""
+class TestEnsureEditableHotkeySet(QuickTestCase):
+    """set_macro's locked-set guard: Maya refuses hotkey edits while the
+    factory ``Maya_Default`` set is current, so an editable user set must be
+    made current first (hotkey sets are GUI-only — mocked here; the live-GUI
+    behavior was verified end-to-end 2026-07-10)."""
+
+    @staticmethod
+    def _fake_hotkeySet(current, existing):
+        """A stateful ``cmds.hotkeySet`` stand-in covering the query /
+        create / switch calls ``ensure_editable_hotkey_set`` makes."""
+        state = {"current": current, "sets": list(existing)}
+
+        def fake(*args, **kw):
+            if kw.get("query"):
+                if kw.get("current"):
+                    return state["current"]
+                if kw.get("exists"):
+                    return args[0] in state["sets"]
+                if kw.get("hotkeySetArray"):
+                    return list(state["sets"])
+                return None
+            if kw.get("edit"):
+                if kw.get("current"):
+                    state["current"] = args[0]
+                if kw.get("delete"):
+                    state["sets"].remove(args[0])
+                return None
+            state["sets"].append(args[0])  # create
+            if kw.get("current"):
+                state["current"] = args[0]
+            return args[0]
+
+        return fake, state
+
+    def test_locked_factory_set_creates_and_switches(self):
+        from unittest import mock
+        from mayatk.ui_utils import hotkey_collisions as hc
+
+        fake, state = self._fake_hotkeySet("Maya_Default", ["Maya_Default"])
+        with mock.patch.object(hc.cmds, "hotkeySet", side_effect=fake):
+            name = hc.ensure_editable_hotkey_set()
+        self.assertEqual(name, hc.MACRO_HOTKEY_SET)
+        self.assertEqual(state["current"], hc.MACRO_HOTKEY_SET)
+        self.assertIn(hc.MACRO_HOTKEY_SET, state["sets"])
+
+    def test_existing_user_set_reused_not_duplicated(self):
+        from unittest import mock
+        from mayatk.ui_utils import hotkey_collisions as hc
+
+        fake, state = self._fake_hotkeySet(
+            "Maya_Default", ["Maya_Default", hc.MACRO_HOTKEY_SET]
+        )
+        with mock.patch.object(hc.cmds, "hotkeySet", side_effect=fake):
+            name = hc.ensure_editable_hotkey_set()
+        self.assertEqual(name, hc.MACRO_HOTKEY_SET)
+        self.assertEqual(state["current"], hc.MACRO_HOTKEY_SET)
+        self.assertEqual(state["sets"].count(hc.MACRO_HOTKEY_SET), 1)
+
+    def test_editable_current_set_untouched(self):
+        from unittest import mock
+        from mayatk.ui_utils import hotkey_collisions as hc
+
+        fake, state = self._fake_hotkeySet("MySet", ["Maya_Default", "MySet"])
+        with mock.patch.object(hc.cmds, "hotkeySet", side_effect=fake):
+            name = hc.ensure_editable_hotkey_set()
+        self.assertEqual(name, "MySet")
+        self.assertEqual(state["current"], "MySet")
+        self.assertNotIn(hc.MACRO_HOTKEY_SET, state["sets"])
+
+
+class TestApplyBindingsResilience(QuickTestCase):
+    """apply_bindings: one bad chord logs and continues — it must never abort
+    the rest of the preset (pre-fix, the first raising entry killed the whole
+    startup / manual preset apply)."""
+
+    def test_one_bad_entry_does_not_abort_the_rest(self):
+        from unittest import mock
+        from mayatk.edit_utils import macros
+
+        applied = []
+
+        def fake_set_macro(name, key=None, cat=None):
+            if name == "m_bad":
+                raise RuntimeError("boom")
+            applied.append(name)
+
+        # apply_bindings diffs against the live registry, so stub it: m_bad and
+        # m_group are unbound (forcing set_macro), m_unbind is currently bound
+        # (forcing clear_hotkey). The bad entry must still not abort the rest.
+        # savePrefs is mocked so this unit test never flushes the real prefs.
+        live = {"m_unbind": {"key": "F4", "cat": "Edit"}}
+        with mock.patch.object(
+            Macros, "get_current_bindings", return_value=live
+        ), mock.patch.object(
+            Macros, "_key_bound_to", return_value=False  # targets not yet live
+        ), mock.patch.object(
+            Macros, "set_macro", side_effect=fake_set_macro
+        ), mock.patch.object(
+            Macros, "clear_hotkey"
+        ) as clear, mock.patch.object(
+            macros.cmds, "savePrefs", create=True
+        ):
+            Macros.apply_bindings(
+                {
+                    "m_bad": {"key": "F5", "cat": "Edit"},  # raises first...
+                    "m_group": {"key": "F6", "cat": "Edit"},  # ...rest applies
+                    "m_unbind": {"key": "", "cat": ""},
+                }
+            )
+        self.assertEqual(applied, ["m_group"])
+        clear.assert_called_once_with("m_unbind")
+
+
+class TestApplyBindingsIdempotent(QuickTestCase):
+    """apply_bindings must be a no-op — and must NOT flush prefs — when the live
+    hotkey registry already matches the target preset. The launch-time re-apply
+    (``apply_saved_macros`` from TclMaya) otherwise recreated every
+    runtimeCommand and forced ``savePrefs(hotkeys=True)`` on every start, so the
+    Script Editor logged "Saving runtime commands / Saving hotkeys / Saving
+    named commands" each launch even though nothing had changed."""
+
+    def test_matching_preset_applies_nothing_and_skips_saveprefs(self):
+        from unittest import mock
+        from mayatk.edit_utils import macros
+
+        # Live registry already equals the preset (one bound, one unbound).
+        live = {
+            "m_wireframe": {"key": "ctl+i", "cat": "Display"},
+            "m_group": {"key": "", "cat": "Edit"},
+        }
+        with mock.patch.object(
+            Macros, "get_current_bindings", return_value=live
+        ), mock.patch.object(
+            Macros, "_key_bound_to", return_value=True  # target chord already live
+        ), mock.patch.object(Macros, "set_macro") as set_macro, mock.patch.object(
+            Macros, "clear_hotkey"
+        ) as clear, mock.patch.object(
+            macros.cmds, "savePrefs", create=True
+        ) as save:
+            Macros.apply_bindings(
+                {
+                    "m_wireframe": {"key": "ctl+i", "cat": "Display"},
+                    "m_group": {"key": "", "cat": "Edit"},  # already unbound
+                }
+            )
+        set_macro.assert_not_called()
+        clear.assert_not_called()
+        save.assert_not_called()  # nothing changed -> no prefs flush
+
+    def test_multibound_target_present_is_noop(self):
+        """THE recurrence bug: a command bound to several chords (sht+q + extras
+        added in Maya's Hotkey Editor) collapses to ONE, non-deterministically-
+        chosen entry in live_hotkey_map. When that entry is an EXTRA (here
+        sht+g) rather than the preset key (sht+q), the old normalize-compare
+        re-applied + flushed prefs — on some launches only, which is why the
+        save spam seemed random. The target key IS live, so it must be a no-op."""
+        from unittest import mock
+        from mayatk.edit_utils import macros
+
+        # live_hotkey_map returned an extra chord, not the preset's sht+q...
+        live = {"m_object_selection": {"key": "sht+g", "cat": "Edit"}}
+        with mock.patch.object(
+            Macros, "get_current_bindings", return_value=live
+        ), mock.patch.object(
+            Macros, "_key_bound_to", return_value=True  # ...but sht+q IS bound
+        ) as kb, mock.patch.object(
+            Macros, "set_macro"
+        ) as set_macro, mock.patch.object(
+            Macros, "clear_hotkey"
+        ) as clear, mock.patch.object(
+            macros.cmds, "savePrefs", create=True
+        ) as save:
+            Macros.apply_bindings(
+                {"m_object_selection": {"key": "sht+q", "cat": "Edit"}}
+            )
+        kb.assert_called_once_with("m_object_selection", "sht+q")
+        set_macro.assert_not_called()
+        clear.assert_not_called()
+        save.assert_not_called()  # target already live -> no flush
+
+    def test_real_difference_applies_and_flushes_once(self):
+        from unittest import mock
+        from mayatk.edit_utils import macros
+
+        live = {"m_wireframe": {"key": "F1", "cat": "Display"}}
+        with mock.patch.object(
+            Macros, "get_current_bindings", return_value=live
+        ), mock.patch.object(
+            Macros, "_key_bound_to", return_value=False  # target F2 not yet live
+        ), mock.patch.object(Macros, "set_macro") as set_macro, mock.patch.object(
+            Macros, "clear_hotkey"
+        ) as clear, mock.patch.object(
+            macros.cmds, "savePrefs", create=True
+        ) as save:
+            Macros.apply_bindings({"m_wireframe": {"key": "F2", "cat": "Display"}})
+        # Rebinding must release the stale live chord first: set_macro only
+        # ADDS a binding, so without the clear the command stays multi-bound,
+        # the registry keeps reporting the old chord, and the launch diff
+        # re-applies (and re-saves prefs) forever.
+        clear.assert_called_once_with("m_wireframe", key="F1")
+        set_macro.assert_called_once_with("m_wireframe", key="F2", cat="Display")
+        save.assert_called_once()  # a genuine change still persists
+
+    def test_unbound_macro_binds_without_clearing(self):
+        from unittest import mock
+        from mayatk.edit_utils import macros
+
+        # No live key -> nothing to release; just bind.
+        live = {"m_wireframe": {"key": "", "cat": "Display"}}
+        with mock.patch.object(
+            Macros, "get_current_bindings", return_value=live
+        ), mock.patch.object(
+            Macros, "_key_bound_to", return_value=False
+        ), mock.patch.object(Macros, "set_macro") as set_macro, mock.patch.object(
+            Macros, "clear_hotkey"
+        ) as clear, mock.patch.object(
+            macros.cmds, "savePrefs", create=True
+        ):
+            Macros.apply_bindings({"m_wireframe": {"key": "F2", "cat": "Display"}})
+        clear.assert_not_called()
+        set_macro.assert_called_once_with("m_wireframe", key="F2", cat="Display")
+
+    def test_chord_swap_does_not_clobber_sibling_target(self):
+        from unittest import mock
+        from mayatk.edit_utils import macros
+
+        # m_wireframe and m_group swap chords in one apply. Neither stale chord
+        # may be cleared — each is the OTHER's target, and set_macro (last write
+        # wins on a key) reassigns it. Clearing would wipe the sibling's set.
+        live = {
+            "m_wireframe": {"key": "F1", "cat": "Display"},
+            "m_group": {"key": "F2", "cat": "Edit"},
+        }
+        with mock.patch.object(
+            Macros, "get_current_bindings", return_value=live
+        ), mock.patch.object(
+            Macros, "_key_bound_to", return_value=False  # neither target live yet
+        ), mock.patch.object(Macros, "set_macro") as set_macro, mock.patch.object(
+            Macros, "clear_hotkey"
+        ) as clear, mock.patch.object(
+            macros.cmds, "savePrefs", create=True
+        ):
+            Macros.apply_bindings(
+                {
+                    "m_wireframe": {"key": "F2", "cat": "Display"},  # was F1
+                    "m_group": {"key": "F1", "cat": "Edit"},  # was F2
+                }
+            )
+        clear.assert_not_called()  # both stale chords are targets -> no clear
+        self.assertEqual(set_macro.call_count, 2)
+
+
+class TestApplySavedMacros(_NoPrefsFlush, _TempPresetRoot, MayaTkTestCase):
+    """Startup path: apply_saved_macros() resolves active -> shipped default."""
+
+    NAMES = ("m_wireframe", "m_invert_selection", "m_group")
 
     def tearDown(self):
-        for name in Macros.load_preset(Macros.DEFAULT_PRESET):
+        for name in self.NAMES:
             try:
                 if cmds.runTimeCommand(name, exists=True) and not cmds.runTimeCommand(
                     name, query=True, default=True
@@ -597,14 +894,31 @@ class TestApplySavedMacros(_TempPresetRoot, MayaTkTestCase):
                 pass
         super().tearDown()
 
-    def test_applies_default_when_no_active_preset(self):
+    def test_default_registers_nothing_when_no_active_preset(self):
+        # The shipped 'default' is all-unbound, so with no active preset the
+        # startup path must not register any macro runTimeCommands.
         Macros.apply_saved_macros()
-        # A representative subset from the default set should be registered.
-        for name in ("m_wireframe", "m_invert_selection", "m_group"):
-            self.assertTrue(
+        for name in self.NAMES:
+            self.assertFalse(
                 cmds.runTimeCommand(name, exists=True),
-                f"{name} not registered by apply_saved_macros()",
+                f"{name} unexpectedly registered by the empty default preset",
             )
+
+    def test_applies_active_user_preset(self):
+        bindings = {
+            "m_wireframe": {"key": "3", "cat": "Display"},
+            "m_group": {"key": "ctl+g", "cat": "Edit"},
+        }
+        Macros.save_preset("unittest_active", bindings)  # also sets it active
+        try:
+            Macros.apply_saved_macros()
+            for name in bindings:
+                self.assertTrue(
+                    cmds.runTimeCommand(name, exists=True),
+                    f"{name} not registered from the active user preset",
+                )
+        finally:
+            Macros.delete_preset("unittest_active")
 
 
 if __name__ == "__main__":

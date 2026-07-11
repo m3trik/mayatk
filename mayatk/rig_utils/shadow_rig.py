@@ -1,9 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
+import math
+
 import numpy as np
-import cv2
-from typing import Optional, Tuple, Union
 
 try:
     import maya.cmds as cmds
@@ -14,7 +14,7 @@ import pythontk as ptk
 from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # From this package:
-from mayatk import CoreUtils, NodeUtils
+from mayatk import NodeUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.core_utils.preview import Preview
 
@@ -28,19 +28,45 @@ class ShadowRig(ptk.LoggingMixin):
 
     Modes:
         - "orbit": Plane rotates around the target to face away from light.
-                   Simple and intuitive; shadow always points away from source.
+                   Correct for animated lights (the silhouette never mirrors).
         - "stretch": Plane stays axis-aligned; uses scale + compensatory
-                     translation to warp shadow. Better for baking but
-                     silhouette may appear mirrored at extreme angles.
+                     translation to warp shadow. Bake-friendly, but the
+                     silhouette mirrors if the light crosses to the opposite
+                     side of the target — prefer orbit for orbiting lights.
+
+    Shadow behavior (both modes):
+        - The plane is anchored at the *projected* ground contact — where the
+          light ray through the contact point hits the ground — so the shadow
+          slides away from the light as the target leaves the ground.
+        - Stretch amount is proportional to the target's measured height
+          (``objectHeight``): tall objects cast long shadows, flat ones don't.
+        - Opacity fades with stretch (``falloffPower``), with the light
+          dropping toward the contact, and with the target rising off the
+          ground (``fadeHeight`` = rise at which the shadow is fully gone).
 
     Workflow for Unity:
     1. Create shadow with ShadowRig.create()
-    2. Bake simulation: Edit > Keys > Bake Simulation
-    3. Export FBX (include shadow plane + texture)
-    4. In Unity: Use Unlit/Transparent shader
+    2. Bake with ShadowRig.bake() (or the panel's Bake to Keyframes button)
+    3. Export through the Scene Exporter — the rig publishes a
+       ``shadow_metadata`` channel on the ``data_export`` carrier
+       (refreshed at export time via FbxUtils.run_export_preparers), and
+       the silhouette PNG goes into the Unity project alongside.
+    4. In Unity: with unitytk's ShadowPlaneController.cs deployed, the
+       import is automatic (unlit-transparent material bound to the
+       silhouette, shadow casting/receiving + probes off). Without it,
+       assign an Unlit/Transparent shader with the PNG by hand.
+
+    Note: the opacity falloff is shader-side (Maya preview only) — FBX does
+    not carry material animation into Unity. The baked plane transform does.
     """
 
     MODES = ("orbit", "stretch")
+    # Lift above the ground plane to avoid z-fighting (build + expression).
+    GROUND_OFFSET = 0.01
+    # Channels the mode expressions drive (and bake() keys).
+    BAKE_CHANNELS = ("translateX", "translateY", "translateZ", "rotateY", "scaleX", "scaleZ")
+    # data_export carrier channel (see refresh_export_metadata).
+    SHADOW_METADATA = "shadow_metadata"
 
     def __init__(self, targets=None, light=None, ground_height=0.0, mode="stretch"):
         # Accept single target or list of targets
@@ -58,14 +84,48 @@ class ShadowRig(ptk.LoggingMixin):
         self.shader = None
         self.opacity_mult = None
         self.texture_path = None
+        self.group = None
+        self.plane_size = 1.0
+        self.object_height = 0.0
         self.mode = mode if mode in self.MODES else "stretch"
 
-        # For naming, use first target or "combined"
-        self._name_base = str(self.targets[0]) if len(self.targets) == 1 else "combined"
+        # For naming, use first target or "combined" — uniquified against
+        # existing rigs: every rig node/texture is named off this base, and a
+        # collision (two multi-target "combined" rigs, or re-creating a
+        # target's rig) would delete the older rig's decomposeMatrix nodes
+        # out from under its expression and overwrite its silhouette PNG.
+        base = str(self.targets[0]) if len(self.targets) == 1 else "combined"
+        i, unique = 0, base
+        while cmds.objExists(f"{unique}_shadow_grp"):
+            i += 1
+            unique = f"{base}{i}"
+        self._name_base = unique
+
+    def _world_bbox(self):
+        """``exactWorldBoundingBox`` over the targets' MESH geometry only.
+
+        Helper shapes parented under a target — this rig's own contact
+        locator, most notably — must not pollute the measurement (the
+        locator sits at min-Y, so including it inflates ``objectHeight``
+        by its display size). Mirrors blendertk's empty-skipping bounds.
+        """
+        shapes = []
+        for t in self.targets:
+            shapes += cmds.ls(t, type="mesh") or []  # target may BE a shape
+            shapes += (
+                cmds.listRelatives(t, ad=True, type="mesh", fullPath=True) or []
+            )
+        # Intermediate (Orig) shapes hold pre-deformation geometry — a skinned
+        # target posed away from bind pose would union its bind pose into the
+        # measurement, skewing objectHeight / plane size / center.
+        shapes = cmds.ls(shapes, noIntermediate=True) or []
+        if not shapes:
+            return cmds.exactWorldBoundingBox(self.targets)
+        return cmds.exactWorldBoundingBox(shapes)
 
     def create_contact_locator(self):
         """Create a locator at the lowest point of the combined objects to act as the shadow anchor."""
-        bbox = cmds.exactWorldBoundingBox(self.targets)
+        bbox = self._world_bbox()
         # BBox is [xmin, ymin, zmin, xmax, ymax, zmax]
         center_x = (bbox[0] + bbox[3]) / 2.0
         min_y = bbox[1]
@@ -101,7 +161,7 @@ class ShadowRig(ptk.LoggingMixin):
         """
         if cmds.objExists(source_name):
             self.light = source_name
-            print(f"Using existing shadow source: {self.light}")
+            self.logger.info(f"Using existing shadow source: {self.light}")
         else:
             self.light = cmds.spaceLocator(name=source_name)[0]
             cmds.setAttr(
@@ -122,16 +182,27 @@ class ShadowRig(ptk.LoggingMixin):
 
         return self.light
 
+    def _ensure_plane_attr(self, ln, dv, min_val=None, max_val=None, keyable=True):
+        """Add a float attr to the shadow plane if it doesn't exist yet."""
+        if not cmds.attributeQuery(ln, node=self.shadow_plane, exists=True):
+            kwargs = {"ln": ln, "at": "float", "dv": dv, "k": keyable}
+            if min_val is not None:
+                kwargs["min"] = min_val
+            if max_val is not None:
+                kwargs["max"] = max_val
+            cmds.addAttr(self.shadow_plane, **kwargs)
+
     def create_shadow_plane(self):
-        """Create a simple quad for the shadow with pivot at near edge."""
+        """Create a simple quad for the shadow with the keyable shadow attrs."""
         if not self.targets:
             raise ValueError("Target object(s) required")
 
-        # Get combined footprint size from all targets
-        bbox = cmds.exactWorldBoundingBox(self.targets)
+        # Get combined footprint size + height from all targets
+        bbox = self._world_bbox()
         width = (bbox[3] - bbox[0]) * 1.1
         depth = (bbox[5] - bbox[2]) * 1.1
         self.plane_size = max(width, depth, 1.0)
+        self.object_height = max(bbox[4] - bbox[1], 0.001)
 
         self.shadow_plane = cmds.polyPlane(
             name=f"{self._name_base}_shadow",
@@ -142,67 +213,105 @@ class ShadowRig(ptk.LoggingMixin):
             axis=(0, 1, 0),
         )[0]
 
-        # Add custom attributes for controlling shadow
-        if not cmds.attributeQuery(
-            "shadowIntensity", node=self.shadow_plane, exists=True
-        ):
-            cmds.addAttr(
-                self.shadow_plane,
-                ln="shadowIntensity",
-                at="float",
-                min=0,
-                max=1,
-                dv=1.0,
-                k=True,
-            )
-        if not cmds.attributeQuery("falloffPower", node=self.shadow_plane, exists=True):
-            cmds.addAttr(
-                self.shadow_plane,
-                ln="falloffPower",
-                at="float",
-                min=0.0,
-                max=5.0,
-                dv=1.2,
-                k=True,
-            )
-        if not cmds.attributeQuery("scaleInfluence", node=self.shadow_plane, exists=True):
-            cmds.addAttr(
-                self.shadow_plane,
-                ln="scaleInfluence",
-                at="float",
-                min=0.0,
-                max=1.0,
-                dv=0.0,
-                k=True,
-            )
-        # Store base plane size for expression calculations
-        if not cmds.attributeQuery("basePlaneSize", node=self.shadow_plane, exists=True):
-            cmds.addAttr(
-                self.shadow_plane,
-                ln="basePlaneSize",
-                at="float",
-                dv=self.plane_size,
-                k=False,
-            )
+        # Art-direction attrs (keyable) + measured constants the expression reads.
+        self._ensure_plane_attr("shadowIntensity", 1.0, 0.0, 1.0)
+        self._ensure_plane_attr("falloffPower", 1.2, 0.0, 5.0)
+        self._ensure_plane_attr("scaleInfluence", 0.0, 0.0, 1.0)
+        self._ensure_plane_attr("maxStretch", 4.0, 0.0, 10.0)
+        # Rise above the ground at which the shadow has fully faded out.
+        self._ensure_plane_attr("fadeHeight", max(2.0 * self.object_height, 0.001), 0.0)
+        self._ensure_plane_attr("basePlaneSize", self.plane_size, keyable=False)
+        self._ensure_plane_attr("objectHeight", self.object_height, keyable=False)
+        # Measured constants are always restamped to this build's values.
         cmds.setAttr(f"{self.shadow_plane}.basePlaneSize", self.plane_size)
+        cmds.setAttr(f"{self.shadow_plane}.objectHeight", self.object_height)
 
         # Keep plane centered - pivot at center, vertices centered around origin
         # The expression handles positioning based on light direction
         cmds.xform(self.shadow_plane, pivots=[0, 0, 0], objectSpace=True)
 
         # Position at combined targets center
-        bbox = cmds.exactWorldBoundingBox(self.targets)
         center_x = (bbox[0] + bbox[3]) / 2.0
         center_z = (bbox[2] + bbox[5]) / 2.0
         cmds.setAttr(
             f"{self.shadow_plane}.translate",
             center_x,
-            self.ground_height + 0.01,
+            self.ground_height + self.GROUND_OFFSET,
             center_z,
             type="double3",
         )
 
         return self.shadow_plane
+
+    def _gather_world_meshes(self, recursive=True):
+        """``[(points, tris)]`` world-space arrays for every target mesh shape.
+
+        Walks transforms first so instanced shapes yield one path per parent
+        (otherwise listRelatives dedupes by node and we miss instance copies).
+        """
+        shapes = []
+        for target in self.targets:
+            if recursive:
+                transforms = [target] + (
+                    cmds.listRelatives(
+                        target, ad=True, type="transform", fullPath=True
+                    )
+                    or []
+                )
+            else:
+                transforms = [target]
+
+            target_shapes = []
+            for tx in transforms:
+                # noIntermediate: an Orig shape holds pre-deformation geometry
+                # — rasterizing it draws the bind pose into the silhouette of
+                # a posed/skinned target (mirrors _world_bbox's filter).
+                tx_shapes = (
+                    cmds.listRelatives(
+                        tx, shapes=True, type="mesh", fullPath=True,
+                        noIntermediate=True,
+                    )
+                    or []
+                )
+                target_shapes.extend(tx_shapes)
+
+            if not target_shapes:
+                direct_shapes = NodeUtils.get_shapes(target, no_intermediate=True)
+                if direct_shapes:
+                    target_shapes = direct_shapes
+
+            shapes.extend(target_shapes)
+
+        meshes = []
+        for shape in shapes:
+            try:
+                sel_list = om2.MSelectionList()
+                sel_list.add(str(shape))
+                fn_mesh = om2.MFnMesh(sel_list.getDagPath(0))
+                points = fn_mesh.getPoints(om2.MSpace.kWorld)
+                _, tri_verts = fn_mesh.getTriangles()
+                pts = np.array([[p.x, p.y, p.z] for p in points], dtype=float)
+                tris = np.array(tri_verts, dtype=np.int64).reshape(-1, 3)
+                if len(pts) and len(tris):
+                    meshes.append((pts, tris))
+            except Exception as e:
+                self.logger.warning(f"Could not process shape {shape}: {e}")
+        return meshes
+
+    def _light_view_basis(self):
+        """Horizontal unit bearing ``(dx, dz)`` from the light to the targets'
+        center, or None when the light is absent or (near) directly overhead."""
+        if not self.light or not cmds.objExists(self.light):
+            return None
+        bbox = self._world_bbox()
+        cx = (bbox[0] + bbox[3]) / 2.0
+        cz = (bbox[2] + bbox[5]) / 2.0
+        lp = cmds.xform(self.light, q=True, ws=True, t=True)
+        dx, dz = cx - lp[0], cz - lp[2]
+        d = math.hypot(dx, dz)
+        if d < 1e-4:
+            return None
+        return dx / d, dz / d
 
     def create_silhouette_texture(
         self,
@@ -216,12 +325,16 @@ class ShadowRig(ptk.LoggingMixin):
         vertical_weight=0.3,
         blur_amount=1.5,
     ):
-        """Create silhouette texture using Maya API triangle rasterization.
+        """Create the silhouette texture via ``pythontk.ImgUtils.rasterize_silhouette``.
 
         Args:
             size: Texture resolution.
-            axis: Projection axis - 'x', 'y', 'z', or 'auto' (default).
-                  'auto' chooses the axis perpendicular to the widest dimension.
+            axis: Projection axis - 'light', 'x', 'y', 'z', or 'auto' (default).
+                  'light' projects the silhouette as seen from the light's
+                  horizontal bearing — the physically correct shape for a
+                  ground shadow. 'auto' = 'light' when a source exists (falling
+                  back to the axis perpendicular to the widest dimension when
+                  the light is directly overhead or not yet created).
             recursive: If True, include descendant meshes (e.g. for groups/locators).
             uniform_alpha: If True, the silhouette alpha is uniform across the
                 shape (no contact-point falloff). Useful for top-down shadows
@@ -243,290 +356,59 @@ class ShadowRig(ptk.LoggingMixin):
             blur_amount: Gaussian blur radius (in pixels) applied to the
                 silhouette mask. ``0`` = sharp edges; typical 1-4.
         """
-        import pythontk as ptk
+        from PIL import Image
 
         workspace = cmds.workspace(q=True, rd=True)
         output_dir = os.path.join(workspace, "sourceimages")
         os.makedirs(output_dir, exist_ok=True)
+        self.texture_path = os.path.join(output_dir, f"{self._name_base}_shadow.png")
 
-        texture_name = f"{self._name_base}_shadow.png"
-        self.texture_path = os.path.join(output_dir, texture_name)
+        meshes = self._gather_world_meshes(recursive)
+        if not meshes:
+            raise ValueError("No mesh geometry found on the target(s).")
 
-        # Get combined mesh bounds from all targets
-        bbox = cmds.exactWorldBoundingBox(self.targets)
-
-        # Auto-detect best axis if requested
-        if axis == "auto":
-            width_x = bbox[3] - bbox[0]
-            depth_z = bbox[5] - bbox[2]
-            axis = "x" if depth_z > width_x else "z"
-
-        # Determine projection axes based on view direction
-        axis = axis.lower()
-        if axis == "y":
-            u_idx, v_idx = 0, 2  # XZ plane
-        elif axis == "x":
-            u_idx, v_idx = 2, 1  # ZY plane
-        else:  # 'z' - default front/back view
-            u_idx, v_idx = 0, 1  # XY plane
-
-        # Calculate projection bounds
-        u_min = bbox[u_idx]
-        u_max = bbox[u_idx + 3]
-        v_min = bbox[v_idx]
-        v_max = bbox[v_idx + 3]
-
-        u_extent = u_max - u_min
-        v_extent = v_max - v_min
-        extent = max(u_extent, v_extent) * 1.1
-        u_center = (u_min + u_max) / 2
-        v_center = (v_min + v_max) / 2
-
-        # Create blank mask
-        mask = np.zeros((size, size), dtype=np.uint8)
-
-        def project_point(point):
-            """Project 3D point to 2D image coordinates."""
-            u = point[u_idx]
-            v = point[v_idx]
-            pu = int(((u - u_center) / extent + 0.5) * size)
-            pv = int((1.0 - ((v - v_center) / extent + 0.5)) * size)
-            return [np.clip(pu, 0, size - 1), np.clip(pv, 0, size - 1)]
-
-        # Gather all mesh-shape DAG paths from all targets.
-        # Walk transforms first so instanced shapes yield one path per parent
-        # (otherwise listRelatives dedupes by node and we miss instance copies).
-        shapes = []
-        for target in self.targets:
-            if recursive:
-                transforms = [target] + (
-                    cmds.listRelatives(
-                        target, ad=True, type="transform", fullPath=True
+        axis = str(axis).lower()
+        raster_axis = axis
+        if axis in ("auto", "light"):
+            basis = self._light_view_basis()
+            if basis is not None:
+                # Rebase points into the light's view frame: u = the horizontal
+                # coordinate perpendicular to the bearing (preserved by the
+                # ground projection — u_axis = (dz, 0, -dx)), v = world up.
+                # Rasterize as a front ('z') view of that frame.
+                dx_n, dz_n = basis
+                meshes = [
+                    (
+                        np.column_stack(
+                            [
+                                pts[:, 0] * dz_n - pts[:, 2] * dx_n,
+                                pts[:, 1],
+                                np.zeros(len(pts)),
+                            ]
+                        ),
+                        tris,
                     )
-                    or []
-                )
+                    for pts, tris in meshes
+                ]
+                raster_axis = "z"
             else:
-                transforms = [target]
+                raster_axis = "auto"  # widest-dimension fallback
 
-            target_shapes = []
-            for tx in transforms:
-                tx_shapes = (
-                    cmds.listRelatives(
-                        tx, shapes=True, type="mesh", fullPath=True
-                    )
-                    or []
-                )
-                target_shapes.extend(tx_shapes)
+        rgba = ptk.ImgUtils.rasterize_silhouette(
+            meshes,
+            size=size,
+            axis=raster_axis,
+            uniform_alpha=uniform_alpha,
+            falloff_source=falloff_source,
+            falloff_power=falloff_power,
+            vertical_weight=vertical_weight,
+            blur_amount=blur_amount,
+        )
+        Image.fromarray(rgba, "RGBA").save(self.texture_path)
 
-            if not target_shapes:
-                direct_shapes = NodeUtils.get_shapes(target, no_intermediate=True)
-                if direct_shapes:
-                    target_shapes = direct_shapes
-
-            shapes.extend(target_shapes)
-
-        for shape in shapes:
-            try:
-                shape_path = str(shape)
-
-                # Get the dag path for the shape
-                sel_list = om2.MSelectionList()
-                sel_list.add(shape_path)
-                dag_path = sel_list.getDagPath(0)
-
-                # Get MFnMesh for fast triangle access
-                fn_mesh = om2.MFnMesh(dag_path)
-
-                # Get all points in world space
-                points = fn_mesh.getPoints(om2.MSpace.kWorld)
-
-                # Get triangle data
-                triangle_counts, triangle_vertices = fn_mesh.getTriangles()
-
-                # Rasterize each triangle
-                tri_idx = 0
-                for face_idx, tri_count in enumerate(triangle_counts):
-                    for t in range(tri_count):
-                        # Get the 3 vertex indices for this triangle
-                        v0_idx = triangle_vertices[tri_idx]
-                        v1_idx = triangle_vertices[tri_idx + 1]
-                        v2_idx = triangle_vertices[tri_idx + 2]
-                        tri_idx += 3
-
-                        # Get 3D points
-                        p0 = points[v0_idx]
-                        p1 = points[v1_idx]
-                        p2 = points[v2_idx]
-
-                        # Project to 2D
-                        pt0 = project_point(p0)
-                        pt1 = project_point(p1)
-                        pt2 = project_point(p2)
-
-                        # Draw filled triangle
-                        triangle = np.array([pt0, pt1, pt2], dtype=np.int32)
-                        cv2.fillPoly(mask, [triangle], 255)
-
-            except Exception as e:
-                print(f"Warning: Could not process shape {shape}: {e}")
-                continue
-
-        # Smooth the silhouette edges
-        if blur_amount and blur_amount > 0:
-            mask = ptk.ImgUtils.gaussian_blur(mask, radius=blur_amount)
-
-        h, w = mask.shape
-
-        if uniform_alpha:
-            combined = np.ones((h, w), dtype=np.float32)
-        else:
-            rows_with_content = np.where(mask.max(axis=1) > 0)[0]
-            cols_with_content = np.where(mask.max(axis=0) > 0)[0]
-
-            if len(rows_with_content) and len(cols_with_content):
-                top_row = rows_with_content[0]
-                bottom_row = rows_with_content[-1]
-                center_col = (cols_with_content[0] + cols_with_content[-1]) // 2
-
-                # Resolve contact point. ``falloff_source`` is interpreted in
-                # *saved-PNG image coords* — (0, 0) top-left, (1, 1) bottom-
-                # right of the file the user opens on disk. The gradient is
-                # computed before the final ``np.flipud`` (which exists so
-                # the texture aligns with Maya's V-up UV convention), so the
-                # v coord is mirrored when passed to the gradient.
-                if falloff_source is not None:
-                    src_u = float(falloff_source[0])
-                    src_v_saved = float(falloff_source[1])
-                    src_uv_norm = (src_u, 1.0 - src_v_saved)
-                else:
-                    src_uv_norm = (
-                        center_col / max(w - 1, 1),
-                        bottom_row / max(h - 1, 1),
-                    )
-
-                # Radial falloff (1 at source → 0 at silhouette height away)
-                max_dist = max(bottom_row - top_row, 1)
-                radial_w = max(1.0 - vertical_weight, 0.0)
-                vertical_w = max(min(vertical_weight, 1.0), 0.0)
-
-                radial = ptk.ImgUtils.radial_gradient(
-                    (w, h),
-                    center=src_uv_norm,
-                    max_radius=max_dist,
-                    falloff_power=falloff_power,
-                )
-
-                # Vertical term — only contributes where mask has content
-                # vertically; outside that band it falls off in the same
-                # direction as the silhouette.
-                vertical = np.zeros((h, w), dtype=np.float32)
-                rows = np.arange(h)
-                span = max(bottom_row - top_row, 1)
-                t = np.clip((rows - top_row) / span, 0.0, 1.0) ** 0.6
-                vertical[:, :] = t[:, None]
-                vertical[rows < top_row, :] = 0.0
-                vertical[rows > bottom_row, :] = 1.0
-
-                combined = radial * radial_w + vertical * vertical_w
-            else:
-                combined = np.ones((h, w), dtype=np.float32)
-
-        alpha = (mask.astype(np.float32) / 255.0 * combined * 255).astype(np.uint8)
-        alpha = np.flipud(
-            alpha
-        )  # Re-enabled flip, as Texture coordinate Y=0 is usually Bottom
-
-        result = np.zeros((h, w, 4), dtype=np.uint8)
-        result[:, :, 3] = alpha
-
-        cv2.imwrite(self.texture_path, result)
-        print(f"Created silhouette texture: {self.texture_path} (axis={axis})")
-        return self.texture_path
-
-    def _create_silhouette_fallback(self, size, axis):
-        """Fallback vertex-based silhouette if render fails."""
-        bbox = cmds.exactWorldBoundingBox(self.target)
-
-        axis = axis.lower()
-        if axis == "y":
-            u_min, u_max = bbox[0], bbox[3]
-            v_min, v_max = bbox[2], bbox[5]
-            u_idx, v_idx = 0, 2
-        elif axis == "x":
-            u_min, u_max = bbox[2], bbox[5]
-            v_min, v_max = bbox[1], bbox[4]
-            u_idx, v_idx = 2, 1
-        else:
-            u_min, u_max = bbox[0], bbox[3]
-            v_min, v_max = bbox[1], bbox[4]
-            u_idx, v_idx = 0, 1
-
-        extent = max(u_max - u_min, v_max - v_min) * 1.2
-        u_center = (u_min + u_max) / 2
-        v_center = (v_min + v_max) / 2
-
-        img = np.zeros((size, size, 4), dtype=np.uint8)
-        mask = np.zeros((size, size), dtype=np.uint8)
-
-        vtx_count = cmds.polyEvaluate(self.target, vertex=True)
-        points = []
-        for i in range(vtx_count):
-            pos = cmds.pointPosition(f"{self.target}.vtx[{i}]", w=True)
-            pu = int(((pos[u_idx] - u_center) / extent + 0.5) * size)
-            pv = int((1.0 - ((pos[v_idx] - v_center) / extent + 0.5)) * size)
-            pu = np.clip(pu, 0, size - 1)
-            pv = np.clip(pv, 0, size - 1)
-            points.append([pu, pv])
-
-        if points:
-            points = np.array(points, dtype=np.int32)
-            for p in points:
-                cv2.circle(mask, tuple(p), 8, 255, -1)
-
-            kernel = np.ones((15, 15), np.uint8)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-            contours, _ = cv2.findContours(
-                mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )
-            mask_filled = np.zeros_like(mask)
-            cv2.drawContours(mask_filled, contours, -1, 255, -1)
-            mask_filled = cv2.GaussianBlur(mask_filled, (7, 7), 0)
-
-            h, w = mask_filled.shape
-            rows_with_content = np.where(mask_filled.max(axis=1) > 0)[0]
-            cols_with_content = np.where(mask_filled.max(axis=0) > 0)[0]
-
-            if len(rows_with_content) > 0 and len(cols_with_content) > 0:
-                top_row = rows_with_content[0]
-                bottom_row = rows_with_content[-1]
-                center_col = (cols_with_content[0] + cols_with_content[-1]) // 2
-
-                y, x = np.ogrid[:h, :w]
-                dist = np.sqrt((x - center_col) ** 2 + (y - bottom_row) ** 2)
-                max_dist = bottom_row - top_row
-                radial = 1.0 - np.clip(dist / max(max_dist, 1), 0, 1) ** 1.5
-
-                vertical = np.zeros((h, w), dtype=np.float32)
-                for row in range(h):
-                    if row < top_row:
-                        vertical[row, :] = 0.0
-                    elif row > bottom_row:
-                        vertical[row, :] = 1.0
-                    else:
-                        t = (row - top_row) / max(bottom_row - top_row, 1)
-                        vertical[row, :] = t**0.5
-
-                combined = vertical * 0.6 + radial * 0.4
-                alpha = (
-                    mask_filled.astype(np.float32) / 255.0 * combined * 255
-                ).astype(np.uint8)
-            else:
-                alpha = mask_filled
-
-            img[:, :, 3] = alpha
-
-        cv2.imwrite(self.texture_path, img)
+        self.logger.info(
+            f"Created silhouette texture: {self.texture_path} (axis={axis})"
+        )
         return self.texture_path
 
     def create_material(self, shader_type="stingray", stingray_opacity_mode="transparent"):
@@ -573,19 +455,11 @@ class ShadowRig(ptk.LoggingMixin):
             if cmds.attributeQuery("roughness", node=self.shader, exists=True):
                 cmds.setAttr(f"{self.shader}.roughness", 1)
             cmds.setAttr(f"{self.shader}.use_opacity_map", True)
-            if stingray_opacity_mode == "masked":
-                # TEX_mask_map is color3 — fan the scalar alpha into all three.
-                for ch in ("X", "Y", "Z"):
-                    cmds.connectAttr(
-                        f"{file_node}.outAlpha",
-                        f"{self.shader}.TEX_mask_map{ch}",
-                        force=True,
-                    )
-            else:
-                cmds.connectAttr(
-                    f"{file_node}.outAlpha", f"{self.shader}.opacity", force=True
-                )
 
+            # Route the alpha THROUGH the fade multiplier — feeding the file's
+            # outAlpha straight into the shader left opacity_mult.output
+            # dangling, so the expression-driven rise fade (input2X) had no
+            # visible effect on the default material.
             self.opacity_mult = cmds.shadingNode(
                 "multiplyDivide",
                 asUtility=True,
@@ -593,7 +467,21 @@ class ShadowRig(ptk.LoggingMixin):
             )
             cmds.connectAttr(f"{file_node}.outAlpha", f"{self.opacity_mult}.input1X")
             cmds.setAttr(f"{self.opacity_mult}.input2X", 1.0)
-            print(f"Created StingrayPBS material ({stingray_opacity_mode})")
+            if stingray_opacity_mode == "masked":
+                # TEX_mask_map is color3 — fan the scalar alpha into all three.
+                for ch in ("X", "Y", "Z"):
+                    cmds.connectAttr(
+                        f"{self.opacity_mult}.outputX",
+                        f"{self.shader}.TEX_mask_map{ch}",
+                        force=True,
+                    )
+            else:
+                cmds.connectAttr(
+                    f"{self.opacity_mult}.outputX",
+                    f"{self.shader}.opacity",
+                    force=True,
+                )
+            self.logger.info(f"Created StingrayPBS material ({stingray_opacity_mode})")
         else:
             # standardSurface path (cleanest VP2.0 preview; Arnold's PBR).
             self.shader = cmds.shadingNode(
@@ -614,7 +502,7 @@ class ShadowRig(ptk.LoggingMixin):
                     f"{file_node}.outAlpha", f"{self.opacity_mult}.input1{chan}"
                 )
             cmds.connectAttr(f"{self.opacity_mult}.output", f"{self.shader}.opacity")
-            print("Created standardSurface material")
+            self.logger.info("Created standardSurface material")
 
         sg = cmds.sets(
             renderable=True, noSurfaceShader=True, empty=True, name=f"{self.shader}_SG"
@@ -634,53 +522,50 @@ class ShadowRig(ptk.LoggingMixin):
         else:
             self._expr_stretch()
 
-    def _expr_orbit(self):
-        """Orbit mode: plane rotates around target to face away from light.
+    def _make_world_decompose(self, node, suffix):
+        """A ``decomposeMatrix`` on ``node.worldMatrix`` — world position even
+        when the node is parented/grouped (raw ``.translate`` is local)."""
+        name = f"{self._name_base}_{suffix}_dm"
+        if cmds.objExists(name):
+            cmds.delete(name)
+        dm = cmds.createNode("decomposeMatrix", name=name)
+        cmds.connectAttr(f"{node}.worldMatrix[0]", f"{dm}.inputMatrix")
+        return dm
 
-        The shadow plane pivots around the contact point, always pointing
-        away from the light source. Scale stretches based on light angle.
-        """
-        expr_name = f"{self.shadow_plane}_expr"
+    def _expr_common(self, light_dm, contact_dm):
+        """Shared expression prologue: world positions, light->contact
+        direction, and the projected ground anchor the plane hangs off."""
+        return f"""
+// 1. World Positions (decomposeMatrix — correct even when parented/grouped)
+float $Lx = {light_dm}.outputTranslateX;
+float $Ly = {light_dm}.outputTranslateY;
+float $Lz = {light_dm}.outputTranslateZ;
 
-        dm_name = f"{self._name_base}_contact_dm"
-        if cmds.objExists(dm_name):
-            cmds.delete(dm_name)
-        dm_node = cmds.createNode("decomposeMatrix", name=dm_name)
-
-        source = self.contact_locator if self.contact_locator else self.targets[0]
-        cmds.connectAttr(f"{source}.worldMatrix[0]", f"{dm_node}.inputMatrix")
-
-        expr_code = f"""
-// ----------------------------------------------------------------------
-// Shadow Projection Logic (Orbit Mode - Rotating Plane)
-// ----------------------------------------------------------------------
-
-// 1. Get World Positions
-float $Lx = {self.light}.translateX;
-float $Ly = {self.light}.translateY;
-float $Lz = {self.light}.translateZ;
-
-float $Cx = {dm_node}.outputTranslateX;
-float $Cy = {dm_node}.outputTranslateY;
-float $Cz = {dm_node}.outputTranslateZ;
+float $Cx = {contact_dm}.outputTranslateX;
+float $Cy = {contact_dm}.outputTranslateY;
+float $Cz = {contact_dm}.outputTranslateZ;
 float $Gy = {self.ground_height};
 
-// 2. Calculate Direction from Light to Contact
+// 2. Light->Contact Direction and Elevation
 float $dx = $Cx - $Lx;
 float $dz = $Cz - $Lz;
-float $dist2D = sqrt($dx * $dx + $dz * $dz);
 float $relHeight = max(0.1, $Ly - $Gy);
 
-// 3. Calculate Rotation (plane faces away from light)
-float $angle = atan2($dx, $dz);
-float $angleDeg = rad_to_deg($angle);
+// 3. Projected Ground Anchor: where the light ray through the contact hits
+// the ground. Equals the contact while the target is grounded; slides away
+// from the light as the target rises (clamped against blowup when the light
+// drops to the contact's height).
+float $k = clamp(0.0, 10.0, ($Ly - $Gy) / max(0.1, $Ly - $Cy));
+float $Sx = $Lx + $dx * $k;
+float $Sz = $Lz + $dz * $k;
 
-// 4. Calculate Scale (stretch based on light angle)
-float $ratio = $dist2D / $relHeight;
-float $limit = 4.0;
-float $sz = 1.0 + clamp(0, $limit, $ratio);
+// 4. Plane Constants
+float $size = {self.shadow_plane}.basePlaneSize;
+float $objH = {self.shadow_plane}.objectHeight;
+float $lim = {self.shadow_plane}.maxStretch;
+float $radius = $size * 0.5;
 
-// Apply manual scale influence
+// Manual scale influence (art-directed grow)
 float $si = {self.shadow_plane}.scaleInfluence;
 float $baseScale = 1.0;
 if ($si > 0) {{
@@ -689,146 +574,288 @@ if ($si > 0) {{
         $baseScale = 1.0 + (($Ly / $hDiff) - 1.0) * $si;
 }}
 $baseScale = clamp(0.5, 3.0, $baseScale);
-$sz = $sz * $baseScale;
+"""
 
-// 5. Calculate Position (pivot at contact, extend away from light)
-float $size = {self.shadow_plane}.basePlaneSize;
-float $radius = $size * 0.5;
-
-// Offset along the direction away from light
-float $offsetDist = $radius * ($sz - 1.0);
-float $normX = ($dist2D > 0.001) ? ($dx / $dist2D) : 0;
-float $normZ = ($dist2D > 0.001) ? ($dz / $dist2D) : 1;
-
-float $tx = $Cx + $normX * $offsetDist;
-float $tz = $Cz + $normZ * $offsetDist;
-
-// 6. Apply Transforms
-{self.shadow_plane}.translateX = $tx;
-{self.shadow_plane}.translateZ = $tz;
-{self.shadow_plane}.translateY = $Gy + 0.005;
-{self.shadow_plane}.rotateY = $angleDeg;
-{self.shadow_plane}.scaleX = 1.0;
-{self.shadow_plane}.scaleZ = $sz;
-
-// 7. Opacity Falloff
+    def _expr_opacity(self, stretch_term):
+        """Shared expression epilogue: opacity = distance falloff x light-height
+        fade x rise fade (target leaving the ground)."""
+        return f"""
+// Opacity Falloff
 float $intensity = {self.shadow_plane}.shadowIntensity;
 float $power = {self.shadow_plane}.falloffPower;
+float $fadeH = {self.shadow_plane}.fadeHeight;
 
-float $distOpacity = $intensity / max(0.001, pow($sz, $power));
+float $distOpacity = $intensity / max(0.001, pow({stretch_term}, $power));
+float $heightFade = clamp(0.0, 1.0, $Ly - $Cy);
+float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH));
 
-float $heightDiff = $Ly - $Cy;
-float $heightFade = clamp(0.0, 1.0, $heightDiff);
-
-float $opacity = $distOpacity * $heightFade;
-$opacity = clamp(0.0, 1.0, $opacity);
+float $opacity = clamp(0.0, 1.0, $distOpacity * $heightFade * $riseFade);
 
 {self.opacity_mult}.input2X = $opacity;
 {self.opacity_mult}.input2Y = $opacity;
 {self.opacity_mult}.input2Z = $opacity;
 """
+
+    def _build_expression(self, body):
+        """(Re)create the plane's expression node from the mode body."""
+        expr_name = f"{self.shadow_plane}_expr"
         if cmds.objExists(expr_name):
             cmds.delete(expr_name)
+        cmds.expression(name=expr_name, string=body, alwaysEvaluate=True)
 
-        cmds.expression(name=expr_name, string=expr_code, alwaysEvaluate=True)
+    def _expr_orbit(self):
+        """Orbit mode: plane rotates around target to face away from light.
+
+        The shadow plane pivots around the projected anchor, always pointing
+        away from the light source. Scale stretches based on light angle.
+        """
+        contact = self.contact_locator if self.contact_locator else self.targets[0]
+        contact_dm = self._make_world_decompose(contact, "contact")
+        light_dm = self._make_world_decompose(self.light, "light")
+
+        expr_code = self._expr_common(light_dm, contact_dm) + f"""
+// 5. Rotation (plane faces away from light)
+float $angleDeg = rad_to_deg(atan2($dx, $dz));
+
+// 6. Depth Stretch (shadow length ~ objectHeight x horizontal-offset/light-height)
+float $dist2D = sqrt($dx * $dx + $dz * $dz);
+float $sz = (1.0 + clamp(0.0, $lim, ($objH * ($dist2D / $relHeight)) / $size)) * $baseScale;
+
+// 7. Position (anchored at the projected contact, extending away from light)
+float $offsetDist = $radius * ($sz - 1.0);
+float $normX = ($dist2D > 0.001) ? ($dx / $dist2D) : 0;
+float $normZ = ($dist2D > 0.001) ? ($dz / $dist2D) : 1;
+
+{self.shadow_plane}.translateX = $Sx + $normX * $offsetDist;
+{self.shadow_plane}.translateZ = $Sz + $normZ * $offsetDist;
+{self.shadow_plane}.translateY = $Gy + {self.GROUND_OFFSET};
+{self.shadow_plane}.rotateY = $angleDeg;
+{self.shadow_plane}.scaleX = 1.0;
+{self.shadow_plane}.scaleZ = $sz;
+""" + self._expr_opacity("$sz")
+        self._build_expression(expr_code)
 
     def _expr_stretch(self):
         """Stretch mode: plane stays axis-aligned, uses scale + translation.
 
         The shadow plane never rotates; instead it scales along X and Z
         independently, with compensatory translation to anchor the "heel"
-        (the edge facing the light) at the contact point.
+        (the edge facing the light) at the projected contact point.
         """
-        expr_name = f"{self.shadow_plane}_expr"
+        contact = self.contact_locator if self.contact_locator else self.targets[0]
+        contact_dm = self._make_world_decompose(contact, "contact")
+        light_dm = self._make_world_decompose(self.light, "light")
 
-        dm_name = f"{self._name_base}_contact_dm"
-        if cmds.objExists(dm_name):
-            cmds.delete(dm_name)
-        dm_node = cmds.createNode("decomposeMatrix", name=dm_name)
-
-        source = self.contact_locator if self.contact_locator else self.targets[0]
-        cmds.connectAttr(f"{source}.worldMatrix[0]", f"{dm_node}.inputMatrix")
-
-        expr_code = f"""
-// ----------------------------------------------------------------------
-// Shadow Projection Logic (Stretch Mode - Axis-Aligned, Compensatory Translation)
-// ----------------------------------------------------------------------
-
-// 1. Get World Positions
-float $Lx = {self.light}.translateX;
-float $Ly = {self.light}.translateY;
-float $Lz = {self.light}.translateZ;
-
-float $Cx = {dm_node}.outputTranslateX;
-float $Cy = {dm_node}.outputTranslateY;
-float $Cz = {dm_node}.outputTranslateZ;
-float $Gy = {self.ground_height};
-
-// 2. Calculate Directions and Ratios
-float $dx = $Cx - $Lx;
-float $dz = $Cz - $Lz;
-float $relHeight = max(0.1, $Ly - $Gy);
-
+        expr_code = self._expr_common(light_dm, contact_dm) + f"""
+// 5. Axis Stretch (shadow length ~ objectHeight x horizontal-offset/light-height)
 float $rx = abs($dx) / $relHeight;
 float $rz = abs($dz) / $relHeight;
+float $sx = (1.0 + clamp(0.0, $lim, ($objH * $rx) / $size)) * $baseScale;
+float $sz = (1.0 + clamp(0.0, $lim, ($objH * $rz) / $size)) * $baseScale;
 
-// 3. Calculate Scales
-float $limit = 4.0;
-float $sx = 1.0 + clamp(0, $limit, $rx);
-float $sz = 1.0 + clamp(0, $limit, $rz);
-
-// Apply manual scale influence
-float $si = {self.shadow_plane}.scaleInfluence;
-float $baseScale = 1.0;
-if ($si > 0) {{
-    float $hDiff = $Ly - $Cy;
-    if ($hDiff > 0.1)
-        $baseScale = 1.0 + (($Ly / $hDiff) - 1.0) * $si;
-}}
-$baseScale = clamp(0.5, 3.0, $baseScale);
-
-$sx = $sx * $baseScale;
-$sz = $sz * $baseScale;
-
-// 4. Compensatory Translation (Virtual Pivot Logic)
-float $size = {self.shadow_plane}.basePlaneSize;
-float $radius = $size * 0.5;
-
+// 6. Compensatory Translation (heel anchored at the projected contact)
 float $px = ($dx > 0) ? -$radius : $radius;
 float $pz = ($dz > 0) ? -$radius : $radius;
 
-float $tx = $px * (1.0 - $sx);
-float $tz = $pz * (1.0 - $sz);
-
-// 5. Apply Transforms
-{self.shadow_plane}.translateX = $Cx + $tx;
-{self.shadow_plane}.translateZ = $Cz + $tz;
-{self.shadow_plane}.translateY = $Gy + 0.005;
+{self.shadow_plane}.translateX = $Sx + $px * (1.0 - $sx);
+{self.shadow_plane}.translateZ = $Sz + $pz * (1.0 - $sz);
+{self.shadow_plane}.translateY = $Gy + {self.GROUND_OFFSET};
 {self.shadow_plane}.rotateY = 0;
 {self.shadow_plane}.scaleX = $sx;
 {self.shadow_plane}.scaleZ = $sz;
+""" + self._expr_opacity("max($sx, $sz)")
+        self._build_expression(expr_code)
 
-// 6. Opacity Falloff
-float $intensity = {self.shadow_plane}.shadowIntensity;
-float $power = {self.shadow_plane}.falloffPower;
-float $maxStretch = max($sx, $sz);
+    # ------------------------------------------------------------------ bake
+    def bake(self, start=None, end=None):
+        """Bake this rig's driven channels to keyframes and remove the live
+        expression (FBX-ready). See :meth:`bake_planes`."""
+        return self.bake_planes([self.shadow_plane], start=start, end=end)
 
-float $distOpacity = $intensity / max(0.001, pow($maxStretch, $power));
+    # ------------------------------------------------------------------ export metadata
+    @staticmethod
+    def _plane_texture_path(plane):
+        """Full path of the plane's silhouette texture — the file node driving
+        the assigned material's OPACITY chain (SSoT; survives retexturing).
 
-float $heightDiff = $Ly - $Cy;
-float $heightFade = clamp(0.0, 1.0, $heightDiff);
+        Walks the opacity plugs only (stingray ``.opacity`` /
+        ``TEX_mask_mapX``, or standardSurface ``.opacity`` via the
+        ``*_opacity_mult`` multiplyDivide) rather than the whole network:
+        ``listHistory`` doesn't traverse a ShaderFX (StingrayPBS) node's
+        inputs, and its loaded graph carries three stock IBL preset file
+        nodes a material-wide search would wrongly match.
+        """
+        shapes = cmds.listRelatives(plane, shapes=True, fullPath=True) or []
+        for shape in shapes:
+            for sg in cmds.listConnections(shape, type="shadingEngine") or []:
+                shaders = (
+                    cmds.listConnections(f"{sg}.surfaceShader", source=True) or []
+                )
+                for shader in shaders:
+                    queue = [
+                        src
+                        for attr in ("opacity", "TEX_mask_mapX")
+                        if cmds.attributeQuery(attr, node=shader, exists=True)
+                        for src in (
+                            cmds.listConnections(
+                                f"{shader}.{attr}", source=True, destination=False
+                            )
+                            or []
+                        )
+                    ]
+                    seen = set()
+                    while queue:
+                        node = queue.pop(0)
+                        if node in seen:
+                            continue
+                        seen.add(node)
+                        if cmds.nodeType(node) == "file":
+                            path = cmds.getAttr(f"{node}.fileTextureName")
+                            if path:
+                                return path
+                        else:
+                            queue += (
+                                cmds.listConnections(
+                                    node, source=True, destination=False
+                                )
+                                or []
+                            )
+        return None
 
-float $opacity = $distOpacity * $heightFade;
-$opacity = clamp(0.0, 1.0, $opacity);
+    @classmethod
+    def refresh_export_metadata(cls):
+        """Republish the ``shadow_metadata`` channel on the ``data_export``
+        carrier from the scene's shadow planes.
 
-{self.opacity_mult}.input2X = $opacity;
-{self.opacity_mult}.input2Y = $opacity;
-{self.opacity_mult}.input2Z = $opacity;
-"""
-        if cmds.objExists(expr_name):
-            cmds.delete(expr_name)
+        The canonical, no-arg pre-export refresh for the shadow rig — wired
+        into ``FbxUtils._KNOWN_PRODUCERS`` so the Scene Exporter (and any
+        ``run_export_preparers`` caller) ships a current channel. The payload
+        joins Unity-side by GameObject name (unitytk's
+        ``ShadowPlaneController.cs``):
 
-        cmds.expression(name=expr_name, string=expr_code, alwaysEvaluate=True)
+        ``{"version": 1, "planes": [{"name", "texture", "intensity"}]}``
+
+        Clears the channel when the scene has no shadow planes (no empty
+        carrier left behind).
+
+        Returns:
+            The published JSON string, or None when cleared.
+        """
+        import json
+
+        from mayatk.core_utils._core_utils import leaf_name
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        planes = cls.find_shadow_planes()
+        if not planes:
+            DataNodes.set_export_string(cls.SHADOW_METADATA, "")
+            return None
+        records = []
+        for plane in planes:
+            tex = cls._plane_texture_path(plane)
+            intensity = (
+                cmds.getAttr(f"{plane}.shadowIntensity")
+                if cmds.attributeQuery("shadowIntensity", node=plane, exists=True)
+                else 1.0
+            )
+            records.append(
+                {
+                    "name": leaf_name(plane),
+                    "texture": os.path.basename(tex) if tex else "",
+                    "intensity": round(float(intensity), 4),
+                }
+            )
+        payload = json.dumps({"version": 1, "planes": records})
+        DataNodes.set_export_string(cls.SHADOW_METADATA, payload)
+        return payload
+
+    @classmethod
+    def find_shadow_planes(cls, nodes=None):
+        """Shadow planes = transforms carrying the stamped ``basePlaneSize``
+        attr. ``nodes`` limits the search (their descendants included, so a
+        selected ``*_shadow_grp`` finds its plane); None scans the scene."""
+        if nodes:
+            # Selections can carry non-DAG nodes (shaders, sets) — filter to
+            # transforms before walking descendants.
+            pool = cmds.ls([str(n) for n in nodes], transforms=True) or []
+            if pool:
+                # fullPath: bare leaf names are ambiguous under duplicate
+                # transform names and crash attributeQuery; ls() normalizes
+                # back to shortest-unique (matching the scene-scan branch).
+                kids = (
+                    cmds.listRelatives(
+                        pool, ad=True, type="transform", fullPath=True
+                    )
+                    or []
+                )
+                pool = cmds.ls(pool + kids) or []
+        else:
+            pool = cmds.ls(type="transform") or []
+        return [
+            n
+            for n in dict.fromkeys(pool)
+            if cmds.attributeQuery("basePlaneSize", node=n, exists=True)
+        ]
+
+    @classmethod
+    def bake_planes(cls, planes=None, start=None, end=None):
+        """Bake shadow planes' expression-driven channels to keyframes and
+        delete the live rig nodes (expression + decomposeMatrix) so the
+        result exports cleanly to FBX.
+
+        Args:
+            planes: Shadow plane transform(s); None bakes every shadow plane
+                in the scene that still has a live expression.
+            start/end: Frame range; defaults to the playback range.
+
+        Returns:
+            The list of planes that were baked.
+
+        Note: the shader-side opacity fade freezes at its last evaluated
+        value (FBX carries no material animation into Unity anyway).
+        """
+        planes = cls.find_shadow_planes(planes)
+        if start is None:
+            start = cmds.playbackOptions(q=True, min=True)
+        if end is None:
+            end = cmds.playbackOptions(q=True, max=True)
+
+        baked = []
+        for plane in planes:
+            # Resolve the driving expression via connections, not by name —
+            # robust to path-qualified plane names and suffixed expr nodes.
+            exprs = set(
+                cmds.listConnections(
+                    plane, source=True, destination=False, type="expression"
+                )
+                or []
+            )
+            if not exprs:
+                continue  # already baked / hand-keyed
+            dm_nodes = set()
+            for expr in exprs:
+                dm_nodes.update(
+                    cmds.listConnections(
+                        expr, source=True, destination=False, type="decomposeMatrix"
+                    )
+                    or []
+                )
+            plugs = [f"{plane}.{ch}" for ch in cls.BAKE_CHANNELS]
+            cmds.bakeResults(
+                plugs,
+                time=(start, end),
+                simulation=True,
+                sampleBy=1,
+                disableImplicitControl=True,
+                preserveOutsideKeys=False,
+            )
+            for node in exprs | dm_nodes:
+                if cmds.objExists(node):
+                    cmds.delete(node)
+            baked.append(plane)
+        if baked:
+            cls.refresh_export_metadata()
+        return baked
 
     @classmethod
     def create(
@@ -840,6 +867,7 @@ $opacity = clamp(0.0, 1.0, $opacity);
         source_name="shadow_source",
         recursive=True,
         mode="stretch",
+        ground_height=0.0,
     ):
         """Create a projected shadow for Unity export.
 
@@ -849,7 +877,10 @@ $opacity = clamp(0.0, 1.0, $opacity);
             light_pos: Initial position for light locator
             texture_res: Resolution of silhouette texture
             axis: Silhouette projection axis:
-                  'auto' = best axis based on bounding box (default)
+                  'auto' / 'light' = as seen from the light's horizontal
+                           bearing (default; physically correct shape — both
+                           fall back to the widest-dimension heuristic when
+                           the light is directly overhead)
                   'z' = front/back view
                   'x' = side view
                   'y' = top-down view
@@ -859,11 +890,12 @@ $opacity = clamp(0.0, 1.0, $opacity);
             mode: Rig behavior mode:
                   'orbit' = plane rotates around target to face away from light
                   'stretch' = plane stays axis-aligned, scales + translates (default)
+            ground_height: World Y of the ground plane the shadow lies on.
 
         Returns:
             ShadowRig instance
         """
-        shadow = cls(targets=targets, mode=mode)
+        shadow = cls(targets=targets, mode=mode, ground_height=ground_height)
         shadow.get_or_create_shadow_source(position=light_pos, source_name=source_name)
         shadow.create_contact_locator()
         shadow.create_shadow_plane()
@@ -873,23 +905,22 @@ $opacity = clamp(0.0, 1.0, $opacity);
         shadow.create_material()
         shadow.setup_expression()
 
-        grp = cmds.group(empty=True, name=f"{shadow._name_base}_shadow_grp")
-        cmds.parent(shadow.shadow_plane, grp)
+        shadow.group = cmds.group(empty=True, name=f"{shadow._name_base}_shadow_grp")
+        # Re-capture: parenting can path-qualify the name under a collision
+        # (same lesson as Controls.create — the stale ref stops resolving).
+        shadow.shadow_plane = cmds.parent(shadow.shadow_plane, shadow.group)[0]
         # contact_locator stays on first target
 
-        target_names = ", ".join(str(t) for t in shadow.targets)
-        print(f"\nCreated shadow for: {target_names}")
-        print(f"  Mode: {shadow.mode}")
-        print(f"  Source: {shadow.light}")
-        print(f"  Shadow: {shadow.shadow_plane}")
-        print(f"  Texture: {shadow.texture_path}")
-        print(f"  Axis: {axis}")
-        print(f"\nMove the shadow source to stretch/warp the shadow!")
-        print(f"\nFor Unity export:")
-        print(f"  1. Bake: Edit > Keys > Bake Simulation")
-        print(f"  2. Export FBX with shadow plane")
-        print(f"  3. In Unity: Use Unlit/Transparent shader")
+        # Publish the engine hand-off record onto the data_export carrier (the
+        # Scene Exporter re-refreshes it at export time via run_export_preparers).
+        cls.refresh_export_metadata()
 
+        target_names = ", ".join(str(t) for t in shadow.targets)
+        shadow.logger.success(
+            f"Shadow rig for {target_names} ({shadow.mode}) — plane "
+            f"{shadow.shadow_plane}, source {shadow.light}, "
+            f"texture {shadow.texture_path}"
+        )
         return shadow
 
 
@@ -912,8 +943,11 @@ class ShadowRigSlots:
         self.ui.txt_source.editingFinished.connect(self.preview.refresh)
         self.ui.s000.currentIndexChanged.connect(self.preview.refresh)
         self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
-        # b001 is auto-wired by the switchboard (method name == objectName);
-        # a raw connect here stacked a second connection → double-fire.
+        # b001/b002 are auto-wired by the switchboard (method name ==
+        # objectName); a raw connect here stacked a second connection →
+        # double-fire.
+
+        self._init_tooltips()
 
     def header_init(self, widget):
         """Configure header help text."""
@@ -922,8 +956,11 @@ class ShadowRigSlots:
                 title="Shadow Rig",
                 body="Create a projected-shadow plane rig that exports cleanly "
                 "for game engines (Unity, etc.). The plane carries a baked "
-                "silhouette PNG; its transform is driven by an expression "
-                "you can bake to keyframes before FBX export.",
+                "silhouette PNG (rendered as seen from the light); its "
+                "transform is driven by an expression and anchored at the "
+                "light ray's projected ground contact, so the shadow slides, "
+                "stretches, and fades realistically as the target or light "
+                "moves.",
                 steps=[
                     "Select one or more target objects.",
                     "Enable <b>Preview</b> to build the rig live.",
@@ -931,21 +968,163 @@ class ShadowRigSlots:
                     "<b>Combine</b>. The preview refreshes on each change.",
                     "Press <b>Create Shadow</b> to commit, or disable Preview "
                     "to discard.",
+                    "Press <b>Bake to Keyframes</b> to bake the expression to "
+                    "keys over the playback range (FBX-ready).",
+                    "Export through the <b>Scene Exporter</b> — the rig's "
+                    "<i>shadow_metadata</i> rides the data_export carrier "
+                    "automatically.",
                 ],
                 sections=[
                     ("Modes", [
                         "<b>Orbit</b> — Plane rotates around the target to face "
-                        "away from the light. Simple, shadow always points away.",
+                        "away from the light. Correct for animated/orbiting "
+                        "lights.",
                         "<b>Stretch</b> — Plane stays axis-aligned; uses scale "
-                        "and compensatory translation to warp the shadow. Better "
-                        "for baking, but the silhouette may appear mirrored at "
-                        "extreme light angles.",
+                        "and compensatory translation to warp the shadow. Bake-"
+                        "friendly, but the silhouette mirrors if the light "
+                        "crosses to the target's opposite side.",
+                    ]),
+                    ("Plane attributes", [
+                        "<b>shadowIntensity</b> / <b>falloffPower</b> — overall "
+                        "strength and distance falloff.",
+                        "<b>maxStretch</b> — clamp on shadow elongation.",
+                        "<b>fadeHeight</b> — rise off the ground at which the "
+                        "shadow has fully faded.",
+                        "<b>scaleInfluence</b> — art-directed extra grow.",
                     ]),
                 ],
                 notes=[
-                    "For Unity export: bake the simulation (Edit ▸ Keys ▸ Bake "
-                    "Simulation), export FBX with the shadow plane + texture, "
-                    "and use an Unlit/Transparent shader in Unity.",
+                    "Unity plug-and-play: deploy unitytk's C# templates once "
+                    "(<i>unitytk.deploy_templates</i>), export via the Scene "
+                    "Exporter, and copy the silhouette PNG into Assets — the "
+                    "import sets up the unlit-transparent material and shadow "
+                    "flags automatically. Other engines: assign an "
+                    "unlit/transparent shader with the PNG by hand.",
+                    "The opacity fade is shader-side (preview only) — FBX "
+                    "carries the plane's transform animation, not material "
+                    "animation.",
+                ],
+            )
+        )
+
+    def _init_tooltips(self):
+        """Set the polished (uitk ``fmt``) tooltips for every option and action."""
+        ui = self.ui
+
+        ui.cmb_mode.setToolTip(
+            fmt(
+                title="Rig Mode",
+                body="How the shadow plane reacts to the light's position.",
+                sections=[
+                    (
+                        "Stretch",
+                        [
+                            "Plane stays axis-aligned; scale and compensatory "
+                            "translation warp the shadow.",
+                            "Bake-friendly.",
+                            "Silhouette mirrors if the light crosses to the "
+                            "target's opposite side.",
+                        ],
+                    ),
+                    (
+                        "Orbit",
+                        [
+                            "Plane rotates around the target to face away from "
+                            "the light.",
+                            "Correct for animated / orbiting lights.",
+                        ],
+                    ),
+                ],
+            )
+        )
+        ui.chk_combine.setToolTip(
+            fmt(
+                title="Include Children",
+                body="Include the selected objects' descendant meshes in the "
+                "baked silhouette.",
+                notes=[
+                    "The selection always shares a single combined shadow "
+                    "plane.",
+                    "Off — only the selected meshes themselves are "
+                    "rasterized.",
+                ],
+            )
+        )
+        ui.txt_source.setToolTip(
+            fmt(
+                title="Source Name",
+                body="Name for the shadow-source locator that anchors the "
+                "projection.",
+                notes=[
+                    "Reuse a name to share one source; use distinct names for "
+                    "separate shadow sources.",
+                ],
+            )
+        )
+        ui.s000.setToolTip(
+            fmt(
+                title="Texture Resolution",
+                body="Pixel resolution of the baked silhouette PNG carried by "
+                "the shadow plane.",
+                notes=[
+                    "Higher = crisper shadow edge, but a larger texture on disk.",
+                ],
+            )
+        )
+        ui.cmb000.setToolTip(
+            fmt(
+                title="Projection Axis",
+                body="Viewing axis the silhouette is rendered along.",
+                rows=[
+                    ("Auto", "chooses the projection axis automatically"),
+                    ("X / Y / Z", "force side / top / front projection"),
+                ],
+            )
+        )
+        ui.chk_preview.setToolTip(
+            fmt(
+                title="Preview",
+                body="Builds the shadow rig live so you can judge it before "
+                "committing.",
+                notes=[
+                    "Tweaking any option refreshes the preview.",
+                    "<b>Create Shadow</b> commits it; disabling Preview "
+                    "discards it.",
+                ],
+            )
+        )
+        ui.b000.setToolTip(
+            fmt(
+                title="Create Shadow",
+                body="Commits the previewed shadow rig for the selected "
+                "target(s).",
+                steps=[
+                    "Select one or more target objects.",
+                    "Enable <b>Preview</b> and dial in the options.",
+                    "Press <b>Create Shadow</b>.",
+                ],
+                notes=[
+                    "Only commits an active preview — enable <b>Preview</b> "
+                    "first, or this does nothing.",
+                ],
+            )
+        )
+        ui.b001.setToolTip(
+            fmt(
+                title="Reset to Defaults",
+                body="Restores every option on this panel to its default value.",
+            )
+        )
+        ui.b002.setToolTip(
+            fmt(
+                title="Bake to Keyframes",
+                body="Bakes the shadow plane's driven motion to keyframes over "
+                "the playback range and removes the live rig — leaving an "
+                "FBX-ready plane.",
+                notes=[
+                    "Applies to selected shadow planes, or all planes if none "
+                    "are selected.",
+                    "Bake before exporting to Unity / a game engine.",
                 ],
             )
         )
@@ -953,6 +1132,27 @@ class ShadowRigSlots:
     def b001(self):
         """Reset to Defaults: Resets all UI widgets to their default values."""
         self.ui.state.reset_all()
+
+    def b002(self):
+        """Bake to Keyframes: bake selected (or all) shadow planes' expressions
+        to keys over the playback range and remove the live rig."""
+        sel = cmds.ls(selection=True) or None
+        planes = ShadowRig.find_shadow_planes(sel)
+        if sel and not planes:
+            # A non-empty selection with no shadow planes must NOT silently
+            # fall back to baking (destructively de-rigging) every plane in
+            # the scene — that's only the documented behavior for an empty
+            # selection.
+            self.sb.message_box(
+                "Selection contains no shadow planes. Select the plane(s) "
+                "to bake, or clear the selection to bake all."
+            )
+            return
+        baked = ShadowRig.bake_planes(planes)
+        if baked:
+            self.sb.message_box(f"Baked {len(baked)} shadow plane(s) to keyframes.")
+        else:
+            self.sb.message_box("No shadow planes with a live expression found.")
 
     def perform_operation(self, objects, contract):
         """Build the shadow rig for the given targets.
@@ -966,7 +1166,10 @@ class ShadowRigSlots:
 
         # Resolution combobox: extract numeric value from text like "Resolution: 512"
         res_text = self.ui.s000.currentText()
-        resolution = int(res_text.replace("Resolution: ", ""))
+        try:
+            resolution = int(res_text.replace("Resolution: ", "").strip())
+        except (ValueError, AttributeError):
+            resolution = 512
         source_name = self.ui.txt_source.text().strip() or "shadow_source"
         recursive = self.ui.chk_combine.isChecked()
 
@@ -979,6 +1182,19 @@ class ShadowRigSlots:
         mode_idx = self.ui.cmb_mode.currentIndex()
         mode_map = {0: "stretch", 1: "orbit"}
         mode = mode_map.get(mode_idx, "stretch")
+
+        if contract is not None:
+            # create() republishes shadow_metadata on the data_export carrier.
+            # A brand-new carrier is rolled back as a created node, but a
+            # PRE-EXISTING one (other producers' channels) only gets its attr
+            # mutated — snapshot it so canceling the preview can't leave a
+            # stale channel behind.
+            from mayatk.node_utils.data_nodes import DataNodes
+
+            if cmds.objExists(DataNodes.EXPORT):
+                contract.record_modification(
+                    DataNodes.EXPORT, ShadowRig.SHADOW_METADATA
+                )
 
         rig = ShadowRig.create(
             targets,

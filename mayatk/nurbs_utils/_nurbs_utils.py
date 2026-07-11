@@ -2,8 +2,10 @@
 # coding=utf-8
 try:
     import maya.cmds as cmds
+    import maya.api.OpenMaya as om
 except ImportError:
     cmds = None
+    om = None
 
 from typing import List, Tuple, Union, Optional
 
@@ -305,6 +307,47 @@ class NurbsUtils(ptk.HelpMixin):
                 print(e)
 
         return result
+
+    @staticmethod
+    def _curve_fn(curve) -> "om.MFnNurbsCurve":
+        """Resolve a curve transform/shape name to a dagPath-bound MFnNurbsCurve."""
+        sel = om.MSelectionList()
+        sel.add(str(curve))
+        dag = sel.getDagPath(0)
+        if not dag.hasFn(om.MFn.kNurbsCurve):
+            dag.extendToShape()
+        return om.MFnNurbsCurve(dag)
+
+    @classmethod
+    def get_curve_length(cls, curve) -> float:
+        """World-space arc length of the given curve (transform or shape)."""
+        return cls._curve_fn(curve).length()
+
+    @classmethod
+    def get_arc_lengths(cls, curve, points) -> List[float]:
+        """Arc length along *curve* of the closest curve point to each given point.
+
+        Batch primitive for parametric weighting / motion-path math: opens the
+        curve function set once, then per point runs closestPoint -> param ->
+        findLengthFromParam. Params are clamped into the knot domain to guard
+        against end-seam float noise.
+
+        Parameters:
+            curve (str/obj): NURBS curve transform or shape.
+            points (list): World-space points (MPoint, MVector, or xyz sequences).
+
+        Returns:
+            (List[float]) Arc length for each input point, in input order.
+        """
+        fn = cls._curve_fn(curve)
+        domain_min, domain_max = fn.knotDomain
+        lengths = []
+        for p in points:
+            point = om.MPoint(p[0], p[1], p[2])
+            _, param = fn.closestPoint(point, space=om.MSpace.kWorld)
+            param = min(max(param, domain_min), domain_max)
+            lengths.append(fn.findLengthFromParam(param))
+        return lengths
 
     @CoreUtils.undoable
     @staticmethod
