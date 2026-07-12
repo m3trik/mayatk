@@ -176,7 +176,7 @@ class TestMatUpdater(MayaTkTestCase):
 
             # Mock MapFactory.prepare_maps to verify the config passed to it
             with patch(
-                "pythontk.img_utils.map_factory.MapFactory.prepare_maps"
+                "pythontk.core_utils.engines.textures.map_factory.MapFactory.prepare_maps"
             ) as mock_prepare:
                 mock_prepare.return_value = {}
 

@@ -9,7 +9,7 @@ except ImportError:
 import os
 
 from pythontk.img_utils._img_utils import ImgUtils
-from pythontk.img_utils.map_factory import MapFactory
+from pythontk.core_utils.engines.textures.map_factory import MapFactory
 from pythontk.str_utils.fuzzy_matcher import FuzzyMatcher
 from uitk.widgets.footer import FooterStatusController
 from uitk.widgets.mixins.tooltip_mixin import fmt

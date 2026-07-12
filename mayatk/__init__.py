@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.12.79"
+__version__ = "0.12.82"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -153,7 +153,6 @@ DEFAULT_INCLUDE = {
     # Scene exporter
     "env_utils.scene_exporter._scene_exporter": "SceneExporter",
     "env_utils.scene_exporter.task_manager": "TaskManager",
-    "env_utils.scene_exporter.task_factory": "TaskFactory",
 }
 
 bootstrap_package(

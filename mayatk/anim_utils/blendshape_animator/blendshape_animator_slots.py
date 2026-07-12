@@ -16,7 +16,7 @@ from mayatk.anim_utils.blendshape_animator._blendshape_animator import (
 )
 from mayatk.anim_utils.blendshape_animator.applicator import ApplyStatus
 from mayatk.anim_utils.blendshape_animator.target import Target, Targets
-from mayatk.anim_utils.blendshape_animator.weights import Weights
+from pythontk import Weights
 from mayatk.anim_utils.blendshape_animator.helpers import list_history
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.script_job_manager import ScriptJobManager

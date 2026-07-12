@@ -14,7 +14,7 @@ from mayatk.node_utils.attributes._attributes import Attributes
 
 from mayatk.anim_utils.blendshape_animator.keyframes import Keyframes
 from mayatk.anim_utils.blendshape_animator.target import Target, Targets
-from mayatk.anim_utils.blendshape_animator.weights import Weights
+from pythontk import Weights
 
 
 class Creator(ptk.LoggingMixin):

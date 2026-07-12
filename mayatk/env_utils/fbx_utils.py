@@ -274,8 +274,19 @@ class FbxUtils(ptk.HelpMixin):
         """
         import importlib
 
+        # Canonical run order: producers named in _KNOWN_PRODUCERS first, in
+        # that dict's order, so same-pass channel consumers read fresh data —
+        # audio scopes its events against the fbx_takes that shots has just
+        # republished. Unknown preparers follow in registration order (stable
+        # sort).
+        known_rank = {n: i for i, n in enumerate(FbxUtils._KNOWN_PRODUCERS)}
+        ordered = sorted(
+            FbxUtils._export_preparers.items(),
+            key=lambda kv: known_rank.get(kv[0], len(known_rank)),
+        )
+
         ran = set()
-        for name, prepare in list(FbxUtils._export_preparers.items()):
+        for name, prepare in ordered:
             ran.add(name)
             try:
                 prepare()
@@ -299,7 +310,10 @@ class FbxUtils(ptk.HelpMixin):
         A preparer stamps a subsystem's data onto the shared ``data_export``
         node so it rides into **any** FBX export (File ▸ Export, Game Exporter,
         scripts).  Multiple subsystems compose — each preparer runs once per
-        export, in registration order, then declared takes are realized.
+        export, known producers first in :attr:`_KNOWN_PRODUCERS` order
+        (shots before audio, so audio can scope events against the takes
+        shots just republished), other names in registration order; then
+        declared takes are realized.
         Re-registering the same *name* replaces it.  Use
         :func:`unregister_export_preparer` to remove it.
         """

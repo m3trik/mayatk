@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
-_Generated: 2026-07-10_
+_Generated: 2026-07-12_
 
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin)`
@@ -46,10 +46,6 @@ _Generated: 2026-07-10_
 - `class Validator(ptk.LoggingMixin)`
   - methods: validate_meshes, validate_blendshape
 
-### `anim_utils/blendshape_animator/weights.py` — Weight calculations and Maya-compatible precision handling for blendShape animation.
-- `class Weights`
-  - methods: round_weight, frame_to_weight, generate_weights
-
 ### `anim_utils/playblast_exporter.py` — Utilities for creating playblasts and alternative preview renders in Maya.
 - `class PlayblastExporter`
   - methods: scene_name, create_playblast, render_with_arnold, export_variations
@@ -64,7 +60,7 @@ _Generated: 2026-07-10_
 - `class SegmentKeys(SegmentKeysInfo)`
   - methods: collect_segments, get_scene_info, format_scene_info_text, format_scene_info_html, print_scene_info, group_segments, merge_groups_sharing_curves, shift_curves, execute_stagger
 
-### `anim_utils/shots/_detection.py` — Shot-region detection — Maya animation-graph analysis.
+### `anim_utils/shots/_detection.py` — Shot-region detection — Maya scene acquisition over the pure engine math.
 - `resolve_to_transform(node, cache=None, _depth=0)`
 - `detect_shot_regions(objects: Optional[List[str]] = None, gap_threshold: float = 5.0, ignore: Optional[str] = None, motion_rate: float = 0.001, min_duration: float = 2.0) -> List[Dict[str, Any]]`
 - `regions_from_selected_keys(gap_threshold: float = 5.0, key_filter: str = 'all') -> List[Dict[str, Any]]`
@@ -72,88 +68,31 @@ _Generated: 2026-07-10_
 ### `anim_utils/shots/_shot_apply.py` — Commit resolved :class:`MovePlan`\ s to the Maya scene.
 - `apply(store: ShotStore, plan: MovePlan, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> None`
 
-### `anim_utils/shots/_shot_plan.py` — Pure planning layer for multi-shot topology transformations.
-- `plan_respace(store: ShotStore, gap: float, start_frame: float) -> MovePlan`
-- `plan_ripple_downstream(store: ShotStore, pivot_shot_id: int, after_frame: float, delta: float) -> MovePlan`
-- `plan_ripple_upstream(store: ShotStore, pivot_shot_id: int, before_frame: float, delta: float) -> MovePlan`
-- `class ShotMove`
-  - methods: delta, moves
-- `class MovePlan`
-
-### `anim_utils/shots/_shots.py` — Shared shot data model and persistent store.
-- `resolve_clip_specs(shots: List['ShotBlock'], strategy: str = 'name') -> List[Tuple[str, int, int]]`
-- `class ScenePersistence(Protocol)`
-  - methods: save, load
+### `anim_utils/shots/_shots.py` — Maya shot-store adapter — the DCC layer over ``pythontk``'s shots engine.
 - `class MayaScenePersistence`
   - methods: save, load, remove_callbacks
-- `class ShotBlock`
-  - methods: duration, classify_objects
-- `class StoreEvent`
-- `class ShotDefined(StoreEvent)`
-- `class ShotUpdated(StoreEvent)`
-- `class ShotRemoved(StoreEvent)`
-- `class ActiveShotChanged(StoreEvent)`
-- `class SettingsChanged(StoreEvent)`
-- `class BatchComplete(StoreEvent)`
-- `class StoreInvalidated(StoreEvent)`
-- `class ShotStore`
-  - methods: active_shot_id, set_active_shot, notify_settings_changed, add_listener, remove_listener, batch_update, is_gap_locked, lock_gap, unlock_gap, lock_all_gaps, unlock_all_gaps, set_persistence, active, set_active, clear_active, add_invalidation_listener, remove_invalidation_listener, snap, compute_gap, sorted_shots, shot_by_id, shot_by_name, define_shot, update_shot, remove_shot, append_shot, is_object_hidden, set_object_hidden, is_object_pinned, set_object_pinned, remove_object_from_shots, to_dict, to_export_view, publish_export_view, refresh_export_view, enable_auto_export, disable_auto_export, from_dict, rescale_to_fps, mark_dirty, save, has_animation, is_detection_relevant, detect_regions, detect_and_define, assess
+- `class ShotStore(ptk.ShotStore)`
+  - methods: active, has_animation, detect_regions, assess, publish_export_view
 
-### `anim_utils/shots/shot_manifest/_shot_manifest.py` — Shot Manifest — parse structured CSVs and populate a ShotStore.
+### `anim_utils/shots/shot_manifest/_shot_manifest.py` — Maya Shot Manifest adapter — the DCC layer over pythontk's manifest engine.
 - `resolve_duration(step: BuilderStep, initial_shot_length: float, fit_mode: FitMode, fps: float) -> Tuple[float, float, float]`
-- `detect_behaviors(text: str) -> List[str]`
-- `parse_csv(filepath: str, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> List[BuilderStep]`
-- `class BuilderObject`
-- `class BuilderStep`
-  - methods: display_text, from_detection
-- `class PlannedShot`
-- `class ObjectStatus`
-- `class StepStatus`
-  - methods: status, missing_count, total_count
-- `class ColumnMap(SchemaSpec)`
-  - methods: to_dict, from_dict
-- `class ShotManifest`
-  - methods: sync, rewire_audio, update, assess, from_csv
+- `class ShotManifest(_EngineShotManifest)`
+  - methods: apply_behaviors, rewire_audio, from_csv
 
-### `anim_utils/shots/shot_manifest/behaviors/_behaviors.py` — Behaviors — load and apply YAML keying recipes.
-- `templates() -> TemplateSet`
-- `load_behavior(name: str, search_path: Optional[Path] = None) -> Dict[str, Any]`
-- `list_behaviors(search_path: Optional[Path] = None, kind: Optional[str] = None) -> List[str]`
-- `resolve_keys(block_def: Dict, start: float, end: float) -> List[Dict[str, Any]]`
+### `anim_utils/shots/shot_manifest/behaviors/_behaviors.py` — Behaviors — Maya appliers over the engine's pure keying-recipe core.
 - `apply_behavior(obj: str, behavior_name: str, start: float, end: float, attrs: Optional[List[str]] = None, search_path: Optional[Path] = None, source_path: str = '', anchor_override: Optional[str] = None) -> None`
 - `verify_behavior(obj: str, behavior_name: str, start: float, end: float, search_path: Optional[Path] = None, keyframe_fn: Optional[Any] = None, anchor_override: Optional[Any] = None) -> bool`
 - `apply_audio_clip(obj: str, start: float, end: float, source_path: str = '') -> None`
 - `compute_duration(behavior_entries: List[Dict[str, str]], fallback: float = 30, fps: Optional[float] = None) -> float`
 - `apply_to_shots(shots: list, apply_fn, exists_fn=None, has_keys_fn=None, store=None) -> Dict[str, list]`
 
-### `anim_utils/shots/shot_manifest/behaviors/_spec.py` — Schema for a *behavior* template file, defined as a dataclass.
-- `validate_duration(value: Any) -> List[str]`
-- `validate_verify(value: Any) -> List[str]`
-- `validate_attributes(value: Any) -> List[str]`
-- `format_markdown() -> str`
-- `class BehaviorSpec(SchemaSpec)`
-
 ### `anim_utils/shots/shot_manifest/manifest_data.py` — Constants, column layout, and pure helper functions for the Shot Manifest UI.
 - `fmt_behavior(name: str) -> str`
 - `format_behavior_html(behaviors, broken=(), status_color=None) -> str`
 - `try_load_maya_icons()`
-- `prune_to_top_boundaries(region_starts: List[float], n_steps: int) -> List[float]`
 
-### `anim_utils/shots/shot_manifest/mapping/_mapping.py` — CSV mapping resolver — interprets JSON mapping files.
-- `templates() -> TemplateSet`
-- `discover(directory: Optional[str] = None) -> List[str]`
-- `load_mapping(name: str, directory: Optional[str] = None) -> Dict[str, Any]`
-- `resolve(csv_path: str, mapping: Optional[Dict[str, Any]] = None, *, name: Optional[str] = None, directory: Optional[str] = None) -> List[BuilderStep]`
-
-### `anim_utils/shots/shot_manifest/mapping/_spec.py` — Schema for a CSV *mapping* file, defined as a dataclass.
-- `validate_audio_resolve(value: Any) -> List[str]`
-- `validate_default_behaviors(value: Any) -> List[str]`
-- `format_markdown() -> str`
-- `class AudioMethod`
-- `class MappingSpec(SchemaSpec)`
-
-### `anim_utils/shots/shot_manifest/range_resolver.py` — Range resolution algorithm for the Shot Manifest.
-- `resolve_ranges(steps: List[BuilderStep], user_ranges: Dict[str, Tuple[Optional[float], Optional[float]]], gap_starts: List[float], gap_end_map: Dict[float, float], gap: float, use_selected_keys: bool, last_resolved: List[Tuple[str, float, Optional[float], bool]], from_step_idx: int = 0, default_duration: float = 0) -> List[Tuple[str, float, Optional[float], bool]]`
+### `anim_utils/shots/shot_manifest/range_resolver.py` — Range resolution for the Shot Manifest build pipeline (Maya-bound facade).
+- `resolve_ranges(steps: List[BuilderStep], user_ranges: Dict[str, Tuple[Optional[float], Optional[float]]], gap_starts: List[float], gap_end_map: Dict[float, float], gap: float, use_selected_keys: bool, last_resolved: List[Tuple[str, float, Optional[float], bool]], from_step_idx: int = 0, default_duration: float = 0, duration_fn: Optional[Callable[..., float]] = None) -> List[Tuple[str, float, Optional[float], bool]]`
 
 ### `anim_utils/shots/shot_manifest/shot_manifest_slots.py` — Switchboard slots for the Shot Manifest UI.
 - `class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin)`
@@ -241,7 +180,7 @@ _Generated: 2026-07-10_
 ### `audio_utils/_audio_utils.py` — Unified audio system for Maya scenes.
 - `class TrackEvent`
 - `class AudioUtils(ptk.HelpMixin)`
-  - methods: get_snap_frames, set_snap_frames, validate_track_id, normalize_track_id, attr_for, track_id_from_attr, find_carriers, list_track_attrs, load_file_map, set_path, get_path, remove_path, get_fps, cached_waveform, clear_waveform_cache, audio_duration_frames, ensure_track_attr, has_track, list_tracks, read_keys, read_events, write_key, remove_key, clear_keys, shift_keys_in_range, tracks_on_at_frame, bake_manifest, delete_track, rename_track, show_track_attrs, hide_track_attrs, sync, find_dg_node_for_track, is_managed_dg, batch, detect_legacy, migrate_legacy_triggers
+  - methods: get_snap_frames, set_snap_frames, validate_track_id, normalize_track_id, attr_for, track_id_from_attr, find_carriers, list_track_attrs, load_file_map, set_path, get_path, remove_path, get_fps, cached_waveform, clear_waveform_cache, audio_duration_frames, ensure_track_attr, has_track, list_tracks, read_keys, read_events, write_key, remove_key, clear_keys, shift_keys_in_range, tracks_on_at_frame, bake_events, delete_track, rename_track, show_track_attrs, hide_track_attrs, sync, find_dg_node_for_track, is_managed_dg, batch, detect_legacy, migrate_legacy_triggers
 
 ### `audio_utils/audio_clips/_audio_clips.py` — Scene-wide audio event manager — thin facade over ``audio_utils``.
 - `class AudioClips(ptk.LoggingMixin)`
@@ -420,6 +359,10 @@ _Generated: 2026-07-10_
 - `class ExplodedViewSlots(ExplodedView)`
   - methods: header_init, b000, b001, b002, b003
 
+### `edit_utils/_curtain_drape.py` — Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
+- `class CurtainDrape`
+  - methods: prepare, grid_points, drape
+
 ### `edit_utils/_edit_utils.py`
 - `class EditUtils(ptk.HelpMixin)`
   - methods: combine_objects, group_objects, separate_objects, merge_vertices, merge_vertex_pairs, detach_components, decimate, dissolve_coplanar, get_all_faces_on_axis, cut_along_axis, delete_along_axis, mirror, separate_mirrored_mesh, get_overlapping_duplicates, find_non_manifold_vertex, split_non_manifold_vertex, get_overlapping_vertices, get_overlapping_faces, get_similar_mesh, get_similar_topo, invert_geometry, invert_components, delete_selected, create_curve_from_edges
@@ -439,7 +382,7 @@ _Generated: 2026-07-10_
 ### `edit_utils/curtain.py` — Procedural draped-cloth (curtain) generator for Maya.
 - `class Rail(ptk.Polyline)`
   - methods: from_selection, sample_curve
-- `class CurtainMesh(ptk.CurtainDrape)`
+- `class CurtainMesh(CurtainDrape)`
   - methods: create, build
 - `class CurtainRig`
   - methods: attach
@@ -636,10 +579,6 @@ _Generated: 2026-07-10_
   - methods: perform_export, generate_export_path, format_export_name, generate_log_file_path, setup_file_logging, close_file_handlers, load_fbx_export_preset, verify_fbx_preset
 - `class SceneExporterSlots(SceneExporter)`
   - methods: workspace, presets, header_init, cmb000_init, txt000_init, txt001_init, cmb001_init, cmb002_init, cmb004_init, b000, b010, b003, b004, b005, b006, b007, b008, save_output_dir, save_output_name
-
-### `env_utils/scene_exporter/task_factory.py`
-- `class TaskFactory`
-  - methods: run_tasks, run_tasks_by_category
 
 ### `env_utils/scene_exporter/task_manager.py`
 - `class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`
@@ -875,8 +814,6 @@ _Generated: 2026-07-10_
 ### `mat_utils/substance_bridge/connection.py` — Substance 3D Painter connection module.
 - `find_painter_exe() -> Optional[str]`
 - `default_log_path() -> Optional[str]`
-- `class OutputStream`
-  - methods: push, subscribe, history, clear_history, wait_for, close, closed
 - `class SubstanceConnection(ptk.LoggingMixin)`
   - methods: open, close, is_alive, attach
 
@@ -925,7 +862,7 @@ _Generated: 2026-07-10_
 
 ### `node_utils/data_nodes.py`
 - `class DataNodes`
-  - methods: ensure_internal, ensure_export, set_internal_string, get_internal_string, set_export_string, get_export_string
+  - methods: ensure_internal, ensure_export, set_internal_string, get_internal_string, set_export_string, get_export_string, dump, format_dump
 
 ### `nurbs_utils/_nurbs_utils.py`
 - `class NurbsUtils(ptk.HelpMixin)`

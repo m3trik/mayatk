@@ -184,7 +184,7 @@ class GameShaderLogicTest(QuickTestCase):
         """A workflow profile drives per-map output format through prepare_maps —
         the call create_network makes when cmb003 is 'Profile default'."""
         import pythontk as ptk
-        from pythontk.img_utils.map_registry import WF
+        from pythontk.core_utils.engines.textures.map_registry import WF
 
         src = _write_test_image(
             os.path.join(self._tmp_dir, "rock_Base_Color.png"), (200, 100, 50)
@@ -1561,7 +1561,7 @@ class GameShaderTest(unittest.TestCase):
 
     def test_prepare_maps_returns_valid_list(self):
         """Test MapFactory.prepare_maps returns valid texture list."""
-        from pythontk.img_utils.map_factory import MapFactory
+        from pythontk.core_utils.engines.textures.map_factory import MapFactory
 
         textures = [
             os.path.join(self.test_assets, "wood_BaseColor.png"),

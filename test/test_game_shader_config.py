@@ -31,7 +31,7 @@ class GameShaderConfigTest(MayaTkTestCase):
         }
 
         with patch(
-            "pythontk.img_utils.map_factory.MapFactory.prepare_maps"
+            "pythontk.core_utils.engines.textures.map_factory.MapFactory.prepare_maps"
         ) as mock_prepare:
             # Simulate single mode return
             mock_prepare.return_value = self.textures
@@ -68,7 +68,7 @@ class GameShaderConfigTest(MayaTkTestCase):
     def test_config_preset(self):
         """Test passing configuration as a preset string."""
         with patch(
-            "pythontk.img_utils.map_factory.MapFactory.prepare_maps"
+            "pythontk.core_utils.engines.textures.map_factory.MapFactory.prepare_maps"
         ) as mock_prepare:
             mock_prepare.return_value = self.textures
 
@@ -92,7 +92,7 @@ class GameShaderConfigTest(MayaTkTestCase):
         config = {"shader_type": "standard_surface"}
 
         with patch(
-            "pythontk.img_utils.map_factory.MapFactory.prepare_maps"
+            "pythontk.core_utils.engines.textures.map_factory.MapFactory.prepare_maps"
         ) as mock_prepare:
             mock_prepare.return_value = self.textures
 
@@ -115,7 +115,7 @@ class GameShaderConfigTest(MayaTkTestCase):
         config = {"shader_type": "standard_surface"}
 
         with patch(
-            "pythontk.img_utils.map_factory.MapFactory.prepare_maps"
+            "pythontk.core_utils.engines.textures.map_factory.MapFactory.prepare_maps"
         ) as mock_prepare:
             mock_prepare.return_value = self.textures
 

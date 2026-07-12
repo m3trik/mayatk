@@ -1,8 +1,11 @@
 # coding=utf-8
-"""Shot-region detection — Maya animation-graph analysis.
+"""Shot-region detection — Maya scene acquisition over the pure engine math.
 
-Pure functions for discovering animation clusters, mapping anim-curves
-to transforms, and building shot boundaries from selected keyframes.
+Maya-side acquisition (discovering animated transforms, resolving anim-curves
+to transforms, gathering selected-key entries, filtering flat objects) feeding
+the DCC-agnostic boundary math in ``pythontk.core_utils.engines.shots``
+(:func:`~pythontk.cluster_segments_by_gap` /
+:func:`~pythontk.boundaries_from_key_entries`).
 
 Split out of :mod:`_shots` to keep that module focused on the domain
 model (:class:`ShotStore`, :class:`ShotBlock`, events) while detection
@@ -12,6 +15,8 @@ All names are re-exported by :mod:`_shots` so existing imports continue
 to work.
 """
 from typing import Any, Dict, List, Optional, Tuple
+
+from pythontk import cluster_segments_by_gap, boundaries_from_key_entries
 
 from mayatk.anim_utils._anim_utils import STANDARD_TRANSFORM_ATTRS
 
@@ -188,39 +193,10 @@ def detect_shot_regions(
     if not segments:
         return []
 
-    segments.sort(key=lambda s: s["start"])
-
-    # Cluster segments by gap_threshold
-    clusters: List[List[Dict[str, Any]]] = []
-    current: List[Dict[str, Any]] = [segments[0]]
-    current_end = segments[0]["end"]
-
-    for seg in segments[1:]:
-        if seg["start"] - current_end > gap_threshold:
-            clusters.append(current)
-            current = [seg]
-            current_end = seg["end"]
-        else:
-            current.append(seg)
-            current_end = max(current_end, seg["end"])
-    clusters.append(current)
-
-    candidates: List[Dict[str, Any]] = []
-    for cluster in clusters:
-        start = min(s["start"] for s in cluster)
-        end = max(s["end"] for s in cluster)
-        if (end - start) < min_duration:
-            continue
-        objs = sorted({str(s["obj"]) for s in cluster})
-        candidates.append(
-            {
-                "name": f"Shot {len(candidates) + 1}",
-                "start": start,
-                "end": end,
-                "objects": objs,
-            }
-        )
-    return candidates
+    # Pure clustering math lives in the engine (shared with blendertk).
+    return cluster_segments_by_gap(
+        segments, gap_threshold=gap_threshold, min_duration=min_duration
+    )
 
 
 def _filter_flat_objects(
@@ -342,94 +318,9 @@ def regions_from_selected_keys(
     if not entries:
         return []
 
-    def _is_zero(v) -> bool:
-        """Treat None and near-zero floats as 'zero'."""
-        return v is None or abs(v) < 1e-9
-
-    # Stable sort: same-time entries have zeros first so that in
-    # ``zero_as_end`` mode a closing zero is processed before the
-    # opening non-zero trigger at the same frame.
-    entries.sort(key=lambda e: (e[0], 0 if _is_zero(e[1]) else 1))
-
-    # ---- "zero_as_end" mode: pair non-zero starts with zero ends ---------
-    if key_filter == "zero_as_end":
-        candidates: List[Dict[str, Any]] = []
-        current_start: Optional[float] = None
-        current_objs: set = set()
-        for t, v, obj in entries:
-            if not _is_zero(v):
-                if current_start is None:
-                    current_start = t
-                    current_objs = {obj}
-                else:
-                    current_objs.add(obj)
-            else:
-                # Zero-value key ends the current shot
-                if current_start is not None:
-                    candidates.append(
-                        {
-                            "name": f"Shot {len(candidates) + 1}",
-                            "start": current_start,
-                            "end": t,
-                            "objects": sorted(str(o) for o in current_objs),
-                        }
-                    )
-                    current_start = None
-                    current_objs = set()
-        # Trailing shot with no closing zero key
-        if current_start is not None:
-            candidates.append(
-                {
-                    "name": f"Shot {len(candidates) + 1}",
-                    "start": current_start,
-                    "end": current_start + 1.0,
-                    "objects": sorted(str(o) for o in current_objs),
-                }
-            )
-        return _filter_flat_objects(candidates)
-
-    # ---- "skip_zero" mode: filter zeros, then use boundary logic below -----
-    if key_filter == "skip_zero":
-        entries = [(t, v, obj) for t, v, obj in entries if not _is_zero(v)]
-        if not entries:
-            return []
-        # Fall through to "all" mode boundary logic.
-
-    # ---- "all" mode: merge keys within gap_threshold into boundary points
-    boundaries: List[Tuple[float, set]] = []  # (time, {objects})
-    first_time = entries[0][0]
-    cur_time = entries[0][0]
-    cur_objs: set = {entries[0][2]}
-
-    for t, _v, obj in entries[1:]:
-        if t - cur_time <= gap_threshold:
-            cur_objs.add(obj)
-            cur_time = t
-        else:
-            boundaries.append((first_time, cur_objs))
-            first_time = t
-            cur_time = t
-            cur_objs = {obj}
-    boundaries.append((first_time, cur_objs))
-
-    if not boundaries:
-        return []
-
-    # Build contiguous regions: each boundary starts a shot that ends
-    # at the next boundary.  The last shot gets a nominal 1-frame end
-    # (the manifest's range resolver will compute the real end).
-    candidates = []
-    for i, (start, objs) in enumerate(boundaries):
-        if i + 1 < len(boundaries):
-            end = boundaries[i + 1][0]
-        else:
-            end = start + 1.0
-        candidates.append(
-            {
-                "name": f"Shot {len(candidates) + 1}",
-                "start": start,
-                "end": end,
-                "objects": sorted(str(o) for o in objs),
-            }
-        )
+    # Pure boundary math lives in the engine (shared with blendertk); the
+    # flat-object post-filter needs scene queries, so it stays Maya-side.
+    candidates = boundaries_from_key_entries(
+        entries, gap_threshold=gap_threshold, key_filter=key_filter
+    )
     return _filter_flat_objects(candidates)

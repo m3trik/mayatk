@@ -45,6 +45,7 @@ from uitk.widgets.mixins.tooltip_mixin import fmt
 # from this package:
 from mayatk.core_utils._core_utils import BoundingBox
 from mayatk.core_utils.preview import Preview
+from mayatk.edit_utils._curtain_drape import CurtainDrape
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.edit_utils.naming._naming import Naming
 
@@ -54,12 +55,13 @@ _PRESETS_DIR = Path(__file__).resolve().parent / "presets" / "curtain"
 
 # ----------------------------------------------------------------------------
 # Math + drape engine. The reusable primitives live in ``ptk.MathUtils``, the
-# generic polyline geometry in ``ptk.Polyline`` (``ptk.geo_utils.polyline``),
-# and the pure drape deformation in ``ptk.CurtainDrape`` (``ptk.geo_utils.drape``
-# — the ecosystem SSoT; blendertk consumes the same engine). This module keeps
-# only the Maya halves: resolving a rail from a selection, building the mesh, and
-# the wire rig. ``catenary_shape`` / ``sag_profile`` stay importable for
-# back-compat.
+# generic polyline geometry in ``ptk.Polyline`` (``ptk.geo_utils.polyline``), and
+# the rail→grid machinery in ``ptk.RailSurface`` (``ptk.geo_utils.rail_surface``).
+# The curtain-specific drape is the vendored ``_curtain_drape.CurtainDrape``
+# (code-identical with blendertk's copy — drift fails extapps'
+# test_vendor_sync.py). This module keeps only the Maya halves: resolving a
+# rail from a selection, building the mesh, and the wire rig.
+# ``catenary_shape`` / ``sag_profile`` stay importable for back-compat.
 # ----------------------------------------------------------------------------
 
 Vec = Tuple[float, float, float]
@@ -153,14 +155,15 @@ class Rail(ptk.Polyline):
 
 
 # ----------------------------------------------------------------------------
-# Deformation engine — ptk.CurtainDrape (ptk.geo_utils.drape) + the Maya mesh build
+# Curtain generator — the vendored CurtainDrape engine (_curtain_drape) + the Maya mesh build
 # ----------------------------------------------------------------------------
 
 
-class CurtainMesh(ptk.CurtainDrape):
+class CurtainMesh(CurtainDrape):
     """Generate a pleated, gravity-draped curtain mesh from a rail polyline.
 
-    The drape math lives in :class:`ptk.CurtainDrape` (the ecosystem SSoT);
+    The drape math lives in :class:`CurtainDrape` (the vendored
+    ``_curtain_drape`` twin — code-identical with blendertk's copy);
     this subclass adds the Maya *mesh build* (``polyPlane`` + ``MFnMesh`` +
     the shell/decimate/normal post-ops). It consumes plain rail points (see
     :class:`Rail`) and emits a mesh — it does not resolve the rail from a
@@ -307,7 +310,7 @@ class CurtainMesh(ptk.CurtainDrape):
     def build(self) -> str:
         """Create the curtain mesh and return its transform name."""
         # Total length / resolution / rail frames / seeded feature sets — the
-        # whole pure precompute lives in ptk.CurtainDrape.prepare().
+        # whole pure precompute lives in CurtainDrape.prepare().
         u_segs, v_segs, frames = self.prepare()
 
         plane = cmds.polyPlane(

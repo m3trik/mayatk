@@ -9,7 +9,7 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 from uitk.widgets.mixins.tooltip_mixin import fmt
-from pythontk.img_utils.map_factory import (
+from pythontk.core_utils.engines.textures.map_factory import (
     ConversionRegistry,
     TextureProcessor,
     MapFactory,

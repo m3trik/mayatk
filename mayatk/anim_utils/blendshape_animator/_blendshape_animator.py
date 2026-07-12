@@ -18,7 +18,7 @@ from mayatk.anim_utils.blendshape_animator.keyframes import Keyframes
 from mayatk.anim_utils.blendshape_animator.recovery import Recovery
 from mayatk.anim_utils.blendshape_animator.target import Target, Targets
 from mayatk.anim_utils.blendshape_animator.validator import Validator
-from mayatk.anim_utils.blendshape_animator.weights import Weights
+from pythontk import Weights
 
 
 class BlendshapeAnimator(ptk.LoggingMixin):

@@ -390,6 +390,54 @@ class TestSequencerMaya(unittest.TestCase):
         nodes = ShotSequencer._shot_nodes(shot)
         self.assertEqual(len(nodes), 0)
 
+    def _make_nonunique_locators(self):
+        """Create two locators sharing the leaf name ``WHEEL_LOC`` under
+        different parents, animating only the first.
+
+        Returns the animated locator's long DAG path.  After this the short
+        name ``WHEEL_LOC`` is non-unique — ``cmds.objExists`` still reports
+        it valid, but any query demanding a unique node raises ``More than
+        one object matches name``.
+        """
+        grp_a = cmds.group(empty=True, name="grpA")
+        grp_b = cmds.group(empty=True, name="grpB")
+        # Animated locator under grpA.  Capture its long path now, while
+        # the leaf name is still unique — once the grpB twin exists the
+        # short name is ambiguous and cmds.ls(short) is nondeterministic.
+        loc = cmds.spaceLocator(name="WHEEL_LOC")[0]
+        loc = cmds.parent(loc, grp_a)[0]
+        animated = cmds.ls(loc, long=True)[0]  # -> |grpA|WHEEL_LOC
+        cmds.setKeyframe(animated, attribute="translateX", time=0, value=0)
+        cmds.setKeyframe(animated, attribute="translateX", time=10, value=5)
+        # Static twin under grpB, same leaf name — makes the short name ambiguous.
+        loc = cmds.spaceLocator(name="WHEEL_LOC")[0]
+        cmds.parent(loc, grp_b)
+        # Sanity: the short name really is ambiguous now.
+        self.assertEqual(len(cmds.ls("WHEEL_LOC", long=True)), 2)
+        return animated
+
+    def test_shot_nodes_disambiguates_nonunique_name(self):
+        """A stored short name that became non-unique resolves to a single
+        unambiguous long path — the anim-curve-bearing one."""
+        animated = self._make_nonunique_locators()
+        shot = ShotBlock(0, "S", 0, 10, ["WHEEL_LOC"])
+        nodes = ShotSequencer._shot_nodes(shot)
+        self.assertEqual(len(nodes), 1)
+        # Unambiguous (full DAG path) and points at the animated node.
+        self.assertIn("|", nodes[0])
+        self.assertEqual(cmds.ls(nodes[0], long=True), [animated])
+
+    def test_collect_object_segments_survives_nonunique_name(self):
+        """Regression: collect_object_segments must not raise ``More than one
+        object matches name`` when a shot references a non-unique short name."""
+        animated = self._make_nonunique_locators()
+        seq = ShotSequencer([ShotBlock(0, "S", 0, 10, ["WHEEL_LOC"])])
+        segs = seq.collect_object_segments(0)  # must not raise
+        self.assertTrue(
+            any(cmds.ls(s["obj"], long=True) == [animated] for s in segs),
+            f"expected a segment for {animated}, got {[s['obj'] for s in segs]}",
+        )
+
     def test_move_object_keys_shifts(self):
         """move_object_keys offsets keys within the given range."""
         cube = self._create_animated_cube("mv", {10: 0, 20: 5})
@@ -1068,6 +1116,27 @@ class TestReconcileStalePaths(unittest.TestCase):
         new_long = cmds.ls("C", long=True)[0]
         self.assertIn(new_long, store.shots[0].objects)
         self.assertNotIn(stored_long, store.shots[0].objects)
+
+    def test_reconcile_resolves_ambiguous_leaf_to_animated(self):
+        """A stale stored path whose leaf name is now non-unique resolves
+        to the anim-curve-bearing node (exercises the multi-match branch
+        of ``_reconcile_stale_paths``)."""
+        grp_a = cmds.group(empty=True, name="grpA")
+        grp_b = cmds.group(empty=True, name="grpB")
+        loc = cmds.spaceLocator(name="WHEEL_LOC")[0]
+        loc = cmds.parent(loc, grp_a)[0]
+        animated = cmds.ls(loc, long=True)[0]  # |grpA|WHEEL_LOC
+        cmds.setKeyframe(animated, attribute="translateX", time=0, value=0)
+        cmds.setKeyframe(animated, attribute="translateX", time=50, value=10)
+        loc = cmds.spaceLocator(name="WHEEL_LOC")[0]
+        cmds.parent(loc, grp_b)  # |grpB|WHEEL_LOC — static twin
+
+        store = ShotStore()
+        store.define_shot("S", 0, 50, objects=["|ghost|WHEEL_LOC"])  # stale path
+        seq = ShotSequencer(store=store)
+
+        self.assertTrue(seq.reconcile_all_shots())
+        self.assertEqual(store.shots[0].objects, [animated])
 
 
 # ---------------------------------------------------------------------------

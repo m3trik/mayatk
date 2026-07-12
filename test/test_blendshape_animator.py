@@ -15,7 +15,7 @@ from mayatk.anim_utils.blendshape_animator._blendshape_animator import Blendshap
 from mayatk.anim_utils.blendshape_animator.creator import Creator
 from mayatk.anim_utils.blendshape_animator.keyframes import Keyframes
 from mayatk.anim_utils.blendshape_animator.target import Target, Targets
-from mayatk.anim_utils.blendshape_animator.weights import Weights
+from pythontk import Weights
 
 
 class TestBlendshapeAnimatorBugs(MayaTkTestCase):

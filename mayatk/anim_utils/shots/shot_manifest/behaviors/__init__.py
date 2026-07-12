@@ -1,12 +1,17 @@
 # coding=utf-8
-"""Behaviors — load and apply YAML keying recipes.
+"""Behaviors — load and apply keying recipes.
 
 A behavior template defines attribute keyframe patterns (e.g. fade-in,
 fade-out) anchored to a time range's start or end.  Shared across all
 tools in the ``shots`` subpackage.
 
-Package facade: the implementation lives in :mod:`._behaviors` (kept out of
-``__init__`` per the package convention). The public API is re-exported here, so
+The pure core (template discovery/loading, schema, keyframe math) lives in
+``pythontk.core_utils.engines.shots.manifest.behaviors`` — JSON templates
+shared with blendertk; built-ins ship with the engine and user templates go
+under ``user_config_root()/shots/manifest_behaviors/``.  The Maya appliers
+live in :mod:`._behaviors`.
+
+Package facade: the public API is re-exported here, so
 ``from ...behaviors import X`` keeps working and ``mock.patch`` of
 ``...behaviors.X`` still takes effect for callers that read the name off this
 package (the lazy ``from ...behaviors import X`` other modules do at call time —
@@ -28,7 +33,7 @@ from mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors import (  # noqa
     apply_to_shots,
     templates,
 )
-from mayatk.anim_utils.shots.shot_manifest.behaviors._spec import (  # noqa: F401
+from pythontk.core_utils.engines.shots.manifest.behaviors._spec import (  # noqa: F401
     BehaviorSpec,
     format_markdown,
 )

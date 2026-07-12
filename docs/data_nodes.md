@@ -97,6 +97,17 @@ exported; only the baked `audio_manifest` projection is. (Pre-2026-07 scenes
 carried `audio_manifest` as a proxied attr pair; `prepare_for_export` heals
 them to the plain channel in place.)
 
+`audio_manifest` is versioned JSON (v2):
+`{"version": 2, "events": [{"clip", "frame", "name"}, …]}`. The bake reads the
+published `fbx_takes` channel and assigns each event to every take whose range
+contains it, with `frame` rebased to that take's start — so `clip` is the same
+join key `shot_metadata` uses and each event fires only in its own Unity
+AnimationClip (the export hook runs the shots preparer before audio's, so the
+takes are always fresh). With no takes the events ship unscoped (`clip: ""`)
+rebased to `playbackOptions min`. Events outside every take are dropped with a
+warning at bake. Pre-v2 FBX carried a flat `"12:footstep 24:jump"` wire string;
+Unity's importer keeps a legacy parser for those files.
+
 > `fbx_takes` is consumed **inside Maya** (`apply_takes_from_node` realizes it
 > into AnimStacks before the export), and then *also* rides out as a raw user
 > property. That duplication is intentional: the JSON is the machine-readable

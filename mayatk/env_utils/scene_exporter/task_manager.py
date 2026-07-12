@@ -22,7 +22,7 @@ from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.env_utils.scene_exporter.task_factory import TaskFactory
+from pythontk import TaskFactory
 from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import HierarchySidecar
 
 
