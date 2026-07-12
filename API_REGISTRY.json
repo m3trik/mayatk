@@ -1796,7 +1796,7 @@
               "kind": "method",
               "signature": "(self) -> bool",
               "summary": "Re-resolve stale DAG paths across every shot and persist changes.",
-              "line": 243,
+              "line": 269,
               "deprecated": false
             },
             {
@@ -1805,7 +1805,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, ignore: Optional[str] = None, motion_rate: float = 0.001, ignore_holds: bool = True) -> List[Dict[str, Any]]",
               "summary": "Collect per-object animation segments within a shot's range.",
-              "line": 261,
+              "line": 287,
               "deprecated": false
             },
             {
@@ -1814,7 +1814,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, include_audio: bool = True) -> List[Dict[str, Any]]",
               "summary": "Return all sequences (anim + audio) inside a shot's range.",
-              "line": 425,
+              "line": 451,
               "deprecated": false
             },
             {
@@ -1823,7 +1823,7 @@
               "kind": "method",
               "signature": "(self, sequences: List[Dict[str, Any]], dest_shot_id: int) -> None",
               "summary": "Move *sequences* (anim and/or audio) into *dest_shot_id*.",
-              "line": 506,
+              "line": 532,
               "deprecated": false
             },
             {
@@ -1832,7 +1832,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, mode: str = 'fit') -> tuple[float, float]",
               "summary": "Resize a shot's boundaries to its sequence content, rippling neighbors.",
-              "line": 625,
+              "line": 651,
               "deprecated": false
             },
             {
@@ -1841,7 +1841,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int) -> tuple[float, float]",
               "summary": "Shrink shot boundaries inward so they exactly enclose content.",
-              "line": 734,
+              "line": 760,
               "deprecated": false
             },
             {
@@ -1850,7 +1850,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int) -> tuple[float, float]",
               "summary": "Expand shot boundaries outward to enclose all of its sequences.",
-              "line": 742,
+              "line": 768,
               "deprecated": false
             },
             {
@@ -1859,7 +1859,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None, gap_threshold: float = 5.0, ignore: Optional[str] = None, motion_rate: float = 0.001, min_duration: float = 2.0) -> List[Dict[str, Any]]",
               "summary": "Detect shot boundaries from existing animation on *objects*.",
-              "line": 752,
+              "line": 778,
               "deprecated": false
             },
             {
@@ -1868,7 +1868,7 @@
               "kind": "method",
               "signature": "(self, gap_threshold: float = 5.0, ignore: Optional[str] = None, motion_rate: float = 0.001) -> Optional[Dict[str, Any]]",
               "summary": "Detect the first animation cluster after all existing shots.",
-              "line": 788,
+              "line": 814,
               "deprecated": false
             },
             {
@@ -1877,7 +1877,7 @@
               "kind": "method",
               "signature": "(self, obj: str, old_start: float, old_end: float, new_start: float) -> None",
               "summary": "Offset all keyframes of *obj* that fall within [old_start, old_end]",
-              "line": 841,
+              "line": 867,
               "deprecated": false
             },
             {
@@ -1886,7 +1886,7 @@
               "kind": "method",
               "signature": "(self, obj: str, old_time: float, new_time: float, attr_name: str | None = None, eps: float = 0.001) -> None",
               "summary": "Move stepped keys at *old_time* to *new_time* via delete-and-recreate.",
-              "line": 922,
+              "line": 948,
               "deprecated": false
             },
             {
@@ -1895,7 +1895,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, obj: str, old_start: float, old_end: float, new_start: float, prevent_overlap: bool = False) -> None",
               "summary": "Move one object's keys within a shot, expanding the shot and",
-              "line": 1097,
+              "line": 1123,
               "deprecated": false
             },
             {
@@ -1904,7 +1904,7 @@
               "kind": "method",
               "signature": "(self, obj: str, old_start: float, old_end: float, new_start: float, new_end: float) -> None",
               "summary": "Scale (and optionally shift) keyframes of *obj* from",
-              "line": 1205,
+              "line": 1231,
               "deprecated": false
             },
             {
@@ -1913,7 +1913,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, new_start: float) -> None",
               "summary": "Move an entire shot (all object keys) to *new_start*, rippling downstream.",
-              "line": 1238,
+              "line": 1264,
               "deprecated": false
             },
             {
@@ -1922,7 +1922,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, new_start: float, direction: str = 'downstream', _enforce: bool = True) -> None",
               "summary": "Slide a shot intact to *new_start*, rippling only in *direction*.",
-              "line": 1252,
+              "line": 1278,
               "deprecated": false
             },
             {
@@ -1931,7 +1931,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, after_frame: float, delta: float)",
               "summary": "Shift all shots starting at or after *after_frame* by *delta*.",
-              "line": 1308,
+              "line": 1334,
               "deprecated": false
             },
             {
@@ -1940,7 +1940,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, before_frame: float, delta: float)",
               "summary": "Shift all shots ending at or before *before_frame* by *delta*.",
-              "line": 1330,
+              "line": 1356,
               "deprecated": false
             },
             {
@@ -1949,7 +1949,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, new_end: float) -> float",
               "summary": "Expand a shot's end frame and ripple downstream shots.",
-              "line": 1411,
+              "line": 1437,
               "deprecated": false
             },
             {
@@ -1958,7 +1958,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, obj: str, old_start: float, old_end: float, new_start: float, new_end: float) -> None",
               "summary": "Scale one object's keys and ripple-shift all downstream shots.",
-              "line": 1440,
+              "line": 1466,
               "deprecated": false
             },
             {
@@ -1967,7 +1967,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, new_duration: float) -> None",
               "summary": "Change a shot's duration and ripple-shift all downstream shots.",
-              "line": 1485,
+              "line": 1511,
               "deprecated": false
             },
             {
@@ -1976,7 +1976,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, new_start: float, new_end: float, _enforce: bool = True) -> None",
               "summary": "Resize a shot to [new_start, new_end], scaling all keys and rippling.",
-              "line": 1516,
+              "line": 1542,
               "deprecated": false
             },
             {
@@ -1985,7 +1985,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, new_start: float, ripple: bool = True) -> None",
               "summary": "Move a shot to a new start time.",
-              "line": 1569,
+              "line": 1595,
               "deprecated": false
             },
             {
@@ -1994,7 +1994,7 @@
               "kind": "method",
               "signature": "(self, shot_id_a: int, shot_id_b: int) -> None",
               "summary": "Swap two shots' timeline positions non-destructively.",
-              "line": 1604,
+              "line": 1630,
               "deprecated": false
             },
             {
@@ -2003,7 +2003,7 @@
               "kind": "method",
               "signature": "(self, shot_id: int, target_pos: int) -> None",
               "summary": "Move a shot to a new 1-based position in the timeline order.",
-              "line": 1699,
+              "line": 1725,
               "deprecated": false
             },
             {
@@ -2012,7 +2012,7 @@
               "kind": "method",
               "signature": "(self, gap: float = 0, start_frame: float = 1) -> None",
               "summary": "Redistribute all shots sequentially with uniform gaps.",
-              "line": 1793,
+              "line": 1819,
               "deprecated": false
             },
             {
@@ -2021,7 +2021,7 @@
               "kind": "method",
               "signature": "(self, gap: float, scope: str = 'all', shot_id: Optional[int] = None) -> bool",
               "summary": "Re-space shots so the given *gap* separates them, per *scope*.",
-              "line": 1818,
+              "line": 1844,
               "deprecated": false
             },
             {
@@ -2030,7 +2030,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[str, Any]",
               "summary": "Serialise shots and settings to a plain dict.",
-              "line": 1873,
+              "line": 1899,
               "deprecated": false
             },
             {
@@ -2039,7 +2039,7 @@
               "kind": "classmethod",
               "signature": "(cls, data: Dict[str, Any]) -> 'ShotSequencer'",
               "summary": "Restore from serialised data.",
-              "line": 1878,
+              "line": 1904,
               "deprecated": false
             }
           ]
