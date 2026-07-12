@@ -4,7 +4,7 @@
 
 Covers:
 - ``tracks_on_at_frame`` — playhead sampling
-- ``bake_manifest`` — game-export wire format
+- ``bake_events`` — the game-export event primitive
 - ``rename_track`` — attr + enum + file_map rename
 - ``migrate_legacy_triggers`` — one-shot schema migration
 """
@@ -65,18 +65,18 @@ class TestTracksOnAtFrame(MayaTkTestCase):
 
 
 # ---------------------------------------------------------------------------
-# bake_manifest
+# bake_events
 # ---------------------------------------------------------------------------
 
 
-class TestBakeManifest(MayaTkTestCase):
-    def test_empty_returns_empty_string(self):
-        self.assertEqual(_events.bake_manifest(), "")
+class TestBakeEvents(MayaTkTestCase):
+    def test_empty_returns_empty_list(self):
+        self.assertEqual(_events.bake_events(), [])
 
     def test_single_track_single_key(self):
         _events.ensure_track_attr("footstep")
         _events.write_key("footstep", 12, value=1)
-        self.assertEqual(_events.bake_manifest(), "12:footstep")
+        self.assertEqual(_events.bake_events(), [(12, "footstep")])
 
     def test_multiple_tracks_time_ordered(self):
         _events.ensure_track_attr("footstep")
@@ -84,26 +84,37 @@ class TestBakeManifest(MayaTkTestCase):
         _events.write_key("jump", 24, value=1)
         _events.write_key("footstep", 12, value=1)
         # Output is time-ordered across tracks.
-        self.assertEqual(_events.bake_manifest(), "12:footstep 24:jump")
+        self.assertEqual(
+            _events.bake_events(), [(12, "footstep"), (24, "jump")]
+        )
 
     def test_stop_keys_excluded(self):
         _events.ensure_track_attr("footstep")
         _events.write_key("footstep", 12, value=1)
         _events.write_key("footstep", 30, value=0)
-        self.assertEqual(_events.bake_manifest(), "12:footstep")
+        self.assertEqual(_events.bake_events(), [(12, "footstep")])
 
     def test_display_map_overrides_labels(self):
         _events.ensure_track_attr("footstep")
         _events.write_key("footstep", 12, value=1)
-        result = _events.bake_manifest(display_map={"footstep": "Footstep"})
-        self.assertEqual(result, "12:Footstep")
+        result = _events.bake_events(display_map={"footstep": "Footstep"})
+        self.assertEqual(result, [(12, "Footstep")])
 
     def test_multiple_keys_same_track(self):
         _events.ensure_track_attr("footstep")
         _events.write_key("footstep", 12, value=1)
         _events.write_key("footstep", 30, value=0)
         _events.write_key("footstep", 40, value=1)
-        self.assertEqual(_events.bake_manifest(), "12:footstep 40:footstep")
+        self.assertEqual(
+            _events.bake_events(), [(12, "footstep"), (40, "footstep")]
+        )
+
+    def test_frames_are_ints(self):
+        """Raw Maya frames round to int — rebasing is the caller's policy."""
+        _events.ensure_track_attr("footstep")
+        _events.write_key("footstep", 12, value=1)
+        (frame, _label) = _events.bake_events()[0]
+        self.assertIsInstance(frame, int)
 
 
 # ---------------------------------------------------------------------------

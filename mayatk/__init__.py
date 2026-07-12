@@ -153,7 +153,6 @@ DEFAULT_INCLUDE = {
     # Scene exporter
     "env_utils.scene_exporter._scene_exporter": "SceneExporter",
     "env_utils.scene_exporter.task_manager": "TaskManager",
-    "env_utils.scene_exporter.task_factory": "TaskFactory",
 }
 
 bootstrap_package(

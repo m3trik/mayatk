@@ -16,6 +16,7 @@ Covers:
 All tests run WITHOUT Maya by mocking maya.cmds/cmds.
 """
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -1312,25 +1313,36 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
 
 
 class TestCrossScenePrefs(unittest.TestCase):
-    """Verify detection_mode survives across scenes via QSettings.
+    """Verify detection_mode survives across scenes via the shared prefs store.
 
-    Bug: use_selected_keys was only persisted per-scene via MayaScenePersistence.
-    Opening a new scene without opening the shots settings panel caused the
-    store to default to use_selected_keys=False, bypassing the guard entirely.
-    Fixed: 2025-07-25
+    Prefs live in the engine's cross-DCC JSON store
+    (``user_config_root()/shots/prefs.json`` — shared with blendertk); legacy
+    ``QSettings("uitk", "shots")`` values are migrated once when the JSON file
+    is absent (see ``ShotStore._restore_user_prefs``).  Every test sandboxes
+    ``_prefs_dir_override`` so the user's real prefs file is never touched.
     """
 
     def setUp(self):
         ShotStore._active = None
         ShotStore._persistence = None
+        self._tmpdir = tempfile.TemporaryDirectory()
+        ShotStore._prefs_dir_override = self._tmpdir.name
 
     def tearDown(self):
         ShotStore._active = None
         ShotStore._persistence = None
+        # Remove the subclass shadow so any suite-level override (or the
+        # engine default) is restored.
+        if "_prefs_dir_override" in ShotStore.__dict__:
+            del ShotStore._prefs_dir_override
+        self._tmpdir.cleanup()
+
+    def _prefs_file(self):
+        return Path(self._tmpdir.name) / "shots_prefs.json"
 
     @patch("mayatk.anim_utils.shots._shots.QSettings")
     def test_fresh_store_restores_detection_mode_from_qsettings(self, mock_qs_cls):
-        """active() must apply detection_mode from QSettings when no per-scene data."""
+        """Legacy QSettings apply (and write through) when no prefs file exists."""
         mock_qs = MagicMock()
         mock_qs.value.side_effect = lambda key, *a: {
             "ShotStore/detection_mode": "skip_zero",
@@ -1341,6 +1353,8 @@ class TestCrossScenePrefs(unittest.TestCase):
         store._restore_user_prefs()
 
         self.assertEqual(store.detection_mode, "skip_zero")
+        # Migration writes through so the legacy read never re-runs.
+        self.assertTrue(self._prefs_file().exists())
 
     @patch("mayatk.anim_utils.shots._shots.QSettings")
     def test_legacy_qsettings_migrated_to_detection_mode(self, mock_qs_cls):
@@ -1359,8 +1373,10 @@ class TestCrossScenePrefs(unittest.TestCase):
         self.assertEqual(store.detection_mode, "skip_zero")
 
     @patch("mayatk.anim_utils.shots._shots.QSettings")
-    def test_save_writes_detection_mode_to_qsettings(self, mock_qs_cls):
-        """save() must persist detection_mode to QSettings."""
+    def test_save_writes_detection_mode_to_prefs_store(self, mock_qs_cls):
+        """_save_user_prefs persists to the JSON store — QSettings is read-only legacy."""
+        import json as _json
+
         mock_qs = MagicMock()
         mock_qs_cls.return_value = mock_qs
 
@@ -1368,7 +1384,26 @@ class TestCrossScenePrefs(unittest.TestCase):
         store.detection_mode = "zero_as_end"
         store._save_user_prefs()
 
-        mock_qs.setValue.assert_any_call("ShotStore/detection_mode", "zero_as_end")
+        data = _json.loads(self._prefs_file().read_text(encoding="utf-8"))
+        self.assertEqual(data["detection_mode"], "zero_as_end")
+        mock_qs.setValue.assert_not_called()
+
+    @patch("mayatk.anim_utils.shots._shots.QSettings")
+    def test_prefs_file_wins_over_legacy_qsettings(self, mock_qs_cls):
+        """Once the JSON store exists, legacy QSettings are never consulted."""
+        store = ShotStore()
+        store.detection_mode = "zero_as_end"
+        store._save_user_prefs()
+
+        mock_qs = MagicMock()
+        mock_qs.value.return_value = "skip_zero"
+        mock_qs_cls.return_value = mock_qs
+
+        fresh = ShotStore()
+        fresh._restore_user_prefs()
+
+        self.assertEqual(fresh.detection_mode, "zero_as_end")
+        mock_qs.value.assert_not_called()
 
     @patch("mayatk.anim_utils.shots._shots.QSettings")
     def test_qsettings_ignored_when_persistence_has_data(self, mock_qs_cls):

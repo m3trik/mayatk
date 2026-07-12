@@ -1001,48 +1001,6 @@
       ]
     },
     {
-      "relpath": "anim_utils/blendshape_animator/weights.py",
-      "summary": "Weight calculations and Maya-compatible precision handling for blendShape animation.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "Weights",
-          "summary": "Handles weight calculations and Maya's precision requirements.",
-          "line": 7,
-          "bases": [],
-          "members": [
-            {
-              "name": "round_weight",
-              "qualname": "Weights.round_weight",
-              "kind": "classmethod",
-              "signature": "(cls, weight: float) -> float",
-              "summary": "Round weight to Maya-compatible precision.",
-              "line": 13,
-              "deprecated": false
-            },
-            {
-              "name": "frame_to_weight",
-              "qualname": "Weights.frame_to_weight",
-              "kind": "classmethod",
-              "signature": "(cls, frame: int, start_frame: int, end_frame: int) -> float",
-              "summary": "Convert frame number to blendShape weight.",
-              "line": 18,
-              "deprecated": false
-            },
-            {
-              "name": "generate_weights",
-              "qualname": "Weights.generate_weights",
-              "kind": "classmethod",
-              "signature": "(cls, count: int, weight_range: Tuple[float, float] = (0.0, 1.0), include_endpoints: bool = False) -> List[float]",
-              "summary": "Generate ``count`` evenly spaced weights within ``weight_range``.",
-              "line": 30,
-              "deprecated": false
-            }
-          ]
-        }
-      ]
-    },
-    {
       "relpath": "anim_utils/playblast_exporter.py",
       "summary": "Utilities for creating playblasts and alternative preview renders in Maya.",
       "functions": [],
@@ -1270,7 +1228,7 @@
     },
     {
       "relpath": "anim_utils/shots/_detection.py",
-      "summary": "Shot-region detection — Maya animation-graph analysis.",
+      "summary": "Shot-region detection — Maya scene acquisition over the pure engine math.",
       "functions": [
         {
           "name": "resolve_to_transform",
@@ -1278,7 +1236,7 @@
           "kind": "function",
           "signature": "(node, cache=None, _depth=0)",
           "summary": "Resolve a curve-destination node to its owning transform.",
-          "line": 19,
+          "line": 24,
           "deprecated": false
         },
         {
@@ -1287,7 +1245,7 @@
           "kind": "function",
           "signature": "(objects: Optional[List[str]] = None, gap_threshold: float = 5.0, ignore: Optional[str] = None, motion_rate: float = 0.001, min_duration: float = 2.0) -> List[Dict[str, Any]]",
           "summary": "Detect animation regions by clustering per-object segments.",
-          "line": 118,
+          "line": 123,
           "deprecated": false
         },
         {
@@ -1296,7 +1254,7 @@
           "kind": "function",
           "signature": "(gap_threshold: float = 5.0, key_filter: str = 'all') -> List[Dict[str, Any]]",
           "summary": "Build shot regions from currently selected keyframes.",
-          "line": 282,
+          "line": 258,
           "deprecated": false
         }
       ],
@@ -1312,127 +1270,21 @@
           "kind": "function",
           "signature": "(store: ShotStore, plan: MovePlan, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> None",
           "summary": "Execute ``plan`` against the scene and ``store``.",
-          "line": 128,
+          "line": 133,
           "deprecated": false
         }
       ],
       "classes": []
     },
     {
-      "relpath": "anim_utils/shots/_shot_plan.py",
-      "summary": "Pure planning layer for multi-shot topology transformations.",
-      "functions": [
-        {
-          "name": "plan_respace",
-          "qualname": "plan_respace",
-          "kind": "function",
-          "signature": "(store: ShotStore, gap: float, start_frame: float) -> MovePlan",
-          "summary": "Build a plan that lays shots out sequentially with uniform gaps.",
-          "line": 215,
-          "deprecated": false
-        },
-        {
-          "name": "plan_ripple_downstream",
-          "qualname": "plan_ripple_downstream",
-          "kind": "function",
-          "signature": "(store: ShotStore, pivot_shot_id: int, after_frame: float, delta: float) -> MovePlan",
-          "summary": "Build a plan that shifts every shot starting at or after",
-          "line": 255,
-          "deprecated": false
-        },
-        {
-          "name": "plan_ripple_upstream",
-          "qualname": "plan_ripple_upstream",
-          "kind": "function",
-          "signature": "(store: ShotStore, pivot_shot_id: int, before_frame: float, delta: float) -> MovePlan",
-          "summary": "Build a plan that shifts every shot ending at or before",
-          "line": 291,
-          "deprecated": false
-        }
-      ],
-      "classes": [
-        {
-          "name": "ShotMove",
-          "summary": "A single shot's source and destination ranges.",
-          "line": 41,
-          "bases": [],
-          "members": [
-            {
-              "name": "delta",
-              "qualname": "ShotMove.delta",
-              "kind": "property",
-              "signature": "(self) -> float",
-              "summary": "",
-              "line": 60,
-              "deprecated": false
-            },
-            {
-              "name": "moves",
-              "qualname": "ShotMove.moves",
-              "kind": "property",
-              "signature": "(self) -> bool",
-              "summary": "",
-              "line": 64,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "MovePlan",
-          "summary": "Resolved multi-shot timeline mutation.",
-          "line": 69,
-          "bases": [],
-          "members": []
-        }
-      ]
-    },
-    {
       "relpath": "anim_utils/shots/_shots.py",
-      "summary": "Shared shot data model and persistent store.",
-      "functions": [
-        {
-          "name": "resolve_clip_specs",
-          "qualname": "resolve_clip_specs",
-          "kind": "function",
-          "signature": "(shots: List['ShotBlock'], strategy: str = 'name') -> List[Tuple[str, int, int]]",
-          "summary": "Resolve ``[(clip_name, start, end), …]`` — the single source of truth for",
-          "line": 376,
-          "deprecated": false
-        }
-      ],
+      "summary": "Maya shot-store adapter — the DCC layer over ``pythontk``'s shots engine.",
+      "functions": [],
       "classes": [
-        {
-          "name": "ScenePersistence",
-          "summary": "Interface for saving / loading ShotStore data.",
-          "line": 102,
-          "bases": [
-            "Protocol"
-          ],
-          "members": [
-            {
-              "name": "save",
-              "qualname": "ScenePersistence.save",
-              "kind": "method",
-              "signature": "(self, data: Dict[str, Any]) -> None",
-              "summary": "",
-              "line": 105,
-              "deprecated": false
-            },
-            {
-              "name": "load",
-              "qualname": "ScenePersistence.load",
-              "kind": "method",
-              "signature": "(self) -> Optional[Dict[str, Any]]",
-              "summary": "",
-              "line": 107,
-              "deprecated": false
-            }
-          ]
-        },
         {
           "name": "MayaScenePersistence",
           "summary": "Persist ShotStore data to a string channel on ``data_internal``.",
-          "line": 110,
+          "line": 114,
           "bases": [],
           "members": [
             {
@@ -1441,7 +1293,7 @@
               "kind": "method",
               "signature": "(self, data: Dict[str, Any]) -> None",
               "summary": "",
-              "line": 133,
+              "line": 137,
               "deprecated": false
             },
             {
@@ -1450,7 +1302,7 @@
               "kind": "method",
               "signature": "(self) -> Optional[Dict[str, Any]]",
               "summary": "",
-              "line": 150,
+              "line": 154,
               "deprecated": false
             },
             {
@@ -1459,480 +1311,26 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Tear down every SJM subscription owned by this store.",
-              "line": 222,
+              "line": 226,
               "deprecated": false
             }
           ]
-        },
-        {
-          "name": "ShotBlock",
-          "summary": "Represents a single shot (contiguous animation range).",
-          "line": 292,
-          "bases": [],
-          "members": [
-            {
-              "name": "duration",
-              "qualname": "ShotBlock.duration",
-              "kind": "property",
-              "signature": "(self) -> float",
-              "summary": "",
-              "line": 317,
-              "deprecated": false
-            },
-            {
-              "name": "classify_objects",
-              "qualname": "ShotBlock.classify_objects",
-              "kind": "method",
-              "signature": "(self) -> Dict[str, str]",
-              "summary": "Return ``{obj_name: status_key}`` using stored metadata.",
-              "line": 320,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "StoreEvent",
-          "summary": "Base class for typed :class:`ShotStore` events.",
-          "line": 404,
-          "bases": [],
-          "members": []
-        },
-        {
-          "name": "ShotDefined",
-          "summary": "A new shot was created and added to the store.",
-          "line": 416,
-          "bases": [
-            "StoreEvent"
-          ],
-          "members": []
-        },
-        {
-          "name": "ShotUpdated",
-          "summary": "An existing shot's fields were modified.",
-          "line": 424,
-          "bases": [
-            "StoreEvent"
-          ],
-          "members": []
-        },
-        {
-          "name": "ShotRemoved",
-          "summary": "A shot was removed from the store.",
-          "line": 432,
-          "bases": [
-            "StoreEvent"
-          ],
-          "members": []
-        },
-        {
-          "name": "ActiveShotChanged",
-          "summary": "The active (selected) shot changed.",
-          "line": 440,
-          "bases": [
-            "StoreEvent"
-          ],
-          "members": []
-        },
-        {
-          "name": "SettingsChanged",
-          "summary": "Detection-relevant settings were modified.",
-          "line": 448,
-          "bases": [
-            "StoreEvent"
-          ],
-          "members": []
-        },
-        {
-          "name": "BatchComplete",
-          "summary": "A :meth:`ShotStore.batch_update` context has exited.",
-          "line": 455,
-          "bases": [
-            "StoreEvent"
-          ],
-          "members": []
-        },
-        {
-          "name": "StoreInvalidated",
-          "summary": "The active store was discarded (scene change / new scene).",
-          "line": 462,
-          "bases": [
-            "StoreEvent"
-          ],
-          "members": []
         },
         {
           "name": "ShotStore",
-          "summary": "Central store for shot data with pluggable persistence.",
-          "line": 478,
-          "bases": [],
+          "summary": ":class:`pythontk.ShotStore` with the scene hooks bound to Maya.",
+          "line": 272,
+          "bases": [
+            "ptk.ShotStore"
+          ],
           "members": [
-            {
-              "name": "active_shot_id",
-              "qualname": "ShotStore.active_shot_id",
-              "kind": "property",
-              "signature": "(self) -> Optional[int]",
-              "summary": "The currently selected shot, or ``None``.",
-              "line": 538,
-              "deprecated": false
-            },
-            {
-              "name": "set_active_shot",
-              "qualname": "ShotStore.set_active_shot",
-              "kind": "method",
-              "signature": "(self, shot_id: Optional[int]) -> None",
-              "summary": "Set the active shot and notify listeners.",
-              "line": 542,
-              "deprecated": false
-            },
-            {
-              "name": "notify_settings_changed",
-              "qualname": "ShotStore.notify_settings_changed",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Fire a ``\"settings_changed\"`` event.",
-              "line": 551,
-              "deprecated": false
-            },
-            {
-              "name": "add_listener",
-              "qualname": "ShotStore.add_listener",
-              "kind": "method",
-              "signature": "(self, callback: Callable[[StoreEvent], None]) -> None",
-              "summary": "Register a listener called on store mutations.",
-              "line": 561,
-              "deprecated": false
-            },
-            {
-              "name": "remove_listener",
-              "qualname": "ShotStore.remove_listener",
-              "kind": "method",
-              "signature": "(self, callback: Callable[[StoreEvent], None]) -> None",
-              "summary": "Remove a previously registered listener.",
-              "line": 578,
-              "deprecated": false
-            },
-            {
-              "name": "batch_update",
-              "qualname": "ShotStore.batch_update",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Defer listener notifications until the block exits.",
-              "line": 599,
-              "deprecated": false
-            },
-            {
-              "name": "is_gap_locked",
-              "qualname": "ShotStore.is_gap_locked",
-              "kind": "method",
-              "signature": "(self, left_id: str, right_id: str) -> bool",
-              "summary": "Return whether the gap between two adjacent shots is locked.",
-              "line": 630,
-              "deprecated": false
-            },
-            {
-              "name": "lock_gap",
-              "qualname": "ShotStore.lock_gap",
-              "kind": "method",
-              "signature": "(self, left_id: int, right_id: int) -> None",
-              "summary": "Lock a gap so its width is preserved during global respace.",
-              "line": 634,
-              "deprecated": false
-            },
-            {
-              "name": "unlock_gap",
-              "qualname": "ShotStore.unlock_gap",
-              "kind": "method",
-              "signature": "(self, left_id: int, right_id: int) -> None",
-              "summary": "Unlock a gap so it follows the global gap value.",
-              "line": 641,
-              "deprecated": false
-            },
-            {
-              "name": "lock_all_gaps",
-              "qualname": "ShotStore.lock_all_gaps",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Lock every adjacent gap.",
-              "line": 647,
-              "deprecated": false
-            },
-            {
-              "name": "unlock_all_gaps",
-              "qualname": "ShotStore.unlock_all_gaps",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Unlock every gap.",
-              "line": 658,
-              "deprecated": false
-            },
-            {
-              "name": "set_persistence",
-              "qualname": "ShotStore.set_persistence",
-              "kind": "classmethod",
-              "signature": "(cls, backend: Optional[ScenePersistence]) -> None",
-              "summary": "Set the persistence backend used by :meth:`active` and :meth:`save`.",
-              "line": 667,
-              "deprecated": false
-            },
             {
               "name": "active",
               "qualname": "ShotStore.active",
               "kind": "classmethod",
               "signature": "(cls) -> 'ShotStore'",
-              "summary": "Return the current active store, creating one if needed.",
-              "line": 676,
-              "deprecated": false
-            },
-            {
-              "name": "set_active",
-              "qualname": "ShotStore.set_active",
-              "kind": "classmethod",
-              "signature": "(cls, store: 'ShotStore') -> None",
-              "summary": "Replace the active store instance.",
-              "line": 708,
-              "deprecated": false
-            },
-            {
-              "name": "clear_active",
-              "qualname": "ShotStore.clear_active",
-              "kind": "classmethod",
-              "signature": "(cls) -> None",
-              "summary": "Reset the active store and persistence backend.",
-              "line": 713,
-              "deprecated": false
-            },
-            {
-              "name": "add_invalidation_listener",
-              "qualname": "ShotStore.add_invalidation_listener",
-              "kind": "classmethod",
-              "signature": "(cls, callback: Callable[['StoreInvalidated'], None]) -> None",
-              "summary": "Register a callback fired when the active store is discarded.",
-              "line": 731,
-              "deprecated": false
-            },
-            {
-              "name": "remove_invalidation_listener",
-              "qualname": "ShotStore.remove_invalidation_listener",
-              "kind": "classmethod",
-              "signature": "(cls, callback: Callable[['StoreInvalidated'], None]) -> None",
-              "summary": "Remove a previously registered invalidation listener.",
-              "line": 744,
-              "deprecated": false
-            },
-            {
-              "name": "snap",
-              "qualname": "ShotStore.snap",
-              "kind": "method",
-              "signature": "(self, frame: float) -> float",
-              "summary": "Return *frame* rounded to the nearest integer when snapping is on.",
-              "line": 850,
-              "deprecated": false
-            },
-            {
-              "name": "compute_gap",
-              "qualname": "ShotStore.compute_gap",
-              "kind": "method",
-              "signature": "(self) -> float",
-              "summary": "Derive the predominant inter-shot gap from current shot positions.",
-              "line": 863,
-              "deprecated": false
-            },
-            {
-              "name": "sorted_shots",
-              "qualname": "ShotStore.sorted_shots",
-              "kind": "method",
-              "signature": "(self) -> List[ShotBlock]",
-              "summary": "Return shots ordered by start time.",
-              "line": 884,
-              "deprecated": false
-            },
-            {
-              "name": "shot_by_id",
-              "qualname": "ShotStore.shot_by_id",
-              "kind": "method",
-              "signature": "(self, shot_id: int) -> Optional[ShotBlock]",
-              "summary": "",
-              "line": 888,
-              "deprecated": false
-            },
-            {
-              "name": "shot_by_name",
-              "qualname": "ShotStore.shot_by_name",
-              "kind": "method",
-              "signature": "(self, name: str) -> Optional[ShotBlock]",
-              "summary": "Return the first shot whose name matches *name*, or ``None``.",
-              "line": 894,
-              "deprecated": false
-            },
-            {
-              "name": "define_shot",
-              "qualname": "ShotStore.define_shot",
-              "kind": "method",
-              "signature": "(self, name: str, start: float, end: float, objects: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, locked: bool = False, description: str = '') -> ShotBlock",
-              "summary": "Create a new shot and add it to the store.",
-              "line": 901,
-              "deprecated": false
-            },
-            {
-              "name": "update_shot",
-              "qualname": "ShotStore.update_shot",
-              "kind": "method",
-              "signature": "(self, shot_id: int, *, start: Optional[float] = None, end: Optional[float] = None, name: Optional[str] = None, objects: Optional[List[str]] = None, description: Optional[str] = None, locked: Optional[bool] = None, metadata: Optional[Dict[str, Any]] = None) -> Optional[ShotBlock]",
-              "summary": "Update fields on an existing shot.",
-              "line": 947,
-              "deprecated": false
-            },
-            {
-              "name": "remove_shot",
-              "qualname": "ShotStore.remove_shot",
-              "kind": "method",
-              "signature": "(self, shot_id: int) -> bool",
-              "summary": "Remove a shot by ID.",
-              "line": 990,
-              "deprecated": false
-            },
-            {
-              "name": "append_shot",
-              "qualname": "ShotStore.append_shot",
-              "kind": "method",
-              "signature": "(self, name: str, duration: float, gap: float = 0, start_frame: Optional[float] = None, objects: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, locked: bool = False, description: str = '') -> ShotBlock",
-              "summary": "Append a shot after the last existing shot, with gap-aware placement.",
-              "line": 1000,
-              "deprecated": false
-            },
-            {
-              "name": "is_object_hidden",
-              "qualname": "ShotStore.is_object_hidden",
-              "kind": "method",
-              "signature": "(self, obj_name: str) -> bool",
-              "summary": "Return True if *obj_name* is hidden in the sequencer UI.",
-              "line": 1041,
-              "deprecated": false
-            },
-            {
-              "name": "set_object_hidden",
-              "qualname": "ShotStore.set_object_hidden",
-              "kind": "method",
-              "signature": "(self, obj_name: str, hidden: bool = True) -> None",
-              "summary": "Show or hide *obj_name* in the sequencer UI.",
-              "line": 1045,
-              "deprecated": false
-            },
-            {
-              "name": "is_object_pinned",
-              "qualname": "ShotStore.is_object_pinned",
-              "kind": "method",
-              "signature": "(self, obj_name: str) -> bool",
-              "summary": "Return True if *obj_name* is pinned (kept even when missing).",
-              "line": 1057,
-              "deprecated": false
-            },
-            {
-              "name": "set_object_pinned",
-              "qualname": "ShotStore.set_object_pinned",
-              "kind": "method",
-              "signature": "(self, obj_name: str, pinned: bool = True) -> None",
-              "summary": "Pin or unpin *obj_name*.",
-              "line": 1061,
-              "deprecated": false
-            },
-            {
-              "name": "remove_object_from_shots",
-              "qualname": "ShotStore.remove_object_from_shots",
-              "kind": "method",
-              "signature": "(self, obj_name: str) -> None",
-              "summary": "Remove *obj_name* from every shot's object list.",
-              "line": 1078,
-              "deprecated": false
-            },
-            {
-              "name": "to_dict",
-              "qualname": "ShotStore.to_dict",
-              "kind": "method",
-              "signature": "(self) -> Dict[str, Any]",
-              "summary": "Serialise shots and settings to a plain dict.",
-              "line": 1096,
-              "deprecated": false
-            },
-            {
-              "name": "to_export_view",
-              "qualname": "ShotStore.to_export_view",
-              "kind": "method",
-              "signature": "(self, strategy: str = 'name') -> Dict[str, Any]",
-              "summary": "Build the FBX/Unity export view from the current shots.",
-              "line": 1130,
-              "deprecated": false
-            },
-            {
-              "name": "publish_export_view",
-              "qualname": "ShotStore.publish_export_view",
-              "kind": "method",
-              "signature": "(self, strategy: Optional[str] = None) -> Optional[str]",
-              "summary": "Project the export view onto the shared ``data_export`` node.",
-              "line": 1156,
-              "deprecated": false
-            },
-            {
-              "name": "refresh_export_view",
-              "qualname": "ShotStore.refresh_export_view",
-              "kind": "classmethod",
-              "signature": "(cls) -> None",
-              "summary": "Republish the active store's export view when it has shots.",
-              "line": 1179,
-              "deprecated": false
-            },
-            {
-              "name": "enable_auto_export",
-              "qualname": "ShotStore.enable_auto_export",
-              "kind": "classmethod",
-              "signature": "(cls) -> None",
-              "summary": "Make **every** FBX export this session carry the active store's shots.",
-              "line": 1196,
-              "deprecated": false
-            },
-            {
-              "name": "disable_auto_export",
-              "qualname": "ShotStore.disable_auto_export",
-              "kind": "classmethod",
-              "signature": "(cls) -> None",
-              "summary": "Remove the before-export preparer for the rest of the session.",
-              "line": 1213,
-              "deprecated": false
-            },
-            {
-              "name": "from_dict",
-              "qualname": "ShotStore.from_dict",
-              "kind": "classmethod",
-              "signature": "(cls, data: Dict[str, Any]) -> 'ShotStore'",
-              "summary": "Restore from serialised data.",
-              "line": 1237,
-              "deprecated": false
-            },
-            {
-              "name": "rescale_to_fps",
-              "qualname": "ShotStore.rescale_to_fps",
-              "kind": "method",
-              "signature": "(self, new_fps: float) -> None",
-              "summary": "Scale all shot timings from the current ``scene_fps`` to *new_fps*.",
-              "line": 1302,
-              "deprecated": false
-            },
-            {
-              "name": "mark_dirty",
-              "qualname": "ShotStore.mark_dirty",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Flag the store as needing a save.",
-              "line": 1327,
-              "deprecated": false
-            },
-            {
-              "name": "save",
-              "qualname": "ShotStore.save",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Persist via the configured backend (no-op if none set).",
-              "line": 1351,
+              "summary": "Return the active store, auto-installing the Maya backend once.",
+              "line": 287,
               "deprecated": false
             },
             {
@@ -1941,16 +1339,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "True if the scene contains animCurves driving transforms.",
-              "line": 1377,
-              "deprecated": false
-            },
-            {
-              "name": "is_detection_relevant",
-              "qualname": "ShotStore.is_detection_relevant",
-              "kind": "property",
-              "signature": "(self) -> bool",
-              "summary": "True when detection settings are actionable.",
-              "line": 1403,
+              "line": 310,
               "deprecated": false
             },
             {
@@ -1959,16 +1348,7 @@
               "kind": "method",
               "signature": "(self) -> List[Dict[str, Any]]",
               "summary": "Detect shot candidates using the store's detection settings.",
-              "line": 1411,
-              "deprecated": false
-            },
-            {
-              "name": "detect_and_define",
-              "qualname": "ShotStore.detect_and_define",
-              "kind": "method",
-              "signature": "(self, overwrite: bool = False) -> List[ShotBlock]",
-              "summary": "Detect shot regions and define them in the store.",
-              "line": 1438,
+              "line": 335,
               "deprecated": false
             },
             {
@@ -1977,7 +1357,16 @@
               "kind": "method",
               "signature": "(self) -> Dict[int, str]",
               "summary": "Lightweight assessment: check if shot objects exist in the scene.",
-              "line": 1467,
+              "line": 353,
+              "deprecated": false
+            },
+            {
+              "name": "publish_export_view",
+              "qualname": "ShotStore.publish_export_view",
+              "kind": "method",
+              "signature": "(self, strategy: Optional[str] = None) -> Optional[str]",
+              "summary": "Project the export view onto the shared ``data_export`` node.",
+              "line": 387,
               "deprecated": false
             }
           ]
@@ -1986,7 +1375,7 @@
     },
     {
       "relpath": "anim_utils/shots/shot_manifest/_shot_manifest.py",
-      "summary": "Shot Manifest — parse structured CSVs and populate a ShotStore.",
+      "summary": "Maya Shot Manifest adapter — the DCC layer over pythontk's manifest engine.",
       "functions": [
         {
           "name": "resolve_duration",
@@ -1994,152 +1383,26 @@
           "kind": "function",
           "signature": "(step: BuilderStep, initial_shot_length: float, fit_mode: FitMode, fps: float) -> Tuple[float, float, float]",
           "summary": "Compute final shot duration for *step* under the given fit policy.",
-          "line": 154,
-          "deprecated": false
-        },
-        {
-          "name": "detect_behaviors",
-          "qualname": "detect_behaviors",
-          "kind": "function",
-          "signature": "(text: str) -> List[str]",
-          "summary": "Return behavior names inferred from descriptive *text*.",
-          "line": 339,
-          "deprecated": false
-        },
-        {
-          "name": "parse_csv",
-          "qualname": "parse_csv",
-          "kind": "function",
-          "signature": "(filepath: str, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> List[BuilderStep]",
-          "summary": "Parse a structured CSV into a list of :class:`BuilderStep`.",
-          "line": 530,
+          "line": 110,
           "deprecated": false
         }
       ],
       "classes": [
         {
-          "name": "BuilderObject",
-          "summary": "One asset within a step.",
-          "line": 36,
-          "bases": [],
-          "members": []
-        },
-        {
-          "name": "BuilderStep",
-          "summary": "One step (= one future sequencer shot).",
-          "line": 46,
-          "bases": [],
-          "members": [
-            {
-              "name": "display_text",
-              "qualname": "BuilderStep.display_text",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "Text shown in the tree Description column.",
-              "line": 57,
-              "deprecated": false
-            },
-            {
-              "name": "from_detection",
-              "qualname": "BuilderStep.from_detection",
-              "kind": "classmethod",
-              "signature": "(cls, candidates: List[Dict]) -> Tuple[List['BuilderStep'], Dict[str, Tuple[float, float]]]",
-              "summary": "Convert detection candidates to BuilderSteps + pre-filled ranges.",
-              "line": 62,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "PlannedShot",
-          "summary": "Immutable build instruction computed before any store mutation.",
-          "line": 113,
-          "bases": [],
-          "members": []
-        },
-        {
-          "name": "ObjectStatus",
-          "summary": "Assessment result for one object within a step.",
-          "line": 277,
-          "bases": [],
-          "members": []
-        },
-        {
-          "name": "StepStatus",
-          "summary": "Assessment result for one step.",
-          "line": 293,
-          "bases": [],
-          "members": [
-            {
-              "name": "status",
-              "qualname": "StepStatus.status",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "Worst-of-children rollup.",
-              "line": 304,
-              "deprecated": false
-            },
-            {
-              "name": "missing_count",
-              "qualname": "StepStatus.missing_count",
-              "kind": "property",
-              "signature": "(self) -> int",
-              "summary": "",
-              "line": 321,
-              "deprecated": false
-            },
-            {
-              "name": "total_count",
-              "qualname": "StepStatus.total_count",
-              "kind": "property",
-              "signature": "(self) -> int",
-              "summary": "",
-              "line": 325,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "ColumnMap",
-          "summary": "Maps logical fields to CSV header names (case-insensitive).",
-          "line": 358,
+          "name": "ShotManifest",
+          "summary": ":class:`pythontk.ShotManifest` with the scene hooks bound to Maya.",
+          "line": 156,
           "bases": [
-            "SchemaSpec"
+            "_EngineShotManifest"
           ],
           "members": [
             {
-              "name": "to_dict",
-              "qualname": "ColumnMap.to_dict",
+              "name": "apply_behaviors",
+              "qualname": "ShotManifest.apply_behaviors",
               "kind": "method",
-              "signature": "(self) -> Dict[str, Any]",
-              "summary": "Serialise to a JSON-safe dict (tuples → lists).",
-              "line": 406,
-              "deprecated": false
-            },
-            {
-              "name": "from_dict",
-              "qualname": "ColumnMap.from_dict",
-              "kind": "classmethod",
-              "signature": "(cls, data: Dict[str, Any]) -> 'ColumnMap'",
-              "summary": "Reconstruct from a dict produced by :meth:`to_dict`.",
-              "line": 420,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "ShotManifest",
-          "summary": "Creates shot store entries from parsed steps and applies behaviors.",
-          "line": 705,
-          "bases": [],
-          "members": [
-            {
-              "name": "sync",
-              "qualname": "ShotManifest.sync",
-              "kind": "method",
-              "signature": "(self, steps: List[BuilderStep], apply_behaviors: bool = True, ranges: Optional[Dict[str, Tuple[float, float]]] = None, remove_missing: bool = True, zero_duration_fallback: bool = False, fit_mode: FitMode = DEFAULT_FIT_MODE, initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH, skip_scene_discovery: bool = False) -> Tuple[Dict[str, str], Dict[str, list], List[StepStatus]]",
-              "summary": "Full build pipeline: plan -> commit -> apply behaviors -> assess.",
-              "line": 753,
+              "signature": "(self) -> Dict[str, list]",
+              "summary": "Apply detected behaviors to Maya objects (fades, audio clips).",
+              "line": 200,
               "deprecated": false
             },
             {
@@ -2148,34 +1411,16 @@
               "kind": "staticmethod",
               "signature": "(tracks: Optional[List[str]] = None) -> Dict[str, List[str]]",
               "summary": "Reconcile managed DG audio nodes with keyed track state.",
-              "line": 821,
-              "deprecated": false
-            },
-            {
-              "name": "update",
-              "qualname": "ShotManifest.update",
-              "kind": "method",
-              "signature": "(self, steps: List[BuilderStep], ranges: Optional[Dict[str, Tuple[float, float]]] = None, remove_missing: bool = True, zero_duration_fallback: bool = False, fit_mode: FitMode = DEFAULT_FIT_MODE, initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH) -> Dict[str, str]",
-              "summary": "Sync parsed steps to the ShotStore (data only, no behaviors).",
-              "line": 847,
-              "deprecated": false
-            },
-            {
-              "name": "assess",
-              "qualname": "ShotManifest.assess",
-              "kind": "method",
-              "signature": "(self, steps: List[BuilderStep], exists_fn: Optional[Callable[[str], bool]] = None, verify_fn: Optional[Callable] = None, keyframe_range_fn: Optional[Callable[[str], Optional[Tuple[float, float]]]] = None, audio_exists_fn: Optional[Callable[[str], bool]] = None, skip_scene_discovery: bool = False) -> List[StepStatus]",
-              "summary": "Compare parsed steps against the current store state.",
-              "line": 1284,
+              "line": 218,
               "deprecated": false
             },
             {
               "name": "from_csv",
               "qualname": "ShotManifest.from_csv",
-              "kind": "staticmethod",
-              "signature": "(filepath: str, store: Optional[ShotStore] = None, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> Tuple['ShotManifest', List[BuilderStep]]",
+              "kind": "classmethod",
+              "signature": "(cls, filepath: str, store: Optional[ShotStore] = None, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> Tuple['ShotManifest', List[BuilderStep]]",
               "summary": "Convenience: parse a CSV and return a ready-to-build engine.",
-              "line": 1682,
+              "line": 424,
               "deprecated": false
             }
           ]
@@ -2184,51 +1429,15 @@
     },
     {
       "relpath": "anim_utils/shots/shot_manifest/behaviors/_behaviors.py",
-      "summary": "Behaviors — load and apply YAML keying recipes.",
+      "summary": "Behaviors — Maya appliers over the engine's pure keying-recipe core.",
       "functions": [
-        {
-          "name": "templates",
-          "qualname": "templates",
-          "kind": "function",
-          "signature": "() -> TemplateSet",
-          "summary": "The shared :class:`~pythontk.TemplateSet` backing behavior discovery.",
-          "line": 45,
-          "deprecated": false
-        },
-        {
-          "name": "load_behavior",
-          "qualname": "load_behavior",
-          "kind": "function",
-          "signature": "(name: str, search_path: Optional[Path] = None) -> Dict[str, Any]",
-          "summary": "Load a YAML behavior template by stem name.",
-          "line": 69,
-          "deprecated": false
-        },
-        {
-          "name": "list_behaviors",
-          "qualname": "list_behaviors",
-          "kind": "function",
-          "signature": "(search_path: Optional[Path] = None, kind: Optional[str] = None) -> List[str]",
-          "summary": "Return stem names of all available behavior templates.",
-          "line": 127,
-          "deprecated": false
-        },
-        {
-          "name": "resolve_keys",
-          "qualname": "resolve_keys",
-          "kind": "function",
-          "signature": "(block_def: Dict, start: float, end: float) -> List[Dict[str, Any]]",
-          "summary": "Resolve an ``in`` or ``out`` block to absolute keyframe dicts.",
-          "line": 176,
-          "deprecated": false
-        },
         {
           "name": "apply_behavior",
           "qualname": "apply_behavior",
           "kind": "function",
           "signature": "(obj: str, behavior_name: str, start: float, end: float, attrs: Optional[List[str]] = None, search_path: Optional[Path] = None, source_path: str = '', anchor_override: Optional[str] = None) -> None",
           "summary": "Apply a named behavior template to an object over a time range.",
-          "line": 232,
+          "line": 64,
           "deprecated": false
         },
         {
@@ -2237,7 +1446,7 @@
           "kind": "function",
           "signature": "(obj: str, behavior_name: str, start: float, end: float, search_path: Optional[Path] = None, keyframe_fn: Optional[Any] = None, anchor_override: Optional[Any] = None) -> bool",
           "summary": "Check whether expected behavior keyframes exist on an object.",
-          "line": 382,
+          "line": 214,
           "deprecated": false
         },
         {
@@ -2246,7 +1455,7 @@
           "kind": "function",
           "signature": "(obj: str, start: float, end: float, source_path: str = '') -> None",
           "summary": "Author start/stop keys for an audio track over *(start, end)*.",
-          "line": 536,
+          "line": 368,
           "deprecated": false
         },
         {
@@ -2254,8 +1463,8 @@
           "qualname": "compute_duration",
           "kind": "function",
           "signature": "(behavior_entries: List[Dict[str, str]], fallback: float = 30, fps: Optional[float] = None) -> float",
-          "summary": "Derive duration from the behavior templates referenced in *behavior_entries*.",
-          "line": 617,
+          "summary": "Derive duration from the behavior templates in *behavior_entries*.",
+          "line": 449,
           "deprecated": false
         },
         {
@@ -2264,64 +1473,11 @@
           "kind": "function",
           "signature": "(shots: list, apply_fn, exists_fn=None, has_keys_fn=None, store=None) -> Dict[str, list]",
           "summary": "Apply declared behaviors from shot metadata to Maya objects.",
-          "line": 745,
+          "line": 515,
           "deprecated": false
         }
       ],
       "classes": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/behaviors/_spec.py",
-      "summary": "Schema for a *behavior* template file, defined as a dataclass.",
-      "functions": [
-        {
-          "name": "validate_duration",
-          "qualname": "validate_duration",
-          "kind": "function",
-          "signature": "(value: Any) -> List[str]",
-          "summary": "``duration`` is a frame count or the literal ``\"from_source\"``.",
-          "line": 28,
-          "deprecated": false
-        },
-        {
-          "name": "validate_verify",
-          "qualname": "validate_verify",
-          "kind": "function",
-          "signature": "(value: Any) -> List[str]",
-          "summary": "",
-          "line": 37,
-          "deprecated": false
-        },
-        {
-          "name": "validate_attributes",
-          "qualname": "validate_attributes",
-          "kind": "function",
-          "signature": "(value: Any) -> List[str]",
-          "summary": "``attributes`` = {attr: {in?/out?: {offset,duration,values,anchor,tangent}}}.",
-          "line": 46,
-          "deprecated": false
-        },
-        {
-          "name": "format_markdown",
-          "qualname": "format_markdown",
-          "kind": "function",
-          "signature": "() -> str",
-          "summary": "Generate the full ``BEHAVIOR_FORMAT.md`` reference from the schema SSoT.",
-          "line": 110,
-          "deprecated": false
-        }
-      ],
-      "classes": [
-        {
-          "name": "BehaviorSpec",
-          "summary": "Schema for one behavior template (see ``BEHAVIOR_FORMAT.md``).",
-          "line": 68,
-          "bases": [
-            "SchemaSpec"
-          ],
-          "members": []
-        }
-      ]
     },
     {
       "relpath": "anim_utils/shots/shot_manifest/manifest_data.py",
@@ -2333,7 +1489,7 @@
           "kind": "function",
           "signature": "(name: str) -> str",
           "summary": "``'fade_in'`` → ``'Fade In'``.",
-          "line": 38,
+          "line": 40,
           "deprecated": false
         },
         {
@@ -2342,7 +1498,7 @@
           "kind": "function",
           "signature": "(behaviors, broken=(), status_color=None) -> str",
           "summary": "Return rich-text HTML for a list of behavior names.",
-          "line": 43,
+          "line": 45,
           "deprecated": false
         },
         {
@@ -2351,126 +1507,23 @@
           "kind": "function",
           "signature": "()",
           "summary": "Return the :class:`NodeIcons` class if Maya is available, else ``None``.",
-          "line": 74,
-          "deprecated": false
-        },
-        {
-          "name": "prune_to_top_boundaries",
-          "qualname": "prune_to_top_boundaries",
-          "kind": "function",
-          "signature": "(region_starts: List[float], n_steps: int) -> List[float]",
-          "summary": "Keep only *n_steps* region starts by selecting the largest gaps.",
-          "line": 84,
-          "deprecated": false
-        }
-      ],
-      "classes": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/mapping/_mapping.py",
-      "summary": "CSV mapping resolver — interprets JSON mapping files.",
-      "functions": [
-        {
-          "name": "templates",
-          "qualname": "templates",
-          "kind": "function",
-          "signature": "() -> TemplateSet",
-          "summary": "The shared :class:`~pythontk.TemplateSet` backing mapping discovery.",
-          "line": 80,
-          "deprecated": false
-        },
-        {
-          "name": "discover",
-          "qualname": "discover",
-          "kind": "function",
-          "signature": "(directory: Optional[str] = None) -> List[str]",
-          "summary": "List available mapping names (without ``.json``).",
-          "line": 103,
-          "deprecated": false
-        },
-        {
-          "name": "load_mapping",
-          "qualname": "load_mapping",
-          "kind": "function",
-          "signature": "(name: str, directory: Optional[str] = None) -> Dict[str, Any]",
-          "summary": "Read a mapping JSON by *name*, validate it, and return the parsed dict.",
-          "line": 126,
-          "deprecated": false
-        },
-        {
-          "name": "resolve",
-          "qualname": "resolve",
-          "kind": "function",
-          "signature": "(csv_path: str, mapping: Optional[Dict[str, Any]] = None, *, name: Optional[str] = None, directory: Optional[str] = None) -> List[BuilderStep]",
-          "summary": "Parse a CSV through a mapping and return fully resolved steps.",
-          "line": 175,
-          "deprecated": false
-        }
-      ],
-      "classes": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/mapping/_spec.py",
-      "summary": "Schema for a CSV *mapping* file, defined as a dataclass.",
-      "functions": [
-        {
-          "name": "validate_audio_resolve",
-          "qualname": "validate_audio_resolve",
-          "kind": "function",
-          "signature": "(value: Any) -> List[str]",
-          "summary": "Validate the polymorphic ``audio_resolve`` block.",
           "line": 76,
           "deprecated": false
-        },
-        {
-          "name": "validate_default_behaviors",
-          "qualname": "validate_default_behaviors",
-          "kind": "function",
-          "signature": "(value: Any) -> List[str]",
-          "summary": "Validate the ``default_behaviors`` block ({kind: [behavior names]}).",
-          "line": 89,
-          "deprecated": false
-        },
-        {
-          "name": "format_markdown",
-          "qualname": "format_markdown",
-          "kind": "function",
-          "signature": "() -> str",
-          "summary": "Generate the full ``MAPPING_FORMAT.md`` reference from the schema SSoT.",
-          "line": 123,
-          "deprecated": false
         }
       ],
-      "classes": [
-        {
-          "name": "AudioMethod",
-          "summary": "Descriptor for one ``audio_resolve`` strategy (drives validate/docs).",
-          "line": 28,
-          "bases": [],
-          "members": []
-        },
-        {
-          "name": "MappingSpec",
-          "summary": "Schema for one CSV-mapping file (see ``MAPPING_FORMAT.md``).",
-          "line": 101,
-          "bases": [
-            "SchemaSpec"
-          ],
-          "members": []
-        }
-      ]
+      "classes": []
     },
     {
       "relpath": "anim_utils/shots/shot_manifest/range_resolver.py",
-      "summary": "Range resolution algorithm for the Shot Manifest.",
+      "summary": "Range resolution for the Shot Manifest build pipeline (Maya-bound facade).",
       "functions": [
         {
           "name": "resolve_ranges",
           "qualname": "resolve_ranges",
           "kind": "function",
-          "signature": "(steps: List[BuilderStep], user_ranges: Dict[str, Tuple[Optional[float], Optional[float]]], gap_starts: List[float], gap_end_map: Dict[float, float], gap: float, use_selected_keys: bool, last_resolved: List[Tuple[str, float, Optional[float], bool]], from_step_idx: int = 0, default_duration: float = 0) -> List[Tuple[str, float, Optional[float], bool]]",
+          "signature": "(steps: List[BuilderStep], user_ranges: Dict[str, Tuple[Optional[float], Optional[float]]], gap_starts: List[float], gap_end_map: Dict[float, float], gap: float, use_selected_keys: bool, last_resolved: List[Tuple[str, float, Optional[float], bool]], from_step_idx: int = 0, default_duration: float = 0, duration_fn: Optional[Callable[..., float]] = None) -> List[Tuple[str, float, Optional[float], bool]]",
           "summary": "Compute a resolved ``(start, end)`` for every step.",
-          "line": 17,
+          "line": 25,
           "deprecated": false
         }
       ],
@@ -4567,11 +3620,11 @@
               "deprecated": false
             },
             {
-              "name": "bake_manifest",
-              "qualname": "AudioUtils.bake_manifest",
+              "name": "bake_events",
+              "qualname": "AudioUtils.bake_events",
               "kind": "classmethod",
-              "signature": "(cls, carrier: Optional[str] = None, display_map: Optional[dict] = None, frame_offset: float = 0.0) -> str",
-              "summary": "Return a space-separated ``\"<frame>:<label>\"`` manifest string.",
+              "signature": "(cls, carrier: Optional[str] = None, display_map: Optional[dict] = None) -> List[tuple]",
+              "summary": "Return the keyed \"on\" events as ``[(frame, label), ...]``.",
               "line": 684,
               "deprecated": false
             },
@@ -4581,7 +3634,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: str, carrier: Optional[str] = None) -> bool",
               "summary": "Remove the per-track attr and its keys.",
-              "line": 725,
+              "line": 721,
               "deprecated": false
             },
             {
@@ -4590,7 +3643,7 @@
               "kind": "classmethod",
               "signature": "(cls, old_id: str, new_id: str, carrier: Optional[str] = None) -> bool",
               "summary": "Rename a track's attr + enum labels + file_map key.",
-              "line": 742,
+              "line": 738,
               "deprecated": false
             },
             {
@@ -4599,7 +3652,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: Optional[str] = None, carrier: Optional[str] = None) -> List[str]",
               "summary": "Un-hide track attrs in the Channel Box.",
-              "line": 785,
+              "line": 781,
               "deprecated": false
             },
             {
@@ -4608,7 +3661,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: Optional[str] = None, carrier: Optional[str] = None) -> List[str]",
               "summary": "Hide track attrs from the Channel Box.",
-              "line": 792,
+              "line": 788,
               "deprecated": false
             },
             {
@@ -4617,7 +3670,7 @@
               "kind": "staticmethod",
               "signature": "(tracks=None, carrier=None)",
               "summary": "Reconcile managed DG audio nodes with keyed track state.",
-              "line": 822,
+              "line": 818,
               "deprecated": false
             },
             {
@@ -4626,7 +3679,7 @@
               "kind": "staticmethod",
               "signature": "(track_id)",
               "summary": "Return the managed DG audio node for *track_id*, or ``None``.",
-              "line": 832,
+              "line": 828,
               "deprecated": false
             },
             {
@@ -4635,7 +3688,7 @@
               "kind": "staticmethod",
               "signature": "(node)",
               "summary": "True if *node* has the ``audio_node_source`` marker attr.",
-              "line": 839,
+              "line": 835,
               "deprecated": false
             },
             {
@@ -4644,7 +3697,7 @@
               "kind": "staticmethod",
               "signature": "(auto_sync=True, undo=True)",
               "summary": "Context manager grouping audio edits into one undo + one sync.",
-              "line": 846,
+              "line": 842,
               "deprecated": false
             },
             {
@@ -4653,7 +3706,7 @@
               "kind": "staticmethod",
               "signature": "(obj=CARRIER_NODE, category='audio')",
               "summary": "Return True if *obj* has legacy ``<category>_trigger`` attr.",
-              "line": 856,
+              "line": 852,
               "deprecated": false
             },
             {
@@ -4662,7 +3715,7 @@
               "kind": "staticmethod",
               "signature": "(obj, category='audio', keep_old_attrs=False)",
               "summary": "Migrate legacy trigger keys to per-track attrs.",
-              "line": 866,
+              "line": 862,
               "deprecated": false
             }
           ]
@@ -4677,7 +3730,7 @@
         {
           "name": "AudioClips",
           "summary": "Scene-wide audio event facade.",
-          "line": 46,
+          "line": 47,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -4688,7 +3741,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_ids: Optional[List[str]] = None, composite: bool = True, activate: bool = True) -> Dict[str, list]",
               "summary": "Reconcile DG nodes and rebuild the composite WAV.",
-              "line": 74,
+              "line": 86,
               "deprecated": false
             },
             {
@@ -4697,7 +3750,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[str]",
               "summary": "Rebuild the scene-wide composite WAV from keyed start events.",
-              "line": 106,
+              "line": 118,
               "deprecated": false
             },
             {
@@ -4706,7 +3759,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> int",
               "summary": "Delete every managed DG node, the composite, and all tracks.",
-              "line": 147,
+              "line": 159,
               "deprecated": false
             },
             {
@@ -4715,7 +3768,7 @@
               "kind": "classmethod",
               "signature": "(cls, audio_files: List[str]) -> List[str]",
               "summary": "Register audio files as tracks (no keys authored).",
-              "line": 178,
+              "line": 190,
               "deprecated": false
             },
             {
@@ -4724,7 +3777,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> str",
               "summary": "Bake the scene-wide audio manifest for FBX export.",
-              "line": 222,
+              "line": 234,
               "deprecated": false
             },
             {
@@ -4733,7 +3786,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Bake the audio manifest onto ``data_export`` before **every** FBX export.",
-              "line": 320,
+              "line": 432,
               "deprecated": false
             },
             {
@@ -4742,7 +3795,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Remove the before-export preparer for the rest of the session.",
-              "line": 336,
+              "line": 448,
               "deprecated": false
             },
             {
@@ -4751,7 +3804,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Return names of every managed DG audio node plus the composite.",
-              "line": 360,
+              "line": 472,
               "deprecated": false
             },
             {
@@ -4760,7 +3813,7 @@
               "kind": "classmethod",
               "signature": "(cls, node_name: str, time_slider: bool = True) -> None",
               "summary": "Set an audio node as the active Time Slider sound.",
-              "line": 375,
+              "line": 487,
               "deprecated": false
             }
           ]
@@ -7388,6 +6441,48 @@
       ]
     },
     {
+      "relpath": "edit_utils/_curtain_drape.py",
+      "summary": "Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "CurtainDrape",
+          "summary": "Drape a grid into a pleated, gravity-sagged curtain — pure math.",
+          "line": 62,
+          "bases": [],
+          "members": [
+            {
+              "name": "prepare",
+              "qualname": "CurtainDrape.prepare",
+              "kind": "method",
+              "signature": "(self) -> Tuple[int, int, List[Tuple[Vec, Vec, Vec]]]",
+              "summary": "Precompute the per-build state and return ``(u_segs, v_segs, frames)``.",
+              "line": 177,
+              "deprecated": false
+            },
+            {
+              "name": "grid_points",
+              "qualname": "CurtainDrape.grid_points",
+              "kind": "method",
+              "signature": "(self) -> Tuple[int, int, List[Vec]]",
+              "summary": "The full draped grid: ``(u_segs, v_segs, points)``.",
+              "line": 207,
+              "deprecated": false
+            },
+            {
+              "name": "drape",
+              "qualname": "CurtainDrape.drape",
+              "kind": "method",
+              "signature": "(self, u, v, pos, tan, normal) -> Vec",
+              "summary": "Place one cloth vertex.",
+              "line": 252,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
       "relpath": "edit_utils/_edit_utils.py",
       "summary": "",
       "functions": [],
@@ -7746,7 +6841,7 @@
         {
           "name": "Rail",
           "summary": "Rail-polyline geometry — the line a curtain hangs from.",
-          "line": 76,
+          "line": 78,
           "bases": [
             "ptk.Polyline"
           ],
@@ -7757,7 +6852,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> Optional[Tuple[List[Vec], bool]]",
               "summary": "Resolve a rail polyline from a Maya selection.",
-              "line": 87,
+              "line": 89,
               "deprecated": false
             },
             {
@@ -7766,7 +6861,7 @@
               "kind": "staticmethod",
               "signature": "(shape: str, count: int = 200) -> Tuple[List[Vec], bool]",
               "summary": "Sample a NURBS curve into a dense polyline (resampled later by length).",
-              "line": 140,
+              "line": 142,
               "deprecated": false
             }
           ]
@@ -7774,9 +6869,9 @@
         {
           "name": "CurtainMesh",
           "summary": "Generate a pleated, gravity-draped curtain mesh from a rail polyline.",
-          "line": 160,
+          "line": 162,
           "bases": [
-            "ptk.CurtainDrape"
+            "CurtainDrape"
           ],
           "members": [
             {
@@ -7785,7 +6880,7 @@
               "kind": "classmethod",
               "signature": "(cls, rail: Sequence[Vec], **opts) -> str",
               "summary": "",
-              "line": 304,
+              "line": 307,
               "deprecated": false
             },
             {
@@ -7794,7 +6889,7 @@
               "kind": "method",
               "signature": "(self) -> str",
               "summary": "Create the curtain mesh and return its transform name.",
-              "line": 307,
+              "line": 310,
               "deprecated": false
             }
           ]
@@ -7802,7 +6897,7 @@
         {
           "name": "CurtainRig",
           "summary": "Make a curve drive a finished curtain.",
-          "line": 372,
+          "line": 375,
           "bases": [],
           "members": [
             {
@@ -7811,7 +6906,7 @@
               "kind": "staticmethod",
               "signature": "(curtain: str, curve: str, dropoff: float, cluster: bool = True) -> str",
               "summary": "Wire-deform *curtain* with *curve* and add per-CV cluster controls.",
-              "line": 382,
+              "line": 385,
               "deprecated": false
             }
           ]
@@ -7819,7 +6914,7 @@
         {
           "name": "CurtainSlots",
           "summary": "Switchboard slot wiring for the curtain UI (hermetic preview + presets).",
-          "line": 434,
+          "line": 437,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -7830,7 +6925,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text (the preset combo lives in the panel).",
-              "line": 501,
+              "line": 504,
               "deprecated": false
             },
             {
@@ -7839,7 +6934,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Wire the in-panel preset selector (built-in + user tiers).",
-              "line": 555,
+              "line": 558,
               "deprecated": false
             },
             {
@@ -7848,7 +6943,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Reset to Defaults.",
-              "line": 759,
+              "line": 762,
               "deprecated": false
             },
             {
@@ -7857,7 +6952,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Set Position to the bounding-box center of the selected object(s).",
-              "line": 763,
+              "line": 766,
               "deprecated": false
             },
             {
@@ -7866,7 +6961,7 @@
               "kind": "method",
               "signature": "(self, objects, contract)",
               "summary": "Build the curtain from the resolved rail (Preview entry point).",
-              "line": 791,
+              "line": 794,
               "deprecated": false
             }
           ]
@@ -10184,7 +9279,7 @@
               "kind": "staticmethod",
               "signature": "(name: str, prepare: Callable[[], Any]) -> None",
               "summary": "Run *prepare* before every FBX export this session (installs the hook).",
-              "line": 296,
+              "line": 307,
               "deprecated": false
             },
             {
@@ -10193,7 +9288,7 @@
               "kind": "staticmethod",
               "signature": "(name: str) -> None",
               "summary": "Remove a preparer;",
-              "line": 310,
+              "line": 324,
               "deprecated": false
             },
             {
@@ -10202,7 +9297,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Realize declared takes on **every** FBX export — shot-agnostic, no preparer.",
-              "line": 316,
+              "line": 330,
               "deprecated": false
             },
             {
@@ -10211,7 +9306,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear the explicit enable;",
-              "line": 329,
+              "line": 343,
               "deprecated": false
             },
             {
@@ -10220,7 +9315,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Return whether the auto-takes export hook is currently registered.",
-              "line": 386,
+              "line": 400,
               "deprecated": false
             }
           ]
@@ -12581,39 +11676,6 @@
               "signature": "(self, output_name: str) -> None",
               "summary": "Record the output filename into the recent values plugin.",
               "line": 1255,
-              "deprecated": false
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "relpath": "env_utils/scene_exporter/task_factory.py",
-      "summary": "",
-      "functions": [],
-      "classes": [
-        {
-          "name": "TaskFactory",
-          "summary": "A factory class for managing and executing tasks in a scene export pipeline.",
-          "line": 9,
-          "bases": [],
-          "members": [
-            {
-              "name": "run_tasks",
-              "qualname": "TaskFactory.run_tasks",
-              "kind": "method",
-              "signature": "(self, tasks: Dict[str, Any]) -> bool",
-              "summary": "Run tasks and checks, returning True if all checks pass, False if any fail.",
-              "line": 113,
-              "deprecated": false
-            },
-            {
-              "name": "run_tasks_by_category",
-              "qualname": "TaskFactory.run_tasks_by_category",
-              "kind": "method",
-              "signature": "(self, task_definitions: Dict[str, Any], check_definitions: Dict[str, Any]) -> bool",
-              "summary": "Alternative method to run tasks and checks separately with better organization.",
-              "line": 125,
               "deprecated": false
             }
           ]
@@ -16310,7 +15372,7 @@
           "kind": "function",
           "signature": "() -> Optional[str]",
           "summary": "Single source of truth for Painter executable discovery.",
-          "line": 59,
+          "line": 55,
           "deprecated": false
         },
         {
@@ -16319,86 +15381,15 @@
           "kind": "function",
           "signature": "() -> Optional[str]",
           "summary": "Return the standard Substance Painter log path, or None if absent.",
-          "line": 73,
+          "line": 69,
           "deprecated": false
         }
       ],
       "classes": [
         {
-          "name": "OutputStream",
-          "summary": "Thread-safe, multi-consumer text stream with bounded history.",
-          "line": 89,
-          "bases": [],
-          "members": [
-            {
-              "name": "push",
-              "qualname": "OutputStream.push",
-              "kind": "method",
-              "signature": "(self, line: str, source: str = '') -> None",
-              "summary": "Append a line.",
-              "line": 112,
-              "deprecated": false
-            },
-            {
-              "name": "subscribe",
-              "qualname": "OutputStream.subscribe",
-              "kind": "method",
-              "signature": "(self, callback: Callable[[str, str], None], replay_history: bool = False) -> Callable[[], None]",
-              "summary": "Register ``callback(source, line)``.",
-              "line": 125,
-              "deprecated": false
-            },
-            {
-              "name": "history",
-              "qualname": "OutputStream.history",
-              "kind": "method",
-              "signature": "(self) -> List[Tuple[str, str]]",
-              "summary": "Snapshot the current history buffer.",
-              "line": 156,
-              "deprecated": false
-            },
-            {
-              "name": "clear_history",
-              "qualname": "OutputStream.clear_history",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Drop buffered lines.",
-              "line": 161,
-              "deprecated": false
-            },
-            {
-              "name": "wait_for",
-              "qualname": "OutputStream.wait_for",
-              "kind": "method",
-              "signature": "(self, pattern: Union[str, Pattern], timeout: Optional[float] = None, source: Optional[str] = None, include_history: bool = True) -> Optional[Tuple[str, str]]",
-              "summary": "Block until a line matches *pattern*, or *timeout* expires.",
-              "line": 182,
-              "deprecated": false
-            },
-            {
-              "name": "close",
-              "qualname": "OutputStream.close",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Mark the stream closed.",
-              "line": 235,
-              "deprecated": false
-            },
-            {
-              "name": "closed",
-              "qualname": "OutputStream.closed",
-              "kind": "property",
-              "signature": "(self) -> bool",
-              "summary": "",
-              "line": 240,
-              "deprecated": false
-            }
-          ]
-        },
-        {
           "name": "SubstanceConnection",
           "summary": "Launch Painter and expose its stdio, log, and RPC under one object.",
-          "line": 342,
+          "line": 82,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -16409,7 +15400,7 @@
               "kind": "method",
               "signature": "(self) -> 'SubstanceConnection'",
               "summary": "Launch Painter and start readers, tailer, and RPC client.",
-              "line": 400,
+              "line": 140,
               "deprecated": false
             },
             {
@@ -16418,7 +15409,7 @@
               "kind": "method",
               "signature": "(self, terminate: bool = False, timeout: float = 5.0) -> None",
               "summary": "Stop readers and tailer;",
-              "line": 450,
+              "line": 190,
               "deprecated": false
             },
             {
@@ -16427,7 +15418,7 @@
               "kind": "method",
               "signature": "(self) -> bool",
               "summary": "True if Painter is reachable through this connection.",
-              "line": 463,
+              "line": 203,
               "deprecated": false
             },
             {
@@ -16436,7 +15427,7 @@
               "kind": "classmethod",
               "signature": "(cls, port: int, host: str = '127.0.0.1', log_path: Optional[str] = None, tail_log_from_start: bool = False, verify_alive: bool = True, verify_timeout: float = 2.0) -> 'SubstanceConnection'",
               "summary": "Bind to a running Painter on *port* without launching anything.",
-              "line": 479,
+              "line": 219,
               "deprecated": false
             }
           ]
@@ -18094,7 +17085,7 @@
         {
           "name": "DataNodes",
           "summary": "Manages the two shared scene data nodes.",
-          "line": 12,
+          "line": 13,
           "bases": [],
           "members": [
             {
@@ -18103,7 +17094,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Get or create the shared network node.",
-              "line": 51,
+              "line": 52,
               "deprecated": false
             },
             {
@@ -18112,7 +17103,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Get or create the shared FBX export transform.",
-              "line": 78,
+              "line": 79,
               "deprecated": false
             },
             {
@@ -18121,7 +17112,7 @@
               "kind": "staticmethod",
               "signature": "(attr: str, value: str) -> str",
               "summary": "Write *value* to a plain string attr on ``data_internal`` (create if needed).",
-              "line": 140,
+              "line": 141,
               "deprecated": false
             },
             {
@@ -18130,7 +17121,7 @@
               "kind": "staticmethod",
               "signature": "(attr: str) -> Optional[str]",
               "summary": "Return the string value of an internal-node channel, or ``None``.",
-              "line": 158,
+              "line": 159,
               "deprecated": false
             },
             {
@@ -18139,7 +17130,7 @@
               "kind": "staticmethod",
               "signature": "(attr: str, value: str) -> Optional[str]",
               "summary": "Write *value* to a plain string attr on the export node (create if needed).",
-              "line": 172,
+              "line": 173,
               "deprecated": false
             },
             {
@@ -18148,7 +17139,25 @@
               "kind": "staticmethod",
               "signature": "(attr: str) -> Optional[str]",
               "summary": "Return the string value of an export-node channel, or ``None``.",
-              "line": 203,
+              "line": 204,
+              "deprecated": false
+            },
+            {
+              "name": "dump",
+              "qualname": "DataNodes.dump",
+              "kind": "staticmethod",
+              "signature": "(decode: bool = True) -> dict",
+              "summary": "Return every tool-authored channel on both data nodes.",
+              "line": 231,
+              "deprecated": false
+            },
+            {
+              "name": "format_dump",
+              "qualname": "DataNodes.format_dump",
+              "kind": "staticmethod",
+              "signature": "(decode: bool = True) -> str",
+              "summary": "Pretty-printed JSON of :meth:`dump`, or ``\"\"`` when nothing is stored.",
+              "line": 282,
               "deprecated": false
             }
           ]
@@ -21050,7 +20059,7 @@
         {
           "name": "ShellXformSlots",
           "summary": "Switchboard slots for the Shell Xform panel (``shell_xform.ui``).",
-          "line": 36,
+          "line": 37,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -21061,7 +20070,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Header menu — Open UV Editor + panel help.",
-              "line": 75,
+              "line": 76,
               "deprecated": false
             },
             {
@@ -21070,7 +20079,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Move To UV Space: Left",
-              "line": 124,
+              "line": 125,
               "deprecated": false
             },
             {
@@ -21079,7 +20088,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Move To UV Space: Down",
-              "line": 128,
+              "line": 129,
               "deprecated": false
             },
             {
@@ -21088,7 +20097,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Move To UV Space: Up",
-              "line": 132,
+              "line": 133,
               "deprecated": false
             },
             {
@@ -21097,7 +20106,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Move To UV Space: Right",
-              "line": 136,
+              "line": 137,
               "deprecated": false
             },
             {
@@ -21106,7 +20115,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Flip U: mirror the selected UVs horizontally about each shell's center.",
-              "line": 154,
+              "line": 155,
               "deprecated": false
             },
             {
@@ -21115,7 +20124,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Flip V: mirror the selected UVs vertically about each shell's center.",
-              "line": 158,
+              "line": 159,
               "deprecated": false
             },
             {
@@ -21124,7 +20133,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Rotate the selected UVs counter-clockwise by the s041 angle.",
-              "line": 195,
+              "line": 196,
               "deprecated": false
             },
             {
@@ -21133,7 +20142,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Rotate the selected UVs clockwise by the s041 angle.",
-              "line": 199,
+              "line": 200,
               "deprecated": false
             },
             {
@@ -21142,7 +20151,7 @@
               "kind": "method",
               "signature": "(self, value, widget)",
               "summary": "Rotate Angle — passive input; read by the Rotate buttons (b036/b037).",
-              "line": 203,
+              "line": 204,
               "deprecated": false
             },
             {
@@ -21151,7 +20160,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Straighten UV",
-              "line": 207,
+              "line": 208,
               "deprecated": false
             },
             {
@@ -21160,7 +20169,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Straighten UV",
-              "line": 239,
+              "line": 240,
               "deprecated": false
             },
             {
@@ -21169,7 +20178,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Distribute",
-              "line": 257,
+              "line": 258,
               "deprecated": false
             },
             {
@@ -21178,7 +20187,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Distribute: evenly space the selected UV shells horizontally or vertically.",
-              "line": 274,
+              "line": 275,
               "deprecated": false
             },
             {
@@ -21187,7 +20196,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Mirror UVs.",
-              "line": 285,
+              "line": 286,
               "deprecated": false
             },
             {
@@ -21196,7 +20205,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Mirror UVs (footprint-preserving by default).",
-              "line": 322,
+              "line": 323,
               "deprecated": false
             },
             {
@@ -21205,7 +20214,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their minimum U (left).",
-              "line": 343,
+              "line": 344,
               "deprecated": false
             },
             {
@@ -21214,7 +20223,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their average U (center).",
-              "line": 347,
+              "line": 348,
               "deprecated": false
             },
             {
@@ -21223,7 +20232,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their maximum U (right).",
-              "line": 351,
+              "line": 352,
               "deprecated": false
             },
             {
@@ -21232,7 +20241,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their minimum V (bottom).",
-              "line": 355,
+              "line": 356,
               "deprecated": false
             },
             {
@@ -21241,7 +20250,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their average V (center).",
-              "line": 359,
+              "line": 360,
               "deprecated": false
             },
             {
@@ -21250,7 +20259,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their maximum V (top).",
-              "line": 363,
+              "line": 364,
               "deprecated": false
             },
             {
@@ -21259,7 +20268,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Linearly align the selected UVs between their two end points.",
-              "line": 367,
+              "line": 368,
               "deprecated": false
             },
             {
@@ -21268,7 +20277,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Orient each shell to run parallel with its nearest U/V axis.",
-              "line": 372,
+              "line": 373,
               "deprecated": false
             },
             {
@@ -21277,7 +20286,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Orient the shell so its selected edge runs along U or V.",
-              "line": 380,
+              "line": 381,
               "deprecated": false
             },
             {
@@ -21286,7 +20295,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Gather the selected shells together toward the 0-1 UV space.",
-              "line": 392,
+              "line": 393,
               "deprecated": false
             },
             {
@@ -21295,7 +20304,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Randomly offset the selected shells.",
-              "line": 396,
+              "line": 397,
               "deprecated": false
             },
             {
@@ -21304,7 +20313,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open Maya's UV Editor (TextureViewWindow).",
-              "line": 401,
+              "line": 402,
               "deprecated": false
             }
           ]

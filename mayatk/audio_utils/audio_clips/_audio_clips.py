@@ -27,6 +27,7 @@ Design
   ``composite=False`` flag for unit-tests or headless export flows.
 """
 import os
+import json
 from typing import Dict, List, Optional
 
 import pythontk as ptk
@@ -64,6 +65,17 @@ class AudioClips(ptk.LoggingMixin):
 
     MANIFEST_ATTR: str = "audio_manifest"
     """Wire-format string attr baked onto the carrier for FBX → game-engine consumption."""
+
+    MANIFEST_VERSION: int = 2
+    """Schema version of the ``audio_manifest`` JSON payload.
+
+    v2: ``{"version": 2, "events": [{"clip", "frame", "name"}, ...]}`` — an
+    event's ``clip`` names the shot take (Unity AnimationClip) it belongs to,
+    with ``frame`` relative to that take's start; an empty ``clip`` means
+    "every clip" (no takes published). v1 was the flat unversioned
+    ``"12:footstep 24:jump"`` wire string (unscoped; consumers keep a legacy
+    parser for pre-v2 FBX).
+    """
 
     # ------------------------------------------------------------------
     # Public API
@@ -223,9 +235,19 @@ class AudioClips(ptk.LoggingMixin):
         """Bake the scene-wide audio manifest for FBX export.
 
         Mirror of :meth:`mayatk.mat_utils.render_opacity.RenderOpacity.prepare_for_export`.
-        Reads every keyed track via :meth:`AudioUtils.bake_manifest` and stamps
-        the resulting ``"<frame>:<label>"`` wire string onto the FBX export
-        surface so it survives as a user property.
+        Reads every keyed track via :meth:`AudioUtils.bake_events` and stamps
+        a versioned JSON manifest (see :attr:`MANIFEST_VERSION`) onto the FBX
+        export surface so it survives as a user property.
+
+        Clip scoping: when the Shots system has published ``fbx_takes`` (the
+        shots preparer runs before this one — canonical order in
+        ``FbxUtils.run_export_preparers``), each event is assigned to every
+        take whose range contains it, with the frame rebased to that take's
+        start — the same frames the imported AnimationClip counts from.
+        Events outside every take are dropped with a warning (they could
+        never fire in any clip).  With no takes, events ship unscoped
+        (``clip: ""``) rebased to ``playbackOptions min``, which becomes
+        time 0 of the single imported clip.
 
         The manifest is a regenerated export artifact — authoring state (the
         keyed ``audio_clip_<id>`` enums and ``audio_file_map``) stays on
@@ -235,16 +257,17 @@ class AudioClips(ptk.LoggingMixin):
         The value rides out as a string user-prop on the ``data_export``
         GameObject in the imported FBX.  Downstream importers (e.g. unitytk
         ``AudioEventImporter``) attach a single scene-wide audio-event
-        component from it.  Scenes written when the manifest was still
-        proxy-mirrored are healed in place (see
-        :meth:`_drop_legacy_manifest_proxy`).
+        component from it and inject each event only into its own clip.
+        Scenes written when the manifest was still proxy-mirrored are healed
+        in place (see :meth:`_drop_legacy_manifest_proxy`).
 
         Idempotent — overwrites any prior value on the attr.  Called once
         before FBX export, typically from a scene-exporter pre-export hook.
 
         Returns:
-            The baked manifest string.  Empty when the carrier is missing
-            or no tracks have keys.
+            The baked manifest JSON string.  Empty when the carrier is
+            missing or no tracks have keys (an empty write clears the
+            channel).
         """
         if cmds is None:
             return ""
@@ -260,7 +283,7 @@ class AudioClips(ptk.LoggingMixin):
 
         # Unity (and most game engines) start their clip clock at 0 — Maya
         # frame ``playbackOptions.min`` becomes Unity time 0 after FBX
-        # import.  Shift the baked frame numbers by ``-min`` so consumers
+        # import.  Unscoped events are shifted by ``-min`` so consumers
         # computing ``time = frame / framerate`` land on the right
         # animation moment instead of one bake-start offset late.
         try:
@@ -268,8 +291,12 @@ class AudioClips(ptk.LoggingMixin):
         except Exception:
             playback_min = 0.0
 
-        manifest = _audio_utils.bake_manifest(
-            carrier=carrier, frame_offset=playback_min
+        events = _audio_utils.bake_events(carrier=carrier)
+        scoped = cls._scope_events(events, cls._published_takes(), playback_min)
+        manifest = (
+            json.dumps({"version": cls.MANIFEST_VERSION, "events": scoped})
+            if scoped
+            else ""
         )
 
         # The manifest is a regenerated export artifact, so it lives as a
@@ -277,7 +304,7 @@ class AudioClips(ptk.LoggingMixin):
         # authored state mirrored from data_internal.
         cls._drop_legacy_manifest_proxy()
         DataNodes.set_export_string(cls.MANIFEST_ATTR, manifest)
-        n_entries = len(manifest.split()) if manifest else 0
+        n_entries = len(scoped)
         cls.logger.info(
             "prepare_for_export: stamped %s.%s with %d entr%s.",
             DataNodes.EXPORT,
@@ -286,6 +313,91 @@ class AudioClips(ptk.LoggingMixin):
             "y" if n_entries == 1 else "ies",
         )
         return manifest
+
+    @classmethod
+    def _published_takes(cls) -> list:
+        """Return the published ``fbx_takes`` as ``[{name, start, end}, ...]``.
+
+        Reads the carrier channel (``DataNodes.get_export_string``) rather
+        than the ShotStore: the channel is exactly what
+        ``FbxUtils.apply_takes_from_node`` realizes into FBX takes, so
+        scoping against it is correct by construction — even a stale channel
+        stays consistent with the clips that actually ship.  Empty/absent/
+        malformed → ``[]`` (unscoped bake); a take entry missing its name or
+        range is dropped the same way, so when *no* entry carries a usable
+        range the bake falls back to unscoped instead of silently dropping
+        every event.
+        """
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        raw = DataNodes.get_export_string(DataNodes.FBX_TAKES)
+        if not raw:
+            return []
+        try:
+            takes = json.loads(raw)
+        except ValueError:
+            cls.logger.warning(
+                "prepare_for_export: unreadable fbx_takes channel — "
+                "baking the audio manifest unscoped."
+            )
+            return []
+        return [
+            t
+            for t in (takes or [])
+            if isinstance(t, dict)
+            and t.get("name") is not None
+            and t.get("start") is not None
+            and t.get("end") is not None
+        ]
+
+    @classmethod
+    def _scope_events(
+        cls, events: list, takes: list, playback_min: float
+    ) -> list:
+        """Assign baked ``(frame, name)`` events to their shot takes.
+
+        With *takes*: an event lands in every take whose ``[start, end]``
+        range (inclusive) contains it, with ``frame`` rebased to that take's
+        start; events outside every take are dropped with a warning.  A take
+        missing its range is skipped — defaulting to ``(0, 0)`` would turn it
+        into a phantom take that swallows frame-0 events (``_published_takes``
+        already filters these; the skip here keeps direct callers safe too).
+        Without takes: events ship unscoped (``clip: ""``), rebased to
+        *playback_min*.
+        """
+        if not takes:
+            return [
+                {"clip": "", "frame": int(round(f - playback_min)), "name": name}
+                for f, name in events
+            ]
+
+        scoped: list = []
+        dropped: list = []
+        for f, name in events:
+            matched = False
+            for take in takes:
+                start, end = take.get("start"), take.get("end")
+                if start is None or end is None:
+                    continue  # range-less take can scope nothing
+                if start <= f <= end:
+                    scoped.append(
+                        {
+                            "clip": str(take["name"]),
+                            "frame": int(round(f - start)),
+                            "name": name,
+                        }
+                    )
+                    matched = True
+            if not matched:
+                dropped.append(f"{name}@{f}")
+        if dropped:
+            cls.logger.warning(
+                "prepare_for_export: %d audio event(s) outside every shot "
+                "take were dropped (they can never fire in a clip): %s",
+                len(dropped),
+                ", ".join(dropped),
+            )
+        return scoped
 
     @classmethod
     def _drop_legacy_manifest_proxy(cls) -> None:

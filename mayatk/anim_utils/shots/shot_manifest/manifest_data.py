@@ -1,7 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
 """Constants, column layout, and pure helper functions for the Shot Manifest UI."""
-from typing import List
+from pythontk.core_utils.engines.shots.manifest.range_resolver import (  # noqa: F401
+    prune_to_top_boundaries,  # canonical home is the engine; re-exported for callers
+)
 
 from mayatk.anim_utils.shots._shots import SHOT_PALETTE
 
@@ -79,24 +81,3 @@ def try_load_maya_icons():
     except ImportError:
         return None
     return NodeIcons
-
-
-def prune_to_top_boundaries(region_starts: List[float], n_steps: int) -> List[float]:
-    """Keep only *n_steps* region starts by selecting the largest gaps.
-
-    Picks the *n_steps - 1* largest consecutive differences in
-    *region_starts* as the primary shot boundaries, then returns
-    the first region plus the region after each selected boundary.
-    """
-    if len(region_starts) <= n_steps:
-        return region_starts
-    diffs = [
-        (region_starts[i + 1] - region_starts[i], i)
-        for i in range(len(region_starts) - 1)
-    ]
-    diffs.sort(key=lambda x: -x[0])
-    top_indices = sorted(d[1] for d in diffs[: n_steps - 1])
-    selected = [region_starts[0]]
-    for idx in top_indices:
-        selected.append(region_starts[idx + 1])
-    return selected

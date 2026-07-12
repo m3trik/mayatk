@@ -2,10 +2,12 @@
 """Shot Manifest behavior template schema + discovery tests.
 
 Maya-free (``_behaviors`` guards ``cmds``), but kept under the mayatk test tree
-and run via mayapy alongside the rest of the suite. Requires PyYAML.
+and run via mayapy alongside the rest of the suite.  Templates are JSON (the
+pythontk engine's store, shared with blendertk).
 
     & $MAYAPY mayatk\\test\\test_shot_manifest_behaviors.py
 """
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -52,8 +54,9 @@ class BehaviorDiscoveryTest(unittest.TestCase):
 
     def test_search_path_override_is_single_tier(self):
         with tempfile.TemporaryDirectory() as d:
-            (Path(d) / "custom.yaml").write_text(
-                "description: a custom one\nkind: [scene]\n", encoding="utf-8"
+            (Path(d) / "custom.json").write_text(
+                json.dumps({"description": "a custom one", "kind": ["scene"]}),
+                encoding="utf-8",
             )
             self.assertEqual(list_behaviors(search_path=Path(d)), ["custom"])
             self.assertEqual(

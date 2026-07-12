@@ -8,6 +8,7 @@ string channels.
 import unittest
 import sys
 import os
+import json
 
 scripts_dir = r"O:\Cloud\Code\_scripts"
 if scripts_dir not in sys.path:
@@ -184,6 +185,78 @@ class TestExportStrings(MayaTkTestCase):
         DataNodes.set_export_string("probe_channel", "one")
         DataNodes.set_export_string("probe_channel", "two")
         self.assertEqual(DataNodes.get_export_string("probe_channel"), "two")
+
+
+# ── dump / format_dump ───────────────────────────────────────────────────
+
+
+class TestDump(MayaTkTestCase):
+    """DataNodes.dump / format_dump — read every channel a scene carries."""
+
+    def test_empty_scene_returns_empty_groups(self):
+        """No nodes → both groups present but empty; format_dump is falsy."""
+        data = DataNodes.dump()
+        self.assertEqual(data, {DataNodes.INTERNAL: {}, DataNodes.EXPORT: {}})
+        self.assertEqual(DataNodes.format_dump(), "")
+
+    def test_groups_channels_by_node(self):
+        DataNodes.set_internal_string("app_state", "running")
+        DataNodes.set_export_string("wire", "abc")
+        data = DataNodes.dump()
+        self.assertEqual(data[DataNodes.INTERNAL], {"app_state": "running"})
+        self.assertEqual(data[DataNodes.EXPORT], {"wire": "abc"})
+
+    def test_decodes_json_values(self):
+        DataNodes.set_export_string("shot_metadata", '{"take": 3, "clips": [1, 2]}')
+        data = DataNodes.dump()  # decode=True default
+        self.assertEqual(data[DataNodes.EXPORT]["shot_metadata"], {"take": 3, "clips": [1, 2]})
+
+    def test_decode_false_keeps_raw_strings(self):
+        DataNodes.set_export_string("shot_metadata", '{"take": 3}')
+        data = DataNodes.dump(decode=False)
+        self.assertEqual(data[DataNodes.EXPORT]["shot_metadata"], '{"take": 3}')
+
+    def test_non_json_value_kept_as_string(self):
+        DataNodes.set_internal_string("note", "just a plain string")
+        data = DataNodes.dump()
+        self.assertEqual(data[DataNodes.INTERNAL]["note"], "just a plain string")
+
+    def test_skips_empty_channels(self):
+        """A created-then-cleared channel is present as an attr but has no value."""
+        DataNodes.set_internal_string("live", "x")
+        DataNodes.set_internal_string("dead", "y")
+        DataNodes.set_internal_string("dead", "")  # clear (attr stays, value empty)
+        data = DataNodes.dump()
+        self.assertIn("live", data[DataNodes.INTERNAL])
+        self.assertNotIn("dead", data[DataNodes.INTERNAL])
+
+    def test_includes_non_string_channels(self):
+        """Non-string channels (the audio tool's per-track enum attrs) are real stored data —
+        dump keeps them alongside the JSON string channels, and format_dump serializes them."""
+        internal = DataNodes.ensure_internal()
+        cmds.addAttr(
+            str(internal),
+            longName="audio_clip_voice",
+            attributeType="enum",
+            enumName="off:on",
+            keyable=True,
+            hidden=True,  # matches AudioClips.ensure_track_attr — must still be discovered
+        )
+        cmds.setAttr(f"{internal}.audio_clip_voice", 1)
+        DataNodes.set_internal_string("payload", "keep")
+        data = DataNodes.dump()
+        self.assertEqual(data[DataNodes.INTERNAL]["payload"], "keep")
+        self.assertEqual(data[DataNodes.INTERNAL]["audio_clip_voice"], 1)
+        # format_dump must serialize the mixed string + non-string channels without error.
+        self.assertEqual(json.loads(DataNodes.format_dump())[DataNodes.INTERNAL]["audio_clip_voice"], 1)
+
+    def test_format_dump_is_valid_json_round_trip(self):
+        DataNodes.set_internal_string("app_state", '{"open": true}')
+        DataNodes.set_export_string("wire", "abc")
+        report = DataNodes.format_dump()
+        parsed = json.loads(report)
+        self.assertEqual(parsed[DataNodes.INTERNAL]["app_state"], {"open": True})
+        self.assertEqual(parsed[DataNodes.EXPORT]["wire"], "abc")
 
 
 if __name__ == "__main__":

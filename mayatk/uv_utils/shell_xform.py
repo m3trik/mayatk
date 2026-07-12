@@ -13,8 +13,9 @@ discovered automatically by :class:`mayatk.ui_utils.MayaUiHandler`, so
 ``self.sb.handlers.marking_menu.show("shell_xform")`` works from anywhere
 with no explicit registration (the tentacle UV panel's Transform group
 exposes it via a ``More..`` button). Blender ships the mirror panel in
-``blendertk.uv_utils.shell_xform`` (a subset — the Maya-only align /
-orient ops have no bpy analogue).
+``blendertk.uv_utils.shell_xform`` at full parity (as of 2026-07-11): Align /
+Orient / Gather / Randomize are realized via native ``bpy.ops.uv`` operators
+and bmesh helpers (see ``tentacle/docs/parity_map.py``).
 """
 try:
     import maya.cmds as cmds

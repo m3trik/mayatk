@@ -2,6 +2,7 @@
 # coding=utf-8
 """Verify AudioClips.prepare_for_export() stamps the manifest and FBX carries it through."""
 import os
+import json
 import unittest
 
 import maya.cmds as cmds
@@ -10,6 +11,12 @@ import maya.mel as mel
 from base_test import MayaTkTestCase
 from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
+
+
+def _event_set(manifest: str):
+    """Parse a v2 manifest into a comparable ``{(clip, frame, name)}`` set."""
+    payload = json.loads(manifest)
+    return {(e["clip"], e["frame"], e["name"]) for e in payload["events"]}
 
 
 class TestAudioClipsExport(MayaTkTestCase):
@@ -54,9 +61,82 @@ class TestAudioClipsExport(MayaTkTestCase):
             ),
             "manifest must not be authored on data_internal (derived artifact)",
         )
-        # Maya frames 10/24 are shifted by playback_min=1 in the wire format
-        self.assertIn("9:footstep", stored)
-        self.assertIn("23:jump",    stored)
+        # v2 envelope: versioned JSON, unscoped events (no takes published),
+        # Maya frames 10/24 shifted by playback_min=1.
+        payload = json.loads(stored)
+        self.assertEqual(payload["version"], AudioClips.MANIFEST_VERSION)
+        self.assertEqual(
+            _event_set(stored),
+            {("", 9, "footstep"), ("", 23, "jump")},
+        )
+
+    def test_prepare_for_export_scopes_events_to_takes(self):
+        """With fbx_takes published, events land in their take, frames rebased
+        to the take start — the same origin the imported AnimationClip counts
+        from. Events outside every take are dropped."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        self._seed_tracks()  # footstep on @10, jump on @24
+        audio_utils.write_key("stray", frame=59, value=1)  # outside both takes
+        DataNodes.set_export_string(
+            DataNodes.FBX_TAKES,
+            json.dumps(
+                [
+                    {"name": "Intro", "start": 1, "end": 20},
+                    {"name": "Outro", "start": 21, "end": 50},
+                ]
+            ),
+        )
+
+        manifest = AudioClips.prepare_for_export()
+        self.assertEqual(
+            _event_set(manifest),
+            {("Intro", 9, "footstep"), ("Outro", 3, "jump")},
+        )
+
+    def test_scoping_skips_takes_missing_range(self):
+        """A published take without start/end must scope nothing — the old
+        ``get(..., 0)`` defaults turned it into a phantom ``(0, 0)`` take
+        that swallowed frame-0 events."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        self._seed_tracks()  # footstep @10, jump @24
+        audio_utils.write_key("boom", frame=0, value=1)  # only the phantom (0,0) contains it
+        DataNodes.set_export_string(
+            DataNodes.FBX_TAKES,
+            json.dumps(
+                [
+                    {"name": "Broken"},  # no range — must be ignored
+                    {"name": "Intro", "start": 1, "end": 30},
+                ]
+            ),
+        )
+
+        manifest = AudioClips.prepare_for_export()
+        self.assertEqual(
+            _event_set(manifest),
+            {("Intro", 9, "footstep"), ("Intro", 23, "jump")},
+            "a range-less take must not capture events (boom@0 is outside "
+            "every real take and should be dropped)",
+        )
+
+    def test_scoping_falls_back_unscoped_when_no_take_has_a_range(self):
+        """When the published takes carry no usable ranges at all, treat the
+        channel like any other malformed ``fbx_takes`` payload: bake unscoped
+        rather than silently dropping every event."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        self._seed_tracks()
+        DataNodes.set_export_string(
+            DataNodes.FBX_TAKES, json.dumps([{"name": "Broken"}])
+        )
+
+        manifest = AudioClips.prepare_for_export()
+        self.assertTrue(manifest, "manifest should fall back to an unscoped bake")
+        self.assertEqual(
+            _event_set(manifest),
+            {("", 9, "footstep"), ("", 23, "jump")},
+        )
 
     def test_prepare_for_export_migrates_legacy_proxy(self):
         """A pre-taxonomy proxied manifest pair is replaced by the plain channel."""
@@ -81,7 +161,7 @@ class TestAudioClipsExport(MayaTkTestCase):
         self._seed_tracks()
         manifest = AudioClips.prepare_for_export()
 
-        self.assertIn("9:footstep", manifest)
+        self.assertIn(("", 9, "footstep"), _event_set(manifest))
         self.assertEqual(DataNodes.get_export_string(AudioClips.MANIFEST_ATTR), manifest)
         self.assertFalse(
             cmds.addAttr(
@@ -139,11 +219,12 @@ class TestAudioClipsExport(MayaTkTestCase):
             content,
             "audio_manifest property should be present in the exported FBX",
         )
+        # Quote-free assertion: FBX ASCII escapes embedded quotes in string
+        # values, so match the bare label rather than JSON punctuation.
         self.assertIn(
-            "9:footstep",
+            "footstep",
             content,
-            "manifest entry should appear inside the FBX user-property "
-            "block (frame 9 = Maya frame 10 minus playback_min=1)",
+            "manifest event name should appear inside the FBX user-property block",
         )
 
 

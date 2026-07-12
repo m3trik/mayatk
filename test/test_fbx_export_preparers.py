@@ -77,6 +77,18 @@ class TestExportPreparerRegistry(MayaTkTestCase):
         _export_selected_ascii([cube])
         self.assertEqual(order, ["a", "b"])
 
+    def test_known_producers_run_in_canonical_order(self):
+        """shots must run before audio regardless of registration order —
+        audio scopes its manifest against the fbx_takes shots republishes."""
+        cube = self.create_test_cube("prepCube2b")
+        order = []
+        FbxUtils.register_export_preparer("audio", lambda: order.append("audio"))
+        FbxUtils.register_export_preparer("shots", lambda: order.append("shots"))
+        FbxUtils.register_export_preparer("zzz", lambda: order.append("zzz"))
+
+        _export_selected_ascii([cube])
+        self.assertEqual(order, ["shots", "audio", "zzz"])
+
     def test_unregister_refcounts_the_hook(self):
         FbxUtils.register_export_preparer("a", lambda: None)
         FbxUtils.register_export_preparer("b", lambda: None)

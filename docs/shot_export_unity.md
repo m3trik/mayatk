@@ -35,11 +35,14 @@ ShotStore.enable_auto_export()                # before-export hook: republish fr
 hook (`FbxUtils.register_export_preparer`); the Audio system registers its own via
 `AudioClips.enable_auto_export()`. Both ride out on the **same** `data_export`
 GameObject with distinct attrs — Shots' plain `fbx_takes`/`shot_metadata`, Audio's
-plain `audio_manifest` (baked from the keyed `audio_clip_*` authoring state on
+JSON `audio_manifest` (baked from the keyed `audio_clip_*` authoring state on
 `data_internal`) — so a scene with both
 exports one FBX that Unity imports into both a `ShotMetadataController` and an
 `AudioEventController` on the prefab root. The hook is reference-counted: enable
-either or both; each runs once per export, fault-isolated. Verified end-to-end by
+either or both; each runs once per export, fault-isolated, **known producers in
+canonical order (shots before audio)** — the audio bake reads the just-published
+`fbx_takes` and scopes each event to its take (`clip` + take-relative `frame`),
+so every audio event fires only in its own AnimationClip. Verified end-to-end by
 `unitytk/test/test_shots_audio_sidebyside_integration.py`.
 
 The Scene Exporter task **"Export Shots as Animation Takes"** does this for you

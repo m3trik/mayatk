@@ -681,31 +681,27 @@ class AudioUtils(ptk.HelpMixin):
         return on
 
     @classmethod
-    def bake_manifest(
+    def bake_events(
         cls,
         carrier: Optional[str] = None,
         display_map: Optional[dict] = None,
-        frame_offset: float = 0.0,
-    ) -> str:
-        """Return a space-separated ``"<frame>:<label>"`` manifest string.
+    ) -> List[tuple]:
+        """Return the keyed "on" events as ``[(frame, label), ...]``.
 
-        Iterates all start keys across all tracks in time order.
-        Used for game-export wire format.
+        Iterates all start keys across all tracks, time-sorted. Frames are
+        raw Maya frame numbers rounded to int — rebasing (playback min, take
+        start) is caller policy, applied by
+        :meth:`mayatk.audio_utils.audio_clips.AudioClips.prepare_for_export`
+        when it builds the versioned ``audio_manifest`` JSON.
 
         Parameters:
             carrier: Carrier node to read tracks from.  Defaults to the
                 canonical :data:`CARRIER_NODE`.
-            display_map: Optional ``{track_id: label}`` overrides.
-            frame_offset: Subtracted from every Maya keyframe before
-                writing.  Use this to convert Maya frame numbers into
-                values relative to a chosen origin (e.g. the FBX bake
-                start), so downstream consumers — which typically start
-                their clock at zero — receive frame numbers that align
-                with the imported animation.  Defaults to ``0`` (no
-                shift, frames are raw Maya frame numbers).
+            display_map: Optional ``{track_id: label}`` overrides; the label
+                defaults to the track id.
         """
         if cmds is None:
-            return ""
+            return []
         carrier = carrier or CARRIER_NODE
         display_map = display_map or {}
         entries: List[tuple] = []
@@ -713,9 +709,9 @@ class AudioUtils(ptk.HelpMixin):
             label = display_map.get(tid, tid)
             for frame, val in cls.read_keys(tid, carrier):
                 if int(round(val)) >= 1:
-                    entries.append((frame - frame_offset, label))
+                    entries.append((int(round(frame)), label))
         entries.sort(key=lambda e: e[0])
-        return " ".join(f"{int(round(f))}:{lbl}" for f, lbl in entries)
+        return entries
 
     # ------------------------------------------------------------------
     # Events — track lifecycle

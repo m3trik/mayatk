@@ -2,4 +2,141 @@
 
 _Diff vs prior baseline. Generated 2026-07-12._
 
-No public API changes since last refresh.
+## Removed (116)
+
+- `anim_utils/blendshape_animator/weights.py::Weights` — was `(class)`
+- `anim_utils/blendshape_animator/weights.py::Weights.frame_to_weight` — was `(cls, frame: int, start_frame: int, end_frame: int) -> float`
+- `anim_utils/blendshape_animator/weights.py::Weights.generate_weights` — was `(cls, count: int, weight_range: Tuple[float, float] = (0.0, 1.0), include_endpoints: bool = False) -> List[float]`
+- `anim_utils/blendshape_animator/weights.py::Weights.round_weight` — was `(cls, weight: float) -> float`
+- `anim_utils/shots/_shot_plan.py::MovePlan` — was `(class)`
+- `anim_utils/shots/_shot_plan.py::ShotMove` — was `(class)`
+- `anim_utils/shots/_shot_plan.py::ShotMove.delta` — was `(self) -> float`
+- `anim_utils/shots/_shot_plan.py::ShotMove.moves` — was `(self) -> bool`
+- `anim_utils/shots/_shot_plan.py::plan_respace` — was `(store: ShotStore, gap: float, start_frame: float) -> MovePlan`
+- `anim_utils/shots/_shot_plan.py::plan_ripple_downstream` — was `(store: ShotStore, pivot_shot_id: int, after_frame: float, delta: float) -> MovePlan`
+- `anim_utils/shots/_shot_plan.py::plan_ripple_upstream` — was `(store: ShotStore, pivot_shot_id: int, before_frame: float, delta: float) -> MovePlan`
+- `anim_utils/shots/_shots.py::ActiveShotChanged` — was `(class)`
+- `anim_utils/shots/_shots.py::BatchComplete` — was `(class)`
+- `anim_utils/shots/_shots.py::ScenePersistence` — was `(class)`
+- `anim_utils/shots/_shots.py::ScenePersistence.load` — was `(self) -> Optional[Dict[str, Any]]`
+- `anim_utils/shots/_shots.py::ScenePersistence.save` — was `(self, data: Dict[str, Any]) -> None`
+- `anim_utils/shots/_shots.py::SettingsChanged` — was `(class)`
+- `anim_utils/shots/_shots.py::ShotBlock` — was `(class)`
+- `anim_utils/shots/_shots.py::ShotBlock.classify_objects` — was `(self) -> Dict[str, str]`
+- `anim_utils/shots/_shots.py::ShotBlock.duration` — was `(self) -> float`
+- `anim_utils/shots/_shots.py::ShotDefined` — was `(class)`
+- `anim_utils/shots/_shots.py::ShotRemoved` — was `(class)`
+- `anim_utils/shots/_shots.py::ShotStore.active_shot_id` — was `(self) -> Optional[int]`
+- `anim_utils/shots/_shots.py::ShotStore.add_invalidation_listener` — was `(cls, callback: Callable[['StoreInvalidated'], None]) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.add_listener` — was `(self, callback: Callable[[StoreEvent], None]) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.append_shot` — was `(self, name: str, duration: float, gap: float = 0, start_frame: Optional[float] = None, objects: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, locked: bool = False, description: str = '') -> ShotBlock`
+- `anim_utils/shots/_shots.py::ShotStore.batch_update` — was `(self)`
+- `anim_utils/shots/_shots.py::ShotStore.clear_active` — was `(cls) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.compute_gap` — was `(self) -> float`
+- `anim_utils/shots/_shots.py::ShotStore.define_shot` — was `(self, name: str, start: float, end: float, objects: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, locked: bool = False, description: str = '') -> ShotBlock`
+- `anim_utils/shots/_shots.py::ShotStore.detect_and_define` — was `(self, overwrite: bool = False) -> List[ShotBlock]`
+- `anim_utils/shots/_shots.py::ShotStore.disable_auto_export` — was `(cls) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.enable_auto_export` — was `(cls) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.from_dict` — was `(cls, data: Dict[str, Any]) -> 'ShotStore'`
+- `anim_utils/shots/_shots.py::ShotStore.is_detection_relevant` — was `(self) -> bool`
+- `anim_utils/shots/_shots.py::ShotStore.is_gap_locked` — was `(self, left_id: str, right_id: str) -> bool`
+- `anim_utils/shots/_shots.py::ShotStore.is_object_hidden` — was `(self, obj_name: str) -> bool`
+- `anim_utils/shots/_shots.py::ShotStore.is_object_pinned` — was `(self, obj_name: str) -> bool`
+- `anim_utils/shots/_shots.py::ShotStore.lock_all_gaps` — was `(self) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.lock_gap` — was `(self, left_id: int, right_id: int) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.mark_dirty` — was `(self) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.notify_settings_changed` — was `(self) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.refresh_export_view` — was `(cls) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.remove_invalidation_listener` — was `(cls, callback: Callable[['StoreInvalidated'], None]) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.remove_listener` — was `(self, callback: Callable[[StoreEvent], None]) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.remove_object_from_shots` — was `(self, obj_name: str) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.remove_shot` — was `(self, shot_id: int) -> bool`
+- `anim_utils/shots/_shots.py::ShotStore.rescale_to_fps` — was `(self, new_fps: float) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.save` — was `(self) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.set_active` — was `(cls, store: 'ShotStore') -> None`
+- `anim_utils/shots/_shots.py::ShotStore.set_active_shot` — was `(self, shot_id: Optional[int]) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.set_object_hidden` — was `(self, obj_name: str, hidden: bool = True) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.set_object_pinned` — was `(self, obj_name: str, pinned: bool = True) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.set_persistence` — was `(cls, backend: Optional[ScenePersistence]) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.shot_by_id` — was `(self, shot_id: int) -> Optional[ShotBlock]`
+- `anim_utils/shots/_shots.py::ShotStore.shot_by_name` — was `(self, name: str) -> Optional[ShotBlock]`
+- `anim_utils/shots/_shots.py::ShotStore.snap` — was `(self, frame: float) -> float`
+- `anim_utils/shots/_shots.py::ShotStore.sorted_shots` — was `(self) -> List[ShotBlock]`
+- `anim_utils/shots/_shots.py::ShotStore.to_dict` — was `(self) -> Dict[str, Any]`
+- `anim_utils/shots/_shots.py::ShotStore.to_export_view` — was `(self, strategy: str = 'name') -> Dict[str, Any]`
+- `anim_utils/shots/_shots.py::ShotStore.unlock_all_gaps` — was `(self) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.unlock_gap` — was `(self, left_id: int, right_id: int) -> None`
+- `anim_utils/shots/_shots.py::ShotStore.update_shot` — was `(self, shot_id: int, *, start: Optional[float] = None, end: Optional[float] = None, name: Optional[str] = None, objects: Optional[List[str]] = None, description: Optional[str] = None, locked: Optional[bool] = None, metadata: Optional[Dict[str, Any]] = None) -> Optional[ShotBlock]`
+- `anim_utils/shots/_shots.py::ShotUpdated` — was `(class)`
+- `anim_utils/shots/_shots.py::StoreEvent` — was `(class)`
+- `anim_utils/shots/_shots.py::StoreInvalidated` — was `(class)`
+- `anim_utils/shots/_shots.py::resolve_clip_specs` — was `(shots: List['ShotBlock'], strategy: str = 'name') -> List[Tuple[str, int, int]]`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::BuilderObject` — was `(class)`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::BuilderStep` — was `(class)`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::BuilderStep.display_text` — was `(self) -> str`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::BuilderStep.from_detection` — was `(cls, candidates: List[Dict]) -> Tuple[List['BuilderStep'], Dict[str, Tuple[float, float]]]`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::ColumnMap` — was `(class)`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::ColumnMap.from_dict` — was `(cls, data: Dict[str, Any]) -> 'ColumnMap'`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::ColumnMap.to_dict` — was `(self) -> Dict[str, Any]`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::ObjectStatus` — was `(class)`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::PlannedShot` — was `(class)`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::ShotManifest.assess` — was `(self, steps: List[BuilderStep], exists_fn: Optional[Callable[[str], bool]] = None, verify_fn: Optional[Callable] = None, keyframe_range_fn: Optional[Callable[[str], Optional[Tuple[float, float]]]] = None, audio_exists_fn: Optional[Callable[[str], bool]] = None, skip_scene_discovery: bool = False) -> List[StepStatus]`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::ShotManifest.sync` — was `(self, steps: List[BuilderStep], apply_behaviors: bool = True, ranges: Optional[Dict[str, Tuple[float, float]]] = None, remove_missing: bool = True, zero_duration_fallback: bool = False, fit_mode: FitMode = DEFAULT_FIT_MODE, initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH, skip_scene_discovery: bool = False) -> Tuple[Dict[str, str], Dict[str, list], List[StepStatus]]`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::ShotManifest.update` — was `(self, steps: List[BuilderStep], ranges: Optional[Dict[str, Tuple[float, float]]] = None, remove_missing: bool = True, zero_duration_fallback: bool = False, fit_mode: FitMode = DEFAULT_FIT_MODE, initial_shot_length: float = DEFAULT_INITIAL_SHOT_LENGTH) -> Dict[str, str]`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::StepStatus` — was `(class)`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::StepStatus.missing_count` — was `(self) -> int`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::StepStatus.status` — was `(self) -> str`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::StepStatus.total_count` — was `(self) -> int`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::detect_behaviors` — was `(text: str) -> List[str]`
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::parse_csv` — was `(filepath: str, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> List[BuilderStep]`
+- `anim_utils/shots/shot_manifest/behaviors/_behaviors.py::list_behaviors` — was `(search_path: Optional[Path] = None, kind: Optional[str] = None) -> List[str]`
+- `anim_utils/shots/shot_manifest/behaviors/_behaviors.py::load_behavior` — was `(name: str, search_path: Optional[Path] = None) -> Dict[str, Any]`
+- `anim_utils/shots/shot_manifest/behaviors/_behaviors.py::resolve_keys` — was `(block_def: Dict, start: float, end: float) -> List[Dict[str, Any]]`
+- `anim_utils/shots/shot_manifest/behaviors/_behaviors.py::templates` — was `() -> TemplateSet`
+- `anim_utils/shots/shot_manifest/behaviors/_spec.py::BehaviorSpec` — was `(class)`
+- `anim_utils/shots/shot_manifest/behaviors/_spec.py::format_markdown` — was `() -> str`
+- `anim_utils/shots/shot_manifest/behaviors/_spec.py::validate_attributes` — was `(value: Any) -> List[str]`
+- `anim_utils/shots/shot_manifest/behaviors/_spec.py::validate_duration` — was `(value: Any) -> List[str]`
+- `anim_utils/shots/shot_manifest/behaviors/_spec.py::validate_verify` — was `(value: Any) -> List[str]`
+- `anim_utils/shots/shot_manifest/manifest_data.py::prune_to_top_boundaries` — was `(region_starts: List[float], n_steps: int) -> List[float]`
+- `anim_utils/shots/shot_manifest/mapping/_mapping.py::discover` — was `(directory: Optional[str] = None) -> List[str]`
+- `anim_utils/shots/shot_manifest/mapping/_mapping.py::load_mapping` — was `(name: str, directory: Optional[str] = None) -> Dict[str, Any]`
+- `anim_utils/shots/shot_manifest/mapping/_mapping.py::resolve` — was `(csv_path: str, mapping: Optional[Dict[str, Any]] = None, *, name: Optional[str] = None, directory: Optional[str] = None) -> List[BuilderStep]`
+- `anim_utils/shots/shot_manifest/mapping/_mapping.py::templates` — was `() -> TemplateSet`
+- `anim_utils/shots/shot_manifest/mapping/_spec.py::AudioMethod` — was `(class)`
+- `anim_utils/shots/shot_manifest/mapping/_spec.py::MappingSpec` — was `(class)`
+- `anim_utils/shots/shot_manifest/mapping/_spec.py::format_markdown` — was `() -> str`
+- `anim_utils/shots/shot_manifest/mapping/_spec.py::validate_audio_resolve` — was `(value: Any) -> List[str]`
+- `anim_utils/shots/shot_manifest/mapping/_spec.py::validate_default_behaviors` — was `(value: Any) -> List[str]`
+- `audio_utils/_audio_utils.py::AudioUtils.bake_manifest` — was `(cls, carrier: Optional[str] = None, display_map: Optional[dict] = None, frame_offset: float = 0.0) -> str`
+- `env_utils/scene_exporter/task_factory.py::TaskFactory` — was `(class)`
+- `env_utils/scene_exporter/task_factory.py::TaskFactory.run_tasks` — was `(self, tasks: Dict[str, Any]) -> bool`
+- `env_utils/scene_exporter/task_factory.py::TaskFactory.run_tasks_by_category` — was `(self, task_definitions: Dict[str, Any], check_definitions: Dict[str, Any]) -> bool`
+- `mat_utils/substance_bridge/connection.py::OutputStream` — was `(class)`
+- `mat_utils/substance_bridge/connection.py::OutputStream.clear_history` — was `(self) -> None`
+- `mat_utils/substance_bridge/connection.py::OutputStream.close` — was `(self) -> None`
+- `mat_utils/substance_bridge/connection.py::OutputStream.closed` — was `(self) -> bool`
+- `mat_utils/substance_bridge/connection.py::OutputStream.history` — was `(self) -> List[Tuple[str, str]]`
+- `mat_utils/substance_bridge/connection.py::OutputStream.push` — was `(self, line: str, source: str = '') -> None`
+- `mat_utils/substance_bridge/connection.py::OutputStream.subscribe` — was `(self, callback: Callable[[str, str], None], replay_history: bool = False) -> Callable[[], None]`
+- `mat_utils/substance_bridge/connection.py::OutputStream.wait_for` — was `(self, pattern: Union[str, Pattern], timeout: Optional[float] = None, source: Optional[str] = None, include_history: bool = True) -> Optional[Tuple[str, str]]`
+
+## Added (8)
+
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::ShotManifest.apply_behaviors(self) -> Dict[str, list]`
+- `audio_utils/_audio_utils.py::AudioUtils.bake_events(cls, carrier: Optional[str] = None, display_map: Optional[dict] = None) -> List[tuple]`
+- `edit_utils/_curtain_drape.py::CurtainDrape(class)`
+- `edit_utils/_curtain_drape.py::CurtainDrape.drape(self, u, v, pos, tan, normal) -> Vec`
+- `edit_utils/_curtain_drape.py::CurtainDrape.grid_points(self) -> Tuple[int, int, List[Vec]]`
+- `edit_utils/_curtain_drape.py::CurtainDrape.prepare(self) -> Tuple[int, int, List[Tuple[Vec, Vec, Vec]]]`
+- `node_utils/data_nodes.py::DataNodes.dump(decode: bool = True) -> dict`
+- `node_utils/data_nodes.py::DataNodes.format_dump(decode: bool = True) -> str`
+
+## Signature changed (2)
+
+- `anim_utils/shots/shot_manifest/_shot_manifest.py::ShotManifest.from_csv`
+  - was: `(filepath: str, store: Optional[ShotStore] = None, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> Tuple['ShotManifest', List[BuilderStep]]`
+  - now: `(cls, filepath: str, store: Optional[ShotStore] = None, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> Tuple['ShotManifest', List[BuilderStep]]`
+- `anim_utils/shots/shot_manifest/range_resolver.py::resolve_ranges`
+  - was: `(steps: List[BuilderStep], user_ranges: Dict[str, Tuple[Optional[float], Optional[float]]], gap_starts: List[float], gap_end_map: Dict[float, float], gap: float, use_selected_keys: bool, last_resolved: List[Tuple[str, float, Optional[float], bool]], from_step_idx: int = 0, default_duration: float = 0) -> List[Tuple[str, float, Optional[float], bool]]`
+  - now: `(steps: List[BuilderStep], user_ranges: Dict[str, Tuple[Optional[float], Optional[float]]], gap_starts: List[float], gap_end_map: Dict[float, float], gap: float, use_selected_keys: bool, last_resolved: List[Tuple[str, float, Optional[float], bool]], from_step_idx: int = 0, default_duration: float = 0, duration_fn: Optional[Callable[..., float]] = None) -> List[Tuple[str, float, Optional[float], bool]]`

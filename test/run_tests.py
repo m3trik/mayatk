@@ -441,6 +441,26 @@ except Exception as e:
                     del sys.modules[mod]
                 print(f"[Fallback] Cleared {{len(modules_to_clear)}} cached mayatk modules")
 
+            # Sandbox the shots cross-scene prefs JSON (engine classvar, set
+            # AFTER the reload so it lands on the final class object) — test
+            # ShotStore.save() calls must never touch the user's real config
+            # store (user_config_root()/shots/prefs.json is cloud-synced).
+            # The temp dir is removed at interpreter exit so repeated runs
+            # don't accumulate shots_prefs_test_* directories.
+            try:
+                import atexit
+                import shutil
+                import tempfile
+                from pythontk.core_utils.engines.shots.shot_model import (
+                    ShotStore as _PrefsStore,
+                )
+                _prefs_sandbox = tempfile.mkdtemp(prefix="shots_prefs_test_")
+                _PrefsStore._prefs_dir_override = _prefs_sandbox
+                atexit.register(shutil.rmtree, _prefs_sandbox, ignore_errors=True)
+                print(f"[Sandbox] shots prefs -> {{_prefs_sandbox}}")
+            except Exception as e:
+                print(f"[Sandbox] shots prefs override failed: {{e}}")
+
             # Setup results file
             output_file = r'{output_file_path}'
             with open(output_file, 'w', encoding='utf-8') as f:

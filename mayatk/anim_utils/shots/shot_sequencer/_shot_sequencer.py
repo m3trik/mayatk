@@ -185,19 +185,52 @@ class ShotSequencer:
         return cls([block])
 
     @staticmethod
-    def _shot_nodes(shot: ShotBlock) -> list:
-        """Return validated names for a shot's objects.
+    def _disambiguate_matches(matches: list) -> str:
+        """Pick a single node from several same-named DAG matches.
 
-        Filters out non-existent names while preserving the form stored on
-        the shot (callers historically pass short names; downstream
-        consumers like SegmentKeys roundtrip those names back into segment
-        dicts).
+        Shared disambiguation policy: prefer the match carrying anim
+        curves — that's the node a shot actually animates — else fall
+        back to the first.  *matches* must be non-empty.
+        """
+        import maya.cmds as cmds
+
+        for m in matches:
+            if cmds.listConnections(m, type="animCurve", s=True, d=False):
+                return m
+        return matches[0]
+
+    @staticmethod
+    def _shot_nodes(shot: ShotBlock) -> list:
+        """Return validated, unambiguous names for a shot's objects.
+
+        Non-existent names are dropped.  A name that resolves to a single
+        scene node is returned in its stored form (callers historically
+        pass short names; downstream consumers like SegmentKeys roundtrip
+        those names back into segment dicts).
+
+        A stored short name can turn **non-unique** when the scene later
+        gains a second node with the same leaf name (duplicate, import,
+        namespace merge).  ``cmds.objExists`` still reports such a name as
+        valid, but handing it to a query that demands a unique node
+        (``cmds.listConnections`` et al. inside ``SegmentKeys``) raises
+        ``More than one object matches name``.  Resolve those to one long
+        DAG path via :meth:`_disambiguate_matches` so no ambiguous name
+        ever reaches the segment collector.
         """
         import maya.cmds as cmds
 
         if not shot.objects:
             return []
-        return [n for n in shot.objects if cmds.objExists(n)]
+        nodes: list = []
+        for n in shot.objects:
+            matches = cmds.ls(n, long=True) or []
+            if not matches:
+                continue  # non-existent → drop
+            if len(matches) == 1:
+                nodes.append(n)  # unique → preserve stored form
+            else:
+                nodes.append(ShotSequencer._disambiguate_matches(matches))
+        return nodes
 
     @staticmethod
     def _reconcile_stale_paths(shot: ShotBlock) -> bool:
@@ -224,14 +257,7 @@ class ShotSequencer:
                 new_objects.append(matches[0])
                 updated = True
             elif matches:
-                # Multiple matches — prefer one with anim curves,
-                # fall back to the first match.
-                resolved = matches[0]
-                for m in matches:
-                    if cmds.listConnections(m, type="animCurve", s=True, d=False):
-                        resolved = m
-                        break
-                new_objects.append(resolved)
+                new_objects.append(ShotSequencer._disambiguate_matches(matches))
                 updated = True
             # else: no scene node with this short name → truly deleted.
         result = sorted(set(new_objects))
