@@ -2730,7 +2730,7 @@ Channels — Switchboard UI for inspecting and editing Maya attributes.
 
 Channels — Maya attribute query / mutation logic.
 
-- **[`class Channels`](mayatk/mayatk/node_utils/attributes/channels/_channels.py#L15)** — Maya attribute query / mutation logic.
+- **[`class Channels`](mayatk/mayatk/node_utils/attributes/channels/_channels.py#L16)** — Maya attribute query / mutation logic.
   - `Channels.is_pinned(self)` *(property)*
   - `Channels.single_object_mode(self)` *(property)*
   - `Channels.pin_targets(self, nodes)` — Pin the manager to a fixed node list;
