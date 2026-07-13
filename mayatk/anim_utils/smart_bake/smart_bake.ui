@@ -209,18 +209,10 @@ parent nodes toggle visibility that child geo inherits at runtime.</string>
         <number>1</number>
        </property>
        <item>
-        <widget class="QCheckBox" name="chk_override_layer">
+        <widget class="ComboBox" name="cmb_bake_layer">
          <property name="toolTip">
-          <string>Bake to a new override animation layer instead of the base layer (nondestructive).
-Original drivers remain connected but are overridden by the baked layer.
-Unchecked bakes to the base layer, converting SDK curves and disconnecting
-drivers — still recoverable via Unbake, unless Delete Inputs is also checked.</string>
-         </property>
-         <property name="text">
-          <string>Use Override Layer</string>
-         </property>
-         <property name="checked">
-          <bool>true</bool>
+          <string>Override Layer: bake to a new override animation layer, leaving the base layer and drivers intact — nondestructive.
+Base Layer: bake into the base layer, converting SDK curves and disconnecting drivers — recoverable via Unbake, unless Delete Inputs is also set.</string>
          </property>
         </widget>
        </item>

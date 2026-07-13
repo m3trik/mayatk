@@ -350,7 +350,7 @@
             </widget>
            </item>
            <item>
-            <widget class="QCheckBox" name="chk002">
+            <widget class="ComboBox" name="cmb_topology">
              <property name="minimumSize">
               <size>
                <width>0</width>
@@ -359,27 +359,12 @@
              </property>
              <property name="maximumSize">
               <size>
-               <width>16777215</width>
+               <width>100</width>
                <height>19</height>
               </size>
              </property>
              <property name="toolTip">
-              <string>Polygon only: build quads (checked) or triangles (unchecked).</string>
-             </property>
-             <property name="text">
-              <string>Quads</string>
-             </property>
-             <property name="iconSize">
-              <size>
-               <width>18</width>
-               <height>18</height>
-              </size>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-             <property name="checked">
-              <bool>true</bool>
+              <string>Polygon only: build quads or triangles.</string>
              </property>
             </widget>
            </item>

@@ -311,13 +311,15 @@ class ShellXformSlots(ptk.LoggingMixin):
             setChecked=True,
             setToolTip="If enabled, mirrors each UV shell independently.",
         )
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Preserve Footprint",
-            setObjectName="chk034",
-            setChecked=True,
-            setToolTip="If enabled, preserves the exact UV point set using one-to-one reassignment.\nIf disabled, performs a geometric mirror around the pivot.",
+        # Preserve Footprint vs Geometric Mirror are two distinct algorithms, not a
+        # modifier — a combobox names both states.
+        mode = widget.option_box.menu.add(
+            "QComboBox",
+            setObjectName="cmb_mirror_mode",
+            setToolTip="Preserve Footprint: keeps the exact UV point set via one-to-one reassignment.\nGeometric Mirror: reflects the UVs around the pivot.",
         )
+        mode.addItems(["Preserve Footprint", "Geometric Mirror"])
+        mode.setCurrentText("Preserve Footprint")  # preserve prior default (checkbox on)
 
     @CoreUtils.undoable
     def tb008(self, widget):
@@ -325,7 +327,9 @@ class ShellXformSlots(ptk.LoggingMixin):
         mirror_u = widget.option_box.menu.chk031.isChecked()
         mirror_v = widget.option_box.menu.chk032.isChecked()
         per_shell = widget.option_box.menu.chk033.isChecked()
-        preserve_position = widget.option_box.menu.chk034.isChecked()
+        preserve_position = (
+            widget.option_box.menu.cmb_mirror_mode.currentText() == "Preserve Footprint"
+        )
 
         axis = "u" if mirror_u and not mirror_v else "v"
 

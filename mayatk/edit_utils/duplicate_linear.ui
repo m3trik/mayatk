@@ -423,7 +423,7 @@
             </widget>
            </item>
            <item>
-            <widget class="QCheckBox" name="chk001">
+            <widget class="ComboBox" name="cmb_inst">
              <property name="minimumSize">
               <size>
                <width>0</width>
@@ -432,27 +432,12 @@
              </property>
              <property name="maximumSize">
               <size>
-               <width>30</width>
+               <width>90</width>
                <height>19</height>
               </size>
              </property>
              <property name="toolTip">
-              <string>Create instances instead of copies.</string>
-             </property>
-             <property name="text">
-              <string>Inst</string>
-             </property>
-             <property name="iconSize">
-              <size>
-               <width>18</width>
-               <height>18</height>
-              </size>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-             <property name="checked">
-              <bool>true</bool>
+              <string>Whether the duplicates are independent copies or instances (shared mesh data).</string>
              </property>
             </widget>
            </item>

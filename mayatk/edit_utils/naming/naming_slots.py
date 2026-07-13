@@ -258,12 +258,14 @@ class NamingSlots(Naming, ptk.LoggingMixin):
     def tb001_init(self, widget):
         """Initialize Suffix By Location"""
         widget.option_box.menu.setTitle("Suffix By Location")
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="First Object As Reference",
-            setObjectName="chk006",
-            setToolTip="Use the first selected object as the reference point, otherwise the scene origin (0,0,0) will be used.",
+        # Reference point is a choice between two named origins, not a modifier.
+        ref = widget.option_box.menu.add(
+            "QComboBox",
+            setObjectName="cmb_reference",
+            setToolTip="Scene Origin: measure from the world origin (0,0,0).\nFirst Object: measure from the first selected object.",
         )
+        ref.addItems(["Scene Origin", "First Object"])
+        ref.setCurrentText("Scene Origin")  # preserve prior default (checkbox off)
         widget.option_box.menu.add(
             "QCheckBox",
             setText="Alphabetical",
@@ -299,7 +301,9 @@ class NamingSlots(Naming, ptk.LoggingMixin):
 
     def tb001(self, widget):
         """Suffix By Location"""
-        first_obj_as_ref = widget.option_box.menu.chk006.isChecked()
+        first_obj_as_ref = (
+            widget.option_box.menu.cmb_reference.currentText() == "First Object"
+        )
         alphabetical = widget.option_box.menu.chk005.isChecked()
         strip_trailing_ints = widget.option_box.menu.chk002.isChecked()
         strip_defined_suffixes = widget.option_box.menu.chk003.isChecked()

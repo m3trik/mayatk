@@ -339,24 +339,26 @@ class WheelRigSlots:
     def header_init(self, widget):
         """Configure header menu with mode toggle and instructions."""
         widget.menu.add("Separator", setTitle="Mode")
-        chk_ws = widget.menu.add(
-            "QCheckBox",
-            setText="World Space (decomposeMatrix)",
-            setObjectName="chk_world_space",
+        # Local vs World Space is a two-valued mode, not a modifier \u2014 a combobox
+        # names both states; extend with a third space here without a relayout.
+        cmb_space = widget.menu.add(
+            "QComboBox",
+            setObjectName="cmb_space",
             setToolTip=fmt(
-                title="World Space (decomposeMatrix)",
+                title="Space",
                 bullets=[
-                    "<b>On</b> \u2014 rotation reads a decomposeMatrix on the "
-                    "driver's <i>worldMatrix</i>, so movement inherited from "
-                    "parent transforms is captured.",
-                    "<b>Off</b> (default) \u2014 reads the driver's local "
+                    "<b>Local</b> (default) \u2014 reads the driver's local "
                     "translate directly. Simpler, and sufficient when the "
                     "driver itself is animated.",
+                    "<b>World Space</b> \u2014 rotation reads a decomposeMatrix on "
+                    "the driver's <i>worldMatrix</i>, so movement inherited from "
+                    "parent transforms is captured.",
                 ],
             ),
-            setChecked=False,
         )
-        chk_ws.toggled.connect(self._on_world_space_toggled)
+        cmb_space.addItems(["Local", "World Space"])
+        cmb_space.setCurrentText("Local")  # preserve prior default (checkbox off = local)
+        cmb_space.currentTextChanged.connect(self._on_space_changed)
 
         widget.set_help_text(
             fmt(
@@ -401,8 +403,8 @@ class WheelRigSlots:
             )
         )
 
-    def _on_world_space_toggled(self, checked: bool):
-        self._use_world_space = checked
+    def _on_space_changed(self, text: str):
+        self._use_world_space = text == "World Space"
 
     @property
     def rig_name(self) -> str:
