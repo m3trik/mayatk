@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-3734%20passed%202%20failed-orange.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-3743%20passed-brightgreen.svg)](../test/)
 
 # mayatk
 
