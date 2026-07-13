@@ -54,8 +54,11 @@ class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin):
         before any ``self.ui.<widget>`` access.
         """
         self.sb.add_reset_buttons(self.ui)
-        self.ui.chk_override_layer.toggled.connect(self._on_override_layer_toggled)
-        self._on_override_layer_toggled(self.ui.chk_override_layer.isChecked())
+        # Bake target is a choice between two named layers, not a modifier.
+        self.ui.cmb_bake_layer.add(["Override Layer", "Base Layer"])
+        self.ui.cmb_bake_layer.setAsCurrent("Override Layer")  # prior default (checkbox on)
+        self.ui.cmb_bake_layer.currentTextChanged.connect(self._on_bake_layer_changed)
+        self._on_bake_layer_changed(self.ui.cmb_bake_layer.currentText())
         self._log_getting_started()
         self._refresh_session_state()
 
@@ -149,10 +152,10 @@ class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin):
             )
         )
 
-    def _on_override_layer_toggled(self, checked: bool) -> None:
+    def _on_bake_layer_changed(self, text: str) -> None:
         # delete_inputs is a base-layer-only behavior — ignored (and visibly
         # disabled) whenever the nondestructive override layer is active.
-        self.ui.chk_delete_inputs.setDisabled(checked)
+        self.ui.chk_delete_inputs.setDisabled(text == "Override Layer")
 
     def reset_defaults(self) -> None:
         """Header menu: reset every field in this panel to its registry default."""
@@ -192,7 +195,7 @@ class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin):
             optimize_keys=self.ui.chk_optimize.isChecked(),
             bake_blend_shapes=self.ui.chk_bake_blendshapes.isChecked(),
             bake_inherited_visibility=self.ui.chk_inherited_vis.isChecked(),
-            use_override_layer=self.ui.chk_override_layer.isChecked(),
+            use_override_layer=self.ui.cmb_bake_layer.currentText() == "Override Layer",
             mute_drivers=self.ui.chk_mute_drivers.isChecked(),
             backup_file=self._backup_value(),
         )

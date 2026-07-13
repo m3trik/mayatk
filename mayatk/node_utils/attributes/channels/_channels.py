@@ -9,6 +9,7 @@ Switchboard UI.
 """
 import maya.cmds as cmds
 
+from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 
 
@@ -902,16 +903,40 @@ class Channels:
 
     @staticmethod
     def get_shape_nodes(nodes):
-        """Return the shape node name(s) for *nodes*."""
-        result = []
-        for node in nodes:
-            shapes = cmds.listRelatives(node, shapes=True, fullPath=True) or []
-            result.extend(shapes)
-        return result
+        """Return the shape node name(s) for *nodes*.
+
+        Delegates to :meth:`NodeUtils.get_shape_node`, which resolves the
+        shape from a transform, a shape, *or* a construction-history node.
+        The last case is what lets the footer *Shape* button keep working
+        after the *History* button has swapped the selection to a history
+        node — a plain ``listRelatives(shapes=True)`` returns nothing for a
+        DG history node, which produced the spurious "No shape nodes found"
+        warning and broke shape<->history toggling.
+        """
+        shapes = NodeUtils.get_shape_node(nodes, returned_type="str")
+        if not isinstance(shapes, list):
+            shapes = [shapes] if shapes else []
+        # NodeUtils.get_shape_node resolves via listRelatives without
+        # fullPath, so it can hand back a bare short name; re-resolve to full
+        # DAG paths here (the original, pre-delegation get_shape_nodes did),
+        # else a downstream cmds.select can raise "More than one object
+        # matches name" in a scene with duplicate short names.
+        return cmds.ls(shapes, long=True) if shapes else []
 
     @staticmethod
     def get_history_nodes(nodes):
-        """Return the construction-history input node(s) for *nodes*."""
+        """Return the construction-history input node(s) for *nodes*.
+
+        Deliberately *not* delegated to ``NodeUtils.get_history_node``
+        (unlike :meth:`get_shape_nodes`): that helper resolves a *shape*
+        input to the bottom of the construction stack (oldest creator)
+        while resolving a *transform* to the top (newest), so pressing
+        History from the shape selection would land on a different node
+        than pressing it from the transform — breaking the footer
+        Shape<->History toggle. This local version lands on the same
+        top-of-stack node from either a transform or a shape, keeping the
+        toggle stable.
+        """
         result = []
         for node in nodes:
             shapes = cmds.listRelatives(node, shapes=True, fullPath=True) or []

@@ -338,6 +338,51 @@ class TestGetShapeNodes(MayaTkTestCase):
         shapes = Channels.get_shape_nodes([grp])
         self.assertEqual(shapes, [])
 
+    def test_resolves_shape_from_shape_node(self):
+        """Passing a shape node returns that same shape (idempotent).
+
+        Required for the footer Shape button to be re-pressable after it
+        has already swapped the selection to the shape node.
+        """
+        shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
+        shapes = Channels.get_shape_nodes([shape])
+        self.assertTrue(shapes)
+        self.assertEqual(cmds.nodeType(shapes[0]), "mesh")
+
+    def test_resolves_shape_from_history_node(self):
+        """Regression: the Shape button after the History button.
+
+        Once History has swapped the selection to a construction-history
+        DG node, pressing Shape must still resolve the mesh — a plain
+        ``listRelatives(shapes=True)`` returns nothing for a DG node and
+        used to warn "No shape nodes found".
+        """
+        history = Channels.get_history_nodes([self.cube])
+        self.assertTrue(history, "expected the cube to have construction history")
+        shapes = Channels.get_shape_nodes(history)
+        self.assertTrue(shapes, "Shape must resolve from a history node")
+        self.assertEqual(cmds.nodeType(shapes[0]), "mesh")
+
+    def test_shape_history_toggle_round_trip(self):
+        """Toggling Shape<->History never loses the target mesh.
+
+        transform -> history -> shape -> history -> shape must keep landing
+        on the same shape / history nodes without re-selecting the cube.
+        """
+        expected_shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
+
+        history = Channels.get_history_nodes([self.cube])
+        self.assertTrue(history)
+
+        shapes = Channels.get_shape_nodes(history)
+        self.assertEqual(cmds.ls(shapes[0], long=True)[0], expected_shape)
+
+        history2 = Channels.get_history_nodes(shapes)
+        self.assertEqual(set(cmds.ls(history2)), set(cmds.ls(history)))
+
+        shapes2 = Channels.get_shape_nodes(history2)
+        self.assertEqual(cmds.ls(shapes2[0], long=True)[0], expected_shape)
+
 
 class TestGetHistoryNodes(MayaTkTestCase):
     """Tests for get_history_nodes."""
@@ -351,6 +396,24 @@ class TestGetHistoryNodes(MayaTkTestCase):
         self.assertTrue(len(history) >= 1)
         types = [cmds.nodeType(h) for h in history]
         self.assertIn("polyCube", types)
+
+    def test_history_consistent_from_transform_and_shape(self):
+        """Shape and transform inputs resolve to the *same* history node.
+
+        Toggle-consistency guard: on a mesh with a construction stack,
+        pressing History from the transform and from its shape must land
+        on the same (top-of-stack) node so the footer Shape<->History
+        toggle never jumps between history nodes. Delegating this to
+        ``NodeUtils.get_history_node`` would break it — that helper returns
+        the *bottom* of the stack from a shape input.
+        """
+        cmds.select(self.cube)
+        cmds.polyExtrudeFacet(f"{self.cube}.f[0]", localTranslateZ=1.0)
+        shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
+        from_xform = Channels.get_history_nodes([self.cube])
+        from_shape = Channels.get_history_nodes([shape])
+        self.assertTrue(from_xform)
+        self.assertEqual(set(cmds.ls(from_xform)), set(cmds.ls(from_shape)))
 
 
 class TestSetBreakdownKey(MayaTkTestCase):

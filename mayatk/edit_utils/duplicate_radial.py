@@ -309,6 +309,12 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
         self.logger.setLevel(log_level)
         self.logger.set_log_prefix(f"[duplicate radial] ")
 
+        # Output mode: independent copies vs shared-shape instances (was the
+        # "Instance" checkbox). Copy is the default, matching the prior unchecked state.
+        self.ui.cmb_inst.clear()
+        self.ui.cmb_inst.add([("Copy", "copy"), ("Instance", "instance")])
+        self.ui.cmb_inst.setAsCurrent("copy")
+
         # Per-field reset buttons (uitk option-box): click resets a field to its
         # default; Alt/Ctrl+click bypasses it to default (greyed, restorable).
         # Must precede connect_multi/Preview — wrapping reparents the widgets and
@@ -330,8 +336,20 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
         )
         self.sb.connect_multi(
             self.ui,
-            "chk002-8",
+            "chk002-4",
             "toggled",
+            self.preview.refresh,
+        )
+        self.sb.connect_multi(
+            self.ui,
+            "chk006-8",
+            "toggled",
+            self.preview.refresh,
+        )
+        self.sb.connect_multi(
+            self.ui,
+            "cmb_inst",
+            "currentIndexChanged",
             self.preview.refresh,
         )
         self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
@@ -382,7 +400,7 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
             "end_angle": self.ui.s014.value(),
             "weight_bias": self.ui.s015.value(),
             "weight_curve": self.ui.s016.value(),
-            "instance": self.ui.chk005.isChecked(),
+            "instance": self.ui.cmb_inst.currentData() == "instance",
             "keep_original": self.ui.chk006.isChecked(),
             "combine": self.ui.chk007.isChecked(),
             "suffix": self.ui.chk008.isChecked(),

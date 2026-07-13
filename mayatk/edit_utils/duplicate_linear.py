@@ -164,8 +164,11 @@ class DuplicateLinearSlots:
         # Set default calculation mode to "Weighted" to match tool defaults
         self.ui.cmb001.setAsCurrent("weighted")
 
-        # Set default state for instance checkbox
-        self.ui.chk001.setChecked(True)
+        # Output mode: independent copies vs shared-shape instances (was the "Inst"
+        # checkbox). Instance is the default, matching the prior checked state.
+        self.ui.cmb_inst.clear()
+        self.ui.cmb_inst.add([("Copy", "copy"), ("Instance", "instance")])
+        self.ui.cmb_inst.setAsCurrent("instance")
 
         # Per-field reset buttons (uitk option-box): click resets a field to its
         # default; Alt/Ctrl+click bypasses it to default (greyed, restorable).
@@ -207,11 +210,11 @@ class DuplicateLinearSlots:
             self.toggle_weight_ui,
         )
 
-        # Connect instance checkbox to preview refresh
+        # Connect output-mode combobox to preview refresh
         self.sb.connect_multi(
             self.ui,
-            "chk001",
-            "stateChanged",
+            "cmb_inst",
+            "currentIndexChanged",
             self.preview.refresh,
         )
 
@@ -301,7 +304,7 @@ class DuplicateLinearSlots:
         calculation_mode = self.ui.cmb001.currentData()
 
         # Get instance mode from checkbox
-        instance = self.ui.chk001.isChecked()
+        instance = self.ui.cmb_inst.currentData() == "instance"
 
         self.copies = DuplicateLinear.duplicate_linear(
             objects,

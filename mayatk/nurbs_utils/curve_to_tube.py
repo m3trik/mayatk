@@ -686,6 +686,10 @@ class CurveToTubeSlots(ptk.LoggingMixin):
 
         # Output-type combo (NURBS / Polygon) drives which options apply.
         self.ui.cmb000.add(list(CurveToTube.OUTPUT_TYPES))
+        # Polygon topology: quads vs triangles (was the "Quads" checkbox). Quads is
+        # the default, matching the prior checked state.
+        self.ui.cmb_topology.add([("Quads", "quads"), ("Triangles", "triangles")])
+        self.ui.cmb_topology.setAsCurrent("quads")
 
         # Per-field reset buttons (uitk option-box): click resets a field to its
         # default; Alt/Ctrl+click bypasses it to default (greyed, restorable).
@@ -711,7 +715,7 @@ class CurveToTubeSlots(ptk.LoggingMixin):
         self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
         self.ui.cmb000.currentIndexChanged.connect(self._toggle_output_options)
         self.ui.chk001.toggled.connect(self.preview.refresh)
-        self.ui.chk002.toggled.connect(self.preview.refresh)
+        self.ui.cmb_topology.currentIndexChanged.connect(self.preview.refresh)
         self.ui.chk003.toggled.connect(self.preview.refresh)  # Live (keep history)
 
         self._toggle_output_options()
@@ -762,7 +766,7 @@ class CurveToTubeSlots(ptk.LoggingMixin):
         is_poly = self.ui.cmb000.currentData() == "polygon"
         self.ui.s002.setEnabled(is_poly)  # Path divisions
         self.ui.chk001.setEnabled(is_poly)  # Caps
-        self.ui.chk002.setEnabled(is_poly)  # Quads
+        self.ui.cmb_topology.setEnabled(is_poly)  # Quads/Triangles
         self.ui.s003.setEnabled(not is_poly)  # Degree (NURBS profile/surface)
 
     def _validate(self, objects) -> bool:
@@ -792,7 +796,7 @@ class CurveToTubeSlots(ptk.LoggingMixin):
             path_divisions=self.ui.s002.value(),
             degree=self.ui.s003.value(),
             caps=self.ui.chk001.isChecked(),
-            quads=self.ui.chk002.isChecked(),
+            quads=self.ui.cmb_topology.currentData() == "quads",
             live=self.ui.chk003.isChecked(),
         )
         self._update_footer()
