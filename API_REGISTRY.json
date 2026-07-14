@@ -1,7 +1,7 @@
 {
   "name": "mayatk",
   "source_root": "mayatk/mayatk",
-  "generated_at": "2026-07-12",
+  "generated_at": "2026-07-14",
   "modules": [
     {
       "relpath": "anim_utils/_anim_utils.py",
@@ -3289,7 +3289,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "",
-              "line": 103,
+              "line": 106,
               "deprecated": false
             },
             {
@@ -3298,7 +3298,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "",
-              "line": 109,
+              "line": 112,
               "deprecated": false
             },
             {
@@ -3307,7 +3307,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Configure header menu, refresh button, and help text.",
-              "line": 112,
+              "line": 115,
               "deprecated": false
             },
             {
@@ -3316,7 +3316,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Header menu: reset every field in this panel to its registry default.",
-              "line": 157,
+              "line": 160,
               "deprecated": false
             },
             {
@@ -3325,7 +3325,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Bake.",
-              "line": 173,
+              "line": 176,
               "deprecated": false
             },
             {
@@ -3334,7 +3334,7 @@
               "kind": "method",
               "signature": "(self, widget) -> None",
               "summary": "Unbake.",
-              "line": 252,
+              "line": 255,
               "deprecated": false
             }
           ]
@@ -7115,7 +7115,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text.",
-              "line": 221,
+              "line": 224,
               "deprecated": false
             },
             {
@@ -7124,7 +7124,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Disable weight UI components if the current calculation mode doesn't use them.",
-              "line": 246,
+              "line": 249,
               "deprecated": false
             },
             {
@@ -7133,7 +7133,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Reset to Defaults: Resets all UI widgets to their default values.",
-              "line": 272,
+              "line": 275,
               "deprecated": false
             },
             {
@@ -7142,7 +7142,7 @@
               "kind": "method",
               "signature": "(self, objects, contract)",
               "summary": "Perform the linear duplication operation.",
-              "line": 276,
+              "line": 279,
               "deprecated": false
             }
           ]
@@ -7187,7 +7187,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text.",
-              "line": 339,
+              "line": 357,
               "deprecated": false
             },
             {
@@ -7196,7 +7196,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Reset to Defaults: Resets all UI widgets to their default values.",
-              "line": 373,
+              "line": 391,
               "deprecated": false
             },
             {
@@ -7205,7 +7205,7 @@
               "kind": "method",
               "signature": "(self, objects, contract)",
               "summary": "Perform the radial duplication operation.",
-              "line": 377,
+              "line": 395,
               "deprecated": false
             },
             {
@@ -7214,7 +7214,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Regroup the committed copies under a fresh ``*_array`` group.",
-              "line": 424,
+              "line": 442,
               "deprecated": false
             }
           ]
@@ -8210,7 +8210,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Suffix By Location",
-              "line": 300,
+              "line": 302,
               "deprecated": false
             },
             {
@@ -8219,7 +8219,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Strip Chars",
-              "line": 325,
+              "line": 329,
               "deprecated": false
             },
             {
@@ -8228,7 +8228,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Strip Chars: remove a number of leading/trailing characters from the selected names.",
-              "line": 343,
+              "line": 347,
               "deprecated": false
             },
             {
@@ -8237,7 +8237,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize Suffix By Type",
-              "line": 352,
+              "line": 356,
               "deprecated": false
             },
             {
@@ -8246,7 +8246,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Suffix By Type",
-              "line": 437,
+              "line": 441,
               "deprecated": false
             }
           ]
@@ -16605,7 +16605,7 @@
         {
           "name": "Channels",
           "summary": "Maya attribute query / mutation logic.",
-          "line": 15,
+          "line": 16,
           "bases": [],
           "members": [
             {
@@ -16614,7 +16614,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 42,
+              "line": 43,
               "deprecated": false
             },
             {
@@ -16623,7 +16623,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 46,
+              "line": 47,
               "deprecated": false
             },
             {
@@ -16632,7 +16632,7 @@
               "kind": "method",
               "signature": "(self, nodes)",
               "summary": "Pin the manager to a fixed node list;",
-              "line": 53,
+              "line": 54,
               "deprecated": false
             },
             {
@@ -16641,7 +16641,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Return the target node list.",
-              "line": 68,
+              "line": 69,
               "deprecated": false
             },
             {
@@ -16650,7 +16650,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Return all attribute names currently selected in Maya's channel box.",
-              "line": 85,
+              "line": 86,
               "deprecated": false
             },
             {
@@ -16659,7 +16659,7 @@
               "kind": "staticmethod",
               "signature": "(filter_key='Custom', invert=False)",
               "summary": "Return the ``cmds.listAttr`` kwargs for the given *filter_key*.",
-              "line": 98,
+              "line": 99,
               "deprecated": false
             },
             {
@@ -16668,7 +16668,7 @@
               "kind": "staticmethod",
               "signature": "(node)",
               "summary": "Return set of attribute names on *node* that have incoming connections.",
-              "line": 120,
+              "line": 121,
               "deprecated": false
             },
             {
@@ -16677,7 +16677,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, filter_kwargs)",
               "summary": "Return the intersection of attribute names across *nodes*.",
-              "line": 135,
+              "line": 136,
               "deprecated": false
             },
             {
@@ -16686,7 +16686,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes, attr_names)",
               "summary": "Return ``{attr_name: (value_str, conn_type)}`` for the given attrs.",
-              "line": 236,
+              "line": 237,
               "deprecated": false
             },
             {
@@ -16695,7 +16695,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name)",
               "summary": "Safely get an attribute value, returning ``None`` on failure.",
-              "line": 271,
+              "line": 272,
               "deprecated": false
             },
             {
@@ -16704,7 +16704,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name)",
               "summary": "Return the Maya attribute type string.",
-              "line": 279,
+              "line": 280,
               "deprecated": false
             },
             {
@@ -16713,7 +16713,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name)",
               "summary": "Return ``'→ src.attr'`` if there is an incoming connection, else ``''``.",
-              "line": 300,
+              "line": 301,
               "deprecated": false
             },
             {
@@ -16722,7 +16722,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, attr_name)",
               "summary": "Classify the incoming connection on *node.attr_name*.",
-              "line": 345,
+              "line": 346,
               "deprecated": false
             },
             {
@@ -16731,7 +16731,7 @@
               "kind": "staticmethod",
               "signature": "(plug)",
               "summary": "Return ``True`` if *plug* has a keyframe set exactly at the current time.",
-              "line": 384,
+              "line": 385,
               "deprecated": false
             },
             {
@@ -16740,7 +16740,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes, filter_kwargs)",
               "summary": "Build row data and state tuples for the table.",
-              "line": 452,
+              "line": 453,
               "deprecated": false
             },
             {
@@ -16749,7 +16749,7 @@
               "kind": "staticmethod",
               "signature": "(val)",
               "summary": "Convert a Maya attribute value to a display string.",
-              "line": 537,
+              "line": 538,
               "deprecated": false
             },
             {
@@ -16758,7 +16758,7 @@
               "kind": "staticmethod",
               "signature": "(text, attr_type)",
               "summary": "Convert user-entered text to a Python value for ``cmds.setAttr``.",
-              "line": 554,
+              "line": 555,
               "deprecated": false
             },
             {
@@ -16767,7 +16767,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name)",
               "summary": "Toggle the lock state for *attr_name* on *nodes*.",
-              "line": 577,
+              "line": 578,
               "deprecated": false
             },
             {
@@ -16776,7 +16776,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name)",
               "summary": "Break all incoming connections for *attr_name* on *nodes*.",
-              "line": 595,
+              "line": 596,
               "deprecated": false
             },
             {
@@ -16785,7 +16785,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names, lock)",
               "summary": "Lock or unlock *attr_names* across all *nodes*.",
-              "line": 650,
+              "line": 651,
               "deprecated": false
             },
             {
@@ -16794,7 +16794,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Reset *attr_names* to their default values across all *nodes*.",
-              "line": 665,
+              "line": 666,
               "deprecated": false
             },
             {
@@ -16803,7 +16803,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Toggle the keyable state for *attr_names* across all *nodes*.",
-              "line": 683,
+              "line": 684,
               "deprecated": false
             },
             {
@@ -16812,7 +16812,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Delete custom *attr_names* across all *nodes*.",
-              "line": 699,
+              "line": 700,
               "deprecated": false
             },
             {
@@ -16821,7 +16821,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes, attr_name, text)",
               "summary": "Parse *text* and set *attr_name* on all *nodes*.",
-              "line": 720,
+              "line": 721,
               "deprecated": false
             },
             {
@@ -16830,7 +16830,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes, name, attr_type, keyable=True, min_val=None, max_val=None, default_val=0.0, enum_names='')",
               "summary": "Create a custom attribute on *nodes*.",
-              "line": 762,
+              "line": 763,
               "deprecated": false
             },
             {
@@ -16839,7 +16839,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Copy attribute values from the primary node to the clipboard.",
-              "line": 845,
+              "line": 846,
               "deprecated": false
             },
             {
@@ -16848,7 +16848,7 @@
               "kind": "staticmethod",
               "signature": "(nodes)",
               "summary": "Paste previously copied attribute values onto *nodes*.",
-              "line": 852,
+              "line": 853,
               "deprecated": false
             },
             {
@@ -16857,7 +16857,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, old_name, new_name)",
               "summary": "Rename a user-defined attribute on *nodes*.",
-              "line": 863,
+              "line": 864,
               "deprecated": false
             },
             {
@@ -16866,7 +16866,7 @@
               "kind": "staticmethod",
               "signature": "(old_name, new_name)",
               "summary": "Rename a Maya node and return its new full path.",
-              "line": 883,
+              "line": 884,
               "deprecated": false
             },
             {
@@ -16875,7 +16875,7 @@
               "kind": "staticmethod",
               "signature": "(nodes)",
               "summary": "Return the shape node name(s) for *nodes*.",
-              "line": 904,
+              "line": 905,
               "deprecated": false
             },
             {
@@ -16884,7 +16884,7 @@
               "kind": "staticmethod",
               "signature": "(nodes)",
               "summary": "Return the construction-history input node(s) for *nodes*.",
-              "line": 913,
+              "line": 927,
               "deprecated": false
             },
             {
@@ -16893,7 +16893,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name)",
               "summary": "Set or remove a keyframe on *attr_name* for *nodes* at the current time.",
-              "line": 933,
+              "line": 958,
               "deprecated": false
             },
             {
@@ -16902,7 +16902,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Set a breakdown key on *attr_names* for all *nodes* at the current time.",
-              "line": 974,
+              "line": 999,
               "deprecated": false
             },
             {
@@ -16911,7 +16911,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Mute *attr_names* across all *nodes*.",
-              "line": 990,
+              "line": 1015,
               "deprecated": false
             },
             {
@@ -16920,7 +16920,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Unmute *attr_names* across all *nodes*.",
-              "line": 999,
+              "line": 1024,
               "deprecated": false
             },
             {
@@ -16929,7 +16929,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Hide *attr_names* from the channel box.",
-              "line": 1008,
+              "line": 1033,
               "deprecated": false
             },
             {
@@ -16938,7 +16938,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Show (unhide) *attr_names* in the channel box.",
-              "line": 1017,
+              "line": 1042,
               "deprecated": false
             },
             {
@@ -16947,7 +16947,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Lock and hide *attr_names*.",
-              "line": 1026,
+              "line": 1051,
               "deprecated": false
             },
             {
@@ -16956,7 +16956,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name)",
               "summary": "Select the upstream node driving *attr_name* on the primary node.",
-              "line": 1035,
+              "line": 1060,
               "deprecated": false
             },
             {
@@ -16965,7 +16965,7 @@
               "kind": "classmethod",
               "signature": "(cls, attr_names)",
               "summary": "Test if *attr_names* maps to a clean group-level freeze.",
-              "line": 1102,
+              "line": 1127,
               "deprecated": false
             },
             {
@@ -16974,7 +16974,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes, attrs=None, store=True)",
               "summary": "Freeze transforms on *nodes* under cumulative bake semantics.",
-              "line": 1166,
+              "line": 1191,
               "deprecated": false
             },
             {
@@ -16983,7 +16983,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes, attrs=None)",
               "summary": "Restore previously stored transforms on *nodes*.",
-              "line": 1229,
+              "line": 1254,
               "deprecated": false
             },
             {
@@ -16992,7 +16992,7 @@
               "kind": "staticmethod",
               "signature": "(nodes)",
               "summary": "Return True when at least one of *nodes* has stored unfreeze data.",
-              "line": 1267,
+              "line": 1292,
               "deprecated": false
             }
           ]
@@ -17016,7 +17016,7 @@
               "kind": "method",
               "signature": "(self, targets=None, filter=None, search=None)",
               "summary": "Configure the window from a :func:`launch` call.",
-              "line": 237,
+              "line": 221,
               "deprecated": false
             },
             {
@@ -17025,7 +17025,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Populate the header menu with global actions.",
-              "line": 268,
+              "line": 252,
               "deprecated": false
             },
             {
@@ -17034,7 +17034,7 @@
               "kind": "method",
               "signature": "(self, *args)",
               "summary": "Show the *Create Attribute* popup.",
-              "line": 413,
+              "line": 392,
               "deprecated": false
             },
             {
@@ -17043,7 +17043,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Populate filter combobox and wire its option_box invert action.",
-              "line": 802,
+              "line": 843,
               "deprecated": false
             },
             {
@@ -17052,7 +17052,7 @@
               "kind": "method",
               "signature": "(self, index)",
               "summary": "Filter changed — refresh table.",
-              "line": 834,
+              "line": 875,
               "deprecated": false
             },
             {
@@ -17061,7 +17061,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "One-time table setup: action columns, context menu, scriptJobs.",
-              "line": 847,
+              "line": 888,
               "deprecated": false
             },
             {
@@ -17070,7 +17070,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Tear down every event subscription owned by this slots instance.",
-              "line": 2930,
+              "line": 2983,
               "deprecated": false
             }
           ]
@@ -17300,7 +17300,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text.",
-              "line": 726,
+              "line": 730,
               "deprecated": false
             },
             {
@@ -17309,7 +17309,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Reset to Defaults.",
-              "line": 775,
+              "line": 779,
               "deprecated": false
             },
             {
@@ -17318,7 +17318,7 @@
               "kind": "method",
               "signature": "(self, objects, contract)",
               "summary": "Build the tube(s) from the selected curves (Preview entry point).",
-              "line": 779,
+              "line": 783,
               "deprecated": false
             }
           ]
@@ -18754,7 +18754,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the rig name from the text box.",
-              "line": 408,
+              "line": 410,
               "deprecated": false
             },
             {
@@ -18763,7 +18763,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "Get the movement axis from the combo box.",
-              "line": 417,
+              "line": 419,
               "deprecated": false
             },
             {
@@ -18772,7 +18772,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "Get the rotation axis that corresponds to the selected movement axis.",
-              "line": 427,
+              "line": 429,
               "deprecated": false
             },
             {
@@ -18781,7 +18781,7 @@
               "kind": "method",
               "signature": "(self) -> Tuple['object', List['object']]",
               "summary": "Resolve the current selection into control (driver) and wheels.",
-              "line": 436,
+              "line": 438,
               "deprecated": false
             },
             {
@@ -18790,7 +18790,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Get the wheel height from the selected object's bounding box.",
-              "line": 465,
+              "line": 467,
               "deprecated": false
             },
             {
@@ -18799,7 +18799,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the wheel height slider.",
-              "line": 568,
+              "line": 570,
               "deprecated": false
             },
             {
@@ -18808,7 +18808,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Update the rig name placeholder based on the driver (last selected).",
-              "line": 589,
+              "line": 591,
               "deprecated": false
             },
             {
@@ -18817,7 +18817,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unsubscribe from the centralized ScriptJobManager.",
-              "line": 600,
+              "line": 602,
               "deprecated": false
             },
             {
@@ -18826,7 +18826,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[WheelRig]",
               "summary": "Get or create the wheel rig attached to the selected control.",
-              "line": 605,
+              "line": 607,
               "deprecated": false
             },
             {
@@ -18835,7 +18835,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Create or update Wheel Rig.",
-              "line": 643,
+              "line": 645,
               "deprecated": false
             }
           ]
@@ -20205,7 +20205,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Mirror UVs (footprint-preserving by default).",
-              "line": 323,
+              "line": 325,
               "deprecated": false
             },
             {
@@ -20214,7 +20214,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their minimum U (left).",
-              "line": 344,
+              "line": 348,
               "deprecated": false
             },
             {
@@ -20223,7 +20223,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their average U (center).",
-              "line": 348,
+              "line": 352,
               "deprecated": false
             },
             {
@@ -20232,7 +20232,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their maximum U (right).",
-              "line": 352,
+              "line": 356,
               "deprecated": false
             },
             {
@@ -20241,7 +20241,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their minimum V (bottom).",
-              "line": 356,
+              "line": 360,
               "deprecated": false
             },
             {
@@ -20250,7 +20250,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their average V (center).",
-              "line": 360,
+              "line": 364,
               "deprecated": false
             },
             {
@@ -20259,7 +20259,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Align the selected UVs to their maximum V (top).",
-              "line": 364,
+              "line": 368,
               "deprecated": false
             },
             {
@@ -20268,7 +20268,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Linearly align the selected UVs between their two end points.",
-              "line": 368,
+              "line": 372,
               "deprecated": false
             },
             {
@@ -20277,7 +20277,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Orient each shell to run parallel with its nearest U/V axis.",
-              "line": 373,
+              "line": 377,
               "deprecated": false
             },
             {
@@ -20286,7 +20286,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Orient the shell so its selected edge runs along U or V.",
-              "line": 381,
+              "line": 385,
               "deprecated": false
             },
             {
@@ -20295,7 +20295,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Gather the selected shells together toward the 0-1 UV space.",
-              "line": 393,
+              "line": 397,
               "deprecated": false
             },
             {
@@ -20304,7 +20304,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Randomly offset the selected shells.",
-              "line": 397,
+              "line": 401,
               "deprecated": false
             },
             {
@@ -20313,7 +20313,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open Maya's UV Editor (TextureViewWindow).",
-              "line": 402,
+              "line": 406,
               "deprecated": false
             }
           ]

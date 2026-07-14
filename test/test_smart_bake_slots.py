@@ -42,14 +42,20 @@ class _StubCheckbox:
 
 
 class _StubCombo:
-    def __init__(self, index=0):
+    def __init__(self, index=0, items=None):
         self._index = index
+        self._items = list(items) if items else []
 
     def currentIndex(self):
         return self._index
 
     def setCurrentIndex(self, index):
         self._index = index
+
+    def currentText(self):
+        if self._items and 0 <= self._index < len(self._items):
+            return self._items[self._index]
+        return ""
 
 
 class _StubSpin:
@@ -93,7 +99,9 @@ class _StubUi:
         self.chk_optimize = _StubCheckbox(False)
         self.chk_bake_blendshapes = _StubCheckbox(True)
         self.chk_inherited_vis = _StubCheckbox(False)
-        self.chk_override_layer = _StubCheckbox(True)
+        # Bake target is a two-item combo now (Override Layer / Base Layer),
+        # not a checkbox; default index 0 == "Override Layer" == prior chk on.
+        self.cmb_bake_layer = _StubCombo(0, items=["Override Layer", "Base Layer"])
         self.chk_mute_drivers = _StubCheckbox(False)
         self.chk_delete_inputs = _StubCheckbox(False)
         self.cmb_backup = _StubCombo(0)
@@ -299,7 +307,8 @@ class TestBakeAndUnbakeThroughSlots(unittest.TestCase):
         from maya import cmds
 
         cube, loc, constraint = self._constrained_scene(prefix="destructive")
-        s = _make_slots(chk_override_layer=False, chk_delete_inputs=True)
+        s = _make_slots(chk_delete_inputs=True)
+        s.ui.cmb_bake_layer.setCurrentIndex(1)  # Base Layer — delete_inputs is base-layer-only
         s.ui.cmb_backup.setCurrentIndex(2)  # Never — keep the test disk-free
         s.b000(None)
 

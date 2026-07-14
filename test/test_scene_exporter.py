@@ -377,42 +377,37 @@ class TestSceneExporter(MayaTkTestCase):
     # optimize_keys forwarding to SmartBake
     # ------------------------------------------------------------------
 
-    def test_optimize_keys_enabled_attribute_set_by_run_tasks(self):
-        """Verify _optimize_keys_enabled is set from the optimize_keys task value
-        before tasks execute.
+    def test_optimize_keys_task_runs_when_requested(self):
+        """The optimize_keys task is dispatched when present+True in the task dict.
 
-        When optimize_keys is present and True in the task dict,
-        _execute_tasks_and_checks must set _optimize_keys_enabled = True
-        so SmartBake can read it.
-        Fixed: 2026-03-04
+        The shots migration to pythontk's TaskFactory dropped the old
+        ``_optimize_keys_enabled`` proxy flag; tasks are now dispatched by name
+        (``TaskFactory._manage_context`` -> ``getattr(self, name)()``), so the
+        current, observable contract is that the ``optimize_keys`` method is
+        invoked. (The flag existed because on a keyframe-less object the task
+        early-returns, leaving no effect to assert.)
         """
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
-        # Run with optimize_keys=True
+        calls = []
+        tm.optimize_keys = lambda *a, **k: calls.append(True)
         tm.run_tasks({"optimize_keys": True})
-        self.assertTrue(
-            getattr(tm, "_optimize_keys_enabled", None),
-            "_optimize_keys_enabled should be True when optimize_keys task is True",
-        )
+        self.assertTrue(calls, "optimize_keys task should run when present and True")
 
-    def test_optimize_keys_disabled_attribute_set_by_run_tasks(self):
-        """Verify _optimize_keys_enabled is False when optimize_keys is not in tasks.
+    def test_optimize_keys_task_skipped_when_absent(self):
+        """The optimize_keys task is not dispatched when absent from the dict.
 
-        When the user unchecks optimize_keys, it won't appear in the filtered
-        task dict (b000 filters out falsy values).  _execute_tasks_and_checks
-        should set _optimize_keys_enabled = False.
-        Fixed: 2026-03-04
+        b000 filters out falsy checkbox values, so an unchecked optimize_keys
+        never reaches run_tasks — the method must not be invoked.
         """
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
-        # Run without optimize_keys in the dict (simulates unchecked)
+        calls = []
+        tm.optimize_keys = lambda *a, **k: calls.append(True)
         tm.run_tasks({"set_linear_unit": "cm"})
-        self.assertFalse(
-            getattr(tm, "_optimize_keys_enabled", True),
-            "_optimize_keys_enabled should be False when optimize_keys absent",
-        )
+        self.assertFalse(calls, "optimize_keys task should not run when absent")
 
     # ------------------------------------------------------------------
     # resolve_invalid_texture_paths
