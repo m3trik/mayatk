@@ -56,6 +56,10 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
     UI_NAME = "substance_bridge"
     PRESETS_ROOT = _PRESETS_ROOT
     LOG_TAG = "substance_bridge"
+    # Fall back to a self-cleaning temp folder when no scene/workspace dir resolves
+    # (unsaved scene) — the FBX + staged maps are transient hand-off artifacts Painter
+    # reads once, so the user shouldn't be forced to pick a path.
+    TEMP_OUTPUT_FALLBACK = True
 
     # Uses the base's default header menu (Open Templates / Refresh / Clear
     # Log); only the help differs, so it's declared as data.
@@ -68,7 +72,7 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
         "line and optional RPC step.",
         "steps": [
             "Set the <b>Output Dir</b> (or leave blank to use the "
-            "scene directory).",
+            "scene directory; an unsaved scene falls back to a temp folder).",
             "Select one or more polygon transforms.",
             "Pick a <b>Template + Mode</b> from the dropdown.",
             "Tweak the template's exposed parameters.",
