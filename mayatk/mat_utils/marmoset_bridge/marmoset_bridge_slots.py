@@ -47,6 +47,10 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
     UI_NAME = "marmoset_bridge"
     PRESETS_ROOT = _PRESETS_ROOT
     LOG_TAG = "marmoset_bridge"
+    # Fall back to a self-cleaning temp folder when no scene/workspace dir resolves
+    # (unsaved scene) — the FBX + baked maps are transient hand-off artifacts Toolbag
+    # reads once, so the user shouldn't be forced to pick a path.
+    TEMP_OUTPUT_FALLBACK = True
 
     # Uses the base's default header menu (Open Templates / Refresh / Clear
     # Log); only the help differs, so it's declared as data. Headless mode is
@@ -58,7 +62,8 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
         "Toolbag runs the rendered template with your parameter values "
         "substituted in.",
         "steps": [
-            "Set the <b>Output Dir</b> (required).",
+            "Set the <b>Output Dir</b> (or leave blank to use the scene "
+            "directory; an unsaved scene falls back to a temp folder).",
             "Select one or more polygon transforms.",
             "Pick a <b>Template + Mode</b> from the dropdown.",
             "Tweak the template's exposed parameters.",

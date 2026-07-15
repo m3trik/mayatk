@@ -13970,7 +13970,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 88,
+              "line": 93,
               "deprecated": false
             },
             {
@@ -13979,7 +13979,7 @@
               "kind": "property",
               "signature": "(self) -> Path",
               "summary": "",
-              "line": 92,
+              "line": 97,
               "deprecated": false
             },
             {
@@ -13988,7 +13988,7 @@
               "kind": "method",
               "signature": "(self) -> MarmosetBridge",
               "summary": "",
-              "line": 95,
+              "line": 100,
               "deprecated": false
             },
             {
@@ -13997,7 +13997,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 98,
+              "line": 103,
               "deprecated": false
             },
             {
@@ -14006,7 +14006,7 @@
               "kind": "method",
               "signature": "(self, pairs)",
               "summary": "Prefer 'bake (roundtrip)' then 'bake (send_to)', else first entry.",
-              "line": 101,
+              "line": 106,
               "deprecated": false
             },
             {
@@ -14015,7 +14015,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Process selected transforms with the chosen template + mode.",
-              "line": 112,
+              "line": 117,
               "deprecated": false
             }
           ]
@@ -15496,7 +15496,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 120,
+              "line": 124,
               "deprecated": false
             },
             {
@@ -15505,7 +15505,7 @@
               "kind": "property",
               "signature": "(self) -> Path",
               "summary": "",
-              "line": 124,
+              "line": 128,
               "deprecated": false
             },
             {
@@ -15514,7 +15514,7 @@
               "kind": "method",
               "signature": "(self) -> SubstanceBridge",
               "summary": "",
-              "line": 127,
+              "line": 131,
               "deprecated": false
             },
             {
@@ -15523,7 +15523,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 130,
+              "line": 134,
               "deprecated": false
             },
             {
@@ -15532,7 +15532,7 @@
               "kind": "method",
               "signature": "(self, pairs)",
               "summary": "Default the panel to ``import (send_to)`` when it's available.",
-              "line": 133,
+              "line": 137,
               "deprecated": false
             },
             {
@@ -15541,7 +15541,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Process the selected transforms with the chosen template + mode.",
-              "line": 142,
+              "line": 146,
               "deprecated": false
             }
           ]
