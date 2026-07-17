@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-3777%20passed-brightgreen.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-3782%20passed-brightgreen.svg)](../test/)
 
 # mayatk
 
@@ -34,7 +34,7 @@ mayatk also ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-pack
 | `core_utils` | `CoreUtils`, `Components`, `AutoInstancer`, MASH bridge, diagnostics, preview |
 | `display_utils` | Display layers, color management, exploded view |
 | `edit_utils` | `Selection`, naming, primitives, snap, bevel, bridge, mirror, duplicate (linear/radial/grid), mesh graph |
-| `env_utils` | `MayaConnection`, workspace, namespace sandbox, references, hierarchy manager, FBX, scene exporter |
+| `env_utils` | `MayaConnection`, workspace, namespace sandbox, references, hierarchy sync, FBX, scene exporter |
 | `light_utils` | Lighting helpers |
 | `mat_utils` | `GameShader`, `RenderOpacity`, `ImageToPlane`, `MatUpdater`, shader templates, Marmoset bridge |
 | `node_utils` | `NodeUtils`, `Attributes`, event triggers, [shared scene data nodes](data_nodes.md) |
@@ -120,7 +120,7 @@ One-click hand-offs that export the selection and drive the target app with a te
 - `Components` / `MeshGraph` — component islands, border edges, edge paths, A* shortest paths, normal-angle edge selection.
 - `ExplodedView` — force-based exploded view (vectorized repulsion), toggleable and reversible.
 - `NamespaceSandbox` — import files into disposable namespaces for analysis or object swapping, with guaranteed cleanup.
-- `HierarchyManager` — diff a working scene against a reference and repair it: create stubs, quarantine extras, fix fuzzy renames and reparents.
+- `HierarchySync` — diff a working scene against a reference and repair it: create stubs, quarantine extras, fix fuzzy renames and reparents.
 - `TubeRig` / `WheelRig` / `ShadowRig` — rig builders: FK / spline-IK / anchor chains from a mesh centerline, expression-driven wheel rotation, fake contact shadows.
 - `ImageTracer` — trace images or Blue Pencil strokes into curves and meshes.
 - `DevTools` / `WidgetInspector` — grep Maya's MEL source and globals; walk, snapshot, and diff Maya's live Qt widget tree.

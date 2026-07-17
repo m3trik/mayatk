@@ -32,6 +32,23 @@ def skipUnlessExtended(func):
     )(func)
 
 
+def _is_batch() -> bool:
+    try:
+        return bool(cmds.about(batch=True))
+    except Exception:
+        return False
+
+
+def skipIfBatch(reason: str = "Interactive-only (needs GUI Maya)"):
+    """Decorator to skip a test under mayapy/batch (headless) sessions.
+
+    For tests exercising interactive-only Maya features (e.g. MEL commands
+    sourced only by the GUI, viewport-dependent behavior).  The default
+    headless runner skips them; they still run in the GUI pass / --gui runs.
+    """
+    return unittest.skipIf(_is_batch(), reason)
+
+
 class MayaTkTestCase(unittest.TestCase):
     """Base class for all mayatk test cases."""
 
@@ -41,18 +58,17 @@ class MayaTkTestCase(unittest.TestCase):
         cls.test_messages = []
 
     def setUp(self):
-        """Set up clean Maya scene for each test."""
+        """Set up clean Maya scene for each test.
+
+        This is the ONLY per-test scene reset — tearDown intentionally does
+        not wipe again (setUp of the next test does, and the suite driver
+        resets the scene between modules).  One wipe per test instead of two
+        saves minutes on a full run.
+        """
         try:
             cmds.file(new=True, force=True)
         except Exception as e:
             print(f"Warning: Could not create new scene: {e}")
-
-    def tearDown(self):
-        """Clean up after each test."""
-        try:
-            cmds.file(new=True, force=True)
-        except Exception:
-            pass
 
     def assertNodeExists(self, node_name: str, msg: str = None):
         """Assert that a Maya node exists."""
@@ -103,16 +119,12 @@ class MayaTkTestCase(unittest.TestCase):
 
 class QuickTestCase(MayaTkTestCase):
     """
-    Quick test case that skips scene setup/teardown.
+    Quick test case that skips the per-test scene reset.
     Use for tests that don't need a clean scene.
     """
 
     def setUp(self):
         """Skip scene setup for speed."""
-        pass
-
-    def tearDown(self):
-        """Skip scene teardown for speed."""
         pass
 
 

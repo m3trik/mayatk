@@ -994,7 +994,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_manifest_path_for(self):
         """Verify sidecar manifest path derivation."""
-        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -1003,7 +1003,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_diff_report_path_for(self):
         """Verify sidecar diff report path derivation."""
-        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -1012,7 +1012,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_build_clean_path_set_strips_namespace(self):
         """Verify namespace stripping and leading pipe removal."""
-        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -1022,7 +1022,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_get_top_level_collapses_children(self):
         """Verify that children are collapsed under their top-level parent."""
-        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -1032,7 +1032,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_get_top_level_preserves_siblings(self):
         """Verify that siblings with similar prefix names are NOT collapsed."""
-        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -1042,7 +1042,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_detect_reparenting_finds_moved_subtree(self):
         """detect_reparenting recognises a subtree moved under a new parent."""
-        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -1070,7 +1070,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_detect_reparenting_returns_empty_on_unrelated_changes(self):
         """detect_reparenting returns empty when changes are not reparenting."""
-        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -1085,6 +1085,24 @@ class TestSceneExporter(MayaTkTestCase):
         self.exporter.task_manager.export_path = os.path.join(self.temp_dir, "test.fbx")
         passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
         self.assertTrue(passed)
+
+    def test_hierarchy_check_falls_back_to_prev_backup(self):
+        """A deleted manifest compares against its .prev backup instead of silently passing."""
+        import json
+
+        export_path = os.path.join(self.temp_dir, "test.fbx")
+        prev_path = os.path.join(self.temp_dir, ".test.hierarchy.json.prev")
+
+        previous = ["ExportGroup", "ExportGroup|Gone"]
+        with open(prev_path, "w") as f:
+            json.dump({"paths": previous, "object_count": len(previous)}, f)
+
+        self.exporter.task_manager.objects = []
+        self.exporter.task_manager.export_path = export_path
+
+        passed, messages = self.exporter.task_manager.check_hierarchy_vs_existing_fbx()
+        self.assertFalse(passed)
+        self.assertTrue(any(".prev backup" in m for m in messages))
 
     def test_hierarchy_check_detects_missing_node(self):
         """Check fails when a node from the manifest is missing.

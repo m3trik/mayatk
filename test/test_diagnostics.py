@@ -106,6 +106,27 @@ class TestMeshDiagnostics(MayaTkTestCase):
             objects=cube, repair=False, quads=True, nsided=True
         )
 
+    def test_clean_geometry_select_mode_returns_and_keeps_component_selection(self):
+        # Regression: Select mode (repair=False) must return the matched problem components AND
+        # leave them selected. A trailing cmds.select(objects) used to clobber the diagnostic
+        # selection, making "select only" a silent no-op. A single 5-sided facet is an n-gon.
+        facet = cmds.polyCreateFacet(
+            p=[(0, 0, 0), (2, 0, 0), (2, 2, 0), (1, 3, 0), (0, 2, 0)]
+        )
+        transform = facet[0]
+        result = MeshDiagnostics.clean_geometry(transform, repair=False, nsided=True)
+        self.assertIsInstance(result, list)
+        self.assertTrue(result, "n-gon should be matched and returned in select mode")
+        current = cmds.ls(selection=True, flatten=True) or []
+        self.assertEqual(set(current), set(result))  # returned == what's left selected
+        self.assertNotIn(transform, current)  # components, not the bare transform
+
+    def test_clean_geometry_repair_mode_returns_empty(self):
+        # Repair mode replaces geometry rather than selecting it: returns [] and reselects objects.
+        cube = cmds.polyCube(name="mesh_diag_repair_cube")[0]
+        result = MeshDiagnostics.clean_geometry(cube, repair=True, nsided=True)
+        self.assertEqual(result, [])
+
     def test_get_ngons_returns_list(self):
         cube = cmds.polyCube(name="ngon_cube")[0]
         result = MeshDiagnostics.get_ngons(objects=cube, repair=False)

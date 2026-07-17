@@ -38,9 +38,20 @@ from pythontk.core_utils import script_template as _templates
 from mayatk.env_utils.blender_bridge._blender_bridge import _SPEC, _TEMPLATE_DIR
 
 _IMPORT_TEMPLATE = _TEMPLATE_DIR / "_import_scene.py"
+_IMPORT_TEMPLATE_USD = _TEMPLATE_DIR / "_import_scene_usd.py"
+
+# Conversion intermediates by route: "fbx" = classic material model + texture-
+# manifest sidecar rebuilt via the GameShader engine; "usd" = native materials /
+# instancing through each DCC's USD runtime (no manifest needed — see the
+# templates' docstrings for the fidelity trade-offs).
+_TEMPLATES = {"fbx": _IMPORT_TEMPLATE, "usd": _IMPORT_TEMPLATE_USD}
 
 # Blender scene format bpy.ops.wm.open_mainfile accepts; FBX would be imported directly.
 SUPPORTED_EXTENSIONS = (".blend",)
+
+# USD sources short-circuit the whole pipeline: both DCCs speak USD natively,
+# so there is no conversion (and no Blender install) involved at all.
+USD_EXTENSIONS = ptk.USD_EXTENSIONS
 
 # Child-process argv for the conversion Blender: headless, factory settings (no
 # user addons/config -- deterministic AND skips any startup toolkit the user's
@@ -113,23 +124,42 @@ class BlenderSceneImport(ptk.LoggingMixin):
         return blender_exe
 
     # ------------------------------------------------------------------ conversion
+    @staticmethod
+    def _template(via: str):
+        """The conversion template for *via*; raises on an unknown route."""
+        try:
+            return _TEMPLATES[via]
+        except KeyError:
+            raise ValueError(
+                f"via must be one of {sorted(_TEMPLATES)}, got {via!r}"
+            ) from None
+
     def render_script(
-        self, src_path: str, out_fbx: str, *, embed_textures: bool = False,
-        include_animation: bool = True,
+        self, src_path: str, out_path: str, *, via: str = "fbx",
+        embed_textures: bool = False, include_animation: bool = True,
     ) -> str:
         """Render the Blender-side conversion script (exposed for tests/preview)."""
         context = {
             "SRC_PATH": str(src_path).replace("\\", "/"),
-            "OUT_FBX": str(out_fbx).replace("\\", "/"),
-            "EMBED_TEXTURES": repr(bool(embed_textures)),
             "INCLUDE_ANIMATION": repr(bool(include_animation)),
         }
-        return _templates.render_template(_IMPORT_TEMPLATE, context)
+        if via == "usd":
+            context["OUT_USD"] = str(out_path).replace("\\", "/")
+            if embed_textures:
+                self.logger.info(
+                    "embed_textures has no USD-route equivalent (textures are "
+                    "referenced on disk); ignored."
+                )
+        else:
+            context["OUT_FBX"] = str(out_path).replace("\\", "/")
+            context["EMBED_TEXTURES"] = repr(bool(embed_textures))
+        return _templates.render_template(self._template(via), context)
 
     def convert(
-        self, src_path: str, out_fbx: str, *, timeout: float = 600, **script_opts: Any
+        self, src_path: str, out_path: str, *, via: str = "fbx",
+        timeout: float = 600, **script_opts: Any
     ) -> "ptk.ScriptRunResult":
-        """Convert *src_path* to *out_fbx* in a fresh headless Blender (blocking)."""
+        """Convert *src_path* to *out_path* in a fresh headless Blender (blocking)."""
         src = os.path.abspath(os.path.expandvars(str(src_path)))
         if not os.path.isfile(src):
             raise FileNotFoundError(f"Blender scene not found: {src}")
@@ -141,12 +171,12 @@ class BlenderSceneImport(ptk.LoggingMixin):
         self.logger.info(f"Converting {os.path.basename(src)} via {blender_exe} ...")
         result = self._run_script(
             blender_exe,
-            self.render_script(src, out_fbx, **script_opts),
-            artifact=out_fbx,
+            self.render_script(src, out_path, via=via, **script_opts),
+            artifact=out_path,
             timeout=timeout,
         )
         self.logger.info(
-            f"Converted to FBX in {result.duration:.1f}s "
+            f"Converted to {via.upper()} in {result.duration:.1f}s "
             f"({os.path.getsize(result.artifact) // 1024} KB)."
         )
         return result
@@ -163,14 +193,15 @@ class BlenderSceneImport(ptk.LoggingMixin):
             env=env,
         )
 
-    @staticmethod
-    def _cache_key(src: str, script_opts: Dict[str, Any]) -> str:
+    @classmethod
+    def _cache_key(cls, src: str, script_opts: Dict[str, Any], via: str = "fbx") -> str:
         """Deterministic tag for the conversion cache: scene identity (path +
-        mtime + size), the Blender-side options that shape the FBX, and the
-        conversion template's own identity -- a template fix must invalidate
-        stale cached payloads, or a retry after an upgrade replays the old bug."""
+        mtime + size), the Blender-side options that shape the artifact, and
+        the conversion template's own identity (per *via*) -- a template fix
+        must invalidate stale cached payloads, or a retry after an upgrade
+        replays the old bug."""
         stat = os.stat(src)
-        tpl = os.stat(_IMPORT_TEMPLATE)
+        tpl = os.stat(cls._template(via))
         blob = (
             f"{src}|{stat.st_mtime_ns}|{stat.st_size}|{sorted(script_opts.items())}"
             f"|{tpl.st_mtime_ns}|{tpl.st_size}"
@@ -182,6 +213,7 @@ class BlenderSceneImport(ptk.LoggingMixin):
         self,
         src_path: str,
         *,
+        via: str = "fbx",
         cleanup: bool = True,
         use_cache: bool = True,
         timeout: float = 600,
@@ -191,35 +223,66 @@ class BlenderSceneImport(ptk.LoggingMixin):
         """Import the Blender scene at *src_path*; return the transforms created.
 
         Parameters:
-            src_path: A ``.blend`` file.
-            cleanup: Remove the intermediate FBX on success (kept on failure
-                either way, with its path logged, for debugging). Not applied
-                to cached payloads -- persistence is the cache's point.
+            src_path: A ``.blend`` file — or a USD file
+                (``.usd``/``.usda``/``.usdc``/``.usdz``), which short-circuits
+                the round-trip entirely: Maya imports USD natively (mayaUsd),
+                so no headless Blender, cache or manifest is involved
+                (``via``/``cleanup``/``use_cache``/``timeout``/``fbx_options``
+                are inert for USD sources).
+            via: Conversion intermediate for ``.blend`` sources. ``"fbx"``
+                (default) = classic material model + texture-manifest sidecar
+                rebuilt through the ``GameShader`` engine. ``"usd"`` =
+                ``wm.usd_export`` → mayaUsd import: materials arrive as native
+                UsdPreviewSurface conversions (metallic / roughness / normal
+                textures included, no manifest) and instancing survives (see
+                the template docstrings).
+            cleanup: Remove the intermediate artifact on success (kept on
+                failure either way, with its path logged, for debugging). Not
+                applied to cached payloads -- persistence is the cache's point.
             use_cache: Reuse a prior conversion of the identical scene
-                (path + mtime + size + options key) -- a cache hit skips the
-                Blender launch entirely. Cached payloads live in the temp dir
-                under the detached-policy lifecycle (stale-swept after
-                ``max_age_days``). Texture edits flow through even on a hit:
-                the payload references textures on disk (``embed_textures``
-                defaults off), so Maya always loads the current files.
+                (path + mtime + size + options + per-``via`` template key) --
+                a cache hit skips the Blender launch entirely. Cached payloads
+                live in the temp dir under the detached-policy lifecycle
+                (stale-swept after ``max_age_days``). Texture edits flow
+                through even on a hit: the payload references textures on
+                disk (``embed_textures`` defaults off), so Maya always loads
+                the current files.
             timeout: Max seconds for the Blender-side conversion.
-            fbx_options: Forwarded to ``cmds.file`` for the FBX import.
-            **script_opts: Blender-side knobs (``embed_textures`` / ``include_animation``).
+            fbx_options: Forwarded to ``cmds.file`` for the FBX import
+                (``via="fbx"`` only; the USD route imports with the native
+                defaults).
+            **script_opts: Blender-side knobs (``embed_textures`` /
+                ``include_animation``; ``embed_textures`` is FBX-route only).
         """
         src = os.path.abspath(os.path.expandvars(str(src_path)))
+        if os.path.splitext(src)[1].lower() in USD_EXTENSIONS:
+            # USD fast path: native import, no headless-Blender round-trip at all.
+            from mayatk.env_utils.usd import UsdUtils
+
+            if not os.path.isfile(src):
+                raise FileNotFoundError(f"USD file not found: {src}")
+            self.logger.info(
+                f"USD source — importing natively (no Blender conversion): {src}"
+            )
+            imported = self._transforms(UsdUtils.import_scene(src))
+            self.logger.info(f"Imported {len(imported)} object(s) from {src_path}.")
+            return imported
+
+        ext = ".usd" if via == "usd" else ".fbx"
+        self._template(via)  # validate the route before any work
         use_cache = use_cache and os.path.isfile(src)
-        cache_fbx = None
+        cache_path = None
         if use_cache:
             store = ptk.TempArtifacts("blender_to_mtk_cache", policy="detached")
-            cache_fbx = store.path(
-                extension=".fbx", name=self._cache_key(src, script_opts)
+            cache_path = store.path(
+                extension=ext, name=self._cache_key(src, script_opts, via)
             )
 
         tmp = None
-        if cache_fbx and os.path.isfile(cache_fbx) and os.path.getsize(cache_fbx) > 0:
-            out_fbx = cache_fbx
+        if cache_path and os.path.isfile(cache_path) and os.path.getsize(cache_path) > 0:
+            out_path = cache_path
             self.logger.info(
-                f"Conversion cache hit ({os.path.basename(cache_fbx)}) -- "
+                f"Conversion cache hit ({os.path.basename(cache_path)}) -- "
                 "skipping the Blender launch."
             )
         else:
@@ -229,33 +292,41 @@ class BlenderSceneImport(ptk.LoggingMixin):
             # stays in scratch, kept + logged for debugging), and concurrent
             # imports of the same scene can't interleave into one file.
             tmp = ptk.TempArtifacts("blender_to_mtk", policy="scoped")
-            out_fbx = tmp.path(extension=".fbx")
-            tmp.register(out_fbx + ".manifest.json")
+            out_path = tmp.path(extension=ext)
+            tmp.register(out_path + ".manifest.json")
             try:
-                self.convert(src, out_fbx, timeout=timeout, **script_opts)
+                self.convert(src, out_path, via=via, timeout=timeout, **script_opts)
             except Exception:
-                if os.path.isfile(out_fbx):
+                if os.path.isfile(out_path):
                     self.logger.warning(
-                        f"Keeping intermediate FBX for debugging: {out_fbx}"
+                        f"Keeping intermediate {via.upper()} for debugging: {out_path}"
                     )
                 raise
-            if cache_fbx:
-                os.replace(out_fbx, cache_fbx)
-                if os.path.isfile(out_fbx + ".manifest.json"):
-                    os.replace(out_fbx + ".manifest.json",
-                               cache_fbx + ".manifest.json")
-                elif os.path.isfile(cache_fbx + ".manifest.json"):
-                    os.remove(cache_fbx + ".manifest.json")  # stale partial promote
-                out_fbx = cache_fbx
+            if cache_path:
+                os.replace(out_path, cache_path)
+                if os.path.isfile(out_path + ".manifest.json"):
+                    os.replace(out_path + ".manifest.json",
+                               cache_path + ".manifest.json")
+                elif os.path.isfile(cache_path + ".manifest.json"):
+                    os.remove(cache_path + ".manifest.json")  # stale partial promote
+                out_path = cache_path
 
-        # Sidecar the template writes for the textures FBX cannot carry
-        # (metallic/roughness/ao and the packed game-engine maps).
-        manifest_path = out_fbx + ".manifest.json"
+        # Sidecar the FBX template writes for the textures FBX cannot carry
+        # (metallic/roughness/ao and the packed game-engine maps). The USD
+        # route needs no manifest -- its materials arrive natively.
+        manifest_path = out_path + ".manifest.json"
         try:
-            new_nodes = self._import_fbx(out_fbx, fbx_options)
+            if via == "usd":
+                from mayatk.env_utils.usd import UsdUtils
+
+                new_nodes = UsdUtils.import_scene(out_path)
+            else:
+                new_nodes = self._import_fbx(out_path, fbx_options)
         except Exception:
-            if tmp is not None and os.path.isfile(out_fbx):
-                self.logger.warning(f"Keeping intermediate FBX for debugging: {out_fbx}")
+            if tmp is not None and os.path.isfile(out_path):
+                self.logger.warning(
+                    f"Keeping intermediate {via.upper()} for debugging: {out_path}"
+                )
             raise
         if os.path.isfile(manifest_path):
             # Structurally non-fatal: a bad sidecar must never abort an

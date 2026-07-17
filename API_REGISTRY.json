@@ -1026,7 +1026,7 @@
               "kind": "method",
               "signature": "(self, filepath: Optional[str] = None, start_frame: Optional[int] = None, end_frame: Optional[int] = None, camera_name: Optional[str] = None, **kwargs: Any) -> str",
               "summary": "Create a playblast using Maya's viewport capture.",
-              "line": 72,
+              "line": 75,
               "deprecated": false
             },
             {
@@ -1035,7 +1035,7 @@
               "kind": "method",
               "signature": "(self, output_dir: str, start_frame: Optional[int] = None, end_frame: Optional[int] = None, camera_name: Optional[str] = None, prefix: Optional[str] = None, frame_padding: int = 4, render_layer: Optional[str] = None, **kwargs: Any) -> List[str]",
               "summary": "Render a frame range using Arnold.",
-              "line": 183,
+              "line": 186,
               "deprecated": false
             },
             {
@@ -1044,7 +1044,7 @@
               "kind": "method",
               "signature": "(self, output_path: str, base_kwargs: Optional[Dict[str, Any]] = None, scene_name: Optional[str] = None, variations: Optional[List[Dict[str, Any]]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Dict[str, Any]]",
               "summary": "Produce multiple playblast outputs (formats, sequences, Arnold).",
-              "line": 279,
+              "line": 282,
               "deprecated": false
             }
           ]
@@ -4094,8 +4094,8 @@
       "classes": []
     },
     {
-      "relpath": "audio_utils/segments/discovery.py",
-      "summary": "Segment discovery from the per-track keyed canonical store.",
+      "relpath": "audio_utils/segments.py",
+      "summary": "Consumer-facing segment discovery for sequencer + manifest.",
       "functions": [
         {
           "name": "collect_all_segments",
@@ -4103,7 +4103,7 @@
           "kind": "function",
           "signature": "(scene_start: Optional[float] = None, scene_end: Optional[float] = None, include_waveform: bool = True, carrier: Optional[str] = None) -> List[AudioSegment]",
           "summary": "Return every :class:`AudioSegment` visible on the canonical carrier.",
-          "line": 101,
+          "line": 116,
           "deprecated": false
         },
         {
@@ -4112,7 +4112,7 @@
           "kind": "function",
           "signature": "(track_id: str, include_waveform: bool = True, carrier: Optional[str] = None) -> List[AudioSegment]",
           "summary": "Return segments for a single *track_id*.",
-          "line": 147,
+          "line": 162,
           "deprecated": false
         }
       ],
@@ -4120,7 +4120,7 @@
         {
           "name": "AudioSegment",
           "summary": "A resolved audio segment for sequencer/manifest consumption.",
-          "line": 22,
+          "line": 37,
           "bases": [],
           "members": [
             {
@@ -4129,7 +4129,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "",
-              "line": 45,
+              "line": 60,
               "deprecated": false
             }
           ]
@@ -5201,7 +5201,7 @@
               "name": "clean_geometry",
               "qualname": "MeshDiagnostics.clean_geometry",
               "kind": "staticmethod",
-              "signature": "(objects: NodeSeq, allMeshes: bool = False, repair: bool = False, quads: bool = False, nsided: bool = False, concave: bool = False, holed: bool = False, nonplanar: bool = False, zeroGeom: bool = False, zeroGeomTol: float = 1e-05, zeroEdge: bool = False, zeroEdgeTol: float = 1e-05, zeroMap: bool = False, zeroMapTol: float = 1e-05, sharedUVs: bool = False, nonmanifold: bool = False, lamina: bool = False, invalidComponents: bool = False, historyOn: bool = True, bakePartialHistory: bool = False) -> None",
+              "signature": "(objects: NodeSeq, allMeshes: bool = False, repair: bool = False, quads: bool = False, nsided: bool = False, concave: bool = False, holed: bool = False, nonplanar: bool = False, zeroGeom: bool = False, zeroGeomTol: float = 1e-05, zeroEdge: bool = False, zeroEdgeTol: float = 1e-05, zeroMap: bool = False, zeroMapTol: float = 1e-05, sharedUVs: bool = False, nonmanifold: bool = False, lamina: bool = False, invalidComponents: bool = False, historyOn: bool = True, bakePartialHistory: bool = False) -> list",
               "summary": "Select or remove unwanted geometry from a mesh via ``polyCleanupArgList``.",
               "line": 22,
               "deprecated": false
@@ -5212,7 +5212,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[NodeSeq], repair: bool = False)",
               "summary": "Find N-gons and optionally convert them to quads.",
-              "line": 90,
+              "line": 103,
               "deprecated": false
             }
           ]
@@ -8810,7 +8810,7 @@
           "kind": "function",
           "signature": "(src_path: str, **kwargs: Any) -> List[str]",
           "summary": "Import a Blender scene (.blend) into the current Maya scene.",
-          "line": 538,
+          "line": 609,
           "deprecated": false
         }
       ],
@@ -8818,7 +8818,7 @@
         {
           "name": "BlenderSceneImport",
           "summary": "Engine: convert a .blend to FBX via headless Blender, then import it.",
-          "line": 85,
+          "line": 96,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -8829,7 +8829,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "The Blender executable (explicit, or discovered via the bridge's AppSpec).",
-              "line": 98,
+              "line": 109,
               "deprecated": false
             },
             {
@@ -8838,34 +8838,34 @@
               "kind": "method",
               "signature": "(self) -> str",
               "summary": "Return :attr:`blender_path` or raise the spec's not-found error.",
-              "line": 108,
+              "line": 119,
               "deprecated": false
             },
             {
               "name": "render_script",
               "qualname": "BlenderSceneImport.render_script",
               "kind": "method",
-              "signature": "(self, src_path: str, out_fbx: str, *, embed_textures: bool = False, include_animation: bool = True) -> str",
+              "signature": "(self, src_path: str, out_path: str, *, via: str = 'fbx', embed_textures: bool = False, include_animation: bool = True) -> str",
               "summary": "Render the Blender-side conversion script (exposed for tests/preview).",
-              "line": 116,
+              "line": 137,
               "deprecated": false
             },
             {
               "name": "convert",
               "qualname": "BlenderSceneImport.convert",
               "kind": "method",
-              "signature": "(self, src_path: str, out_fbx: str, *, timeout: float = 600, **script_opts: Any) -> 'ptk.ScriptRunResult'",
-              "summary": "Convert *src_path* to *out_fbx* in a fresh headless Blender (blocking).",
-              "line": 129,
+              "signature": "(self, src_path: str, out_path: str, *, via: str = 'fbx', timeout: float = 600, **script_opts: Any) -> 'ptk.ScriptRunResult'",
+              "summary": "Convert *src_path* to *out_path* in a fresh headless Blender (blocking).",
+              "line": 158,
               "deprecated": false
             },
             {
               "name": "import_scene",
               "qualname": "BlenderSceneImport.import_scene",
               "kind": "method",
-              "signature": "(self, src_path: str, *, cleanup: bool = True, use_cache: bool = True, timeout: float = 600, fbx_options: Optional[Dict[str, Any]] = None, **script_opts: Any) -> List[str]",
+              "signature": "(self, src_path: str, *, via: str = 'fbx', cleanup: bool = True, use_cache: bool = True, timeout: float = 600, fbx_options: Optional[Dict[str, Any]] = None, **script_opts: Any) -> List[str]",
               "summary": "Import the Blender scene at *src_path*;",
-              "line": 181,
+              "line": 212,
               "deprecated": false
             }
           ]
@@ -9006,6 +9006,31 @@
           "signature": "()",
           "summary": "",
           "line": 191,
+          "deprecated": false
+        }
+      ],
+      "classes": []
+    },
+    {
+      "relpath": "env_utils/blender_bridge/templates/_import_scene_usd.py",
+      "summary": "Open a .blend headlessly (blender --background) and export it as USD for a Maya import.",
+      "functions": [
+        {
+          "name": "export_usd",
+          "qualname": "export_usd",
+          "kind": "function",
+          "signature": "(bpy)",
+          "summary": "Whole-scene USD export with per-kwarg tolerance across Blender versions.",
+          "line": 38,
+          "deprecated": false
+        },
+        {
+          "name": "main",
+          "qualname": "main",
+          "kind": "function",
+          "signature": "()",
+          "summary": "",
+          "line": 85,
           "deprecated": false
         }
       ],
@@ -9322,7 +9347,7 @@
       "classes": [
         {
           "name": "FbxUtils",
-          "summary": "Low-level utilities for FBX export operations in Maya.",
+          "summary": "Low-level utilities for FBX import/export operations in Maya.",
           "line": 18,
           "bases": [
             "ptk.HelpMixin"
@@ -9334,7 +9359,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Ensure the fbxmaya plugin is loaded.",
-              "line": 33,
+              "line": 49,
               "deprecated": false
             },
             {
@@ -9343,7 +9368,7 @@
               "kind": "staticmethod",
               "signature": "(options: Dict[str, Any])",
               "summary": "Apply FBX export options via MEL commands.",
-              "line": 39,
+              "line": 55,
               "deprecated": false
             },
             {
@@ -9352,7 +9377,7 @@
               "kind": "staticmethod",
               "signature": "(preset_path: str)",
               "summary": "Load an FBX export preset file.",
-              "line": 70,
+              "line": 86,
               "deprecated": false
             },
             {
@@ -9361,7 +9386,16 @@
               "kind": "classmethod",
               "signature": "(cls, file_path: str, objects: Optional[List] = None, preset_file: Optional[str] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True) -> str",
               "summary": "Export geometry to an FBX file.",
-              "line": 87,
+              "line": 103,
+              "deprecated": false
+            },
+            {
+              "name": "import_scene",
+              "qualname": "FbxUtils.import_scene",
+              "kind": "classmethod",
+              "signature": "(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True) -> List[str]",
+              "summary": "Import an FBX file, optionally isolated into a namespace.",
+              "line": 161,
               "deprecated": false
             },
             {
@@ -9370,7 +9404,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear all FBX export take definitions (global, sticky exporter state).",
-              "line": 149,
+              "line": 274,
               "deprecated": false
             },
             {
@@ -9379,7 +9413,7 @@
               "kind": "staticmethod",
               "signature": "(takes: Iterable[Any]) -> int",
               "summary": "Configure FBX export to emit one AnimStack (Unity clip) per take.",
-              "line": 155,
+              "line": 280,
               "deprecated": false
             },
             {
@@ -9388,7 +9422,7 @@
               "kind": "staticmethod",
               "signature": "(node: Optional[str] = None, attr: Optional[str] = None) -> int",
               "summary": "Read take defs from a JSON string channel on *node* and apply them.",
-              "line": 198,
+              "line": 323,
               "deprecated": false
             },
             {
@@ -9397,7 +9431,7 @@
               "kind": "staticmethod",
               "signature": "(include_known: bool = True) -> None",
               "summary": "Refresh every producer's ``data_export`` channel once, right now.",
-              "line": 264,
+              "line": 389,
               "deprecated": false
             },
             {
@@ -9406,7 +9440,7 @@
               "kind": "staticmethod",
               "signature": "(name: str, prepare: Callable[[], Any]) -> None",
               "summary": "Run *prepare* before every FBX export this session (installs the hook).",
-              "line": 307,
+              "line": 432,
               "deprecated": false
             },
             {
@@ -9415,7 +9449,7 @@
               "kind": "staticmethod",
               "signature": "(name: str) -> None",
               "summary": "Remove a preparer;",
-              "line": 324,
+              "line": 449,
               "deprecated": false
             },
             {
@@ -9424,7 +9458,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Realize declared takes on **every** FBX export — shot-agnostic, no preparer.",
-              "line": 330,
+              "line": 455,
               "deprecated": false
             },
             {
@@ -9433,7 +9467,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear the explicit enable;",
-              "line": 343,
+              "line": 468,
               "deprecated": false
             },
             {
@@ -9442,7 +9476,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Return whether the auto-takes export hook is currently registered.",
-              "line": 400,
+              "line": 525,
               "deprecated": false
             }
           ]
@@ -9464,7 +9498,7 @@
       ]
     },
     {
-      "relpath": "env_utils/hierarchy_manager/_hierarchy_manager.py",
+      "relpath": "env_utils/hierarchy_sync/_hierarchy_sync.py",
       "summary": "",
       "functions": [
         {
@@ -9518,7 +9552,7 @@
           "kind": "function",
           "signature": "(node, node_types: List[str], exclude: bool = True) -> bool",
           "summary": "Filter nodes by shape types.",
-          "line": 127,
+          "line": 126,
           "deprecated": false
         },
         {
@@ -9527,7 +9561,7 @@
           "kind": "function",
           "signature": "(path_map: Dict[str, Any]) -> Dict[str, Any]",
           "summary": "Remove Maya default cameras from *path_map*.",
-          "line": 141,
+          "line": 148,
           "deprecated": false
         },
         {
@@ -9536,7 +9570,7 @@
           "kind": "function",
           "signature": "(path_map: Dict[str, Any], node_types: List[str], exclude: bool = True) -> Dict[str, Any]",
           "summary": "Filter *path_map* by shape node types.",
-          "line": 150,
+          "line": 157,
           "deprecated": false
         },
         {
@@ -9545,7 +9579,7 @@
           "kind": "function",
           "signature": "(object_names: List[str]) -> int",
           "summary": "Select objects in Maya scene by name.",
-          "line": 161,
+          "line": 168,
           "deprecated": false
         }
       ],
@@ -9553,7 +9587,7 @@
         {
           "name": "HierarchyMapBuilder",
           "summary": "Builds hierarchy path maps for Maya transforms.",
-          "line": 220,
+          "line": 227,
           "bases": [],
           "members": [
             {
@@ -9562,7 +9596,7 @@
               "kind": "staticmethod",
               "signature": "(root, exclude_namespace_prefixes: List[str] = None, strip_namespaces: bool = False) -> Dict[str, Any]",
               "summary": "Build a mapping of hierarchical paths to transform nodes.",
-              "line": 229,
+              "line": 236,
               "deprecated": false
             },
             {
@@ -9571,7 +9605,7 @@
               "kind": "staticmethod",
               "signature": "(nodes: List[Any], strip_namespaces: bool = False) -> Dict[str, Any]",
               "summary": "Build a path map from an arbitrary list of transform node names.",
-              "line": 288,
+              "line": 300,
               "deprecated": false
             }
           ]
@@ -9579,7 +9613,7 @@
         {
           "name": "MayaObjectMatcher",
           "summary": "Maya-specific object matching with fuzzy logic and container searches.",
-          "line": 324,
+          "line": 339,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -9590,62 +9624,62 @@
               "kind": "method",
               "signature": "(self, target_objects: List[str], imported_transforms: List, dry_run: bool = False) -> Tuple[List, Dict]",
               "summary": "Find matching objects using exact and fuzzy matching.",
-              "line": 332,
+              "line": 347,
               "deprecated": false
             }
           ]
         },
         {
-          "name": "HierarchyManager",
+          "name": "HierarchySync",
           "summary": "Core hierarchy analysis and repair manager.",
-          "line": 430,
+          "line": 437,
           "bases": [
             "ptk.LoggingMixin"
           ],
           "members": [
             {
               "name": "analyze_hierarchies",
-              "qualname": "HierarchyManager.analyze_hierarchies",
+              "qualname": "HierarchySync.analyze_hierarchies",
               "kind": "method",
               "signature": "(self, current_tree_root=None, reference_tree_root=None, reference_objects: List = None, filter_meshes: bool = True, filter_cameras: bool = False, filter_lights: bool = False, inc_names: Optional[List[str]] = None, exc_names: Optional[List[str]] = None, inc_types: Optional[List[str]] = None, exc_types: Optional[List[str]] = None) -> Dict[str, Any]",
               "summary": "Analyze differences between current and reference hierarchies.",
-              "line": 455,
+              "line": 468,
               "deprecated": false
             },
             {
               "name": "create_stubs",
-              "qualname": "HierarchyManager.create_stubs",
+              "qualname": "HierarchySync.create_stubs",
               "kind": "method",
               "signature": "(self, paths: Optional[List[str]] = None) -> List[str]",
               "summary": "Create empty transform stubs for missing hierarchy paths.",
-              "line": 1013,
+              "line": 1146,
               "deprecated": false
             },
             {
               "name": "quarantine_extras",
-              "qualname": "HierarchyManager.quarantine_extras",
+              "qualname": "HierarchySync.quarantine_extras",
               "kind": "method",
               "signature": "(self, group: str = '_QUARANTINE', paths: Optional[List[str]] = None, skip_animated: bool = True) -> List[str]",
               "summary": "Move extra (scene-only) items to a root-level quarantine group.",
-              "line": 1492,
+              "line": 1806,
               "deprecated": false
             },
             {
               "name": "fix_fuzzy_renames",
-              "qualname": "HierarchyManager.fix_fuzzy_renames",
+              "qualname": "HierarchySync.fix_fuzzy_renames",
               "kind": "method",
               "signature": "(self, items: Optional[List[Dict[str, str]]] = None, skip_animated: bool = True) -> List[str]",
               "summary": "Rename nodes identified as fuzzy matches to their reference names.",
-              "line": 1663,
+              "line": 1988,
               "deprecated": false
             },
             {
               "name": "fix_reparented",
-              "qualname": "HierarchyManager.fix_reparented",
+              "qualname": "HierarchySync.fix_reparented",
               "kind": "method",
-              "signature": "(self, items: Optional[List[Dict[str, str]]] = None) -> List[str]",
+              "signature": "(self, items: Optional[List[Dict[str, str]]] = None, skip_animated: bool = True) -> List[str]",
               "summary": "Move reparented nodes to match their reference hierarchy position.",
-              "line": 1729,
+              "line": 2073,
               "deprecated": false
             }
           ]
@@ -9653,27 +9687,18 @@
         {
           "name": "ObjectSwapper",
           "summary": "Handles cross-scene object operations like push/pull.",
-          "line": 1820,
+          "line": 2216,
           "bases": [
             "ptk.LoggingMixin"
           ],
           "members": [
-            {
-              "name": "push_objects_to_scene",
-              "qualname": "ObjectSwapper.push_objects_to_scene",
-              "kind": "method",
-              "signature": "(self, target_objects: List[str], target_file: Union[str, Path], backup: bool = True) -> bool",
-              "summary": "Push objects from current scene to target scene.",
-              "line": 1840,
-              "deprecated": false
-            },
             {
               "name": "pull_objects_from_scene",
               "qualname": "ObjectSwapper.pull_objects_from_scene",
               "kind": "method",
               "signature": "(self, target_objects: List[str], source_file: Union[str, Path], backup: bool = True) -> bool",
               "summary": "Pull objects from source scene into current scene.",
-              "line": 1858,
+              "line": 2236,
               "deprecated": false
             }
           ]
@@ -9681,367 +9706,7 @@
       ]
     },
     {
-      "relpath": "env_utils/hierarchy_manager/hierarchy_manager_slots.py",
-      "summary": "",
-      "functions": [],
-      "classes": [
-        {
-          "name": "HierarchyManagerController",
-          "summary": "Controller for hierarchy management operations.",
-          "line": 29,
-          "bases": [
-            "ptk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "workspace",
-              "qualname": "HierarchyManagerController.workspace",
-              "kind": "property",
-              "signature": "(self) -> Optional[str]",
-              "summary": "Get the current workspace directory.",
-              "line": 85,
-              "deprecated": false
-            },
-            {
-              "name": "reference_path",
-              "qualname": "HierarchyManagerController.reference_path",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "The current reference scene path.",
-              "line": 93,
-              "deprecated": false
-            },
-            {
-              "name": "analyze_hierarchies",
-              "qualname": "HierarchyManagerController.analyze_hierarchies",
-              "kind": "method",
-              "signature": "(self, reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, filter_meshes: bool = False) -> bool",
-              "summary": "Analyze hierarchies and perform comparison.",
-              "line": 136,
-              "deprecated": false
-            },
-            {
-              "name": "pull_objects",
-              "qualname": "HierarchyManagerController.pull_objects",
-              "kind": "method",
-              "signature": "(self, object_names: List[str], reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, pull_children: bool = False, pull_mode: str = 'Add to Scene') -> bool",
-              "summary": "Pull objects from reference scene to current scene.",
-              "line": 309,
-              "deprecated": false
-            },
-            {
-              "name": "repair_hierarchies",
-              "qualname": "HierarchyManagerController.repair_hierarchies",
-              "kind": "method",
-              "signature": "(self, create_stubs: bool = True, quarantine_extras: bool = True, quarantine_group: str = '_QUARANTINE', skip_animated: bool = True, fix_reparented: bool = True, fix_fuzzy_renames: bool = True, dry_run: bool = True) -> bool",
-              "summary": "Run repair operations on the current scene to match reference hierarchy.",
-              "line": 395,
-              "deprecated": false
-            },
-            {
-              "name": "select_objects_in_maya",
-              "qualname": "HierarchyManagerController.select_objects_in_maya",
-              "kind": "method",
-              "signature": "(self, object_names: List[str]) -> int",
-              "summary": "Select objects in Maya scene by name.",
-              "line": 670,
-              "deprecated": false
-            },
-            {
-              "name": "populate_reference_tree",
-              "qualname": "HierarchyManagerController.populate_reference_tree",
-              "kind": "method",
-              "signature": "(self, tree_widget, reference_path: str = None)",
-              "summary": "Populate the reference tree — handles cache, import, and rendering.",
-              "line": 676,
-              "deprecated": false
-            },
-            {
-              "name": "refresh_trees",
-              "qualname": "HierarchyManagerController.refresh_trees",
-              "kind": "method",
-              "signature": "(self, restore_selection: bool = True)",
-              "summary": "Refresh both tree widgets with current hierarchy data.",
-              "line": 724,
-              "deprecated": false
-            },
-            {
-              "name": "is_path_ignored",
-              "qualname": "HierarchyManagerController.is_path_ignored",
-              "kind": "method",
-              "signature": "(self, tree_widget, path)",
-              "summary": "Check whether *path* (or any ancestor) is in the ignored set.",
-              "line": 793,
-              "deprecated": false
-            },
-            {
-              "name": "clear_ignored_paths",
-              "qualname": "HierarchyManagerController.clear_ignored_paths",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Clear all ignored paths for both trees.",
-              "line": 800,
-              "deprecated": false
-            },
-            {
-              "name": "log_diff_results",
-              "qualname": "HierarchyManagerController.log_diff_results",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Log detailed hierarchy difference analysis results using rich formatting.",
-              "line": 840,
-              "deprecated": false
-            },
-            {
-              "name": "get_recent_reference_scenes",
-              "qualname": "HierarchyManagerController.get_recent_reference_scenes",
-              "kind": "method",
-              "signature": "(self) -> List[str]",
-              "summary": "Get recent reference scenes from settings.",
-              "line": 1001,
-              "deprecated": false
-            },
-            {
-              "name": "save_recent_reference_scene",
-              "qualname": "HierarchyManagerController.save_recent_reference_scene",
-              "kind": "method",
-              "signature": "(self, scene_path: str)",
-              "summary": "Save reference scene to recent list.",
-              "line": 1007,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "HierarchyManagerSlots",
-          "summary": "Slots class for hierarchy management UI operations.",
-          "line": 1112,
-          "bases": [
-            "ptk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "HierarchyManagerSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the header widget.",
-              "line": 1227,
-              "deprecated": false
-            },
-            {
-              "name": "tree000_init",
-              "qualname": "HierarchyManagerSlots.tree000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the reference/imported hierarchy tree widget.",
-              "line": 1274,
-              "deprecated": false
-            },
-            {
-              "name": "tree001_init",
-              "qualname": "HierarchyManagerSlots.tree001_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the current scene hierarchy tree widget.",
-              "line": 1497,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_diff_options_init",
-              "qualname": "HierarchyManagerSlots.cmb_diff_options_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Populate the diff-options WidgetComboBox below the Diff button.",
-              "line": 1598,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_pull_options_init",
-              "qualname": "HierarchyManagerSlots.cmb_pull_options_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Populate the pull-options WidgetComboBox below the Pull button.",
-              "line": 1684,
-              "deprecated": false
-            },
-            {
-              "name": "tb003_init",
-              "qualname": "HierarchyManagerSlots.tb003_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the fix/repair toggle button with options menu.",
-              "line": 1713,
-              "deprecated": false
-            },
-            {
-              "name": "tb001",
-              "qualname": "HierarchyManagerSlots.tb001",
-              "kind": "method",
-              "signature": "(self, state=None)",
-              "summary": "Run the diff analysis using settings from cmb_diff_options.",
-              "line": 1759,
-              "deprecated": false
-            },
-            {
-              "name": "tb002",
-              "qualname": "HierarchyManagerSlots.tb002",
-              "kind": "method",
-              "signature": "(self, state=None)",
-              "summary": "Toggle button for pull objects with options menu.",
-              "line": 1917,
-              "deprecated": false
-            },
-            {
-              "name": "tb003",
-              "qualname": "HierarchyManagerSlots.tb003",
-              "kind": "method",
-              "signature": "(self, state=None)",
-              "summary": "Toggle button for fix/repair operations.",
-              "line": 2101,
-              "deprecated": false
-            },
-            {
-              "name": "b003",
-              "qualname": "HierarchyManagerSlots.b003",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Browse for reference scene file.",
-              "line": 2166,
-              "deprecated": false
-            },
-            {
-              "name": "b005",
-              "qualname": "HierarchyManagerSlots.b005",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Refresh current scene hierarchy tree.",
-              "line": 2201,
-              "deprecated": false
-            },
-            {
-              "name": "b006",
-              "qualname": "HierarchyManagerSlots.b006",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Select checked objects in Maya scene.",
-              "line": 2205,
-              "deprecated": false
-            },
-            {
-              "name": "b007",
-              "qualname": "HierarchyManagerSlots.b007",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Expand all items in current scene tree.",
-              "line": 2214,
-              "deprecated": false
-            },
-            {
-              "name": "b008",
-              "qualname": "HierarchyManagerSlots.b008",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Collapse all items in current scene tree.",
-              "line": 2218,
-              "deprecated": false
-            },
-            {
-              "name": "b009",
-              "qualname": "HierarchyManagerSlots.b009",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Refresh reference hierarchy tree.",
-              "line": 2222,
-              "deprecated": false
-            },
-            {
-              "name": "b011",
-              "qualname": "HierarchyManagerSlots.b011",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Show differences between hierarchies.",
-              "line": 2230,
-              "deprecated": false
-            },
-            {
-              "name": "b012",
-              "qualname": "HierarchyManagerSlots.b012",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Analyze hierarchies and perform comparison.",
-              "line": 2243,
-              "deprecated": false
-            },
-            {
-              "name": "b013",
-              "qualname": "HierarchyManagerSlots.b013",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Ignore selected items in the reference tree.",
-              "line": 2273,
-              "deprecated": false
-            },
-            {
-              "name": "b014",
-              "qualname": "HierarchyManagerSlots.b014",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Unignore selected items in the reference tree.",
-              "line": 2277,
-              "deprecated": false
-            },
-            {
-              "name": "b015",
-              "qualname": "HierarchyManagerSlots.b015",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Ignore selected items in the current scene tree.",
-              "line": 2281,
-              "deprecated": false
-            },
-            {
-              "name": "b016",
-              "qualname": "HierarchyManagerSlots.b016",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Unignore selected items in the current scene tree.",
-              "line": 2285,
-              "deprecated": false
-            },
-            {
-              "name": "b018",
-              "qualname": "HierarchyManagerSlots.b018",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Delete selected objects from the Maya scene and refresh the tree.",
-              "line": 2289,
-              "deprecated": false
-            },
-            {
-              "name": "b017",
-              "qualname": "HierarchyManagerSlots.b017",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Rename current-scene items to match reference names.",
-              "line": 2329,
-              "deprecated": false
-            },
-            {
-              "name": "count_tree_items",
-              "qualname": "HierarchyManagerSlots.count_tree_items",
-              "kind": "method",
-              "signature": "(self, tree_widget)",
-              "summary": "Count total items in a tree widget.",
-              "line": 3476,
-              "deprecated": false
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "relpath": "env_utils/hierarchy_manager/hierarchy_sidecar.py",
+      "relpath": "env_utils/hierarchy_sync/hierarchy_sidecar.py",
       "summary": "Hierarchy sidecar manifest management.",
       "functions": [],
       "classes": [
@@ -10111,7 +9776,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> set",
               "summary": "Build a set of namespace-stripped hierarchy paths from DAG long paths.",
-              "line": 161,
+              "line": 174,
               "deprecated": false
             },
             {
@@ -10120,7 +9785,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> list",
               "summary": "Return *objects* plus all their DAG descendants (full paths).",
-              "line": 175,
+              "line": 188,
               "deprecated": false
             },
             {
@@ -10129,7 +9794,7 @@
               "kind": "staticmethod",
               "signature": "(paths) -> list",
               "summary": "Return only paths whose ancestor is *not* also in the set.",
-              "line": 193,
+              "line": 206,
               "deprecated": false
             },
             {
@@ -10138,7 +9803,7 @@
               "kind": "staticmethod",
               "signature": "(missing: list, extra: list) -> list",
               "summary": "Detect nodes that were reparented rather than added/removed.",
-              "line": 205,
+              "line": 218,
               "deprecated": false
             },
             {
@@ -10147,7 +9812,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str, paths, *, base_stem: bool = False) -> Optional[str]",
               "summary": "Write *paths* to the sidecar manifest for *export_path*.",
-              "line": 246,
+              "line": 259,
               "deprecated": false
             },
             {
@@ -10156,7 +9821,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str, *, base_stem: bool = False) -> Optional[Set[str]]",
               "summary": "Read the manifest for *export_path*.",
-              "line": 295,
+              "line": 333,
               "deprecated": false
             },
             {
@@ -10165,7 +9830,7 @@
               "kind": "staticmethod",
               "signature": "(top_path: str, all_paths) -> int",
               "summary": "Count *top_path* plus its descendants in *all_paths*.",
-              "line": 319,
+              "line": 355,
               "deprecated": false
             },
             {
@@ -10174,7 +9839,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str, missing: list, extra: list, reparented: list = None, *, base_stem: bool = False) -> Optional[str]",
               "summary": "Write a human-readable diff report to the sidecar text file.",
-              "line": 347,
+              "line": 383,
               "deprecated": false
             },
             {
@@ -10183,7 +9848,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str, *, base_stem: bool = False) -> None",
               "summary": "Remove a stale diff report left over from a previous failure.",
-              "line": 429,
+              "line": 465,
               "deprecated": false
             },
             {
@@ -10192,7 +9857,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects) -> set",
               "summary": "Expand *objects* to descendants, then clean and deduplicate.",
-              "line": 445,
+              "line": 481,
               "deprecated": false
             },
             {
@@ -10201,7 +9866,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str, current_paths: set, *, base_stem: bool = False) -> Tuple[bool, list, list]",
               "summary": "Compare *current_paths* against the stored manifest.",
-              "line": 450,
+              "line": 486,
               "deprecated": false
             }
           ]
@@ -10209,14 +9874,374 @@
       ]
     },
     {
-      "relpath": "env_utils/hierarchy_manager/tree_renderer.py",
-      "summary": "Tree rendering, formatting, and selection management for the hierarchy manager UI.",
+      "relpath": "env_utils/hierarchy_sync/hierarchy_sync_slots.py",
+      "summary": "",
+      "functions": [],
+      "classes": [
+        {
+          "name": "HierarchySyncController",
+          "summary": "Controller for hierarchy management operations.",
+          "line": 29,
+          "bases": [
+            "ptk.LoggingMixin"
+          ],
+          "members": [
+            {
+              "name": "workspace",
+              "qualname": "HierarchySyncController.workspace",
+              "kind": "property",
+              "signature": "(self) -> Optional[str]",
+              "summary": "Get the current workspace directory.",
+              "line": 86,
+              "deprecated": false
+            },
+            {
+              "name": "reference_path",
+              "qualname": "HierarchySyncController.reference_path",
+              "kind": "property",
+              "signature": "(self) -> str",
+              "summary": "The current reference scene path.",
+              "line": 94,
+              "deprecated": false
+            },
+            {
+              "name": "analyze_hierarchies",
+              "qualname": "HierarchySyncController.analyze_hierarchies",
+              "kind": "method",
+              "signature": "(self, reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, filter_meshes: bool = False, filter_cameras: bool = False, filter_lights: bool = False) -> bool",
+              "summary": "Analyze hierarchies and perform comparison.",
+              "line": 137,
+              "deprecated": false
+            },
+            {
+              "name": "pull_objects",
+              "qualname": "HierarchySyncController.pull_objects",
+              "kind": "method",
+              "signature": "(self, object_names: List[str], reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, pull_children: bool = False, pull_mode: str = 'Add to Scene') -> bool",
+              "summary": "Pull objects from reference scene to current scene.",
+              "line": 315,
+              "deprecated": false
+            },
+            {
+              "name": "repair_hierarchies",
+              "qualname": "HierarchySyncController.repair_hierarchies",
+              "kind": "method",
+              "signature": "(self, create_stubs: bool = True, quarantine_extras: bool = True, quarantine_group: str = '_QUARANTINE', skip_animated: bool = True, fix_reparented: bool = True, fix_fuzzy_renames: bool = True, dry_run: bool = True) -> bool",
+              "summary": "Run repair operations on the current scene to match reference hierarchy.",
+              "line": 401,
+              "deprecated": false
+            },
+            {
+              "name": "select_objects_in_maya",
+              "qualname": "HierarchySyncController.select_objects_in_maya",
+              "kind": "method",
+              "signature": "(self, object_names: List[str]) -> int",
+              "summary": "Select objects in Maya scene by name.",
+              "line": 683,
+              "deprecated": false
+            },
+            {
+              "name": "populate_reference_tree",
+              "qualname": "HierarchySyncController.populate_reference_tree",
+              "kind": "method",
+              "signature": "(self, tree_widget, reference_path: str = None)",
+              "summary": "Populate the reference tree — handles cache, import, and rendering.",
+              "line": 689,
+              "deprecated": false
+            },
+            {
+              "name": "refresh_trees",
+              "qualname": "HierarchySyncController.refresh_trees",
+              "kind": "method",
+              "signature": "(self, restore_selection: bool = True)",
+              "summary": "Refresh both tree widgets with current hierarchy data.",
+              "line": 737,
+              "deprecated": false
+            },
+            {
+              "name": "is_path_ignored",
+              "qualname": "HierarchySyncController.is_path_ignored",
+              "kind": "method",
+              "signature": "(self, tree_widget, path)",
+              "summary": "Check whether *path* (or any ancestor) is in the ignored set.",
+              "line": 806,
+              "deprecated": false
+            },
+            {
+              "name": "clear_ignored_paths",
+              "qualname": "HierarchySyncController.clear_ignored_paths",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Clear all ignored paths for both trees.",
+              "line": 813,
+              "deprecated": false
+            },
+            {
+              "name": "log_diff_results",
+              "qualname": "HierarchySyncController.log_diff_results",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Log detailed hierarchy difference analysis results using rich formatting.",
+              "line": 853,
+              "deprecated": false
+            },
+            {
+              "name": "get_recent_reference_scenes",
+              "qualname": "HierarchySyncController.get_recent_reference_scenes",
+              "kind": "method",
+              "signature": "(self) -> List[str]",
+              "summary": "Get recent reference scenes from settings.",
+              "line": 1023,
+              "deprecated": false
+            },
+            {
+              "name": "save_recent_reference_scene",
+              "qualname": "HierarchySyncController.save_recent_reference_scene",
+              "kind": "method",
+              "signature": "(self, scene_path: str)",
+              "summary": "Save reference scene to recent list.",
+              "line": 1031,
+              "deprecated": false
+            }
+          ]
+        },
+        {
+          "name": "HierarchySyncSlots",
+          "summary": "Slots class for hierarchy management UI operations.",
+          "line": 1138,
+          "bases": [
+            "ptk.LoggingMixin"
+          ],
+          "members": [
+            {
+              "name": "header_init",
+              "qualname": "HierarchySyncSlots.header_init",
+              "kind": "method",
+              "signature": "(self, widget)",
+              "summary": "Initialize the header widget.",
+              "line": 1253,
+              "deprecated": false
+            },
+            {
+              "name": "tree000_init",
+              "qualname": "HierarchySyncSlots.tree000_init",
+              "kind": "method",
+              "signature": "(self, widget)",
+              "summary": "Initialize the reference/imported hierarchy tree widget.",
+              "line": 1316,
+              "deprecated": false
+            },
+            {
+              "name": "tree001_init",
+              "qualname": "HierarchySyncSlots.tree001_init",
+              "kind": "method",
+              "signature": "(self, widget)",
+              "summary": "Initialize the current scene hierarchy tree widget.",
+              "line": 1555,
+              "deprecated": false
+            },
+            {
+              "name": "cmb_diff_options_init",
+              "qualname": "HierarchySyncSlots.cmb_diff_options_init",
+              "kind": "method",
+              "signature": "(self, widget)",
+              "summary": "Populate the diff-options WidgetComboBox below the Diff button.",
+              "line": 1656,
+              "deprecated": false
+            },
+            {
+              "name": "cmb_pull_options_init",
+              "qualname": "HierarchySyncSlots.cmb_pull_options_init",
+              "kind": "method",
+              "signature": "(self, widget)",
+              "summary": "Populate the pull-options WidgetComboBox below the Pull button.",
+              "line": 1761,
+              "deprecated": false
+            },
+            {
+              "name": "tb003_init",
+              "qualname": "HierarchySyncSlots.tb003_init",
+              "kind": "method",
+              "signature": "(self, widget)",
+              "summary": "Initialize the fix/repair toggle button with options menu.",
+              "line": 1790,
+              "deprecated": false
+            },
+            {
+              "name": "tb001",
+              "qualname": "HierarchySyncSlots.tb001",
+              "kind": "method",
+              "signature": "(self, state=None)",
+              "summary": "Run the diff analysis using settings from cmb_diff_options.",
+              "line": 1840,
+              "deprecated": false
+            },
+            {
+              "name": "tb002",
+              "qualname": "HierarchySyncSlots.tb002",
+              "kind": "method",
+              "signature": "(self, state=None)",
+              "summary": "Toggle button for pull objects with options menu.",
+              "line": 2009,
+              "deprecated": false
+            },
+            {
+              "name": "tb003",
+              "qualname": "HierarchySyncSlots.tb003",
+              "kind": "method",
+              "signature": "(self, state=None)",
+              "summary": "Toggle button for fix/repair operations.",
+              "line": 2198,
+              "deprecated": false
+            },
+            {
+              "name": "b003",
+              "qualname": "HierarchySyncSlots.b003",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Browse for reference scene file.",
+              "line": 2263,
+              "deprecated": false
+            },
+            {
+              "name": "b005",
+              "qualname": "HierarchySyncSlots.b005",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Refresh current scene hierarchy tree.",
+              "line": 2298,
+              "deprecated": false
+            },
+            {
+              "name": "b006",
+              "qualname": "HierarchySyncSlots.b006",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Select checked objects in Maya scene.",
+              "line": 2302,
+              "deprecated": false
+            },
+            {
+              "name": "b007",
+              "qualname": "HierarchySyncSlots.b007",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Expand all items in current scene tree.",
+              "line": 2311,
+              "deprecated": false
+            },
+            {
+              "name": "b008",
+              "qualname": "HierarchySyncSlots.b008",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Collapse all items in current scene tree.",
+              "line": 2315,
+              "deprecated": false
+            },
+            {
+              "name": "b009",
+              "qualname": "HierarchySyncSlots.b009",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Refresh reference hierarchy tree.",
+              "line": 2319,
+              "deprecated": false
+            },
+            {
+              "name": "b011",
+              "qualname": "HierarchySyncSlots.b011",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Show differences between hierarchies.",
+              "line": 2327,
+              "deprecated": false
+            },
+            {
+              "name": "b012",
+              "qualname": "HierarchySyncSlots.b012",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Analyze hierarchies and perform comparison.",
+              "line": 2340,
+              "deprecated": false
+            },
+            {
+              "name": "b013",
+              "qualname": "HierarchySyncSlots.b013",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Ignore selected items in the reference tree.",
+              "line": 2381,
+              "deprecated": false
+            },
+            {
+              "name": "b014",
+              "qualname": "HierarchySyncSlots.b014",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Unignore selected items in the reference tree.",
+              "line": 2385,
+              "deprecated": false
+            },
+            {
+              "name": "b015",
+              "qualname": "HierarchySyncSlots.b015",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Ignore selected items in the current scene tree.",
+              "line": 2389,
+              "deprecated": false
+            },
+            {
+              "name": "b016",
+              "qualname": "HierarchySyncSlots.b016",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Unignore selected items in the current scene tree.",
+              "line": 2393,
+              "deprecated": false
+            },
+            {
+              "name": "b018",
+              "qualname": "HierarchySyncSlots.b018",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Delete selected objects from the Maya scene and refresh the tree.",
+              "line": 2397,
+              "deprecated": false
+            },
+            {
+              "name": "b017",
+              "qualname": "HierarchySyncSlots.b017",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Rename current-scene items to match reference names.",
+              "line": 2441,
+              "deprecated": false
+            },
+            {
+              "name": "count_tree_items",
+              "qualname": "HierarchySyncSlots.count_tree_items",
+              "kind": "method",
+              "signature": "(self, tree_widget)",
+              "summary": "Count total items in a tree widget.",
+              "line": 3038,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relpath": "env_utils/hierarchy_sync/tree_renderer.py",
+      "summary": "Tree rendering, formatting, and selection management for the hierarchy sync UI.",
       "functions": [],
       "classes": [
         {
           "name": "HierarchyTreeRenderer",
           "summary": "Owns all QTreeWidget population, diff-colour formatting, ignore",
-          "line": 30,
+          "line": 25,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -10227,7 +10252,7 @@
               "kind": "method",
               "signature": "(self, tree_widget)",
               "summary": "Populate the current scene hierarchy tree.",
-              "line": 50,
+              "line": 45,
               "deprecated": false
             },
             {
@@ -10236,7 +10261,7 @@
               "kind": "method",
               "signature": "(self, tree_widget, transforms, reference_name='Reference Scene')",
               "summary": "Populate the reference hierarchy tree with pre-fetched transforms.",
-              "line": 144,
+              "line": 139,
               "deprecated": false
             },
             {
@@ -10245,7 +10270,7 @@
               "kind": "method",
               "signature": "(self, tree_widget, reference_name='Reference Scene')",
               "summary": "Show a 'Browse for Reference Scene' placeholder in an empty tree.",
-              "line": 179,
+              "line": 174,
               "deprecated": false
             },
             {
@@ -10254,7 +10279,7 @@
               "kind": "method",
               "signature": "(self, tree_widget, reference_name='Reference Scene', message='File Not Found')",
               "summary": "Show an error or status message in the reference tree.",
-              "line": 190,
+              "line": 185,
               "deprecated": false
             },
             {
@@ -10263,7 +10288,7 @@
               "kind": "method",
               "signature": "(self, tree_widget, objects, tree_type='current')",
               "summary": "Populate tree widget with proper Maya-style hierarchy.",
-              "line": 198,
+              "line": 193,
               "deprecated": false
             },
             {
@@ -10272,7 +10297,7 @@
               "kind": "method",
               "signature": "(self, tree001, tree000)",
               "summary": "Apply color formatting to tree widgets based on hierarchy differences.",
-              "line": 290,
+              "line": 285,
               "deprecated": false
             },
             {
@@ -10281,7 +10306,7 @@
               "kind": "method",
               "signature": "(self, tree_widget)",
               "summary": "Remove foreground/background colors from every item in a tree widget.",
-              "line": 326,
+              "line": 321,
               "deprecated": false
             },
             {
@@ -10290,7 +10315,7 @@
               "kind": "method",
               "signature": "(self, tree_widget, tree_type, tree_matcher, by_full, by_clean, by_last)",
               "summary": "Format a specific tree widget based on differences.",
-              "line": 362,
+              "line": 357,
               "deprecated": false
             },
             {
@@ -10298,8 +10323,8 @@
               "qualname": "HierarchyTreeRenderer.apply_ignore_styling",
               "kind": "method",
               "signature": "(self, tree_widget)",
-              "summary": "Apply or remove strikethrough + dim styling for ignored items.",
-              "line": 500,
+              "summary": "Apply strikethrough/dim styling for ignored items — and, when the 'Hide Ignored'",
+              "line": 495,
               "deprecated": false
             },
             {
@@ -10308,7 +10333,7 @@
               "kind": "staticmethod",
               "signature": "(item)",
               "summary": "Build a pipe-separated hierarchy path from a QTreeWidgetItem.",
-              "line": 555,
+              "line": 541,
               "deprecated": false
             },
             {
@@ -10317,7 +10342,7 @@
               "kind": "method",
               "signature": "(self, tree_widget, object_name)",
               "summary": "Find a tree item by object name (first column).",
-              "line": 564,
+              "line": 550,
               "deprecated": false
             },
             {
@@ -10326,7 +10351,7 @@
               "kind": "method",
               "signature": "(self, tree_widget)",
               "summary": "Get selected items from a tree widget.",
-              "line": 581,
+              "line": 567,
               "deprecated": false
             },
             {
@@ -10335,7 +10360,7 @@
               "kind": "method",
               "signature": "(self, tree_widget)",
               "summary": "Extract object names from selected tree widget items.",
-              "line": 589,
+              "line": 575,
               "deprecated": false
             }
           ]
@@ -10343,8 +10368,8 @@
       ]
     },
     {
-      "relpath": "env_utils/hierarchy_manager/tree_utils.py",
-      "summary": "Tree widget utilities for hierarchy manager UI operations.",
+      "relpath": "env_utils/hierarchy_sync/tree_utils.py",
+      "summary": "Tree widget utilities for hierarchy sync UI operations.",
       "functions": [
         {
           "name": "get_selected_object_names",
@@ -10370,7 +10395,7 @@
           "kind": "function",
           "signature": "(tree_widget, object_name: str)",
           "summary": "Find tree widget item by object name.",
-          "line": 199,
+          "line": 214,
           "deprecated": false
         },
         {
@@ -10379,7 +10404,7 @@
           "kind": "function",
           "signature": "(objects: list) -> Tuple[Dict[str, Dict], List[str]]",
           "summary": "Build hierarchical structure from Maya transform objects.",
-          "line": 210,
+          "line": 225,
           "deprecated": false
         }
       ],
@@ -10636,7 +10661,7 @@
         {
           "name": "FBXImporter",
           "summary": "Handles FBX-specific import operations (.fbx files).",
-          "line": 90,
+          "line": 51,
           "bases": [],
           "members": [
             {
@@ -10645,7 +10670,7 @@
               "kind": "method",
               "signature": "(self, file_path: Union[str, Path]) -> bool",
               "summary": "Check if the file is an FBX file.",
-              "line": 123,
+              "line": 67,
               "deprecated": false
             },
             {
@@ -10653,8 +10678,8 @@
               "qualname": "FBXImporter.import_with_namespace",
               "kind": "method",
               "signature": "(self, source_file: Path, namespace: str, temp_namespace_prefix: str, force_complete_import: bool = False) -> Optional[Dict]",
-              "summary": "Import FBX file with namespace - handles the complete import process.",
-              "line": 127,
+              "summary": "Import an FBX file isolated into *namespace*.",
+              "line": 71,
               "deprecated": false
             },
             {
@@ -10662,8 +10687,8 @@
               "qualname": "FBXImporter.import_for_analysis",
               "kind": "method",
               "signature": "(self, source_file: Path, namespace: str) -> Optional[List[Any]]",
-              "summary": "Import FBX file for analysis purposes.",
-              "line": 177,
+              "summary": "Import FBX file into a fresh namespace for analysis.",
+              "line": 113,
               "deprecated": false
             }
           ]
@@ -10671,7 +10696,7 @@
         {
           "name": "MayaImporter",
           "summary": "Handles Maya-specific import operations (.ma/.mb files).",
-          "line": 1062,
+          "line": 144,
           "bases": [],
           "members": [
             {
@@ -10680,7 +10705,7 @@
               "kind": "method",
               "signature": "(self, file_path: Union[str, Path]) -> bool",
               "summary": "Check if the file is a Maya file (.ma or .mb).",
-              "line": 1069,
+              "line": 151,
               "deprecated": false
             },
             {
@@ -10689,7 +10714,7 @@
               "kind": "method",
               "signature": "(self, source_file: Path, namespace: str, temp_namespace_prefix: str, force_complete_import: bool = False) -> Optional[Dict]",
               "summary": "Import Maya file with namespace - original logic.",
-              "line": 1074,
+              "line": 156,
               "deprecated": false
             },
             {
@@ -10698,7 +10723,7 @@
               "kind": "method",
               "signature": "(self, source_file: Path, namespace: str) -> Optional[List[Any]]",
               "summary": "Import Maya file for analysis purposes.",
-              "line": 1211,
+              "line": 294,
               "deprecated": false
             }
           ]
@@ -10706,7 +10731,7 @@
         {
           "name": "CameraTracker",
           "summary": "Tracks cameras before and after import operations for proper cleanup.",
-          "line": 1241,
+          "line": 325,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -10717,7 +10742,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Capture camera state before import.",
-              "line": 1254,
+              "line": 338,
               "deprecated": false
             },
             {
@@ -10726,7 +10751,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Capture camera state after import.",
-              "line": 1261,
+              "line": 345,
               "deprecated": false
             },
             {
@@ -10735,7 +10760,7 @@
               "kind": "method",
               "signature": "(self, namespace_filter=None)",
               "summary": "Get cameras that were imported (optionally filtered by namespace).",
-              "line": 1270,
+              "line": 354,
               "deprecated": false
             },
             {
@@ -10744,7 +10769,7 @@
               "kind": "method",
               "signature": "(self, namespace_filter=None, preserve_user_cameras=True)",
               "summary": "Clean up imported cameras with optional preservation of user cameras.",
-              "line": 1280,
+              "line": 364,
               "deprecated": false
             },
             {
@@ -10753,7 +10778,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Reset tracking state.",
-              "line": 1351,
+              "line": 435,
               "deprecated": false
             }
           ]
@@ -10761,7 +10786,7 @@
         {
           "name": "NamespaceSandbox",
           "summary": "Handles temporary importing and namespace management for Maya scenes.",
-          "line": 1358,
+          "line": 442,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -10772,7 +10797,7 @@
               "kind": "method",
               "signature": "(self, source_file: Union[str, Path], namespace_prefix: str = None, force_complete_import: bool = False) -> Optional[Dict]",
               "summary": "Import file and return import information.",
-              "line": 1393,
+              "line": 477,
               "deprecated": false
             },
             {
@@ -10781,7 +10806,7 @@
               "kind": "method",
               "signature": "(self, source_file: Union[str, Path], namespace: str = None) -> Optional[List[Any]]",
               "summary": "Import file into temporary namespace for analysis (dry-run mode).",
-              "line": 1468,
+              "line": 552,
               "deprecated": false
             },
             {
@@ -10790,7 +10815,7 @@
               "kind": "method",
               "signature": "(self) -> List[str]",
               "summary": "Get list of supported file formats from all importers.",
-              "line": 1519,
+              "line": 603,
               "deprecated": false
             },
             {
@@ -10799,7 +10824,7 @@
               "kind": "method",
               "signature": "(self, namespace: str, target_objects: List[str]) -> List[Any]",
               "summary": "Find objects in the specified namespace with optional fuzzy matching.",
-              "line": 1533,
+              "line": 617,
               "deprecated": false
             },
             {
@@ -10808,7 +10833,7 @@
               "kind": "method",
               "signature": "(self, namespace: str, target_objects: List[str]) -> List[Any]",
               "summary": "Find objects using hierarchical path matching (only if fuzzy_matching enabled).",
-              "line": 1584,
+              "line": 668,
               "deprecated": false
             },
             {
@@ -10817,7 +10842,7 @@
               "kind": "method",
               "signature": "(self, namespace: str) -> Dict[str, Any]",
               "summary": "Get complete hierarchy information for objects in namespace.",
-              "line": 1631,
+              "line": 715,
               "deprecated": false
             },
             {
@@ -10826,7 +10851,7 @@
               "kind": "method",
               "signature": "(self, namespace: str, imported_objects: List[Any] = None) -> bool",
               "summary": "Safely remove imported objects and cleanup namespace tracking.",
-              "line": 1668,
+              "line": 752,
               "deprecated": false
             },
             {
@@ -10835,7 +10860,7 @@
               "kind": "method",
               "signature": "(self, namespace: str) -> bool",
               "summary": "Backward compatibility alias for cleanup_import.",
-              "line": 1733,
+              "line": 817,
               "deprecated": false
             },
             {
@@ -10844,7 +10869,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Clean up all temp imports managed by this instance.",
-              "line": 1737,
+              "line": 821,
               "deprecated": false
             },
             {
@@ -10853,7 +10878,7 @@
               "kind": "method",
               "signature": "(self, namespace_filter=None)",
               "summary": "Get cameras that were imported during the last import operation.",
-              "line": 1843,
+              "line": 927,
               "deprecated": false
             },
             {
@@ -10862,7 +10887,7 @@
               "kind": "method",
               "signature": "(self, namespace_filter=None, preserve_user_cameras=True)",
               "summary": "Clean up imported cameras for a specific namespace.",
-              "line": 1854,
+              "line": 938,
               "deprecated": false
             },
             {
@@ -10871,7 +10896,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Force cleanup of ALL temp namespaces in Maya, not just tracked ones.",
-              "line": 1881,
+              "line": 965,
               "deprecated": false
             },
             {
@@ -10880,7 +10905,7 @@
               "kind": "method",
               "signature": "(self, target_objects: List[str]) -> Optional[Path]",
               "summary": "Export objects to temporary file using cmds.ls() for robust object handling.",
-              "line": 1921,
+              "line": 1005,
               "deprecated": false
             },
             {
@@ -10889,7 +10914,7 @@
               "kind": "method",
               "signature": "(self, source_file: Union[str, Path]) -> Optional[Dict]",
               "summary": "Import objects from source scene for object swapping operations.",
-              "line": 1957,
+              "line": 1041,
               "deprecated": false
             },
             {
@@ -10898,7 +10923,7 @@
               "kind": "method",
               "signature": "(self, temp_file: Union[str, Path], target_scene: Union[str, Path], backup: bool = True) -> bool",
               "summary": "Import objects into target scene.",
-              "line": 1990,
+              "line": 1074,
               "deprecated": false
             },
             {
@@ -10907,7 +10932,7 @@
               "kind": "method",
               "signature": "(self, namespace: str = None) -> bool",
               "summary": "Clean up analysis namespace and its contents.",
-              "line": 2032,
+              "line": 1121,
               "deprecated": false
             }
           ]
@@ -11817,7 +11842,7 @@
         {
           "name": "TaskManager",
           "summary": "Contains all task-related UI definitions for the Scene Exporter.",
-          "line": 1348,
+          "line": 1357,
           "bases": [
             "TaskFactory",
             "_TaskActionsMixin",
@@ -11830,7 +11855,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 1418,
+              "line": 1427,
               "deprecated": false
             },
             {
@@ -11839,7 +11864,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return the task definitions for the UI.",
-              "line": 1434,
+              "line": 1443,
               "deprecated": false
             },
             {
@@ -11848,7 +11873,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return the check definitions for the UI.",
-              "line": 1595,
+              "line": 1604,
               "deprecated": false
             },
             {
@@ -11857,7 +11882,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict[str, Any]]",
               "summary": "Return all definitions combined for backward compatibility.",
-              "line": 1725,
+              "line": 1734,
               "deprecated": false
             }
           ]
@@ -12055,6 +12080,59 @@
               "signature": "(self)",
               "summary": "Export per the chosen Scope and copy the FBX into the Unity project.",
               "line": 266,
+              "deprecated": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "relpath": "env_utils/usd.py",
+      "summary": "USD import / export over Maya's native ``mayaUsd`` runtime.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "UsdUtils",
+          "summary": "Low-level USD import/export utilities over the ``mayaUsd`` plugin.",
+          "line": 35,
+          "bases": [
+            "ptk.HelpMixin"
+          ],
+          "members": [
+            {
+              "name": "load_plugin",
+              "qualname": "UsdUtils.load_plugin",
+              "kind": "staticmethod",
+              "signature": "()",
+              "summary": "Ensure the ``mayaUsdPlugin`` plugin is loaded.",
+              "line": 62,
+              "deprecated": false
+            },
+            {
+              "name": "is_usd_file",
+              "qualname": "UsdUtils.is_usd_file",
+              "kind": "staticmethod",
+              "signature": "(file_path: str) -> bool",
+              "summary": "True when *file_path* is a USD layer/package (delegates to pythontk).",
+              "line": 68,
+              "deprecated": false
+            },
+            {
+              "name": "export",
+              "qualname": "UsdUtils.export",
+              "kind": "classmethod",
+              "signature": "(cls, file_path: str, objects: Optional[List] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True) -> str",
+              "summary": "Export to a USD file (``.usd``/``.usda``/``.usdc``/``.usdz``).",
+              "line": 73,
+              "deprecated": false
+            },
+            {
+              "name": "import_scene",
+              "qualname": "UsdUtils.import_scene",
+              "kind": "classmethod",
+              "signature": "(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True) -> List[str]",
+              "summary": "Import a USD file, optionally isolated into a namespace.",
+              "line": 140,
               "deprecated": false
             }
           ]
@@ -14631,59 +14709,6 @@
       ]
     },
     {
-      "relpath": "mat_utils/mat_transfer.py",
-      "summary": "",
-      "functions": [],
-      "classes": [
-        {
-          "name": "MatTransfer",
-          "summary": "",
-          "line": 19,
-          "bases": [
-            "ptk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "is_material_related_node",
-              "qualname": "MatTransfer.is_material_related_node",
-              "kind": "method",
-              "signature": "(self, node) -> bool",
-              "summary": "Check if a node is material-related.",
-              "line": 31,
-              "deprecated": false
-            },
-            {
-              "name": "get_material_assignments",
-              "qualname": "MatTransfer.get_material_assignments",
-              "kind": "method",
-              "signature": "(self, obj) -> Dict[str, List]",
-              "summary": "Get material assignments for an object.",
-              "line": 37,
-              "deprecated": false
-            },
-            {
-              "name": "collect_material_assignments",
-              "qualname": "MatTransfer.collect_material_assignments",
-              "kind": "method",
-              "signature": "(self, obj)",
-              "summary": "Collect material assignments including shaders and textures.",
-              "line": 52,
-              "deprecated": false
-            },
-            {
-              "name": "handle_object_materials",
-              "qualname": "MatTransfer.handle_object_materials",
-              "kind": "method",
-              "signature": "(self, target_obj, material_assignments: Dict) -> None",
-              "summary": "Simple material handling - let Maya do the heavy lifting.",
-              "line": 56,
-              "deprecated": false
-            }
-          ]
-        }
-      ]
-    },
-    {
       "relpath": "mat_utils/mat_updater.py",
       "summary": "",
       "functions": [],
@@ -15127,32 +15152,6 @@
               "signature": "(cls) -> Dict[str, Dict[str, Any]]",
               "summary": "Returns a dict of dicts for all shader mappings.",
               "line": 156,
-              "deprecated": false
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "relpath": "mat_utils/shader_remapper.py",
-      "summary": "",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ShaderRemapper",
-          "summary": "",
-          "line": 16,
-          "bases": [
-            "ptk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "remap_shaders",
-              "qualname": "ShaderRemapper.remap_shaders",
-              "kind": "method",
-              "signature": "(self, shaders: List[str], target_type: str) -> Dict[str, str]",
-              "summary": "For each shader:",
-              "line": 32,
               "deprecated": false
             }
           ]
@@ -19480,14 +19479,14 @@
       "classes": []
     },
     {
-      "relpath": "ui_utils/maya_bridge_slots.py",
+      "relpath": "ui_utils/maya_bridge_slots_base.py",
       "summary": "Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.",
       "functions": [],
       "classes": [
         {
           "name": "MayaBridgeSlotsBase",
           "summary": "Adds a Maya-flavored ``default_output_dir`` to :class:`BridgeSlotsBase`.",
-          "line": 22,
+          "line": 24,
           "bases": [
             "BridgeSlotsBase"
           ],
@@ -19498,7 +19497,7 @@
               "kind": "method",
               "signature": "(self) -> str",
               "summary": "Scene-dir then workspace fallback for an empty Output Dir field.",
-              "line": 25,
+              "line": 27,
               "deprecated": false
             }
           ]

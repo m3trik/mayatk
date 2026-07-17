@@ -40,8 +40,13 @@ class MeshDiagnostics:
         invalidComponents: bool = False,
         historyOn: bool = True,
         bakePartialHistory: bool = False,
-    ) -> None:
-        """Select or remove unwanted geometry from a mesh via ``polyCleanupArgList``."""
+    ) -> list:
+        """Select or remove unwanted geometry from a mesh via ``polyCleanupArgList``.
+
+        Returns the matched problem components in ``repair=False`` (select) mode — the selection
+        ``polyCleanupArgList`` leaves behind — so callers can report or act on them. Repair mode
+        replaces geometry rather than selecting it and returns ``[]``.
+        """
 
         if allMeshes:
             objects = cmds.ls(geometry=True)
@@ -84,7 +89,15 @@ class MeshDiagnostics:
         command = f"polyCleanupArgList 4 {{{arg_list}}}"
 
         mel.eval(command)
-        cmds.select(objects)
+        if repair:
+            # Repair replaces geometry; reselect the objects so downstream ops have a stable
+            # selection, and there are no matched components to hand back.
+            cmds.select(objects)
+            return []
+        # Select mode: polyCleanupArgList leaves the matched problem components selected. Keep that
+        # selection — the whole point of "select only" — instead of clobbering it by reselecting the
+        # objects (the prior behavior, which made Select mode a no-op), and return the components.
+        return cmds.ls(selection=True, flatten=True) or []
 
     @staticmethod
     def get_ngons(objects: Optional[NodeSeq], repair: bool = False):

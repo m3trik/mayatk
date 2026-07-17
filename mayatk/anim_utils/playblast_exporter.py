@@ -54,7 +54,10 @@ class PlayblastExporter:
     def scene_name(self) -> str:
         if self._scene_name is None:
             scene = cmds.file(query=True, sceneName=True)
-            if scene:
+            # An unsaved scene reports "" in the GUI but a phantom
+            # extensionless ".../untitled" path in batch — a real scene file
+            # always carries an extension, so require one before trusting it.
+            if scene and os.path.splitext(scene)[1]:
                 self._scene_name = os.path.basename(scene).rsplit(".", 1)[0]
             else:
                 self._scene_name = "playblast"

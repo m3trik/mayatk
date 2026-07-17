@@ -1,17 +1,17 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Tree widget utilities for hierarchy manager UI operations.
+"""Tree widget utilities for hierarchy sync UI operations.
 
-Separated from _hierarchy_manager.py to keep Qt imports out of the core module.
+Separated from _hierarchy_sync.py to keep Qt imports out of the core module.
 """
 from typing import Dict, List, Tuple, Any
 
-from qtpy import QtWidgets
+from qtpy import QtCore, QtWidgets
 import pythontk as ptk
 from pythontk.core_utils.hierarchy_utils.hierarchy_matching import HierarchyMatching
 from pythontk.core_utils.hierarchy_utils.hierarchy_indexer import HierarchyIndexer
 
-from mayatk.env_utils.hierarchy_manager._hierarchy_manager import clean_hierarchy_path
+from mayatk.env_utils.hierarchy_sync._hierarchy_sync import clean_hierarchy_path
 
 
 class TreePathMatcher(ptk.LoggingMixin):
@@ -181,8 +181,23 @@ def get_selected_tree_items(tree_widget) -> list:
     return selected_items
 
 
+#: UserRole payloads that are UI placeholders, not Maya nodes.
+_PLACEHOLDER_USER_DATA = {"browse_placeholder", "open_scene_placeholder"}
+
+
 def _extract_object_name_from_item(item) -> str:
-    """Extract Maya object name from tree widget item."""
+    """Extract the Maya object name from a tree widget item.
+
+    Prefers the stored UserRole DAG path — leaf names (``_raw_name``) are
+    ambiguous when duplicate names exist in the scene.
+    """
+    try:
+        data = item.data(0, QtCore.Qt.UserRole)
+    except Exception:
+        data = None
+    if isinstance(data, str) and data and data not in _PLACEHOLDER_USER_DATA:
+        return data
+
     raw_name = getattr(item, "_raw_name", None)
     if raw_name:
         return raw_name

@@ -2,7 +2,7 @@
 # coding=utf-8
 """Slots for the RizomUV bridge panel.
 
-Thin subclass of :class:`mayatk.ui_utils.maya_bridge_slots.MayaBridgeSlotsBase`
+Thin subclass of :class:`mayatk.ui_utils.maya_bridge_slots_base.MayaBridgeSlotsBase`
 (which itself subclasses uitk's :class:`BridgeSlotsBase`) -- the panel
 machinery (widget construction, presets, log routing, startup info,
 template/script description) lives upstream. This file owns only
@@ -34,7 +34,7 @@ except ImportError:
     cmds = None
     mel = None
 
-from mayatk.ui_utils.maya_bridge_slots import MayaBridgeSlotsBase
+from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
 
 # From this package:
 from mayatk.uv_utils.rizom_bridge._rizom_bridge import (

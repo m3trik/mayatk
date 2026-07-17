@@ -140,17 +140,30 @@ class HierarchySidecar:
         """
         renamed = []
         for path_fn in (cls.manifest_path_for, cls.diff_report_path_for):
-            old = path_fn(old_export_path)
-            new = path_fn(new_export_path)
-            if os.path.exists(old):
-                os.replace(old, new)
-                renamed.append((old, new))
-            # Also rename .prev backup if present
-            old_prev = old + ".prev"
-            new_prev = new + ".prev"
-            if os.path.exists(old_prev):
-                os.replace(old_prev, new_prev)
-                renamed.append((old_prev, new_prev))
+            # Cover both per-file and base-stem sidecar variants.
+            pairs = list(
+                dict.fromkeys(
+                    [
+                        (path_fn(old_export_path), path_fn(new_export_path)),
+                        (
+                            path_fn(old_export_path, base_stem=True),
+                            path_fn(new_export_path, base_stem=True),
+                        ),
+                    ]
+                )
+            )
+            for old, new in pairs:
+                if old == new:
+                    continue
+                if os.path.exists(old):
+                    os.replace(old, new)
+                    renamed.append((old, new))
+                # Also rename .prev backup if present
+                old_prev = old + ".prev"
+                new_prev = new + ".prev"
+                if os.path.exists(old_prev):
+                    os.replace(old_prev, new_prev)
+                    renamed.append((old_prev, new_prev))
         return renamed
 
     # ------------------------------------------------------------------
@@ -265,19 +278,12 @@ class HierarchySidecar:
         sorted_paths = sorted(paths)
         path_hash = cls._paths_hash(sorted_paths)
 
-        # Preserve previous manifest as .prev (skip if hash is identical)
-        if os.path.exists(manifest_path):
-            try:
-                with open(manifest_path, "r", encoding="utf-8") as f:
-                    old_data = json.load(f)
-                if old_data.get("hash") != path_hash:
-                    prev_path = manifest_path + ".prev"
-                    os.replace(manifest_path, prev_path)
-            except (OSError, json.JSONDecodeError):
-                pass  # Can't read old manifest — just overwrite
-
+        # Write the new manifest to a temp file FIRST — moving the old one
+        # to .prev before a failed write would leave no manifest at all
+        # (compare() then silently passes).
+        tmp_path = manifest_path + ".tmp"
         try:
-            with open(manifest_path, "w", encoding="utf-8") as f:
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(
                     {
                         "paths": sorted_paths,
@@ -287,9 +293,41 @@ class HierarchySidecar:
                     f,
                     indent=2,
                 )
+        except OSError:
+            return None
+
+        # Preserve previous manifest as .prev (skip if hash is identical)
+        if os.path.exists(manifest_path):
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    old_data = json.load(f)
+                if old_data.get("hash") != path_hash:
+                    os.replace(manifest_path, manifest_path + ".prev")
+            except (OSError, json.JSONDecodeError):
+                pass  # Can't read old manifest — just overwrite
+
+        try:
+            os.replace(tmp_path, manifest_path)
             return manifest_path
         except OSError:
             return None
+
+    @classmethod
+    def _load_manifest(cls, manifest_path: str) -> Optional[dict]:
+        """Load manifest JSON, falling back to its ``.prev`` backup.
+
+        Accidental deletion or a corrupt write usually leaves the ``.prev``
+        backup intact — comparing against the last-known-good baseline
+        beats silently passing.  Returns None when neither file is
+        readable (no baseline yet).
+        """
+        for path in (manifest_path, manifest_path + ".prev"):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except (OSError, json.JSONDecodeError):
+                continue
+        return None
 
     @classmethod
     def read_manifest(
@@ -297,19 +335,17 @@ class HierarchySidecar:
     ) -> Optional[Set[str]]:
         """Read the manifest for *export_path*.
 
+        Falls back to the ``.prev`` backup when the manifest itself is
+        missing or unreadable.
+
         Returns:
-            A set of DAG path strings, or ``None`` if the manifest does
-            not exist or cannot be read.
+            A set of DAG path strings, or ``None`` if neither the
+            manifest nor its backup can be read.
         """
-        manifest_path = cls.manifest_path_for(export_path, base_stem=base_stem)
-        if not os.path.exists(manifest_path):
-            return None
-        try:
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return set(data.get("paths", []))
-        except (OSError, json.JSONDecodeError):
-            return None
+        data = cls._load_manifest(
+            cls.manifest_path_for(export_path, base_stem=base_stem)
+        )
+        return None if data is None else set(data.get("paths", []))
 
     # ------------------------------------------------------------------
     # Diff report
@@ -457,7 +493,9 @@ class HierarchySidecar:
         """Compare *current_paths* against the stored manifest.
 
         Uses the stored hash for a fast-path equality check before
-        falling back to a full set diff.
+        falling back to a full set diff.  When the manifest is missing or
+        unreadable its ``.prev`` backup is used as the baseline; with
+        neither present the check passes (no baseline yet).
 
         Parameters:
             export_path: The export file whose manifest to compare against.
@@ -470,13 +508,8 @@ class HierarchySidecar:
             the hierarchies are identical.
         """
         manifest_path = cls.manifest_path_for(export_path, base_stem=base_stem)
-        if not os.path.exists(manifest_path):
-            return True, [], []
-
-        try:
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
+        data = cls._load_manifest(manifest_path)
+        if data is None:
             return True, [], []
 
         # Fast-path: compare hashes before doing the full set diff

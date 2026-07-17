@@ -8,9 +8,11 @@ the one piece every Maya bridge needs: a sensible Output Dir fallback
 sourced from :class:`mayatk.env_utils.EnvUtils` (scene dir, then
 workspace) when the user leaves the field blank.
 
-Marmoset, Substance, and Rizom slots all subclass this instead of
-inheriting from ``BridgeSlotsBase`` directly, so the fallback lives
-in one place.
+The Marmoset, Substance, Rizom, Blender, and Unity bridge slots all
+subclass this instead of inheriting from ``BridgeSlotsBase`` directly,
+so the fallback lives in one place (Unity opts back out by overriding
+``default_output_dir`` to return ``""`` — a Maya scene dir isn't a
+Unity project).
 """
 from __future__ import annotations
 

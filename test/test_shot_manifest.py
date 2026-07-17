@@ -2244,7 +2244,7 @@ class TestColorOverrideRestore(unittest.TestCase, _ControllerHarness):
 
     def test_restore_mutates_palette(self):
         """Persisted fg override is applied to PASTEL_STATUS."""
-        from uitk.widgets.mixins.settings_manager import SettingsManager
+        from uitk.managers.settings_manager import SettingsManager
         from mayatk.anim_utils.shots.shot_manifest.manifest_data import PASTEL_STATUS
 
         settings = SettingsManager(namespace=self.ctrl._COLOR_SETTINGS_NS)
@@ -2263,7 +2263,7 @@ class TestColorOverrideRestore(unittest.TestCase, _ControllerHarness):
 
     def test_restore_updates_behavior_status_colors(self):
         """Persisted missing_behavior override propagates to BEHAVIOR_STATUS_COLORS."""
-        from uitk.widgets.mixins.settings_manager import SettingsManager
+        from uitk.managers.settings_manager import SettingsManager
         from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
             PASTEL_STATUS,
             BEHAVIOR_STATUS_COLORS,
@@ -2285,7 +2285,7 @@ class TestColorOverrideRestore(unittest.TestCase, _ControllerHarness):
 
     def test_restore_updates_error_color(self):
         """Persisted missing_object override propagates to BEHAVIOR_STATUS_COLORS['error']."""
-        from uitk.widgets.mixins.settings_manager import SettingsManager
+        from uitk.managers.settings_manager import SettingsManager
         from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
             PASTEL_STATUS,
             BEHAVIOR_STATUS_COLORS,

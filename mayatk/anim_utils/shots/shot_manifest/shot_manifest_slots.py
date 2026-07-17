@@ -66,7 +66,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._store = None  # ShotStore from last build
         self._last_results: list = []  # Last assessment results
 
-        from uitk.widgets.mixins.settings_manager import SettingsManager
+        from uitk.managers.settings_manager import SettingsManager
 
         self._settings = SettingsManager(namespace=SETTINGS_NS)
         # One-shot migration: fit_mode and initial_shot_length now live on
@@ -1120,7 +1120,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     def _open_color_editor(self) -> None:
         """Launch the status-color editor dialog."""
         from uitk.widgets.editors.color_mapping_editor import ColorMappingDialog
-        from uitk.widgets.mixins.settings_manager import SettingsManager
+        from uitk.managers.settings_manager import SettingsManager
         from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
             PASTEL_STATUS,
             BEHAVIOR_STATUS_COLORS,
@@ -1169,7 +1169,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
     def _restore_color_overrides(self) -> None:
         """Apply any persisted color overrides to the live palette."""
-        from uitk.widgets.mixins.settings_manager import SettingsManager
+        from uitk.managers.settings_manager import SettingsManager
         from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
             PASTEL_STATUS,
             BEHAVIOR_STATUS_COLORS,

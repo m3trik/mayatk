@@ -1,4 +1,4 @@
-"""Minimal runner for test_hierarchy_manager.py under mayapy."""
+"""Minimal runner for test_hierarchy_sync.py under mayapy."""
 import sys
 import os
 import io
@@ -25,8 +25,8 @@ if QtWidgets.QApplication.instance() is None:
 import importlib.util
 
 _spec = importlib.util.spec_from_file_location(
-    "test_hierarchy_manager",
-    os.path.join(MAYATK_ROOT, "test", "test_hierarchy_manager.py"),
+    "test_hierarchy_sync",
+    os.path.join(MAYATK_ROOT, "test", "test_hierarchy_sync.py"),
 )
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)

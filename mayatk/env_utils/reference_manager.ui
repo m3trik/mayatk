@@ -222,7 +222,7 @@
   <customwidget>
    <class>TableWidget</class>
    <extends>QTableWidget</extends>
-   <header>uitk.widgets.table_widget</header>
+   <header>uitk.widgets.tableWidget</header>
   </customwidget>
  </customwidgets>
  <resources/>

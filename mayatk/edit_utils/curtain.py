@@ -558,7 +558,7 @@ class CurtainSlots(ptk.LoggingMixin):
     def cmb000_init(self, widget):
         """Wire the in-panel preset selector (built-in + user tiers)."""
         try:
-            from uitk.widgets.mixins.preset_manager import PresetManager
+            from uitk.managers.preset_manager import PresetManager
 
             self.presets = PresetManager(
                 parent=self.ui,

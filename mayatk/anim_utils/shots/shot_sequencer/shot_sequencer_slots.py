@@ -1235,7 +1235,7 @@ class ShotSequencerController(
         # the resolved color map and only rebuild when the color dialog
         # publishes a new one via btn_colors.
         if self._color_map_cache is None:
-            from uitk.widgets.mixins.settings_manager import SettingsManager
+            from uitk.managers.settings_manager import SettingsManager
 
             color_settings = SettingsManager(namespace=AttributeColorDialog._SETTINGS_NS)
             color_map = dict(_DEFAULT_ATTRIBUTE_COLORS)
@@ -1325,7 +1325,7 @@ class ShotSequencerController(
             in_active = obj_name in active_objects
             icon = node_icons_cls.get_icon(obj_name) if node_icons_cls else None
             if not exists and icon is None:
-                from uitk.widgets.mixins.icon_manager import IconManager
+                from uitk.managers.icon_manager import IconManager
 
                 icon = IconManager.get("close", size=(16, 16), color=_NOT_FOUND_COLOR)
             color_kw: dict = {}
@@ -2962,7 +2962,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
 
     def btn_colors(self):
         """Open the attribute color configuration dialog."""
-        from uitk.widgets.mixins.settings_manager import SettingsManager
+        from uitk.managers.settings_manager import SettingsManager
 
         widget = self.controller._get_sequencer_widget()
 

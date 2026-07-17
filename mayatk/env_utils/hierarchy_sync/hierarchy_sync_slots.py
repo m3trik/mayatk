@@ -14,19 +14,19 @@ from uitk.widgets.mixins.tooltip_mixin import fmt
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.namespace_sandbox import NamespaceSandbox
-from mayatk.env_utils.hierarchy_manager._hierarchy_manager import (
-    HierarchyManager,
+from mayatk.env_utils.hierarchy_sync._hierarchy_sync import (
+    HierarchySync,
     ObjectSwapper,
     get_clean_node_name_from_string,
     is_default_maya_camera,
     select_objects_in_maya,
 )
-import mayatk.env_utils.hierarchy_manager.tree_utils as tree_utils
-from mayatk.env_utils.hierarchy_manager.tree_renderer import HierarchyTreeRenderer
+import mayatk.env_utils.hierarchy_sync.tree_utils as tree_utils
+from mayatk.env_utils.hierarchy_sync.tree_renderer import HierarchyTreeRenderer
 from mayatk.ui_utils.node_icons import NodeIcons
 
 
-class HierarchyManagerController(ptk.LoggingMixin):
+class HierarchySyncController(ptk.LoggingMixin):
     """Controller for hierarchy management operations."""
 
     def __init__(self, slots_instance, log_level="WARNING"):
@@ -39,7 +39,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
         self._redirect_logger(self.logger)
 
         # Initialize state
-        self.hierarchy_manager = None
+        self.hierarchy_sync = None
         self.object_swapper = None
         self._current_diff_result = None
         self._reference_path = ""  # Reference scene path (source of truth)
@@ -53,6 +53,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
         # Per-tree ignored path sets
         self._ignored_ref_paths = set()  # Ignored paths in reference tree (tree000)
         self._ignored_cur_paths = set()  # Ignored paths in current tree (tree001)
+        self._hide_ignored = False  # 'Hide Ignored' toggle: hide vs dim ignored items
 
         # Cached reference import â€” avoids re-importing the same file for
         # tree display + diff analysis within a single session.
@@ -67,7 +68,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
         if hasattr(self.ui.txt003, "anchorClicked"):
             self.ui.txt003.anchorClicked.connect(self._on_log_link_clicked)
 
-        self.logger.debug("HierarchyManagerController initialized.")
+        self.logger.debug("HierarchySyncController initialized.")
 
     def _on_log_link_clicked(self, url) -> None:
         """Dispatch clickable ``action://`` links from the log panel."""
@@ -139,6 +140,8 @@ class HierarchyManagerController(ptk.LoggingMixin):
         fuzzy_matching: bool = True,
         dry_run: bool = True,
         filter_meshes: bool = False,
+        filter_cameras: bool = False,
+        filter_lights: bool = False,
     ) -> bool:
         """Analyze hierarchies and perform comparison.
 
@@ -151,6 +154,9 @@ class HierarchyManagerController(ptk.LoggingMixin):
             fuzzy_matching: Enable fuzzy name matching
             dry_run: Perform analysis without making changes
             filter_meshes: Exclude mesh-bearing transforms from comparison
+            filter_cameras: Exclude all camera transforms from comparison
+                (default cameras are always excluded regardless).
+            filter_lights: Exclude all light transforms from comparison.
 
         Returns:
             bool: True if analysis was successful
@@ -189,28 +195,28 @@ class HierarchyManagerController(ptk.LoggingMixin):
                 )
                 return False
 
-            # Obtain the sandbox from the cache for the HierarchyManager.
+            # Obtain the sandbox from the cache for the HierarchySync.
             cached_sandbox = (
                 self._cached_reference_import.get("sandbox")
                 if self._cached_reference_import
                 else None
             )
 
-            # Create hierarchy manager for comparison analysis
-            self.hierarchy_manager = HierarchyManager(
+            # Create hierarchy sync for comparison analysis
+            self.hierarchy_sync = HierarchySync(
                 import_manager=cached_sandbox,
                 fuzzy_matching=fuzzy_matching,
                 dry_run=dry_run,
             )
 
-            self._redirect_logger(self.hierarchy_manager.logger)
+            self._redirect_logger(self.hierarchy_sync.logger)
 
-            self._current_diff_result = self.hierarchy_manager.analyze_hierarchies(
+            self._current_diff_result = self.hierarchy_sync.analyze_hierarchies(
                 current_tree_root="SCENE_WIDE_MODE",
                 reference_objects=non_default_camera_reference_transforms,
                 filter_meshes=filter_meshes,
-                filter_cameras=False,
-                filter_lights=False,
+                filter_cameras=filter_cameras,
+                filter_lights=filter_lights,
             )
 
             # Do NOT clean up the cached import here â€” it may still be
@@ -238,7 +244,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
 
     def _clear_analysis_cache(self):
         """Clear the analysis cache to force re-analysis on next diff operation."""
-        self.hierarchy_manager = None
+        self.hierarchy_sync = None
         self._current_diff_result = None
         self._reference_namespaces = []  # Clear reference namespace tracking
         self.clear_ignored_paths()
@@ -246,7 +252,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
         self.logger.debug("Analysis cache cleared (ignore paths also reset)")
 
     def _on_window_hidden(self):
-        """Unload reference scene data when the hierarchy manager is hidden."""
+        """Unload reference scene data when the hierarchy sync is hidden."""
         self._cleanup_cached_reference_import()
         # Clear the reference tree
         if hasattr(self, "ui") and hasattr(self.ui, "tree000"):
@@ -411,7 +417,9 @@ class HierarchyManagerController(ptk.LoggingMixin):
             create_stubs: Create empty transforms for missing items.
             quarantine_extras: Move extra items to a _QUARANTINE group.
             quarantine_group: Name of the quarantine group.
-            skip_animated: Skip quarantining extras under animated ancestors.
+            skip_animated: Skip quarantining/reparenting nodes whose motion
+                would change — animated extras (or extras under animated
+                ancestors) and keyed reparent candidates.
             fix_reparented: Move reparented nodes to reference position.
             fix_fuzzy_renames: Rename fuzzy-matched nodes to reference names.
             dry_run: Preview without changes.
@@ -419,15 +427,15 @@ class HierarchyManagerController(ptk.LoggingMixin):
         Returns:
             True if any repairs were applied (or would be in dry-run).
         """
-        if not self.hierarchy_manager or not self._current_diff_result:
+        if not self.hierarchy_sync or not self._current_diff_result:
             self.logger.error("Please run a diff analysis first.")
             return False
 
         effective = self._filter_ignored_from_diff()
 
         # Temporarily set dry_run without leaking state
-        prev_dry_run = self.hierarchy_manager.dry_run
-        self.hierarchy_manager.dry_run = dry_run
+        prev_dry_run = self.hierarchy_sync.dry_run
+        self.hierarchy_sync.dry_run = dry_run
 
         # Wrap live changes in a single undo chunk for one-click revert
         undo_opened = False
@@ -447,7 +455,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
                 self.logger.progress(
                     f"Renaming {len(effective['fuzzy_matches'])} fuzzy-matched items..."
                 )
-                results["renamed"] = self.hierarchy_manager.fix_fuzzy_renames(
+                results["renamed"] = self.hierarchy_sync.fix_fuzzy_renames(
                     effective["fuzzy_matches"],
                     skip_animated=skip_animated,
                 )
@@ -489,29 +497,34 @@ class HierarchyManagerController(ptk.LoggingMixin):
                 self.logger.progress(
                     f"Creating stubs for {len(effective['missing'])} missing items..."
                 )
-                results["stubs"] = self.hierarchy_manager.create_stubs(
+                results["stubs"] = self.hierarchy_sync.create_stubs(
                     effective["missing"]
+                )
+
+            # Reparent BEFORE quarantine — quarantining an extra parent moves
+            # its subtree, which would strand any reparented child still
+            # inside it (the recorded path goes stale and the fix silently
+            # skips it).
+            if fix_reparented and effective["reparented"]:
+                self.logger.progress(
+                    f"Fixing {len(effective['reparented'])} reparented items..."
+                )
+                results["reparented"] = self.hierarchy_sync.fix_reparented(
+                    effective["reparented"],
+                    skip_animated=skip_animated,
                 )
 
             if quarantine_extras and effective["extra"]:
                 self.logger.progress(
                     f"Quarantining {len(effective['extra'])} extra items..."
                 )
-                results["quarantined"] = self.hierarchy_manager.quarantine_extras(
+                results["quarantined"] = self.hierarchy_sync.quarantine_extras(
                     group=quarantine_group,
                     paths=effective["extra"],
                     skip_animated=skip_animated,
                 )
-
-            if fix_reparented and effective["reparented"]:
-                self.logger.progress(
-                    f"Fixing {len(effective['reparented'])} reparented items..."
-                )
-                results["reparented"] = self.hierarchy_manager.fix_reparented(
-                    effective["reparented"]
-                )
         finally:
-            self.hierarchy_manager.dry_run = prev_dry_run
+            self.hierarchy_sync.dry_run = prev_dry_run
             if undo_opened:
                 try:
                     cmds.undoInfo(closeChunk=True)
@@ -856,7 +869,7 @@ class HierarchyManagerController(ptk.LoggingMixin):
 
         self.logger.log_divider()
 
-        from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import (
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
             HierarchySidecar,
         )
 
@@ -998,9 +1011,20 @@ class HierarchyManagerController(ptk.LoggingMixin):
         except OSError:
             return None
 
+    @staticmethod
+    def _coerce_str_list(value) -> List[str]:
+        """QSettings round-trips a one-item list as a bare string — coerce."""
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        return list(value)
+
     def get_recent_reference_scenes(self) -> List[str]:
         """Get recent reference scenes from settings."""
-        recent_scenes = self.ui.settings.value("recent_reference_scenes", [])
+        recent_scenes = self._coerce_str_list(
+            self.ui.settings.value("recent_reference_scenes", [])
+        )
         # Filter out non-existent files and return last 10
         return [scene for scene in recent_scenes if os.path.exists(scene)][-10:]
 
@@ -1010,7 +1034,9 @@ class HierarchyManagerController(ptk.LoggingMixin):
             return
 
         scene_path = str(Path(scene_path).resolve())
-        recent_scenes = self.ui.settings.value("recent_reference_scenes", [])
+        recent_scenes = self._coerce_str_list(
+            self.ui.settings.value("recent_reference_scenes", [])
+        )
 
         # Remove if already exists to avoid duplicates
         if scene_path in recent_scenes:
@@ -1109,10 +1135,10 @@ class _MiddleButtonDragFilter(QtCore.QObject):
         return super().eventFilter(obj, event)
 
 
-class HierarchyManagerSlots(ptk.LoggingMixin):
+class HierarchySyncSlots(ptk.LoggingMixin):
     """Slots class for hierarchy management UI operations.
 
-    This class provides the interface between the UI and the HierarchyManagerController.
+    This class provides the interface between the UI and the HierarchySyncController.
     It manages UI event handling, widget initialization, and routes user interactions
     to the appropriate controller methods.
 
@@ -1138,13 +1164,13 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         self.set_log_level(log_level)
 
         self.sb = switchboard
-        self.ui = self.sb.loaded_ui.hierarchy_manager
+        self.ui = self.sb.loaded_ui.hierarchy_sync
 
         # Initialize UI components
         self.ui.txt003.setText("")  # Log Output
 
         # Create controller
-        self.controller = HierarchyManagerController(self)
+        self.controller = HierarchySyncController(self)
 
         # Middle-mouse drag filter for current scene tree reparenting
         self._tree001_drag_filter = _MiddleButtonDragFilter(
@@ -1209,7 +1235,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
         lines = [
             '<span style="color:#aaa; font-size:11px;">'
-            "<b>Hierarchy Manager</b><br>"
+            "<b>Hierarchy Sync</b><br>"
             f"Scene: {scene_name}<br>"
             f"Workspace: {workspace}<br><br>"
             "<b>Workflow:</b><br>"
@@ -1240,10 +1266,18 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             setCurrentIndex=1,  # Default to INFO
             setToolTip="Set the log level.",
         )
+        widget.menu.add(
+            "QCheckBox",
+            setText="Hide Ignored",
+            setObjectName="chk_hide_ignored",
+            setChecked=False,
+            setToolTip="Hide ignored items from the trees instead of dimming them.",
+        )
+        widget.menu.chk_hide_ignored.toggled.connect(self._on_hide_ignored_toggled)
 
         widget.set_help_text(
             fmt(
-                title="Hierarchy Manager",
+                title="Hierarchy Sync",
                 body="Compare, diff, and synchronise scene hierarchies "
                 "against a reference file.",
                 steps=[
@@ -1262,6 +1296,8 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                         "the scene.",
                         "<b>Log Level</b> — control verbosity of the output "
                         "panel.",
+                        "<b>Hide Ignored</b> — hide ignored items from the "
+                        "trees instead of dimming them.",
                     ]),
                 ],
                 notes=[
@@ -1270,6 +1306,12 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 ],
             )
         )
+
+    def _on_hide_ignored_toggled(self, state):
+        """Toggle whether ignored items are hidden from the trees or merely dimmed."""
+        self.controller._hide_ignored = bool(state)
+        self.controller.tree.apply_ignore_styling(self.ui.tree000)
+        self.controller.tree.apply_ignore_styling(self.ui.tree001)
 
     def tree000_init(self, widget):
         """Initialize the reference/imported hierarchy tree widget."""
@@ -1359,8 +1401,6 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             start_dir=self.controller.workspace,
         )
         if scene_files and len(scene_files) > 0:
-            import maya.cmds as cmds
-
             cmds.file(scene_files[0], open=True, force=True)
 
     def _show_recent_scenes(self):
@@ -1384,8 +1424,6 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         action = menu.exec_(QtGui.QCursor.pos())
         if action:
             chosen = action.data()
-            import maya.cmds as cmds
-
             cmds.file(chosen, open=True, force=True)
 
     def _on_current_tree_item_clicked(self, item, column):
@@ -1418,9 +1456,10 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 new_path = cmds.rename(node, new_name)
                 actual_name = new_path.split('|')[-1].split(':')[-1]
                 # Persist the post-rename DAG path so subsequent ops on this
-                # item resolve correctly.
+                # item resolve correctly (descendants included).
                 item.setData(0, self.sb.QtCore.Qt.UserRole, new_path)
                 item._raw_name = actual_name
+                self._patch_descendant_item_paths(item, node, new_path)
 
                 # Maya may have appended a number to avoid clashes
                 if actual_name != new_name:
@@ -1454,10 +1493,15 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 ``new_parent_item`` is ``None`` when dropped at root.
         """
         role = self.sb.QtCore.Qt.UserRole
-        pending = []  # (node, parent_node | None-for-world)
+        # Track everything by UUID — moving one item invalidates the stored
+        # DAG paths of any other dragged item beneath it.
+        pending = []  # (node_uuid, parent_uuid | None-for-world, display_name)
         for item, new_parent_item in moves:
             node = item.data(0, role)
             if not node or not cmds.objExists(node):
+                continue
+            node_uuid = (cmds.ls(node, uuid=True) or [None])[0]
+            if not node_uuid:
                 continue
             if new_parent_item is not None:
                 parent_node = new_parent_item.data(0, role)
@@ -1466,27 +1510,41 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                         "Drop target has no Maya node — reparent skipped."
                     )
                     continue
-                pending.append((node, parent_node))
+                parent_uuid = (cmds.ls(parent_node, uuid=True) or [None])[0]
+                pending.append((node_uuid, parent_uuid, node))
             else:
-                pending.append((node, None))  # dropped at root → world-parent
+                pending.append((node_uuid, None, node))  # dropped at root
         if not pending:
             return
 
         cmds.undoInfo(openChunk=True, chunkName="Drag Reparent")
         try:
-            for node, parent_node in pending:
+            for node_uuid, parent_uuid, display in pending:
+                node = (cmds.ls(node_uuid, long=True) or [None])[0]
+                if not node:
+                    continue
                 try:
-                    if parent_node is None:
-                        cmds.parent(node, world=True)
-                        self.controller.logger.info(f"Reparented '{node}' to world")
-                    else:
-                        cmds.parent(node, parent_node)
-                        self.controller.logger.info(
-                            f"Reparented '{node}' under '{parent_node}'"
+                    if HierarchySync._has_animation_data(node):
+                        self.controller.logger.warning(
+                            f"'{node.split('|')[-1]}' has animation — its "
+                            f"motion may change under the new parent."
                         )
+                    HierarchySync._unlock_if_stub(node)
+                    if parent_uuid is None:
+                        new_path = (cmds.parent(node, world=True) or [node])[0]
+                        self.controller.logger.info(f"Reparented '{display}' to world")
+                    else:
+                        parent_node = (cmds.ls(parent_uuid, long=True) or [None])[0]
+                        if not parent_node:
+                            continue
+                        new_path = (cmds.parent(node, parent_node) or [node])[0]
+                        self.controller.logger.info(
+                            f"Reparented '{display}' under '{parent_node.split('|')[-1]}'"
+                        )
+                    HierarchySync._relock_if_stub(new_path)
                 except Exception as e:
                     self.controller.logger.error(
-                        f"Maya reparent failed for '{node}': {e}"
+                        f"Maya reparent failed for '{display}': {e}"
                     )
         finally:
             cmds.undoInfo(closeChunk=True)
@@ -1668,6 +1726,25 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         )
         items.append((chk_filter_meshes, "Filter Mesh Objects"))
 
+        chk_filter_cameras = self.sb.registered_widgets.CheckBox()
+        chk_filter_cameras.setText("Filter Cameras")
+        chk_filter_cameras.setObjectName("chk_filter_cameras")
+        chk_filter_cameras.setChecked(False)
+        chk_filter_cameras.setToolTip(
+            "Exclude all camera transforms from the comparison. Maya's default "
+            "cameras (persp, top, front, side) are always excluded regardless."
+        )
+        items.append((chk_filter_cameras, "Filter Cameras"))
+
+        chk_filter_lights = self.sb.registered_widgets.CheckBox()
+        chk_filter_lights.setText("Filter Lights")
+        chk_filter_lights.setObjectName("chk_filter_lights")
+        chk_filter_lights.setChecked(False)
+        chk_filter_lights.setToolTip(
+            "Exclude all light transforms from the comparison."
+        )
+        items.append((chk_filter_lights, "Filter Lights"))
+
         chk_ignore_quarantine = self.sb.registered_widgets.CheckBox()
         chk_ignore_quarantine.setText("Ignore Quarantine Group")
         chk_ignore_quarantine.setObjectName("chk_ignore_quarantine")
@@ -1736,10 +1813,14 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         )
         widget.option_box.menu.add(
             "QCheckBox",
-            setText="Skip Animated Parents",
+            setText="Skip Animated",
             setObjectName="chk_skip_animated",
             setChecked=True,
-            setToolTip="Skip quarantining extras that are parented under an animated object (they may be intentionally attached).",
+            setToolTip=(
+                "Skip repairs that would change motion: extras that are "
+                "animated (or ride an animated parent) are not quarantined, "
+                "and keyed nodes are not reparented."
+            ),
         )
         widget.option_box.menu.add(
             "QCheckBox",
@@ -1784,6 +1865,8 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         expand_diff = True
         force_reanalysis = False
         filter_meshes = False  # Default: compare all transforms
+        filter_cameras = False
+        filter_lights = False
 
         if hasattr(self.ui, "cmb_diff_mode"):
             diff_mode = self.ui.cmb_diff_mode.currentData() or diff_mode
@@ -1797,6 +1880,10 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             fuzzy_matching = self.ui.chk_fuzzy_matching.isChecked()
         if hasattr(self.ui, "chk_filter_meshes"):
             filter_meshes = self.ui.chk_filter_meshes.isChecked()
+        if hasattr(self.ui, "chk_filter_cameras"):
+            filter_cameras = self.ui.chk_filter_cameras.isChecked()
+        if hasattr(self.ui, "chk_filter_lights"):
+            filter_lights = self.ui.chk_filter_lights.isChecked()
 
         # Parse selection mode
         auto_select = selection_mode != "none"
@@ -1826,7 +1913,12 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
         # Perform hierarchy analysis
         success = self.controller.analyze_hierarchies(
-            reference_path, fuzzy_matching, dry_run, filter_meshes=filter_meshes
+            reference_path,
+            fuzzy_matching,
+            dry_run,
+            filter_meshes=filter_meshes,
+            filter_cameras=filter_cameras,
+            filter_lights=filter_lights,
         )
         if not success:
             return
@@ -1918,14 +2010,19 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         """Toggle button for pull objects with options menu."""
         self.ui.txt003.clear()
 
-        # Validate that we have objects selected and a reference path
-        object_names = self.controller.tree.get_selected_object_names(self.ui.tree000)
-        # Filter out ignored items from selection
-        object_names = [
-            n
-            for n in object_names
-            if not self.controller.is_path_ignored(self.ui.tree000, n)
-        ]
+        # Validate that we have objects selected and a reference path.
+        # Ignore filtering must compare TREE paths (what the ignored set
+        # stores) — the extracted object names carry namespaces and would
+        # never match.
+        tree = self.ui.tree000
+        object_names = []
+        for item in self.controller.tree.get_selected_tree_items(tree):
+            item_path = self.controller.tree.build_item_path(item)
+            if self.controller.is_path_ignored(tree, item_path):
+                continue
+            name = tree_utils._extract_object_name_from_item(item)
+            if name:
+                object_names.append(name)
         if not object_names:
             self.logger.error("Please select objects in the reference hierarchy tree.")
             return
@@ -2247,11 +2344,17 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         reference_path = self.controller.reference_path
         fuzzy_matching = True  # Default value
         filter_meshes = False
+        filter_cameras = False
+        filter_lights = False
 
         if hasattr(self.ui, "chk_fuzzy_matching"):
             fuzzy_matching = self.ui.chk_fuzzy_matching.isChecked()
         if hasattr(self.ui, "chk_filter_meshes"):
             filter_meshes = self.ui.chk_filter_meshes.isChecked()
+        if hasattr(self.ui, "chk_filter_cameras"):
+            filter_cameras = self.ui.chk_filter_cameras.isChecked()
+        if hasattr(self.ui, "chk_filter_lights"):
+            filter_lights = self.ui.chk_filter_lights.isChecked()
 
         dry_run = self.ui.chk002.isChecked()
         log_level = self.ui.cmb001.currentData()
@@ -2261,7 +2364,12 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             self.logger.setLevel(log_level)
 
         success = self.controller.analyze_hierarchies(
-            reference_path, fuzzy_matching, dry_run, filter_meshes=filter_meshes
+            reference_path,
+            fuzzy_matching,
+            dry_run,
+            filter_meshes=filter_meshes,
+            filter_cameras=filter_cameras,
+            filter_lights=filter_lights,
         )
         if success:
             # Refresh tree widgets with new analysis
@@ -2316,6 +2424,10 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
         try:
             cmds.undoInfo(openChunk=True, chunkName="Delete Selected Objects")
+            # Stub transforms are locked against deletion — lift the lock so
+            # one locked stub can't fail the whole batch.
+            for node in nodes:
+                HierarchySync._unlock_if_stub(node)
             cmds.delete(nodes)
             self.logger.info(f"Deleted {len(nodes)} object(s): {', '.join(nodes)}")
         except Exception as e:
@@ -2408,7 +2520,16 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 return
 
         # â”€â”€ Execute renames â”€â”€
+        # Deepest-first: renaming a parent before its child invalidates the
+        # child's stored DAG path and would silently skip it.
+        def _pair_depth(pair):
+            data = pair[0].data(0, self.sb.QtCore.Qt.UserRole)
+            return str(data).count("|") if data else 0
+
+        rename_pairs.sort(key=_pair_depth, reverse=True)
+
         renamed = 0
+        cmds.undoInfo(openChunk=True, chunkName="Rename from Reference")
         for cur_item, new_name in rename_pairs:
             node = cur_item.data(0, self.sb.QtCore.Qt.UserRole)
             if not node or not cmds.objExists(node):
@@ -2425,6 +2546,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 actual_name = new_path.split('|')[-1].split(':')[-1]
                 cur_item.setData(0, self.sb.QtCore.Qt.UserRole, new_path)
                 cur_item._raw_name = actual_name
+                self._patch_descendant_item_paths(cur_item, node, new_path)
 
                 # Block signals to prevent itemChanged from interfering
                 self.ui.tree001.blockSignals(True)
@@ -2440,6 +2562,8 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
             except Exception as e:
                 self.controller.logger.error(f"Failed to rename '{node}': {e}")
 
+        cmds.undoInfo(closeChunk=True)
+
         if renamed:
             self.logger.success(f"Renamed {renamed} object(s) from reference names.")
             # Re-run diff if one was active
@@ -2447,6 +2571,23 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                 self.controller.tree.apply_difference_formatting(
                     self.ui.tree001, self.ui.tree000
                 )
+
+    def _patch_descendant_item_paths(self, item, old_path, new_path):
+        """Update stored UserRole DAG paths in *item*'s subtree after a rename.
+
+        Only path-qualified entries (``|A|B`` style, present when short names
+        are ambiguous) embed their ancestors' names — patch their prefix so
+        later operations on those items still resolve.
+        """
+        role = self.sb.QtCore.Qt.UserRole
+        old_prefix = str(old_path) + "|"
+        stack = [item.child(i) for i in range(item.childCount())]
+        while stack:
+            child = stack.pop()
+            data = child.data(0, role)
+            if isinstance(data, str) and data.startswith(old_prefix):
+                child.setData(0, role, str(new_path) + data[len(str(old_path)):])
+            stack.extend(child.child(i) for i in range(child.childCount()))
 
     def _auto_ignore_quarantine_group(self):
         """Add the quarantine group path to the current-scene ignored set.
@@ -2532,6 +2673,42 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         self.controller.tree.apply_ignore_styling(self.ui.tree000)
         self.controller.tree.apply_ignore_styling(self.ui.tree001)
 
+    # ------------------------- Auto-select helpers ------------------------- #
+
+    @staticmethod
+    def _condense_to_roots(paths):
+        """Drop paths whose ancestor is also in *paths* (keep shallow roots)."""
+        condensed = []
+        for path in sorted(paths, key=lambda p: p.count("|")):
+            if not any(path.startswith(root + "|") for root in condensed):
+                condensed.append(path)
+        return condensed
+
+    @staticmethod
+    def _filter_to_leaves(paths):
+        """Keep only paths that are not a parent of another path in *paths*."""
+        ordered = sorted(paths, key=lambda p: p.count("|"), reverse=True)
+        return [
+            p
+            for p in ordered
+            if not any(o != p and o.startswith(p + "|") for o in ordered)
+        ]
+
+    @staticmethod
+    def _select_and_reveal(candidates):
+        """Select *candidates* and expand their ancestors; returns new-selection count."""
+        count = 0
+        for c in candidates:
+            if not c.isSelected():
+                c.setSelected(True)
+                count += 1
+                parent = c.parent()
+                while parent:
+                    if not parent.isExpanded():
+                        parent.setExpanded(True)
+                    parent = parent.parent()
+        return count
+
     def _apply_diff_options(
         self,
         auto_select: bool,
@@ -2539,282 +2716,88 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
         select_root_only: bool = False,
         select_leaves_only: bool = False,
     ):
-        """Apply auto-select and expand diff options to tree widgets.
+        """Apply auto-select and expand-diff options to the tree widgets.
 
-        Args:
-            auto_select: Whether to automatically select differences
-            expand_diff: Whether to expand nodes with differences
-            select_root_only: If True, only select root differences (condensed view).
-                             If False, select all differences.
-            select_leaves_only: If True, only select leaf differences (deepest level objects).
-                               If False, select according to root_only setting.
+        missing  -> selected/expanded in the REFERENCE tree (tree000)
+        extra    -> selected/expanded in the CURRENT tree (tree001)
+        reparented / fuzzy matches -> both trees.
         """
-        if not self.controller._current_diff_result:
+        diff = self.controller._current_diff_result
+        if not diff:
             return
 
-        # Get tree widgets
-        tree001 = self.ui.tree001  # Current scene tree
-        tree000 = self.ui.tree000  # Reference tree
+        tree000 = self.ui.tree000  # reference
+        tree001 = self.ui.tree001  # current
+        strict = not self.controller.hierarchy_sync.fuzzy_matching
 
-        # Auto-select differences in both trees
+        def _condensed(paths, tree):
+            if select_root_only and paths:
+                paths = self._condense_to_roots(paths)
+            elif select_leaves_only and paths:
+                paths = self._filter_to_leaves(paths)
+            return [
+                p for p in paths if not self.controller.is_path_ignored(tree, p)
+            ]
+
         if auto_select:
             tree001.clearSelection()
             tree000.clearSelection()
             selected_count = 0
 
-            # Initialize tree path matcher
             tree_matcher = tree_utils.TreePathMatcher()
             self.controller._redirect_logger(tree_matcher.logger)
-
-            # Build indices for both trees
-            ref_by_full, ref_by_clean_full, ref_by_last = tree_matcher.build_tree_index(
+            ref_by_full, ref_by_clean, ref_by_last = tree_matcher.build_tree_index(
                 tree000
             )
-            cur_by_full, cur_by_clean_full, cur_by_last = tree_matcher.build_tree_index(
+            cur_by_full, cur_by_clean, cur_by_last = tree_matcher.build_tree_index(
                 tree001
             )
 
-            # Debug logging for tree indices
-            tree_matcher.log_tree_index_debug(
-                cur_by_full, cur_by_clean_full, cur_by_last, "current"
-            )
+            unresolved_missing = []  # exist ONLY in reference, not found in tree
+            unresolved_extra = []  # exist ONLY in current, not found in tree
 
-            unresolved_extra = []  # Extra objects exist ONLY in current scene
-            unresolved_missing = []  # Missing objects exist ONLY in reference
-
-            # NOTE: Previous implementation inverted the tree search targets.
-            # Correct logic:
-            #   missing -> select in REFERENCE tree (tree000)
-            #   extra   -> select in CURRENT tree (tree001)
-
-            # -------------------- Select MISSING (reference tree) ---------------------
-            missing_list = self.controller._current_diff_result.get("missing", [])
-
-            # DEBUG: Show which tree each type of diff will be processed in
-            extra_list_preview = self.controller._current_diff_result.get("extra", [])
-            self.logger.debug(
-                f"[TREE-DEBUG] Missing paths will be selected in REFERENCE TREE (tree000): {len(missing_list)} paths"
-            )
-            self.logger.debug(
-                f"[TREE-DEBUG] Extra paths will be selected in CURRENT TREE (tree001): {len(extra_list_preview)} paths"
-            )
-            if missing_list:
-                self.logger.debug(
-                    f"[TREE-DEBUG] Missing path examples (reference tree): {missing_list[:3]}"
-                )
-            if extra_list_preview:
-                self.logger.debug(
-                    f"[TREE-DEBUG] Extra path examples (current tree): {extra_list_preview[:3]}"
-                )
-
-            # Check tree structure for debugging
-            try:
-                ref_item_count = self.count_tree_items(tree000)
-                cur_item_count = self.count_tree_items(tree001)
-                self.logger.debug(
-                    f"[TREE-DEBUG] Reference tree (tree000) total items: {ref_item_count}"
-                )
-                self.logger.debug(
-                    f"[TREE-DEBUG] Current tree (tree001) total items: {cur_item_count}"
-                )
-            except Exception as e:
-                self.logger.debug(f"[TREE-DEBUG] Could not count tree items: {e}")
-
-            # Optionally condense to root-only missing paths (avoid selecting every descendant when a parent is already missing)
-            if select_root_only and missing_list:
-                self.logger.debug(
-                    f"[ROOT-ONLY] Applying root-only filter to {len(missing_list)} missing paths"
-                )
-                original_count = len(missing_list)
-                # Sort by depth (shallow first) so parents appear before children
-                missing_list_sorted = sorted(missing_list, key=lambda p: p.count("|"))
-                condensed_missing = []
-                seen_roots = set()
-                for path in missing_list_sorted:
-                    # If any existing condensed path is a strict prefix (parent) of this path, skip it
-                    skip = False
-                    for root in condensed_missing:
-                        if path.startswith(root + "|"):
-                            skip = True
-                            break
-                    if not skip:
-                        condensed_missing.append(path)
-                        seen_roots.add(path)
-                missing_list = condensed_missing
-                self.logger.debug(
-                    f"[ROOT-ONLY] Condensed missing paths from {original_count} to {len(missing_list)} root paths"
-                )
-                if len(missing_list) < original_count:
-                    self.logger.debug(
-                        f"Root-only filtering reduced selection from {original_count} to {len(missing_list)} objects"
-                    )
-            elif select_root_only:
-                self.logger.debug(
-                    "[ROOT-ONLY] Root-only filter requested but no missing objects to filter"
-                )
-
-            # Optionally filter to leaf-only missing paths (deepest level objects)
-            if select_leaves_only and not select_root_only and missing_list:
-                original_count = len(missing_list)
-                # Sort by depth (deepest first) so leaves appear before parents
-                missing_list_sorted = sorted(
-                    missing_list, key=lambda p: p.count("|"), reverse=True
-                )
-                leaf_missing = []
-                for path in missing_list_sorted:
-                    # If this path is a parent of any other path in the list, skip it
-                    is_parent = False
-                    for other_path in missing_list_sorted:
-                        if other_path != path and other_path.startswith(path + "|"):
-                            is_parent = True
-                            break
-                    if not is_parent:
-                        leaf_missing.append(path)
-                missing_list = leaf_missing
-                if len(missing_list) != original_count:
-                    self.logger.debug(
-                        f"Filtered to leaf-only missing paths from {original_count} to {len(missing_list)} leaf paths"
-                    )
-
-            # Filter out ignored paths (reference tree)
-            if missing_list:
-                pre_ignore = len(missing_list)
-                missing_list = [
-                    p
-                    for p in missing_list
-                    if not self.controller.is_path_ignored(tree000, p)
-                ]
-                ignored_count = pre_ignore - len(missing_list)
-                if ignored_count:
-                    self.logger.debug(
-                        f"Filtered {ignored_count} ignored paths from missing list"
-                    )
-
-            mode_desc = (
-                "(root-only)"
-                if select_root_only
-                else "(leaves-only)" if select_leaves_only else "(all differences)"
-            )
-            self.logger.debug(
-                f"[AUTO-SELECT] Missing paths (reference lookup): {len(missing_list)} {mode_desc}"
-            )
+            # ---- missing → reference tree ----
+            missing_list = _condensed(diff.get("missing", []), tree000)
             for missing_path in missing_list:
-                self.logger.debug(
-                    f"Processing missing path in REFERENCE TREE (tree000): '{missing_path}'"
-                )
-
-                # Check for leaf object patterns (debug only)
-                if any(leaf in missing_path for leaf in ["_FRES_LOC", "_LOC", "_GEO"]):
-                    self.logger.debug(f"Processing leaf object: {missing_path}")
-
-                # Find matches in reference tree (prefer cleaned paths since it displays cleaned names)
                 candidates, strategy = tree_matcher.find_path_matches(
                     missing_path,
                     ref_by_full,
-                    ref_by_clean_full,
+                    ref_by_clean,
                     ref_by_last,
                     prefer_cleaned=True,
-                    strict=not self.controller.hierarchy_manager.fuzzy_matching,
+                    strict=strict,
                 )
-
                 if not candidates:
-                    self.logger.debug(
-                        f"Missing path unresolved in reference tree: '{missing_path}'"
-                    )
-                    # Debug: Let's see what tree items we actually have for the last component
-                    last_component = missing_path.split("|")[-1]
-                    all_items_with_name = tree000.findItems(
-                        last_component, QtCore.Qt.MatchRecursive
-                    )
-                    if all_items_with_name:
-                        self.logger.debug(
-                            f"  Found {len(all_items_with_name)} items with last component '{last_component}':"
-                        )
-                        for idx, item in enumerate(
-                            all_items_with_name[:3]
-                        ):  # Show first 3
-                            # Build actual tree path for this item
-                            path_parts = []
-                            cur = item
-                            while cur:
-                                path_parts.insert(0, cur.text(0))
-                                cur = cur.parent()
-                            actual_path = "|".join(path_parts)
-                            self.logger.debug(
-                                f"    [{idx}] Tree item path: '{actual_path}'"
-                            )
-                            # Also check if it has raw name stored
-                            raw_name = getattr(item, "_raw_name", "N/A")
-                            self.logger.debug(f"        Raw name: '{raw_name}'")
-                    else:
-                        self.logger.debug(
-                            f"  No tree items found with last component '{last_component}'"
-                        )
-                        # Show what last components we do have available
-                        sample_items = []
-                        it_sample = QtWidgets.QTreeWidgetItemIterator(tree000)
-                        while it_sample.value() and len(sample_items) < 10:
-                            item_sample = it_sample.value()
-                            if not item_sample.parent():  # Only top-level for brevity
-                                sample_items.append(item_sample.text(0))
-                            it_sample += 1
-                        self.logger.debug(
-                            f"  Available top-level items: {sample_items}"
-                        )
-
                     unresolved_missing.append(missing_path)
                     continue
-
-                # Log matching results (simplified)
                 self.logger.debug(
-                    f"Missing path '{missing_path}' -> {len(candidates)} candidates via {strategy}"
+                    f"Missing '{missing_path}' -> {len(candidates)} via {strategy}"
                 )
+                selected_count += self._select_and_reveal(candidates)
 
-                for c in candidates:
-                    if not c.isSelected():
-                        c.setSelected(True)
-                        selected_count += 1
-                        self.logger.debug(f"Selected: '{c.text(0)}'")
-
-                        # Ensure parent items are expanded so selection is visible
-                        parent = c.parent()
-                        while parent:
-                            if not parent.isExpanded():
-                                parent.setExpanded(True)
-                            parent = parent.parent()
-                    else:
-                        self.logger.debug(
-                            f"  âš  Already selected: '{missing_path}'"
-                        )  # -------------------- Fuzzy child fallback for unresolved missing ---------------------
-            if unresolved_missing and self.controller.hierarchy_manager.fuzzy_matching:
-                self.logger.debug(
-                    f"Attempting fuzzy child resolution for {len(unresolved_missing)} unresolved missing paths"
-                )
-                resolved_via_fuzzy = 0
-                for missing_path in list(unresolved_missing):  # copy for safe removal
+            # ---- fuzzy child fallback for unresolved missing ----
+            if unresolved_missing and not strict:
+                for missing_path in list(unresolved_missing):
                     if "|" not in missing_path:
-                        continue  # no parent to search under
-                    parent_path = missing_path.rsplit("|", 1)[0]
-                    last_component = missing_path.split("|")[-1]
+                        continue
+                    parent_path, last_component = missing_path.rsplit("|", 1)
                     parent_candidates, _ = tree_matcher.find_path_matches(
                         parent_path,
                         ref_by_full,
-                        ref_by_clean_full,
+                        ref_by_clean,
                         ref_by_last,
                         prefer_cleaned=True,
-                        strict=not self.controller.hierarchy_manager.fuzzy_matching,
+                        strict=strict,
                     )
                     if len(parent_candidates) != 1:
                         continue
                     parent_item = parent_candidates[0]
-                    # Gather child display names (reference tree shows cleaned names)
                     child_names = [
                         parent_item.child(i).text(0)
                         for i in range(parent_item.childCount())
                     ]
                     if not child_names:
                         continue
-                    # Use fuzzy match to try to map requested last component to an existing child
                     try:
                         matches = ptk.FuzzyMatcher.find_all_matches(
                             [last_component], child_names, score_threshold=0.6
@@ -2826,595 +2809,174 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
                         continue
                     if not matches:
                         continue
-                    # find_all_matches returns Dict[str, Tuple[str, float]]
-                    first_key = next(iter(matches))
-                    matched_child, score = matches[first_key]
-                    # Select the matched child
+                    matched_child, score = matches[next(iter(matches))]
                     for i in range(parent_item.childCount()):
                         child_item = parent_item.child(i)
                         if child_item.text(0) == matched_child:
-                            if not child_item.isSelected():
-                                child_item.setSelected(True)
-                                selected_count += 1
-                                # Ensure parent items are expanded so selection is visible
-                                parent = child_item.parent()
-                                while parent:
-                                    if not parent.isExpanded():
-                                        parent.setExpanded(True)
-                                    parent = parent.parent()
+                            selected_count += self._select_and_reveal([child_item])
                             unresolved_missing.remove(missing_path)
-                            resolved_via_fuzzy += 1
                             self.logger.debug(
-                                f"Fuzzy child match resolved missing path '{missing_path}' -> '{matched_child}' (score {score:.2f})"
+                                f"Fuzzy child match: '{missing_path}' -> "
+                                f"'{matched_child}' (score {score:.2f})"
                             )
                             break
-                if resolved_via_fuzzy:
-                    self.logger.debug(
-                        f"Resolved {resolved_via_fuzzy} missing paths via fuzzy child matching"
-                    )
 
-            # -------------------- Select EXTRA (current tree) ---------------------
-            extra_list = self.controller._current_diff_result.get("extra", [])
-
-            # Optionally condense extra paths similarly (though usually these are shallow already)
-            if select_root_only and extra_list:
-                self.logger.debug(
-                    f"[ROOT-ONLY] Applying root-only filter to {len(extra_list)} extra paths"
-                )
-                original_extra = len(extra_list)
-                extra_sorted = sorted(extra_list, key=lambda p: p.count("|"))
-                condensed_extra = []
-                for path in extra_sorted:
-                    if any(path.startswith(root + "|") for root in condensed_extra):
-                        continue
-                    condensed_extra.append(path)
-                extra_list = condensed_extra
-                self.logger.debug(
-                    f"[ROOT-ONLY] Condensed extra paths from {original_extra} to {len(extra_list)} root paths"
-                )
-                if len(extra_list) < original_extra:
-                    self.logger.debug(
-                        f"Root-only filtering reduced extra selection from {original_extra} to {len(extra_list)} objects"
-                    )
-            elif select_root_only:
-                self.logger.debug(
-                    "[ROOT-ONLY] Root-only filter requested but no extra objects to filter"
-                )
-
-            # Optionally filter to leaf-only extra paths (deepest level objects)
-            if select_leaves_only and not select_root_only and extra_list:
-                original_count = len(extra_list)
-                # Sort by depth (deepest first) so leaves appear before parents
-                extra_list_sorted = sorted(
-                    extra_list, key=lambda p: p.count("|"), reverse=True
-                )
-                leaf_extra = []
-                for path in extra_list_sorted:
-                    # If this path is a parent of any other path in the list, skip it
-                    is_parent = False
-                    for other_path in extra_list_sorted:
-                        if other_path != path and other_path.startswith(path + "|"):
-                            is_parent = True
-                            break
-                    if not is_parent:
-                        leaf_extra.append(path)
-                extra_list = leaf_extra
-                if len(extra_list) != original_count:
-                    self.logger.debug(
-                        f"Filtered to leaf-only extra paths from {original_count} to {len(extra_list)} leaf paths"
-                    )
-
-            # Filter out ignored paths (current tree)
-            if extra_list:
-                pre_ignore = len(extra_list)
-                extra_list = [
-                    p
-                    for p in extra_list
-                    if not self.controller.is_path_ignored(tree001, p)
-                ]
-                ignored_count = pre_ignore - len(extra_list)
-                if ignored_count:
-                    self.logger.debug(
-                        f"Filtered {ignored_count} ignored paths from extra list"
-                    )
-
-            mode_desc = (
-                "(root-only)"
-                if select_root_only
-                else "(leaves-only)" if select_leaves_only else "(all differences)"
-            )
-            self.logger.debug(
-                f"[AUTO-SELECT] Extra paths (current lookup): {len(extra_list)} {mode_desc}"
-            )
+            # ---- extra → current tree ----
+            extra_list = _condensed(diff.get("extra", []), tree001)
             for extra_path in extra_list:
-                self.logger.debug(
-                    f"Processing extra path in CURRENT TREE (tree001): '{extra_path}'"
-                )
-
-                # Find matches in current tree (exact preferred; names are already clean)
                 candidates, strategy = tree_matcher.find_path_matches(
                     extra_path,
                     cur_by_full,
-                    cur_by_clean_full,
+                    cur_by_clean,
                     cur_by_last,
                     prefer_cleaned=False,
-                    strict=not self.controller.hierarchy_manager.fuzzy_matching,
+                    strict=strict,
                 )
-
                 if not candidates:
-                    self.logger.debug(
-                        f"Extra path unresolved in current tree: '{extra_path}'"
-                    )
                     unresolved_extra.append(extra_path)
                     continue
+                tree_matcher.log_matching_debug(extra_path, candidates, strategy, "Extra")
+                selected_count += self._select_and_reveal(candidates)
 
-                tree_matcher.log_matching_debug(
-                    extra_path, candidates, strategy, "Extra"
-                )
-
-                for c in candidates:
-                    if not c.isSelected():
-                        c.setSelected(True)
-                        selected_count += 1
-                        # Debug: Log which specific item was selected
-                        item_path_parts = []
-                        cur_item = c
-                        while cur_item:
-                            item_path_parts.insert(0, cur_item.text(0))
-                            cur_item = cur_item.parent()
-                        actual_item_path = "|".join(item_path_parts)
-                        self.logger.debug(
-                            f"  âœ“ SELECTED: '{actual_item_path}' (strategy: {strategy})"
+            # ---- reparented + fuzzy → both trees ----
+            both_tree_specs = (
+                ("reparented", "reference_path", "current_path"),
+                ("fuzzy_matches", "target_name", "current_name"),
+            )
+            for diff_key, ref_key, cur_key in both_tree_specs:
+                for entry in diff.get(diff_key, []):
+                    for key, by_f, by_c, by_l in (
+                        (ref_key, ref_by_full, ref_by_clean, ref_by_last),
+                        (cur_key, cur_by_full, cur_by_clean, cur_by_last),
+                    ):
+                        path = entry.get(key, "")
+                        if not path:
+                            continue
+                        candidates, _strategy = tree_matcher.find_path_matches(
+                            path, by_f, by_c, by_l, prefer_cleaned=True, strict=False
                         )
+                        selected_count += self._select_and_reveal(candidates)
 
-                        # Ensure parent items are expanded so selection is visible
-                        parent = c.parent()
-                        while parent:
-                            if not parent.isExpanded():
-                                parent.setExpanded(True)
-                            parent = parent.parent()
+            # ---- fuzzy VARIANT pass: strip trailing digits on _GRP/_LOC ----
+            if unresolved_missing and not strict:
+                import re as _re
 
-            # -------------------- Select REPARENTED (both trees) ---------------------
-            reparented_list = self.controller._current_diff_result.get("reparented", [])
-            if reparented_list:
-                self.logger.debug(
-                    f"[AUTO-SELECT] Selecting {len(reparented_list)} reparented items"
-                )
-            for rp in reparented_list:
-                for key, tree, by_f, by_c, by_l in (
-                    (
-                        "reference_path",
-                        tree000,
-                        ref_by_full,
-                        ref_by_clean_full,
-                        ref_by_last,
-                    ),
-                    (
-                        "current_path",
-                        tree001,
-                        cur_by_full,
-                        cur_by_clean_full,
-                        cur_by_last,
-                    ),
-                ):
-                    rp_path = rp.get(key, "")
-                    if not rp_path:
+                pattern = _re.compile(r"(.+_(?:GRP|LOC))\d+$")
+                still_unresolved = []
+                for miss_path in unresolved_missing:
+                    variant_components = []
+                    changed = False
+                    for comp in miss_path.split("|"):
+                        m = pattern.match(comp)
+                        variant_components.append(m.group(1) if m else comp)
+                        changed = changed or bool(m)
+                    if not changed:
+                        still_unresolved.append(miss_path)
                         continue
-                    candidates, strategy = tree_matcher.find_path_matches(
-                        rp_path,
-                        by_f,
-                        by_c,
-                        by_l,
+                    candidates, _strategy = tree_matcher.find_path_matches(
+                        "|".join(variant_components),
+                        ref_by_full,
+                        ref_by_clean,
+                        ref_by_last,
                         prefer_cleaned=True,
                         strict=False,
                     )
-                    for c in candidates:
-                        if not c.isSelected():
-                            c.setSelected(True)
-                            selected_count += 1
-                            parent = c.parent()
-                            while parent:
-                                if not parent.isExpanded():
-                                    parent.setExpanded(True)
-                                parent = parent.parent()
-                            self.logger.debug(
-                                f"  âœ“ SELECTED reparented '{rp['leaf']}' in "
-                                f"{'ref' if key == 'reference_path' else 'cur'} tree"
-                            )
+                    if candidates:
+                        selected_count += self._select_and_reveal(candidates)
+                    else:
+                        still_unresolved.append(miss_path)
+                unresolved_missing = still_unresolved
 
-            # -------------------- Select FUZZY (both trees) ---------------------
-            fuzzy_list = self.controller._current_diff_result.get("fuzzy_matches", [])
-            if fuzzy_list:
-                self.logger.debug(
-                    f"[AUTO-SELECT] Selecting {len(fuzzy_list)} fuzzy-matched items"
-                )
-            for fz in fuzzy_list:
-                for key, tree, by_f, by_c, by_l in (
-                    (
-                        "target_name",
-                        tree000,
-                        ref_by_full,
-                        ref_by_clean_full,
-                        ref_by_last,
-                    ),
-                    (
-                        "current_name",
-                        tree001,
-                        cur_by_full,
-                        cur_by_clean_full,
-                        cur_by_last,
-                    ),
-                ):
-                    fz_path = fz.get(key, "")
-                    if not fz_path:
-                        continue
-                    candidates, strategy = tree_matcher.find_path_matches(
-                        fz_path,
-                        by_f,
-                        by_c,
-                        by_l,
-                        prefer_cleaned=True,
-                        strict=False,
-                    )
-                    for c in candidates:
-                        if not c.isSelected():
-                            c.setSelected(True)
-                            selected_count += 1
-                            parent = c.parent()
-                            while parent:
-                                if not parent.isExpanded():
-                                    parent.setExpanded(True)
-                                parent = parent.parent()
-                            self.logger.debug(
-                                f"  âœ“ SELECTED fuzzy '{fz_path.split('|')[-1]}' in "
-                                f"{'ref' if key == 'target_name' else 'cur'} tree"
-                            )
-
-            # -------------------- Select ALL CHILDREN of selected nodes ---------------------
-            # After selecting the diff paths, also select all their children to ensure
-            # the deepest visible nodes (like _GEO objects) are also selected
-            children_selected = 0
-
-            # Function to recursively select all children of a tree item
+            # ---- select all children of everything selected ----
             def select_all_children(tree_item):
                 count = 0
                 tree_widget = tree_item.treeWidget()
                 for i in range(tree_item.childCount()):
                     child = tree_item.child(i)
-                    # Skip ignored children
                     child_path = self.controller.tree.build_item_path(child)
                     if self.controller.is_path_ignored(tree_widget, child_path):
                         continue
                     if not child.isSelected():
                         child.setSelected(True)
                         count += 1
-                    # Recursively select grandchildren
                     count += select_all_children(child)
                 return count
 
-            # Select children in reference tree
-            it_ref = QtWidgets.QTreeWidgetItemIterator(tree000)
-            while it_ref.value():
-                item = it_ref.value()
-                if item.isSelected() and item.childCount() > 0:
-                    children_selected += select_all_children(item)
-                it_ref += 1
-
-            # Select children in current tree
-            it_cur = QtWidgets.QTreeWidgetItemIterator(tree001)
-            while it_cur.value():
-                item = it_cur.value()
-                if item.isSelected() and item.childCount() > 0:
-                    children_selected += select_all_children(item)
-                it_cur += 1
-
-            if children_selected > 0:
-                selected_count += children_selected
-                self.logger.debug(
-                    f"Child selection: Added {children_selected} child nodes"
-                )
-
-            # Update expected total to reflect condensed selection intention
-            total_expected = (
-                len(extra_list)
-                + len(missing_list)
-                + len(reparented_list) * 2  # both trees
-                + len(fuzzy_list) * 2  # both trees
-            )
-            if unresolved_extra or unresolved_missing:
-                self.logger.warning(
-                    f"Unresolved diff paths (extra={len(unresolved_extra)}, missing={len(unresolved_missing)}) sample extra={unresolved_extra[:5]} missing={unresolved_missing[:5]}"
-                )
-            self.logger.debug(
-                f"Auto-selected {selected_count} diff items (expected {total_expected}) unresolved={len(unresolved_extra)+len(unresolved_missing)}"
-            )
-
-            # Immediate selection verification before any further processing
-            try:
-                # Count actually selected items in reference tree immediately
-                ref_selected_count = 0
-                it_verify = QtWidgets.QTreeWidgetItemIterator(tree000)
-                while it_verify.value():
-                    if it_verify.value().isSelected():
-                        ref_selected_count += 1
-                    it_verify += 1
-
-                # Count actually selected items in current tree
-                cur_selected_count = 0
-                it_cur_verify = QtWidgets.QTreeWidgetItemIterator(tree001)
-                while it_cur_verify.value():
-                    if it_cur_verify.value().isSelected():
-                        cur_selected_count += 1
-                    it_cur_verify += 1
-
-                self.logger.debug(
-                    f"[VERIFY] Actual UI selection state: ref_tree={ref_selected_count} cur_tree={cur_selected_count} total={ref_selected_count + cur_selected_count}"
-                )
-
-                # Note: selected_count now includes children, so actual count may be higher
-                if ref_selected_count + cur_selected_count != selected_count:
-                    self.logger.debug(
-                        f"[VERIFY] Selection count difference (includes children): Reported={selected_count} Actual UI={ref_selected_count + cur_selected_count}"
-                    )
-
-                # Ensure proper tree focus and visibility
-                if ref_selected_count > 0:
-                    tree000.setFocus()
-                    tree000.viewport().update()
-                elif cur_selected_count > 0:
-                    tree001.setFocus()
-                    tree001.viewport().update()
-
-                # Force a repaint to ensure selection is visually updated
-                tree000.repaint()
-                tree001.repaint()
-
-                # Flush pending events and repaint both trees
-                try:
-                    self.sb.QtWidgets.QApplication.processEvents()
-                except Exception:
-                    pass
-
-                for tree in (tree000, tree001):
-                    tree.viewport().update()
-                    tree.repaint()
-
-                # Set focus on the tree with more selections
-                if ref_selected_count >= cur_selected_count:
-                    tree000.setFocus()
-                else:
-                    tree001.setFocus()
-
-            except Exception as verify_err:
-                self.logger.error(
-                    f"[VERIFY] Selection verification failed: {verify_err}"
-                )
-
-            # Post-selection debug: enumerate actually selected items in reference tree
-            try:
-                ref_selected = []
-                it = QtWidgets.QTreeWidgetItemIterator(tree000)
+            for tree in (tree000, tree001):
+                it = QtWidgets.QTreeWidgetItemIterator(tree)
                 while it.value():
                     item = it.value()
-                    if item.isSelected():
-                        # Build path for clarity
-                        path_parts = []
-                        cur = item
-                        while cur:
-                            path_parts.insert(0, cur.text(0))
-                            cur = cur.parent()
-                        ref_selected.append("|".join(path_parts))
+                    if item.isSelected() and item.childCount() > 0:
+                        selected_count += select_all_children(item)
                     it += 1
-                # Secondary fuzzy variant pass for unresolved missing paths (strip trailing digits on _GRP/_LOC segments)
-                if (
-                    unresolved_missing
-                    and self.controller.hierarchy_manager.fuzzy_matching
-                ):
-                    import re as _re
 
-                    fuzzy_variant_selected = 0
-                    still_unresolved = []
-                    pattern = _re.compile(r"(.+_(?:GRP|LOC))\d+$")
-                    for miss_path in list(unresolved_missing):
-                        components = miss_path.split("|")
-                        variant_components = []
-                        changed = False
-                        for comp in components:
-                            m = pattern.match(comp)
-                            if m:
-                                variant_components.append(m.group(1))
-                                changed = True
-                            else:
-                                variant_components.append(comp)
-                        if not changed:
-                            still_unresolved.append(miss_path)
-                            continue
-                        variant_path = "|".join(variant_components)
-                        # Try to find matches for the variant path
-                        candidates, strategy = tree_matcher.find_path_matches(
-                            variant_path,
-                            ref_by_full,
-                            ref_by_clean_full,
-                            ref_by_last,
-                            prefer_cleaned=True,
-                            strict=False,
-                        )
-                        if candidates:
-                            tree_matcher.log_matching_debug(
-                                variant_path,
-                                candidates,
-                                strategy,
-                                "Missing-FuzzyVariant",
-                            )
-                            for c in candidates:
-                                if not c.isSelected():
-                                    c.setSelected(True)
-                                    selected_count += 1
-                                    fuzzy_variant_selected += 1
-                                    # Ensure parent items are expanded so selection is visible
-                                    parent = c.parent()
-                                    while parent:
-                                        if not parent.isExpanded():
-                                            parent.setExpanded(True)
-                                        parent = parent.parent()
-                        else:
-                            still_unresolved.append(miss_path)
-                    if fuzzy_variant_selected:
-                        self.logger.debug(
-                            f"Fuzzy variant pass selected {fuzzy_variant_selected} additional missing items"
-                        )
-                        unresolved_missing = still_unresolved
-                        # Rebuild enumeration after fuzzy variant pass
-                        ref_selected = []
-                        it_rv = QtWidgets.QTreeWidgetItemIterator(tree000)
-                        while it_rv.value():
-                            item_rv = it_rv.value()
-                            if item_rv.isSelected():
-                                path_parts_rv = []
-                                cur_rv = item_rv
-                                while cur_rv:
-                                    path_parts_rv.insert(0, cur_rv.text(0))
-                                    cur_rv = cur_rv.parent()
-                                ref_selected.append("|".join(path_parts_rv))
-                            it_rv += 1
-                elif unresolved_missing:
-                    self.logger.debug(
-                        f"[AUTO-SELECT] Skipping fuzzy variant pass (fuzzy matching disabled) unresolved_missing={len(unresolved_missing)}"
-                    )
-                self.logger.debug(
-                    f"[AUTO-SELECT] Reference tree selected items ({len(ref_selected)} of {total_expected} expected leaf diffs): {ref_selected[:30]}{'...' if len(ref_selected) > 30 else ''}"
+            if unresolved_missing or unresolved_extra:
+                self.logger.warning(
+                    f"Unresolved diff paths (missing={len(unresolved_missing)}, "
+                    f"extra={len(unresolved_extra)}) "
+                    f"sample missing={unresolved_missing[:5]} "
+                    f"extra={unresolved_extra[:5]}"
                 )
-                if unresolved_missing or unresolved_extra:
-                    self.logger.debug(
-                        f"[AUTO-SELECT] Remaining unresolved paths -> missing: {unresolved_missing[:10]}{'...' if len(unresolved_missing) > 10 else ''} extra: {unresolved_extra[:10]}{'...' if len(unresolved_extra) > 10 else ''}"
-                    )
-            except Exception as sel_dbg_err:
-                self.logger.debug(f"Selection debug enumeration failed: {sel_dbg_err}")
+            self.logger.debug(f"Auto-selected {selected_count} diff items")
 
-        # Expand nodes with differences
+            for tree in (tree000, tree001):
+                tree.viewport().update()
+
+        # ---- expand nodes with differences ----
         if expand_diff:
+            expand_specs = (
+                ("missing", None, tree000),
+                ("extra", None, tree001),
+                ("reparented", "reference_path", tree000),
+                ("reparented", "current_path", tree001),
+                ("fuzzy_matches", "target_name", tree000),
+                ("fuzzy_matches", "current_name", tree001),
+            )
             expanded_count = 0
-
-            # Correct expansion logic:
-            #   missing (reference-only) -> expand in REFERENCE tree (tree000)
-            #   extra   (current-only)   -> expand in CURRENT tree (tree001)
-
-            # Expand reference-only (missing) paths in reference tree
-            for missing_path in self.controller._current_diff_result.get("missing", []):
-                if self.controller.is_path_ignored(tree000, missing_path):
-                    continue
-                node_name = missing_path.split("|")[-1]
-                items = tree000.findItems(node_name, self.sb.QtCore.Qt.MatchRecursive)
-                for item in items:
-                    if self._matches_hierarchy_path(item, missing_path):
-                        parent = item.parent()
-                        while parent:
-                            if not parent.isExpanded():
-                                parent.setExpanded(True)
-                                expanded_count += 1
-                            parent = parent.parent()
-
-            # Expand current-only (extra) paths in current tree
-            for extra_path in self.controller._current_diff_result.get("extra", []):
-                if self.controller.is_path_ignored(tree001, extra_path):
-                    continue
-                node_name = extra_path.split("|")[-1]
-                items = tree001.findItems(node_name, self.sb.QtCore.Qt.MatchRecursive)
-                for item in items:
-                    if self._matches_hierarchy_path(item, extra_path):
-                        parent = item.parent()
-                        while parent:
-                            if not parent.isExpanded():
-                                parent.setExpanded(True)
-                                expanded_count += 1
-                            parent = parent.parent()
-
-            # Expand reparented items in both trees
-            for reparented in self.controller._current_diff_result.get(
-                "reparented", []
-            ):
-                for key, tree in (
-                    ("reference_path", tree000),
-                    ("current_path", tree001),
-                ):
-                    rp_path = reparented.get(key, "")
-                    if not rp_path:
+            for diff_key, entry_key, tree in expand_specs:
+                for entry in diff.get(diff_key, []):
+                    path = entry.get(entry_key, "") if entry_key else entry
+                    if not path or self.controller.is_path_ignored(tree, path):
                         continue
-                    node_name = rp_path.split("|")[-1]
-                    items = tree.findItems(node_name, self.sb.QtCore.Qt.MatchRecursive)
-                    for item in items:
-                        if self._matches_hierarchy_path(item, rp_path):
+                    node_name = path.split("|")[-1]
+                    for item in tree.findItems(
+                        node_name, self.sb.QtCore.Qt.MatchRecursive
+                    ):
+                        if self._matches_hierarchy_path(item, path):
                             parent = item.parent()
                             while parent:
                                 if not parent.isExpanded():
                                     parent.setExpanded(True)
                                     expanded_count += 1
                                 parent = parent.parent()
-
-            # Expand fuzzy-matched items in both trees
-            for fuzzy in self.controller._current_diff_result.get("fuzzy_matches", []):
-                for key, tree in (
-                    ("target_name", tree000),
-                    ("current_name", tree001),
-                ):
-                    fz_path = fuzzy.get(key, "")
-                    if not fz_path:
-                        continue
-                    node_name = fz_path.split("|")[-1]
-                    items = tree.findItems(node_name, self.sb.QtCore.Qt.MatchRecursive)
-                    for item in items:
-                        if self._matches_hierarchy_path(item, fz_path):
-                            parent = item.parent()
-                            while parent:
-                                if not parent.isExpanded():
-                                    parent.setExpanded(True)
-                                    expanded_count += 1
-                                parent = parent.parent()
-
             if expanded_count > 0:
-                self.logger.debug(
-                    f"Expanded {expanded_count} nodes showing differences"
-                )
+                self.logger.debug(f"Expanded {expanded_count} nodes showing differences")
 
-        # Final selection summary for user clarity
+        # ---- final summary ----
         if auto_select:
-            try:
-                final_ref_count = 0
-                it_final = QtWidgets.QTreeWidgetItemIterator(tree000)
-                while it_final.value():
-                    if it_final.value().isSelected():
-                        final_ref_count += 1
-                    it_final += 1
+            counts = {}
+            for label, tree in (("reference", tree000), ("current", tree001)):
+                n = 0
+                it = QtWidgets.QTreeWidgetItemIterator(tree)
+                while it.value():
+                    if it.value().isSelected():
+                        n += 1
+                    it += 1
+                counts[label] = n
 
-                final_cur_count = 0
-                it_final_cur = QtWidgets.QTreeWidgetItemIterator(tree001)
-                while it_final_cur.value():
-                    if it_final_cur.value().isSelected():
-                        final_cur_count += 1
-                    it_final_cur += 1
+            if counts["reference"] >= counts["current"]:
+                tree000.setFocus()
+            else:
+                tree001.setFocus()
 
-                if final_ref_count > 0 and final_cur_count > 0:
-                    self.logger.success(
-                        f"âœ“ AUTO-SELECT COMPLETE: {final_ref_count} items in REFERENCE tree, "
-                        f"{final_cur_count} items in CURRENT tree. "
-                        f"Use 'Pull' to import missing, or 'Fix' to repair reparented/renamed."
-                    )
-                elif final_ref_count > 0:
-                    self.logger.success(
-                        f"âœ“ AUTO-SELECT COMPLETE: {final_ref_count} items selected in REFERENCE tree (left panel). "
-                        f"Use 'Pull' button to import selected objects to current scene."
-                    )
-                elif final_cur_count > 0:
-                    self.logger.success(
-                        f"âœ“ AUTO-SELECT COMPLETE: {final_cur_count} items selected in CURRENT tree (right panel)."
-                    )
-                else:
-                    self.logger.warning(
-                        "No items remain selected after auto-select process."
-                    )
-
-            except Exception as final_err:
-                self.logger.debug(f"Final selection summary failed: {final_err}")
+            if counts["reference"] or counts["current"]:
+                self.logger.success(
+                    f"Auto-select complete: {counts['reference']} item(s) in the "
+                    f"REFERENCE tree, {counts['current']} in the CURRENT tree. "
+                    f"Use 'Pull' to import missing or 'Fix' to repair."
+                )
+            else:
+                self.logger.warning("No items remain selected after auto-select.")
 
     def _matches_hierarchy_path(self, tree_item, full_path: str) -> bool:
         """Check if a tree item matches the full hierarchy path."""
@@ -3488,7 +3050,7 @@ class HierarchyManagerSlots(ptk.LoggingMixin):
 
 
 # Export the main classes
-__all__ = ["HierarchyManagerSlots", "HierarchyManagerController"]
+__all__ = ["HierarchySyncSlots", "HierarchySyncController"]
 
 # --------------------------------------------------------------------------------------------
 

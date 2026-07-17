@@ -54,13 +54,15 @@ $env:PYTHONPATH = "$PWD\mayatk;$PWD\pythontk;$PWD\uitk;$PWD\tentacle"
 
 - **Pre-flight (no Maya)** — AST syntax sweep: `python -c "import ast,glob; [ast.parse(open(f,encoding='utf-8').read()) for f in glob.glob('mayatk/mayatk/**/*.py',recursive=True)]"`
 - **Command-name check (mayapy)** — `& $MAYAPY mayatk\test\check_cmds_syntax.py` validates every `cmds.*` / `mel.eval` name against the live registry. `--report` writes a file; append `mayatk/mayatk tentacle/tentacle` to scope to a subset.
-- **Base classes** `test/base_test.py` → `MayaTkTestCase` (full cleanup) / `QuickTestCase` (fast). **Runner** `test/run_tests.py`. **Connection** `mayatk/env_utils/maya_connection.py` (Port / Standalone / Interactive).
+- **Base classes** `test/base_test.py` → `MayaTkTestCase` (scene reset in `setUp` only) / `QuickTestCase` (no reset). Interactive-only tests: `@skipIfBatch`. **Runner** `test/run_tests.py`; shared in-session harness `test/_suite_driver.py`. **Connection** `mayatk/env_utils/maya_connection.py` (Port / Standalone / Interactive).
 
 | Test kind | How to tell | Run |
 |:---|:---|:---|
 | Standalone repro | has `maya.standalone.initialize()` + `__main__` | `& $MAYAPY <script.py>` |
-| Production module | uses `MayaTkTestCase` / `QuickTestCase` | `& $MAYAPY mayatk\test\run_tests.py --all` (or `… core_utils components`, `… --list`) |
-| GUI-dependent | needs Qt / viewport | Maya Script Editor → `import mayatk.test.run_tests as r; r.MayaTestRunner().run_tests(['core_utils'])` |
+| Production module | uses `MayaTkTestCase` / `QuickTestCase` | `python mayatk\test\run_tests.py --all` (or `… core_utils components`, `… --list`). **Headless by default**: chunked fresh-mayapy processes; modules that native-crash mayapy auto-defer to one GUI pass (`GUI_REQUIRED` registry in the runner) |
+| GUI-dependent | needs Qt / viewport (→ `GUI_REQUIRED`) | auto GUI pass, or `--gui` to force the whole run through a launched GUI Maya. Script Editor: `import mayatk.test.run_tests as r; r.MayaTestRunner().run_tests(['core_utils'])` (runs in-session) |
+
+Headless runner notes: results carry per-module timings (`SLOWEST MODULES` section); the badge only updates when every in-scope module ran. `--jobs N` runs chunks concurrently (standalone inits are staggered) — drop back to 1 if a run stalls at init (FlexLM reclaim after a killed mayapy).
 
 ## Style
 

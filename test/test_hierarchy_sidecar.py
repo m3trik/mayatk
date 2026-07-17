@@ -24,7 +24,7 @@ for p in (
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import HierarchySidecar
+from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import HierarchySidecar
 
 
 class BaseStemTest(unittest.TestCase):
@@ -218,6 +218,74 @@ class WriteReadManifestRoutingTest(unittest.TestCase):
             v4 = os.path.join(d, "shot_v004.fbx")
             HierarchySidecar.write_manifest(v3, {"a"})
             self.assertIsNone(HierarchySidecar.read_manifest(v4))
+
+
+class PrevFallbackTest(unittest.TestCase):
+    """compare/read_manifest fall back to the .prev backup when the manifest is gone.
+
+    Guards against a deleted or corrupted manifest silently passing the
+    hierarchy check when the last-known-good baseline is still on disk.
+    """
+
+    def _write_with_prev(self, d):
+        """Write twice with differing content so a .prev exists; return export path."""
+        export = os.path.join(d, "shot.fbx")
+        HierarchySidecar.write_manifest(export, {"A", "A|B"})
+        HierarchySidecar.write_manifest(export, {"A", "A|B", "A|C"})
+        return export
+
+    def test_compare_uses_prev_after_manifest_deletion(self):
+        with tempfile.TemporaryDirectory() as d:
+            export = self._write_with_prev(d)
+            os.remove(HierarchySidecar.manifest_path_for(export))
+            # .prev holds the older baseline {A, A|B}.
+            match, missing, extra = HierarchySidecar.compare(export, {"A", "A|B"})
+            self.assertTrue(match)
+
+    def test_compare_detects_drift_via_prev(self):
+        with tempfile.TemporaryDirectory() as d:
+            export = self._write_with_prev(d)
+            os.remove(HierarchySidecar.manifest_path_for(export))
+            match, missing, extra = HierarchySidecar.compare(export, {"A"})
+            self.assertFalse(match)
+            self.assertEqual(missing, ["A|B"])
+            self.assertEqual(extra, [])
+
+    def test_compare_uses_prev_when_manifest_corrupt(self):
+        with tempfile.TemporaryDirectory() as d:
+            export = self._write_with_prev(d)
+            with open(
+                HierarchySidecar.manifest_path_for(export), "w", encoding="utf-8"
+            ) as f:
+                f.write("not json{")
+            match, _, _ = HierarchySidecar.compare(export, {"A", "A|B"})
+            self.assertTrue(match)
+
+    def test_read_manifest_falls_back_to_prev(self):
+        with tempfile.TemporaryDirectory() as d:
+            export = self._write_with_prev(d)
+            os.remove(HierarchySidecar.manifest_path_for(export))
+            self.assertEqual(
+                HierarchySidecar.read_manifest(export), {"A", "A|B"}
+            )
+
+    def test_no_manifest_no_prev_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            export = os.path.join(d, "never.fbx")
+            self.assertEqual(
+                HierarchySidecar.compare(export, {"X"}), (True, [], [])
+            )
+            self.assertIsNone(HierarchySidecar.read_manifest(export))
+
+    def test_intact_manifest_wins_over_prev(self):
+        with tempfile.TemporaryDirectory() as d:
+            export = self._write_with_prev(d)
+            # Manifest {A, A|B, A|C} present — .prev must NOT shadow it.
+            match, _, _ = HierarchySidecar.compare(export, {"A", "A|B", "A|C"})
+            self.assertTrue(match)
+            match, missing, _ = HierarchySidecar.compare(export, {"A", "A|B"})
+            self.assertFalse(match)
+            self.assertEqual(missing, ["A|C"])
 
 
 if __name__ == "__main__":

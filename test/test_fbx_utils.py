@@ -169,5 +169,58 @@ class TestFbxUtilsExportWithOptions(MayaTkTestCase):
             )
 
 
+class TestFbxUtilsImport(MayaTkTestCase):
+    """import_scene — round-trip and native namespace isolation."""
+
+    def setUp(self):
+        super().setUp()
+        FbxUtils.load_plugin()
+        self.tempdir = tempfile.mkdtemp(prefix="fbx_import_test_")
+        # Build and export a small hierarchy, then start from an empty scene.
+        root = cmds.group(em=True, name="IMP_ROOT")
+        child = cmds.polyCube(name="IMP_BOX")[0]
+        cmds.parent(child, root)
+        self.fbx_path = os.path.join(self.tempdir, "roundtrip.fbx")
+        FbxUtils.export(self.fbx_path, objects=["IMP_ROOT"], selection_only=True)
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        for f in os.listdir(self.tempdir):
+            try:
+                os.remove(os.path.join(self.tempdir, f))
+            except Exception:
+                pass
+        try:
+            os.rmdir(self.tempdir)
+        except Exception:
+            pass
+        super().tearDown()
+
+    def test_import_into_namespace_isolates(self):
+        new_nodes = FbxUtils.import_scene(self.fbx_path, namespace="imp_ns")
+        self.assertTrue(new_nodes)
+        leaves = {
+            t.split(":")[-1] for t in (cmds.ls("imp_ns:*", type="transform") or [])
+        }
+        self.assertIn("IMP_ROOT", leaves)
+        self.assertIn("IMP_BOX", leaves)
+        # Nothing leaked to the root namespace.
+        self.assertFalse(cmds.ls("IMP_ROOT") or cmds.ls("IMP_BOX"))
+
+    def test_import_without_namespace_at_root(self):
+        FbxUtils.import_scene(self.fbx_path)
+        self.assertTrue(cmds.ls("IMP_ROOT"))
+
+    def test_import_restores_active_namespace(self):
+        before = cmds.namespaceInfo(currentNamespace=True, absoluteName=True)
+        FbxUtils.import_scene(self.fbx_path, namespace="imp_ns2")
+        after = cmds.namespaceInfo(currentNamespace=True, absoluteName=True)
+        self.assertEqual(before, after)
+
+    def test_missing_file_raises(self):
+        with self.assertRaises(FileNotFoundError):
+            FbxUtils.import_scene(r"C:/__nonexistent__/missing.fbx")
+
+
 if __name__ == "__main__":
     unittest.main()
