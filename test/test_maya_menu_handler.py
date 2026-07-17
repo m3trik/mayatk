@@ -10,6 +10,7 @@ except ImportError:
     from mayatk.test.base_test import MayaTkTestCase
 
 from mayatk.ui_utils.maya_native_menus import MayaNativeMenus as MayaMenuHandler, EmbeddedMenuWidget
+from uitk.widgets.mainWindow import MainWindow
 import maya.cmds as cmds
 
 
@@ -142,6 +143,65 @@ class TestNativeMenuPopulateFailure(MayaTkTestCase):
             "successful build must be cached under its key",
         )
         self.assertEqual(set_mode.call_args_list[-1], mock.call("commonMenuSet"))
+
+
+class TestNativeMenuObjectName(MayaTkTestCase):
+    """No menu's wrapper objectName may shadow a MainWindow attribute.
+
+    ``MainWindow.register_widget`` binds each registered child's objectName as an
+    attribute on the window, so a wrapper named for a bare menu key collides
+    wherever that key matches a method: 'render' (``QWidget.render``) and 'create'
+    (``QWidget.create``) both do. That cost the Render menu its attribute binding
+    (uitk's shadow guard warns and skips) and, before the guard, would have
+    clobbered the method outright. Assert the whole mapping is clear of
+    MainWindow's surface, not just the two keys that collide today — a new mapping
+    entry is the likely way this regresses.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.handler = MayaMenuHandler()
+
+    def _object_name_for(self, menu_key):
+        """Return the objectName get_menu assigns to *menu_key*'s wrapper.
+
+        Drives the real get_menu so the assertion tracks production naming rather
+        than restating it. Same stubbed Maya/Qt boundary as above (mayapy has no
+        QApplication); populate is forced True to reach the naming path.
+        """
+        with mock.patch(
+            "mayatk.ui_utils.maya_native_menus.mel.eval"
+        ), mock.patch(
+            "mayatk.ui_utils.maya_native_menus.cmds.menuSet",
+            return_value="commonMenuSet",
+        ), mock.patch(
+            "mayatk.ui_utils.maya_native_menus.cmds.setMenuMode"
+        ), mock.patch(
+            "mayatk.ui_utils.maya_native_menus.cmds.refresh"
+        ), mock.patch(
+            "mayatk.ui_utils.maya_native_menus.PersistentMenu"
+        ), mock.patch(
+            "mayatk.ui_utils.maya_native_menus.EmbeddedMenuWidget"
+        ) as widget_cls, mock.patch.object(
+            self.handler, "_populate_menu", return_value=True
+        ):
+            self.assertIsNotNone(
+                self.handler.get_menu(menu_key), f"'{menu_key}' must build"
+            )
+            return widget_cls.return_value.setObjectName.call_args[0][0]
+
+    def test_no_menu_key_shadows_mainwindow_attribute(self):
+        offenders = {}
+        for menu_key in MayaMenuHandler.MENU_MAPPING:
+            obj_name = self._object_name_for(menu_key)
+            if callable(getattr(MainWindow, obj_name, None)):
+                offenders[menu_key] = obj_name
+
+        self.assertEqual(
+            offenders,
+            {},
+            f"wrapper objectName shadows a MainWindow method: {offenders}",
+        )
 
 
 class TestPopulateMenuReturn(MayaTkTestCase):

@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.12.90"
+__version__ = "0.12.93"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -111,6 +111,13 @@ DEFAULT_INCLUDE = {
     # ``BlenderBridgeSlots`` panel class is discovered by MayaUiHandler, not registered).
     # Counterpart of blendertk's ``MayaBridge``.
     "env_utils.blender_bridge._blender_bridge": "BlenderBridge",
+    # Pull direction — import a .blend into the CURRENT Maya scene via a headless
+    # Blender FBX round-trip. Counterpart of blendertk's ``MayaSceneImport`` /
+    # ``btk.import_maya_scene``.
+    "env_utils.blender_bridge._scene_import": [
+        "BlenderSceneImport",
+        "import_blender_scene",
+    ],
     # Material utils
     "mat_utils.game_shader": "GameShader",
     "mat_utils.arnold_bridge": "ArnoldBridge",

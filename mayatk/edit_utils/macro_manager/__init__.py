@@ -1,9 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Macro Manager — a uitk panel for assigning hotkeys and categories to the
-``mayatk`` macros, with save/load preset support.
+"""Shipped macro binding presets (``presets/``) — the built-in tier of the
+``Macros`` preset store.
 
-The panel is a thin consumer of the ``MacroManager`` management API
-(:mod:`mayatk.edit_utils.macros`); all binding/persistence logic lives there so
-it is equally usable headlessly (e.g. the ``userSetup`` startup path).
+The bespoke Macro Manager panel that used to live here was retired: the UI is
+now the unified uitk ``ShortcutEditor`` launched over the ``Macros``
+controller via ``Macros.show_editor()`` (see :mod:`mayatk.edit_utils.macros`).
+This package remains only as the anchor for the shipped preset data both that
+editor and the headless ``apply_saved_macros`` startup path read.
 """

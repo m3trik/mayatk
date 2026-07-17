@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-07-15_
+_Generated: 2026-07-17_
 
 ## Index
 
@@ -78,7 +78,6 @@ _Generated: 2026-07-15_
 - [`edit_utils/duplicate_linear.py`](#edit_utils--duplicate_linear)
 - [`edit_utils/duplicate_radial.py`](#edit_utils--duplicate_radial)
 - [`edit_utils/dynamic_pipe.py`](#edit_utils--dynamic_pipe)
-- [`edit_utils/macro_manager/macro_manager_slots.py`](#edit_utils--macro_manager--macro_manager_slots) — UI slots for the Macro Manager panel.
 - [`edit_utils/macros.py`](#edit_utils--macros)
 - [`edit_utils/mesh_graph.py`](#edit_utils--mesh_graph)
 - [`edit_utils/mirror.py`](#edit_utils--mirror)
@@ -89,8 +88,10 @@ _Generated: 2026-07-15_
 - [`edit_utils/snap.py`](#edit_utils--snap)
 - [`env_utils/_env_utils.py`](#env_utils--_env_utils)
 - [`env_utils/blender_bridge/_blender_bridge.py`](#env_utils--blender_bridge--_blender_bridge) — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
+- [`env_utils/blender_bridge/_scene_import.py`](#env_utils--blender_bridge--_scene_import) — Import a Blender scene (.blend) into Maya via a headless-Blender FBX round-trip.
 - [`env_utils/blender_bridge/blender_bridge_slots.py`](#env_utils--blender_bridge--blender_bridge_slots) — Slots for the Blender bridge panel.
 - [`env_utils/blender_bridge/parameters.py`](#env_utils--blender_bridge--parameters) — Registry of user-tunable Blender-bridge parameters exposed to the panel.
+- [`env_utils/blender_bridge/templates/_import_scene.py`](#env_utils--blender_bridge--templates--_import_scene) — Open a .blend headlessly (blender --background) and export it as FBX for a Maya import.
 - [`env_utils/blender_bridge/templates/import.py`](#env_utils--blender_bridge--templates--import) — Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.
 - [`env_utils/devtools.py`](#env_utils--devtools)
 - [`env_utils/fbx_utils.py`](#env_utils--fbx_utils)
@@ -1345,17 +1346,6 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `DynamicPipeSlots.header_init(self, widget)` — Configure header help text.
   - `DynamicPipeSlots.b000(self)` — Initialize Pipe — build pipe from the current ordered selection.
 
-<a id="edit_utils--macro_manager--macro_manager_slots"></a>
-### `edit_utils/macro_manager/macro_manager_slots.py`
-
-UI slots for the Macro Manager panel.
-
-- **[`class MacroManagerSlots`](mayatk/mayatk/edit_utils/macro_manager/macro_manager_slots.py#L23)** — Switchboard slots for the Macro Manager UI.
-  - `MacroManagerSlots.header_init(self, widget)` — Populate the header menu (global actions + preset selector).
-  - `MacroManagerSlots.cmb000_init(self, widget)` — Populate the category filter combobox.
-  - `MacroManagerSlots.cmb000(self, index)` — Category filter changed — refresh the table.
-  - `MacroManagerSlots.tbl000_init(self, widget)` — One-time table setup, then (re)populate.
-
 <a id="edit_utils--macros"></a>
 ### `edit_utils/macros.py`
 
@@ -1382,7 +1372,13 @@ UI slots for the Macro Manager panel.
   - `MacroManager.get_active_preset(cls) -> Optional[str]` *(class)* — The last-selected/applied preset name, or ``None``.
   - `MacroManager.set_active_preset(cls, name: Optional[str]) -> None` *(class)* — Set (or clear, with ``None``) the active-preset pointer.
   - `MacroManager.apply_saved_macros(cls, name: Optional[str] = None) -> None` *(class)* — Apply a saved preset/template's bindings to Maya on demand.
-- **[`class DisplayMacros`](mayatk/mayatk/edit_utils/macros.py#L671)**
+  - `MacroManager.editor_categories(cls) -> List[str]` *(class)* — Mixin-derived categories plus any custom category carried by the
+  - `MacroManager.get_editor_registry(cls, category: str) -> List[dict]` *(class)* — Editor-shaped entries for every macro in *category*.
+  - `MacroManager.apply_editor_binding(cls, name: str, sequence: str) -> None` *(class)* — Apply a Qt key sequence captured in the editor (``""`` clears).
+  - `MacroManager.export_bindings(cls) -> Dict[str, dict]` *(class)* — The persist-worthy subset of the live bindings — every macro with a
+  - `MacroManager.import_bindings(cls, data: Optional[Dict[str, dict]]) -> int` *(class)* — Apply a loaded binding set (the preset ``value_applier``): release
+  - `MacroManager.show_editor(cls, parent=None)` *(class)* — Open the Macro Manager — the unified uitk ``ShortcutEditor`` over
+- **[`class DisplayMacros`](mayatk/mayatk/edit_utils/macros.py#L880)**
   - `DisplayMacros.m_component_id_display()` *(static)* — Toggle Component Id Display through vertices, edges, faces, UVs, and off.
   - `DisplayMacros.m_normals_display()` *(static)* — Toggle face normals, vertex normals, tangents, and off.
   - `DisplayMacros.m_soft_edge_display()` *(static)* — Toggle Soft Edge Display.
@@ -1392,14 +1388,15 @@ UI slots for the Macro Manager panel.
   - `DisplayMacros.m_isolate_selected() -> None` *(static)* — Isolate the current selection in the active 3D viewport.
   - `DisplayMacros.m_cycle_display_state(objects) -> None` *(static)* — Cycle the display state of all selected objects based on the first object's state.
   - `DisplayMacros.m_wireframe_toggle(objects) -> None` *(static)* — Toggle Wireframe Display on selected objects, or on all objects if none are selected.
-  - `DisplayMacros.m_grid_and_image_planes() -> None` *(static)* — Toggle grid and image plane visibility.
+  - `DisplayMacros.m_grid() -> bool` *(static)* — Toggle the grid.
+  - `DisplayMacros.m_grid_and_image_planes() -> None` *(static)* — Toggle grid and image plane visibility together.
   - `DisplayMacros.m_frame(objects) -> None` *(static)* — Frame the selection, cycling zoom level on repeated presses.
   - `DisplayMacros.m_smooth_preview(cls, objects) -> None` *(class)* — Toggle smooth mesh preview.
   - `DisplayMacros.m_wireframe() -> None` *(static)* — Toggles the wireframe display state.
   - `DisplayMacros.m_material_override()` *(static)* — Toggle the viewport's default-material override.
   - `DisplayMacros.m_shading(cls) -> None` *(class)* — Toggles viewport display mode between wireframe, smooth shaded with textures off,
   - `DisplayMacros.m_lighting(cls) -> None` *(class)* — Toggles viewport lighting between different states: default, all lights, active lights,
-- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L1226)**
+- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L1444)**
   - `EditMacros.m_group(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditMacros.m_combine(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)` *(static)* — Combine multiple meshes.
   - `EditMacros.m_boolean(objects, repair_mesh=True, keep_boolean=True, **kwargs)` *(static)* — Perform a boolean operation on two meshes using cmds, managing shorthand and full parameter names d…
@@ -1407,7 +1404,7 @@ UI slots for the Macro Manager panel.
   - `EditMacros.m_paste_and_rename() -> None` *(static)* — Paste and rename by removing 'pasted__' prefix and reference file names,
   - `EditMacros.m_multi_component() -> None` *(static)* — Enable the multi-component selection mask.
   - `EditMacros.m_merge_vertices(objects, tolerance=0.001) -> None` *(static)* — Merge vertices within a small distance tolerance.
-- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L1482)**
+- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L1700)**
   - `SelectionMacros.m_object_selection() -> None` *(static)* — Set object selection mask.
   - `SelectionMacros.m_vertex_selection() -> None` *(static)* — Set vertex selection mask.
   - `SelectionMacros.m_edge_selection() -> None` *(static)* — Set edge selection mask.
@@ -1416,12 +1413,12 @@ UI slots for the Macro Manager panel.
   - `SelectionMacros.m_toggle_selectability(objects)` *(static)* — Toggle selectability of the given objects.
   - `SelectionMacros.m_toggle_UV_select_type() -> None` *(static)* — Toggles between UV shell and UV component selection.
   - `SelectionMacros.m_invert_component_selection() -> None` *(static)* — Invert the component selection on the currently selected objects.
-- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1645)**
+- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1863)**
   - `UiMacros.m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None` *(static)* — Toggle UI toolbars and menu bar in sync.
-- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L1681)**
+- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L1899)**
   - `AnimationMacros.m_set_selected_keys(objects) -> None` *(static)* — Set keys for any attributes (channels) that are selected in the channel box.
   - `AnimationMacros.m_unset_selected_keys(objects) -> None` *(static)* — Un-set keys for any attributes (channels) that are selected in the channel box.
-- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L1708)**
+- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L1926)**
 
 <a id="edit_utils--mesh_graph"></a>
 ### `edit_utils/mesh_graph.py`
@@ -1554,6 +1551,19 @@ Blender bridge engine -- export the Maya selection and run a chosen import templ
   - `BlenderBridge.params_defaults(self) -> Dict[str, Any]`
   - `BlenderBridge.render_context(self, params: Dict[str, Any]) -> Dict[str, str]`
 
+<a id="env_utils--blender_bridge--_scene_import"></a>
+### `env_utils/blender_bridge/_scene_import.py`
+
+Import a Blender scene (.blend) into Maya via a headless-Blender FBX round-trip.
+
+- [`import_blender_scene(src_path: str, **kwargs: Any) -> List[str]`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L538) — Import a Blender scene (.blend) into the current Maya scene.
+- **[`class BlenderSceneImport(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L85)** — Engine: convert a .blend to FBX via headless Blender, then import it.
+  - `BlenderSceneImport.blender_path(self) -> Optional[str]` *(property)* — The Blender executable (explicit, or discovered via the bridge's AppSpec).
+  - `BlenderSceneImport.require_blender(self) -> str` — Return :attr:`blender_path` or raise the spec's not-found error.
+  - `BlenderSceneImport.render_script(self, src_path: str, out_fbx: str, *, embed_textures: bool = False, include_animation: bool = True) -> str` — Render the Blender-side conversion script (exposed for tests/preview).
+  - `BlenderSceneImport.convert(self, src_path: str, out_fbx: str, *, timeout: float = 600, **script_opts: Any) -> 'ptk.ScriptRunResult'` — Convert *src_path* to *out_fbx* in a fresh headless Blender (blocking).
+  - `BlenderSceneImport.import_scene(self, src_path: str, *, cleanup: bool = True, use_cache: bool = True, timeout: float = 600, fbx_options: Optional[Dict[str, Any]] = None, **script_opts: Any) -> List[str]` — Import the Blender scene at *src_path*;
+
 <a id="env_utils--blender_bridge--blender_bridge_slots"></a>
 ### `env_utils/blender_bridge/blender_bridge_slots.py`
 
@@ -1574,6 +1584,16 @@ Registry of user-tunable Blender-bridge parameters exposed to the panel.
 - [`referenced_keys(script_text: str) -> 'set[str]'`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L105) — Registered keys present in *script_text* (delegates to uitk.bridge).
 - [`defaults() -> 'dict[str, Any]'`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L110) — Return ``{key: default}`` for every registered parameter.
 - [`render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L115) — Format *values* for ``StrUtils.replace_delimited`` using Python literals.
+
+<a id="env_utils--blender_bridge--templates--_import_scene"></a>
+### `env_utils/blender_bridge/templates/_import_scene.py`
+
+Open a .blend headlessly (blender --background) and export it as FBX for a Maya import.
+
+- [`collect_texture_manifest(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L84) — Manifest entries for every textured material on an exportable object,
+- [`write_texture_manifest(entries, scene_materials, path)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L139) — Sidecar for the textures FBX cannot carry, consumed by BlenderSceneImport.
+- [`export_fbx(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L157) — Full-fidelity FBX export with per-flag tolerance across Blender versions.
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L191)
 
 <a id="env_utils--blender_bridge--templates--import"></a>
 ### `env_utils/blender_bridge/templates/import.py`
@@ -1953,7 +1973,6 @@ Maya Connection Module
 - [`show(*args, **kwargs)`](mayatk/mayatk/env_utils/script_output.py#L291)
 - [`toggle(*args, **kwargs)`](mayatk/mayatk/env_utils/script_output.py#L295) — Toggle the Script Output panel.
 - **[`class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog)`](mayatk/mayatk/env_utils/script_output.py#L14)** — Dockable window that live-mirrors Maya's Script Editor output,
-  - `ScriptConsole.enterEvent(self, event)`
   - `ScriptConsole.show_console(cls, dock=None, width: int = None, height: int = None, tab_position: str = None, restore: bool = False)` *(class)* — Show the Script Output console.
 
 <a id="env_utils--unity_bridge--_unity_bridge"></a>
@@ -3099,10 +3118,10 @@ Programmatic access to Maya's Channel Box.
 Maya hotkey collision checker for the uitk ShortcutEditor.
 
 - [`parse_qt_sequence(sequence: str) -> Optional[dict]`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L49) — Convert a Qt key sequence string to ``cmds.hotkey`` query kwargs.
-- [`keystring_to_token(ks: list) -> str`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L122) — Convert an ``assignCommand`` keyString array to a Maya hotkey token.
-- [`live_hotkey_map() -> dict`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L151) — Return ``{runtime_command: maya_key_token}`` for the active hotkey set.
-- [`ensure_editable_hotkey_set(name: str = MACRO_HOTKEY_SET) -> str`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L282) — Make the *current* hotkey set editable;
-- [`maya_collision_checker(sequence, scope, ui_name, method_name)`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L335) — Check a proposed binding against Maya's active hotkey set.
+- [`keystring_to_token(ks: list) -> str`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L129) — Convert an ``assignCommand`` keyString array to a Maya hotkey token.
+- [`live_hotkey_map() -> dict`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L158) — Return ``{runtime_command: maya_key_token}`` for the active hotkey set.
+- [`ensure_editable_hotkey_set(name: str = MACRO_HOTKEY_SET) -> str`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L289) — Make the *current* hotkey set editable;
+- [`maya_collision_checker(sequence, scope, ui_name, method_name, ignore=None)`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L342) — Check a proposed binding against Maya's active hotkey set.
 
 <a id="ui_utils--maya_bridge_slots"></a>
 ### `ui_utils/maya_bridge_slots.py`
@@ -3115,17 +3134,7 @@ Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 <a id="ui_utils--maya_native_menus"></a>
 ### `ui_utils/maya_native_menus.py`
 
-- **[`class PersistentMenu(QtWidgets.QMenu)`](mayatk/mayatk/ui_utils/maya_native_menus.py#L14)** — A QMenu that ignores attempts to hide it (e.g.
-  - `PersistentMenu.setVisible(self, visible)`
-- **[`class EmbeddedMenuWidget(QtWidgets.QWidget)`](mayatk/mayatk/ui_utils/maya_native_menus.py#L23)** — Embeds a Maya QMenu into a sizeable widget that fits content exactly.
-  - `EmbeddedMenuWidget.init_ui(self)`
-  - `EmbeddedMenuWidget.content_size(self)` — Exact size needed for header + populated menu, no dead space.
-  - `EmbeddedMenuWidget.sizeHint(self)`
-  - `EmbeddedMenuWidget.minimumSizeHint(self)`
-  - `EmbeddedMenuWidget.resizeEvent(self, event)`
-  - `EmbeddedMenuWidget.showEvent(self, event)`
-  - `EmbeddedMenuWidget.fit_to_window(self)` — Resize and lock the parent window to exact content size.
-- **[`class MayaNativeMenus(ptk.LoggingMixin)`](mayatk/mayatk/ui_utils/maya_native_menus.py#L204)** — Handles Maya's menu retrieval and embedding into UI components.
+- **[`class MayaNativeMenus(ptk.LoggingMixin)`](mayatk/mayatk/ui_utils/maya_native_menus.py#L19)** — Handles Maya's menu retrieval and embedding into UI components.
   - `MayaNativeMenus.get_menu(self, menu_key: str) -> Optional[QtWidgets.QWidget]` — Retrieve a Maya menu, populated synchronously, and return its wrapper.
   - `MayaNativeMenus.display_menu(self, menu_key: str)` — Displays the specified Maya menu in a standalone window.
 

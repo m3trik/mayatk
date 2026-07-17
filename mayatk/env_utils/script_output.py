@@ -30,6 +30,10 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
         # The read-only, syntax-highlighted view now lives in uitk (shared with
         # blendertk / standalone). Maya-specific behavior is injected: Clear also
         # empties Maya's reporter, and the context menu gains the Echo toggle.
+        # Hover-to-focus (so Ctrl+C / Ctrl+A reach the console without clicking in
+        # first) is the widget's own `focus_on_hover`, default on — it used to be a
+        # hand-rolled `enterEvent` on this dialog; the widget owning it means the
+        # Blender console gets the same behavior from the same code.
         self.output = ScriptOutput(
             clear_callback=self._clear_reporter,
             context_menu_hook=self._echo_menu_hook,
@@ -149,10 +153,6 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
         # Optionally close the Script Editor if we opened it
         if not was_open:
             self._hide_script_editor()
-
-    def enterEvent(self, event):
-        super().enterEvent(event)
-        self.setFocus()
 
     @classmethod
     def _build_ui_script(cls) -> str:

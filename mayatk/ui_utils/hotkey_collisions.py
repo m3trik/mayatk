@@ -99,18 +99,25 @@ def parse_qt_sequence(sequence: str) -> Optional[dict]:
 def _ks_modifier(ks: list, mod: str) -> bool:
     """Read a modifier flag from an assignCommand keyString array.
 
-    Maya 2025's keyString is a 7-element list:
-        [key, alt, ctrl, ?, shift, release, ?]
+    Maya 2025's keyString is a 7-element list with shift LAST:
+        [key, alt, ctrl, ?, ?, ?, shift]
 
-    Older Maya versions report 6 elements with a slightly different order;
-    this helper handles both common shapes. Modifier flags are stored as
-    string ``"0"``/``"1"``.
+    Probe-verified against live dumps: ``ctl+alt+sht+F9`` reports
+    ``["F9","1","1","0","0","0","1"]`` and ``sht+i`` reports
+    ``["I","0","0","0","0","0","1"]`` (shift+letter also upper-cases the
+    glyph). Reading shift from index 4 — the old assumption — silently
+    dropped the modifier for non-letter keys, so ``live_hotkey_map`` returned
+    a shift-less token and a rebind/clear released the wrong chord.
+
+    Older Maya versions report 6 elements with a different order; this helper
+    handles both common shapes. Modifier flags are stored as string
+    ``"0"``/``"1"``.
     """
     if not ks:
         return False
-    # 7-element layout (Maya 2025+)
+    # 7-element layout (Maya 2025+): shift is the final element.
     if len(ks) >= 7:
-        idx = {"alt": 1, "ctrl": 2, "shift": 4}.get(mod)
+        idx = {"alt": 1, "ctrl": 2, "shift": 6}.get(mod)
     else:
         # 6-element legacy layout: [key, alt, ctrl, shift, ?, release]
         idx = {"alt": 1, "ctrl": 2, "shift": 3}.get(mod)
@@ -332,7 +339,7 @@ def _unbind_maya_hotkey(parsed: dict) -> None:
         pass
 
 
-def maya_collision_checker(sequence, scope, ui_name, method_name):
+def maya_collision_checker(sequence, scope, ui_name, method_name, ignore=None):
     """Check a proposed binding against Maya's active hotkey set.
 
     Args:
@@ -340,6 +347,11 @@ def maya_collision_checker(sequence, scope, ui_name, method_name):
         scope: ``"window"`` or ``"application"`` — informational.
         ui_name: UI being edited — informational.
         method_name: Slot being assigned — informational.
+        ignore: Optional predicate ``(runtime_command_name) -> bool``; a bound
+            command it returns True for is not reported. Lets a caller whose
+            editor already reports its own managed bindings (e.g. the Macro
+            Manager's built-in macro-vs-macro check) suppress the duplicate
+            listing of the same conflict.
 
     Returns:
         A list of ``CollisionConflict`` entries (imported lazily so the
@@ -354,7 +366,7 @@ def maya_collision_checker(sequence, scope, ui_name, method_name):
         return conflicts
 
     bound = _find_bound_command(parsed)
-    if not bound:
+    if not bound or (ignore is not None and ignore(bound)):
         return conflicts
 
     set_name = _current_hotkey_set()
