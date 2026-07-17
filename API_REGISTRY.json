@@ -19533,7 +19533,7 @@
               "kind": "method",
               "signature": "(self, menu_key: str)",
               "summary": "Displays the specified Maya menu in a standalone window.",
-              "line": 391,
+              "line": 394,
               "deprecated": false
             }
           ]
