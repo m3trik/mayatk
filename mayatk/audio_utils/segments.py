@@ -1,21 +1,36 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Segment discovery from the per-track keyed canonical store.
+"""Consumer-facing segment discovery for sequencer + manifest.
+
+Produces :class:`AudioSegment` lists derived from the per-track keyed
+canonical store on ``data_internal``.  Replaces the legacy
+``AudioTrackManager`` which read from DG audio nodes plus a separate
+enum-driven AudioClips carrier.
 
 For each track attr on the carrier, the segment's timeline position is
 the first ``value=1`` (start) key.  The effective end is either the
 matching ``value=0`` (stop) key or the audio file's intrinsic duration.
 
-Consumers (sequencer ``_build_audio_tracks``, manifest
-``_post_build_audio``) call :func:`collect_all_segments` once per build
-pass.  Results are not cached at this layer — consumers coalesce
-through their own ``batch`` / compositor sync lifecycle.
+The sequencer (``_build_audio_tracks``) and manifest
+(``_post_build_audio``) are the only intended consumers; each calls
+:func:`collect_all_segments` once per build pass.  Results are not
+cached at this layer — consumers coalesce through their own ``batch`` /
+compositor sync lifecycle.  UI code should treat :class:`AudioSegment`
+as read-only snapshots — mutations go through the ``audio_utils``
+primitive API (``write_key``, ``shift_keys_in_range``, ``set_path``)
+plus ``audio_utils.sync()``.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from mayatk.audio_utils._audio_utils import AudioUtils
+
+__all__ = [
+    "AudioSegment",
+    "collect_all_segments",
+    "collect_segments_for_track",
+]
 
 
 @dataclass

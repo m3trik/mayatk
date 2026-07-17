@@ -13,11 +13,13 @@ Skips: actual file imports (would require fixture .ma/.mb/.fbx files and
 side-effect-heavy import paths).
 """
 import os
+import tempfile
 import unittest
 from pathlib import Path
 import logging
 
 import maya.cmds as cmds
+import maya.mel as mel
 
 from mayatk.env_utils.namespace_sandbox import (
     NamespaceSandbox,
@@ -208,6 +210,78 @@ class TestFindObjectsInNamespace(MayaTkTestCase):
         sb = NamespaceSandbox(fuzzy_matching=False)
         result = sb.find_objects_in_namespace("empty_ns", ["nothing"])
         self.assertEqual(result, [])
+
+
+class TestImportRoundTrip(MayaTkTestCase):
+    """Real (synthetic) import round-trips through NamespaceSandbox.
+
+    Locks two regressions that the extended real-scene tests were silently
+    skipping (broken skip guards) and no unit test covered:
+      * MayaImporter must pass ``i=True`` to ``cmds.file`` — the
+        ``pm.importFile`` → ``cmds.file`` migration dropped it, so every
+        ``.ma/.mb`` import returned None.
+      * FBXImporter must isolate the import into the namespace natively,
+        without disturbing a clashing root-scene object.
+    """
+
+    def setUp(self):
+        super().setUp()
+        cmds.loadPlugin("fbxmaya", quiet=True)
+        self.tempdir = tempfile.mkdtemp(prefix="ns_roundtrip_")
+        root = cmds.group(em=True, name="RT_ROOT")
+        child = cmds.polyCube(name="RT_BOX")[0]
+        cmds.parent(child, root)
+        self.ma_path = os.path.join(self.tempdir, "rt.ma")
+        self.fbx_path = os.path.join(self.tempdir, "rt.fbx")
+        cmds.select("RT_ROOT", replace=True)
+        cmds.file(self.ma_path, exportSelected=True, type="mayaAscii", force=True)
+        mel.eval("FBXResetExport")
+        mel.eval('FBXExport -f "{}" -s'.format(self.fbx_path.replace("\\", "/")))
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        for f in os.listdir(self.tempdir):
+            try:
+                os.remove(os.path.join(self.tempdir, f))
+            except Exception:
+                pass
+        try:
+            os.rmdir(self.tempdir)
+        except Exception:
+            pass
+        super().tearDown()
+
+    def test_maya_import_namespaced(self):
+        # Would return None before the i=True fix.
+        sb = NamespaceSandbox(dry_run=False)
+        info = sb.import_with_namespace(self.ma_path)
+        self.assertIsNotNone(info, "MayaImporter returned None (missing i=True?)")
+        ns = info["namespace"]
+        leaves = {t.split("|")[-1].split(":")[-1] for t in info["transforms"]}
+        self.assertIn("RT_ROOT", leaves)
+        self.assertIn("RT_BOX", leaves)
+        self.assertTrue(all(":" in t for t in info["transforms"]))
+        sb.cleanup_all_namespaces()
+        self.assertFalse(cmds.namespace(exists=ns))
+
+    def test_fbx_import_namespaced_and_survives_clash(self):
+        clash = cmds.polyCube(name="RT_BOX")[0]  # collides with FBX contents
+        clash_uuid = cmds.ls(clash, uuid=True)[0]
+
+        sb = NamespaceSandbox(dry_run=False)
+        info = sb.import_with_namespace(self.fbx_path)
+        self.assertIsNotNone(info)
+        ns = info["namespace"]
+        self.assertTrue(info["transforms"])
+        self.assertTrue(all(f"{ns}:" in t for t in info["transforms"]))
+        # The pre-existing root clash object is untouched (native isolation,
+        # no shelving).
+        self.assertEqual(cmds.ls(clash_uuid, long=True), ["|RT_BOX"])
+        self.assertFalse(cmds.ls("_temp_import_conflict_*"))
+
+        sb.cleanup_all_namespaces()
+        self.assertFalse(cmds.namespace(exists=ns))
+        self.assertTrue(cmds.ls(clash_uuid), "clash object lost during cleanup")
 
 
 if __name__ == "__main__":

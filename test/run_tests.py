@@ -3,35 +3,59 @@
 """
 MayaTk Test Runner
 
-Unified test runner for executing mayatk tests via Maya command port.
-Tests run in Maya and output is displayed in Script Editor.
-Results are saved to test_results.txt for review.
-README badge is automatically updated with test results.
+Unified test runner for the mayatk suite.
+
+Default execution is HEADLESS: modules run under mayapy (maya.standalone)
+in chunks, each chunk in a fresh process (one long standalone session
+accumulates native state and hard-crashes mid-run).  A module that native-
+crashes or hangs headlessly is attributed via progress markers, the chunk
+resumes in a fresh process, and the offender is deferred to a single GUI
+pass at the end (alongside the known-GUI-only modules in GUI_REQUIRED).
+The GUI pass launches a NEW Maya via command port — user sessions are never
+touched.
+
+The in-session harness lives in _suite_driver.py and is shared by both
+paths, so headless and GUI runs behave identically per module.
 
 Usage:
-    python run_tests.py                          # Run default core tests
+    python run_tests.py                          # Run default core tests (headless)
     python run_tests.py core_utils components    # Run specific modules
     python run_tests.py --all                    # Run ALL test modules
+    python run_tests.py --gui                    # Force everything through a GUI Maya
+    python run_tests.py --no-gui-pass            # Skip the GUI pass (GUI-only modules DEFERRED; no badge)
+    python run_tests.py --chunk-size 12          # Modules per fresh mayapy process
+    python run_tests.py --jobs 2                 # Concurrent mayapy chunks (default 1; see note)
+    python run_tests.py --module-timeout 900     # Headless per-module hang timeout (seconds)
+    python run_tests.py --mayapy <path>          # Explicit mayapy (else MAYATK_MAYAPY / newest install)
     python run_tests.py --dry-run                # Validate test setup without running
-    python run_tests.py --quick                  # Run quick validation test
+    python run_tests.py --quick                  # Run quick validation test (GUI)
     python run_tests.py --list                   # List available test modules
     python run_tests.py --no-badge               # Skip README badge update
-    python run_tests.py --no-wait                # Fire-and-forget (don't poll for results)
-    python run_tests.py --timeout 7200           # Override the results-wait timeout (seconds;
-                                                 #   default scales with module count)
-    python run_tests.py --keep-maya              # Keep Maya open after tests (default: close)
-    python run_tests.py --reuse                  # Reuse existing Maya (CAUTION: resets scene)
+    python run_tests.py --no-wait                # Fire-and-forget (GUI mode only)
+    python run_tests.py --timeout 7200           # GUI-pass results-wait timeout (seconds)
+    python run_tests.py --keep-maya              # Keep GUI Maya open after tests
+    python run_tests.py --reuse                  # Reuse existing Maya (CAUTION: resets scene; implies --gui)
+
+Notes:
+    --jobs > 1 runs multiple mayapy chunks concurrently.  Standalone
+    initializations are staggered (one at a time) to avoid license-checkout
+    races; if a run ever hangs at init, drop back to --jobs 1 and let the
+    FlexLM checkout reclaim before retrying.
 
 Directory Structure:
     - Main Test Suite: mayatk/test/ (Standardized test_*.py files only)
     - Temporary Tests: mayatk/test/temp_tests/ (Reproduction scripts, scratchpad tests)
 """
+import json
 import os
 import re
+import shutil
+import subprocess
 import sys
-import textwrap
+import threading
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 
 # cp1252 consoles can't encode characters test docstrings legitimately use
 # ("→"); unittest's printErrors then dies MID-REPORT, eating the failure list
@@ -43,63 +67,217 @@ for _stream in (sys.stdout, sys.stderr):
         except (ValueError, OSError):
             pass
 
+SCRIPTS_ROOT = Path(__file__).resolve().parents[2]
+DRIVER_PATH = Path(__file__).resolve().parent / "_suite_driver.py"
+SUITE_COMPLETE_MARKER = "# SUITE COMPLETE"
+
 # Ensure mayatk is in path
-scripts_dir = r"O:\Cloud\Code\_scripts"
-if scripts_dir not in sys.path:
-    sys.path.insert(0, scripts_dir)
+if str(SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_ROOT))
 
 try:
     from mayatk.env_utils import maya_connection
 except ImportError:
     print(
-        "Warning: mayatk.env_utils.maya_connection module not found. Standalone mode may not work."
+        "Warning: mayatk.env_utils.maya_connection module not found. GUI/port mode may not work."
     )
+
+# Modules that must run in a GUI Maya session (mayapy standalone native-
+# crashes them).  Anything NOT listed that still crashes headlessly is
+# auto-detected at runtime and deferred to the GUI pass — add persistent
+# offenders here so they skip the wasted crash/relaunch cycle.
+GUI_REQUIRED = {
+    "test_sequencer": "Qt table classes hard-crash mayapy (0xC0000409)",
+    "test_shot_manifest": (
+        "shots adapters register OpenMaya/scriptJob callbacks that "
+        "segfault without a real Maya event loop"
+    ),
+    "test_hotkey_collisions": (
+        "cmds.hotkeySet raises RuntimeError under mayapy batch "
+        "(hotkey infrastructure is GUI-only)"
+    ),
+    # Confirmed native mayapy crashers (2026-07-17 full run; hierarchy_sync
+    # re-confirmed crashing ALONE in a fresh process — Qt reference-tree
+    # population). All pass under the GUI pass.
+    "test_hierarchy_sync": "native-crashes mayapy at Qt reference-tree population",
+    "test_hdr_manager": "native-crashes mayapy (2026-07-17 full run)",
+    "test_mat_marmoset_bridge": "native-crashes mayapy (2026-07-17 full run)",
+    "test_maya_menu_handler": "builds native GUI menus; native-crashes mayapy",
+    "test_preview": "native-crashes mayapy (2026-07-17 full run)",
+    "test_script_output": "Qt console embed; native-crashes mayapy",
+    "test_sequencer_gui": "Qt sequencer widgets; native-crashes mayapy",
+    "test_uv_rizom_bridge": "native-crashes mayapy (2026-07-17 full run)",
+    # Batch-incompatible by design (fail, not crash — but belong in a GUI session).
+    "test_maya_connection": (
+        "asserts interactive-session mode detection (batch detects 'standalone' "
+        "by design) and rides out dead-port retries headlessly (376s)"
+    ),
+    "test_native_menu_window": "wraps Maya's GUI menu bar (no menus in batch)",
+    "test_style_setter": (
+        "cmds.displayRGBColor queries return None under batch, breaking the "
+        "color snapshot/restore harness"
+    ),
+}
+
+# Statuses a module line in the results file can carry.  PASS/FAIL/LOAD ERROR
+# come from the driver; the rest are written by this orchestrator.
+_MODULE_LINE = re.compile(
+    r"^(test_\S+): (PASS|FAIL|LOAD ERROR|NATIVE CRASH|TIMEOUT|DEFERRED)\b(.*)$"
+)
+_COUNTS_LINE = re.compile(r"^  Tests: (\d+), Failures: (\d+), Errors: (\d+), Skipped: (\d+)")
+_TIME_IN_REST = re.compile(r"\[([\d.]+)s\]")
+
+# Statuses that mean the module never produced test results.
+_NOT_RUN = ("NATIVE CRASH", "TIMEOUT", "DEFERRED")
+
+
+def find_mayapy(explicit: Optional[str] = None) -> Optional[str]:
+    """Locate mayapy.exe: explicit arg > MAYATK_MAYAPY env > newest install > PATH."""
+    if explicit:
+        if Path(explicit).exists():
+            return explicit
+        print(f"[WARNING] --mayapy path not found: {explicit}")
+        return None
+    try:
+        from pythontk import AppLauncher
+
+        found = AppLauncher.resolve_app_path(
+            env_vars=("MAYATK_MAYAPY",),
+            scan_globs=("{program_files}/Autodesk/Maya20*/bin/mayapy.exe",),
+        )
+        if found:
+            return found
+    except ImportError:
+        pass
+    return shutil.which("mayapy")
+
+
+def _inside_maya() -> bool:
+    """True when running inside an interactive Maya session (Script Editor)."""
+    if "maya.cmds" not in sys.modules:
+        return False
+    try:
+        import maya.cmds as cmds
+
+        return not cmds.about(batch=True)
+    except Exception:
+        return False
+
+
+def _read_markers(path) -> List[str]:
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _split_markers(markers: List[str]) -> Tuple[List[str], set, bool, bool]:
+    """Split progress markers into (started, finished, done, init_done)."""
+    started = [m[len("STARTED "):] for m in markers if m.startswith("STARTED ")]
+    finished = {m[len("FINISHED "):] for m in markers if m.startswith("FINISHED ")}
+    return started, finished, "DONE" in markers, "INIT_DONE" in markers
+
+
+def _parse_module_blocks(text: str) -> List[dict]:
+    """Parse per-module result blocks out of a results-file text."""
+    records = []
+    for line in text.splitlines():
+        m = _MODULE_LINE.match(line)
+        if m:
+            rest = m.group(3)
+            t = _TIME_IN_REST.search(rest)
+            records.append(
+                {
+                    "name": m.group(1),
+                    "status": m.group(2),
+                    "elapsed": float(t.group(1)) if t else None,
+                    "counts": None,
+                }
+            )
+            continue
+        c = _COUNTS_LINE.match(line)
+        if c and records and records[-1]["counts"] is None:
+            records[-1]["counts"] = tuple(int(g) for g in c.groups())
+    return records
 
 
 class MayaTestRunner:
-    """Test runner for mayatk test suite via Maya command port."""
+    """Orchestrates the mayatk test suite (headless mayapy chunks + GUI pass)."""
 
-    def __init__(self, host="localhost", port=7002, reuse_instance=False):
+    def __init__(
+        self,
+        host="localhost",
+        port=7002,
+        reuse_instance=False,
+        mayapy: Optional[str] = None,
+        chunk_size: int = 12,
+        jobs: int = 1,
+        module_timeout: int = 900,
+        wait_timeout: Optional[int] = None,
+    ):
         self.host = host
         self.port = port
         self.reuse_instance = reuse_instance
-        self.test_dir = Path(__file__).parent
+        self.mayapy = mayapy
+        self.chunk_size = max(1, chunk_size)
+        self.jobs = max(1, jobs)
+        self.module_timeout = module_timeout
+        self.wait_timeout = wait_timeout
+        # Standalone init normally takes well under two minutes; past
+        # init_timeout we warn, past + grace we conclude a stuck FlexLM
+        # checkout and stop spawning mayapy (GUI pass still works — it uses
+        # a normal interactive license).
+        self.init_timeout = 600
+        self.init_grace = 300
 
-        # FIX: Save results and temp files in temp_tests directory to avoid pollution
+        self.test_dir = Path(__file__).parent
         self.temp_test_dir = self.test_dir / "temp_tests"
         self.temp_test_dir.mkdir(exist_ok=True)
 
         # Scoped by port AND runner PID: two concurrent invocations would
-        # otherwise share one file — the second run's ``unlink()``-then-
-        # rewrite clobbers the first's in-progress content, and
-        # wait_for_results' file-based fallback (which just looks for a
-        # "SUMMARY" marker) then reports the FIRST run "done" with the
-        # SECOND run's results.  Port scoping alone (the first fix) still
-        # collided when both runs used the default port — observed live:
-        # a scoped run dispatched mid ``--all`` recreated the shared file
-        # and the ``--all`` runner adopted the scoped run's 8-module
-        # summary as its own.  The PID makes the path unique per runner
-        # process; the in-Maya payload embeds this same path, so both
-        # sides stay consistent.
-        self.results_file = (
-            self.temp_test_dir / f"test_results_{port}_{os.getpid()}.txt"
-        )
-        # Best-effort sweep of results files from long-gone runs so the
-        # per-run scoping doesn't accumulate stale files unboundedly.
-        try:
-            import time as _time
+        # otherwise share one file and clobber each other's results.
+        self.results_file = self.temp_test_dir / f"test_results_{port}_{os.getpid()}.txt"
 
-            for stale in self.temp_test_dir.glob("test_results*.txt"):
-                if stale != self.results_file and (
-                    _time.time() - stale.stat().st_mtime > 7 * 86400
-                ):
-                    stale.unlink(missing_ok=True)
-        except OSError:
-            pass
+        self._merge_lock = threading.Lock()
+        self._print_lock = threading.Lock()
+        self._spawn_gate = threading.Semaphore(1)  # staggers standalone inits
+        self._license_trap = False
+        self._done_count = 0
+        self._grand_total = 0
+
+        self._sweep_stale_artifacts()
+
         try:
             self.connection = maya_connection.MayaConnection.get_instance()
         except NameError:
             self.connection = None
+
+    def _sweep_stale_artifacts(self):
+        """Best-effort sweep of files from long-gone runs."""
+        now = time.time()
+        try:
+            for pattern, max_age in (
+                ("test_results*.txt", 7 * 86400),
+                ("chunk_*.*", 7 * 86400),
+                ("gui_*.*", 7 * 86400),
+            ):
+                for stale in self.temp_test_dir.glob(pattern):
+                    if stale != self.results_file and (
+                        now - stale.stat().st_mtime > max_age
+                    ):
+                        stale.unlink(missing_ok=True)
+            # Shots-prefs sandboxes leak when a chunk native-crashes
+            # (os._exit / segfault bypasses cleanup) — sweep older dirs.
+            for stale_dir in self.temp_test_dir.glob("shots_prefs_test_*"):
+                if stale_dir.is_dir() and (now - stale_dir.stat().st_mtime > 86400):
+                    shutil.rmtree(stale_dir, ignore_errors=True)
+        except OSError:
+            pass
+
+    # ------------------------------------------------------------------
+    # Connection (GUI / command-port path)
+    # ------------------------------------------------------------------
 
     def connect_to_maya(self):
         """Connect to Maya using MayaConnection.
@@ -142,15 +320,7 @@ class MayaTestRunner:
             return False
 
     def verify_connection(self):
-        """Verify Maya connection with a round-trip data check.
-
-        Sends a trivial expression to Maya and checks it returns the
-        expected result.  This catches cases where ``connect()`` reports
-        success but the command port is not actually functional.
-
-        Returns:
-            True if Maya responded correctly.
-        """
+        """Verify Maya connection with a round-trip data check."""
         if not self.connection or not self.connection.is_connected:
             return False
 
@@ -160,9 +330,7 @@ class MayaTestRunner:
                     "str(1+1)", wait_for_response=True, timeout=10
                 )
                 if result and result.strip() == "2":
-                    print(
-                        "[VERIFIED] Maya connection confirmed (round-trip data check)"
-                    )
+                    print("[VERIFIED] Maya connection confirmed (round-trip data check)")
                     return True
                 print(f"[WARNING] Unexpected verification response: {result!r}")
                 return False
@@ -188,6 +356,10 @@ class MayaTestRunner:
             print(f"[ERROR] Failed to execute code: {e}")
             return False
 
+    # ------------------------------------------------------------------
+    # Discovery
+    # ------------------------------------------------------------------
+
     # Subdirectories opted out of default discovery — caller must pass
     # ``--extended`` or ``--mocks`` to include them.
     EXTENDED_DIR = "extended"
@@ -208,12 +380,7 @@ class MayaTestRunner:
         )
 
     def discover_tests(self, include_extended: bool = False, include_mocks: bool = False):
-        """Discover available test modules.
-
-        Default: only ``mayatk/test/test_*.py`` (the main suite).
-        ``include_extended``: also pull in ``mayatk/test/extended/test_*.py``.
-        ``include_mocks``: also pull in ``mayatk/test/mock_tests/test_*.py``.
-        """
+        """Discover available test modules."""
         modules = list(self._discover_in())
         if include_extended:
             modules.extend(self._discover_in(self.EXTENDED_DIR))
@@ -224,7 +391,7 @@ class MayaTestRunner:
     def _path_for_module(self, module_name: str) -> str:
         """Resolve a module name to its absolute file path, checking subdirs."""
         for subdir in ("", self.EXTENDED_DIR, self.MOCKS_DIR):
-            candidate = (self.test_dir / subdir / f"{module_name}.py")
+            candidate = self.test_dir / subdir / f"{module_name}.py"
             if candidate.exists():
                 return str(candidate).replace("\\", "/")
         # Fall back to the main dir even if missing — caller will surface the load error
@@ -248,12 +415,17 @@ class MayaTestRunner:
             for module in modules:
                 i += 1
                 display_name = module.replace("test_", "")
-                print(f"  {i:3d}. {display_name:30s} ({module})")
+                gui_tag = "  [GUI]" if module in GUI_REQUIRED else ""
+                print(f"  {i:3d}. {display_name:30s} ({module}){gui_tag}")
         print("=" * 70)
         print(f"\nTotal: {i} test modules")
         print("\nUsage: python run_tests.py <module_name> [<module_name> ...]")
         print("Example: python run_tests.py core_utils components")
-        print("Flags:   --extended  --mocks  --all")
+        print("Flags:   --extended  --mocks  --all  --gui")
+
+    # ------------------------------------------------------------------
+    # Quick validation (GUI)
+    # ------------------------------------------------------------------
 
     def run_quick_test(self):
         """Run a single quick validation test."""
@@ -276,16 +448,16 @@ print("="*70)
 try:
     import test_core_utils as test_mod
     import unittest
-    
+
     # Run first test class
     for attr_name in dir(test_mod):
         attr = getattr(test_mod, attr_name)
         if isinstance(attr, type) and issubclass(attr, unittest.TestCase):
             if attr is not unittest.TestCase and attr.__name__ != "MayaTkTestCase":
-                suite = unittest.makeSuite(attr)
+                suite = unittest.defaultTestLoader.loadTestsFromTestCase(attr)
                 runner = unittest.TextTestRunner(verbosity=2)
                 result = runner.run(suite)
-                
+
                 print("\\\\n" + "-"*70)
                 if result.wasSuccessful():
                     print(f"[PASS] {attr_name}: ALL {result.testsRun} TESTS PASSED")
@@ -307,23 +479,559 @@ except Exception as e:
             return True
         return False
 
-    def run_tests(self, modules=None, dry_run=False, extended=False, mocks=False):
+    # ------------------------------------------------------------------
+    # Shared results plumbing
+    # ------------------------------------------------------------------
+
+    def _append_master(self, text: str):
+        with self._merge_lock:
+            with open(self.results_file, "a", encoding="utf-8") as f:
+                f.write(text)
+
+    def _merge_into_master(self, phase_results_path: Path):
+        """Append a phase/chunk results file into the master results file."""
+        try:
+            text = Path(phase_results_path).read_text(encoding="utf-8")
+        except OSError:
+            return
+        lines = [
+            line
+            for line in text.splitlines(keepends=True)
+            if not line.startswith(SUITE_COMPLETE_MARKER)
+        ]
+        self._append_master("".join(lines))
+
+    def _emit(self, msg: str):
+        with self._print_lock:
+            print(msg, flush=True)
+
+    # ------------------------------------------------------------------
+    # Headless (mayapy) execution
+    # ------------------------------------------------------------------
+
+    def _child_env(self) -> dict:
+        """Environment for mayapy children.
+
+        PYTHONPATH is pinned to the ecosystem roots so a workspace venv
+        (whose PySide6 is newer than Maya's) can never leak into mayapy.
         """
-        Run tests for specified modules.
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join(
+            str(SCRIPTS_ROOT / pkg) for pkg in ("mayatk", "pythontk", "uitk", "tentacle")
+        )
+        env.pop("PYTHONHOME", None)
+        env.pop("VIRTUAL_ENV", None)
+        return env
+
+    def _run_headless(
+        self, modules: List[str], module_paths: Dict[str, str], extended: bool
+    ) -> Tuple[bool, List[str]]:
+        """Run modules in chunked mayapy processes.
+
+        Returns (ok, deferred) where deferred = modules that must go to the
+        GUI pass (native crash / hang / init failure).
+        """
+        # Crashed/hung/unlaunchable modules are rerouted to the GUI pass, so
+        # they don't fail the run here — their final module status decides.
+        mayapy = self.mayapy or find_mayapy()
+        if not mayapy:
+            print(
+                "[WARNING] mayapy not found (set MAYATK_MAYAPY or pass --mayapy). "
+                "Routing all modules through the GUI pass."
+            )
+            return True, list(modules)
+
+        chunks = [
+            modules[i : i + self.chunk_size]
+            for i in range(0, len(modules), self.chunk_size)
+        ]
+        self._grand_total = len(modules)
+        self._done_count = 0
+        print(
+            f"\n[HEADLESS] {len(modules)} modules in {len(chunks)} chunk(s) "
+            f"of <= {self.chunk_size}, jobs={self.jobs}\n[HEADLESS] mayapy: {mayapy}"
+        )
+
+        ok = True
+        deferred: List[str] = []
+
+        if self.jobs == 1 or len(chunks) == 1:
+            for idx, chunk in enumerate(chunks):
+                if self._license_trap:
+                    deferred.extend(chunk)
+                    for m in chunk:
+                        self._append_master(
+                            f"\n{m}: TIMEOUT (standalone init stalled; deferred to GUI pass)\n"
+                        )
+                    continue
+                chunk_ok, chunk_deferred = self._run_chunk(
+                    mayapy, idx, len(chunks), chunk, module_paths, extended
+                )
+                ok = ok and chunk_ok
+                deferred.extend(chunk_deferred)
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+
+            def _worker(pair):
+                idx, chunk = pair
+                if self._license_trap:
+                    for m in chunk:
+                        self._append_master(
+                            f"\n{m}: TIMEOUT (standalone init stalled; deferred to GUI pass)\n"
+                        )
+                    return True, list(chunk)
+                return self._run_chunk(
+                    mayapy, idx, len(chunks), chunk, module_paths, extended
+                )
+
+            with ThreadPoolExecutor(max_workers=self.jobs) as pool:
+                for chunk_ok, chunk_deferred in pool.map(_worker, enumerate(chunks)):
+                    ok = ok and chunk_ok
+                    deferred.extend(chunk_deferred)
+
+        return ok, deferred
+
+    def _run_chunk(
+        self,
+        mayapy: str,
+        idx: int,
+        n_chunks: int,
+        chunk_modules: List[str],
+        module_paths: Dict[str, str],
+        extended: bool,
+    ) -> Tuple[bool, List[str]]:
+        """Run one chunk, resuming in a fresh mayapy after any native crash."""
+        tag = f"chunk {idx + 1}/{n_chunks}"
+        pending = list(chunk_modules)
+        deferred: List[str] = []
+        no_progress_relaunches = 0
+        attempt = 0
+
+        while pending:
+            attempt += 1
+            base = self.temp_test_dir / f"chunk_{os.getpid()}_{idx:02d}_{attempt}"
+            cfg_path = base.with_suffix(".json")
+            res_path = base.with_suffix(".txt")
+            prog_path = base.with_suffix(".progress")
+            log_path = base.with_suffix(".log")
+
+            config = {
+                "modules": pending,
+                "module_paths": {m: module_paths[m] for m in pending},
+                "results_file": str(res_path).replace("\\", "/"),
+                "progress_file": str(prog_path).replace("\\", "/"),
+                "temp_dir": str(self.temp_test_dir).replace("\\", "/"),
+                "extended": extended,
+                "reload": False,
+            }
+            cfg_path.write_text(json.dumps(config, indent=1), encoding="utf-8")
+
+            proc = None
+            log_file = None
+            timed_out_module = None
+            init_done = False
+            gate_held = False
+            try:
+                # Stagger standalone inits across parallel chunks — concurrent
+                # license checkouts are the suspected contention/hang source.
+                self._spawn_gate.acquire()
+                gate_held = True
+
+                log_file = open(log_path, "w", encoding="utf-8", errors="replace")
+                try:
+                    proc = subprocess.Popen(
+                        [mayapy, str(DRIVER_PATH), str(cfg_path)],
+                        stdout=log_file,
+                        stderr=subprocess.STDOUT,
+                        cwd=str(SCRIPTS_ROOT),
+                        env=self._child_env(),
+                    )
+                except OSError as e:
+                    print(f"[ERROR] Failed to launch mayapy: {e} — deferring to GUI pass")
+                    return True, pending
+
+                start = time.monotonic()
+                last_activity = start
+                init_warned = False
+                seen_results = set()
+                finished_count = 0
+
+                while True:
+                    rc = proc.poll()
+
+                    # Stream compact per-module completions from the chunk file.
+                    try:
+                        chunk_text = res_path.read_text(encoding="utf-8")
+                    except OSError:
+                        chunk_text = ""
+                    for rec in _parse_module_blocks(chunk_text):
+                        if rec["name"] not in seen_results:
+                            seen_results.add(rec["name"])
+                            with self._print_lock:
+                                self._done_count += 1
+                                t = f" [{rec['elapsed']:.1f}s]" if rec["elapsed"] else ""
+                                print(
+                                    f"  [{self._done_count}/{self._grand_total}] "
+                                    f"({tag}) {rec['name']}: {rec['status']}{t}",
+                                    flush=True,
+                                )
+
+                    started, finished, _, has_init = _split_markers(
+                        _read_markers(prog_path)
+                    )
+                    if not init_done and has_init:
+                        init_done = True
+                        last_activity = time.monotonic()
+                        if gate_held:
+                            self._spawn_gate.release()
+                            gate_held = False
+                        self._emit(
+                            f"  ({tag}) maya.standalone ready "
+                            f"({int(time.monotonic() - start)}s)"
+                        )
+                    if len(finished) != finished_count:
+                        finished_count = len(finished)
+                        last_activity = time.monotonic()
+
+                    if rc is not None:
+                        break
+
+                    now = time.monotonic()
+                    if not init_done:
+                        if now - start > self.init_timeout and not init_warned:
+                            init_warned = True
+                            self._emit(
+                                f"  ({tag}) [WARNING] standalone init exceeded "
+                                f"{self.init_timeout}s — possible stuck FlexLM "
+                                f"checkout; extending grace {self.init_grace}s "
+                                "(do NOT kill mayapy mid-initialize manually)."
+                            )
+                        if now - start > self.init_timeout + self.init_grace:
+                            self._license_trap = True
+                            proc.kill()
+                            proc.wait(timeout=30)
+                            break
+                    elif now - last_activity > self.module_timeout:
+                        timed_out_module = next(
+                            (m for m in reversed(started) if m not in finished), None
+                        )
+                        self._emit(
+                            f"  ({tag}) [WARNING] no progress for "
+                            f"{self.module_timeout}s — killing chunk "
+                            f"(hung module: {timed_out_module or 'unknown'})"
+                        )
+                        proc.kill()
+                        proc.wait(timeout=30)
+                        break
+
+                    time.sleep(1.0)
+            except BaseException:
+                # KeyboardInterrupt / anything unexpected: never orphan a child.
+                if proc and proc.poll() is None:
+                    proc.kill()
+                raise
+            finally:
+                if gate_held:
+                    self._spawn_gate.release()
+                if log_file is not None:
+                    try:
+                        log_file.close()
+                    except OSError:
+                        pass
+
+            started, finished, done, _ = _split_markers(_read_markers(prog_path))
+
+            self._merge_into_master(res_path)
+
+            if self._license_trap:
+                remaining = [m for m in pending if m not in finished]
+                print(
+                    f"\n[LICENSE TRAP] ({tag}) standalone never initialized after "
+                    f"{self.init_timeout + self.init_grace}s. A killed/crashed "
+                    "mayapy can leave the FlexLM checkout stuck for many minutes "
+                    "— every later standalone init hangs until it reclaims. "
+                    "Remaining headless modules go to the GUI pass (interactive "
+                    "license)."
+                )
+                for m in remaining:
+                    self._append_master(
+                        f"\n{m}: TIMEOUT (standalone init stalled; deferred to GUI pass)\n"
+                    )
+                deferred.extend(remaining)
+                for p in (cfg_path, prog_path):
+                    p.unlink(missing_ok=True)
+                return True, deferred
+
+            if done:
+                for p in (cfg_path, prog_path, res_path, log_path):
+                    p.unlink(missing_ok=True)
+                return True, deferred
+
+            # Crashed or hung — attribute, record, resume the remainder.
+            crashed = timed_out_module or next(
+                (m for m in reversed(started) if m not in finished), None
+            )
+            remaining = [m for m in pending if m not in finished]
+            label = "TIMEOUT" if timed_out_module else "NATIVE CRASH"
+            if crashed and crashed in remaining:
+                remaining.remove(crashed)
+                deferred.append(crashed)
+                self._append_master(
+                    f"\n{crashed}: {label} (headless; deferred to GUI pass — "
+                    f"log: {log_path.name})\n"
+                )
+                self._emit(
+                    f"  ({tag}) {crashed}: {label} under mayapy — deferred to "
+                    f"GUI pass; resuming {len(remaining)} remaining in a fresh "
+                    "process"
+                )
+                no_progress_relaunches = 0
+            elif not finished:
+                no_progress_relaunches += 1
+                if no_progress_relaunches >= 2 and remaining:
+                    scapegoat = remaining.pop(0)
+                    deferred.append(scapegoat)
+                    self._append_master(
+                        f"\n{scapegoat}: NATIVE CRASH (headless; chunk made no "
+                        f"progress twice — deferred to GUI pass; log: {log_path.name})\n"
+                    )
+                    no_progress_relaunches = 0
+            else:
+                no_progress_relaunches = 0
+
+            pending = remaining
+            # Keep the crash log for forensics; config/progress are noise.
+            for p in (cfg_path, prog_path):
+                p.unlink(missing_ok=True)
+
+        return True, deferred
+
+    # ------------------------------------------------------------------
+    # GUI / command-port execution
+    # ------------------------------------------------------------------
+
+    def _run_via_port(
+        self,
+        gui_modules: List[str],
+        module_paths: Dict[str, str],
+        extended: bool,
+        no_wait: bool = False,
+    ):
+        """Run modules inside a (new or reused) GUI Maya over the command port.
+
+        Returns True / False, or the string "nowait" for fire-and-forget.
+        """
+        print(f"\n[GUI PASS] {len(gui_modules)} module(s):")
+        if len(gui_modules) <= 20:
+            for m in gui_modules:
+                reason = GUI_REQUIRED.get(m, "deferred from headless run")
+                print(f"  - {m}  ({reason})")
+        else:
+            # Forced --gui runs route everything here; the banner already
+            # listed the modules — skip the per-module reason spam.
+            print("  (module list in the banner above)")
+
+        if not self.connect_to_maya():
+            for m in gui_modules:
+                self._append_master(f"\n{m}: DEFERRED (GUI connection failed)\n")
+            return False
+
+        base = self.temp_test_dir / f"gui_{os.getpid()}"
+        cfg_path = base.with_suffix(".json")
+        res_path = base.with_suffix(".txt")
+        # Reload only matters when the session may hold stale modules.
+        needs_reload = self.reuse_instance or (
+            self.connection and self.connection.mode == "interactive"
+        )
+        config = {
+            "modules": gui_modules,
+            "module_paths": {m: module_paths[m] for m in gui_modules},
+            "results_file": str(res_path).replace("\\", "/"),
+            "progress_file": str(base.with_suffix(".progress")).replace("\\", "/"),
+            "temp_dir": str(self.temp_test_dir).replace("\\", "/"),
+            "extended": extended,
+            "reload": bool(needs_reload),
+        }
+        cfg_path.write_text(json.dumps(config, indent=1), encoding="utf-8")
+        res_path.unlink(missing_ok=True)
+
+        driver = str(DRIVER_PATH).replace("\\", "/")
+        cfg = str(cfg_path).replace("\\", "/")
+        exec_code = f"""
+import sys, json, importlib.util
+import __main__ as _m
+_m._mayatk_test_complete = False
+try:
+    # Drop cached mayatk/test modules (stale in reused sessions); keep the
+    # connection and Qt machinery alive.
+    for _k in [k for k in list(sys.modules)
+               if ('mayatk' in k.lower() or k in ('base_test', '_mayatk_suite_driver'))
+               and 'maya_connection' not in k
+               and 'qt' not in k.lower() and 'pyside' not in k.lower()]:
+        sys.modules.pop(_k, None)
+    _spec = importlib.util.spec_from_file_location('_mayatk_suite_driver', r'{driver}')
+    _drv = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_drv)
+    with open(r'{cfg}', encoding='utf-8') as _f:
+        _cfgd = json.load(_f)
+    _totals = _drv.run_suite(_cfgd)
+    _m._mayatk_test_summary = _drv.format_totals(_totals)
+    _m._mayatk_test_passed = (_totals['failures'] == 0 and _totals['errors'] == 0)
+except Exception:
+    import traceback
+    traceback.print_exc()
+finally:
+    _m._mayatk_test_complete = True
+"""
+
+        print("\nSending test code to Maya ...")
+        if not self.send_code(exec_code):
+            for m in gui_modules:
+                self._append_master(f"\n{m}: DEFERRED (failed to send test code)\n")
+            return False
+        print("[OK] Test code sent — tests are running in Maya")
+
+        if no_wait:
+            print(f"\n--no-wait: results will be written to {res_path}")
+            print(f'  Get-Content "{res_path}" -Wait')
+            return "nowait"
+
+        timeout = self.wait_timeout or max(600, 30 * len(gui_modules))
+        completed = self.wait_for_results(res_path, timeout=timeout)
+        self._merge_into_master(res_path)
+
+        # A module with no result line would otherwise vanish from the final
+        # records entirely (e.g. the in-Maya driver raised before running it,
+        # which still sets the completion sentinel) — mark every one so the
+        # summary/badge logic sees it as not-run.
+        reported = {r["name"] for r in _parse_module_blocks(self._safe_read(res_path))}
+        missing = [m for m in gui_modules if m not in reported]
+        for m in missing:
+            reason = "GUI pass wait expired" if not completed else "no result reported"
+            self._append_master(f"\n{m}: TIMEOUT ({reason})\n")
+        if completed and not missing:
+            cfg_path.unlink(missing_ok=True)
+            res_path.unlink(missing_ok=True)
+            base.with_suffix(".progress").unlink(missing_ok=True)
+        return completed and not missing
+
+    @staticmethod
+    def _safe_read(path) -> str:
+        try:
+            return Path(path).read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    def wait_for_results(
+        self, results_path, timeout: int, poll_interval: float = 2.0
+    ) -> bool:
+        """Poll Maya for test completion, with file-based fallback.
+
+        Primary: asks Maya via socket whether the ``_mayatk_test_complete``
+        sentinel is True.  Fallback: watches the results file for the
+        suite-complete marker.
+        """
+        results_path = Path(results_path)
+        start = time.monotonic()
+        last_size = 0
+        use_socket = (
+            self.connection
+            and self.connection.is_connected
+            and self.connection.mode == "port"
+        )
+        socket_failures = 0
+
+        print(f"\nWaiting for tests to complete (timeout: {timeout}s) ...")
+
+        while (time.monotonic() - start) < timeout:
+            elapsed = int(time.monotonic() - start)
+
+            # ---- primary: socket-based sentinel check ----
+            if use_socket:
+                done = None
+                try:
+                    done = self.connection.execute(
+                        "getattr(__import__('__main__'), '_mayatk_test_complete', False)",
+                        wait_for_response=True,
+                        timeout=5,
+                    )
+                except Exception:
+                    pass  # fall through to file check
+                if done is None:
+                    # The command port refuses connections while Maya's main
+                    # thread runs the suite; stop hammering it after a few tries.
+                    socket_failures += 1
+                    if socket_failures >= 5:
+                        use_socket = False
+                        print(
+                            "\n  [INFO] Command port busy/unavailable; "
+                            "polling results file only."
+                        )
+                else:
+                    socket_failures = 0
+                    if str(done).strip().lower() == "true":
+                        print(f"\r  Tests completed in {elapsed}s.{' ' * 30}")
+                        summary = self.connection.execute(
+                            "getattr(__import__('__main__'), '_mayatk_test_summary', '')",
+                            wait_for_response=True,
+                            timeout=5,
+                        )
+                        if summary and summary.strip():
+                            print(f"  Maya reports: {summary.strip()}")
+                        return True
+
+            # ---- fallback: file-based polling ----
+            content = self._safe_read(results_path)
+            if content:
+                cur_size = len(content)
+                if cur_size != last_size:
+                    module_count = len(_parse_module_blocks(content))
+                    print(
+                        f"\r  [{elapsed}s] {module_count} module(s) finished ...",
+                        end="",
+                        flush=True,
+                    )
+                    last_size = cur_size
+
+                if SUITE_COMPLETE_MARKER in content or "SUMMARY" in content:
+                    print(f"\r  Tests completed in {elapsed}s.{' ' * 30}")
+                    return True
+
+            time.sleep(poll_interval)
+
+        elapsed = int(time.monotonic() - start)
+        print(f"\n[TIMEOUT] Results not found after {elapsed}s.")
+        return False
+
+    # ------------------------------------------------------------------
+    # Orchestration
+    # ------------------------------------------------------------------
+
+    def run_tests(
+        self,
+        modules=None,
+        dry_run=False,
+        extended=False,
+        mocks=False,
+        gui=False,
+        no_gui_pass=False,
+        no_wait=False,
+    ):
+        """Run tests for the specified modules.
 
         Args:
             modules: List of module names (with or without test_ prefix).
-                    None = run all default modules.
-            dry_run: If True, show what would be executed without running tests.
-            extended: If True, run extended tests (sets MAYATK_EXTENDED_TESTS=1
-                    and pulls in ``mayatk/test/extended/test_*.py``).
-            mocks: If True, also include ``mayatk/test/mock_tests/test_*.py``
-                    (designed for pytest-conftest mocking, mostly skipped under
-                    mayapy).
+                None = run the default core set.
+            dry_run: Show what would be executed without running tests.
+            extended: Run extended tests (sets MAYATK_EXTENDED_TESTS=1).
+            mocks: Also include mock_tests/ modules.
+            gui: Force everything through a GUI Maya (old behavior).
+            no_gui_pass: Skip the GUI pass; GUI-required modules are DEFERRED.
+            no_wait: Fire-and-forget (GUI mode only).
+
+        Returns:
+            Status dict (see _finalize_results), or {"ok": True, "dry_run": True}.
         """
-        # Default test modules (core functionality)
-        # NOTE: test_calculator runs via regular pytest (no Maya needed)
-        # NOTE: test_keyframe_grouper does not exist yet
         default_modules = [
             "test_core_utils",
             "test_components",
@@ -342,25 +1050,24 @@ except Exception as e:
         if modules is None:
             test_modules = default_modules
         else:
-            # Ensure test_ prefix
-            test_modules = [
-                m if m.startswith("test_") else f"test_{m}" for m in modules
-            ]
+            test_modules = [m if m.startswith("test_") else f"test_{m}" for m in modules]
 
-        # Recorded so wait_for_results can scale its default timeout —
-        # a fixed wait can never cover both a 1-module and a 120-module run.
-        self.last_module_count = len(test_modules)
+        module_paths = {m: self._path_for_module(m) for m in test_modules}
 
-        # Resolve each module name to its on-disk path so the in-Maya runner
-        # can load tests from extended/ and mock_tests/ subdirs.
-        test_module_paths = {m: self._path_for_module(m) for m in test_modules}
+        # Never spawn mayapy from inside an interactive Maya session — run
+        # in THIS session instead (Script Editor usage).
+        if not gui and _inside_maya():
+            gui = True
+            print("[INFO] Interactive Maya session detected — running in-session.")
 
+        mode = "GUI" if gui else "HEADLESS (mayapy)"
         print("\n" + "=" * 70)
-        print("MAYATK TEST RUNNER" + (" (DRY RUN)" if dry_run else ""))
+        print("MAYATK TEST RUNNER" + (" (DRY RUN)" if dry_run else f"  [{mode}]"))
         print("=" * 70)
         print(f"{'Would run' if dry_run else 'Running'} {len(test_modules)} modules:")
         for module in test_modules:
-            print(f"  • {module}")
+            tag = "  [GUI]" if (not gui and module in GUI_REQUIRED) else ""
+            print(f"  • {module}{tag}")
         if extended:
             print("  • Extended tests enabled")
         if mocks:
@@ -374,476 +1081,127 @@ except Exception as e:
             print("  [OK] Test files exist")
             print("  [OK] Test runner configuration is valid")
             print("\nTo actually run tests, omit --dry-run flag")
-            return True
+            return {"ok": True, "dry_run": True}
 
-        # Connect to Maya
-        if not self.connect_to_maya():
-            return False
+        # Master results file: header now, module blocks merged in as phases
+        # complete, SUMMARY appended at the end.
+        with open(self.results_file, "w", encoding="utf-8") as f:
+            f.write("=" * 70 + "\n")
+            f.write("MAYATK TEST RESULTS\n")
+            f.write("=" * 70 + "\n\n")
 
-        output_file_path = str(self.results_file).replace("\\", "/")
-
-        # Generate test execution code
-        test_code = textwrap.dedent(
-            f"""
-            import sys
-            import os
-            
-            # Set extended tests flag
-            if {extended}:
-                os.environ['MAYATK_EXTENDED_TESTS'] = '1'
-            else:
-                if 'MAYATK_EXTENDED_TESTS' in os.environ:
-                    del os.environ['MAYATK_EXTENDED_TESTS']
-            
-            sys.path.insert(0, r'O:/Cloud/Code/_scripts/mayatk/test')
-            # Subdirectory tests need their own dir on sys.path so sibling
-            # imports (e.g. from base_test) resolve identically.
-            sys.path.insert(0, r'O:/Cloud/Code/_scripts/mayatk/test/extended')
-            sys.path.insert(0, r'O:/Cloud/Code/_scripts/mayatk/test/mock_tests')
-            # Add all package roots to sys.path
-            package_roots = [
-                r'O:/Cloud/Code/_scripts',
-                r'O:/Cloud/Code/_scripts/mayatk',
-                r'O:/Cloud/Code/_scripts/pythontk',
-                r'O:/Cloud/Code/_scripts/uitk',
-                r'O:/Cloud/Code/_scripts/tentacle',
-            ]
-            for root in package_roots:
-                if root not in sys.path:
-                    sys.path.insert(0, root)
-
-            import unittest
-            import importlib.util
-
-            # Use ModuleReloader to properly reload mayatk modules
-            try:
-                from pythontk import ModuleReloader
-                reloader = ModuleReloader(include_submodules=True)                
-                # Reload pythontk first to ensure core utilities are up to date
-                import pythontk
-                reloader.reload(pythontk)
-                print("[ModuleReloader] Reloaded pythontk")
-                import mayatk
-                reloaded = reloader.reload(mayatk)
-                print(f"[ModuleReloader] Reloaded {{len(reloaded)}} mayatk modules")
-                
-                # Force reload base_test by removing it from sys.modules
-                if 'base_test' in sys.modules:
-                    del sys.modules['base_test']
-                    print("[ModuleReloader] Removed base_test from sys.modules to force reload")
-                
-                # Debug: Check if base_test can be imported and has the attribute
-                try:
-                    import base_test
-                    print(f"[Debug] Imported base_test from: {{base_test.__file__}}")
-                    if hasattr(base_test, 'skipUnlessExtended'):
-                        print("[Debug] base_test has skipUnlessExtended")
-                    else:
-                        print("[Debug] base_test MISSING skipUnlessExtended")
-                        print(f"[Debug] dir(base_test): {{dir(base_test)}}")
-                except ImportError as e:
-                    print(f"[Debug] Could not import base_test: {{e}}")
-                    
-            except Exception as e:
-                # Fallback to simple module clearing if reloader fails
-                modules_to_clear = [k for k in list(sys.modules.keys()) if 'mayatk' in k.lower()]
-                for mod in modules_to_clear:
-                    del sys.modules[mod]
-                print(f"[Fallback] Cleared {{len(modules_to_clear)}} cached mayatk modules")
-
-            # Sandbox the shots cross-scene prefs JSON (engine classvar, set
-            # AFTER the reload so it lands on the final class object) — test
-            # ShotStore.save() calls must never touch the user's real config
-            # store (user_config_root()/shots/prefs.json is cloud-synced).
-            # The temp dir is removed at interpreter exit so repeated runs
-            # don't accumulate shots_prefs_test_* directories.
-            try:
-                import atexit
-                import shutil
-                import tempfile
-                from pythontk.core_utils.engines.shots.shot_model import (
-                    ShotStore as _PrefsStore,
-                )
-                _prefs_sandbox = tempfile.mkdtemp(prefix="shots_prefs_test_")
-                _PrefsStore._prefs_dir_override = _prefs_sandbox
-                atexit.register(shutil.rmtree, _prefs_sandbox, ignore_errors=True)
-                print(f"[Sandbox] shots prefs -> {{_prefs_sandbox}}")
-            except Exception as e:
-                print(f"[Sandbox] shots prefs override failed: {{e}}")
-
-            # Setup results file
-            output_file = r'{output_file_path}'
-            with open(output_file, 'w', encoding='utf-8') as f:
-                f.write("="*70 + "\\n")
-                f.write("MAYATK TEST RESULTS\\n")
-                f.write("="*70 + "\\n\\n")
-                
-            print("\\n" + "="*70)
-            print("MAYATK TEST SUITE")
-            print("="*70)
-
-            test_modules = {test_modules}
-            total_tests = 0
-            total_failures = 0
-            total_errors = 0
-            total_skipped = 0
-            results_summary = []
-
-            # Snapshot real Maya modules so tests that mock sys.modules
-            # don't pollute later test modules. Import the core ones first so
-            # the snapshot is complete — a key missing here can never be
-            # restored, so a mock injected for it would survive the
-            # per-module cleanup (and the package ATTRIBUTE it binds would
-            # reroute every later `import maya.cmds as cmds`).
-            for _k in (
-                "maya.cmds", "maya.mel",
-                "maya.api.OpenMaya", "maya.api.OpenMayaAnim",
-            ):
-                try:
-                    __import__(_k)
-                except Exception:
-                    pass
-            _real_module_keys = (
-                "maya", "maya.cmds", "maya.mel", "maya.OpenMaya", "maya.OpenMayaUI",
-                "maya.api", "maya.api.OpenMaya", "maya.api.OpenMayaAnim",
-                "maya.utils", "maya.app",
-            )
-            _real_modules_snapshot = {{
-                k: sys.modules[k] for k in _real_module_keys if k in sys.modules
-            }}
-
-            test_module_paths = {test_module_paths}
-            for module_name in test_modules:
-                print(f"\\n{{'-'*70}}")
-                print(f"Testing: {{module_name}}")
-                print(('-'*70))
-
-                module_path = test_module_paths.get(
-                    module_name,
-                    rf'O:/Cloud/Code/_scripts/mayatk/test/{{module_name}}.py',
-                )
-                try:
-                    spec = importlib.util.spec_from_file_location(
-                        module_name,
-                        module_path,
-                    )
-                    test_module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(test_module)
-                    
-                    # Create test suite
-                    suite = unittest.TestSuite()
-                    for attr_name in dir(test_module):
-                        attr = getattr(test_module, attr_name)
-                        if isinstance(attr, type) and issubclass(attr, unittest.TestCase):
-                            if attr is not unittest.TestCase:
-                                suite.addTest(unittest.makeSuite(attr))
-                    
-                    # Run tests
-                    runner = unittest.TextTestRunner(verbosity=2)
-                    result = runner.run(suite)
-
-                    # Filter out @skipUnlessExtended skips — they're an
-                    # opt-in marker, not a real skip. Subtract them from
-                    # the totals so the main run reports 0 skipped.
-                    extended_skips = [
-                        (t, r) for (t, r) in result.skipped
-                        if "Extended test" in r
-                    ]
-                    real_skipped = [
-                        (t, r) for (t, r) in result.skipped
-                        if "Extended test" not in r
-                    ]
-                    real_run = result.testsRun - len(extended_skips)
-
-                    # Track results
-                    total_tests += real_run
-                    total_failures += len(result.failures)
-                    total_errors += len(result.errors)
-                    total_skipped += len(real_skipped)
-                    
-                    status = "PASS" if result.wasSuccessful() else "FAIL"
-                    results_summary.append(
-                        f"{{module_name}}: {{status}} ({{real_run}} tests, "
-                        f"{{len(result.failures)}} failures, {{len(result.errors)}} errors)"
-                    )
-
-                    # Write to results file
-                    with open(output_file, 'a', encoding='utf-8') as f:
-                        f.write(f"\\n{{module_name}}: {{status}}\\n")
-                        f.write(
-                            f"  Tests: {{real_run}}, "
-                            f"Failures: {{len(result.failures)}}, "
-                            f"Errors: {{len(result.errors)}}, "
-                            f"Skipped: {{len(real_skipped)}}"
-                        )
-                        if extended_skips:
-                            f.write(f", Extended-deferred: {{len(extended_skips)}}")
-                        f.write("\\n")
-
-                        if result.failures:
-                            for test, trace in result.failures:  # All failures
-                                f.write(f"\\n  FAILURE: {{test}}\\n")
-                                f.write(f"  {{trace}}\\n")
-
-                        if result.errors:
-                            for test, trace in result.errors:  # All errors
-                                f.write(f"\\n  ERROR: {{test}}\\n")
-                                f.write(f"  {{trace}}\\n")
-
-                        for test, reason in real_skipped:
-                            f.write(f"  SKIP: {{test}} | {{reason}}\\n")
-                    
-                except Exception as e:
-                    print(f"[ERROR] Error loading {{module_name}}: {{e}}")
-                    results_summary.append(f"{{module_name}}: LOAD ERROR - {{str(e)[:50]}}")
-
-                    with open(output_file, 'a', encoding='utf-8') as f:
-                        f.write(f"\\n{{module_name}}: LOAD ERROR\\n")
-                        f.write(f"  {{str(e)}}\\n")
-                finally:
-                    # Restore real Maya modules in case the just-loaded
-                    # test patched sys.modules with mocks; evict entries for
-                    # keys that had no real module to snapshot (a leftover
-                    # fake would short-circuit the next real import).
-                    for _k in _real_module_keys:
-                        if _k in _real_modules_snapshot:
-                            sys.modules[_k] = _real_modules_snapshot[_k]
-                        else:
-                            sys.modules.pop(_k, None)
-                    # Also restore the parent-package ATTRIBUTES:
-                    # `import maya.cmds as cmds` resolves via
-                    # getattr(maya, 'cmds') BEFORE falling back to
-                    # sys.modules, so a leaked attribute mock reroutes every
-                    # later module's import even after sys.modules is
-                    # restored (this is how a single leaked mock broke every
-                    # module alphabetically after its test file).
-                    for _k, _real_mod in _real_modules_snapshot.items():
-                        if "." in _k:
-                            _parent_name, _child_name = _k.rsplit(".", 1)
-                            _parent_mod = _real_modules_snapshot.get(_parent_name)
-                            if _parent_mod is not None:
-                                setattr(_parent_mod, _child_name, _real_mod)
-                    # Clear cached mayatk modules so the next test re-imports
-                    # against the restored real Maya modules.
-                    for _k in [k for k in list(sys.modules.keys()) if k.startswith("mayatk")]:
-                        del sys.modules[_k]
-
-            # Print final summary
-            print("\\n" + "="*70)
-            print("TEST SUMMARY")
-            print("="*70)
-            for result_line in results_summary:
-                print(f"  {{result_line}}")
-            print("="*70)
-            print(f"Total: {{total_tests}} tests, {{total_failures}} failures, "
-                  f"{{total_errors}} errors, {{total_skipped}} skipped")
-            print("="*70)
-
-            # Write summary to file
-            with open(output_file, 'a', encoding='utf-8') as f:
-                f.write("\\n" + "="*70 + "\\n")
-                f.write("SUMMARY\\n")
-                f.write("="*70 + "\\n")
-                for result_line in results_summary:
-                    f.write(f"  {{result_line}}\\n")
-                f.write("="*70 + "\\n")
-                f.write(f"Total: {{total_tests}} tests, {{total_failures}} failures, "
-                       f"{{total_errors}} errors, {{total_skipped}} skipped\\n")
-                f.write("="*70 + "\\n")
-
-            print(f"\\nResults saved to: {{output_file}}")
-
-            # Final status
-            if total_failures == 0 and total_errors == 0:
-                print("\\n[PASS] ALL TESTS PASSED!")
-
-            # Expose summary to __main__ for socket-based polling
-            import __main__ as _mayatk_main
-            _mayatk_main._mayatk_test_summary = (
-                f"Total: {{total_tests}} tests, {{total_failures}} failures, "
-                f"{{total_errors}} errors, {{total_skipped}} skipped"
-            )
-            _mayatk_main._mayatk_test_passed = (
-                total_failures == 0 and total_errors == 0
-            )
-            """
-        )
-
-        # Write test code to a temporary file to avoid command port size limits
-        temp_runner_path = self.temp_test_dir / "_temp_test_runner.py"
-        try:
-            with open(temp_runner_path, "w", encoding="utf-8") as f:
-                f.write(test_code)
-        except Exception as e:
-            print(f"[ERROR] Failed to write temp runner file: {e}")
-            return False
-
-        # Generate execution code (small payload)
-        runner_dir = str(self.temp_test_dir).replace("\\", "/")
-        output_file_path = str(self.results_file).replace("\\", "/")
-
-        exec_code = f"""
-import sys
-import os
-
-runner_dir = r'{runner_dir}'
-if runner_dir not in sys.path:
-    sys.path.insert(0, runner_dir)
-
-# AGGRESSIVE MODULE CLEARING - clear all mayatk modules BEFORE running tests
-# This ensures fresh imports from the test files
-# BUT preserve maya_connection to keep the Maya standalone session and QApplication alive
-# Also preserve PySide/qtpy related modules to prevent losing QApplication reference
-mods_to_clear = [k for k in list(sys.modules.keys()) 
-                 if ('mayatk' in k.lower() or '_temp_test_runner' in k)
-                 and 'maya_connection' not in k
-                 and 'qt' not in k.lower()
-                 and 'pyside' not in k.lower()]
-for mod in mods_to_clear:
-    try:
-        del sys.modules[mod]
-    except KeyError:
-        pass
-print(f"[RELOAD] Cleared {{len(mods_to_clear)}} modules before test execution")
-
-# Force reload/execution of the temp runner
-import __main__ as _mayatk_main
-_mayatk_main._mayatk_test_complete = False
-try:
-    # Drop any cached version so the import re-executes the module body once.
-    if '_temp_test_runner' in sys.modules:
-        del sys.modules['_temp_test_runner']
-    import _temp_test_runner  # runs the test suite top-level
-except Exception as e:
-    print(f"Error executing test runner: {{e}}")
-    import traceback
-    traceback.print_exc()
-finally:
-    _mayatk_main._mayatk_test_complete = True
-"""
-
-        # Clear stale results before sending
-        if self.results_file.exists():
-            self.results_file.unlink()
-
-        print("\nSending test code to Maya (via file)...")
-
-        if self.send_code(exec_code):
-            print("[OK] Test code sent successfully")
-            print("\n" + "=" * 70)
-            print("TESTS ARE RUNNING IN MAYA")
-            print("=" * 70)
-            print(f"Results file: {self.results_file}")
-            print("=" * 70)
-            return True
+        if gui:
+            headless_modules: List[str] = []
+            gui_modules = list(test_modules)
         else:
-            print("[ERROR] Failed to send test code")
-            return False
+            gui_modules = [m for m in test_modules if m in GUI_REQUIRED]
+            headless_modules = [m for m in test_modules if m not in GUI_REQUIRED]
 
-    def wait_for_results(
-        self, timeout: Optional[int] = None, poll_interval: float = 2.0
-    ) -> bool:
-        """Poll Maya for test completion, with file-based fallback.
+        phases_ok = True
+        all_ran = True
 
-        Primary: asks Maya directly via socket whether the
-        ``_mayatk_test_complete`` sentinel (set by the test code) is True.
-        Fallback: watches the results file for the ``SUMMARY`` marker.
+        if headless_modules:
+            h_ok, deferred = self._run_headless(headless_modules, module_paths, extended)
+            phases_ok = phases_ok and h_ok
+            gui_modules = gui_modules + [m for m in deferred if m not in gui_modules]
 
-        Parameters:
-            timeout: Maximum seconds to wait. None (default) scales with the
-                last run's module count (30s per module, 600s floor) so a
-                full ``--all`` run isn't cut off by a fixed wait.
-            poll_interval: Seconds between checks.
+        if gui_modules:
+            if no_gui_pass and not gui:
+                print(
+                    f"\n[GUI PASS SKIPPED] {len(gui_modules)} module(s) deferred "
+                    "(--no-gui-pass): " + ", ".join(gui_modules)
+                )
+                for m in gui_modules:
+                    self._append_master(f"\n{m}: DEFERRED (--no-gui-pass)\n")
+                all_ran = False
+            else:
+                result = self._run_via_port(
+                    gui_modules, module_paths, extended, no_wait=no_wait
+                )
+                if result == "nowait":
+                    return {"ok": True, "nowait": True}
+                phases_ok = phases_ok and bool(result)
 
-        Returns:
-            True if results were found before timeout, False otherwise.
-        """
-        import time as _time
+        status = self._finalize_results()
+        status["ok"] = phases_ok and not status["failed_modules"] and not status["not_run"]
+        status["all_ran"] = all_ran and not status["not_run"]
+        return status
 
-        if timeout is None:
-            timeout = max(600, 30 * getattr(self, "last_module_count", 0))
+    def _finalize_results(self) -> dict:
+        """Aggregate module blocks in the master file; append SUMMARY + timing."""
+        content = self._safe_read(self.results_file)
+        records = _parse_module_blocks(content)
 
-        start = _time.monotonic()
-        last_size = 0
-        use_socket = (
-            self.connection
-            and self.connection.is_connected
-            and self.connection.mode == "port"
+        # Last status wins (a NATIVE CRASH line is superseded by the module's
+        # GUI-pass result); keep first-appearance order.
+        final: Dict[str, dict] = {}
+        for rec in records:
+            if rec["name"] in final:
+                final[rec["name"]].update(rec)
+            else:
+                final[rec["name"]] = dict(rec)
+
+        totals = [0, 0, 0, 0]  # tests, failures, errors, skipped
+        summary_lines = []
+        for rec in final.values():
+            counts = rec["counts"]
+            if counts and rec["status"] in ("PASS", "FAIL"):
+                for i in range(4):
+                    totals[i] += counts[i]
+                detail = (
+                    f" ({counts[0]} tests, {counts[1]} failures, {counts[2]} errors)"
+                )
+            else:
+                detail = ""
+            t = f" [{rec['elapsed']:.1f}s]" if rec["elapsed"] is not None else ""
+            summary_lines.append(f"  {rec['name']}: {rec['status']}{detail}{t}")
+
+        tests, failures, errors, skipped = totals
+        failed_modules = [
+            r["name"] for r in final.values() if r["status"] in ("FAIL", "LOAD ERROR")
+        ]
+        not_run = [r["name"] for r in final.values() if r["status"] in _NOT_RUN]
+
+        timed = sorted(
+            (r for r in final.values() if r["elapsed"] is not None),
+            key=lambda r: r["elapsed"],
+            reverse=True,
         )
-        socket_failures = 0
 
-        print(f"\nWaiting for tests to complete (timeout: {timeout}s) ...")
+        out = ["\n" + "=" * 70 + "\n", "SUMMARY\n", "=" * 70 + "\n"]
+        out.extend(line + "\n" for line in summary_lines)
+        out.append("=" * 70 + "\n")
+        out.append(
+            f"Total: {tests} tests, {failures} failures, {errors} errors, "
+            f"{skipped} skipped\n"
+        )
+        if not_run:
+            out.append(f"NOT RUN ({len(not_run)}): {', '.join(not_run)}\n")
+        out.append("=" * 70 + "\n")
+        if timed:
+            out.append("\nSLOWEST MODULES\n")
+            for rec in timed[:10]:
+                out.append(f"  {rec['elapsed']:8.1f}s  {rec['name']}\n")
+        self._append_master("".join(out))
 
-        while (_time.monotonic() - start) < timeout:
-            elapsed = int(_time.monotonic() - start)
+        print(f"\nResults saved to: {self.results_file}")
+        if failures == 0 and errors == 0 and not failed_modules and not not_run:
+            print("\n[PASS] ALL TESTS PASSED!")
 
-            # ---- primary: socket-based sentinel check ----
-            if use_socket:
-                done = None
-                try:
-                    done = self.connection.execute(
-                        "getattr(__import__('__main__'), '_mayatk_test_complete', False)",
-                        wait_for_response=True,
-                        timeout=5,
-                    )
-                except Exception:
-                    pass  # fall through to file check
-                if done is None:
-                    # The command port refuses connections while Maya's main
-                    # thread runs the suite; stop hammering it after a few
-                    # tries (each attempt prints a connection error).
-                    socket_failures += 1
-                    if socket_failures >= 5:
-                        use_socket = False
-                        print(
-                            "\n  [INFO] Command port busy/unavailable; "
-                            "polling results file only."
-                        )
-                else:
-                    socket_failures = 0
-                    if str(done).strip().lower() == "true":
-                        print(f"\r  Tests completed in {elapsed}s.{' ' * 30}")
-                        # Retrieve summary directly from Maya
-                        summary = self.connection.execute(
-                            "getattr(__import__('__main__'), '_mayatk_test_summary', '')",
-                            wait_for_response=True,
-                            timeout=5,
-                        )
-                        if summary and summary.strip():
-                            print(f"  Maya reports: {summary.strip()}")
-                        return True
+        return {
+            "tests": tests,
+            "failures": failures,
+            "errors": errors,
+            "skipped": skipped,
+            "passed": tests - failures - errors,
+            "failed": failures + errors,
+            "failed_modules": failed_modules,
+            "not_run": not_run,
+        }
 
-            # ---- fallback: file-based polling ----
-            if self.results_file.exists():
-                try:
-                    content = self.results_file.read_text(encoding="utf-8")
-                except (OSError, PermissionError):
-                    _time.sleep(poll_interval)
-                    continue
-
-                cur_size = len(content)
-                if cur_size != last_size:
-                    module_count = (
-                        content.count(": PASS")
-                        + content.count(": FAIL")
-                        + content.count(": LOAD ERROR")
-                    )
-                    print(
-                        f"\r  [{elapsed}s] {module_count} module(s) finished ...",
-                        end="",
-                        flush=True,
-                    )
-                    last_size = cur_size
-
-                if "SUMMARY" in content:
-                    print(f"\r  Tests completed in {elapsed}s.{' ' * 30}")
-                    return True
-
-            _time.sleep(poll_interval)
-
-        elapsed = int(_time.monotonic() - start)
-        print(f"\n[TIMEOUT] Results not found after {elapsed}s.")
-        return False
+    # ------------------------------------------------------------------
+    # Reporting
+    # ------------------------------------------------------------------
 
     def print_results(self) -> None:
         """Read and print the results file contents to console."""
@@ -856,22 +1214,13 @@ finally:
         try:
             print("\n" + content)
         except UnicodeEncodeError:
-            import sys as _sys
             safe = content.encode(
-                _sys.stdout.encoding or "ascii", errors="replace"
-            ).decode(_sys.stdout.encoding or "ascii")
+                sys.stdout.encoding or "ascii", errors="replace"
+            ).decode(sys.stdout.encoding or "ascii")
             print("\n" + safe)
 
     def update_readme_badge(self, passed: int, failed: int) -> bool:
-        """Update the README with a test status badge.
-
-        Parameters:
-            passed: Number of passed tests.
-            failed: Number of failed tests.
-
-        Returns:
-            True if README was updated successfully.
-        """
+        """Update the README with a test status badge."""
         readme_path = self.test_dir.parent / "docs" / "README.md"
 
         if not readme_path.exists():
@@ -880,7 +1229,6 @@ finally:
 
         content = readme_path.read_text(encoding="utf-8")
 
-        total = passed + failed
         if failed == 0:
             color = "brightgreen"
             status = f"{passed} passed"
@@ -904,20 +1252,17 @@ finally:
         )
 
         if re.search(tests_badge_pattern, content):
-            # Replace existing badge
             new_content = re.sub(tests_badge_pattern, new_badge, content)
         else:
             # Add badge after the Maya badge line
             maya_badge_pattern = r"(\[!\[Maya\]\(https://img\.shields\.io/badge/Maya-[^\)]+\)\]\([^\)]+\))"
             match = re.search(maya_badge_pattern, content)
             if match:
-                # Insert after Maya badge
                 insert_pos = match.end()
                 new_content = (
                     content[:insert_pos] + "\n" + new_badge + content[insert_pos:]
                 )
             else:
-                # Fallback: add after Python badge
                 python_badge_pattern = r"(\[!\[Python\]\(https://img\.shields\.io/badge/Python-[^\)]+\)\]\([^\)]+\))"
                 match = re.search(python_badge_pattern, content)
                 if match:
@@ -926,7 +1271,6 @@ finally:
                         content[:insert_pos] + "\n" + new_badge + content[insert_pos:]
                     )
                 else:
-                    # Last resort: add at the very beginning
                     new_content = new_badge + "\n" + content
 
         readme_path.write_text(new_content, encoding="utf-8")
@@ -934,7 +1278,7 @@ finally:
         return True
 
     def parse_test_results(self) -> tuple:
-        """Parse test_results.txt to extract test counts.
+        """Parse the results file to extract test counts.
 
         Returns:
             Tuple of (passed, failed) where failed = failures + errors
@@ -944,7 +1288,6 @@ finally:
 
         content = self.results_file.read_text(encoding="utf-8")
 
-        # Look for the total line: "Total: 253 tests, 0 failures, 1 errors, 15 skipped"
         match = re.search(
             r"Total: (\d+) tests, (\d+) failures?, (\d+) errors?", content
         )
@@ -959,65 +1302,75 @@ finally:
         return (0, 0)
 
 
+def _pop_value(args: List[str], name: str, cast, default):
+    """Extract ``name <value>`` from args; returns (value, ok)."""
+    if name not in args:
+        return default, True
+    try:
+        idx = args.index(name)
+        value = cast(args[idx + 1])
+        args.pop(idx)
+        args.pop(idx)
+        return value, True
+    except (ValueError, IndexError):
+        print(f"Invalid value for {name}")
+        return default, False
+
+
 def main() -> int:
     """Main entry point. Returns a process exit code (0 = success)."""
-    # Parse command line arguments
     args = sys.argv[1:]
 
-    # Parse port first
-    port = 7002
-    if "--port" in args:
-        try:
-            p_idx = args.index("--port")
-            if p_idx + 1 < len(args):
-                port = int(args[p_idx + 1])
-                # Remove --port and value from args so they aren't treated as module names
-                args.pop(p_idx)
-                args.pop(p_idx)
-        except (ValueError, IndexError):
-            print("Invalid port specified")
-            return 2
+    port, ok = _pop_value(args, "--port", int, 7002)
+    if not ok:
+        return 2
+    wait_timeout, ok = _pop_value(args, "--timeout", int, None)
+    if not ok:
+        return 2
+    chunk_size, ok = _pop_value(args, "--chunk-size", int, 12)
+    if not ok:
+        return 2
+    jobs, ok = _pop_value(args, "--jobs", int, 1)
+    if not ok:
+        return 2
+    module_timeout, ok = _pop_value(args, "--module-timeout", int, 900)
+    if not ok:
+        return 2
+    mayapy_arg, ok = _pop_value(args, "--mayapy", str, None)
+    if not ok:
+        return 2
 
-    # Optional results-wait timeout override (seconds). Default (None) lets
-    # wait_for_results scale with the module count.
-    wait_timeout = None
-    if "--timeout" in args:
-        try:
-            t_idx = args.index("--timeout")
-            wait_timeout = int(args[t_idx + 1])
-            args.pop(t_idx)
-            args.pop(t_idx)
-        except (ValueError, IndexError):
-            print("Invalid timeout specified")
-            return 2
+    def pop_flag(*names) -> bool:
+        found = any(n in args for n in names)
+        args[:] = [a for a in args if a not in names]
+        return found
 
-    # --reuse: connect to an existing Maya session (DANGEROUS: will reset the scene)
-    reuse_instance = "--reuse" in args
-    if reuse_instance:
-        args = [arg for arg in args if arg != "--reuse"]
+    reuse_instance = pop_flag("--reuse")
+    dry_run = pop_flag("--dry-run", "-d")
+    no_badge = pop_flag("--no-badge")
+    no_wait = pop_flag("--no-wait")
+    keep_maya = pop_flag("--keep-maya")
+    extended = pop_flag("--extended", "-e")
+    mocks = pop_flag("--mocks")
+    gui = pop_flag("--gui")
+    pop_flag("--headless")  # accepted for symmetry; headless is the default
+    no_gui_pass = pop_flag("--no-gui-pass")
 
-    runner = MayaTestRunner(port=port, reuse_instance=reuse_instance)
+    # Reusing/attaching only makes sense through the port path.
+    gui = gui or reuse_instance
+    if no_wait and not gui:
+        print("[INFO] --no-wait only applies to --gui runs; ignoring.")
+        no_wait = False
 
-    # Check for flags
-    dry_run = "--dry-run" in args or "-d" in args
-    no_badge = "--no-badge" in args
-    no_wait = "--no-wait" in args
-    keep_maya = "--keep-maya" in args
-    extended = "--extended" in args or "-e" in args
-    mocks = "--mocks" in args
-
-    if dry_run:
-        args = [arg for arg in args if arg not in ("--dry-run", "-d")]
-    if no_badge:
-        args = [arg for arg in args if arg != "--no-badge"]
-    if no_wait:
-        args = [arg for arg in args if arg != "--no-wait"]
-    if keep_maya:
-        args = [arg for arg in args if arg != "--keep-maya"]
-    if extended:
-        args = [arg for arg in args if arg not in ("--extended", "-e")]
-    if mocks:
-        args = [arg for arg in args if arg != "--mocks"]
+    runner = MayaTestRunner(
+        port=port,
+        reuse_instance=reuse_instance,
+        mayapy=mayapy_arg,
+        chunk_size=chunk_size,
+        jobs=jobs,
+        module_timeout=module_timeout,
+        wait_timeout=wait_timeout,
+    )
 
     if "--list" in args or "-l" in args:
         runner.list_tests()
@@ -1028,52 +1381,62 @@ def main() -> int:
 
     # Everything below may launch Maya — wrap in try/finally for cleanup
     try:
-        if not args:
-            success = runner.run_tests(
-                dry_run=dry_run, extended=extended, mocks=mocks
-            )
-        elif "--quick" in args or "-q" in args:
+        if "--quick" in args or "-q" in args:
             success = runner.run_quick_test()
             # Quick test is fire-and-forget (no results file to poll)
             return 0 if success else 1
-        elif "--all" in args or "-a" in args:
-            all_modules = runner.discover_tests(
+
+        full_run = "--all" in args or "-a" in args
+        if full_run:
+            modules = runner.discover_tests(
                 include_extended=extended, include_mocks=mocks
             )
-            print(f"\nRunning ALL {len(all_modules)} test modules...")
-            success = runner.run_tests(
-                all_modules, dry_run=dry_run, extended=extended, mocks=mocks
-            )
+            print(f"\nRunning ALL {len(modules)} test modules...")
+        elif args:
+            modules = args
         else:
-            success = runner.run_tests(
-                args, dry_run=dry_run, extended=extended, mocks=mocks
-            )
+            modules = None
 
-        if not success:
+        status = runner.run_tests(
+            modules,
+            dry_run=dry_run,
+            extended=extended,
+            mocks=mocks,
+            gui=gui,
+            no_gui_pass=no_gui_pass,
+            no_wait=no_wait,
+        )
+
+        if not isinstance(status, dict):
             return 1
-        if dry_run:
+        if status.get("nowait"):
+            # Fire-and-forget: leave the Maya that is running the tests alive
+            # (the old runner's finally-shutdown killed it mid-run).
+            keep_maya = True
+            return 0
+        if status.get("dry_run"):
             return 0
 
-        # Wait for results (default) or fire-and-forget (--no-wait)
-        if no_wait:
-            print(f"\n--no-wait: results will be written to {runner.results_file}")
-            print(f'  Get-Content "{runner.results_file}" -Wait')
-            return 0  # finally block handles Maya cleanup
+        runner.print_results()
 
-        if runner.wait_for_results(timeout=wait_timeout):
-            runner.print_results()
+        # Update README badge — only on a full --all run where every module
+        # actually ran (a scoped or partial run must not clobber the badge).
+        if not no_badge:
+            if (
+                full_run
+                and status.get("all_ran")
+                and (status["passed"] > 0 or status["failed"] > 0)
+            ):
+                runner.update_readme_badge(status["passed"], status["failed"])
+            elif not status.get("all_ran"):
+                print("[INFO] Badge not updated (some modules did not run).")
+            elif not full_run:
+                print(
+                    "[INFO] Badge not updated (scoped run — the badge reflects "
+                    "full --all runs only)."
+                )
 
-            passed, failed = runner.parse_test_results()
-            # Update README badge with test results (unless disabled)
-            if not no_badge and (passed > 0 or failed > 0):
-                runner.update_readme_badge(passed, failed)
-            return 1 if failed > 0 else 0
-        else:
-            # Timed out — still try to show partial results
-            if runner.results_file.exists():
-                print("\n[PARTIAL RESULTS]")
-                runner.print_results()
-            return 1
+        return 0 if status.get("ok") else 1
     except KeyboardInterrupt:
         print("\n[INTERRUPTED] Cleaning up ...")
         return 130

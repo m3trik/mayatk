@@ -1,13 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Tree rendering, formatting, and selection management for the hierarchy manager UI.
+"""Tree rendering, formatting, and selection management for the hierarchy sync UI.
 
-Extracted from HierarchyManagerController to isolate presentation logic
-try:
-    import maya.cmds as cmds
-except ImportError:
-    cmds = None
-
+Extracted from HierarchySyncController to isolate presentation logic
 from orchestration and state management.  All Controller state is accessed
 via ``self._ctrl``.
 """
@@ -19,7 +14,7 @@ import maya.cmds as cmds
 from qtpy import QtCore, QtWidgets, QtGui
 import pythontk as ptk
 
-import mayatk.env_utils.hierarchy_manager.tree_utils as tree_utils
+import mayatk.env_utils.hierarchy_sync.tree_utils as tree_utils
 from mayatk.ui_utils.node_icons import NodeIcons
 
 # Custom data role for storing the original (pre-diff) tooltip so that
@@ -498,25 +493,15 @@ class HierarchyTreeRenderer(ptk.LoggingMixin):
     # ------------------------------------------------------------------ #
 
     def apply_ignore_styling(self, tree_widget):
-        """Apply or remove strikethrough + dim styling for ignored items.
+        """Apply strikethrough/dim styling for ignored items — and, when the 'Hide Ignored'
+        toggle is on, hide them from the tree entirely instead of dimming.
 
-        Directly-ignored items get strikethrough + dim ``#666666``.
-        Inherited-ignored items (ancestor is ignored) get italic + ``#888888``.
+        Directly-ignored items get strikethrough + dim ``#666666``. Inherited-ignored items
+        (ancestor is ignored) get italic + ``#888888``. When ``_hide_ignored`` is set, every
+        ignored item (direct or inherited) is hidden.
         """
         ignored = self._ctrl._get_ignored_set(tree_widget)
-        if not ignored:
-            iterator = QtWidgets.QTreeWidgetItemIterator(tree_widget)
-            while iterator.value():
-                item = iterator.value()
-                font = item.font(0)
-                if font.strikeOut() or font.italic():
-                    font.setStrikeOut(False)
-                    font.setItalic(False)
-                    for col in range(tree_widget.columnCount()):
-                        item.setFont(col, font)
-                iterator += 1
-            return
-
+        hide = getattr(self._ctrl, "_hide_ignored", False)
         direct_fg = QtGui.QColor("#666666")
         inherited_fg = QtGui.QColor("#888888")
         iterator = QtWidgets.QTreeWidgetItemIterator(tree_widget)
@@ -524,27 +509,28 @@ class HierarchyTreeRenderer(ptk.LoggingMixin):
             item = iterator.value()
             path = self.build_item_path(item)
             font = item.font(0)
-            if path in ignored:
-                if not font.strikeOut():
-                    font.setStrikeOut(True)
+            direct = path in ignored
+            inherited = not direct and self._ctrl.is_path_ignored(tree_widget, path)
+            if direct:
+                font.setStrikeOut(True)
                 font.setItalic(False)
                 for col in range(tree_widget.columnCount()):
                     item.setFont(col, font)
                     item.setForeground(col, QtGui.QBrush(direct_fg))
                     item.setBackground(col, QtGui.QBrush())
-            elif self._ctrl.is_path_ignored(tree_widget, path):
+            elif inherited:
                 font.setStrikeOut(False)
                 font.setItalic(True)
                 for col in range(tree_widget.columnCount()):
                     item.setFont(col, font)
                     item.setForeground(col, QtGui.QBrush(inherited_fg))
                     item.setBackground(col, QtGui.QBrush())
-            else:
-                if font.strikeOut() or font.italic():
-                    font.setStrikeOut(False)
-                    font.setItalic(False)
-                    for col in range(tree_widget.columnCount()):
-                        item.setFont(col, font)
+            elif font.strikeOut() or font.italic():
+                font.setStrikeOut(False)
+                font.setItalic(False)
+                for col in range(tree_widget.columnCount()):
+                    item.setFont(col, font)
+            item.setHidden(hide and (direct or inherited))
             iterator += 1
 
     # ------------------------------------------------------------------ #

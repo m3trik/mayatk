@@ -1,9 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
 """
-Test Suite for mayatk.env_utils.hierarchy_manager
+Test Suite for mayatk.env_utils.hierarchy_sync
 
-Tests for HierarchyManager class functionality including:
+Tests for HierarchySync class functionality including:
 - Hierarchy analysis
 - Missing/extra object detection
 - Reparented object detection
@@ -50,9 +50,9 @@ def _pm_undo_chunk():
         cmds.undoInfo(closeChunk=True)
 # --- end shims ---
 import mayatk as mtk
-from mayatk import HierarchyManager, NamespaceSandbox
-from mayatk.env_utils.hierarchy_manager._hierarchy_manager import (
-    HierarchyManager,
+from mayatk import HierarchySync, NamespaceSandbox
+from mayatk.env_utils.hierarchy_sync._hierarchy_sync import (
+    HierarchySync,
     get_clean_node_name,
     get_clean_node_name_from_string,
     clean_hierarchy_path,
@@ -71,8 +71,8 @@ from mayatk.env_utils.hierarchy_manager._hierarchy_manager import (
 from base_test import MayaTkTestCase, skipUnlessExtended
 
 
-class TestHierarchyManager(MayaTkTestCase):
-    """Comprehensive tests for HierarchyManager class."""
+class TestHierarchySync(MayaTkTestCase):
+    """Comprehensive tests for HierarchySync class."""
 
     def setUp(self):
         """Set up test environment."""
@@ -110,7 +110,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         reference_objects = [root_ref, child1_ref, child3_ref]
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
 
         # Analyze
         diff_result = manager.analyze_hierarchies(
@@ -130,6 +130,53 @@ class TestHierarchyManager(MayaTkTestCase):
 
         # child2 is in current but not in reference -> extra
         self.assertIn("root|child2", diff_result["extra"])
+
+    def test_filter_cameras_and_lights(self):
+        """filter_cameras / filter_lights exclude ALL cameras / lights from the diff.
+
+        Regression: a light shape reports its concrete node type (``pointLight``,
+        ``directionalLight``, …), never a bare ``"light"``, so type-filtering has
+        to match on the shape's *inherited* node-type chain. A non-default camera
+        likewise must be excluded only when the checkbox is on.
+        Added: 2026-07-17
+        """
+        # Current scene: a plain group, a (non-default) camera, and a point light.
+        cmds.group(empty=True, name="keepGrp")
+        cmds.rename(cmds.camera()[0], "myCam")
+        light_shape = cmds.pointLight()
+        cmds.rename(
+            cmds.listRelatives(light_shape, parent=True, fullPath=True)[0], "myLight"
+        )
+
+        # Reference has only the group, so the camera + light are "extra" unless filtered.
+        if not cmds.namespace(exists="ref"):
+            cmds.namespace(add="ref")
+        reference_objects = [cmds.group(empty=True, name="ref:keepGrp")]
+
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
+
+        # Filtering ON: neither the camera nor the light may show up as extra.
+        diff_on = manager.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=reference_objects,
+            filter_meshes=False,
+            filter_cameras=True,
+            filter_lights=True,
+        )
+        self.assertNotIn("myCam", diff_on["extra"])
+        self.assertNotIn("myLight", diff_on["extra"])
+
+        # Filtering OFF: both appear as extra — proves the type-match actually
+        # fires (the light case is what the inherited-type fix restores).
+        diff_off = manager.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=reference_objects,
+            filter_meshes=False,
+            filter_cameras=False,
+            filter_lights=False,
+        )
+        self.assertIn("myCam", diff_off["extra"])
+        self.assertIn("myLight", diff_off["extra"])
 
     def test_analyze_hierarchies_reparented(self):
         """Test detection of reparented objects.
@@ -153,7 +200,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         reference_objects = [root1_ref, root2_ref, child1_ref]
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
 
         # Analyze
         diff_result = manager.analyze_hierarchies(
@@ -207,7 +254,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         reference_objects = [root_ref] + list((cmds.listRelatives(str(root_ref), children=True) or []))
 
-        manager = HierarchyManager(fuzzy_matching=True, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=True, dry_run=True)
 
         diff_result = manager.analyze_hierarchies(
             current_tree_root="SCENE_WIDE_MODE",
@@ -264,7 +311,7 @@ class TestHierarchyManager(MayaTkTestCase):
             (cmds.listRelatives(str(grp_a_ref), children=True) or []) + (cmds.listRelatives(str(grp_b_ref), children=True) or [])
         )
 
-        manager = HierarchyManager(fuzzy_matching=True, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=True, dry_run=True)
         diff_result = manager.analyze_hierarchies(
             current_tree_root="SCENE_WIDE_MODE",
             reference_objects=ref_objects,
@@ -337,7 +384,7 @@ class TestHierarchyManager(MayaTkTestCase):
             (cmds.listRelatives(str(grp_ref), children=True) or []) + (cmds.listRelatives(str(grp_copy_ref), children=True) or [])
         )
 
-        manager = HierarchyManager(fuzzy_matching=True, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=True, dry_run=True)
         diff_result = manager.analyze_hierarchies(
             current_tree_root="SCENE_WIDE_MODE",
             reference_objects=ref_objects,
@@ -379,7 +426,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         ref_objects = [root_ref] + list((cmds.listRelatives(str(root_ref), children=True) or []))
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         manager.analyze_hierarchies(
             current_tree_root="SCENE_WIDE_MODE",
             reference_objects=ref_objects,
@@ -402,7 +449,7 @@ class TestHierarchyManager(MayaTkTestCase):
         Added: 2026-03-06
         """
         # None of these exist yet
-        parent = HierarchyManager._ensure_parent_chain("GRP_A|GRP_B|LEAF")
+        parent = HierarchySync._ensure_parent_chain("GRP_A|GRP_B|LEAF")
         self.assertIsNotNone(parent)
         self.assertEqual(parent.split('|')[-1].split(':')[-1], "GRP_B")
         self.assertTrue(cmds.objExists("GRP_A"))
@@ -415,7 +462,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         Added: 2026-03-06
         """
-        result = HierarchyManager._ensure_parent_chain("LEAF")
+        result = HierarchySync._ensure_parent_chain("LEAF")
         self.assertIsNone(result)
 
     def test_create_stubs_dry_run(self):
@@ -423,7 +470,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         Added: 2026-03-06
         """
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         manager.differences = {"missing": ["grp|child1", "grp|child2"]}
 
         created = manager.create_stubs()
@@ -442,7 +489,7 @@ class TestHierarchyManager(MayaTkTestCase):
         # Create the parent so the stub can be placed correctly
         cmds.group(empty=True, name="grp")
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.differences = {"missing": ["grp|stub_child", "root_stub"]}
 
         created = manager.create_stubs()
@@ -465,7 +512,7 @@ class TestHierarchyManager(MayaTkTestCase):
         """
         cmds.group(empty=True, name="existing_obj")
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.differences = {"missing": ["existing_obj"]}
 
         created = manager.create_stubs()
@@ -476,7 +523,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         Added: 2026-03-06
         """
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.differences = {"missing": ["deep_grp|sub_grp|leaf_stub"]}
 
         created = manager.create_stubs()
@@ -498,7 +545,7 @@ class TestHierarchyManager(MayaTkTestCase):
         so that Maya's Optimize Scene Size cannot delete them.
         Added: 2026-04-10
         """
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.differences = {"missing": ["stub_node"]}
 
         created = manager.create_stubs()
@@ -509,15 +556,15 @@ class TestHierarchyManager(MayaTkTestCase):
 
         # Custom attribute exists and is True.
         self.assertTrue(
-            cmds.attributeQuery(HierarchyManager.STUB_ATTR, node=node, exists=True),
+            cmds.attributeQuery(HierarchySync.STUB_ATTR, node=node, exists=True),
             "Stub should have hierarchyManagerStub attribute",
         )
-        self.assertTrue(cmds.getAttr(f"{node}.{HierarchyManager.STUB_ATTR}"))
+        self.assertTrue(cmds.getAttr(f"{node}.{HierarchySync.STUB_ATTR}"))
 
         # Notes attribute with explanation.
         self.assertTrue(cmds.attributeQuery("notes", node=node, exists=True))
         notes = cmds.getAttr(f"{node}.notes")
-        self.assertIn("Hierarchy Manager", notes)
+        self.assertIn("Hierarchy Sync", notes)
 
         # Node is locked.
         self.assertTrue(cmds.lockNode(node, query=True, lock=True)[0])
@@ -531,7 +578,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         Added: 2026-04-10
         """
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.differences = {"missing": ["grp_a|grp_b|leaf_node"]}
 
         manager.create_stubs()
@@ -543,7 +590,7 @@ class TestHierarchyManager(MayaTkTestCase):
         # The intermediate parents should also be tagged and locked.
         for name in ("grp_a", "grp_b"):
             self.assertTrue(
-                cmds.attributeQuery(HierarchyManager.STUB_ATTR, node=name, exists=True),
+                cmds.attributeQuery(HierarchySync.STUB_ATTR, node=name, exists=True),
                 f"{name} should have stub attribute",
             )
             self.assertTrue(
@@ -559,7 +606,7 @@ class TestHierarchyManager(MayaTkTestCase):
         lock error.
         Added: 2026-04-10
         """
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
 
         # First run — creates grp_a (locked) and leaf_1 under it.
         manager.differences = {"missing": ["grp_a|leaf_1"]}
@@ -586,7 +633,7 @@ class TestHierarchyManager(MayaTkTestCase):
         Added: 2026-04-10
         """
         # Create a stub via the normal path.
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.differences = {"missing": ["REPLACE_ME"]}
         manager.create_stubs()
 
@@ -622,7 +669,7 @@ class TestHierarchyManager(MayaTkTestCase):
         """
         cmds.group(empty=True, name="extra_obj")
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         manager.differences = {"extra": ["extra_obj"]}
 
         moved = manager.quarantine_extras()
@@ -650,7 +697,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         ref_objects = [root_ref] + list((cmds.listRelatives(str(root_ref), children=True) or []))
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.analyze_hierarchies(
             current_tree_root="SCENE_WIDE_MODE",
             reference_objects=ref_objects,
@@ -680,7 +727,7 @@ class TestHierarchyManager(MayaTkTestCase):
         grp = cmds.group(empty=True, name="orphan_grp")
         child = cmds.group(empty=True, name="orphan_child", parent=grp)
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         # Manually populate the path maps so _resolve_node works
         manager.current_scene_path_map = {
             "orphan_grp": grp,
@@ -709,7 +756,7 @@ class TestHierarchyManager(MayaTkTestCase):
         """
         extra_node = cmds.group(empty=True, name="stray")
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.current_scene_path_map = {"stray": extra_node}
         manager.clean_to_raw_current = {"stray": "stray"}
         manager.differences = {"extra": ["stray"]}
@@ -724,7 +771,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         Added: 2026-03-06
         """
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         manager.differences = {
             "reparented": [
                 {
@@ -759,7 +806,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         ref_objects = [grp_a_ref, grp_b_ref, child_ref]
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.analyze_hierarchies(
             current_tree_root="SCENE_WIDE_MODE",
             reference_objects=ref_objects,
@@ -792,7 +839,7 @@ class TestHierarchyManager(MayaTkTestCase):
         grp_a = cmds.group(empty=True, name="grp_a")
         child = cmds.group(empty=True, name="child", parent=grp_a)
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.current_scene_path_map = {"grp_a|child": child}
         manager.clean_to_raw_current = {"grp_a|child": "grp_a|child"}
         manager.differences = {
@@ -816,7 +863,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         Added: 2026-03-06
         """
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.differences = {"missing": []}
         self.assertEqual(manager.create_stubs(), [])
 
@@ -825,7 +872,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         Added: 2026-03-06
         """
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.differences = {"extra": []}
         self.assertEqual(manager.quarantine_extras(), [])
 
@@ -834,7 +881,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         Added: 2026-03-06
         """
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.differences = {"reparented": []}
         self.assertEqual(manager.fix_reparented(), [])
 
@@ -856,7 +903,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         ref_objects = [root_ref] + list((cmds.listRelatives(str(root_ref), children=True) or []))
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         diff_result = manager.analyze_hierarchies(
             current_tree_root="SCENE_WIDE_MODE",
             reference_objects=ref_objects,
@@ -929,7 +976,7 @@ class TestHierarchyManager(MayaTkTestCase):
 
         reference_objects = [root_ref, mesh_ref, cam_ref, extra_ref]
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
 
         # Analyze with camera filtering ON
         diff_result = manager.analyze_hierarchies(
@@ -1040,12 +1087,6 @@ class TestHierarchyManager(MayaTkTestCase):
         self.assertEqual(len(roots), 1)
         self.assertEqual(roots[0], root)
 
-        # _expand_objects_with_children
-        expanded = swapper._expand_objects_with_children([root])
-        self.assertEqual(len(expanded), 2)
-        self.assertIn(root, expanded)
-        self.assertIn(child, expanded)
-
         # _collect_object_and_children
         result_list = []
         processed_set = set()
@@ -1072,7 +1113,7 @@ class TestHierarchyManager(MayaTkTestCase):
     def test_logging_redirect_to_widget(self):
         """Verify that setup_logging_redirect actually pipes log output to a text widget.
 
-        Bug: LoggingMixin subclasses (HierarchyManager, ObjectSwapper,
+        Bug: LoggingMixin subclasses (HierarchySync, ObjectSwapper,
         MayaObjectMatcher) each have isolated loggers. If setup_logging_redirect
         is not called for each one, their output silently goes to the console
         instead of the UI textedit.
@@ -1089,15 +1130,15 @@ class TestHierarchyManager(MayaTkTestCase):
             def append(self, msg):
                 self.messages.append(msg)
 
-        # --- HierarchyManager ---
+        # --- HierarchySync ---
         widget_hm = FakeTextEdit()
-        hm = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        hm = HierarchySync(fuzzy_matching=False, dry_run=True)
         hm.logger.setup_logging_redirect(widget_hm)
         hm.logger.info("HM_TEST_MSG")
         time.sleep(0.1)  # DefaultTextLogHandler uses threading.Timer(0, ...)
         self.assertTrue(
             any("HM_TEST_MSG" in m for m in widget_hm.messages),
-            f"HierarchyManager log not redirected. Messages: {widget_hm.messages}",
+            f"HierarchySync log not redirected. Messages: {widget_hm.messages}",
         )
 
         # --- ObjectSwapper ---
@@ -1140,7 +1181,7 @@ class TestHierarchyManager(MayaTkTestCase):
     @skipUnlessExtended
     def test_real_world_scenes(self):
         """Test hierarchy analysis using real-world scenes if available."""
-        if not cmds.objExists(str(real_scenes_dir)):
+        if not self.real_scenes_dir.exists():
             self.skipTest(
                 f"Real-world scenes directory not found: {self.real_scenes_dir}"
             )
@@ -1148,7 +1189,7 @@ class TestHierarchyManager(MayaTkTestCase):
         current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
         reference_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
 
-        if not cmds.objExists(str(current_scene)) or not cmds.objExists(str(reference_scene)):
+        if not current_scene.exists() or not reference_scene.exists():
             self.skipTest("Required real-world scene files not found.")
 
         # Load current scene
@@ -1168,7 +1209,7 @@ class TestHierarchyManager(MayaTkTestCase):
         reference_objects = import_info["transforms"]
 
         # Analyze
-        manager = HierarchyManager(
+        manager = HierarchySync(
             import_manager=sandbox, fuzzy_matching=True, dry_run=True
         )
         diff_result = manager.analyze_hierarchies(
@@ -1199,7 +1240,7 @@ class TestHierarchyManager(MayaTkTestCase):
         results for the C5_AFT_COMP_ASSEMBLY current.ma vs module.ma scene pair.
         Baseline captured: 2026-06-16
         """
-        if not cmds.objExists(str(real_scenes_dir)):
+        if not self.real_scenes_dir.exists():
             self.skipTest(
                 f"Real-world scenes directory not found: {self.real_scenes_dir}"
             )
@@ -1207,7 +1248,7 @@ class TestHierarchyManager(MayaTkTestCase):
         current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
         reference_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
 
-        if not cmds.objExists(str(current_scene)) or not cmds.objExists(str(reference_scene)):
+        if not current_scene.exists() or not reference_scene.exists():
             self.skipTest("Required C5 MA scene files not found.")
 
         default_cams = frozenset({"persp", "top", "front", "side"})
@@ -1226,7 +1267,7 @@ class TestHierarchyManager(MayaTkTestCase):
             if t.split('|')[-1].split(':')[-1].split(":")[-1] not in default_cams
         ]
 
-        manager = HierarchyManager(
+        manager = HierarchySync(
             import_manager=sandbox, fuzzy_matching=True, dry_run=True
         )
         diff = manager.analyze_hierarchies(
@@ -1354,7 +1395,7 @@ class TestHierarchyManager(MayaTkTestCase):
         for C5_AFT_COMP_ASSEMBLY current.ma vs the FBX export.
         Baseline captured: 2026-06-16
         """
-        if not cmds.objExists(str(real_scenes_dir)):
+        if not self.real_scenes_dir.exists():
             self.skipTest(
                 f"Real-world scenes directory not found: {self.real_scenes_dir}"
             )
@@ -1362,7 +1403,7 @@ class TestHierarchyManager(MayaTkTestCase):
         current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
         reference_fbx = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY.fbx"
 
-        if not cmds.objExists(str(current_scene)) or not cmds.objExists(str(reference_fbx)):
+        if not current_scene.exists() or not reference_fbx.exists():
             self.skipTest("Required C5 MA/FBX scene files not found.")
 
         default_cams = frozenset({"persp", "top", "front", "side"})
@@ -1381,7 +1422,7 @@ class TestHierarchyManager(MayaTkTestCase):
             if t.split('|')[-1].split(':')[-1].split(":")[-1] not in default_cams
         ]
 
-        manager = HierarchyManager(
+        manager = HierarchySync(
             import_manager=sandbox, fuzzy_matching=True, dry_run=True
         )
         diff = manager.analyze_hierarchies(
@@ -1482,7 +1523,7 @@ class TestHierarchyManager(MayaTkTestCase):
         names. This caused massive geo loss in production scenes.
         Fixed: 2026-02-23
         """
-        if not cmds.objExists(str(real_scenes_dir)):
+        if not self.real_scenes_dir.exists():
             self.skipTest(
                 f"Real-world scenes directory not found: {self.real_scenes_dir}"
             )
@@ -1490,7 +1531,7 @@ class TestHierarchyManager(MayaTkTestCase):
         current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
         reference_fbx = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY.fbx"
 
-        if not cmds.objExists(str(current_scene)) or not cmds.objExists(str(reference_fbx)):
+        if not current_scene.exists() or not reference_fbx.exists():
             self.skipTest("Required scene files not found.")
 
         # --- Phase 1: Open scene and snapshot everything ---
@@ -1601,7 +1642,7 @@ class TestHierarchyManager(MayaTkTestCase):
         original bug scenario (630 objects renamed, dozens deleted).
         Fixed: 2026-02-23
         """
-        if not cmds.objExists(str(real_scenes_dir)):
+        if not self.real_scenes_dir.exists():
             self.skipTest(
                 f"Real-world scenes directory not found: {self.real_scenes_dir}"
             )
@@ -1609,7 +1650,7 @@ class TestHierarchyManager(MayaTkTestCase):
         current_scene = self.real_scenes_dir / "C17A_TOWING_ASSEMBLY_02.fbx"
         reference_fbx = self.real_scenes_dir / "C17A_TOWING_ASSEMBLY_01.fbx"
 
-        if not cmds.objExists(str(current_scene)) or not cmds.objExists(str(reference_fbx)):
+        if not current_scene.exists() or not reference_fbx.exists():
             self.skipTest("Required C17 FBX files not found.")
 
         # --- Open scene and snapshot ---
@@ -1670,107 +1711,6 @@ class TestHierarchyManager(MayaTkTestCase):
         # --- Cleanup ---
         sandbox.cleanup_all_namespaces()
 
-    def test_same_name_parent_child_survives_namespace_rename(self):
-        """Verify transforms with same-name parent/child paths survive NamespaceSandbox.
-
-        Bug: A ``has_consecutive_dupes`` filter silently dropped any transform
-        whose DAG path contained a parent and child with the same short name
-        (e.g. ``A|A``).  PyMEL's MObject-backed rename handles this correctly,
-        so the filter was unnecessary and caused false "extra" items in diffs.
-        Fixed: 2026-03-05
-        """
-        # Build hierarchy:  A -> A (child) -> B -> C
-        _pm_new_file(force=True)
-        parent = cmds.group(empty=True, name="A")
-        child = cmds.group(empty=True, name="A", parent=parent)
-        grandchild = cmds.group(empty=True, name="B", parent=child)
-        leaf = cmds.group(empty=True, name="C", parent=grandchild)
-
-        # Capture UUIDs so we can re-resolve nodes after renames (cmds string
-        # variables don't auto-rebind the way PyMEL PyNodes did).
-        parent_uid = cmds.ls("|A", uuid=True)[0]
-        child_uid = cmds.ls("|A|A", uuid=True)[0]
-        grandchild_uid = cmds.ls("|A|A|B", uuid=True)[0]
-        leaf_uid = cmds.ls("|A|A|B|C", uuid=True)[0]
-
-        # Sanity: child has a consecutive-dupe path
-        self.assertEqual(cmds.ls(child_uid, l=True)[0], "|A|A")
-
-        # Use explicit long DAG paths so parent and child "A" remain
-        # distinguishable when fed to _move_objects_to_namespace. cmds.ls("A")
-        # is ambiguous (matches both |A and |A|A) — PyMEL PyNodes carried
-        # MObject identity, but cmds-side the short name alone is not enough.
-        all_nodes = ["|A", "|A|A", "|A|A|B", "|A|A|B|C"]
-        sandbox = NamespaceSandbox(dry_run=False)
-        sandbox._fbx_importer._move_objects_to_namespace(all_nodes, "test_ns")
-
-        # All 4 must survive
-        queried = cmds.ls("test_ns:*", type="transform")
-        self.assertEqual(
-            len(queried),
-            4,
-            f"Expected 4 transforms in namespace, got {len(queried)}: "
-            f"{[cmds.ls(str(t), l=True)[0] for t in queried]}",
-        )
-
-        # Hierarchy must be intact (re-resolve via UUID — strings are stale)
-        self.assertEqual(cmds.ls(child_uid, l=True)[0], "|test_ns:A|test_ns:A")
-        self.assertEqual(cmds.ls(leaf_uid, l=True)[0], "|test_ns:A|test_ns:A|test_ns:B|test_ns:C")
-
-        # Cleaned paths must preserve the same-name structure
-        cleaned_paths = {clean_hierarchy_path(cmds.ls(str(t), l=True)[0]) for t in queried}
-        # clean_hierarchy_path preserves leading separator from longName()
-        self.assertIn("|A|A", cleaned_paths)
-        self.assertIn("|A|A|B|C", cleaned_paths)
-
-        cmds.namespace(removeNamespace="test_ns", mergeNamespaceWithRoot=True)
-
-    def test_fbx_namespace_stripped_during_sandbox_rename(self):
-        """Verify FBX-created namespaces are stripped to avoid nested namespaces.
-
-        Bug: FBX import sometimes creates nodes in a ``ControlData:`` namespace.
-        When ``_move_objects_to_namespace`` renamed these, the result was
-        ``temp_import:ControlData:FOO`` (nested), which ``cmds.ls("temp_import:*")``
-        could not find.  The fix strips existing namespace prefixes before
-        adding the sandbox namespace.
-        Fixed: 2026-03-05
-        """
-        _pm_new_file(force=True)
-
-        # Simulate FBX-created node with a namespace
-        if not cmds.namespace(exists="ControlData"):
-            cmds.namespace(add="ControlData")
-        node = cmds.group(empty=True, name="ControlData:SWITCH_NODE")
-        self.assertEqual(str(node).split('|')[-1], "ControlData:SWITCH_NODE")
-        node_uuid = cmds.ls(node, uuid=True)[0]
-
-        sandbox = NamespaceSandbox(dry_run=False)
-        sandbox._fbx_importer._move_objects_to_namespace([node], "test_ns")
-
-        # Re-resolve node by UUID — string variable does not auto-rebind after rename
-        node = cmds.ls(node_uuid, long=False)[0]
-        # Must be in test_ns (flat), NOT test_ns:ControlData (nested).
-        # Use the leaf name with namespace prefix preserved — stripping
-        # via .split(':')[-1] would falsely report failure even on success.
-        leaf = str(node).split('|')[-1]
-        self.assertTrue(
-            leaf.startswith("test_ns:"),
-            f"Node should be in test_ns namespace, got: {leaf}",
-        )
-        self.assertNotIn(
-            "ControlData",
-            leaf,
-            f"ControlData namespace should be stripped, got: {leaf}",
-        )
-
-        # Must be discoverable with standard namespace query
-        queried = cmds.ls("test_ns:*", type="transform")
-        self.assertEqual(len(queried), 1, f"Expected 1 node, got {len(queried)}")
-        self.assertEqual(queried[0], "test_ns:SWITCH_NODE")
-
-        cmds.namespace(removeNamespace="test_ns", mergeNamespaceWithRoot=True)
-        cmds.namespace(removeNamespace="ControlData", mergeNamespaceWithRoot=True)
-
     @skipUnlessExtended
     def test_c130_fbx_vs_ma_diff_content(self):
         """Regression: C130 FBX-vs-MA diff correctly detects FBX name-flattening.
@@ -1784,7 +1724,7 @@ class TestHierarchyManager(MayaTkTestCase):
         empty stubs AND quarantined real geometry — destroying the scene.
         Fixed: 2026-03-09
         """
-        if not cmds.objExists(str(real_scenes_dir)):
+        if not self.real_scenes_dir.exists():
             self.skipTest(
                 f"Real-world scenes directory not found: {self.real_scenes_dir}"
             )
@@ -1796,7 +1736,7 @@ class TestHierarchyManager(MayaTkTestCase):
             r"\modules\C130H_FCR_SPEEDRUN\C130H_FCR_SPEEDRUN_module.ma"
         )
 
-        if not cmds.objExists(str(reference_fbx)) or not cmds.objExists(str(current_scene)):
+        if not reference_fbx.exists() or not current_scene.exists():
             self.skipTest("Required C130 FBX/MA scene files not found.")
 
         _pm_open_file(str(current_scene), force=True)
@@ -1814,7 +1754,7 @@ class TestHierarchyManager(MayaTkTestCase):
             if t.split('|')[-1].split(':')[-1].split(":")[-1] not in default_cams
         ]
 
-        manager = HierarchyManager(
+        manager = HierarchySync(
             import_manager=sandbox, fuzzy_matching=True, dry_run=True
         )
         diff = manager.analyze_hierarchies(
@@ -2025,7 +1965,7 @@ class TestHierarchyManager(MayaTkTestCase):
         current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
         reference_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
 
-        if not cmds.objExists(str(current_scene)) or not cmds.objExists(str(reference_scene)):
+        if not current_scene.exists() or not reference_scene.exists():
             self.skipTest("Required C5 scene files not found.")
 
         _pm_open_file(str(current_scene), force=True)
@@ -2039,7 +1979,7 @@ class TestHierarchyManager(MayaTkTestCase):
         self.assertIsNotNone(info)
 
         ref_objs = info.get("transforms", [])
-        manager = HierarchyManager(
+        manager = HierarchySync(
             import_manager=sandbox, fuzzy_matching=True, dry_run=True
         )
         manager.analyze_hierarchies(
@@ -2115,7 +2055,7 @@ class TestHierarchyManager(MayaTkTestCase):
         current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
         reference_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
 
-        if not cmds.objExists(str(current_scene)) or not cmds.objExists(str(reference_scene)):
+        if not current_scene.exists() or not reference_scene.exists():
             self.skipTest("Required C5 scene files not found.")
 
         _pm_open_file(str(current_scene), force=True)
@@ -2129,7 +2069,7 @@ class TestHierarchyManager(MayaTkTestCase):
         self.assertIsNotNone(info)
 
         ref_objs = info.get("transforms", [])
-        manager = HierarchyManager(
+        manager = HierarchySync(
             import_manager=sandbox, fuzzy_matching=True, dry_run=False
         )
         diff = manager.analyze_hierarchies(
@@ -2215,7 +2155,7 @@ class TestHierarchyManager(MayaTkTestCase):
         )
         scene_file = test_scenes / "tangent_preservation_test.ma"
 
-        if not cmds.objExists(str(scene_file)):
+        if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
         _pm_open_file(str(scene_file), force=True)
@@ -2228,9 +2168,9 @@ class TestHierarchyManager(MayaTkTestCase):
             "tangent_preservation_test.ma should have animation curves",
         )
 
-        # Build a HierarchyManager and do a scene-wide analysis
+        # Build a HierarchySync and do a scene-wide analysis
         # (no reference — this just exercises the map-building code path)
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         manager.current_scene_path_map = HierarchyMapBuilder.build_path_map(
             "SCENE_WIDE_MODE", strip_namespaces=False
         )
@@ -2266,7 +2206,7 @@ class TestHierarchyManager(MayaTkTestCase):
         )
         scene_file = test_scenes / "breaks_baked_curves_test.ma"
 
-        if not cmds.objExists(str(scene_file)):
+        if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
         _pm_open_file(str(scene_file), force=True)
@@ -2279,7 +2219,7 @@ class TestHierarchyManager(MayaTkTestCase):
         )
 
         # Analyze the scene against itself (identity — nothing should change)
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         all_transforms = [
             t
             for t in cmds.ls(type="transform")
@@ -2330,7 +2270,7 @@ class TestHierarchyManager(MayaTkTestCase):
         strips animation on load).
         """
         current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
-        if not cmds.objExists(str(current_scene)):
+        if not current_scene.exists():
             self.skipTest("C5 current scene not found.")
 
         _pm_open_file(str(current_scene), force=True)
@@ -2398,7 +2338,7 @@ class TestHierarchyManager(MayaTkTestCase):
         current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_current.ma"
         reference_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
 
-        if not cmds.objExists(str(current_scene)) or not cmds.objExists(str(reference_scene)):
+        if not current_scene.exists() or not reference_scene.exists():
             self.skipTest("Required C5 scene files not found.")
 
         # Snapshot module animation
@@ -2454,14 +2394,14 @@ class TestHierarchyManager(MayaTkTestCase):
             r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
             r"\_tests\transforms\freeze_transforms.ma"
         )
-        if not cmds.objExists(str(scene_file)):
+        if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
         _pm_open_file(str(scene_file), force=True)
         before = self._snapshot_scene_animation()
 
         # Full analyze pipeline (scene as its own reference)
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         all_transforms = [
             t
             for t in cmds.ls(type="transform")
@@ -2519,14 +2459,14 @@ class TestHierarchyManager(MayaTkTestCase):
             r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
             r"\_tests\icio_error\C5M_AFT_LOADMASTER_PANEL_copy.ma"
         )
-        if not cmds.objExists(str(scene_file)):
+        if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
         _pm_open_file(str(scene_file), force=True)
         before = self._snapshot_scene_animation()
 
         # Full analyze pipeline (scene as its own reference)
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         all_transforms = [
             t
             for t in cmds.ls(type="transform")
@@ -2585,14 +2525,14 @@ class TestHierarchyManager(MayaTkTestCase):
             r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
             r"\_tests\instance_separator\example_of_a_split_assembly.ma"
         )
-        if not cmds.objExists(str(scene_file)):
+        if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
         _pm_open_file(str(scene_file), force=True)
         before = self._snapshot_scene_animation()
 
         # Full analyze pipeline (scene as its own reference)
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         all_transforms = [
             t
             for t in cmds.ls(type="transform")
@@ -2648,14 +2588,14 @@ class TestHierarchyManager(MayaTkTestCase):
         that the full analyze_hierarchies pipeline works on binary scenes.
         """
         scene_file = self.real_scenes_dir / "C5M_AFT_COMPARTMENT_module.mb"
-        if not cmds.objExists(str(scene_file)):
+        if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
         _pm_open_file(str(scene_file), force=True)
         before = self._snapshot_scene_animation()
 
         # Full analyze pipeline (scene as its own reference)
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         all_transforms = [
             t
             for t in cmds.ls(type="transform")
@@ -2714,14 +2654,14 @@ class TestHierarchyManager(MayaTkTestCase):
             r"O:\Dropbox (Moth+Flame)\Moth+Flame Dropbox\Ryan Simpson"
             r"\_tests\tube_rig\C130J_MLG_copy.ma"
         )
-        if not cmds.objExists(str(scene_file)):
+        if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
         _pm_open_file(str(scene_file), force=True)
         before = self._snapshot_scene_animation()
 
         # Full analysis using the scene as its own reference (identity diff)
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         all_transforms = [
             t
             for t in cmds.ls(type="transform")
@@ -2775,7 +2715,7 @@ class TestHierarchyManager(MayaTkTestCase):
             r"\_tests\optimize_baked_keys"
             r"\C5M_MAIN_LANDING_GEAR_DOORS_module_baked_optimized.ma"
         )
-        if not cmds.objExists(str(scene_file)):
+        if not scene_file.exists():
             self.skipTest(f"Scene not found: {scene_file}")
 
         _pm_open_file(str(scene_file), force=True)
@@ -2788,7 +2728,7 @@ class TestHierarchyManager(MayaTkTestCase):
         )
 
         # Full analysis using scene as its own reference
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         all_transforms = [
             t
             for t in cmds.ls(type="transform")
@@ -2850,7 +2790,7 @@ class TestHierarchyManager(MayaTkTestCase):
         current_scene = self.real_scenes_dir / "C5M_AFT_COMPARTMENT_module.mb"
         reference_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
 
-        if not cmds.objExists(str(current_scene)) or not cmds.objExists(str(reference_scene)):
+        if not current_scene.exists() or not reference_scene.exists():
             self.skipTest("Required C5 AFT COMPARTMENT scene files not found.")
 
         _pm_open_file(str(current_scene), force=True)
@@ -2863,7 +2803,7 @@ class TestHierarchyManager(MayaTkTestCase):
         self.assertIsNotNone(info)
 
         ref_objs = info.get("transforms", [])
-        manager = HierarchyManager(
+        manager = HierarchySync(
             import_manager=sandbox, fuzzy_matching=True, dry_run=True
         )
         manager.analyze_hierarchies(
@@ -2960,11 +2900,11 @@ class TestIgnoreFeature(MayaTkTestCase):
             registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
 
         fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
-        from mayatk.env_utils.hierarchy_manager.hierarchy_manager_slots import (
-            HierarchyManagerController,
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
+            HierarchySyncController,
         )
 
-        self.controller = HierarchyManagerController(fake_slots)
+        self.controller = HierarchySyncController(fake_slots)
         self.tree000 = fake_slots.ui.tree000
         self.tree001 = fake_slots.ui.tree001
 
@@ -3277,21 +3217,21 @@ class TestIgnoreFeature(MayaTkTestCase):
 
         Added: 2026-03-06
         """
-        self.controller.hierarchy_manager = None
+        self.controller.hierarchy_sync = None
         self.controller._current_diff_result = None
         result = self.controller.repair_hierarchies(dry_run=True)
         self.assertFalse(result)
 
     def test_repair_hierarchies_dry_run_restore(self):
-        """repair_hierarchies restores hierarchy_manager.dry_run after execution.
+        """repair_hierarchies restores hierarchy_sync.dry_run after execution.
 
         Bug: method mutated dry_run on the manager without save/restore.
         Fixed: 2026-03-06 (critique fix #1)
         """
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.differences = {"missing": ["grp|stub"], "extra": [], "reparented": []}
 
-        self.controller.hierarchy_manager = manager
+        self.controller.hierarchy_sync = manager
         self.controller._current_diff_result = {
             "missing": ["grp|stub"],
             "extra": [],
@@ -3314,14 +3254,14 @@ class TestIgnoreFeature(MayaTkTestCase):
         """
         cmds.group(empty=True, name="grp")
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.differences = {
             "missing": ["grp|new_stub"],
             "extra": [],
             "reparented": [],
         }
 
-        self.controller.hierarchy_manager = manager
+        self.controller.hierarchy_sync = manager
         self.controller._current_diff_result = {
             "missing": ["grp|new_stub"],
             "extra": [],
@@ -3337,8 +3277,8 @@ class TestIgnoreFeature(MayaTkTestCase):
             "Diff cache should be cleared after live repair",
         )
         self.assertIsNone(
-            self.controller.hierarchy_manager,
-            "hierarchy_manager should be cleared after live repair",
+            self.controller.hierarchy_sync,
+            "hierarchy_sync should be cleared after live repair",
         )
 
     def test_repair_hierarchies_respects_ignored_paths(self):
@@ -3348,14 +3288,14 @@ class TestIgnoreFeature(MayaTkTestCase):
         """
         cmds.group(empty=True, name="grp")
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         manager.differences = {
             "missing": ["grp|keep", "grp|skip"],
             "extra": [],
             "reparented": [],
         }
 
-        self.controller.hierarchy_manager = manager
+        self.controller.hierarchy_sync = manager
         self.controller._current_diff_result = {
             "missing": ["grp|keep", "grp|skip"],
             "extra": [],
@@ -3383,7 +3323,7 @@ class TestIgnoreFeature(MayaTkTestCase):
 
 
 class TestCachedReferenceImport(MayaTkTestCase):
-    """Tests for the cached reference import mechanism in HierarchyManagerController.
+    """Tests for the cached reference import mechanism in HierarchySyncController.
 
     Verifies that the controller reuses a single import rather than importing
     the reference file multiple times, and that cache invalidation works correctly.
@@ -3428,11 +3368,11 @@ class TestCachedReferenceImport(MayaTkTestCase):
             registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
 
         fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
-        from mayatk.env_utils.hierarchy_manager.hierarchy_manager_slots import (
-            HierarchyManagerController,
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
+            HierarchySyncController,
         )
 
-        self.controller = HierarchyManagerController(fake_slots)
+        self.controller = HierarchySyncController(fake_slots)
         self.tree000 = fake_slots.ui.tree000
         self.tree001 = fake_slots.ui.tree001
 
@@ -3478,8 +3418,8 @@ class TestCachedReferenceImport(MayaTkTestCase):
 
         ref_objects = [root_ref] + list((cmds.listRelatives(str(root_ref), children=True) or []))
 
-        # Run analysis directly on the core HierarchyManager.
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        # Run analysis directly on the core HierarchySync.
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         diff = manager.analyze_hierarchies(
             current_tree_root="SCENE_WIDE_MODE",
             reference_objects=ref_objects,
@@ -3489,7 +3429,7 @@ class TestCachedReferenceImport(MayaTkTestCase):
         )
 
         # Simulate the controller state after a successful analysis.
-        self.controller.hierarchy_manager = manager
+        self.controller.hierarchy_sync = manager
         self.controller._current_diff_result = diff
 
         # Verify analysis detected something.
@@ -3671,7 +3611,7 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
 
     def test_build_hierarchy_structure_basic(self):
         """build_hierarchy_structure returns correct parent/type info using cmds."""
-        from mayatk.env_utils.hierarchy_manager.tree_utils import (
+        from mayatk.env_utils.hierarchy_sync.tree_utils import (
             build_hierarchy_structure,
         )
 
@@ -3706,7 +3646,7 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
         child_a = cmds.group(empty=True, name="rev_a", parent=container)
         child_b = cmds.group(empty=True, name="rev_b", parent=container)
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.current_scene_path_map = {
             "REVISIONS": container,
             "REVISIONS|rev_a": child_a,
@@ -3739,7 +3679,7 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
         grp = cmds.group(empty=True, name="lone_grp")
         child = cmds.group(empty=True, name="lone_child", parent=grp)
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.current_scene_path_map = {
             "lone_grp": grp,
             "lone_grp|lone_child": child,
@@ -3767,7 +3707,7 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
         q_grp = cmds.group(empty=True, name="MY_Q")
         existing = cmds.group(empty=True, name="already_there", parent=q_grp)
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.current_scene_path_map = {
             "MY_Q|already_there": existing,
         }
@@ -3798,7 +3738,7 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
         cmds.setKeyframe(anim_extra, attribute="translateX", time=10, value=5)
         plain_extra = cmds.group(empty=True, name="plain_extra")
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.current_scene_path_map = {
             "anim_extra_node": anim_extra,
             "plain_extra": plain_extra,
@@ -3829,7 +3769,7 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
         cmds.setKeyframe(anim_root, attribute="translateX", time=1, value=0)
         extra = cmds.group(empty=True, name="child_under_anim", parent=anim_root)
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.current_scene_path_map = {
             "anim_root2|child_under_anim": extra,
         }
@@ -3856,7 +3796,7 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
         cmds.setKeyframe(anim_extra, attribute="translateY", time=10, value=5)
         static_extra = cmds.group(empty=True, name="dry_static_extra")
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         manager.current_scene_path_map = {
             "dry_anim_extra": anim_extra,
             "dry_static_extra": static_extra,
@@ -3927,11 +3867,11 @@ class TestHierarchyTreeRenderer(MayaTkTestCase):
             registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
 
         fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
-        from mayatk.env_utils.hierarchy_manager.hierarchy_manager_slots import (
-            HierarchyManagerController,
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
+            HierarchySyncController,
         )
 
-        self.controller = HierarchyManagerController(fake_slots)
+        self.controller = HierarchySyncController(fake_slots)
         self.renderer = self.controller.tree
         self.tree = fake_slots.ui.tree000
 
@@ -4067,11 +4007,11 @@ class TestDiffFormattingAndDelegate(MayaTkTestCase):
             registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
 
         fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
-        from mayatk.env_utils.hierarchy_manager.hierarchy_manager_slots import (
-            HierarchyManagerController,
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
+            HierarchySyncController,
         )
 
-        self.controller = HierarchyManagerController(fake_slots)
+        self.controller = HierarchySyncController(fake_slots)
         self.renderer = self.controller.tree
         self.tree000 = fake_slots.ui.tree000
         self.tree001 = fake_slots.ui.tree001
@@ -4262,7 +4202,7 @@ class TestDiffFormattingAndDelegate(MayaTkTestCase):
 
     def test_diff_colors_has_all_domain_aliases(self):
         """DIFF_COLORS palette has aliases for all four domain categories."""
-        from mayatk.env_utils.hierarchy_manager.tree_renderer import (
+        from mayatk.env_utils.hierarchy_sync.tree_renderer import (
             HierarchyTreeRenderer,
         )
 
@@ -4333,11 +4273,11 @@ class TestControllerTreeOrchestration(MayaTkTestCase):
             registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
 
         fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
-        from mayatk.env_utils.hierarchy_manager.hierarchy_manager_slots import (
-            HierarchyManagerController,
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
+            HierarchySyncController,
         )
 
-        self.controller = HierarchyManagerController(fake_slots)
+        self.controller = HierarchySyncController(fake_slots)
         self.tree000 = fake_slots.ui.tree000
         self.tree001 = fake_slots.ui.tree001
         self.fake_ui = fake_slots.ui
@@ -4801,28 +4741,28 @@ class TestAnimationSafety(MayaTkTestCase):
     def test_has_animation_data_keyframed(self):
         """Returns True for a node with time-based keyframes."""
         cube = self._make_animated_cube("HAD_KEYED")
-        self.assertTrue(HierarchyManager._has_animation_data(cube))
+        self.assertTrue(HierarchySync._has_animation_data(cube))
 
     def test_has_animation_data_plain(self):
         """Returns False for a plain transform with no connections."""
         grp = cmds.group(empty=True, name="HAD_PLAIN")
-        self.assertFalse(HierarchyManager._has_animation_data(grp))
+        self.assertFalse(HierarchySync._has_animation_data(grp))
 
     def test_has_animation_data_constrained(self):
         """Returns True for a node with a parentConstraint."""
         node, _target = self._make_constrained("HAD_CONSTR", "HAD_CTGT")
-        self.assertTrue(HierarchyManager._has_animation_data(node))
+        self.assertTrue(HierarchySync._has_animation_data(node))
 
     def test_has_animation_data_driven_key(self):
         """Returns True for a driven-key target."""
         _driver, driven = self._make_driven_key("HAD_DKVR", "HAD_DKVN")
-        self.assertTrue(HierarchyManager._has_animation_data(driven))
+        self.assertTrue(HierarchySync._has_animation_data(driven))
 
     def test_has_animation_data_expression(self):
         """Returns True when an expression drives the node."""
         node = self._make_expression("HAD_EXPR")
         self.assertTrue(
-            HierarchyManager._has_animation_data(node),
+            HierarchySync._has_animation_data(node),
             "Expression-driven node should be detected as animated",
         )
 
@@ -4832,16 +4772,16 @@ class TestAnimationSafety(MayaTkTestCase):
         node = cmds.polyCube(name="HAD_COMBO")[0]
         cmds.setKeyframe(str(node), attribute="translateX", time=1, value=0)
         cmds.parentConstraint(target, node, mo=True)
-        self.assertTrue(HierarchyManager._has_animation_data(node))
+        self.assertTrue(HierarchySync._has_animation_data(node))
 
     def test_has_animation_data_nonexistent_node(self):
         """Returns False gracefully for a node that does not exist."""
-        self.assertFalse(HierarchyManager._has_animation_data("DOES_NOT_EXIST_12345"))
+        self.assertFalse(HierarchySync._has_animation_data("DOES_NOT_EXIST_12345"))
 
     def test_has_animation_data_node_with_shapes_only(self):
         """Returns False for a mesh with shapes but no animation."""
         cube = cmds.polyCube(name="HAD_SHAPES")[0]
-        self.assertFalse(HierarchyManager._has_animation_data(cube))
+        self.assertFalse(HierarchySync._has_animation_data(cube))
 
     # ── check_descendants variations ──────────────────────────────────
 
@@ -4849,9 +4789,9 @@ class TestAnimationSafety(MayaTkTestCase):
         """check_descendants=True detects animation on a direct child."""
         parent = cmds.group(empty=True, name="HAD_DESC_P")
         self._make_animated_cube("HAD_DESC_C", parent=parent)
-        self.assertFalse(HierarchyManager._has_animation_data(parent))
+        self.assertFalse(HierarchySync._has_animation_data(parent))
         self.assertTrue(
-            HierarchyManager._has_animation_data(parent, check_descendants=True)
+            HierarchySync._has_animation_data(parent, check_descendants=True)
         )
 
     def test_has_animation_data_descendants_deep_chain(self):
@@ -4861,7 +4801,7 @@ class TestAnimationSafety(MayaTkTestCase):
         leaf = cmds.group(empty=True, name="HAD_DEEP_L", parent=mid)
         cmds.setKeyframe(str(leaf), attribute="rotateZ", time=1, value=0)
         self.assertTrue(
-            HierarchyManager._has_animation_data(root, check_descendants=True),
+            HierarchySync._has_animation_data(root, check_descendants=True),
             "Should detect keyframe 3 levels deep",
         )
 
@@ -4872,7 +4812,7 @@ class TestAnimationSafety(MayaTkTestCase):
         child = cmds.group(empty=True, name="HAD_CDC_C", parent=parent)
         cmds.parentConstraint(target, child, mo=True)
         self.assertTrue(
-            HierarchyManager._has_animation_data(parent, check_descendants=True),
+            HierarchySync._has_animation_data(parent, check_descendants=True),
             "Should detect constraint on child",
         )
 
@@ -4882,7 +4822,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.group(empty=True, name="HAD_CLN_C1", parent=root)
         cmds.group(empty=True, name="HAD_CLN_C2", parent=root)
         self.assertFalse(
-            HierarchyManager._has_animation_data(root, check_descendants=True)
+            HierarchySync._has_animation_data(root, check_descendants=True)
         )
 
     # ══════════════════════════════════════════════════════════════════
@@ -4892,7 +4832,7 @@ class TestAnimationSafety(MayaTkTestCase):
     def test_classify_time_curves(self):
         """Time-based keyframes show up in curves list, not driven_keys."""
         cube = self._make_animated_cube("CLS_TIME")
-        cls = HierarchyManager._classify_animation(cube)
+        cls = HierarchySync._classify_animation(cube)
         self.assertGreater(len(cls["curves"]), 0)
         self.assertEqual(len(cls["driven_keys"]), 0)
         self.assertFalse(cls["is_referenced"])
@@ -4901,7 +4841,7 @@ class TestAnimationSafety(MayaTkTestCase):
     def test_classify_driven_key(self):
         """Set-driven keys appear in driven_keys, not curves."""
         _driver, driven = self._make_driven_key("CLS2_DRV", "CLS2_DVN")
-        cls = HierarchyManager._classify_animation(driven)
+        cls = HierarchySync._classify_animation(driven)
         self.assertGreater(len(cls["driven_keys"]), 0)
         # Driven-key nodes should NOT appear in curves
         self.assertEqual(len(cls["curves"]), 0)
@@ -4909,13 +4849,13 @@ class TestAnimationSafety(MayaTkTestCase):
     def test_classify_constraint(self):
         """Constraints appear in the constraints list."""
         node, _target = self._make_constrained("CLS2_CONSTR", "CLS2_TGT")
-        cls = HierarchyManager._classify_animation(node)
+        cls = HierarchySync._classify_animation(node)
         self.assertGreater(len(cls["constraints"]), 0)
 
     def test_classify_expression(self):
         """Expressions appear in the expressions list."""
         node = self._make_expression("CLS_EXPR")
-        cls = HierarchyManager._classify_animation(node)
+        cls = HierarchySync._classify_animation(node)
         self.assertGreater(
             len(cls["expressions"]), 0, "Should detect expression connection"
         )
@@ -4923,7 +4863,7 @@ class TestAnimationSafety(MayaTkTestCase):
     def test_classify_no_animation(self):
         """Clean node returns all empty lists."""
         grp = cmds.group(empty=True, name="CLS_CLEAN")
-        cls = HierarchyManager._classify_animation(grp)
+        cls = HierarchySync._classify_animation(grp)
         self.assertEqual(len(cls["curves"]), 0)
         self.assertEqual(len(cls["driven_keys"]), 0)
         self.assertEqual(len(cls["constraints"]), 0)
@@ -4934,7 +4874,7 @@ class TestAnimationSafety(MayaTkTestCase):
     def test_classify_multi_attribute(self):
         """Multiple keyed attributes each appear as separate curve entries."""
         cube = self._make_multi_attr_animated("CLS_MULTI")
-        cls = HierarchyManager._classify_animation(cube)
+        cls = HierarchySync._classify_animation(cube)
         # translateX, rotateY, scaleZ → at least 3 curves
         self.assertGreaterEqual(
             len(cls["curves"]),
@@ -4949,7 +4889,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(node), attribute="scaleX", time=1, value=1)
         cmds.setKeyframe(str(node), attribute="scaleX", time=24, value=2)
         cmds.parentConstraint(target, node, mo=True)
-        cls = HierarchyManager._classify_animation(node)
+        cls = HierarchySync._classify_animation(node)
         self.assertGreater(len(cls["curves"]), 0, "Should have time-based curves")
         self.assertGreater(len(cls["constraints"]), 0, "Should have constraints")
 
@@ -4973,14 +4913,14 @@ class TestAnimationSafety(MayaTkTestCase):
             driverValue=90,
             value=5,
         )
-        cls = HierarchyManager._classify_animation(node)
+        cls = HierarchySync._classify_animation(node)
         self.assertGreater(len(cls["curves"]), 0, "Time-based curve on translateY")
         self.assertGreater(len(cls["driven_keys"]), 0, "Driven key on translateX")
 
     def test_classify_dict_keys_present(self):
         """Returned dict always has all expected keys."""
         grp = cmds.group(empty=True, name="CLS_KEYS")
-        cls = HierarchyManager._classify_animation(grp)
+        cls = HierarchySync._classify_animation(grp)
         for key in (
             "curves",
             "driven_keys",
@@ -4999,7 +4939,7 @@ class TestAnimationSafety(MayaTkTestCase):
         """Disconnect/reconnect transfers time-based curves losslessly."""
         old = self._make_animated_cube("XFR_OLD")
         new = cmds.polyCube(name="XFR_NEW")[0]
-        result = HierarchyManager._transfer_anim_curves(old, new)
+        result = HierarchySync._transfer_anim_curves(old, new)
         self.assertGreater(result["transferred"], 0)
         self.assertEqual(result["method"], "rewire")
         keys = cmds.keyframe(str(new), attribute="translateX", query=True, tc=True)
@@ -5017,7 +4957,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(old), attribute="translateX", time=48, value=-7.5)
         new = cmds.polyCube(name="XFR_VAL_NEW")[0]
 
-        HierarchyManager._transfer_anim_curves(old, new)
+        HierarchySync._transfer_anim_curves(old, new)
 
         keys = cmds.keyframe(str(new), attribute="translateX", query=True, tc=True)
         vals = cmds.keyframe(str(new), attribute="translateX", query=True, vc=True)
@@ -5029,7 +4969,7 @@ class TestAnimationSafety(MayaTkTestCase):
         """All time-based curves transfer — translateX, rotateY, scaleZ."""
         old = self._make_multi_attr_animated("XFR_MOLD")
         new = cmds.polyCube(name="XFR_MNEW")[0]
-        result = HierarchyManager._transfer_anim_curves(old, new)
+        result = HierarchySync._transfer_anim_curves(old, new)
         self.assertGreaterEqual(
             result["transferred"],
             3,
@@ -5052,7 +4992,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(old), attribute="myWeight", time=24, value=1)
         new = cmds.group(empty=True, name="XFR_MISS_NEW")  # no myWeight attr
 
-        result = HierarchyManager._transfer_anim_curves(old, new)
+        result = HierarchySync._transfer_anim_curves(old, new)
         skipped_attrs = [s["attr"] for s in result["skipped"]]
         self.assertIn("myWeight", skipped_attrs)
         reasons = [s["reason"] for s in result["skipped"] if s["attr"] == "myWeight"]
@@ -5067,7 +5007,7 @@ class TestAnimationSafety(MayaTkTestCase):
         new = cmds.polyCube(name="XFR_LCK_NEW")[0]
         cmds.setAttr(f"{new}.translateX", lock=True)
 
-        result = HierarchyManager._transfer_anim_curves(old, new)
+        result = HierarchySync._transfer_anim_curves(old, new)
         self.assertGreater(result["transferred"], 0, "Should transfer despite lock")
         keys = cmds.keyframe(str(new), attribute="translateX", query=True, tc=True)
         self.assertIsNotNone(keys)
@@ -5086,7 +5026,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(new), attribute="translateX", time=1, value=-50)
         cmds.setKeyframe(str(new), attribute="translateX", time=24, value=-100)
 
-        result = HierarchyManager._transfer_anim_curves(old, new)
+        result = HierarchySync._transfer_anim_curves(old, new)
         self.assertGreater(result["transferred"], 0)
 
         # New node should have OLD values, not its original ones
@@ -5098,7 +5038,7 @@ class TestAnimationSafety(MayaTkTestCase):
         """Driven keys appear in skipped list with reason."""
         _driver, driven = self._make_driven_key("XFR2_DRV", "XFR2_DVN")
         replacement = cmds.group(empty=True, name="XFR2_REPL")
-        result = HierarchyManager._transfer_anim_curves(driven, replacement)
+        result = HierarchySync._transfer_anim_curves(driven, replacement)
         skipped_reasons = [s["reason"] for s in result["skipped"]]
         self.assertIn("driven key", skipped_reasons)
 
@@ -5106,7 +5046,7 @@ class TestAnimationSafety(MayaTkTestCase):
         """Constraints appear in skipped list with reason."""
         node, _target = self._make_constrained("XFR2_CONSTR", "XFR2_CTGT")
         replacement = cmds.group(empty=True, name="XFR2_CREPL")
-        result = HierarchyManager._transfer_anim_curves(node, replacement)
+        result = HierarchySync._transfer_anim_curves(node, replacement)
         skipped_reasons = [s["reason"] for s in result["skipped"]]
         self.assertIn("constraint", skipped_reasons)
 
@@ -5114,7 +5054,7 @@ class TestAnimationSafety(MayaTkTestCase):
         """Expressions appear in skipped list with reason."""
         node = self._make_expression("XFR_EXPR")
         replacement = cmds.group(empty=True, name="XFR_EXPR_REPL")
-        result = HierarchyManager._transfer_anim_curves(node, replacement)
+        result = HierarchySync._transfer_anim_curves(node, replacement)
         skipped_reasons = [s["reason"] for s in result["skipped"]]
         self.assertIn("expression", skipped_reasons)
 
@@ -5125,7 +5065,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(old), attribute="translateX", time=24, value=15)
         new = cmds.polyCube(name="XFR_CUBE")[0]
 
-        result = HierarchyManager._transfer_anim_curves(old, new)
+        result = HierarchySync._transfer_anim_curves(old, new)
         self.assertGreater(result["transferred"], 0)
         keys = cmds.keyframe(str(new), attribute="translateX", query=True, tc=True)
         self.assertIsNotNone(keys)
@@ -5134,7 +5074,7 @@ class TestAnimationSafety(MayaTkTestCase):
         """After rewire, old node no longer has animCurve connections."""
         old = self._make_animated_cube("XFR_DISC_OLD")
         new = cmds.polyCube(name="XFR_DISC_NEW")[0]
-        HierarchyManager._transfer_anim_curves(old, new)
+        HierarchySync._transfer_anim_curves(old, new)
         conns = cmds.listConnections(
             str(old), type="animCurve", source=True, destination=False
         )
@@ -5375,7 +5315,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(parent), attribute="translateY", time=1, value=0)
         cmds.setKeyframe(str(parent), attribute="translateY", time=24, value=5)
 
-        hm = HierarchyManager()
+        hm = HierarchySync()
         hm.dry_run = False
         hm.current_scene_path_map = {"FRP_ANIM_P|FRP_CHILD": child}
         hm.clean_to_raw_current = {"FRP_ANIM_P|FRP_CHILD": "FRP_ANIM_P|FRP_CHILD"}
@@ -5398,7 +5338,7 @@ class TestAnimationSafety(MayaTkTestCase):
         parent = cmds.group(empty=True, name="FRP_PLAIN_P")
         child = cmds.group(empty=True, name="FRP_PCHILD", parent=parent)
 
-        hm = HierarchyManager()
+        hm = HierarchySync()
         hm.dry_run = False
         hm.current_scene_path_map = {"FRP_PLAIN_P|FRP_PCHILD": child}
         hm.clean_to_raw_current = {"FRP_PLAIN_P|FRP_PCHILD": "FRP_PLAIN_P|FRP_PCHILD"}
@@ -5420,7 +5360,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.parentConstraint(target, parent, mo=True)
         child = cmds.group(empty=True, name="FRP_C_CHILD", parent=parent)
 
-        hm = HierarchyManager()
+        hm = HierarchySync()
         hm.dry_run = False
         hm.current_scene_path_map = {"FRP_C_PAR|FRP_C_CHILD": child}
         hm.clean_to_raw_current = {"FRP_C_PAR|FRP_C_CHILD": "FRP_C_PAR|FRP_C_CHILD"}
@@ -5445,7 +5385,7 @@ class TestAnimationSafety(MayaTkTestCase):
         Renaming breaks expressions that reference the node by name.
         """
         node = self._make_expression("FZRN_EXPR")
-        hm = HierarchyManager()
+        hm = HierarchySync()
         hm.dry_run = False
         hm.current_scene_path_map = {"FZRN_EXPR": node}
         hm.clean_to_raw_current = {"FZRN_EXPR": "FZRN_EXPR"}
@@ -5458,7 +5398,7 @@ class TestAnimationSafety(MayaTkTestCase):
     def test_fuzzy_rename_proceeds_for_keyframed_only(self):
         """Keyframed node WITHOUT expressions IS renamed (skip_animated only guards expressions)."""
         node = self._make_animated_cube("FZRN_KEYED")
-        hm = HierarchyManager()
+        hm = HierarchySync()
         hm.dry_run = False
         hm.current_scene_path_map = {"FZRN_KEYED": node}
         hm.clean_to_raw_current = {"FZRN_KEYED": "FZRN_KEYED"}
@@ -5471,7 +5411,7 @@ class TestAnimationSafety(MayaTkTestCase):
     def test_fuzzy_rename_proceeds_when_skip_disabled(self):
         """skip_animated=False allows renaming expression-connected nodes."""
         node = self._make_expression("FZRN_FORCE")
-        hm = HierarchyManager()
+        hm = HierarchySync()
         hm.dry_run = False
         hm.current_scene_path_map = {"FZRN_FORCE": node}
         hm.clean_to_raw_current = {"FZRN_FORCE": "FZRN_FORCE"}
@@ -5483,7 +5423,7 @@ class TestAnimationSafety(MayaTkTestCase):
     def test_fuzzy_rename_dry_run_no_skip(self):
         """Dry-run mode does not apply the skip_animated guard (it doesn't rename anyway)."""
         node = self._make_expression("FZRN_DRY")
-        hm = HierarchyManager()
+        hm = HierarchySync()
         hm.dry_run = True
         items = [{"current_name": "FZRN_DRY", "target_name": "FZRN_DRY_NEW"}]
 
@@ -5504,7 +5444,7 @@ class TestAnimationSafety(MayaTkTestCase):
         animation-bearing nodes.
         Fixed: 2026-07-19
         """
-        hm = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        hm = HierarchySync(fuzzy_matching=False, dry_run=False)
         node = self._make_animated_cube("QUA_ANIM")
         cmds.parent(node, world=True)
         hm.differences = {"extra": ["QUA_ANIM"]}
@@ -5517,7 +5457,7 @@ class TestAnimationSafety(MayaTkTestCase):
 
     def test_quarantine_mixed_animated_and_plain(self):
         """Mixed batch: animated extras stay, plain extras are quarantined."""
-        hm = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        hm = HierarchySync(fuzzy_matching=False, dry_run=False)
         anim = self._make_animated_cube("QUA_MIX_A")
         cmds.parent(anim, world=True)
         plain1 = cmds.group(empty=True, name="QUA_MIX_P1")
@@ -5545,7 +5485,7 @@ class TestAnimationSafety(MayaTkTestCase):
 
     def test_quarantine_force_override_skip_false(self):
         """skip_animated=False quarantines animated nodes too."""
-        hm = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        hm = HierarchySync(fuzzy_matching=False, dry_run=False)
         node = self._make_animated_cube("QUA_FORCE")
         cmds.parent(node, world=True)
 
@@ -5558,7 +5498,7 @@ class TestAnimationSafety(MayaTkTestCase):
 
     def test_quarantine_constrained_extra_skipped(self):
         """Constrained extras are skipped by default (they have animation data)."""
-        hm = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        hm = HierarchySync(fuzzy_matching=False, dry_run=False)
         target = cmds.group(empty=True, name="QUA_CTGT")
         node = cmds.group(empty=True, name="QUA_CNST")
         cmds.parentConstraint(target, node, mo=True)
@@ -5573,7 +5513,7 @@ class TestAnimationSafety(MayaTkTestCase):
 
     def test_quarantine_expression_extra_skipped(self):
         """Expression-driven extras are skipped by default."""
-        hm = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        hm = HierarchySync(fuzzy_matching=False, dry_run=False)
         node = self._make_expression("QUA_EXPR")
 
         hm.current_scene_path_map = {"QUA_EXPR": node}
@@ -5589,11 +5529,12 @@ class TestAnimationSafety(MayaTkTestCase):
     # ══════════════════════════════════════════════════════════════════
 
     def test_transfer_partial_success(self):
-        """Multi-attr node where some attrs transfer and some are skipped.
+        """Multi-attr node where one attr cannot transfer → all-or-nothing abort.
 
-        translateX exists on both → transferred.
-        myWeight is a custom attr only on old → skipped (missing attr).
-        Result should report both transferred > 0 AND len(skipped) > 0.
+        translateX exists on both, but myWeight is a custom attr only on old.
+        The transfer must abort WITHOUT mutating either node — a partial
+        transfer followed by 'preserve existing' destroys the moved curves
+        when the caller deletes the replacement (audit 2026-07-17).
         """
         old = cmds.group(empty=True, name="ADV_PART_OLD")
         cmds.addAttr(str(old), longName="myWeight", attributeType="float", keyable=True)
@@ -5603,18 +5544,23 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(old), attribute="myWeight", time=24, value=1)
         new = cmds.group(empty=True, name="ADV_PART_NEW")  # no myWeight attr
 
-        result = HierarchyManager._transfer_anim_curves(old, new)
-        self.assertGreater(result["transferred"], 0, "translateX should transfer")
-        self.assertGreater(len(result["skipped"]), 0, "myWeight should be skipped")
-        # Verify translateX actually landed
-        keys = cmds.keyframe(str(new), attribute="translateX", query=True, tc=True)
-        self.assertIsNotNone(keys)
+        result = HierarchySync._transfer_anim_curves(old, new)
+        self.assertEqual(result["transferred"], 0, "All-or-nothing: nothing transfers")
+        self.assertGreater(len(result["skipped"]), 0, "myWeight should be reported")
+        # Old node must keep ALL of its animation.
+        self.assertIsNotNone(
+            cmds.keyframe(str(old), attribute="translateX", query=True, tc=True)
+        )
+        self.assertIsNone(
+            cmds.keyframe(str(new), attribute="translateX", query=True, tc=True),
+            "Replacement must not receive a partial transfer",
+        )
 
     def test_transfer_no_time_curves_only_driven(self):
         """Node with ONLY driven keys and no time curves → transferred=0."""
         _driver, driven = self._make_driven_key("ADV_NOTIME_DRV", "ADV_NOTIME_DVN")
         replacement = cmds.group(empty=True, name="ADV_NOTIME_REPL")
-        result = HierarchyManager._transfer_anim_curves(driven, replacement)
+        result = HierarchySync._transfer_anim_curves(driven, replacement)
         self.assertEqual(result["transferred"], 0, "No time-based curves to transfer")
         self.assertGreater(len(result["skipped"]), 0, "Driven key should be skipped")
 
@@ -5634,7 +5580,7 @@ class TestAnimationSafety(MayaTkTestCase):
         )
 
         new = cmds.polyCube(name="ADV_TAN_NEW")[0]
-        HierarchyManager._transfer_anim_curves(old, new)
+        HierarchySync._transfer_anim_curves(old, new)
 
         tan_after = cmds.keyTangent(
             str(new), attribute="translateX", query=True, outTangentType=True
@@ -5667,7 +5613,7 @@ class TestAnimationSafety(MayaTkTestCase):
         )
 
         new = cmds.polyCube(name="ADV_WT_NEW")[0]
-        HierarchyManager._transfer_anim_curves(old, new)
+        HierarchySync._transfer_anim_curves(old, new)
 
         weight_after = cmds.keyTangent(
             str(new),
@@ -5706,6 +5652,13 @@ class TestAnimationSafety(MayaTkTestCase):
             "Partial transfer should preserve existing node",
         )
         self.assertTrue(cmds.objExists("ADV_SMD_PART"))
+        # The preserved node must keep its animation even after the caller
+        # deletes the replacement (the real-world next step).
+        cmds.delete(replacement)
+        self.assertIsNotNone(
+            cmds.keyframe("ADV_SMD_PART", attribute="translateX", query=True, tc=True),
+            "Preserved node lost its translateX keys to the partial transfer",
+        )
 
     def test_safe_merge_delete_clean_root_animated_descendant_driven_key(self):
         """Clean root with driven-key child is preserved (descendant check).
@@ -5750,8 +5703,8 @@ class TestAnimationSafety(MayaTkTestCase):
         node2 = cmds.group(empty=True, name="ADV_MC_NODE2")
         cmds.aimConstraint(target2, node2, mo=True)
 
-        cls1 = HierarchyManager._classify_animation(node)
-        cls2 = HierarchyManager._classify_animation(node2)
+        cls1 = HierarchySync._classify_animation(node)
+        cls2 = HierarchySync._classify_animation(node2)
         total_constraints = len(cls1["constraints"]) + len(cls2["constraints"])
         self.assertGreaterEqual(
             total_constraints,
@@ -5770,7 +5723,7 @@ class TestAnimationSafety(MayaTkTestCase):
     def test_classify_constraint_only_no_curves(self):
         """Node with ONLY a constraint has empty curves and driven_keys lists."""
         node, _target = self._make_constrained("ADV_CONLY", "ADV_CONLY_TGT")
-        cls = HierarchyManager._classify_animation(node)
+        cls = HierarchySync._classify_animation(node)
         self.assertEqual(len(cls["curves"]), 0)
         self.assertEqual(len(cls["driven_keys"]), 0)
         self.assertGreater(len(cls["constraints"]), 0)
@@ -5786,7 +5739,7 @@ class TestAnimationSafety(MayaTkTestCase):
             name="ADV_EXPR_CA_expr",
         )
         self.assertTrue(
-            HierarchyManager._has_animation_data(node),
+            HierarchySync._has_animation_data(node),
             "Expression on custom attr should be detected",
         )
 
@@ -5808,7 +5761,7 @@ class TestAnimationSafety(MayaTkTestCase):
 
     def test_quarantine_dry_run_respects_skip_animated(self):
         """Dry-run mode correctly partitions animated vs. plain extras."""
-        hm = HierarchyManager(fuzzy_matching=False, dry_run=True)
+        hm = HierarchySync(fuzzy_matching=False, dry_run=True)
         anim = self._make_animated_cube("ADV_QDR_A")
         cmds.parent(anim, world=True)
         expr_node = self._make_expression("ADV_QDR_E")
@@ -5838,7 +5791,7 @@ class TestAnimationSafety(MayaTkTestCase):
     def test_fuzzy_rename_constrained_node_proceeds(self):
         """Constrained node IS renamed (skip_animated only guards expressions)."""
         node, _target = self._make_constrained("ADV_FZRN_C", "ADV_FZRN_CTGT")
-        hm = HierarchyManager()
+        hm = HierarchySync()
         hm.dry_run = False
         hm.current_scene_path_map = {"ADV_FZRN_C": node}
         hm.clean_to_raw_current = {"ADV_FZRN_C": "ADV_FZRN_C"}
@@ -5892,7 +5845,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(grp_b), attribute="rotateY", time=24, value=90)
         child = cmds.group(empty=True, name="ADV_EPC_CHILD", parent=grp_b)
 
-        hm = HierarchyManager()
+        hm = HierarchySync()
         hm.dry_run = False
         hm.current_scene_path_map = {
             "ADV_EPC_A|ADV_EPC_B|ADV_EPC_CHILD": child,
@@ -5934,28 +5887,28 @@ class TestAnimationSafety(MayaTkTestCase):
         target = cmds.group(empty=True, name="CST_OC_TGT")
         node = cmds.group(empty=True, name="CST_OC_NODE")
         cmds.orientConstraint(target, node, mo=True)
-        self.assertTrue(HierarchyManager._has_animation_data(node))
+        self.assertTrue(HierarchySync._has_animation_data(node))
 
     def test_has_animation_data_point_constraint(self):
         """pointConstraint is detected as animation data."""
         target = cmds.group(empty=True, name="CST_PC_TGT")
         node = cmds.group(empty=True, name="CST_PC_NODE")
         cmds.pointConstraint(target, node)
-        self.assertTrue(HierarchyManager._has_animation_data(node))
+        self.assertTrue(HierarchySync._has_animation_data(node))
 
     def test_has_animation_data_scale_constraint(self):
         """scaleConstraint is detected as animation data."""
         target = cmds.group(empty=True, name="CST_SC_TGT")
         node = cmds.group(empty=True, name="CST_SC_NODE")
         cmds.scaleConstraint(target, node)
-        self.assertTrue(HierarchyManager._has_animation_data(node))
+        self.assertTrue(HierarchySync._has_animation_data(node))
 
     def test_has_animation_data_aim_constraint(self):
         """aimConstraint is detected as animation data."""
         target = cmds.group(empty=True, name="CST_AC_TGT")
         node = cmds.group(empty=True, name="CST_AC_NODE")
         cmds.aimConstraint(target, node)
-        self.assertTrue(HierarchyManager._has_animation_data(node))
+        self.assertTrue(HierarchySync._has_animation_data(node))
 
     def test_has_animation_data_pole_vector_constraint(self):
         """poleVectorConstraint is detected as animation data.
@@ -5977,7 +5930,7 @@ class TestAnimationSafety(MayaTkTestCase):
         pole = cmds.group(empty=True, name="CST_PV_POLE")
         cmds.poleVectorConstraint(pole, ik_handle)
         self.assertTrue(
-            HierarchyManager._has_animation_data(ik_handle),
+            HierarchySync._has_animation_data(ik_handle),
             "poleVectorConstraint should be detected",
         )
 
@@ -5988,7 +5941,7 @@ class TestAnimationSafety(MayaTkTestCase):
         target = cmds.group(empty=True, name="CST_CLS_OC_TGT")
         node = cmds.group(empty=True, name="CST_CLS_OC")
         cmds.orientConstraint(target, node, mo=True)
-        cls = HierarchyManager._classify_animation(node)
+        cls = HierarchySync._classify_animation(node)
         self.assertGreater(len(cls["constraints"]), 0)
         constraint_types = [cmds.objectType(c) for c in cls["constraints"]]
         self.assertIn("orientConstraint", constraint_types)
@@ -5998,7 +5951,7 @@ class TestAnimationSafety(MayaTkTestCase):
         target = cmds.group(empty=True, name="CST_CLS_PC_TGT")
         node = cmds.group(empty=True, name="CST_CLS_PC")
         cmds.pointConstraint(target, node)
-        cls = HierarchyManager._classify_animation(node)
+        cls = HierarchySync._classify_animation(node)
         constraint_types = [cmds.objectType(c) for c in cls["constraints"]]
         self.assertIn("pointConstraint", constraint_types)
 
@@ -6007,7 +5960,7 @@ class TestAnimationSafety(MayaTkTestCase):
         target = cmds.group(empty=True, name="CST_CLS_SC_TGT")
         node = cmds.group(empty=True, name="CST_CLS_SC")
         cmds.scaleConstraint(target, node)
-        cls = HierarchyManager._classify_animation(node)
+        cls = HierarchySync._classify_animation(node)
         constraint_types = [cmds.objectType(c) for c in cls["constraints"]]
         self.assertIn("scaleConstraint", constraint_types)
 
@@ -6016,7 +5969,7 @@ class TestAnimationSafety(MayaTkTestCase):
         target = cmds.group(empty=True, name="CST_CLS_AC_TGT")
         node = cmds.group(empty=True, name="CST_CLS_AC")
         cmds.aimConstraint(target, node)
-        cls = HierarchyManager._classify_animation(node)
+        cls = HierarchySync._classify_animation(node)
         constraint_types = [cmds.objectType(c) for c in cls["constraints"]]
         self.assertIn("aimConstraint", constraint_types)
 
@@ -6034,7 +5987,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.orientConstraint(rot_tgt, node, mo=True)
         cmds.scaleConstraint(scl_tgt, node)
 
-        cls = HierarchyManager._classify_animation(node)
+        cls = HierarchySync._classify_animation(node)
         constraint_types = set(cmds.objectType(c) for c in cls["constraints"])
         self.assertIn("pointConstraint", constraint_types)
         self.assertIn("orientConstraint", constraint_types)
@@ -6055,7 +6008,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.parentConstraint(tgt_a, node, mo=True)
         cmds.parentConstraint(tgt_b, node, mo=True)
 
-        cls = HierarchyManager._classify_animation(node)
+        cls = HierarchySync._classify_animation(node)
         # Maya stores multi-target in a single constraint node
         parent_constraints = [
             c for c in cls["constraints"] if cmds.objectType(c) == "parentConstraint"
@@ -6074,7 +6027,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.orientConstraint(tgt_a, node, mo=True)
         cmds.orientConstraint(tgt_b, node, mo=True)
 
-        cls = HierarchyManager._classify_animation(node)
+        cls = HierarchySync._classify_animation(node)
         orient_constraints = [
             c for c in cls["constraints"] if cmds.objectType(c) == "orientConstraint"
         ]
@@ -6090,7 +6043,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(node), attribute="translateX", time=1, value=0)
         cmds.setKeyframe(str(node), attribute="translateX", time=24, value=10)
 
-        cls = HierarchyManager._classify_animation(node)
+        cls = HierarchySync._classify_animation(node)
         self.assertGreater(len(cls["constraints"]), 0, "orientConstraint present")
         self.assertGreater(len(cls["curves"]), 0, "time-based curve on translateX")
 
@@ -6102,7 +6055,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(node), attribute="scaleX", time=1, value=1)
         cmds.setKeyframe(str(node), attribute="scaleX", time=24, value=2)
 
-        cls = HierarchyManager._classify_animation(node)
+        cls = HierarchySync._classify_animation(node)
         self.assertGreater(len(cls["constraints"]), 0)
         self.assertGreater(len(cls["curves"]), 0)
 
@@ -6169,7 +6122,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.orientConstraint(target, node, mo=True)
         replacement = cmds.group(empty=True, name="CST_XFR_OC_REPL")
 
-        result = HierarchyManager._transfer_anim_curves(node, replacement)
+        result = HierarchySync._transfer_anim_curves(node, replacement)
         skipped_reasons = [s["reason"] for s in result["skipped"]]
         self.assertIn("constraint", skipped_reasons)
 
@@ -6180,7 +6133,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.pointConstraint(target, node)
         replacement = cmds.group(empty=True, name="CST_XFR_PC_REPL")
 
-        result = HierarchyManager._transfer_anim_curves(node, replacement)
+        result = HierarchySync._transfer_anim_curves(node, replacement)
         skipped_reasons = [s["reason"] for s in result["skipped"]]
         self.assertIn("constraint", skipped_reasons)
 
@@ -6197,7 +6150,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(node), attribute="translateX", time=24, value=10)
 
         replacement = cmds.polyCube(name="CST_XFR_MIX_REPL")[0]
-        result = HierarchyManager._transfer_anim_curves(node, replacement)
+        result = HierarchySync._transfer_anim_curves(node, replacement)
 
         self.assertGreater(result["transferred"], 0, "Time curves should transfer")
         skipped_reasons = [s["reason"] for s in result["skipped"]]
@@ -6212,9 +6165,9 @@ class TestAnimationSafety(MayaTkTestCase):
         child = cmds.group(empty=True, name="CST_DESC_OC_C", parent=parent)
         cmds.orientConstraint(target, child, mo=True)
 
-        self.assertFalse(HierarchyManager._has_animation_data(parent))
+        self.assertFalse(HierarchySync._has_animation_data(parent))
         self.assertTrue(
-            HierarchyManager._has_animation_data(parent, check_descendants=True),
+            HierarchySync._has_animation_data(parent, check_descendants=True),
         )
 
     def test_safe_merge_delete_descendant_with_scale_constraint(self):
@@ -6237,7 +6190,7 @@ class TestAnimationSafety(MayaTkTestCase):
 
     def test_quarantine_skips_orient_constrained(self):
         """orientConstraint extra is skipped by default."""
-        hm = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        hm = HierarchySync(fuzzy_matching=False, dry_run=False)
         target = cmds.group(empty=True, name="CST_QUA_OC_TGT")
         node = cmds.group(empty=True, name="CST_QUA_OC")
         cmds.orientConstraint(target, node, mo=True)
@@ -6252,7 +6205,7 @@ class TestAnimationSafety(MayaTkTestCase):
 
     def test_quarantine_skips_point_constrained(self):
         """pointConstraint extra is skipped by default."""
-        hm = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        hm = HierarchySync(fuzzy_matching=False, dry_run=False)
         target = cmds.group(empty=True, name="CST_QUA_PC_TGT")
         node = cmds.group(empty=True, name="CST_QUA_PC")
         cmds.pointConstraint(target, node)
@@ -6335,7 +6288,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.orientConstraint(target, parent, mo=True)
         child = cmds.group(empty=True, name="CST_FRP_CHILD", parent=parent)
 
-        hm = HierarchyManager()
+        hm = HierarchySync()
         hm.dry_run = False
         hm.current_scene_path_map = {"CST_FRP_PAR|CST_FRP_CHILD": child}
         hm.clean_to_raw_current = {
@@ -6369,10 +6322,10 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(child), attribute="rotateX", time=1, value=0)
         cmds.setKeyframe(str(child), attribute="rotateX", time=24, value=90)
 
-        self.assertTrue(HierarchyManager._has_animation_data(parent))
-        self.assertTrue(HierarchyManager._has_animation_data(child))
+        self.assertTrue(HierarchySync._has_animation_data(parent))
+        self.assertTrue(HierarchySync._has_animation_data(child))
         self.assertTrue(
-            HierarchyManager._has_animation_data(parent, check_descendants=True),
+            HierarchySync._has_animation_data(parent, check_descendants=True),
         )
 
     def test_detect_parent_keyed_child_constrained(self):
@@ -6384,8 +6337,8 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(parent), attribute="translateX", time=24, value=10)
         cmds.parentConstraint(target, child, mo=True)
 
-        self.assertTrue(HierarchyManager._has_animation_data(parent))
-        self.assertTrue(HierarchyManager._has_animation_data(child))
+        self.assertTrue(HierarchySync._has_animation_data(parent))
+        self.assertTrue(HierarchySync._has_animation_data(child))
 
     def test_detect_parent_constrained_child_keyed(self):
         """Parent has a constraint, child has keyframes."""
@@ -6397,8 +6350,8 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(child), attribute="scaleX", time=1, value=1)
         cmds.setKeyframe(str(child), attribute="scaleX", time=24, value=3)
 
-        self.assertTrue(HierarchyManager._has_animation_data(parent))
-        self.assertTrue(HierarchyManager._has_animation_data(child))
+        self.assertTrue(HierarchySync._has_animation_data(parent))
+        self.assertTrue(HierarchySync._has_animation_data(child))
 
     def test_detect_parent_keyed_child_expression(self):
         """Parent has keyframes, child has an expression."""
@@ -6413,8 +6366,8 @@ class TestAnimationSafety(MayaTkTestCase):
             name="PC_KE_expr",
         )
 
-        self.assertTrue(HierarchyManager._has_animation_data(parent))
-        self.assertTrue(HierarchyManager._has_animation_data(child))
+        self.assertTrue(HierarchySync._has_animation_data(parent))
+        self.assertTrue(HierarchySync._has_animation_data(child))
 
     def test_detect_parent_keyed_child_driven_key(self):
         """Parent has keyframes, child has a set-driven key."""
@@ -6435,8 +6388,8 @@ class TestAnimationSafety(MayaTkTestCase):
             value=90,
         )
 
-        self.assertTrue(HierarchyManager._has_animation_data(parent))
-        self.assertTrue(HierarchyManager._has_animation_data(child))
+        self.assertTrue(HierarchySync._has_animation_data(parent))
+        self.assertTrue(HierarchySync._has_animation_data(child))
 
     # -- classify hierarchical combos --
 
@@ -6449,8 +6402,8 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(parent), attribute="translateY", time=24, value=5)
         cmds.pointConstraint(target, child)
 
-        cls_p = HierarchyManager._classify_animation(parent)
-        cls_c = HierarchyManager._classify_animation(child)
+        cls_p = HierarchySync._classify_animation(parent)
+        cls_c = HierarchySync._classify_animation(child)
         self.assertGreater(len(cls_p["curves"]), 0, "Parent has time curves")
         self.assertEqual(len(cls_p["constraints"]), 0, "Parent has no constraints")
         self.assertGreater(len(cls_c["constraints"]), 0, "Child has constraint")
@@ -6466,8 +6419,8 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(child), attribute="rotateZ", time=1, value=0)
         cmds.setKeyframe(str(child), attribute="rotateZ", time=24, value=180)
 
-        cls_p = HierarchyManager._classify_animation(parent)
-        cls_c = HierarchyManager._classify_animation(child)
+        cls_p = HierarchySync._classify_animation(parent)
+        cls_c = HierarchySync._classify_animation(child)
         parent_plugs = [plug for _, plug in cls_p["curves"]]
         child_plugs = [plug for _, plug in cls_c["curves"]]
         self.assertTrue(
@@ -6649,7 +6602,7 @@ class TestAnimationSafety(MayaTkTestCase):
         still be quarantined — the child is NOT checked by default.
         This documents the current behavior boundary.
         """
-        hm = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        hm = HierarchySync(fuzzy_matching=False, dry_run=False)
         parent = cmds.group(empty=True, name="PC_QUA_P")
         child = cmds.polyCube(name="PC_QUA_C")[0]
         cmds.parent(child, parent)
@@ -6667,7 +6620,7 @@ class TestAnimationSafety(MayaTkTestCase):
 
     def test_quarantine_skips_directly_animated_parent(self):
         """Extra parent with both own keyframes AND a keyed child is skipped."""
-        hm = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        hm = HierarchySync(fuzzy_matching=False, dry_run=False)
         parent = cmds.group(empty=True, name="PC_QUA_AP")
         child = cmds.polyCube(name="PC_QUA_AC")[0]
         cmds.parent(child, parent)
@@ -6711,7 +6664,7 @@ class TestAnimationSafety(MayaTkTestCase):
         """
         base, bs = self._make_blendshape_cube("BS_UNKEYED")
         self.assertFalse(
-            HierarchyManager._has_animation_data(base),
+            HierarchySync._has_animation_data(base),
             "Unkeyed blend shape should not trigger detection",
         )
 
@@ -6723,7 +6676,7 @@ class TestAnimationSafety(MayaTkTestCase):
         the transform, so this is a known limitation: blend shape animation
         is invisible to transform-level hierarchy checks.
 
-        This is correct behavior for the hierarchy manager's scope:
+        This is correct behavior for the hierarchy sync's scope:
         blend shapes are deformer-level data that travels with the mesh
         shape, not the transform hierarchy.
         """
@@ -6739,7 +6692,7 @@ class TestAnimationSafety(MayaTkTestCase):
 
         # Transform-level check should NOT detect it
         self.assertFalse(
-            HierarchyManager._has_animation_data(base),
+            HierarchySync._has_animation_data(base),
             "Keyed blend shape weight is on the deformer, not the transform",
         )
 
@@ -6756,7 +6709,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(base), attribute="translateX", time=24, value=10)
 
         self.assertTrue(
-            HierarchyManager._has_animation_data(base),
+            HierarchySync._has_animation_data(base),
             "Transform keyframes should be detected regardless of blend shape",
         )
 
@@ -6770,7 +6723,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(bs), attribute="weight[0]", time=1, value=0)
         cmds.setKeyframe(str(bs), attribute="weight[0]", time=24, value=1)
 
-        cls = HierarchyManager._classify_animation(base)
+        cls = HierarchySync._classify_animation(base)
         self.assertEqual(len(cls["curves"]), 0)
         self.assertEqual(len(cls["driven_keys"]), 0)
         self.assertEqual(len(cls["constraints"]), 0)
@@ -6783,7 +6736,7 @@ class TestAnimationSafety(MayaTkTestCase):
         cmds.setKeyframe(str(base), attribute="rotateY", time=1, value=0)
         cmds.setKeyframe(str(base), attribute="rotateY", time=24, value=90)
 
-        cls = HierarchyManager._classify_animation(base)
+        cls = HierarchySync._classify_animation(base)
         self.assertGreater(
             len(cls["curves"]),
             0,
@@ -6808,7 +6761,7 @@ class TestAnimationSafety(MayaTkTestCase):
         )
 
         self.assertFalse(
-            HierarchyManager._has_animation_data(base),
+            HierarchySync._has_animation_data(base),
             "Driven blend shape weight is on the deformer, not the transform",
         )
 
@@ -6823,7 +6776,7 @@ class TestAnimationSafety(MayaTkTestCase):
         )
 
         self.assertFalse(
-            HierarchyManager._has_animation_data(base),
+            HierarchySync._has_animation_data(base),
             "Expression on blend shape deformer is not on the transform",
         )
 
@@ -6919,7 +6872,7 @@ class TestAnimationSafety(MayaTkTestCase):
         Blend shape animation is deformer-level and invisible to
         skip_animated checks on the transform.
         """
-        hm = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        hm = HierarchySync(fuzzy_matching=False, dry_run=False)
         base, bs = self._make_blendshape_cube("BS_QUA")
         cmds.setKeyframe(str(bs), attribute="weight[0]", time=1, value=0)
         cmds.setKeyframe(str(bs), attribute="weight[0]", time=24, value=1)
@@ -6936,7 +6889,7 @@ class TestAnimationSafety(MayaTkTestCase):
 
     def test_quarantine_blendshape_plus_transform_keys_skipped(self):
         """Extra with blend shape AND transform keys is skipped (transform keys detected)."""
-        hm = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        hm = HierarchySync(fuzzy_matching=False, dry_run=False)
         base, bs = self._make_blendshape_cube("BS_QUA_COMBO")
         cmds.setKeyframe(str(bs), attribute="weight[0]", time=1, value=0)
         cmds.setKeyframe(str(bs), attribute="weight[0]", time=24, value=1)
@@ -7052,12 +7005,12 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
     def test_is_locator_transform_true(self):
         """_is_locator_transform returns True for a transform with locatorShape."""
         loc = cmds.spaceLocator(name="test_loc_shape")[0]
-        self.assertTrue(HierarchyManager._is_locator_transform(loc))
+        self.assertTrue(HierarchySync._is_locator_transform(loc))
 
     def test_is_locator_transform_false_for_group(self):
         """_is_locator_transform returns False for a plain transform."""
         grp = cmds.group(empty=True, name="test_plain_grp")
-        self.assertFalse(HierarchyManager._is_locator_transform(grp))
+        self.assertFalse(HierarchySync._is_locator_transform(grp))
 
     # ── _find_locator_group_root ──
 
@@ -7067,14 +7020,14 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         GRP > LOC > CHILD  →  root = GRP
         """
         grp, loc, child = self._make_locator_group("FLR")
-        root = HierarchyManager._find_locator_group_root(child)
+        root = HierarchySync._find_locator_group_root(child)
         self.assertIsNotNone(root)
         self.assertEqual(root.split('|')[-1].split(':')[-1], grp.split('|')[-1].split(':')[-1])
 
     def test_find_root_from_locator_itself(self):
         """Locator transform itself returns its parent GRP as root."""
         grp, loc, child = self._make_locator_group("FLR2")
-        root = HierarchyManager._find_locator_group_root(loc)
+        root = HierarchySync._find_locator_group_root(loc)
         self.assertIsNotNone(root)
         self.assertEqual(root.split('|')[-1].split(':')[-1], grp.split('|')[-1].split(':')[-1])
 
@@ -7092,7 +7045,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         cmds.parent(inner_loc, inner_grp)
         child = cmds.group(empty=True, name="DEEP_CHILD", parent=inner_loc)
 
-        root = HierarchyManager._find_locator_group_root(child)
+        root = HierarchySync._find_locator_group_root(child)
         self.assertIsNotNone(root)
         self.assertEqual(root.split('|')[-1].split(':')[-1], outer_grp.split('|')[-1].split(':')[-1])
 
@@ -7100,7 +7053,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         """No locator in chain → returns None."""
         grp = cmds.group(empty=True, name="PLAIN_GRP")
         child = cmds.group(empty=True, name="PLAIN_CHILD", parent=grp)
-        root = HierarchyManager._find_locator_group_root(child)
+        root = HierarchySync._find_locator_group_root(child)
         self.assertIsNone(root)
 
     def test_find_root_locator_at_world_root(self):
@@ -7108,7 +7061,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         loc = cmds.spaceLocator(name="ROOT_LOC")[0]
         child = cmds.group(empty=True, name="ROOT_LOC_CHILD", parent=loc)
 
-        root = HierarchyManager._find_locator_group_root(child)
+        root = HierarchySync._find_locator_group_root(child)
         self.assertIsNotNone(root)
         self.assertEqual(root.split('|')[-1].split(':')[-1], loc.split('|')[-1].split(':')[-1])
 
@@ -7125,7 +7078,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         inner_grp = cmds.group(empty=True, name="INTER_INNER_GRP", parent=loc)
         child = cmds.group(empty=True, name="INTER_CHILD", parent=inner_grp)
 
-        root = HierarchyManager._find_locator_group_root(child)
+        root = HierarchySync._find_locator_group_root(child)
         self.assertIsNotNone(root)
         self.assertEqual(root.split('|')[-1].split(':')[-1], grp.split('|')[-1].split(':')[-1])
 
@@ -7140,7 +7093,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         """
         grp, loc, child = self._make_locator_group("PROMO")
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.current_scene_path_map = {
             "PROMO_GRP": grp,
             "PROMO_GRP|PROMO_LOC": loc,
@@ -7160,7 +7113,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         grp, loc, child1 = self._make_locator_group("DEDUP")
         child2 = cmds.group(empty=True, name="DEDUP_MESH2", parent=loc)
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.current_scene_path_map = {
             "DEDUP_GRP": grp,
             "DEDUP_GRP|DEDUP_LOC": loc,
@@ -7184,7 +7137,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         grp = cmds.group(empty=True, name="NOLOC_GRP")
         child = cmds.group(empty=True, name="NOLOC_CHILD", parent=grp)
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.current_scene_path_map = {
             "NOLOC_GRP": grp,
             "NOLOC_GRP|NOLOC_CHILD": child,
@@ -7210,7 +7163,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         """
         grp, loc, child = self._make_locator_group("GUARD")
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.current_scene_path_map = {
             "GUARD_GRP": grp,
             "GUARD_GRP|GUARD_LOC": loc,
@@ -7255,7 +7208,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
 
         ref_objects = [ref_root]
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.analyze_hierarchies(
             current_tree_root="SCENE_WIDE_MODE",
             reference_objects=ref_objects,
@@ -7300,7 +7253,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         cmds.parent(inner_loc, inner_grp)
         deep_child = cmds.group(empty=True, name="NEST_DEEP_CHILD", parent=inner_loc)
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.analyze_hierarchies(
             current_tree_root="SCENE_WIDE_MODE",
             reference_objects=[ref_root],
@@ -7356,7 +7309,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         ref_root = cmds.group(empty=True, name="ref:rskip_scene_root")
         ref_mesh = cmds.group(empty=True, name="ref:RSKIP_MESH", parent=ref_root)
 
-        manager = HierarchyManager(fuzzy_matching=False, dry_run=False)
+        manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.analyze_hierarchies(
             current_tree_root="SCENE_WIDE_MODE",
             reference_objects=[ref_root],
@@ -7391,7 +7344,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         engines rely on for animated transforms.
         Fixed: 2026-04-10
         """
-        if not cmds.objExists(str(real_scenes_dir)):
+        if not self.real_scenes_dir.exists():
             self.skipTest(
                 f"Real-world scenes directory not found: {self.real_scenes_dir}"
             )
@@ -7399,7 +7352,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         current_scene = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY_module.ma"
         reference_fbx = self.real_scenes_dir / "C5_AFT_COMP_ASSEMBLY.fbx"
 
-        if not cmds.objExists(str(current_scene)) or not cmds.objExists(str(reference_fbx)):
+        if not current_scene.exists() or not reference_fbx.exists():
             self.skipTest("Required C5 module.ma / FBX scene files not found.")
 
         default_cams = frozenset({"persp", "top", "front", "side"})
@@ -7434,7 +7387,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
             if t.split('|')[-1].split(':')[-1].split(":")[-1] not in default_cams
         ]
 
-        manager = HierarchyManager(
+        manager = HierarchySync(
             import_manager=sandbox, fuzzy_matching=True, dry_run=False
         )
         diff = manager.analyze_hierarchies(
@@ -7497,7 +7450,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         sandbox.cleanup_all_namespaces()
 
 
-class TestHierarchyManagerSlotsUserDataPaths(MayaTkTestCase):
+class TestHierarchySyncSlotsUserDataPaths(MayaTkTestCase):
     """Regression: tree-driven slot ops must work against string user data.
 
     Bug fixed 2026-05-07: ``b018`` (delete), ``b017`` (fuzzy rename),
@@ -7514,14 +7467,14 @@ class TestHierarchyManagerSlotsUserDataPaths(MayaTkTestCase):
         from types import SimpleNamespace
         from unittest.mock import MagicMock
 
-        from mayatk.env_utils.hierarchy_manager.hierarchy_manager_slots import (
-            HierarchyManagerSlots,
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
+            HierarchySyncSlots,
         )
 
-        self.HierarchyManagerSlots = HierarchyManagerSlots
+        self.HierarchySyncSlots = HierarchySyncSlots
 
         # Minimal slot scaffold.
-        self.slot = HierarchyManagerSlots.__new__(HierarchyManagerSlots)
+        self.slot = HierarchySyncSlots.__new__(HierarchySyncSlots)
         self.slot.sb = SimpleNamespace(QtCore=QtCore)
         self.slot.ui = MagicMock()
         self.slot.controller = MagicMock()
@@ -7671,6 +7624,807 @@ class TestHierarchyManagerSlotsUserDataPaths(MayaTkTestCase):
             self.assertEqual(got[0].split("|")[-1], "HM_RP_M_PARENT")
         # One rebuild for the whole batch, not one per item.
         self.slot.controller.refresh_trees.assert_called_once()
+
+
+class TestTransferAllOrNothing(MayaTkTestCase):
+    """_transfer_anim_curves must be all-or-nothing.
+
+    Bug (audit 2026-07-17): curves were rewired one attribute at a time and
+    the caller decided to "preserve" the existing node only AFTER some curves
+    had already been moved onto the replacement — which the caller then
+    deleted, destroying the moved curves permanently.
+    """
+
+    def _keyed_group(self, name, attrs=("translateX",)):
+        grp = cmds.group(empty=True, name=name)
+        for attr in attrs:
+            cmds.setKeyframe(grp, attribute=attr, time=1, value=0)
+            cmds.setKeyframe(grp, attribute=attr, time=24, value=10)
+        return grp
+
+    def test_transfer_aborts_without_mutation_on_missing_attr(self):
+        """If ANY destination attr is missing, nothing is transferred and the
+        old node keeps every curve."""
+        old = self._keyed_group("AON_OLD")
+        cmds.addAttr(old, longName="myWeight", attributeType="float", keyable=True)
+        cmds.setKeyframe(old, attribute="myWeight", time=1, value=0)
+        cmds.setKeyframe(old, attribute="myWeight", time=24, value=1)
+        new = cmds.group(empty=True, name="AON_NEW")  # no myWeight
+
+        result = HierarchySync._transfer_anim_curves(old, new)
+
+        self.assertEqual(result["transferred"], 0, "All-or-nothing: nothing moves")
+        self.assertIsNotNone(
+            cmds.keyframe(old, attribute="translateX", query=True, tc=True),
+            "Old node must keep its translateX keys",
+        )
+        self.assertIsNotNone(
+            cmds.keyframe(old, attribute="myWeight", query=True, tc=True),
+            "Old node must keep its custom-attr keys",
+        )
+        self.assertIsNone(
+            cmds.keyframe(new, attribute="translateX", query=True, tc=True),
+            "Replacement must not receive a partial transfer",
+        )
+
+    def test_merge_partial_transfer_keeps_existing_keys(self):
+        """EC-10 hardened: after a failed merge the existing node's animation
+        must survive the caller deleting the replacement."""
+        existing = cmds.group(empty=True, name="AON_MERGE_PART")
+        cmds.addAttr(existing, longName="customBlend", attributeType="float", keyable=True)
+        cmds.setKeyframe(existing, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(existing, attribute="translateX", time=24, value=5)
+        cmds.setKeyframe(existing, attribute="customBlend", time=1, value=0)
+        cmds.setKeyframe(existing, attribute="customBlend", time=24, value=1)
+
+        replacement = cmds.polyCube(name="AON_MERGE_REPL")[0]  # no customBlend
+        swapper = ObjectSwapper(dry_run=False)
+        self.assertFalse(swapper._safe_merge_delete(existing, replacement))
+
+        # Simulate what _integrate_hierarchy does next: delete the replacement.
+        cmds.delete(replacement)
+
+        keys = cmds.keyframe("AON_MERGE_PART", attribute="translateX", query=True, tc=True)
+        self.assertIsNotNone(keys, "translateX animation was destroyed by partial transfer")
+        self.assertEqual(len(keys), 2)
+
+    def test_transfer_matches_rotate_order(self):
+        """Transferred rotation curves must evaluate in the old node's rotate
+        order — the replacement's rotateOrder is aligned before rewiring."""
+        old = cmds.group(empty=True, name="AON_RO_OLD")
+        cmds.setAttr(f"{old}.rotateOrder", 2)  # zxy
+        cmds.setKeyframe(old, attribute="rotateX", time=1, value=0)
+        cmds.setKeyframe(old, attribute="rotateX", time=24, value=90)
+        new = cmds.group(empty=True, name="AON_RO_NEW")  # xyz
+
+        result = HierarchySync._transfer_anim_curves(old, new)
+        self.assertGreater(result["transferred"], 0)
+        self.assertEqual(
+            cmds.getAttr(f"{new}.rotateOrder"),
+            2,
+            "Replacement rotateOrder must match the animation's source order",
+        )
+
+    def test_transfer_preserves_shared_replacement_curve(self):
+        """Replacing a curve on the destination attr must not delete a curve
+        node that also drives other plugs."""
+        new = cmds.group(empty=True, name="AON_SHARED_NEW")
+        cmds.setKeyframe(new, attribute="translateX", time=1, value=-1)
+        cmds.setKeyframe(new, attribute="translateX", time=24, value=-2)
+        shared_curve = cmds.listConnections(
+            f"{new}.translateX", s=True, d=False
+        )[0]
+        other = cmds.group(empty=True, name="AON_SHARED_OTHER")
+        cmds.connectAttr(f"{shared_curve}.output", f"{other}.translateY", force=True)
+
+        old = cmds.group(empty=True, name="AON_SHARED_OLD")
+        cmds.setKeyframe(old, attribute="translateX", time=1, value=100)
+        cmds.setKeyframe(old, attribute="translateX", time=24, value=200)
+
+        result = HierarchySync._transfer_anim_curves(old, new)
+        self.assertGreater(result["transferred"], 0)
+        self.assertTrue(
+            cmds.objExists(shared_curve),
+            "Shared curve must survive — it still drives another plug",
+        )
+        self.assertIsNotNone(
+            cmds.keyframe(other, attribute="translateY", query=True, tc=True),
+            "Other node's animation must be untouched",
+        )
+        vals = cmds.keyframe(new, attribute="translateX", query=True, vc=True)
+        self.assertAlmostEqual(vals[0], 100.0, places=1)
+
+
+class TestQuarantineAnimatedAncestors(MayaTkTestCase):
+    """skip_animated must honor its contract: extras parented under an
+    animated object are left in place (docstring + UI tooltip promise)."""
+
+    def _manager_with(self, path_map):
+        hm = HierarchySync()
+        hm.dry_run = False
+        hm.current_scene_path_map = dict(path_map)
+        hm.clean_to_raw_current = {k: k for k in path_map}
+        return hm
+
+    def test_quarantine_skips_extra_under_animated_ancestor(self):
+        parent = cmds.group(empty=True, name="QAA_ANIM_PAR")
+        cmds.setKeyframe(parent, attribute="translateY", time=1, value=0)
+        cmds.setKeyframe(parent, attribute="translateY", time=24, value=5)
+        child = cmds.group(empty=True, name="QAA_PLAIN_CHILD", parent=parent)
+
+        hm = self._manager_with({"QAA_ANIM_PAR|QAA_PLAIN_CHILD": child})
+        moved = hm.quarantine_extras(
+            paths=["QAA_ANIM_PAR|QAA_PLAIN_CHILD"], skip_animated=True
+        )
+
+        self.assertEqual(moved, [], "Extra under animated ancestor must be skipped")
+        got_parent = cmds.listRelatives("QAA_PLAIN_CHILD", parent=True)[0]
+        self.assertEqual(got_parent.split("|")[-1], "QAA_ANIM_PAR")
+
+    def test_quarantine_skips_animated_ancestor_dry_run(self):
+        parent = cmds.group(empty=True, name="QAA_DR_PAR")
+        cmds.setKeyframe(parent, attribute="rotateY", time=1, value=0)
+        cmds.setKeyframe(parent, attribute="rotateY", time=24, value=45)
+        child = cmds.group(empty=True, name="QAA_DR_CHILD", parent=parent)
+
+        hm = self._manager_with({"QAA_DR_PAR|QAA_DR_CHILD": child})
+        hm.dry_run = True
+        moved = hm.quarantine_extras(
+            paths=["QAA_DR_PAR|QAA_DR_CHILD"], skip_animated=True
+        )
+        self.assertEqual(moved, [], "Dry-run must report the same skip")
+
+    def test_quarantine_moves_extra_under_plain_ancestor(self):
+        """Control: a plain ancestor chain still quarantines normally."""
+        parent = cmds.group(empty=True, name="QAA_PLAIN_PAR")
+        child = cmds.group(empty=True, name="QAA_MOVE_CHILD", parent=parent)
+
+        hm = self._manager_with({"QAA_PLAIN_PAR|QAA_MOVE_CHILD": child})
+        moved = hm.quarantine_extras(
+            paths=["QAA_PLAIN_PAR|QAA_MOVE_CHILD"], skip_animated=True
+        )
+        self.assertEqual(moved, ["QAA_MOVE_CHILD"])
+
+
+class TestFixReparentedAnimationGuard(MayaTkTestCase):
+    """fix_reparented must not silently change the animation space of keyed
+    nodes; constraint-only nodes reparent safely and still move."""
+
+    def _manager_for(self, current_path, node):
+        hm = HierarchySync()
+        hm.dry_run = False
+        hm.current_scene_path_map = {current_path: node}
+        hm.clean_to_raw_current = {current_path: current_path}
+        return hm
+
+    def test_skips_keyed_node_by_default(self):
+        wrong_parent = cmds.group(empty=True, name="FRA_WRONG_PAR")
+        node = cmds.group(empty=True, name="FRA_KEYED", parent=wrong_parent)
+        cmds.setKeyframe(node, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(node, attribute="translateX", time=24, value=10)
+
+        hm = self._manager_for("FRA_WRONG_PAR|FRA_KEYED", node)
+        fixed = hm.fix_reparented(
+            [{"current_path": "FRA_WRONG_PAR|FRA_KEYED", "reference_path": "FRA_KEYED"}]
+        )
+
+        self.assertEqual(fixed, [], "Keyed node must be skipped by default")
+        self.assertIsNotNone(
+            cmds.listRelatives("FRA_KEYED", parent=True),
+            "Keyed node must remain under its current parent",
+        )
+
+    def test_moves_keyed_node_when_skip_disabled(self):
+        wrong_parent = cmds.group(empty=True, name="FRA_WP2")
+        node = cmds.group(empty=True, name="FRA_KEYED2", parent=wrong_parent)
+        cmds.setKeyframe(node, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(node, attribute="translateX", time=24, value=10)
+
+        hm = self._manager_for("FRA_WP2|FRA_KEYED2", node)
+        fixed = hm.fix_reparented(
+            [{"current_path": "FRA_WP2|FRA_KEYED2", "reference_path": "FRA_KEYED2"}],
+            skip_animated=False,
+        )
+        self.assertEqual(fixed, ["FRA_KEYED2"])
+        self.assertIsNone(
+            cmds.listRelatives("FRA_KEYED2", parent=True),
+            "Node should now be at world root",
+        )
+
+    def test_moves_constraint_only_node(self):
+        """Constraints follow parentInverseMatrix — reparenting is safe and
+        must still happen with the guard enabled."""
+        target = cmds.group(empty=True, name="FRA_CTGT")
+        wrong_parent = cmds.group(empty=True, name="FRA_WP3")
+        node = cmds.group(empty=True, name="FRA_CONSTRAINED", parent=wrong_parent)
+        cmds.parentConstraint(target, node, mo=True)
+
+        hm = self._manager_for("FRA_WP3|FRA_CONSTRAINED", node)
+        fixed = hm.fix_reparented(
+            [
+                {
+                    "current_path": "FRA_WP3|FRA_CONSTRAINED",
+                    "reference_path": "FRA_CONSTRAINED",
+                }
+            ]
+        )
+        self.assertEqual(fixed, ["FRA_CONSTRAINED"])
+        constraints = cmds.listRelatives("FRA_CONSTRAINED", type="constraint") or []
+        self.assertGreater(len(constraints), 0, "Constraint must survive the move")
+
+
+class TestAnimationDetectionBlindSpots(MayaTkTestCase):
+    """_has_animation_data / _safe_merge_delete blind spots from the audit:
+    motion paths, shape-level animation, referenced nodes, and nodes that
+    drive animation elsewhere."""
+
+    def test_has_animation_data_motion_path(self):
+        crv = cmds.curve(degree=1, point=[(0, 0, 0), (10, 0, 0)])
+        node = cmds.group(empty=True, name="BS_MOPATH")
+        cmds.pathAnimation(node, curve=crv, fractionMode=True, startTimeU=1, endTimeU=24)
+        self.assertTrue(
+            HierarchySync._has_animation_data(node),
+            "Motion-path-driven node must count as animated",
+        )
+
+    def test_has_animation_data_animated_shape(self):
+        cam, cam_shape = cmds.camera(name="BS_ANIMCAM")
+        cmds.setKeyframe(cam_shape, attribute="focalLength", time=1, value=35)
+        cmds.setKeyframe(cam_shape, attribute="focalLength", time=24, value=85)
+        self.assertTrue(
+            HierarchySync._has_animation_data(cam),
+            "Keyed shape attribute must count as animation on the transform",
+        )
+
+    def test_has_animation_data_animated_shape_descendant(self):
+        grp = cmds.group(empty=True, name="BS_CAMGRP")
+        cam, cam_shape = cmds.camera(name="BS_DESCCAM")
+        cmds.parent(cam, grp)
+        cmds.setKeyframe(cam_shape, attribute="focalLength", time=1, value=35)
+        cmds.setKeyframe(cam_shape, attribute="focalLength", time=24, value=85)
+        self.assertTrue(
+            HierarchySync._has_animation_data(grp, check_descendants=True),
+            "Descendant sweep must include shape-level animation",
+        )
+
+    def test_safe_merge_delete_preserves_motion_path_node(self):
+        crv = cmds.curve(degree=1, point=[(0, 0, 0), (5, 0, 0)])
+        existing = cmds.group(empty=True, name="BS_MP_EXISTING")
+        cmds.pathAnimation(existing, curve=crv, fractionMode=True, startTimeU=1, endTimeU=24)
+        replacement = cmds.group(empty=True, name="BS_MP_REPL")
+
+        swapper = ObjectSwapper(dry_run=False)
+        self.assertFalse(swapper._safe_merge_delete(existing, replacement))
+        self.assertTrue(cmds.objExists("BS_MP_EXISTING"))
+
+    def test_safe_merge_delete_preserves_referenced_node(self):
+        """Referenced nodes cannot be deleted — merge must preserve them
+        cleanly instead of erroring into the fallback path."""
+        import tempfile
+
+        ref_dir = Path(__file__).parent / "temp_tests"
+        ref_dir.mkdir(exist_ok=True)
+        ref_file = ref_dir / "bs_ref_source.ma"
+        try:
+            src = cmds.group(empty=True, name="BS_REF_GRP")
+            cmds.select(src)
+            cmds.file(str(ref_file), exportSelected=True, type="mayaAscii", force=True)
+            cmds.delete(src)
+            cmds.file(str(ref_file), reference=True, namespace="bsRefNS")
+            referenced = "bsRefNS:BS_REF_GRP"
+            self.assertTrue(cmds.objExists(referenced))
+
+            replacement = cmds.group(empty=True, name="BS_REF_REPL")
+            swapper = ObjectSwapper(dry_run=False)
+            self.assertFalse(
+                swapper._safe_merge_delete(referenced, replacement),
+                "Referenced existing node must be preserved, not error",
+            )
+            self.assertTrue(cmds.objExists(referenced))
+        finally:
+            try:
+                cmds.file(str(ref_file), removeReference=True)
+            except Exception:
+                pass
+            if ref_file.exists():
+                os.remove(ref_file)
+
+    def test_safe_merge_delete_preserves_driven_key_driver(self):
+        """Deleting a node that DRIVES a set-driven key elsewhere would break
+        that other node's animation."""
+        driver = cmds.group(empty=True, name="BS_EXT_DRIVER")
+        other = cmds.group(empty=True, name="BS_EXT_DRIVEN")
+        cmds.setDrivenKeyframe(
+            f"{other}.translateX", currentDriver=f"{driver}.translateY",
+            driverValue=0, value=0,
+        )
+        cmds.setDrivenKeyframe(
+            f"{other}.translateX", currentDriver=f"{driver}.translateY",
+            driverValue=10, value=5,
+        )
+        replacement = cmds.group(empty=True, name="BS_EXT_REPL")
+
+        swapper = ObjectSwapper(dry_run=False)
+        self.assertFalse(swapper._safe_merge_delete(driver, replacement))
+        self.assertTrue(cmds.objExists("BS_EXT_DRIVER"))
+        self.assertTrue(
+            cmds.listConnections(f"{other}.translateX", type="animCurve", s=True, d=False),
+            "Driven key on the other node must remain intact",
+        )
+
+    def test_safe_merge_delete_preserves_constraint_target(self):
+        """Deleting the TARGET of another node's constraint breaks that node."""
+        target = cmds.group(empty=True, name="BS_CT_TARGET")
+        constrained = cmds.group(empty=True, name="BS_CT_CONSTRAINED")
+        cmds.parentConstraint(target, constrained, mo=True)
+        replacement = cmds.group(empty=True, name="BS_CT_REPL")
+
+        swapper = ObjectSwapper(dry_run=False)
+        self.assertFalse(swapper._safe_merge_delete(target, replacement))
+        self.assertTrue(cmds.objExists("BS_CT_TARGET"))
+
+
+class TestStubCreationRobustness(MayaTkTestCase):
+    """Stub/parent-chain creation must survive name clashes, locked stubs,
+    dry-run previews, and very deep hierarchies."""
+
+    def test_ensure_parent_chain_name_clash_with_root_node(self):
+        """A root-level node with the same name must not hijack the chain via
+        Maya's auto-suffixing (B -> B1)."""
+        cmds.group(empty=True, name="SCR_B")  # clashing root node
+        cmds.group(empty=True, name="SCR_A")
+
+        HierarchySync._ensure_parent_chain("SCR_A|SCR_B|SCR_LEAF")
+        self.assertTrue(
+            cmds.objExists("|SCR_A|SCR_B"),
+            "Intermediate must be created with its exact name under SCR_A",
+        )
+
+    def test_create_stubs_leaf_name_clash(self):
+        cmds.group(empty=True, name="SCR_LEAF2")  # clashing root node
+        hm = HierarchySync()
+        hm.dry_run = False
+        created = hm.create_stubs(["SCR_A2|SCR_LEAF2"])
+        self.assertIn("SCR_LEAF2", created)
+        self.assertTrue(
+            cmds.objExists("|SCR_A2|SCR_LEAF2"),
+            "Stub leaf must keep its exact name despite the root-level clash",
+        )
+
+    def test_create_stubs_dry_run_skips_existing(self):
+        parent = cmds.group(empty=True, name="SCR_DR_PAR")
+        cmds.group(empty=True, name="SCR_DR_EXISTS", parent=parent)
+        hm = HierarchySync()
+        hm.dry_run = True
+        created = hm.create_stubs(["SCR_DR_PAR|SCR_DR_EXISTS", "SCR_DR_PAR|SCR_DR_NEW"])
+        self.assertEqual(
+            created, ["SCR_DR_NEW"],
+            "Dry-run must not count stubs that already exist",
+        )
+
+    def test_quarantine_moves_locked_stub(self):
+        """Locked stub transforms must be unlockable for quarantine moves."""
+        stub = cmds.createNode("transform", name="SCR_LOCKED_STUB")
+        HierarchySync._finalize_stub_node(stub)  # tags + locks
+
+        hm = HierarchySync()
+        hm.dry_run = False
+        # Re-root the stub under a parent so it is a nested extra.
+        parent = cmds.group(empty=True, name="SCR_STUB_PAR")
+        HierarchySync._unlock_if_stub(stub)
+        cmds.parent(stub, parent)
+        HierarchySync._relock_if_stub(stub)
+        long_path = cmds.ls("SCR_LOCKED_STUB", long=True)[0]
+        hm.current_scene_path_map = {"SCR_STUB_PAR|SCR_LOCKED_STUB": long_path}
+        hm.clean_to_raw_current = {
+            "SCR_STUB_PAR|SCR_LOCKED_STUB": "SCR_STUB_PAR|SCR_LOCKED_STUB"
+        }
+
+        moved = hm.quarantine_extras(paths=["SCR_STUB_PAR|SCR_LOCKED_STUB"])
+        self.assertEqual(moved, ["SCR_LOCKED_STUB"])
+        got_parent = cmds.listRelatives("SCR_LOCKED_STUB", parent=True)[0]
+        self.assertEqual(got_parent.split("|")[-1], "_QUARANTINE")
+
+    def test_build_path_map_very_deep_no_recursion_error(self):
+        """Traversal must be iterative — deep chains blow Python's recursion
+        limit with the recursive implementation."""
+        import sys
+
+        depth = min(1500, sys.getrecursionlimit() + 500)
+        root = cmds.createNode("transform", name="SCR_DEEP_0")
+        prev = root
+        for i in range(1, depth):
+            prev = cmds.createNode("transform", name=f"SCR_DEEP_{i}", parent=prev)
+
+        path_map = HierarchyMapBuilder.build_path_map(root)
+        self.assertEqual(len(path_map), depth)
+
+
+class TestReparentedPairingAndResolution(MayaTkTestCase):
+    """Diff pairing and node resolution correctness."""
+
+    def test_detect_reparented_shape_mismatch_not_paired(self):
+        """A missing mesh and an unrelated extra empty transform sharing a
+        leaf name must NOT be paired as 'reparented'."""
+        # Reference side (simulated import namespace): REAL_PAR|RP_ITEM (mesh)
+        cmds.namespace(add="refA")
+        ref_par = cmds.group(empty=True, name="refA:RPM_REAL_PAR")
+        cube = cmds.polyCube(name="RPM_TMP")[0]
+        cube = cmds.rename(cube, "refA:RPM_ITEM")
+        cmds.parent(cube, ref_par)
+
+        # Current side: matched parent + unrelated empty transform of same name
+        cmds.group(empty=True, name="RPM_REAL_PAR")
+        holder = cmds.group(empty=True, name="RPM_HOLDER")
+        cmds.group(empty=True, name="RPM_ITEM", parent=holder)
+
+        hm = HierarchySync()
+        diff = hm.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=[ref_par, "refA:RPM_ITEM"],
+            filter_meshes=False,
+        )
+
+        paired_leaves = [r["leaf"] for r in diff.get("reparented", [])]
+        self.assertNotIn(
+            "RPM_ITEM", paired_leaves,
+            "Mesh vs empty-transform must not be declared reparented",
+        )
+        self.assertIn("RPM_REAL_PAR|RPM_ITEM", diff.get("missing", []))
+
+    def test_resolve_node_ambiguous_cleaned_path_refused(self):
+        """When namespace-stripping collapses two nodes onto one cleaned path,
+        repairs must refuse to resolve it rather than pick arbitrarily."""
+        cmds.namespace(add="dupNS")
+        cmds.group(empty=True, name="AMBIG_GRP")
+        cmds.group(empty=True, name="dupNS:AMBIG_GRP")
+        ref_node = cmds.group(empty=True, name="AMBIG_REF_ONLY")
+
+        hm = HierarchySync()
+        hm.analyze_hierarchies(
+            current_tree_root="SCENE_WIDE_MODE",
+            reference_objects=[ref_node],
+            filter_meshes=False,
+        )
+        self.assertIsNone(
+            hm._resolve_node("AMBIG_GRP", source="current"),
+            "Ambiguous cleaned path must not resolve to an arbitrary node",
+        )
+
+    def test_fix_reparented_preserves_reference_matched_empty_parent(self):
+        """The now-empty old parent must NOT be deleted when the reference
+        expects that group to exist."""
+        parent = cmds.group(empty=True, name="FRP_KEEP_PAR")
+        child = cmds.group(empty=True, name="FRP_KEEP_CHILD", parent=parent)
+
+        hm = HierarchySync()
+        hm.dry_run = False
+        hm.current_scene_path_map = {"FRP_KEEP_PAR|FRP_KEEP_CHILD": child}
+        hm.clean_to_raw_current = {
+            "FRP_KEEP_PAR|FRP_KEEP_CHILD": "FRP_KEEP_PAR|FRP_KEEP_CHILD"
+        }
+        # Reference knows this parent — it must survive.
+        hm.clean_to_raw_reference = {"FRP_KEEP_PAR": "refNS:FRP_KEEP_PAR"}
+
+        hm.fix_reparented(
+            [{"current_path": "FRP_KEEP_PAR|FRP_KEEP_CHILD", "reference_path": "FRP_KEEP_CHILD"}]
+        )
+        self.assertTrue(cmds.objExists("FRP_KEEP_CHILD"))
+        self.assertTrue(
+            cmds.objExists("FRP_KEEP_PAR"),
+            "Reference-matched empty parent must be preserved",
+        )
+
+    def test_repair_order_reparent_before_quarantine(self):
+        """Quarantining an extra parent must not strand its reparented child:
+        reparent runs before quarantine so the child reaches its reference
+        position."""
+        from qtpy import QtWidgets
+
+        class _FakeUI:
+            class _FakeTree(QtWidgets.QTreeWidget):
+                def __init__(self):
+                    super().__init__()
+                    self.is_initialized = True
+
+            def __init__(self):
+                self.tree000 = self._FakeTree()
+                self.tree001 = self._FakeTree()
+                self.txt003 = type(
+                    "W", (), {
+                        "append": lambda *a: None, "setHtml": lambda *a: None,
+                        "setText": lambda *a: None, "clear": lambda *a: None,
+                    },
+                )()
+
+        class _FakeSB:
+            registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
+
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
+            HierarchySyncController,
+        )
+
+        fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
+        controller = HierarchySyncController(fake_slots)
+
+        cmds.group(empty=True, name="RO_ROOT_GRP")
+        extra_parent = cmds.group(empty=True, name="RO_EXTRA_PAR")
+        child = cmds.group(empty=True, name="RO_CHILD", parent=extra_parent)
+
+        hm = HierarchySync()
+        hm.current_scene_path_map = {
+            "RO_ROOT_GRP": cmds.ls("RO_ROOT_GRP", long=True)[0],
+            "RO_EXTRA_PAR": cmds.ls("RO_EXTRA_PAR", long=True)[0],
+            "RO_EXTRA_PAR|RO_CHILD": cmds.ls(child, long=True)[0],
+        }
+        hm.clean_to_raw_current = {k: k for k in hm.current_scene_path_map}
+        controller.hierarchy_sync = hm
+        controller._current_diff_result = {
+            "missing": [],
+            "extra": ["RO_EXTRA_PAR"],
+            "reparented": [
+                {
+                    "leaf": "RO_CHILD",
+                    "reference_path": "RO_ROOT_GRP|RO_CHILD",
+                    "current_path": "RO_EXTRA_PAR|RO_CHILD",
+                }
+            ],
+            "fuzzy_matches": [],
+        }
+
+        controller.repair_hierarchies(
+            create_stubs=False,
+            quarantine_extras=True,
+            fix_reparented=True,
+            fix_fuzzy_renames=False,
+            dry_run=False,
+        )
+
+        self.assertTrue(
+            cmds.objExists("|RO_ROOT_GRP|RO_CHILD"),
+            "Child must reach its reference position — quarantine must not strand it",
+        )
+
+
+class TestPullIntegrationRobustness(MayaTkTestCase):
+    """ObjectSwapper integration must track nodes across rename/reparent
+    (no stale-string handles) and never leave pulled nodes namespaced."""
+
+    def test_integrate_hierarchy_no_spurious_warning(self):
+        """A clean merge pull must not route through the exception fallback."""
+        import logging
+
+        existing = cmds.group(empty=True, name="PIR_TARGET")
+        if not cmds.namespace(exists="temp_import"):
+            cmds.namespace(add="temp_import")
+        imported = cmds.group(empty=True, name="temp_import:PIR_TARGET")
+        uuid_before = cmds.ls(imported, uuid=True)[0]
+
+        swapper = ObjectSwapper(dry_run=False, pull_mode="Merge Hierarchies", pull_children=True)
+
+        records = []
+
+        class _Catcher(logging.Handler):
+            def emit(self, record):
+                records.append(record)
+
+        catcher = _Catcher(level=logging.WARNING)
+        swapper.logger.addHandler(catcher)
+        try:
+            swapper._integrate_hierarchy(
+                imported, "PIR_TARGET", merge=True, allow_auto_rename=False
+            )
+        finally:
+            swapper.logger.removeHandler(catcher)
+
+        warnings = [r for r in records if r.levelno >= logging.WARNING]
+        self.assertEqual(
+            [r.getMessage() for r in warnings], [],
+            "Clean integration must not emit warnings",
+        )
+        matches = cmds.ls("PIR_TARGET", type="transform")
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(
+            cmds.ls("PIR_TARGET", uuid=True)[0], uuid_before,
+            "The pulled node (same UUID) must have taken the name",
+        )
+
+    def test_integrate_hierarchy_locked_import_leaves_no_namespace(self):
+        """A locked imported node must still be stripped out of the temp
+        namespace — otherwise namespace cleanup deletes the pulled content."""
+        if not cmds.namespace(exists="temp_import_99"):
+            cmds.namespace(add="temp_import_99")
+        imported = cmds.group(empty=True, name="temp_import_99:PIR_LOCKED")
+        cmds.lockNode(imported, lock=True)
+
+        swapper = ObjectSwapper(dry_run=False, pull_mode="Add to Scene", pull_children=True)
+        swapper._integrate_hierarchy(
+            imported, "PIR_LOCKED", merge=False, allow_auto_rename=True
+        )
+
+        leftovers = cmds.ls("temp_import_99:*", type="transform") or []
+        self.assertEqual(
+            leftovers, [],
+            "No pulled node may remain in the temp namespace (cleanup would delete it)",
+        )
+        self.assertTrue(cmds.objExists("PIR_LOCKED"))
+
+
+class TestSlotsLockedAndStalePaths(MayaTkTestCase):
+    """Slot-level operations on locked stubs and multi-item drags."""
+
+    def setUp(self):
+        super().setUp()
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
+            HierarchySyncSlots,
+        )
+
+        self.slot = HierarchySyncSlots.__new__(HierarchySyncSlots)
+        self.slot.sb = SimpleNamespace(QtCore=QtCore)
+        self.slot.ui = MagicMock()
+        self.slot.controller = MagicMock()
+        self.slot.logger = MagicMock()
+
+    def _make_item(self, node_path):
+        item = _QtWidgets.QTreeWidgetItem([node_path.split("|")[-1]])
+        item.setData(0, QtCore.Qt.UserRole, node_path)
+        return item
+
+    def test_b018_deletes_locked_stub(self):
+        stub = cmds.createNode("transform", name="SLP_LOCKED_STUB")
+        HierarchySync._finalize_stub_node(stub)  # locks the node
+        plain = cmds.group(empty=True, name="SLP_PLAIN")
+
+        self.slot.ui.tree001.selectedItems.return_value = [
+            self._make_item(stub), self._make_item(plain),
+        ]
+        self.slot.b018()
+
+        self.assertFalse(
+            cmds.objExists("SLP_LOCKED_STUB"),
+            "Locked stubs must be unlocked before deletion",
+        )
+        self.assertFalse(cmds.objExists("SLP_PLAIN"))
+
+    def test_drop_reparent_locked_stub(self):
+        stub = cmds.createNode("transform", name="SLP_DRAG_STUB")
+        HierarchySync._finalize_stub_node(stub)
+        new_parent = cmds.group(empty=True, name="SLP_DRAG_PAR")
+
+        moves = [(self._make_item(stub), self._make_item(new_parent))]
+        self.slot._on_tree001_drop_reparent(moves)
+
+        got = cmds.listRelatives("SLP_DRAG_STUB", parent=True)
+        self.assertIsNotNone(got, "Locked stub must be reparentable via drag")
+        self.assertEqual(got[0].split("|")[-1], "SLP_DRAG_PAR")
+
+    def test_drop_reparent_nested_multi_select(self):
+        """Moving a parent and its child in one drag must reparent both —
+        the child's stored DAG path goes stale after the parent moves."""
+        a = cmds.group(empty=True, name="SLP_NEST_A")
+        b = cmds.group(empty=True, name="SLP_NEST_B", parent=a)
+        target = cmds.group(empty=True, name="SLP_NEST_TGT")
+
+        a_path = cmds.ls("SLP_NEST_A", long=True)[0]
+        b_path = cmds.ls(b, long=True)[0]
+        target_item = self._make_item(target)
+        moves = [
+            (self._make_item(a_path), target_item),
+            (self._make_item(b_path), target_item),
+        ]
+        self.slot._on_tree001_drop_reparent(moves)
+
+        for name in ("SLP_NEST_A", "SLP_NEST_B"):
+            got = cmds.listRelatives(name, parent=True)
+            self.assertIsNotNone(got, f"{name} must have been reparented")
+            self.assertEqual(got[0].split("|")[-1], "SLP_NEST_TGT")
+
+    def test_b017_renames_parent_and_child_together(self):
+        """Renaming a parent and its child in one batch must not skip the
+        child due to its stale stored path."""
+        parent = cmds.group(empty=True, name="SLP_B17_PAR")
+        child = cmds.group(empty=True, name="SLP_B17_CHILD", parent=parent)
+        child_path = cmds.ls(child, long=True)[0]
+
+        parent_item = self._make_item(cmds.ls(parent, long=True)[0])
+        child_item = self._make_item(child_path)
+        ref_par = _QtWidgets.QTreeWidgetItem(["SLP_B17_PAR_NEW"])
+        ref_child = _QtWidgets.QTreeWidgetItem(["SLP_B17_CHILD_NEW"])
+
+        self.slot.ui.tree001.selectedItems.return_value = [parent_item, child_item]
+        self.slot.ui.tree000.selectedItems.return_value = [ref_par, ref_child]
+        self.slot.b017()
+
+        self.assertTrue(cmds.objExists("SLP_B17_PAR_NEW"))
+        self.assertTrue(
+            cmds.objExists("SLP_B17_CHILD_NEW"),
+            "Child rename must survive the parent being renamed first",
+        )
+
+
+class TestControllerSettingsCoercion(MayaTkTestCase):
+    """QSettings may return a bare string for a one-item list — the recent-
+    reference helpers must coerce instead of crashing/iterating chars."""
+
+    def setUp(self):
+        super().setUp()
+        from qtpy import QtWidgets
+
+        class _FakeSettings:
+            def __init__(self):
+                self.store = {}
+
+            def value(self, key, default=None):
+                return self.store.get(key, default)
+
+            def setValue(self, key, val):
+                self.store[key] = val
+
+        class _FakeUI:
+            class _FakeTree(QtWidgets.QTreeWidget):
+                def __init__(self):
+                    super().__init__()
+                    self.is_initialized = True
+
+            def __init__(self):
+                self.tree000 = self._FakeTree()
+                self.tree001 = self._FakeTree()
+                self.settings = _FakeSettings()
+                self.txt003 = type(
+                    "W", (), {
+                        "append": lambda *a: None, "setHtml": lambda *a: None,
+                        "setText": lambda *a: None, "clear": lambda *a: None,
+                    },
+                )()
+
+        class _FakeSB:
+            registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
+
+        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
+            HierarchySyncController,
+        )
+
+        fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
+        self.controller = HierarchySyncController(fake_slots)
+        self.settings = fake_slots.ui.settings
+
+    def test_get_recent_handles_bare_string(self):
+        this_file = str(Path(__file__).resolve())
+        self.settings.store["recent_reference_scenes"] = this_file
+        recent = self.controller.get_recent_reference_scenes()
+        self.assertEqual(recent, [this_file])
+
+    def test_save_recent_handles_bare_string(self):
+        this_file = str(Path(__file__).resolve())
+        self.settings.store["recent_reference_scenes"] = this_file
+        other = str(Path(__file__).parent.resolve() / "base_test.py")
+        self.controller.save_recent_reference_scene(other)
+        stored = self.settings.store["recent_reference_scenes"]
+        self.assertIsInstance(stored, list)
+        self.assertIn(other, stored)
+        self.assertIn(this_file, stored)
+
+
+class TestTreeUtilsExtraction(MayaTkTestCase):
+    """Tree-item object extraction must prefer the stored DAG path over the
+    ambiguous leaf name."""
+
+    def test_extract_object_name_prefers_user_role_path(self):
+        from mayatk.env_utils.hierarchy_sync.tree_utils import (
+            _extract_object_name_from_item,
+        )
+
+        item = _QtWidgets.QTreeWidgetItem(["LEAF"])
+        item.setData(0, QtCore.Qt.UserRole, "|GRP_A|LEAF")
+        item._raw_name = "LEAF"
+        self.assertEqual(
+            _extract_object_name_from_item(item),
+            "|GRP_A|LEAF",
+            "Stored DAG path must win over the leaf name",
+        )
 
 
 if __name__ == "__main__":

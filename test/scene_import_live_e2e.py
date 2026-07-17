@@ -275,6 +275,49 @@ try:
           second_duration < max(first_duration * 0.5, 5.0),
           f"first={first_duration:.1f}s second={second_duration:.1f}s")
 
+    # ---- via="usd" route: the SAME .blend through the USD intermediate ------
+    # A/B against the FBX legs above: LINKED textures must arrive natively
+    # (UsdPreviewSurface import), with no manifest rebuild involved. The
+    # UNLINKED/packed images (norm_a / ms_a) are manifest-only transport by
+    # design — the USD exporter carries the actual node network, so they are
+    # NOT expected here (that asymmetry is the documented route trade-off).
+    def descendant_sgs(prefix, nodes):
+        """Shading engines bound anywhere under *prefix* (any nesting depth)."""
+        tfs = find(prefix, nodes)
+        if not tfs:
+            return set()
+        shapes = cmds.listRelatives(
+            tfs[0], allDescendents=True, fullPath=True, type="mesh"
+        ) or []
+        return {sg for shape in shapes
+                for sg in (cmds.listConnections(shape, type="shadingEngine") or [])}
+
+    def sg_history_file(prefix, nodes, tex_suffix):
+        """True when *prefix*'s shading network reads a file ending *tex_suffix*."""
+        for sg in descendant_sgs(prefix, nodes):
+            for node in cmds.listHistory(sg) or []:
+                if cmds.nodeType(node) == "file":
+                    path = cmds.getAttr(f"{node}.fileTextureName") or ""
+                    if path.replace("\\", "/").endswith(tex_suffix):
+                        return True
+        return False
+
+    cmds.file(new=True, force=True)
+    records.clear()
+    imported_usd = eng.import_scene(blend, via="usd", use_cache=False)
+    check("USD route: all four objects imported",
+          all(find(p, imported_usd) for p in
+              ("e2e_cube", "e2e_sphere", "e2e_cone", "e2e_missing")),
+          imported_usd)
+    check("USD route: shared Base_Color arrives NATIVELY (no manifest rebuild)",
+          sg_history_file("e2e_sphere", imported_usd, "e2e_shared_Base_Color.png")
+          and not any("Rebuilt material" in m for m in records))
+    check("USD route: matA Base_Color arrives natively",
+          sg_history_file("e2e_cube", imported_usd, "e2e_matA_Base_Color.png"))
+    cube_u_sgs = descendant_sgs("e2e_cube", imported_usd)
+    check("USD route: two-material cube keeps both bindings (GeomSubsets)",
+          len(cube_u_sgs) >= 2, cube_u_sgs)
+
     ok = all(line.startswith("OK") for line in lines)
 except Exception as e:
     lines.append(f"FAIL setup: {e!r}")

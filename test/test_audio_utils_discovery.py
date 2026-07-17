@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Discovery tests for ``audio_utils.segments.discovery``.
+"""Discovery tests for ``audio_utils.segments``.
 
 Validates that the per-track canonical store produces correct
 :class:`AudioSegment` lists for consumers (sequencer + manifest).

@@ -184,8 +184,19 @@ class TestClassifyConnection(MayaTkTestCase):
     def test_keyframe_connection(self):
         cmds.setKeyframe(str(self.cube), attribute="translateX", time=1, value=0)
         cmds.setKeyframe(str(self.cube), attribute="translateX", time=10, value=5)
+        # Pin current time BETWEEN the keys — classify_connection promotes to
+        # "keyframe_active" when a key sits on the current frame, and a fresh
+        # scene's current time is environment-dependent (batch lands on 1).
+        cmds.currentTime(5)
         result = Channels.classify_connection(self.cube, "translateX")
         self.assertEqual(result, "keyframe")
+
+    def test_keyframe_active_connection(self):
+        cmds.setKeyframe(str(self.cube), attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(str(self.cube), attribute="translateX", time=10, value=5)
+        cmds.currentTime(10)
+        result = Channels.classify_connection(self.cube, "translateX")
+        self.assertEqual(result, "keyframe_active")
 
     def test_expression_connection(self):
         cmds.expression(string=f"{self.cube}.translateX = frame;", object=self.cube)

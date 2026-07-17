@@ -2,7 +2,7 @@
 # coding=utf-8
 """Slots for the Marmoset Toolbag bridge panel.
 
-Thin subclass of :class:`mayatk.ui_utils.maya_bridge_slots.MayaBridgeSlotsBase`
+Thin subclass of :class:`mayatk.ui_utils.maya_bridge_slots_base.MayaBridgeSlotsBase`
 (which itself subclasses uitk's :class:`BridgeSlotsBase`) -- the panel
 machinery (widget construction, presets, log routing, Output Dir row
 with scene-dir fallback, startup info, template description) lives
@@ -20,7 +20,7 @@ try:
 except ImportError:
     cmds = None
 
-from mayatk.ui_utils.maya_bridge_slots import MayaBridgeSlotsBase
+from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
 
 # From this package:
 from mayatk.mat_utils.marmoset_bridge._marmoset_bridge import (

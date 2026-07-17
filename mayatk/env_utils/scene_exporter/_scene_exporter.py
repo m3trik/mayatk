@@ -24,7 +24,7 @@ from uitk.widgets.mixins.tooltip_mixin import fmt
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.env_utils.scene_exporter.task_manager import TaskManager
-from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import HierarchySidecar
+from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import HierarchySidecar
 
 
 class SceneExporter(ptk.LoggingMixin):

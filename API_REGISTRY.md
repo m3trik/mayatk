@@ -49,7 +49,7 @@ _Generated: 2026-07-17_
 - [`audio_utils/compositor.py`](#audio_utils--compositor) — Compositor — derives DG audio nodes from keyed track events.
 - [`audio_utils/migrate.py`](#audio_utils--migrate) — One-shot migration from legacy single-enum carriers to per-track schema.
 - [`audio_utils/nodes.py`](#audio_utils--nodes) — Low-level DG audio node primitives.
-- [`audio_utils/segments/discovery.py`](#audio_utils--segments--discovery) — Segment discovery from the per-track keyed canonical store.
+- [`audio_utils/segments.py`](#audio_utils--segments) — Consumer-facing segment discovery for sequencer + manifest.
 - [`cam_utils/_cam_utils.py`](#cam_utils--_cam_utils)
 - [`core_utils/_core_utils.py`](#core_utils--_core_utils)
 - [`core_utils/auto_instancer/_auto_instancer.py`](#core_utils--auto_instancer--_auto_instancer) — Scene auto-instancer: convert geometrically identical meshes to instances.
@@ -92,15 +92,16 @@ _Generated: 2026-07-17_
 - [`env_utils/blender_bridge/blender_bridge_slots.py`](#env_utils--blender_bridge--blender_bridge_slots) — Slots for the Blender bridge panel.
 - [`env_utils/blender_bridge/parameters.py`](#env_utils--blender_bridge--parameters) — Registry of user-tunable Blender-bridge parameters exposed to the panel.
 - [`env_utils/blender_bridge/templates/_import_scene.py`](#env_utils--blender_bridge--templates--_import_scene) — Open a .blend headlessly (blender --background) and export it as FBX for a Maya import.
+- [`env_utils/blender_bridge/templates/_import_scene_usd.py`](#env_utils--blender_bridge--templates--_import_scene_usd) — Open a .blend headlessly (blender --background) and export it as USD for a Maya import.
 - [`env_utils/blender_bridge/templates/import.py`](#env_utils--blender_bridge--templates--import) — Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.
 - [`env_utils/devtools.py`](#env_utils--devtools)
 - [`env_utils/fbx_utils.py`](#env_utils--fbx_utils)
 - [`env_utils/handoff_export.py`](#env_utils--handoff_export) — Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
-- [`env_utils/hierarchy_manager/_hierarchy_manager.py`](#env_utils--hierarchy_manager--_hierarchy_manager)
-- [`env_utils/hierarchy_manager/hierarchy_manager_slots.py`](#env_utils--hierarchy_manager--hierarchy_manager_slots)
-- [`env_utils/hierarchy_manager/hierarchy_sidecar.py`](#env_utils--hierarchy_manager--hierarchy_sidecar) — Hierarchy sidecar manifest management.
-- [`env_utils/hierarchy_manager/tree_renderer.py`](#env_utils--hierarchy_manager--tree_renderer) — Tree rendering, formatting, and selection management for the hierarchy manager UI.
-- [`env_utils/hierarchy_manager/tree_utils.py`](#env_utils--hierarchy_manager--tree_utils) — Tree widget utilities for hierarchy manager UI operations.
+- [`env_utils/hierarchy_sync/_hierarchy_sync.py`](#env_utils--hierarchy_sync--_hierarchy_sync)
+- [`env_utils/hierarchy_sync/hierarchy_sidecar.py`](#env_utils--hierarchy_sync--hierarchy_sidecar) — Hierarchy sidecar manifest management.
+- [`env_utils/hierarchy_sync/hierarchy_sync_slots.py`](#env_utils--hierarchy_sync--hierarchy_sync_slots)
+- [`env_utils/hierarchy_sync/tree_renderer.py`](#env_utils--hierarchy_sync--tree_renderer) — Tree rendering, formatting, and selection management for the hierarchy sync UI.
+- [`env_utils/hierarchy_sync/tree_utils.py`](#env_utils--hierarchy_sync--tree_utils) — Tree widget utilities for hierarchy sync UI operations.
 - [`env_utils/maya_connection.py`](#env_utils--maya_connection) — Maya Connection Module
 - [`env_utils/namespace_sandbox.py`](#env_utils--namespace_sandbox)
 - [`env_utils/reference_manager.py`](#env_utils--reference_manager)
@@ -110,6 +111,7 @@ _Generated: 2026-07-17_
 - [`env_utils/unity_bridge/_unity_bridge.py`](#env_utils--unity_bridge--_unity_bridge) — Unity bridge engine -- export the Maya selection into a Unity project's Assets/.
 - [`env_utils/unity_bridge/parameters.py`](#env_utils--unity_bridge--parameters) — User-tunable parameters for the Maya->Unity bridge panel.
 - [`env_utils/unity_bridge/unity_bridge_slots.py`](#env_utils--unity_bridge--unity_bridge_slots) — Slots for the Unity bridge panel.
+- [`env_utils/usd.py`](#env_utils--usd) — USD import / export over Maya's native ``mayaUsd`` runtime.
 - [`env_utils/workspace_manager.py`](#env_utils--workspace_manager)
 - [`env_utils/workspace_map.py`](#env_utils--workspace_map)
 - [`light_utils/_light_utils.py`](#light_utils--_light_utils)
@@ -140,14 +142,12 @@ _Generated: 2026-07-17_
 - [`mat_utils/marmoset_bridge/toolbag_log.py`](#mat_utils--marmoset_bridge--toolbag_log) — Marmoset Toolbag log-file resolution, classification, and live tailing.
 - [`mat_utils/mat_manifest.py`](#mat_utils--mat_manifest)
 - [`mat_utils/mat_snapshot.py`](#mat_utils--mat_snapshot) — Lightweight material state snapshot and restore.
-- [`mat_utils/mat_transfer.py`](#mat_utils--mat_transfer)
 - [`mat_utils/mat_updater.py`](#mat_utils--mat_updater)
 - [`mat_utils/render_opacity/_render_opacity.py`](#mat_utils--render_opacity--_render_opacity)
 - [`mat_utils/render_opacity/attribute_mode.py`](#mat_utils--render_opacity--attribute_mode)
 - [`mat_utils/render_opacity/material_mode.py`](#mat_utils--render_opacity--material_mode)
 - [`mat_utils/render_opacity/render_opacity_slots.py`](#mat_utils--render_opacity--render_opacity_slots) — Switchboard slots for the Render Opacity UI.
 - [`mat_utils/shader_attribute_map.py`](#mat_utils--shader_attribute_map)
-- [`mat_utils/shader_remapper.py`](#mat_utils--shader_remapper)
 - [`mat_utils/shader_templates/_shader_templates.py`](#mat_utils--shader_templates--_shader_templates)
 - [`mat_utils/substance_bridge/_substance_bridge.py`](#mat_utils--substance_bridge--_substance_bridge) — Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
 - [`mat_utils/substance_bridge/connection.py`](#mat_utils--substance_bridge--connection) — Substance 3D Painter connection module.
@@ -177,7 +177,7 @@ _Generated: 2026-07-17_
 - [`ui_utils/calculator.py`](#ui_utils--calculator)
 - [`ui_utils/channel_box.py`](#ui_utils--channel_box) — Programmatic access to Maya's Channel Box.
 - [`ui_utils/hotkey_collisions.py`](#ui_utils--hotkey_collisions) — Maya hotkey collision checker for the uitk ShortcutEditor.
-- [`ui_utils/maya_bridge_slots.py`](#ui_utils--maya_bridge_slots) — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
+- [`ui_utils/maya_bridge_slots_base.py`](#ui_utils--maya_bridge_slots_base) — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 - [`ui_utils/maya_native_menus.py`](#ui_utils--maya_native_menus)
 - [`ui_utils/maya_ui_handler.py`](#ui_utils--maya_ui_handler)
 - [`ui_utils/node_icons.py`](#ui_utils--node_icons) — Reusable helper for resolving Maya node icons at runtime.
@@ -867,14 +867,14 @@ Low-level DG audio node primitives.
 - [`configure_dg(node_name: str, file_path: str, offset: float) -> None`](mayatk/mayatk/audio_utils/nodes.py#L96) — Configure an existing DG audio node for reliable playback.
 - [`query_duration(node_name: str) -> float`](mayatk/mayatk/audio_utils/nodes.py#L121) — Return the duration of an audio DG node in frames (0 on failure).
 
-<a id="audio_utils--segments--discovery"></a>
-### `audio_utils/segments/discovery.py`
+<a id="audio_utils--segments"></a>
+### `audio_utils/segments.py`
 
-Segment discovery from the per-track keyed canonical store.
+Consumer-facing segment discovery for sequencer + manifest.
 
-- [`collect_all_segments(scene_start: Optional[float] = None, scene_end: Optional[float] = None, include_waveform: bool = True, carrier: Optional[str] = None) -> List[AudioSegment]`](mayatk/mayatk/audio_utils/segments/discovery.py#L101) — Return every :class:`AudioSegment` visible on the canonical carrier.
-- [`collect_segments_for_track(track_id: str, include_waveform: bool = True, carrier: Optional[str] = None) -> List[AudioSegment]`](mayatk/mayatk/audio_utils/segments/discovery.py#L147) — Return segments for a single *track_id*.
-- **[`class AudioSegment`](mayatk/mayatk/audio_utils/segments/discovery.py#L22)** — A resolved audio segment for sequencer/manifest consumption.
+- [`collect_all_segments(scene_start: Optional[float] = None, scene_end: Optional[float] = None, include_waveform: bool = True, carrier: Optional[str] = None) -> List[AudioSegment]`](mayatk/mayatk/audio_utils/segments.py#L116) — Return every :class:`AudioSegment` visible on the canonical carrier.
+- [`collect_segments_for_track(track_id: str, include_waveform: bool = True, carrier: Optional[str] = None) -> List[AudioSegment]`](mayatk/mayatk/audio_utils/segments.py#L162) — Return segments for a single *track_id*.
+- **[`class AudioSegment`](mayatk/mayatk/audio_utils/segments.py#L37)** — A resolved audio segment for sequencer/manifest consumption.
   - `AudioSegment.is_audio(self) -> bool` *(property)*
 
 <a id="cam_utils--_cam_utils"></a>
@@ -1036,7 +1036,7 @@ Animation-curve diagnostics and optional repair helpers.
 Mesh diagnostics and repair helpers.
 
 - **[`class MeshDiagnostics`](mayatk/mayatk/core_utils/diagnostics/mesh_diag.py#L18)** — Operations for inspecting and fixing common mesh issues.
-  - `MeshDiagnostics.clean_geometry(objects: NodeSeq, allMeshes: bool = False, repair: bool = False, quads: bool = False, nsided: bool = False, concave: bool = False, holed: bool = False, nonplanar: bool = False, zeroGeom: bool = False, zeroGeomTol: float = 1e-05, zeroEdge: bool = False, zeroEdgeTol: float = 1e-05, zeroMap: bool = False, zeroMapTol: float = 1e-05, sharedUVs: bool = False, nonmanifold: bool = False, lamina: bool = False, invalidComponents: bool = False, historyOn: bool = True, bakePartialHistory: bool = False) -> None` *(static)* — Select or remove unwanted geometry from a mesh via ``polyCleanupArgList``.
+  - `MeshDiagnostics.clean_geometry(objects: NodeSeq, allMeshes: bool = False, repair: bool = False, quads: bool = False, nsided: bool = False, concave: bool = False, holed: bool = False, nonplanar: bool = False, zeroGeom: bool = False, zeroGeomTol: float = 1e-05, zeroEdge: bool = False, zeroEdgeTol: float = 1e-05, zeroMap: bool = False, zeroMapTol: float = 1e-05, sharedUVs: bool = False, nonmanifold: bool = False, lamina: bool = False, invalidComponents: bool = False, historyOn: bool = True, bakePartialHistory: bool = False) -> list` *(static)* — Select or remove unwanted geometry from a mesh via ``polyCleanupArgList``.
   - `MeshDiagnostics.get_ngons(objects: Optional[NodeSeq], repair: bool = False)` *(static)* — Find N-gons and optionally convert them to quads.
 
 <a id="core_utils--diagnostics--scene_diag"></a>
@@ -1556,13 +1556,13 @@ Blender bridge engine -- export the Maya selection and run a chosen import templ
 
 Import a Blender scene (.blend) into Maya via a headless-Blender FBX round-trip.
 
-- [`import_blender_scene(src_path: str, **kwargs: Any) -> List[str]`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L538) — Import a Blender scene (.blend) into the current Maya scene.
-- **[`class BlenderSceneImport(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L85)** — Engine: convert a .blend to FBX via headless Blender, then import it.
+- [`import_blender_scene(src_path: str, **kwargs: Any) -> List[str]`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L609) — Import a Blender scene (.blend) into the current Maya scene.
+- **[`class BlenderSceneImport(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L96)** — Engine: convert a .blend to FBX via headless Blender, then import it.
   - `BlenderSceneImport.blender_path(self) -> Optional[str]` *(property)* — The Blender executable (explicit, or discovered via the bridge's AppSpec).
   - `BlenderSceneImport.require_blender(self) -> str` — Return :attr:`blender_path` or raise the spec's not-found error.
-  - `BlenderSceneImport.render_script(self, src_path: str, out_fbx: str, *, embed_textures: bool = False, include_animation: bool = True) -> str` — Render the Blender-side conversion script (exposed for tests/preview).
-  - `BlenderSceneImport.convert(self, src_path: str, out_fbx: str, *, timeout: float = 600, **script_opts: Any) -> 'ptk.ScriptRunResult'` — Convert *src_path* to *out_fbx* in a fresh headless Blender (blocking).
-  - `BlenderSceneImport.import_scene(self, src_path: str, *, cleanup: bool = True, use_cache: bool = True, timeout: float = 600, fbx_options: Optional[Dict[str, Any]] = None, **script_opts: Any) -> List[str]` — Import the Blender scene at *src_path*;
+  - `BlenderSceneImport.render_script(self, src_path: str, out_path: str, *, via: str = 'fbx', embed_textures: bool = False, include_animation: bool = True) -> str` — Render the Blender-side conversion script (exposed for tests/preview).
+  - `BlenderSceneImport.convert(self, src_path: str, out_path: str, *, via: str = 'fbx', timeout: float = 600, **script_opts: Any) -> 'ptk.ScriptRunResult'` — Convert *src_path* to *out_path* in a fresh headless Blender (blocking).
+  - `BlenderSceneImport.import_scene(self, src_path: str, *, via: str = 'fbx', cleanup: bool = True, use_cache: bool = True, timeout: float = 600, fbx_options: Optional[Dict[str, Any]] = None, **script_opts: Any) -> List[str]` — Import the Blender scene at *src_path*;
 
 <a id="env_utils--blender_bridge--blender_bridge_slots"></a>
 ### `env_utils/blender_bridge/blender_bridge_slots.py`
@@ -1594,6 +1594,14 @@ Open a .blend headlessly (blender --background) and export it as FBX for a Maya 
 - [`write_texture_manifest(entries, scene_materials, path)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L139) — Sidecar for the textures FBX cannot carry, consumed by BlenderSceneImport.
 - [`export_fbx(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L157) — Full-fidelity FBX export with per-flag tolerance across Blender versions.
 - [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L191)
+
+<a id="env_utils--blender_bridge--templates--_import_scene_usd"></a>
+### `env_utils/blender_bridge/templates/_import_scene_usd.py`
+
+Open a .blend headlessly (blender --background) and export it as USD for a Maya import.
+
+- [`export_usd(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L38) — Whole-scene USD export with per-kwarg tolerance across Blender versions.
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L85)
 
 <a id="env_utils--blender_bridge--templates--import"></a>
 ### `env_utils/blender_bridge/templates/import.py`
@@ -1640,11 +1648,12 @@ Import the bridged FBX into Blender, with optional clean-slate and frame-on-impo
 <a id="env_utils--fbx_utils"></a>
 ### `env_utils/fbx_utils.py`
 
-- **[`class FbxUtils(ptk.HelpMixin)`](mayatk/mayatk/env_utils/fbx_utils.py#L18)** — Low-level utilities for FBX export operations in Maya.
+- **[`class FbxUtils(ptk.HelpMixin)`](mayatk/mayatk/env_utils/fbx_utils.py#L18)** — Low-level utilities for FBX import/export operations in Maya.
   - `FbxUtils.load_plugin()` *(static)* — Ensure the fbxmaya plugin is loaded.
   - `FbxUtils.set_fbx_options(options: Dict[str, Any])` *(static)* — Apply FBX export options via MEL commands.
   - `FbxUtils.load_preset(preset_path: str)` *(static)* — Load an FBX export preset file.
   - `FbxUtils.export(cls, file_path: str, objects: Optional[List] = None, preset_file: Optional[str] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True) -> str` *(class)* — Export geometry to an FBX file.
+  - `FbxUtils.import_scene(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True) -> List[str]` *(class)* — Import an FBX file, optionally isolated into a namespace.
   - `FbxUtils.reset_takes() -> None` *(static)* — Clear all FBX export take definitions (global, sticky exporter state).
   - `FbxUtils.apply_takes(takes: Iterable[Any]) -> int` *(static)* — Configure FBX export to emit one AnimStack (Unity clip) per take.
   - `FbxUtils.apply_takes_from_node(node: Optional[str] = None, attr: Optional[str] = None) -> int` *(static)* — Read take defs from a JSON string channel on *node* and apply them.
@@ -1662,82 +1671,38 @@ Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
 
 - **[`class MayaExportMixin`](mayatk/mayatk/env_utils/handoff_export.py#L32)** — The Maya producer hooks for hand-off bridges (``_resolve_objects`` + ``_produce``).
 
-<a id="env_utils--hierarchy_manager--_hierarchy_manager"></a>
-### `env_utils/hierarchy_manager/_hierarchy_manager.py`
+<a id="env_utils--hierarchy_sync--_hierarchy_sync"></a>
+### `env_utils/hierarchy_sync/_hierarchy_sync.py`
 
-- [`get_clean_node_name(node) -> str`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L67) — Get a consistent clean node name for matching (strips namespace).
-- [`get_clean_node_name_from_string(node_name: str) -> str`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L83) — Get a clean node name from a string path (removes namespace prefix).
-- [`clean_hierarchy_path(path: str) -> str`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L91) — Clean namespace prefixes from all components of a hierarchical path.
-- [`format_component(name: str, strip_namespaces: bool = False) -> str`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L99) — Format a single component name with optional namespace stripping.
-- [`is_default_maya_camera(path: str, node) -> bool`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L111) — Check if *node* represents a Maya default camera.
-- [`should_keep_node_by_type(node, node_types: List[str], exclude: bool = True) -> bool`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L127) — Filter nodes by shape types.
-- [`filter_path_map_by_cameras(path_map: Dict[str, Any]) -> Dict[str, Any]`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L141) — Remove Maya default cameras from *path_map*.
-- [`filter_path_map_by_types(path_map: Dict[str, Any], node_types: List[str], exclude: bool = True) -> Dict[str, Any]`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L150) — Filter *path_map* by shape node types.
-- [`select_objects_in_maya(object_names: List[str]) -> int`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L161) — Select objects in Maya scene by name.
-- **[`class HierarchyMapBuilder`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L220)** — Builds hierarchy path maps for Maya transforms.
+- [`get_clean_node_name(node) -> str`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L67) — Get a consistent clean node name for matching (strips namespace).
+- [`get_clean_node_name_from_string(node_name: str) -> str`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L83) — Get a clean node name from a string path (removes namespace prefix).
+- [`clean_hierarchy_path(path: str) -> str`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L91) — Clean namespace prefixes from all components of a hierarchical path.
+- [`format_component(name: str, strip_namespaces: bool = False) -> str`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L99) — Format a single component name with optional namespace stripping.
+- [`is_default_maya_camera(path: str, node) -> bool`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L111) — Check if *node* represents a Maya default camera.
+- [`should_keep_node_by_type(node, node_types: List[str], exclude: bool = True) -> bool`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L126) — Filter nodes by shape types.
+- [`filter_path_map_by_cameras(path_map: Dict[str, Any]) -> Dict[str, Any]`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L148) — Remove Maya default cameras from *path_map*.
+- [`filter_path_map_by_types(path_map: Dict[str, Any], node_types: List[str], exclude: bool = True) -> Dict[str, Any]`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L157) — Filter *path_map* by shape node types.
+- [`select_objects_in_maya(object_names: List[str]) -> int`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L168) — Select objects in Maya scene by name.
+- **[`class HierarchyMapBuilder`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L227)** — Builds hierarchy path maps for Maya transforms.
   - `HierarchyMapBuilder.build_path_map(root, exclude_namespace_prefixes: List[str] = None, strip_namespaces: bool = False) -> Dict[str, Any]` *(static)* — Build a mapping of hierarchical paths to transform nodes.
   - `HierarchyMapBuilder.build_path_map_from_nodes(nodes: List[Any], strip_namespaces: bool = False) -> Dict[str, Any]` *(static)* — Build a path map from an arbitrary list of transform node names.
-- **[`class MayaObjectMatcher(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L324)** — Maya-specific object matching with fuzzy logic and container searches.
+- **[`class MayaObjectMatcher(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L339)** — Maya-specific object matching with fuzzy logic and container searches.
   - `MayaObjectMatcher.find_matches(self, target_objects: List[str], imported_transforms: List, dry_run: bool = False) -> Tuple[List, Dict]` — Find matching objects using exact and fuzzy matching.
-- **[`class HierarchyManager(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L430)** — Core hierarchy analysis and repair manager.
-  - `HierarchyManager.analyze_hierarchies(self, current_tree_root=None, reference_tree_root=None, reference_objects: List = None, filter_meshes: bool = True, filter_cameras: bool = False, filter_lights: bool = False, inc_names: Optional[List[str]] = None, exc_names: Optional[List[str]] = None, inc_types: Optional[List[str]] = None, exc_types: Optional[List[str]] = None) -> Dict[str, Any]` — Analyze differences between current and reference hierarchies.
-  - `HierarchyManager.create_stubs(self, paths: Optional[List[str]] = None) -> List[str]` — Create empty transform stubs for missing hierarchy paths.
-  - `HierarchyManager.quarantine_extras(self, group: str = '_QUARANTINE', paths: Optional[List[str]] = None, skip_animated: bool = True) -> List[str]` — Move extra (scene-only) items to a root-level quarantine group.
-  - `HierarchyManager.fix_fuzzy_renames(self, items: Optional[List[Dict[str, str]]] = None, skip_animated: bool = True) -> List[str]` — Rename nodes identified as fuzzy matches to their reference names.
-  - `HierarchyManager.fix_reparented(self, items: Optional[List[Dict[str, str]]] = None) -> List[str]` — Move reparented nodes to match their reference hierarchy position.
-- **[`class ObjectSwapper(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_manager/_hierarchy_manager.py#L1820)** — Handles cross-scene object operations like push/pull.
-  - `ObjectSwapper.push_objects_to_scene(self, target_objects: List[str], target_file: Union[str, Path], backup: bool = True) -> bool` — Push objects from current scene to target scene.
+- **[`class HierarchySync(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L437)** — Core hierarchy analysis and repair manager.
+  - `HierarchySync.analyze_hierarchies(self, current_tree_root=None, reference_tree_root=None, reference_objects: List = None, filter_meshes: bool = True, filter_cameras: bool = False, filter_lights: bool = False, inc_names: Optional[List[str]] = None, exc_names: Optional[List[str]] = None, inc_types: Optional[List[str]] = None, exc_types: Optional[List[str]] = None) -> Dict[str, Any]` — Analyze differences between current and reference hierarchies.
+  - `HierarchySync.create_stubs(self, paths: Optional[List[str]] = None) -> List[str]` — Create empty transform stubs for missing hierarchy paths.
+  - `HierarchySync.quarantine_extras(self, group: str = '_QUARANTINE', paths: Optional[List[str]] = None, skip_animated: bool = True) -> List[str]` — Move extra (scene-only) items to a root-level quarantine group.
+  - `HierarchySync.fix_fuzzy_renames(self, items: Optional[List[Dict[str, str]]] = None, skip_animated: bool = True) -> List[str]` — Rename nodes identified as fuzzy matches to their reference names.
+  - `HierarchySync.fix_reparented(self, items: Optional[List[Dict[str, str]]] = None, skip_animated: bool = True) -> List[str]` — Move reparented nodes to match their reference hierarchy position.
+- **[`class ObjectSwapper(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L2216)** — Handles cross-scene object operations like push/pull.
   - `ObjectSwapper.pull_objects_from_scene(self, target_objects: List[str], source_file: Union[str, Path], backup: bool = True) -> bool` — Pull objects from source scene into current scene.
 
-<a id="env_utils--hierarchy_manager--hierarchy_manager_slots"></a>
-### `env_utils/hierarchy_manager/hierarchy_manager_slots.py`
-
-- **[`class HierarchyManagerController(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_manager/hierarchy_manager_slots.py#L29)** — Controller for hierarchy management operations.
-  - `HierarchyManagerController.workspace(self) -> Optional[str]` *(property)* — Get the current workspace directory.
-  - `HierarchyManagerController.reference_path(self) -> str` *(property)* — The current reference scene path.
-  - `HierarchyManagerController.analyze_hierarchies(self, reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, filter_meshes: bool = False) -> bool` — Analyze hierarchies and perform comparison.
-  - `HierarchyManagerController.pull_objects(self, object_names: List[str], reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, pull_children: bool = False, pull_mode: str = 'Add to Scene') -> bool` — Pull objects from reference scene to current scene.
-  - `HierarchyManagerController.repair_hierarchies(self, create_stubs: bool = True, quarantine_extras: bool = True, quarantine_group: str = '_QUARANTINE', skip_animated: bool = True, fix_reparented: bool = True, fix_fuzzy_renames: bool = True, dry_run: bool = True) -> bool` — Run repair operations on the current scene to match reference hierarchy.
-  - `HierarchyManagerController.select_objects_in_maya(self, object_names: List[str]) -> int` — Select objects in Maya scene by name.
-  - `HierarchyManagerController.populate_reference_tree(self, tree_widget, reference_path: str = None)` — Populate the reference tree — handles cache, import, and rendering.
-  - `HierarchyManagerController.refresh_trees(self, restore_selection: bool = True)` — Refresh both tree widgets with current hierarchy data.
-  - `HierarchyManagerController.is_path_ignored(self, tree_widget, path)` — Check whether *path* (or any ancestor) is in the ignored set.
-  - `HierarchyManagerController.clear_ignored_paths(self)` — Clear all ignored paths for both trees.
-  - `HierarchyManagerController.log_diff_results(self)` — Log detailed hierarchy difference analysis results using rich formatting.
-  - `HierarchyManagerController.get_recent_reference_scenes(self) -> List[str]` — Get recent reference scenes from settings.
-  - `HierarchyManagerController.save_recent_reference_scene(self, scene_path: str)` — Save reference scene to recent list.
-- **[`class HierarchyManagerSlots(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_manager/hierarchy_manager_slots.py#L1112)** — Slots class for hierarchy management UI operations.
-  - `HierarchyManagerSlots.header_init(self, widget)` — Initialize the header widget.
-  - `HierarchyManagerSlots.tree000_init(self, widget)` — Initialize the reference/imported hierarchy tree widget.
-  - `HierarchyManagerSlots.tree001_init(self, widget)` — Initialize the current scene hierarchy tree widget.
-  - `HierarchyManagerSlots.cmb_diff_options_init(self, widget)` — Populate the diff-options WidgetComboBox below the Diff button.
-  - `HierarchyManagerSlots.cmb_pull_options_init(self, widget)` — Populate the pull-options WidgetComboBox below the Pull button.
-  - `HierarchyManagerSlots.tb003_init(self, widget)` — Initialize the fix/repair toggle button with options menu.
-  - `HierarchyManagerSlots.tb001(self, state=None)` — Run the diff analysis using settings from cmb_diff_options.
-  - `HierarchyManagerSlots.tb002(self, state=None)` — Toggle button for pull objects with options menu.
-  - `HierarchyManagerSlots.tb003(self, state=None)` — Toggle button for fix/repair operations.
-  - `HierarchyManagerSlots.b003(self)` — Browse for reference scene file.
-  - `HierarchyManagerSlots.b005(self)` — Refresh current scene hierarchy tree.
-  - `HierarchyManagerSlots.b006(self)` — Select checked objects in Maya scene.
-  - `HierarchyManagerSlots.b007(self)` — Expand all items in current scene tree.
-  - `HierarchyManagerSlots.b008(self)` — Collapse all items in current scene tree.
-  - `HierarchyManagerSlots.b009(self)` — Refresh reference hierarchy tree.
-  - `HierarchyManagerSlots.b011(self)` — Show differences between hierarchies.
-  - `HierarchyManagerSlots.b012(self)` — Analyze hierarchies and perform comparison.
-  - `HierarchyManagerSlots.b013(self)` — Ignore selected items in the reference tree.
-  - `HierarchyManagerSlots.b014(self)` — Unignore selected items in the reference tree.
-  - `HierarchyManagerSlots.b015(self)` — Ignore selected items in the current scene tree.
-  - `HierarchyManagerSlots.b016(self)` — Unignore selected items in the current scene tree.
-  - `HierarchyManagerSlots.b018(self)` — Delete selected objects from the Maya scene and refresh the tree.
-  - `HierarchyManagerSlots.b017(self)` — Rename current-scene items to match reference names.
-  - `HierarchyManagerSlots.count_tree_items(self, tree_widget)` — Count total items in a tree widget.
-
-<a id="env_utils--hierarchy_manager--hierarchy_sidecar"></a>
-### `env_utils/hierarchy_manager/hierarchy_sidecar.py`
+<a id="env_utils--hierarchy_sync--hierarchy_sidecar"></a>
+### `env_utils/hierarchy_sync/hierarchy_sidecar.py`
 
 Hierarchy sidecar manifest management.
 
-- **[`class HierarchySidecar`](mayatk/mayatk/env_utils/hierarchy_manager/hierarchy_sidecar.py#L17)** — Manages hierarchy sidecar files stored alongside export files.
+- **[`class HierarchySidecar`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_sidecar.py#L17)** — Manages hierarchy sidecar files stored alongside export files.
   - `HierarchySidecar.base_stem(cls, export_path: str) -> str` *(class)* — Return the export stem with any trailing ``_vNN`` suffix stripped.
   - `HierarchySidecar.manifest_path_for(cls, export_path: str, *, base_stem: bool = False) -> str` *(class)* — Return the sidecar manifest path for an export file.
   - `HierarchySidecar.diff_report_path_for(cls, export_path: str, *, base_stem: bool = False) -> str` *(class)* — Return the sidecar diff report path for an export file.
@@ -1756,12 +1721,55 @@ Hierarchy sidecar manifest management.
   - `HierarchySidecar.build_full_path_set(cls, objects) -> set` *(class)* — Expand *objects* to descendants, then clean and deduplicate.
   - `HierarchySidecar.compare(cls, export_path: str, current_paths: set, *, base_stem: bool = False) -> Tuple[bool, list, list]` *(class)* — Compare *current_paths* against the stored manifest.
 
-<a id="env_utils--hierarchy_manager--tree_renderer"></a>
-### `env_utils/hierarchy_manager/tree_renderer.py`
+<a id="env_utils--hierarchy_sync--hierarchy_sync_slots"></a>
+### `env_utils/hierarchy_sync/hierarchy_sync_slots.py`
 
-Tree rendering, formatting, and selection management for the hierarchy manager UI.
+- **[`class HierarchySyncController(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_sync_slots.py#L29)** — Controller for hierarchy management operations.
+  - `HierarchySyncController.workspace(self) -> Optional[str]` *(property)* — Get the current workspace directory.
+  - `HierarchySyncController.reference_path(self) -> str` *(property)* — The current reference scene path.
+  - `HierarchySyncController.analyze_hierarchies(self, reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, filter_meshes: bool = False, filter_cameras: bool = False, filter_lights: bool = False) -> bool` — Analyze hierarchies and perform comparison.
+  - `HierarchySyncController.pull_objects(self, object_names: List[str], reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, pull_children: bool = False, pull_mode: str = 'Add to Scene') -> bool` — Pull objects from reference scene to current scene.
+  - `HierarchySyncController.repair_hierarchies(self, create_stubs: bool = True, quarantine_extras: bool = True, quarantine_group: str = '_QUARANTINE', skip_animated: bool = True, fix_reparented: bool = True, fix_fuzzy_renames: bool = True, dry_run: bool = True) -> bool` — Run repair operations on the current scene to match reference hierarchy.
+  - `HierarchySyncController.select_objects_in_maya(self, object_names: List[str]) -> int` — Select objects in Maya scene by name.
+  - `HierarchySyncController.populate_reference_tree(self, tree_widget, reference_path: str = None)` — Populate the reference tree — handles cache, import, and rendering.
+  - `HierarchySyncController.refresh_trees(self, restore_selection: bool = True)` — Refresh both tree widgets with current hierarchy data.
+  - `HierarchySyncController.is_path_ignored(self, tree_widget, path)` — Check whether *path* (or any ancestor) is in the ignored set.
+  - `HierarchySyncController.clear_ignored_paths(self)` — Clear all ignored paths for both trees.
+  - `HierarchySyncController.log_diff_results(self)` — Log detailed hierarchy difference analysis results using rich formatting.
+  - `HierarchySyncController.get_recent_reference_scenes(self) -> List[str]` — Get recent reference scenes from settings.
+  - `HierarchySyncController.save_recent_reference_scene(self, scene_path: str)` — Save reference scene to recent list.
+- **[`class HierarchySyncSlots(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_sync_slots.py#L1138)** — Slots class for hierarchy management UI operations.
+  - `HierarchySyncSlots.header_init(self, widget)` — Initialize the header widget.
+  - `HierarchySyncSlots.tree000_init(self, widget)` — Initialize the reference/imported hierarchy tree widget.
+  - `HierarchySyncSlots.tree001_init(self, widget)` — Initialize the current scene hierarchy tree widget.
+  - `HierarchySyncSlots.cmb_diff_options_init(self, widget)` — Populate the diff-options WidgetComboBox below the Diff button.
+  - `HierarchySyncSlots.cmb_pull_options_init(self, widget)` — Populate the pull-options WidgetComboBox below the Pull button.
+  - `HierarchySyncSlots.tb003_init(self, widget)` — Initialize the fix/repair toggle button with options menu.
+  - `HierarchySyncSlots.tb001(self, state=None)` — Run the diff analysis using settings from cmb_diff_options.
+  - `HierarchySyncSlots.tb002(self, state=None)` — Toggle button for pull objects with options menu.
+  - `HierarchySyncSlots.tb003(self, state=None)` — Toggle button for fix/repair operations.
+  - `HierarchySyncSlots.b003(self)` — Browse for reference scene file.
+  - `HierarchySyncSlots.b005(self)` — Refresh current scene hierarchy tree.
+  - `HierarchySyncSlots.b006(self)` — Select checked objects in Maya scene.
+  - `HierarchySyncSlots.b007(self)` — Expand all items in current scene tree.
+  - `HierarchySyncSlots.b008(self)` — Collapse all items in current scene tree.
+  - `HierarchySyncSlots.b009(self)` — Refresh reference hierarchy tree.
+  - `HierarchySyncSlots.b011(self)` — Show differences between hierarchies.
+  - `HierarchySyncSlots.b012(self)` — Analyze hierarchies and perform comparison.
+  - `HierarchySyncSlots.b013(self)` — Ignore selected items in the reference tree.
+  - `HierarchySyncSlots.b014(self)` — Unignore selected items in the reference tree.
+  - `HierarchySyncSlots.b015(self)` — Ignore selected items in the current scene tree.
+  - `HierarchySyncSlots.b016(self)` — Unignore selected items in the current scene tree.
+  - `HierarchySyncSlots.b018(self)` — Delete selected objects from the Maya scene and refresh the tree.
+  - `HierarchySyncSlots.b017(self)` — Rename current-scene items to match reference names.
+  - `HierarchySyncSlots.count_tree_items(self, tree_widget)` — Count total items in a tree widget.
 
-- **[`class HierarchyTreeRenderer(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_manager/tree_renderer.py#L30)** — Owns all QTreeWidget population, diff-colour formatting, ignore
+<a id="env_utils--hierarchy_sync--tree_renderer"></a>
+### `env_utils/hierarchy_sync/tree_renderer.py`
+
+Tree rendering, formatting, and selection management for the hierarchy sync UI.
+
+- **[`class HierarchyTreeRenderer(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/tree_renderer.py#L25)** — Owns all QTreeWidget population, diff-colour formatting, ignore
   - `HierarchyTreeRenderer.populate_current_scene_tree(self, tree_widget)` — Populate the current scene hierarchy tree.
   - `HierarchyTreeRenderer.populate_reference_tree(self, tree_widget, transforms, reference_name='Reference Scene')` — Populate the reference hierarchy tree with pre-fetched transforms.
   - `HierarchyTreeRenderer.show_reference_placeholder(self, tree_widget, reference_name='Reference Scene')` — Show a 'Browse for Reference Scene' placeholder in an empty tree.
@@ -1770,22 +1778,22 @@ Tree rendering, formatting, and selection management for the hierarchy manager U
   - `HierarchyTreeRenderer.apply_difference_formatting(self, tree001, tree000)` — Apply color formatting to tree widgets based on hierarchy differences.
   - `HierarchyTreeRenderer.clear_tree_colors(self, tree_widget)` — Remove foreground/background colors from every item in a tree widget.
   - `HierarchyTreeRenderer.format_tree_differences(self, tree_widget, tree_type, tree_matcher, by_full, by_clean, by_last)` — Format a specific tree widget based on differences.
-  - `HierarchyTreeRenderer.apply_ignore_styling(self, tree_widget)` — Apply or remove strikethrough + dim styling for ignored items.
+  - `HierarchyTreeRenderer.apply_ignore_styling(self, tree_widget)` — Apply strikethrough/dim styling for ignored items — and, when the 'Hide Ignored'
   - `HierarchyTreeRenderer.build_item_path(item)` *(static)* — Build a pipe-separated hierarchy path from a QTreeWidgetItem.
   - `HierarchyTreeRenderer.find_tree_item_by_name(self, tree_widget, object_name)` — Find a tree item by object name (first column).
   - `HierarchyTreeRenderer.get_selected_tree_items(self, tree_widget)` — Get selected items from a tree widget.
   - `HierarchyTreeRenderer.get_selected_object_names(self, tree_widget)` — Extract object names from selected tree widget items.
 
-<a id="env_utils--hierarchy_manager--tree_utils"></a>
-### `env_utils/hierarchy_manager/tree_utils.py`
+<a id="env_utils--hierarchy_sync--tree_utils"></a>
+### `env_utils/hierarchy_sync/tree_utils.py`
 
-Tree widget utilities for hierarchy manager UI operations.
+Tree widget utilities for hierarchy sync UI operations.
 
-- [`get_selected_object_names(tree_widget) -> List[str]`](mayatk/mayatk/env_utils/hierarchy_manager/tree_utils.py#L162) — Extract object names from selected tree widget items.
-- [`get_selected_tree_items(tree_widget) -> list`](mayatk/mayatk/env_utils/hierarchy_manager/tree_utils.py#L172) — Get all selected items from tree widget.
-- [`find_tree_item_by_name(tree_widget, object_name: str)`](mayatk/mayatk/env_utils/hierarchy_manager/tree_utils.py#L199) — Find tree widget item by object name.
-- [`build_hierarchy_structure(objects: list) -> Tuple[Dict[str, Dict], List[str]]`](mayatk/mayatk/env_utils/hierarchy_manager/tree_utils.py#L210) — Build hierarchical structure from Maya transform objects.
-- **[`class TreePathMatcher(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_manager/tree_utils.py#L17)** — Tree path matching functionality for UI tree widgets.
+- [`get_selected_object_names(tree_widget) -> List[str]`](mayatk/mayatk/env_utils/hierarchy_sync/tree_utils.py#L162) — Extract object names from selected tree widget items.
+- [`get_selected_tree_items(tree_widget) -> list`](mayatk/mayatk/env_utils/hierarchy_sync/tree_utils.py#L172) — Get all selected items from tree widget.
+- [`find_tree_item_by_name(tree_widget, object_name: str)`](mayatk/mayatk/env_utils/hierarchy_sync/tree_utils.py#L214) — Find tree widget item by object name.
+- [`build_hierarchy_structure(objects: list) -> Tuple[Dict[str, Dict], List[str]]`](mayatk/mayatk/env_utils/hierarchy_sync/tree_utils.py#L225) — Build hierarchical structure from Maya transform objects.
+- **[`class TreePathMatcher(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/tree_utils.py#L17)** — Tree path matching functionality for UI tree widgets.
   - `TreePathMatcher.build_tree_index(self, widget)` — Build tree indices for fast item lookup.
   - `TreePathMatcher.find_path_matches(self, target_path: str, by_full: dict, by_clean_full: dict, by_last: dict, prefer_cleaned: bool = False, strict: bool = False)` — Find tree items matching a target path using multiple strategies.
   - `TreePathMatcher.log_matching_debug(self, path, candidates, strategy, prefix='')` — Log debug information about path matching.
@@ -1821,21 +1829,21 @@ Maya Connection Module
 <a id="env_utils--namespace_sandbox"></a>
 ### `env_utils/namespace_sandbox.py`
 
-- **[`class FBXImporter`](mayatk/mayatk/env_utils/namespace_sandbox.py#L90)** — Handles FBX-specific import operations (.fbx files).
+- **[`class FBXImporter`](mayatk/mayatk/env_utils/namespace_sandbox.py#L51)** — Handles FBX-specific import operations (.fbx files).
   - `FBXImporter.is_supported_file(self, file_path: Union[str, Path]) -> bool` — Check if the file is an FBX file.
-  - `FBXImporter.import_with_namespace(self, source_file: Path, namespace: str, temp_namespace_prefix: str, force_complete_import: bool = False) -> Optional[Dict]` — Import FBX file with namespace - handles the complete import process.
-  - `FBXImporter.import_for_analysis(self, source_file: Path, namespace: str) -> Optional[List[Any]]` — Import FBX file for analysis purposes.
-- **[`class MayaImporter`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1062)** — Handles Maya-specific import operations (.ma/.mb files).
+  - `FBXImporter.import_with_namespace(self, source_file: Path, namespace: str, temp_namespace_prefix: str, force_complete_import: bool = False) -> Optional[Dict]` — Import an FBX file isolated into *namespace*.
+  - `FBXImporter.import_for_analysis(self, source_file: Path, namespace: str) -> Optional[List[Any]]` — Import FBX file into a fresh namespace for analysis.
+- **[`class MayaImporter`](mayatk/mayatk/env_utils/namespace_sandbox.py#L144)** — Handles Maya-specific import operations (.ma/.mb files).
   - `MayaImporter.is_supported_file(self, file_path: Union[str, Path]) -> bool` — Check if the file is a Maya file (.ma or .mb).
   - `MayaImporter.import_with_namespace(self, source_file: Path, namespace: str, temp_namespace_prefix: str, force_complete_import: bool = False) -> Optional[Dict]` — Import Maya file with namespace - original logic.
   - `MayaImporter.import_for_analysis(self, source_file: Path, namespace: str) -> Optional[List[Any]]` — Import Maya file for analysis purposes.
-- **[`class CameraTracker(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1241)** — Tracks cameras before and after import operations for proper cleanup.
+- **[`class CameraTracker(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L325)** — Tracks cameras before and after import operations for proper cleanup.
   - `CameraTracker.capture_pre_import_state(self)` — Capture camera state before import.
   - `CameraTracker.capture_post_import_state(self)` — Capture camera state after import.
   - `CameraTracker.get_imported_cameras(self, namespace_filter=None)` — Get cameras that were imported (optionally filtered by namespace).
   - `CameraTracker.cleanup_imported_cameras(self, namespace_filter=None, preserve_user_cameras=True)` — Clean up imported cameras with optional preservation of user cameras.
   - `CameraTracker.reset(self)` — Reset tracking state.
-- **[`class NamespaceSandbox(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L1358)** — Handles temporary importing and namespace management for Maya scenes.
+- **[`class NamespaceSandbox(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L442)** — Handles temporary importing and namespace management for Maya scenes.
   - `NamespaceSandbox.import_with_namespace(self, source_file: Union[str, Path], namespace_prefix: str = None, force_complete_import: bool = False) -> Optional[Dict]` — Import file and return import information.
   - `NamespaceSandbox.import_for_analysis(self, source_file: Union[str, Path], namespace: str = None) -> Optional[List[Any]]` — Import file into temporary namespace for analysis (dry-run mode).
   - `NamespaceSandbox.get_supported_formats(self) -> List[str]` — Get list of supported file formats from all importers.
@@ -1961,7 +1969,7 @@ Maya Connection Module
 <a id="env_utils--scene_exporter--task_manager"></a>
 ### `env_utils/scene_exporter/task_manager.py`
 
-- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L1348)** — Contains all task-related UI definitions for the Scene Exporter.
+- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L1357)** — Contains all task-related UI definitions for the Scene Exporter.
   - `TaskManager.objects(self)` *(property)*
   - `TaskManager.task_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the task definitions for the UI.
   - `TaskManager.check_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the check definitions for the UI.
@@ -2006,6 +2014,17 @@ Slots for the Unity bridge panel.
   - `UnityBridgeSlots.list_template_modes(self)`
   - `UnityBridgeSlots.default_output_dir(self) -> str`
   - `UnityBridgeSlots.b000(self)` — Export per the chosen Scope and copy the FBX into the Unity project.
+
+<a id="env_utils--usd"></a>
+### `env_utils/usd.py`
+
+USD import / export over Maya's native ``mayaUsd`` runtime.
+
+- **[`class UsdUtils(ptk.HelpMixin)`](mayatk/mayatk/env_utils/usd.py#L35)** — Low-level USD import/export utilities over the ``mayaUsd`` plugin.
+  - `UsdUtils.load_plugin()` *(static)* — Ensure the ``mayaUsdPlugin`` plugin is loaded.
+  - `UsdUtils.is_usd_file(file_path: str) -> bool` *(static)* — True when *file_path* is a USD layer/package (delegates to pythontk).
+  - `UsdUtils.export(cls, file_path: str, objects: Optional[List] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True) -> str` *(class)* — Export to a USD file (``.usd``/``.usda``/``.usdc``/``.usdz``).
+  - `UsdUtils.import_scene(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True) -> List[str]` *(class)* — Import a USD file, optionally isolated into a namespace.
 
 <a id="env_utils--workspace_manager"></a>
 ### `env_utils/workspace_manager.py`
@@ -2434,15 +2453,6 @@ Lightweight material state snapshot and restore.
   - `MatSnapshot.capture(cls, mat_name: str, objects=None) -> Dict[str, Any]` *(class)* — Snapshot textures and scalar values for *mat_name*.
   - `MatSnapshot.restore(cls, mat_name: str, snapshot: Dict[str, Any], source_mat_name: Optional[str] = None) -> Dict[str, int]` *(class)* — Restore textures and scalar values onto *mat_name*.
 
-<a id="mat_utils--mat_transfer"></a>
-### `mat_utils/mat_transfer.py`
-
-- **[`class MatTransfer(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/mat_transfer.py#L19)**
-  - `MatTransfer.is_material_related_node(self, node) -> bool` — Check if a node is material-related.
-  - `MatTransfer.get_material_assignments(self, obj) -> Dict[str, List]` — Get material assignments for an object.
-  - `MatTransfer.collect_material_assignments(self, obj)` — Collect material assignments including shaders and textures.
-  - `MatTransfer.handle_object_materials(self, target_obj, material_assignments: Dict) -> None` — Simple material handling - let Maya do the heavy lifting.
-
 <a id="mat_utils--mat_updater"></a>
 ### `mat_utils/mat_updater.py`
 
@@ -2513,12 +2523,6 @@ Switchboard slots for the Render Opacity UI.
   - `ShaderAttributeMap.add_shader_type(cls, shader_type: str, attrs: ShaderAttrs) -> None` *(class)* — Add a new shader type mapping.
   - `ShaderAttributeMap.update_attr(cls, shader_type: str, logical: str, value: Optional[Tuple[str, str]]) -> None` *(class)* — Update a logical channel mapping for a shader type.
   - `ShaderAttributeMap.as_dict(cls) -> Dict[str, Dict[str, Any]]` *(class)* — Returns a dict of dicts for all shader mappings.
-
-<a id="mat_utils--shader_remapper"></a>
-### `mat_utils/shader_remapper.py`
-
-- **[`class ShaderRemapper(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/shader_remapper.py#L16)**
-  - `ShaderRemapper.remap_shaders(self, shaders: List[str], target_type: str) -> Dict[str, str]` — For each shader:
 
 <a id="mat_utils--shader_templates--_shader_templates"></a>
 ### `mat_utils/shader_templates/_shader_templates.py`
@@ -3123,12 +3127,12 @@ Maya hotkey collision checker for the uitk ShortcutEditor.
 - [`ensure_editable_hotkey_set(name: str = MACRO_HOTKEY_SET) -> str`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L289) — Make the *current* hotkey set editable;
 - [`maya_collision_checker(sequence, scope, ui_name, method_name, ignore=None)`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L342) — Check a proposed binding against Maya's active hotkey set.
 
-<a id="ui_utils--maya_bridge_slots"></a>
-### `ui_utils/maya_bridge_slots.py`
+<a id="ui_utils--maya_bridge_slots_base"></a>
+### `ui_utils/maya_bridge_slots_base.py`
 
 Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 
-- **[`class MayaBridgeSlotsBase(BridgeSlotsBase)`](mayatk/mayatk/ui_utils/maya_bridge_slots.py#L22)** — Adds a Maya-flavored ``default_output_dir`` to :class:`BridgeSlotsBase`.
+- **[`class MayaBridgeSlotsBase(BridgeSlotsBase)`](mayatk/mayatk/ui_utils/maya_bridge_slots_base.py#L24)** — Adds a Maya-flavored ``default_output_dir`` to :class:`BridgeSlotsBase`.
   - `MayaBridgeSlotsBase.default_output_dir(self) -> str` — Scene-dir then workspace fallback for an empty Output Dir field.
 
 <a id="ui_utils--maya_native_menus"></a>

@@ -216,7 +216,7 @@ _Generated: 2026-07-17_
 - `configure_dg(node_name: str, file_path: str, offset: float) -> None`
 - `query_duration(node_name: str) -> float`
 
-### `audio_utils/segments/discovery.py` — Segment discovery from the per-track keyed canonical store.
+### `audio_utils/segments.py` — Consumer-facing segment discovery for sequencer + manifest.
 - `collect_all_segments(scene_start: Optional[float] = None, scene_end: Optional[float] = None, include_waveform: bool = True, carrier: Optional[str] = None) -> List[AudioSegment]`
 - `collect_segments_for_track(track_id: str, include_waveform: bool = True, carrier: Optional[str] = None) -> List[AudioSegment]`
 - `class AudioSegment`
@@ -497,6 +497,10 @@ _Generated: 2026-07-17_
 - `export_fbx(bpy)`
 - `main()`
 
+### `env_utils/blender_bridge/templates/_import_scene_usd.py` — Open a .blend headlessly (blender --background) and export it as USD for a Maya import.
+- `export_usd(bpy)`
+- `main()`
+
 ### `env_utils/blender_bridge/templates/import.py` — Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.
 - `main()`
 
@@ -508,12 +512,12 @@ _Generated: 2026-07-17_
 
 ### `env_utils/fbx_utils.py`
 - `class FbxUtils(ptk.HelpMixin)`
-  - methods: load_plugin, set_fbx_options, load_preset, export, reset_takes, apply_takes, apply_takes_from_node, run_export_preparers, register_export_preparer, unregister_export_preparer, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
+  - methods: load_plugin, set_fbx_options, load_preset, export, import_scene, reset_takes, apply_takes, apply_takes_from_node, run_export_preparers, register_export_preparer, unregister_export_preparer, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
 
 ### `env_utils/handoff_export.py` — Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`
 
-### `env_utils/hierarchy_manager/_hierarchy_manager.py`
+### `env_utils/hierarchy_sync/_hierarchy_sync.py`
 - `get_clean_node_name(node) -> str`
 - `get_clean_node_name_from_string(node_name: str) -> str`
 - `clean_hierarchy_path(path: str) -> str`
@@ -527,26 +531,26 @@ _Generated: 2026-07-17_
   - methods: build_path_map, build_path_map_from_nodes
 - `class MayaObjectMatcher(ptk.LoggingMixin)`
   - methods: find_matches
-- `class HierarchyManager(ptk.LoggingMixin)`
+- `class HierarchySync(ptk.LoggingMixin)`
   - methods: analyze_hierarchies, create_stubs, quarantine_extras, fix_fuzzy_renames, fix_reparented
 - `class ObjectSwapper(ptk.LoggingMixin)`
-  - methods: push_objects_to_scene, pull_objects_from_scene
+  - methods: pull_objects_from_scene
 
-### `env_utils/hierarchy_manager/hierarchy_manager_slots.py`
-- `class HierarchyManagerController(ptk.LoggingMixin)`
-  - methods: workspace, reference_path, analyze_hierarchies, pull_objects, repair_hierarchies, select_objects_in_maya, populate_reference_tree, refresh_trees, is_path_ignored, clear_ignored_paths, log_diff_results, get_recent_reference_scenes, save_recent_reference_scene
-- `class HierarchyManagerSlots(ptk.LoggingMixin)`
-  - methods: header_init, tree000_init, tree001_init, cmb_diff_options_init, cmb_pull_options_init, tb003_init, tb001, tb002, tb003, b003, b005, b006, b007, b008, b009, b011, b012, b013, b014, b015, b016, b018, b017, count_tree_items
-
-### `env_utils/hierarchy_manager/hierarchy_sidecar.py` — Hierarchy sidecar manifest management.
+### `env_utils/hierarchy_sync/hierarchy_sidecar.py` — Hierarchy sidecar manifest management.
 - `class HierarchySidecar`
   - methods: base_stem, manifest_path_for, diff_report_path_for, find_legacy_manifest, ensure_base_name, rename, build_clean_path_set, expand_to_descendants, get_top_level, detect_reparenting, write_manifest, read_manifest, count_descendants, write_diff_report, clean_stale_diff, build_full_path_set, compare
 
-### `env_utils/hierarchy_manager/tree_renderer.py` — Tree rendering, formatting, and selection management for the hierarchy manager UI.
+### `env_utils/hierarchy_sync/hierarchy_sync_slots.py`
+- `class HierarchySyncController(ptk.LoggingMixin)`
+  - methods: workspace, reference_path, analyze_hierarchies, pull_objects, repair_hierarchies, select_objects_in_maya, populate_reference_tree, refresh_trees, is_path_ignored, clear_ignored_paths, log_diff_results, get_recent_reference_scenes, save_recent_reference_scene
+- `class HierarchySyncSlots(ptk.LoggingMixin)`
+  - methods: header_init, tree000_init, tree001_init, cmb_diff_options_init, cmb_pull_options_init, tb003_init, tb001, tb002, tb003, b003, b005, b006, b007, b008, b009, b011, b012, b013, b014, b015, b016, b018, b017, count_tree_items
+
+### `env_utils/hierarchy_sync/tree_renderer.py` — Tree rendering, formatting, and selection management for the hierarchy sync UI.
 - `class HierarchyTreeRenderer(ptk.LoggingMixin)`
   - methods: populate_current_scene_tree, populate_reference_tree, show_reference_placeholder, show_reference_error, populate_tree_with_hierarchy, apply_difference_formatting, clear_tree_colors, format_tree_differences, apply_ignore_styling, build_item_path, find_tree_item_by_name, get_selected_tree_items, get_selected_object_names
 
-### `env_utils/hierarchy_manager/tree_utils.py` — Tree widget utilities for hierarchy manager UI operations.
+### `env_utils/hierarchy_sync/tree_utils.py` — Tree widget utilities for hierarchy sync UI operations.
 - `get_selected_object_names(tree_widget) -> List[str]`
 - `get_selected_tree_items(tree_widget) -> list`
 - `find_tree_item_by_name(tree_widget, object_name: str)`
@@ -610,6 +614,10 @@ _Generated: 2026-07-17_
 ### `env_utils/unity_bridge/unity_bridge_slots.py` — Slots for the Unity bridge panel.
 - `class UnityBridgeSlots(MayaBridgeSlotsBase)`
   - methods: params_module, template_dir, make_bridge, list_template_modes, default_output_dir, b000
+
+### `env_utils/usd.py` — USD import / export over Maya's native ``mayaUsd`` runtime.
+- `class UsdUtils(ptk.HelpMixin)`
+  - methods: load_plugin, is_usd_file, export, import_scene
 
 ### `env_utils/workspace_manager.py`
 - `class WorkspaceManager(ptk.HelpMixin)`
@@ -764,10 +772,6 @@ _Generated: 2026-07-17_
 - `class MatSnapshot`
   - methods: capture, restore
 
-### `mat_utils/mat_transfer.py`
-- `class MatTransfer(ptk.LoggingMixin)`
-  - methods: is_material_related_node, get_material_assignments, collect_material_assignments, handle_object_materials
-
 ### `mat_utils/mat_updater.py`
 - `class MatUpdater(ptk.LoggingMixin)`
   - methods: update_materials, disconnect_associated_attributes, update_network
@@ -793,10 +797,6 @@ _Generated: 2026-07-17_
 ### `mat_utils/shader_attribute_map.py`
 - `class ShaderAttributeMap`
   - methods: logical_channels, get_attr, get_mapping, add_shader_type, update_attr, as_dict
-
-### `mat_utils/shader_remapper.py`
-- `class ShaderRemapper(ptk.LoggingMixin)`
-  - methods: remap_shaders
 
 ### `mat_utils/shader_templates/_shader_templates.py`
 - `class GraphCollector`
@@ -965,7 +965,7 @@ _Generated: 2026-07-17_
 - `ensure_editable_hotkey_set(name: str = MACRO_HOTKEY_SET) -> str`
 - `maya_collision_checker(sequence, scope, ui_name, method_name, ignore=None)`
 
-### `ui_utils/maya_bridge_slots.py` — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
+### `ui_utils/maya_bridge_slots_base.py` — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 - `class MayaBridgeSlotsBase(BridgeSlotsBase)`
   - methods: default_output_dir
 

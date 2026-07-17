@@ -16,7 +16,7 @@ import unittest
 import mayatk as mtk
 from mayatk.xform_utils._xform_utils import XformUtils
 
-from base_test import MayaTkTestCase
+from base_test import MayaTkTestCase, skipIfBatch
 import maya.cmds as cmds
 
 
@@ -685,6 +685,7 @@ class TestXformUtils(MayaTkTestCase):
         # Pivot should be at 10, 10, 10 if we moved it
         self.assertAlmostEqual(pos[0], 10.0)
 
+    @skipIfBatch("align_pivot_to_selection uses snap3PointsTo3Points, a GUI-sourced MEL proc")
     def test_align_pivot_to_selection(self):
         """Test aligning pivot to selection."""
         # Move cube2

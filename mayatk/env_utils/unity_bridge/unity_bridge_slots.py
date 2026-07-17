@@ -2,7 +2,7 @@
 # coding=utf-8
 """Slots for the Unity bridge panel.
 
-Thin subclass of :class:`mayatk.ui_utils.maya_bridge_slots.MayaBridgeSlotsBase` (which subclasses
+Thin subclass of :class:`mayatk.ui_utils.maya_bridge_slots_base.MayaBridgeSlotsBase` (which subclasses
 uitk's :class:`BridgeSlotsBase`). The panel machinery (parameter widgets, user presets, log routing)
 lives upstream; this file owns the Unity-specific bits: the bridge factory, the single copy-to-Assets
 delivery, the relabeled 'Unity Project' row, the header menu, and the ``b000`` send action.
@@ -26,7 +26,7 @@ try:
 except ImportError:
     cmds = None
 
-from mayatk.ui_utils.maya_bridge_slots import MayaBridgeSlotsBase
+from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
 
 from mayatk.env_utils.unity_bridge._unity_bridge import UnityBridge
 from mayatk.env_utils.unity_bridge import parameters as _params

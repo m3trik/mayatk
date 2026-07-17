@@ -2,7 +2,7 @@
 # coding=utf-8
 """Slots for the Blender bridge panel.
 
-Thin subclass of :class:`mayatk.ui_utils.maya_bridge_slots.MayaBridgeSlotsBase` (which subclasses
+Thin subclass of :class:`mayatk.ui_utils.maya_bridge_slots_base.MayaBridgeSlotsBase` (which subclasses
 uitk's :class:`BridgeSlotsBase`) -- the panel machinery (template combo, dynamic parameter widgets,
 user presets, log routing, per-template description) lives upstream. This file owns only the
 Blender-specific bits: the bridge factory, the ``(template, mode)`` listing, the header menu, and
@@ -19,7 +19,7 @@ try:
 except ImportError:
     cmds = None
 
-from mayatk.ui_utils.maya_bridge_slots import MayaBridgeSlotsBase
+from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
 
 # From this package:
 from mayatk.env_utils.blender_bridge._blender_bridge import (

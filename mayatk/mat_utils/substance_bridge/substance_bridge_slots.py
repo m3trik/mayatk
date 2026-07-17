@@ -2,7 +2,7 @@
 # coding=utf-8
 """Slots for the Substance Painter bridge panel.
 
-Thin subclass of :class:`mayatk.ui_utils.maya_bridge_slots.MayaBridgeSlotsBase`
+Thin subclass of :class:`mayatk.ui_utils.maya_bridge_slots_base.MayaBridgeSlotsBase`
 (itself a :class:`uitk.bridge.BridgeSlotsBase`). The panel machinery
 lives upstream. Substance-specific extras live below: the ``b000`` send
 action (FBX export + Painter handoff with optional RPC dispatch).
@@ -25,7 +25,7 @@ except ImportError:
     cmds = None
 
 from uitk.bridge.spec import connect_changed, read_value
-from mayatk.ui_utils.maya_bridge_slots import MayaBridgeSlotsBase
+from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
 
 # From this package:
 from mayatk.mat_utils.substance_bridge._substance_bridge import (

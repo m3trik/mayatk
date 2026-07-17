@@ -1673,7 +1673,7 @@ class ChannelsSlots:
             )
             # Apply SVG icons to each action (edit / add / trash).
             try:
-                from uitk.widgets.mixins.icon_manager import IconManager
+                from uitk.managers.icon_manager import IconManager
 
                 _icon_names = ("edit", "add", "trash")
                 for action, icon_name in zip(actions, _icon_names):

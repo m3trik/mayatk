@@ -23,7 +23,7 @@ from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from pythontk import TaskFactory
-from mayatk.env_utils.hierarchy_manager.hierarchy_sidecar import HierarchySidecar
+from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import HierarchySidecar
 
 
 class _TaskDataMixin:
@@ -1266,13 +1266,24 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         manifest_path = HierarchySidecar.manifest_path_for(export_path, **sk)
 
+        messages = []
         if not os.path.exists(manifest_path):
-            if os.path.exists(export_path):
+            if os.path.exists(manifest_path + ".prev"):
+                # Manifest deleted (or a write failed) but its backup
+                # survives — compare() falls back to it, and a fresh
+                # manifest is written after this export.
+                messages.append(
+                    "Hierarchy manifest missing — compared against its "
+                    ".prev backup (a fresh manifest will be written after "
+                    "this export)."
+                )
+            elif os.path.exists(export_path):
                 return True, [
                     "No hierarchy manifest found for existing FBX. "
                     "A manifest will be created after this export."
                 ]
-            return True, []
+            else:
+                return True, []
 
         current_paths = HierarchySidecar.build_full_path_set(self.objects)
 
@@ -1282,9 +1293,7 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         if match:
             HierarchySidecar.clean_stale_diff(export_path, **sk)
-            return True, []
-
-        messages = []
+            return True, messages
 
         # Detect reparenting patterns for a cleaner summary
         reparented = HierarchySidecar.detect_reparenting(missing, extra)

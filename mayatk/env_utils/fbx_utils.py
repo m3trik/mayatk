@@ -16,18 +16,34 @@ logger = logging.getLogger(__name__)
 
 
 class FbxUtils(ptk.HelpMixin):
-    """Low-level utilities for FBX export operations in Maya.
+    """Low-level utilities for FBX import/export operations in Maya.
 
     This module owns the MEL-level FBX commands (plugin loading, preset
-    application, option setting, and the ``cmds.file`` call).  Higher-level
-    orchestration (task management, UI, logging to files) belongs in
-    ``SceneExporter`` or calling code.
+    application, option setting, and the ``cmds.file`` import/export call).
+    Higher-level orchestration (task management, UI, logging to files,
+    namespace sandboxing) belongs in ``SceneExporter``, ``NamespaceSandbox``
+    or calling code.
     """
 
     _AUTO_TAKES_OWNER = "fbx.auto_takes"  # stable owner key for SJM teardown
     _auto_takes_ids = None  # (before_id, after_id) when the hook is active
     _export_preparers = {}  # name -> callable, run before each auto FBX export
     _explicit_auto_takes = False  # enable_auto_takes() called with no preparers
+
+    # Sensible defaults applied by import_scene when no options are supplied.
+    # Only commands that exist on Maya 2025 are listed — materials/textures
+    # import unconditionally (there is no FBXImportMaterials command). Callers
+    # override via ``options``.
+    _DEFAULT_IMPORT_OPTIONS = {
+        "FBXImportMode": "add",
+        "FBXImportConvertDeformingNullsToJoint": True,
+        "FBXImportMergeAnimationLayers": True,
+        "FBXImportConstraints": True,
+        "FBXImportCameras": True,
+        "FBXImportLights": True,
+        "FBXImportGenerateLog": False,
+        "FBXImportUpAxis": "y",
+    }
 
     @staticmethod
     def load_plugin():
@@ -140,6 +156,115 @@ class FbxUtils(ptk.HelpMixin):
         cmds.file(file_path, **kwargs)
         logger.info(f"Exported FBX: {file_path}")
         return file_path
+
+    @classmethod
+    def import_scene(
+        cls,
+        file_path: str,
+        namespace: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+        return_new_nodes: bool = True,
+    ) -> List[str]:
+        """Import an FBX file, optionally isolated into a namespace.
+
+        Maya's FBX translator **ignores** the ``cmds.file(namespace=...)``
+        flag, but it honors the *active* namespace: setting it before the
+        import cleanly isolates every imported node — transforms, shapes,
+        materials and shading engines — under that namespace (verified on
+        Maya 2025). This is the same native isolation ``.ma/.mb`` imports get
+        for free, so no manual per-node namespace moves are needed. The active
+        namespace is always restored afterward, even on failure.
+
+        Parameters:
+            file_path: Source ``.fbx`` path (``$VAR``/``~`` expanded).
+            namespace: If given, it is created if absent and set active so the
+                whole import lands under it. If *None*, imports into the
+                current namespace (usually root).
+            options: FBX import MEL options applied before importing (see
+                :func:`set_fbx_options`). Defaults to
+                :attr:`_DEFAULT_IMPORT_OPTIONS`. Applied best-effort — a
+                version-specific option that is unavailable never blocks the
+                import.
+            return_new_nodes: Passed to ``cmds.file(returnNewNodes=...)``.
+
+        Returns:
+            The newly created node names (namespace-prefixed when *namespace*
+            is given), or ``[]``.
+
+        Raises:
+            FileNotFoundError: If *file_path* does not exist.
+            RuntimeError: On import failure.
+        """
+        file_path = os.path.abspath(os.path.expandvars(os.path.expanduser(str(file_path))))
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(f"FBX not found: {file_path}")
+
+        cls.load_plugin()
+        cls._apply_import_options(
+            options if options is not None else cls._DEFAULT_IMPORT_OPTIONS
+        )
+
+        fbx_path = file_path.replace("\\", "/")
+        restore_ns = None
+        if namespace:
+            if not cmds.namespace(exists=namespace):
+                cmds.namespace(add=namespace)
+            restore_ns = cmds.namespaceInfo(currentNamespace=True, absoluteName=True)
+            cmds.namespace(setNamespace=namespace)
+        try:
+            new_nodes = cmds.file(
+                fbx_path,
+                i=True,
+                type="FBX",
+                returnNewNodes=return_new_nodes,
+                mergeNamespacesOnClash=False,
+                preserveReferences=False,
+            )
+        finally:
+            if restore_ns is not None:
+                cmds.namespace(setNamespace=restore_ns)
+
+        logger.info(
+            f"Imported FBX: {fbx_path}"
+            + (f" into namespace '{namespace}'" if namespace else "")
+        )
+        # cmds.file returns the new-node list only with returnNewNodes; without
+        # it the return is the filename string — honor the List[str] contract.
+        return new_nodes if isinstance(new_nodes, list) else []
+
+    @classmethod
+    def _apply_import_options(cls, options: Dict[str, Any]) -> None:
+        """Apply FBX import options best-effort and quietly.
+
+        Import setters share the export setters' inconsistent syntax
+        (``FBXImportMode -v add`` but bare ``FBXImportUpAxis y``), so each is
+        delegated to :func:`set_fbx_options` — the single owner of that
+        syntax-probing — rather than reimplemented here. Each is applied in
+        isolation so a command absent on this Maya version (there is no
+        ``FBXImportMaterials``, for instance) is skipped instead of blocking the
+        rest, and the script-editor error noise the probing emits is
+        suppressed.
+        """
+        suppressed = False
+        try:
+            cmds.scriptEditorInfo(suppressErrors=True, suppressWarnings=True)
+            suppressed = True
+        except Exception:
+            pass
+        try:
+            for opt, val in options.items():
+                try:
+                    cls.set_fbx_options({opt: val})
+                except Exception:
+                    logger.debug("FBX import option %r unavailable (OK).", opt)
+        finally:
+            if suppressed:
+                try:
+                    cmds.scriptEditorInfo(
+                        suppressErrors=False, suppressWarnings=False
+                    )
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # Animation takes (generic — any tool can declare takes on a node)

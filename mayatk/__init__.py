@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.12.93"
+__version__ = "0.12.96"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -15,22 +15,27 @@ methods, and helper APIs (``configure_resolver``, ``build_dictionaries``, ``expo
 
 # Unified include dictionary supporting both simple modules and nested module paths
 DEFAULT_INCLUDE = {
-    # Legacy modules - expose all classes using wildcard
-    "_anim_utils": "*",
-    "_cam_utils": "*",
-    "_core_utils": "*",
-    "_display_utils": "*",
-    "_edit_utils": "*",
-    "_env_utils": "*",
-    "_mat_utils": "*",
-    "_node_utils": "*",
+    # Namespace main modules (full dotted path, wildcard-scanned). The "*" is
+    # deliberate, not legacy laxness: the resolver's wildcard AST scan also
+    # publishes each class's public methods as package attributes (e.g.
+    # ``mtk.get_parent`` -> ``NodeUtils.get_parent``) — a surface an explicit
+    # name list cannot express (explicit entries resolve module-level names
+    # only). Prefer explicit full-path + name-list entries for NEW modules.
+    "anim_utils._anim_utils": "*",
+    "cam_utils._cam_utils": "*",
+    "core_utils._core_utils": "*",
+    "display_utils._display_utils": "*",
+    "edit_utils._edit_utils": "*",
+    "env_utils._env_utils": "*",
+    "mat_utils._mat_utils": "*",
+    "node_utils._node_utils": "*",
     "node_utils.data_nodes": "*",
-    "_rig_utils": "*",
-    "_ui_utils": "*",
-    "_uv_utils": "*",
-    "_xform_utils": "*",
-    "_nurbs_utils": "*",
-    "_light_utils": "*",
+    "rig_utils._rig_utils": "*",
+    "ui_utils._ui_utils": "*",
+    "uv_utils._uv_utils": "*",
+    "xform_utils._xform_utils": "*",
+    "nurbs_utils._nurbs_utils": "*",
+    "light_utils._light_utils": "*",
     # Animation utilities
     "anim_utils.scale_keys": "*",
     "anim_utils.stagger_keys": "*",
@@ -45,8 +50,6 @@ DEFAULT_INCLUDE = {
     "audio_utils.audio_clips._audio_clips": "AudioClips",
     # Audio utils
     "audio_utils._audio_utils": "AudioUtils",
-    # Environment utils
-    "env_utils.devtools": "*",
     # Core utils - specific classes
     "core_utils.components": "Components",
     "core_utils.auto_instancer._auto_instancer": ["AutoInstancer", "auto_instance"],
@@ -96,17 +99,22 @@ DEFAULT_INCLUDE = {
     "edit_utils.mirror": "Mirror",
     "edit_utils.mesh_graph": "MeshGraph",
     # Environment utilities
+    "env_utils.devtools": "*",
     "env_utils.maya_connection": "MayaConnection",
     "env_utils.workspace_manager": "WorkspaceManager",
     "env_utils.workspace_map": "WorkspaceMap",
     "env_utils.namespace_sandbox": "NamespaceSandbox",
     "env_utils.reference_manager": "ReferenceManager",
     "env_utils.script_output": "ScriptOutput",
-    "env_utils.hierarchy_manager._hierarchy_manager": [
-        "HierarchyManager",
+    "env_utils.hierarchy_sync._hierarchy_sync": [
+        "HierarchySync",
         "ObjectSwapper",
     ],
     "env_utils.fbx_utils": "FbxUtils",
+    # USD import/export over the native mayaUsd runtime — the USD sibling of
+    # FbxUtils (mirrored by blendertk's ``env_utils.usd``: mtk.UsdUtils ↔
+    # btk.UsdUtils). Zero-dep USDZ packaging composes pythontk's UsdzPackager.
+    "env_utils.usd": "UsdUtils",
     # Blender bridge engine — one-way send of the selection to a fresh Blender (the
     # ``BlenderBridgeSlots`` panel class is discovered by MayaUiHandler, not registered).
     # Counterpart of blendertk's ``MayaBridge``.
@@ -201,12 +209,3 @@ try:
             ExecutionMonitor.set_interpreter(mayapy)
 except ImportError:
     pass
-
-
-# --------------------------------------------------------------------------------------------
-# Notes
-# --------------------------------------------------------------------------------------------
-# Test: 222117--------------------------------------------------------------------------------
-# Notes
-# --------------------------------------------------------------------------------------------
-# Test: 222117
