@@ -67,9 +67,12 @@ class TestParseQtSequence(unittest.TestCase):
 class TestKeystringToToken(unittest.TestCase):
     """Pure keyString -> token conversion — no Maya state required."""
 
-    # 7-element Maya 2025 layout: [key, alt, ctrl, ?, shift, release, ?]
+    # 7-element Maya 2025 layout: [key, alt, ctrl, ?, ?, ?, shift] — probe-
+    # verified against live assignCommand dumps (ctl+alt+sht+F9 reports
+    # ["F9","1","1","0","0","0","1"]; sht+i reports ["I","0",…,"1"]). The
+    # shift flag is the LAST element, not index 4 as previously assumed.
     def _ks(self, key, alt="0", ctrl="0", shift="0"):
-        return [key, alt, ctrl, "0", shift, "0", "0"]
+        return [key, alt, ctrl, "0", "0", "0", shift]
 
     def test_ctrl_letter(self):
         # Maya stores a non-shifted letter as its lower-case glyph.
@@ -78,6 +81,21 @@ class TestKeystringToToken(unittest.TestCase):
     def test_uppercase_letter_becomes_shift(self):
         # Maya stores shift+letter as the upper-case glyph, no shift flag.
         self.assertEqual(keystring_to_token(self._ks("K")), "sht+k")
+
+    def test_shift_function_key(self):
+        """The shift FLAG must be read for non-letter keys (live layout: last
+        element). Regression: the flag was read from index 4, so a shift+Fkey
+        binding read back shift-less — the Macro Manager displayed
+        ``Ctrl+Alt+F9`` for a bound ``ctl+alt+sht+F9`` and, worse, a rebind /
+        clear released the WRONG (shift-less) chord, leaving the real binding
+        live. Probe-verified layout: ``["F9","1","1","0","0","0","1"]``."""
+        self.assertEqual(
+            keystring_to_token(["F9", "1", "1", "0", "0", "0", "1"]),
+            "ctl+alt+sht+F9",
+        )
+        self.assertEqual(
+            keystring_to_token(["F9", "0", "0", "0", "0", "0", "1"]), "sht+F9"
+        )
 
     def test_empty_array(self):
         self.assertEqual(keystring_to_token([]), "")
@@ -176,6 +194,21 @@ class TestMayaCollisionChecker(MayaTkTestCase):
         self.assertFalse(c.breaks_binding)
         self.assertIn(self.RUNTIME_CMD, c.description)
         self.assertIn(self.TEST_SET, c.description)
+
+    def test_ignore_predicate_suppresses_bound_command(self):
+        """``ignore`` returning True for the bound command suppresses the
+        report — the editor's own managed-binding check owns that conflict."""
+        conflicts = maya_collision_checker(
+            "Ctrl+Alt+J", "application", "ui_x", "method_x",
+            ignore=lambda cmd: cmd == self.RUNTIME_CMD,
+        )
+        self.assertEqual(conflicts, [])
+        # A predicate that does NOT match must leave the report intact.
+        conflicts = maya_collision_checker(
+            "Ctrl+Alt+J", "application", "ui_x", "method_x",
+            ignore=lambda cmd: cmd.startswith("somethingElse"),
+        )
+        self.assertEqual(len(conflicts), 1)
 
     def test_unbound_sequence_returns_no_conflicts(self):
         """A sequence that isn't bound in Maya should report nothing."""

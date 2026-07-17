@@ -66,7 +66,7 @@ class TestSmartBakePanelLoads(unittest.TestCase):
             "chk_optimize",
             "chk_bake_blendshapes",
             "chk_inherited_vis",
-            "chk_override_layer",
+            "cmb_bake_layer",
             "chk_mute_drivers",
             "chk_delete_inputs",
             "cmb_backup",
@@ -87,17 +87,34 @@ class TestSmartBakePanelLoads(unittest.TestCase):
         items = [self.ui.cmb_backup.itemText(i) for i in range(self.ui.cmb_backup.count())]
         self.assertEqual(items, ["Auto", "Always", "Never"])
 
-    def test_override_layer_defaults_checked(self):
-        self.assertTrue(self.ui.chk_override_layer.isChecked())
+    def test_bake_layer_combo_items_and_default(self):
+        # The checkbox->combobox migration (9c49d9b): two named layers, the
+        # nondestructive Override Layer as the default (prior checkbox=on).
+        items = [
+            self.ui.cmb_bake_layer.itemText(i)
+            for i in range(self.ui.cmb_bake_layer.count())
+        ]
+        self.assertEqual(items, ["Override Layer", "Base Layer"])
+        self.assertEqual(self.ui.cmb_bake_layer.currentText(), "Override Layer")
 
-    def test_delete_inputs_disabled_when_override_layer_checked(self):
-        self.ui.chk_override_layer.setChecked(True)
-        self.assertFalse(self.ui.chk_delete_inputs.isEnabled())
+    def test_bake_layer_handler_is_connected(self):
+        from qtpy import QtCore
 
-    def test_delete_inputs_enabled_when_override_layer_unchecked(self):
-        self.ui.chk_override_layer.setChecked(False)
+        cmb = self.ui.cmb_bake_layer
+        sig = QtCore.QMetaMethod.fromSignal(cmb.currentTextChanged)
+        self.assertTrue(cmb.isSignalConnected(sig))
+
+    def test_delete_inputs_gating_follows_bake_layer(self):
+        # Deterministic-state rule (see uitk's offscreen-flake convention):
+        # signal DELIVERY under the venv's newer offscreen Qt is flaky in this
+        # harness (the connection reports connected but intermittently doesn't
+        # deliver), so the gating contract is pinned through the handler while
+        # the connection itself is asserted separately above.
+        slots = self.ui.slots
+        slots._on_bake_layer_changed("Base Layer")
         self.assertTrue(self.ui.chk_delete_inputs.isEnabled())
-        self.ui.chk_override_layer.setChecked(True)  # restore default
+        slots._on_bake_layer_changed("Override Layer")
+        self.assertFalse(self.ui.chk_delete_inputs.isEnabled())
 
     def test_unbake_disabled_with_no_pending_sessions(self):
         # mock_cmds.getAttr returns a MagicMock, not JSON — BakeSessionStore

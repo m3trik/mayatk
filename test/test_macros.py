@@ -12,6 +12,7 @@ selection/viewport driven — these tests cover the testable surface:
     - Headless-safe macros: m_group, m_combine, m_*_selection (selection masks)
 """
 import unittest
+from unittest.mock import patch
 
 import maya.cmds as cmds
 
@@ -205,6 +206,61 @@ class TestEditMacros(MayaTkTestCase):
         after = len(cmds.ls(type="mesh"))
         # Combine collapses two meshes into one (count may include shape nodes)
         self.assertLessEqual(after, before)
+
+
+class TestGridMacros(MayaTkTestCase):
+    """m_grid toggles the grid on its own; m_grid_and_image_planes drives that same
+    toggle (the grid LEADS) and syncs image planes to it — mirroring blendertk, whose
+    counterpart has always led with the grid.
+
+    ``cmds.grid`` is a display pref, not scene state, so it survives ``file(new=True)``
+    between tests — tearDown restores Maya's default-on grid.
+    """
+
+    def tearDown(self):
+        try:
+            cmds.grid(toggle=True)
+        except Exception:
+            pass
+        super().tearDown()
+
+    def test_m_grid_toggles_off_then_back_on(self):
+        cmds.grid(toggle=True)
+        Macros.m_grid()
+        self.assertFalse(cmds.grid(query=True, toggle=True), "m_grid did not turn the grid OFF")
+        Macros.m_grid()
+        self.assertTrue(cmds.grid(query=True, toggle=True), "m_grid did not turn the grid back ON")
+
+    def test_m_grid_returns_the_applied_state(self):
+        # The return value is what lets m_grid_and_image_planes follow it (DRY).
+        cmds.grid(toggle=True)
+        self.assertIs(Macros.m_grid(), False)
+        self.assertIs(Macros.m_grid(), True)
+
+    def test_grid_toggles_with_no_image_planes(self):
+        # REGRESSION: cmds.grid(toggle=...) used to sit INSIDE `for obj in image_plane:`,
+        # so an empty scene (no image planes — i.e. most scenes) left the grid untouched
+        # and the macro silently did nothing at all.
+        self.assertEqual(cmds.ls(exactType="imagePlane"), [], "fixture must start with no image planes")
+        cmds.grid(toggle=True)
+        Macros.m_grid_and_image_planes()
+        self.assertFalse(
+            cmds.grid(query=True, toggle=True),
+            "m_grid_and_image_planes must toggle the grid even with no image planes",
+        )
+
+    def test_grid_leads_and_image_planes_follow(self):
+        cmds.imagePlane()
+        plane = cmds.ls(exactType="imagePlane")[0]  # the node the macro itself resolves
+        cmds.grid(toggle=True)
+
+        Macros.m_grid_and_image_planes()  # grid ON -> OFF, planes follow it off
+        self.assertFalse(cmds.grid(query=True, toggle=True))
+        self.assertEqual(cmds.getAttr(f"{plane}.displayMode"), 0)
+
+        Macros.m_grid_and_image_planes()  # grid OFF -> ON, planes follow it on
+        self.assertTrue(cmds.grid(query=True, toggle=True))
+        self.assertEqual(cmds.getAttr(f"{plane}.displayMode"), 2)
 
 
 class TestMacroDiscovery(QuickTestCase):
@@ -760,6 +816,10 @@ class TestApplyBindingsIdempotent(QuickTestCase):
             Macros, "get_current_bindings", return_value=live
         ), mock.patch.object(
             Macros, "_key_bound_to", return_value=True  # target chord already live
+        ), mock.patch.object(
+            # A converged macro has its runTimeCommand too — the no-op check
+            # requires both (a bound chord whose command is gone must re-apply).
+            macros.cmds, "runTimeCommand", return_value=True, create=True
         ), mock.patch.object(Macros, "set_macro") as set_macro, mock.patch.object(
             Macros, "clear_hotkey"
         ) as clear, mock.patch.object(
@@ -792,6 +852,9 @@ class TestApplyBindingsIdempotent(QuickTestCase):
         ), mock.patch.object(
             Macros, "_key_bound_to", return_value=True  # ...but sht+q IS bound
         ) as kb, mock.patch.object(
+            # Converged state includes the runTimeCommand (see the sibling test).
+            macros.cmds, "runTimeCommand", return_value=True, create=True
+        ), mock.patch.object(
             Macros, "set_macro"
         ) as set_macro, mock.patch.object(
             Macros, "clear_hotkey"
@@ -919,6 +982,143 @@ class TestApplySavedMacros(_NoPrefsFlush, _TempPresetRoot, MayaTkTestCase):
                 )
         finally:
             Macros.delete_preset("unittest_active")
+
+    def test_apply_rebuilds_missing_runtime_command_when_chord_still_bound(self):
+        """Deleting a runTimeCommand does NOT release its chord (see
+        set_macro's multi-bound note), leaving a binding that ERRORS on
+        keypress — the "hotkey set but broken" state. apply_bindings' no-op
+        check must not treat that stale chord as "already applied": it must
+        re-register the command so the startup applier heals the key.
+        (Regression: the check tested only the chord, so a session/prefs
+        state with the binding but no command was skipped forever.)"""
+        name, key = "m_wireframe", "3"
+        Macros.set_macro(name, key=key, cat="Display")
+        if not Macros._key_bound_to(name, key):
+            self.skipTest("live hotkey registry unavailable (headless)")
+        cmds.runTimeCommand(name, edit=True, delete=True)  # chord survives
+        self.assertTrue(
+            Macros._key_bound_to(name, key),
+            "precondition: the chord must survive the command's deletion",
+        )
+        Macros.apply_bindings({name: {"key": key, "cat": "Display"}})
+        self.assertTrue(
+            cmds.runTimeCommand(name, exists=True),
+            "apply_bindings must re-register a macro whose chord is bound "
+            "but whose runTimeCommand is missing",
+        )
+
+
+class TestEditorGlue(QuickTestCase):
+    """Provider callables behind ``Macros.show_editor`` — the data the unified
+    uitk ShortcutEditor renders and the routes its edits/presets take. Live
+    state is patched so these are pure logic tests (no hotkey mutation)."""
+
+    # m_grid: bound; m_group: unbound at its default category;
+    # m_wireframe: unbound but re-categorised (a preset-carried override).
+    _LIVE = {
+        "m_grid": {"key": "ctl+g", "cat": "Display"},
+        "m_group": {"key": "", "cat": "Edit"},
+        "m_wireframe": {"key": "", "cat": "Custom"},
+    }
+
+    def _patched_live(self):
+        live = {
+            name: dict(self._LIVE.get(name) or {"key": "", "cat": ""})
+            for name in Macros.list_available_macros()
+        }
+        for name, spec in live.items():
+            spec["cat"] = spec.get("cat") or Macros.macro_category(name)
+        return live
+
+    def test_registry_entries_are_editor_shaped_and_category_filtered(self):
+        with patch.object(
+            Macros, "get_current_bindings", side_effect=self._patched_live
+        ), patch.object(Macros, "_default_bindings", return_value={}):
+            entries = {e["method"]: e for e in Macros.get_editor_registry("Display")}
+        self.assertIn("m_grid", entries)
+        self.assertNotIn("m_group", entries)  # Edit category
+        self.assertNotIn("m_wireframe", entries)  # re-categorised away
+        entry = entries["m_grid"]
+        self.assertEqual(entry["name"], "Grid")
+        self.assertEqual(entry["current"], "Ctrl+G")  # converted to Qt form
+        self.assertEqual(entry["current_scope"], "application")
+        self.assertFalse(entry["scope_editable"])  # native keys are DCC-global
+        for field in ("method", "name", "doc", "current", "default",
+                      "current_scope", "default_scope"):
+            self.assertIn(field, entry)
+
+    def test_custom_category_becomes_a_group(self):
+        with patch.object(
+            Macros, "get_current_bindings", side_effect=self._patched_live
+        ), patch.object(Macros, "_default_bindings", return_value={}):
+            cats = Macros.editor_categories()
+            customs = [e["method"] for e in Macros.get_editor_registry("Custom")]
+        self.assertIn("Custom", cats)
+        for mixin_cat in Macros.list_categories():
+            self.assertIn(mixin_cat, cats)
+        self.assertEqual(customs, ["m_wireframe"])
+
+    def test_export_bindings_captures_bound_and_category_overrides_only(self):
+        """Bound macros + category overrides are saved; unbound macros at their
+        mixin-default category are omitted (regression carried over from the
+        retired panel: only-bound exports dropped re-categorisations)."""
+        with patch.object(
+            Macros, "get_current_bindings", side_effect=self._patched_live
+        ):
+            out = Macros.export_bindings()
+        self.assertEqual(out["m_grid"], {"key": "ctl+g", "cat": "Display"})
+        self.assertEqual(out["m_wireframe"], {"key": "", "cat": "Custom"})
+        self.assertNotIn("m_group", out)  # unbound at default category
+
+    def test_import_bindings_releases_uncovered_keys_then_applies(self):
+        cleared, applied = [], []
+        with patch.object(
+            Macros, "get_current_bindings", side_effect=self._patched_live
+        ), patch.object(
+            Macros, "clear_hotkey", side_effect=lambda n, key=None: cleared.append((n, key))
+        ), patch.object(
+            Macros, "apply_bindings", side_effect=lambda d: applied.append(d)
+        ):
+            count = Macros.import_bindings({"m_group": {"key": "g", "cat": "Edit"}})
+        self.assertEqual(count, 1)
+        self.assertIn(("m_grid", "ctl+g"), cleared)  # live key not in the set
+        self.assertEqual(applied, [{"m_group": {"key": "g", "cat": "Edit"}}])
+
+    def test_apply_editor_binding_rebinds_clears_and_sets(self):
+        calls = []
+        with patch.object(
+            Macros, "get_current_bindings", side_effect=self._patched_live
+        ), patch.object(
+            Macros, "clear_hotkey", side_effect=lambda n, key=None: calls.append(("clear", n, key))
+        ), patch.object(
+            Macros, "set_macro",
+            side_effect=lambda n, key=None, cat=None: calls.append(("set", n, key, cat)),
+        ):
+            Macros.apply_editor_binding("m_grid", "Ctrl+J")  # rebind
+            Macros.apply_editor_binding("m_grid", "")  # clear
+            Macros.apply_editor_binding("m_group", "Alt+G")  # fresh assign
+        self.assertEqual(
+            calls,
+            [
+                ("clear", "m_grid", "ctl+g"),
+                ("set", "m_grid", "ctl+j", "Display"),
+                ("clear", "m_grid", "ctl+g"),
+                ("set", "m_group", "alt+g", "Edit"),
+            ],
+        )
+
+    def test_apply_editor_binding_same_key_is_not_cleared(self):
+        calls = []
+        with patch.object(
+            Macros, "get_current_bindings", side_effect=self._patched_live
+        ), patch.object(
+            Macros, "clear_hotkey", side_effect=lambda n, key=None: calls.append(("clear", n, key))
+        ), patch.object(
+            Macros, "set_macro",
+            side_effect=lambda n, key=None, cat=None: calls.append(("set", n, key, cat)),
+        ):
+            Macros.apply_editor_binding("m_grid", "Ctrl+G")  # unchanged chord
+        self.assertNotIn(("clear", "m_grid", "ctl+g"), calls)
 
 
 if __name__ == "__main__":

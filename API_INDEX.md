@@ -419,15 +419,11 @@ _Generated: 2026-07-17_
 - `class DynamicPipeSlots`
   - methods: header_init, b000
 
-### `edit_utils/macro_manager/macro_manager_slots.py` — UI slots for the Macro Manager panel.
-- `class MacroManagerSlots`
-  - methods: header_init, cmb000_init, cmb000, tbl000_init
-
 ### `edit_utils/macros.py`
 - `class MacroManager(ptk.HelpMixin)`
-  - methods: set_macros, call_with_input, set_macro, list_available_macros, macro_label, macro_category, list_categories, macro_help, get_current_bindings, apply_bindings, clear_hotkey, unset_macro, find_conflicts, qt_sequence_to_maya_key, maya_key_to_qt_sequence, list_presets, load_preset, save_preset, delete_preset, get_active_preset, set_active_preset, apply_saved_macros
+  - methods: set_macros, call_with_input, set_macro, list_available_macros, macro_label, macro_category, list_categories, macro_help, get_current_bindings, apply_bindings, clear_hotkey, unset_macro, find_conflicts, qt_sequence_to_maya_key, maya_key_to_qt_sequence, list_presets, load_preset, save_preset, delete_preset, get_active_preset, set_active_preset, apply_saved_macros, editor_categories, get_editor_registry, apply_editor_binding, export_bindings, import_bindings, show_editor
 - `class DisplayMacros`
-  - methods: m_component_id_display, m_normals_display, m_soft_edge_display, m_toggle_visibility, m_toggle_uv_border_edges, m_back_face_culling, m_isolate_selected, m_cycle_display_state, m_wireframe_toggle, m_grid_and_image_planes, m_frame, m_smooth_preview, m_wireframe, m_material_override, m_shading, m_lighting
+  - methods: m_component_id_display, m_normals_display, m_soft_edge_display, m_toggle_visibility, m_toggle_uv_border_edges, m_back_face_culling, m_isolate_selected, m_cycle_display_state, m_wireframe_toggle, m_grid, m_grid_and_image_planes, m_frame, m_smooth_preview, m_wireframe, m_material_override, m_shading, m_lighting
 - `class EditMacros`
   - methods: m_group, m_combine, m_boolean, m_lock_vertex_normals, m_paste_and_rename, m_multi_component, m_merge_vertices
 - `class SelectionMacros`
@@ -481,6 +477,11 @@ _Generated: 2026-07-17_
 - `class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`
   - methods: blender_path, params_defaults, render_context
 
+### `env_utils/blender_bridge/_scene_import.py` — Import a Blender scene (.blend) into Maya via a headless-Blender FBX round-trip.
+- `import_blender_scene(src_path: str, **kwargs: Any) -> List[str]`
+- `class BlenderSceneImport(ptk.LoggingMixin)`
+  - methods: blender_path, require_blender, render_script, convert, import_scene
+
 ### `env_utils/blender_bridge/blender_bridge_slots.py` — Slots for the Blender bridge panel.
 - `class BlenderBridgeSlots(MayaBridgeSlotsBase)`
   - methods: params_module, template_dir, make_bridge, list_template_modes, b000
@@ -489,6 +490,12 @@ _Generated: 2026-07-17_
 - `referenced_keys(script_text: str) -> 'set[str]'`
 - `defaults() -> 'dict[str, Any]'`
 - `render_context(values: 'dict[str, Any]') -> 'dict[str, str]'`
+
+### `env_utils/blender_bridge/templates/_import_scene.py` — Open a .blend headlessly (blender --background) and export it as FBX for a Maya import.
+- `collect_texture_manifest(bpy)`
+- `write_texture_manifest(entries, scene_materials, path)`
+- `export_fbx(bpy)`
+- `main()`
 
 ### `env_utils/blender_bridge/templates/import.py` — Import the bridged FBX into Blender, with optional clean-slate and frame-on-import behaviors.
 - `main()`
@@ -588,7 +595,7 @@ _Generated: 2026-07-17_
 - `show(*args, **kwargs)`
 - `toggle(*args, **kwargs)`
 - `class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog)`
-  - methods: enterEvent, show_console
+  - methods: show_console
 
 ### `env_utils/unity_bridge/_unity_bridge.py` — Unity bridge engine -- export the Maya selection into a Unity project's Assets/.
 - `list_delivery_modes() -> List[Tuple[str, str]]`
@@ -956,17 +963,13 @@ _Generated: 2026-07-17_
 - `keystring_to_token(ks: list) -> str`
 - `live_hotkey_map() -> dict`
 - `ensure_editable_hotkey_set(name: str = MACRO_HOTKEY_SET) -> str`
-- `maya_collision_checker(sequence, scope, ui_name, method_name)`
+- `maya_collision_checker(sequence, scope, ui_name, method_name, ignore=None)`
 
 ### `ui_utils/maya_bridge_slots.py` — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 - `class MayaBridgeSlotsBase(BridgeSlotsBase)`
   - methods: default_output_dir
 
 ### `ui_utils/maya_native_menus.py`
-- `class PersistentMenu(QtWidgets.QMenu)`
-  - methods: setVisible
-- `class EmbeddedMenuWidget(QtWidgets.QWidget)`
-  - methods: init_ui, content_size, sizeHint, minimumSizeHint, resizeEvent, showEvent, fit_to_window
 - `class MayaNativeMenus(ptk.LoggingMixin)`
   - methods: get_menu, display_menu
 

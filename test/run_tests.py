@@ -33,6 +33,16 @@ import textwrap
 from pathlib import Path
 from typing import Optional
 
+# cp1252 consoles can't encode characters test docstrings legitimately use
+# ("→"); unittest's printErrors then dies MID-REPORT, eating the failure list
+# and the summary (bitten in uitk's runner). Degrade gracefully instead.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(errors="replace")
+        except (ValueError, OSError):
+            pass
+
 # Ensure mayatk is in path
 scripts_dir = r"O:\Cloud\Code\_scripts"
 if scripts_dir not in sys.path:

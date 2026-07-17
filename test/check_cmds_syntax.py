@@ -438,8 +438,15 @@ def validate(
     )
     print(f"  Probing {len(unique_pairs)} unique (cmd, flag) pair(s) by execution...")
 
+    # A probe EXECUTES the command — one that blocks (waits on input, sleeps,
+    # opens something) hangs the whole check with no trace of which pair did
+    # it. CHECK_CMDS_DEBUG=1 prints each pair (flushed) so the culprit is the
+    # last line before the stall.
+    debug_probes = bool(os.environ.get("CHECK_CMDS_DEBUG"))
     probe_cache: Dict[Tuple[str, str], str] = {}
     for cmd_name, flag_name in unique_pairs:
+        if debug_probes:
+            print(f"    probe: {cmd_name}({flag_name}=True)", flush=True)
         probe_cache[(cmd_name, flag_name)] = _probe_flag(cmds, cmd_name, flag_name)
 
     flag_errors = [
