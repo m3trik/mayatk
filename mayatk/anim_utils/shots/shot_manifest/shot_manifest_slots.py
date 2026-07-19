@@ -1460,21 +1460,6 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             self._sync_csv_widgets(False)
             self.detect()
 
-    def browse_csv(self) -> None:
-        """Open a file dialog and load the selected CSV."""
-        if hasattr(self, "_browse_csv_option"):
-            self._browse_csv_option.browse()
-            return
-
-        from qtpy.QtWidgets import QFileDialog
-
-        path, _ = QFileDialog.getOpenFileName(
-            self.ui, "Open Sequence CSV", "", "CSV Files (*.csv);;All Files (*)"
-        )
-        if not path:
-            return
-        self._on_csv_browsed(path)
-
     def _on_csv_browsed(self, path: str) -> None:
         """Handle a CSV path selected via browse or BrowseOption."""
         self._sync_csv_widgets(True)
@@ -1530,6 +1515,16 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             self.ui.txt_csv_path.set_action_color("invalid")
             self._set_footer(f"Error: {exc}", color=ERROR_COLOR)
             return
+
+        # A CSV reload re-parses from disk, which knows nothing about the
+        # context-menu exclusions tracked only in self._column_map, so without
+        # this a reload while a mapping is active resurrects every
+        # context-menu-excluded step (and _include_step would resurrect ALL
+        # excluded steps, not just the one being restored). Mirrors blendertk's
+        # ShotManifestController._load_csv.
+        if self._column_map.exclude_steps:
+            excluded = {e.upper() for e in self._column_map.exclude_steps}
+            steps = [s for s in steps if s.step_id.upper() not in excluded]
 
         self.ui.txt_csv_path.reset_action_color()
         self._recent_csv_option.record(path)

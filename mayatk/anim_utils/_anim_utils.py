@@ -2996,8 +2996,14 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 if not keys_to_move:
                     continue
                 moving_set = set(keys_to_move)
-                # Keys on this curve that are NOT being moved
-                stationary = {k for k in keyframes if k not in moving_set}
+                # Keys on this curve that are NOT being moved. Query the FULL
+                # curve, not the (possibly sl=True-filtered) plan query: with
+                # selected_keys_only, unselected keys are invisible to
+                # `keyframes`, and option="over" below would silently
+                # overwrite one if a moved key landed on it (the same blind
+                # spot fixed in snap_keys_to_frames' occupied set).
+                all_times = cmds.keyframe(curve, query=True, timeChange=True) or []
+                stationary = {k for k in all_times if k not in moving_set}
                 dests: List[float] = []
                 for key in keys_to_move:
                     dest = max(key + actual_spacing, 0)
@@ -3050,11 +3056,18 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                 new_time = max(key + actual_spacing, 0)
                 if new_time != key:
                     try:
+                        # option="over" lets a key travel past unmoved
+                        # neighbors — the default move CLAMPS at the adjacent
+                        # key, leaving it off-frame (see _shift_key_times and
+                        # snap_keys_to_frames for the same trap). The
+                        # prevent_collisions pre-flight already aborts on a
+                        # destination that lands ON a stationary key.
                         cmds.keyframe(
                             curve,
                             edit=True,
                             time=(key,),
                             timeChange=new_time,
+                            option="over",
                         )
                     except RuntimeError as e:
                         cmds.warning(
@@ -3167,7 +3180,10 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
                     attr_start = int(key_times[0])
                     attr_end = time_range
 
-                # Calculate frames to key (excluding bookends)
+                # Calculate frames to key (excluding bookends).
+                # Coerce caller-supplied bounds to int the same way the
+                # auto-detect path does — range() rejects float arguments.
+                attr_start, attr_end = int(attr_start), int(attr_end)
                 frames = list(range(attr_start + 1, attr_end))
                 if percent is not None:
                     count = max(1, int(len(frames) * (percent / 100.0)))
@@ -4100,8 +4116,13 @@ class AnimUtils(_AnimUtilsMixin, ptk.HelpMixin):
             moves.sort(key=lambda x: x[0], reverse=True)
 
             # Build a set of occupied times for collision detection.
-            # Start with all whole-frame times already on the curve.
-            occupied = set(t for t in keyframe_times if t == int(t))
+            # Must include ALL whole-frame keys on the curve (selected AND
+            # unselected, and outside any time_range) so a snapped key never
+            # overwrites an unselected whole-frame key via option="over".
+            # keyframe_times is the selected/time-range-filtered query and is
+            # blind to those keys.
+            all_curve_times = cmds.keyframe(curve, query=True, timeChange=True) or []
+            occupied = set(t for t in all_curve_times if t == int(t))
 
             for old_time, new_time in moves:
                 # Skip if another key already occupies the target time

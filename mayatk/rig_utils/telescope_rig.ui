@@ -71,6 +71,52 @@
         <number>0</number>
        </property>
        <item>
+        <widget class="ComboBox" name="cmb_axis">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="currentIndex">
+          <number>1</number>
+         </property>
+         <property name="maxVisibleItems">
+          <number>40</number>
+         </property>
+         <property name="maxCount">
+          <number>500</number>
+         </property>
+         <property name="sizeAdjustPolicy">
+          <enum>QComboBox::AdjustToContents</enum>
+         </property>
+         <property name="frame">
+          <bool>true</bool>
+         </property>
+         <item>
+          <property name="text">
+           <string>Aim Axis:  X</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Aim Axis:  Y</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Aim Axis:  Z</string>
+          </property>
+         </item>
+        </widget>
+       </item>
+       <item>
         <widget class="QDoubleSpinBox" name="spin_collapsed">
          <property name="prefix">
           <string>Collapsed Dist:	</string>
@@ -192,6 +238,11 @@
   </widget>
  </widget>
  <customwidgets>
+  <customwidget>
+   <class>ComboBox</class>
+   <extends>QComboBox</extends>
+   <header>uitk.widgets.comboBox.ComboBox.h</header>
+  </customwidget>
   <customwidget>
    <class>Footer</class>
    <extends>QWidget</extends>

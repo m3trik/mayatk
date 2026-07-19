@@ -277,5 +277,215 @@ class TestAuditRegressionFixes(MayaTkTestCase):
         self.assertIsNone(animator.blendshape)
 
 
+class TestBlendshapeAnimatorImprovements(MayaTkTestCase):
+    """TDD tests for the 2026-07 improvement pass.
+
+    Covers: setup-scoped tween queries (multi-setup scenes), tag-based
+    ``from_existing`` target detection, ``find_nearby_weight`` tolerance,
+    frame-0 recovery, weight range guards, frame-based group/prefix
+    overrides, and the shared delete helpers.
+    """
+
+    def _make_setup(self, prefix, start=1, end=10):
+        """Create an independent base+target sphere pair and animator."""
+        base = cmds.polySphere(name=f"{prefix}_base")[0]
+        target = cmds.polySphere(name=f"{prefix}_target")[0]
+        cmds.move(2, 0, 0, target)
+        animator = BlendshapeAnimator()
+        ok = animator.create(
+            base_mesh=base,
+            target_mesh=target,
+            start_frame=start,
+            end_frame=end,
+            name=prefix,
+            test_setup=False,
+        )
+        self.assertTrue(ok, f"setup precondition failed for {prefix}")
+        return animator
+
+    # -- Setup-scoped queries -------------------------------------------------
+
+    def test_get_existing_weights_scoped_per_setup(self):
+        """Two setups in one scene must not see each other's weights as taken."""
+        a = self._make_setup("sa")
+        b = self._make_setup("sb")
+        a.tween_creator.create_weight_based_tweens([0.5])
+
+        created = b.tween_creator.create_weight_based_tweens([0.5])
+        self.assertEqual(len(created), 1)
+        self.assertEqual(
+            created[0].weight,
+            0.5,
+            "setup B's weight 0.5 must not be offset by setup A's tween",
+        )
+
+    def test_find_all_targets_blendshape_filter(self):
+        """find_all_targets accepts blendshape/base_mesh filters."""
+        a = self._make_setup("sc")
+        b = self._make_setup("sd")
+        a.tween_creator.create_weight_based_tweens([0.3])
+        b.tween_creator.create_weight_based_tweens([0.7])
+
+        self.assertEqual(len(Targets.find_all_targets()), 2)
+
+        scoped = Targets.find_all_targets(
+            blendshape=a.blendshape, base_mesh=a.base_mesh
+        )
+        self.assertEqual(len(scoped), 1)
+        self.assertEqual(scoped[0].weight, 0.3)
+
+    def test_finalize_for_export_spares_other_setups(self):
+        """finalize_for_export must only delete its OWN setup's tweens."""
+        a = self._make_setup("se")
+        b = self._make_setup("sf")
+        a.tween_creator.create_weight_based_tweens([0.4])
+        b_tweens = b.tween_creator.create_weight_based_tweens([0.6])
+        b_mesh = b_tweens[0].mesh
+
+        self.assertTrue(a.finalize_for_export())
+        self.assertTrue(
+            cmds.objExists(b_mesh),
+            "finalize on setup A deleted setup B's tween mesh",
+        )
+
+    def test_update_all_references_scoped_to_base_mesh(self):
+        """update_all_references must not rewrite tweens of other setups."""
+        a = self._make_setup("sg")
+        b = self._make_setup("sh")
+        a.tween_creator.create_weight_based_tweens([0.3])
+        b.tween_creator.create_weight_based_tweens([0.7])
+
+        count = Targets.update_all_references(a.blendshape, a.base_mesh)
+        self.assertEqual(count, 1, "only setup A's tween should be updated")
+
+        b_tween = Targets.find_all_targets(blendshape=b.blendshape)[0]
+        self.assertEqual(
+            b_tween.blendshape_name,
+            b.blendshape,
+            "setup B's tween tags were stomped by setup A's reference update",
+        )
+
+    # -- from_existing target detection ---------------------------------------
+
+    def test_from_existing_skips_tagged_tweens_any_name(self):
+        """Tag-based detection: a tween with an arbitrary prefix must never be
+        adopted as the target mesh (the old name-pattern heuristic missed it)."""
+        a = self._make_setup("si")
+        a.tween_creator.create_weight_based_tweens([0.5], name_prefix="zz")
+
+        loaded = BlendshapeAnimator.from_existing(a.base_mesh)
+        self.assertIsNotNone(loaded)
+        self.assertEqual(
+            loaded.target_mesh,
+            "si_target",
+            "from_existing must resolve the real target transform, not a tween",
+        )
+
+    # -- Creator fixes ---------------------------------------------------------
+
+    def test_find_nearby_weight_honors_tolerance(self):
+        a = self._make_setup("sj")
+        result = a.tween_creator.find_nearby_weight(
+            0.5, {0.5, 0.501, 0.499}, tolerance=0.001
+        )
+        self.assertIsNone(
+            result,
+            f"offsets beyond tolerance must not be used (got {result})",
+        )
+
+    def test_frame_based_tween_group_and_prefix(self):
+        """create_frame_based_tween accepts group_name/name_prefix overrides."""
+        a = self._make_setup("sk")
+        tween = a.tween_creator.create_frame_based_tween(
+            5, group_name="_customTweens_GRP", name_prefix="ftw"
+        )
+        self.assertIsNotNone(tween)
+        self.assertTrue(
+            tween.mesh.startswith("ftw_f5"),
+            f"expected ftw_f5* name, got {tween.mesh}",
+        )
+        parent = (cmds.listRelatives(tween.mesh, parent=True) or [None])[0]
+        self.assertEqual(parent, "_customTweens_GRP")
+
+    def test_weight_based_rejects_out_of_range(self):
+        """Weights outside (0, 1) are skipped with a warning, not sent to Maya."""
+        a = self._make_setup("sl")
+        created = a.tween_creator.create_weight_based_tweens([1.5, -0.2, 0.5])
+        self.assertEqual(
+            [t.weight for t in created],
+            [0.5],
+            "only the in-range weight should be created",
+        )
+        self.assertFalse(cmds.objExists("morph_ib_w1500"))
+
+    def test_weight_based_survives_untagged_weight_collision(self):
+        """An in-between occupying a weight WITHOUT a tagged tween mesh (added
+        outside the tool) slips past the tag-based pre-check. Verified live on
+        Maya 2025: the add silently REPLACES the occupied slot (no 'Weights
+        must be unique' error), so the batch must complete and the tool's
+        tagged tween takes ownership of the weight."""
+        a = self._make_setup("so")
+        foreign = cmds.duplicate(
+            a.base_mesh, name="foreign_ib", returnRootsOnly=True
+        )[0]
+        cmds.delete(foreign, constructionHistory=True)
+        cmds.blendShape(
+            a.blendshape,
+            edit=True,
+            inBetween=True,
+            target=(a.base_mesh, 0, foreign, 0.5),
+        )
+
+        created = a.tween_creator.create_weight_based_tweens([0.5, 0.7])
+        self.assertEqual(
+            [t.weight for t in created],
+            [0.5, 0.7],
+            "batch must complete; the tool tween adopts the occupied slot",
+        )
+        self.assertTrue(
+            cmds.objExists(foreign), "the foreign in-between mesh must survive"
+        )
+        tagged = {
+            t.weight
+            for t in Targets.find_all_targets(blendshape=a.blendshape)
+        }
+        self.assertIn(0.5, tagged, "the tag SSoT must now own weight 0.5")
+
+    # -- Recovery --------------------------------------------------------------
+
+    def test_recover_animation_includes_frame_zero(self):
+        """A tween created at frame 0 must count toward range recovery."""
+        a = self._make_setup("sm", start=-10, end=10)
+        self.assertIsNotNone(a.tween_creator.create_frame_based_tween(0))
+        self.assertIsNotNone(a.tween_creator.create_frame_based_tween(5))
+
+        cmds.cutKey(a.blendshape, attribute="weight[0]", clear=True)
+        self.assertTrue(a.recover_animation())
+
+        times = cmds.keyframe(f"{a.blendshape}.weight[0]", query=True) or []
+        self.assertEqual(
+            (min(times), max(times)),
+            (0.0, 5.0),
+            "recovered range must span the frame-0 tween",
+        )
+
+    # -- Shared delete helpers -------------------------------------------------
+
+    def test_delete_helpers(self):
+        a = self._make_setup("sn")
+        a.tween_creator.create_weight_based_tweens([0.3, 0.7])
+        tweens = Targets.find_all_targets()
+        self.assertEqual(len(tweens), 2)
+
+        deleted = Targets._delete_targets(tweens)
+        self.assertEqual(sorted(deleted), sorted(t.mesh for t in tweens))
+        for t in tweens:
+            self.assertFalse(cmds.objExists(t.mesh))
+
+        removed_groups = Targets._delete_empty_groups()
+        self.assertIn("_morphInbetweens_GRP", removed_groups)
+        self.assertFalse(cmds.objExists("_morphInbetweens_GRP"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -51,12 +51,6 @@ from pythontk.core_utils.engines.shots.manifest.manifest_model import (  # noqa:
 from pythontk.core_utils.engines.shots.manifest.manifest_engine import (
     ShotManifest as _EngineShotManifest,
 )
-from pythontk.core_utils.engines.shots.manifest.manifest_engine import (
-    _audio_placeholder_dur as _engine_audio_placeholder_dur,
-)
-from pythontk.core_utils.engines.shots.manifest.manifest_engine import (
-    resolve_duration as _engine_resolve_duration,
-)
 
 from mayatk.anim_utils.shots._shots import (
     ShotStore,
@@ -100,42 +94,6 @@ def _scene_fps() -> float:
         return float(AudioUtils.get_fps())
     except Exception:
         return 24.0
-
-
-# ---------------------------------------------------------------------------
-# Duration resolution (Maya-bound facades over the engine)
-# ---------------------------------------------------------------------------
-
-
-def resolve_duration(
-    step: BuilderStep,
-    initial_shot_length: float,
-    fit_mode: FitMode,
-    fps: float,
-) -> Tuple[float, float, float]:
-    """Compute final shot duration for *step* under the given fit policy.
-
-    Facade over the engine's
-    :func:`~pythontk.core_utils.engines.shots.manifest.manifest_engine.resolve_duration`
-    with Maya's audio measurement injected, so audio clips are probed against
-    *fps* exactly as before the extraction.
-    """
-    return _engine_resolve_duration(
-        step,
-        initial_shot_length,
-        fit_mode,
-        fps,
-        measure_audio=lambda obj: _measure_audio_obj(obj, fps),
-    )
-
-
-def _audio_placeholder_dur(step: BuilderStep) -> Optional[float]:
-    """Return ``AUDIO_PLACEHOLDER_DURATION`` if *step* is an audio step with
-    no resolvable source (see the engine's ``_audio_placeholder_dur``)."""
-    fps = _scene_fps()
-    return _engine_audio_placeholder_dur(
-        step, measure_audio=lambda obj: _measure_audio_obj(obj, fps)
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -388,8 +346,7 @@ class ShotManifest(_EngineShotManifest):
             import maya.cmds as cmds
 
             try:
-                track_id = AudioUtils.normalize_track_id(name)
-                if AudioUtils.has_track(track_id):
+                if AudioUtils.is_registered(name):
                     return True
             except Exception:
                 pass

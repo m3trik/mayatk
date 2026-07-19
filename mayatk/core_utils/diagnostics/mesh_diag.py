@@ -100,14 +100,32 @@ class MeshDiagnostics:
         return cmds.ls(selection=True, flatten=True) or []
 
     @staticmethod
-    def get_ngons(objects: Optional[NodeSeq], repair: bool = False):
-        """Find N-gons and optionally convert them to quads."""
+    def get_ngons(objects: Optional[NodeSeq] = None, repair: bool = False) -> list:
+        """Find N-gons and optionally convert them to quads.
+
+        Parameters:
+            objects: Mesh objects (or components) to inspect. None uses the
+                current selection.
+            repair: If True, quadrangulate the found N-gons via ``polyQuad``.
+
+        Returns:
+            list: The matched N-gon face components. They are left selected —
+            same contract as :meth:`clean_geometry`'s select mode.
+        """
+        if objects is None:
+            objects = cmds.ls(selection=True) or []
+        if not objects:
+            raise ValueError(
+                "N-gon check requires one or more mesh objects. Select meshes and try again."
+            )
 
         cmds.select(objects)
         mel.eval("changeSelectMode 1")
         cmds.selectType(smp=0, sme=1, smf=0, smu=0, pv=0, pe=1, pf=0, puv=0)
         cmds.polySelectConstraint(mode=3, type=0x0008, size=3)
-        n_gons = cmds.ls(sl=1)
+        # Flattened to individual face components — same granularity as
+        # clean_geometry's select-mode return.
+        n_gons = cmds.ls(sl=1, flatten=True)
         cmds.polySelectConstraint(disable=1)
 
         if repair:

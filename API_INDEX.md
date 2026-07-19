@@ -46,9 +46,14 @@ _Generated: 2026-07-19_
 - `class Validator(ptk.LoggingMixin)`
   - methods: validate_meshes, validate_blendshape
 
-### `anim_utils/playblast_exporter.py` — Utilities for creating playblasts and alternative preview renders in Maya.
-- `class PlayblastExporter`
-  - methods: scene_name, create_playblast, render_with_arnold, export_variations
+### `anim_utils/playblast_exporter.py` — Playblast capture, encoding, and preview-render exports for Maya.
+- `class ExportTarget`
+- `class CaptureResult`
+  - methods: pattern
+- `class ExportResult`
+  - methods: ok
+- `class PlayblastExporter(ptk.LoggingMixin)`
+  - methods: available_targets, scene_name, scene_fps, resolve_frame_range, resolve_sound_node, capture_sequence, capture_still, capture_movie, encode_sequence, export, render_with_arnold
 
 ### `anim_utils/scale_keys.py` — Dedicated scale-keys module to keep AnimUtils lean and testable.
 - `class ScaleKeys`
@@ -75,7 +80,6 @@ _Generated: 2026-07-19_
   - methods: active, has_animation, detect_regions, assess, publish_export_view
 
 ### `anim_utils/shots/shot_manifest/_shot_manifest.py` — Maya Shot Manifest adapter — the DCC layer over pythontk's manifest engine.
-- `resolve_duration(step: BuilderStep, initial_shot_length: float, fit_mode: FitMode, fps: float) -> Tuple[float, float, float]`
 - `class ShotManifest(_EngineShotManifest)`
   - methods: apply_behaviors, rewire_audio, from_csv
 
@@ -96,7 +100,7 @@ _Generated: 2026-07-19_
 
 ### `anim_utils/shots/shot_manifest/shot_manifest_slots.py` — Switchboard slots for the Shot Manifest UI.
 - `class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin)`
-  - methods: detect, remove_callbacks, browse_csv, build, assess
+  - methods: detect, remove_callbacks, build, assess
 - `class ShotManifestSlots(ptk.LoggingMixin)`
   - methods: header_init, btn_expand_missing, btn_expand_extra, btn_settings, b002, b003
 
@@ -106,7 +110,7 @@ _Generated: 2026-07-19_
 
 ### `anim_utils/shots/shot_sequencer/_shot_sequencer.py` — Shot Sequencer — manages per-shot animation with ripple editing.
 - `class ShotSequencer`
-  - methods: shots, hidden_objects, markers, is_object_hidden, set_object_hidden, sorted_shots, shot_by_id, shot_by_name, define_shot, from_current_range, reconcile_all_shots, collect_object_segments, collect_shot_sequences, move_sequences_to_shot, fit_shot_to_content, trim_shot_to_content, extend_shot_to_fit, detect_shots, detect_next_shot, move_object_keys, move_stepped_keys, move_object_in_shot, scale_object_keys, move_shot, slide_shot, ripple_downstream, ripple_upstream, expand_shot, resize_object, set_shot_duration, resize_shot, set_shot_start, reorder_shots, move_shot_to_position, respace, apply_gap, to_dict, from_dict
+  - methods: shots, hidden_objects, markers, is_object_hidden, set_object_hidden, sorted_shots, shot_by_id, shot_by_name, define_shot, reconcile_all_shots, collect_object_segments, collect_shot_sequences, move_sequences_to_shot, fit_shot_to_content, trim_shot_to_content, extend_shot_to_fit, detect_shots, detect_next_shot, move_object_keys, move_stepped_keys, move_object_in_shot, scale_object_keys, move_shot, slide_shot, ripple_downstream, ripple_upstream, expand_shot, resize_object, set_shot_duration, resize_shot, set_shot_start, reorder_shots, move_shot_to_position, respace, apply_gap, to_dict, from_dict
 
 ### `anim_utils/shots/shot_sequencer/clip_motion.py` — Clip motion, resize, and key-scaling logic for the shot sequencer.
 - `curves_for_attr(obj_name: str, attr_name: str) -> list`
@@ -180,7 +184,7 @@ _Generated: 2026-07-19_
 ### `audio_utils/_audio_utils.py` — Unified audio system for Maya scenes.
 - `class TrackEvent`
 - `class AudioUtils(ptk.HelpMixin)`
-  - methods: get_snap_frames, set_snap_frames, validate_track_id, normalize_track_id, attr_for, track_id_from_attr, find_carriers, list_track_attrs, load_file_map, set_path, get_path, remove_path, get_fps, cached_waveform, clear_waveform_cache, audio_duration_frames, ensure_track_attr, has_track, list_tracks, read_keys, read_events, write_key, remove_key, clear_keys, shift_keys_in_range, tracks_on_at_frame, bake_events, delete_track, rename_track, show_track_attrs, hide_track_attrs, sync, find_dg_node_for_track, is_managed_dg, batch, detect_legacy, migrate_legacy_triggers
+  - methods: get_snap_frames, set_snap_frames, validate_track_id, normalize_track_id, attr_for, track_id_from_attr, find_carriers, list_track_attrs, load_file_map, set_path, get_path, remove_path, get_fps, cached_waveform, clear_waveform_cache, audio_duration_frames, ensure_track_attr, has_track, is_registered, list_tracks, read_keys, pair_on_off_events, read_events, write_key, remove_key, clear_keys, shift_keys_in_range, tracks_on_at_frame, bake_events, delete_track, rename_track, show_track_attrs, hide_track_attrs, sync, find_dg_node_for_track, is_managed_dg, batch, detect_legacy, migrate_legacy_triggers
 
 ### `audio_utils/audio_clips/_audio_clips.py` — Scene-wide audio event manager — thin facade over ``audio_utils``.
 - `class AudioClips(ptk.LoggingMixin)`
@@ -236,12 +240,12 @@ _Generated: 2026-07-19_
   - methods: undo_chunk, suspended_refresh, selected, undoable, reparent, wrap_control, confirm_existence, get_mfn_mesh, get_array_type, convert_array_type, get_parameter_mapping, set_parameter_mapping, build_mesh_similarity_mapping, get_mel_globals, reorder_objects
 
 ### `core_utils/auto_instancer/_auto_instancer.py` — Scene auto-instancer: convert geometrically identical meshes to instances.
-- `auto_instance(nodes: Optional[Sequence[object]] = None, tolerance: float = 0.001, scale_tolerance: Optional[float] = None, require_same_material: Union[bool, int] = True, check_uvs: bool = False, check_hierarchy: bool = False, separate_combined: bool = False, combine_assemblies: bool = True, combine_non_instanced: bool = True, combine_by_material: bool = True, combine_by_distance: bool = True, combine_distance_threshold: float = 10000.0, search_radius_mult: float = 1.5, is_static: bool = True, needs_individual: bool = False, will_be_lightmapped: bool = False, can_gpu_instance: bool = True, verbose: bool = True, log_level: str = 'WARNING') -> List[str]`
+- `auto_instance(nodes: Optional[Sequence[object]] = None, tolerance: float = 0.001, scale_tolerance: Optional[float] = None, require_same_material: Union[bool, int] = True, check_uvs: bool = False, check_hierarchy: bool = False, separate_combined: bool = False, combine_assemblies: bool = True, combine_non_instanced: bool = True, combine_by_material: bool = True, combine_by_distance: bool = True, combine_distance_threshold: float = 10000.0, search_radius_mult: float = 1.5, is_static: bool = True, needs_individual: bool = False, will_be_lightmapped: bool = False, can_gpu_instance: bool = True, verbose: bool = True, log_level: str = 'WARNING', return_summary: bool = False) -> Union[List[str], Tuple[List[str], Dict[str, object]]]`
 - `class InstanceCandidate`
   - methods: transform, exists
 - `class InstanceGroup`
 - `class AutoInstancer(ptk.LoggingMixin)`
-  - methods: tolerance, scale_tolerance, require_same_material, check_uvs, combine_assemblies, search_radius_mult, verbose, run, find_instance_groups
+  - methods: default_summary, format_summary, tolerance, scale_tolerance, require_same_material, check_uvs, combine_assemblies, search_radius_mult, verbose, run, find_instance_groups
 
 ### `core_utils/auto_instancer/assembly_reconstructor.py` — Logic for separating and reassembling mesh assemblies.
 - `class AssemblyReconstructor`
@@ -268,19 +272,13 @@ _Generated: 2026-07-19_
 - `class GetComponentsMixin`
   - methods: get_component_type, convert_alias, convert_component_type, get_component_index, convert_int_to_component, filter_components, get_components
 - `class Components(GetComponentsMixin, ptk.HelpMixin)`
-  - methods: map_components_to_objects, get_contiguous_edges, get_contiguous_islands, get_islands, get_border_components, get_furthest_vertices, get_closest_verts, get_closest_vertex, get_vertices_within_threshold, adjusted_distance_between_vertices, bridge_connected_edges, get_edge_path, get_shortest_path, get_normal, get_normal_vector, get_normal_angle, get_edges_by_normal_angle, set_edge_hardness, get_faces_with_similar_normals, average_normals, transfer_normals, filter_components_by_connection_count, get_vertex_normal, get_vector_from_components, crease_edges, get_creased_edges, transfer_creased_edges
+  - methods: map_components_to_objects, get_contiguous_edges, get_contiguous_islands, get_islands, get_border_components, get_furthest_vertices, get_closest_verts, closest_point_probe, get_closest_vertex, get_vertices_within_threshold, adjusted_distance_between_vertices, bridge_connected_edges, get_edge_path, get_shortest_path, get_normal, get_normal_vector, get_normal_angle, get_edges_by_normal_angle, set_edge_hardness, get_faces_with_similar_normals, average_normals, transfer_normals, filter_components_by_connection_count, get_vertex_normal, get_vector_from_components, crease_edges, get_creased_edges, transfer_creased_edges
 
 ### `core_utils/diagnostics/animation_diag.py` — Animation-curve diagnostics and optional repair helpers.
 - `class AnimCurveDiagnostics`
-  - methods: repair_corrupted_curves, repair_visibility_tangents
+  - methods: repair_visibility_tangents, repair_corrupted_curves
 
-### `core_utils/diagnostics/mesh_diag.py` — Mesh diagnostics and repair helpers.
-- `class MeshDiagnostics`
-  - methods: clean_geometry, get_ngons
-
-### `core_utils/diagnostics/scene_diag.py` — Scene diagnostics and repair helpers.
-- `class SceneDiagnostics`
-  - methods: fix_ocio, fix_missing_color_spaces, fix_unknown_plugins, remove_xgen_expressions, cleanup_scene
+### `core_utils/diagnostics/audit_records.py` — Scene-audit data contract: profiles, per-asset records, and the SceneReport tree.
 - `class AuditProfile`
 - `class MeshRecord`
 - `class MaterialRecord`
@@ -310,12 +308,22 @@ _Generated: 2026-07-19_
   - methods: to_dict
 - `class SceneInfoSection`
   - methods: normalize
+
+### `core_utils/diagnostics/mesh_diag.py` — Mesh diagnostics and repair helpers.
+- `class MeshDiagnostics`
+  - methods: clean_geometry, get_ngons
+
+### `core_utils/diagnostics/scene_audit.py` — Scene audit engine — game-readiness analysis over meshes, materials, and textures.
 - `class SceneAnalyzer(ptk.LoggingMixin)`
   - methods: run_audit, format_audit_text, format_audit_html, analyze, generate_report, print_report
 
-### `core_utils/diagnostics/transform_diag.py`
+### `core_utils/diagnostics/scene_diag.py` — Scene repair helpers: OCIO / color management, unknown nodes and plugins,
+- `class SceneDiagnostics`
+  - methods: fix_ocio, fix_missing_color_spaces, fix_unknown_plugins, remove_xgen_expressions, cleanup_scene
+
+### `core_utils/diagnostics/transform_diag.py` — Transform diagnostics and repair helpers.
 - `class TransformDiagnostics`
-  - methods: fix_non_orthogonal_axes
+  - methods: get_sheared, fix_non_orthogonal_axes
 
 ### `core_utils/diagnostics/uv_diag.py` — UV diagnostics and repair helpers.
 - `class UvSetCleanupResult`
@@ -339,7 +347,7 @@ _Generated: 2026-07-19_
 
 ### `core_utils/script_job_manager.py` — Centralized Maya event subscription manager.
 - `class ScriptJobManager`
-  - methods: instance, reset, subscribe, add_om_callback, unsubscribe, unsubscribe_all, connect_cleanup, suppress, resume, status, print_status, teardown
+  - methods: instance, reset, subscribe, add_om_callback, unsubscribe, unsubscribe_all, connect_cleanup, suppress, resume, suppressed, status, print_status, teardown
 
 ### `display_utils/_display_utils.py`
 - `class DisplayUtils(ptk.HelpMixin)`
@@ -900,11 +908,11 @@ _Generated: 2026-07-19_
 ### `rig_utils/controls.py`
 - `class ControlNodes`
 - `class Controls(ptk.HelpMixin)`
-  - methods: register_preset, create, combine
+  - methods: register_preset, shapes, create, combine
 
 ### `rig_utils/shadow_rig.py`
 - `class ShadowRig(ptk.LoggingMixin)`
-  - methods: create_contact_locator, get_or_create_shadow_source, create_shadow_plane, create_silhouette_texture, create_material, setup_expression, bake, refresh_export_metadata, find_shadow_planes, bake_planes, create
+  - methods: create_contact_locator, get_or_create_shadow_source, create_shadow_plane, create_silhouette_texture, create_material, setup_expression, bake, refresh_export_metadata, find_shadow_planes, bake_planes, delete, delete_rigs, create
 - `class ShadowRigSlots`
   - methods: header_init, b001, b002, perform_operation
 
@@ -912,11 +920,12 @@ _Generated: 2026-07-19_
 - `class CurveWeights(ptk.HelpMixin)`
   - methods: effective_degree, joint_stations, solve
 - `class SkinUtils(ptk.HelpMixin)`
-  - methods: get_skin_cluster, get_influences, bind, unbind, get_weights, set_weights, set_vertex_weights, prune_weights, normalize_weights, set_max_influences, set_skinning_method, copy_weights, mirror_weights, export_weights, import_weights, apply_falloff, add_delta_mush, bind_to_curve
+  - methods: get_skin_cluster, get_influences, bind, name_bind_pose, unbind, get_weights, set_weights, set_vertex_weights, prune_weights, normalize_weights, set_max_influences, set_skinning_method, copy_weights, mirror_weights, export_weights, import_weights, apply_falloff, add_delta_mush, bind_to_curve
 
 ### `rig_utils/telescope_rig.py`
+- `class TelescopeRigBundle`
 - `class TelescopeRig(ptk.LoggingMixin)`
-  - methods: setup_telescope_rig
+  - methods: setup_telescope_rig, teardown
 - `class TelescopeRigSlots(ptk.LoggingMixin)`
   - methods: header_init, build_rig
 

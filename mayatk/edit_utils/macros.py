@@ -883,8 +883,15 @@ class DisplayMacros:
     @staticmethod
     def m_component_id_display():
         """Toggle Component Id Display through vertices, edges, faces, UVs, and off."""
-        # Query the current state of component ID display settings for vertices, edges, faces, and UVs
-        current_state = cmds.polyOptions(q=True, displayItemNumbers=True)[:4]
+        # Query the current state of component ID display settings for vertices, edges, faces, and UVs.
+        # polyOptions returns None when no polygon mesh is in the selection.
+        state = cmds.polyOptions(q=True, displayItemNumbers=True)
+        if not state:
+            cmds.inViewMessage(
+                amg="Select a polygon mesh.", pos="topCenter", fade=True
+            )
+            return
+        current_state = state[:4]
 
         # Determine the next state to switch to
         if True not in current_state:
@@ -981,8 +988,15 @@ class DisplayMacros:
     @staticmethod
     def m_soft_edge_display():
         """Toggle Soft Edge Display."""
-        # Query the current setting for all edges display
-        all_edges_visible = cmds.polyOptions(q=True, ae=True)[0]
+        # Query the current setting for all edges display.
+        # polyOptions returns None when no polygon mesh is in the selection.
+        res = cmds.polyOptions(q=True, ae=True)
+        if not res:
+            cmds.inViewMessage(
+                amg="Select a polygon mesh.", pos="topCenter", fade=True
+            )
+            return
+        all_edges_visible = res[0]
 
         # Toggle the edge display based on the current state
         if all_edges_visible:
@@ -1668,8 +1682,10 @@ class EditMacros:
             )
 
         else:
+            # Select mode is global, not per-object; resolve it once.
+            component_mode = cmds.selectMode(q=True, component=True)
             for obj in objects:
-                if cmds.selectMode(q=True, component=True):  # Merge selected components.
+                if component_mode:  # Merge selected components.
                     if cmds.filterExpand(selectionMask=31):  # Vertices
                         cmds.polyMergeVertex(
                             distance=tolerance,
@@ -1679,22 +1695,21 @@ class EditMacros:
                     else:  # If selection type is edges or facets:
                         mel.eval("MergeToCenter")
 
-                else:  # If object mode. merge all vertices on the selected object.
-                    for n, obj in enumerate(objects):
-                        # Get number of vertices
-                        count = cmds.polyEvaluate(obj, vertex=True)
-                        vertices = str(obj) + ".vtx [0:" + str(count) + "]"
-                        cmds.polyMergeVertex(
-                            vertices,
-                            distance=tolerance,
-                            alwaysMergeTwoVertices=False,
-                            constructionHistory=False,
-                        )
+                else:  # Object mode: merge all coincident vertices on this mesh.
+                    count = cmds.polyEvaluate(obj, vertex=True)
+                    vertices = f"{obj}.vtx[0:{count - 1}]"
+                    cmds.polyMergeVertex(
+                        vertices,
+                        distance=tolerance,
+                        alwaysMergeTwoVertices=False,
+                        constructionHistory=False,
+                    )
 
-                    # Return to original state
-                    cmds.select(clear=True)
-                    for obj in objects:
-                        cmds.select(obj, add=True)
+            if not component_mode:
+                # Return to original state (object-mode selection).
+                cmds.select(clear=True)
+                for obj in objects:
+                    cmds.select(obj, add=True)
 
 
 class SelectionMacros:

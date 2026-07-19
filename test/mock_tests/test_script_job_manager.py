@@ -130,6 +130,26 @@ class TestSubscribe(ScriptJobManagerTestCase):
         cb1.assert_not_called()
         cb2.assert_not_called()
 
+    def test_jobs_created_protected(self):
+        """Shared jobs use protected=True so a stray killAll can't silence SJM."""
+        mock_cmds.scriptJob.reset_mock()
+        self.mgr.subscribe("SceneOpened", lambda: None)
+
+        event_calls = [
+            c for c in mock_cmds.scriptJob.call_args_list if "event" in c.kwargs
+        ]
+        self.assertEqual(len(event_calls), 1)
+        self.assertTrue(event_calls[0].kwargs.get("protected"))
+
+    def test_subscribe_failure_leaves_no_orphan_bookkeeping(self):
+        """If scriptJob creation raises, no subscription may be recorded."""
+        mock_cmds.scriptJob.side_effect = RuntimeError("no runtime")
+        with self.assertRaises(RuntimeError):
+            self.mgr.subscribe("SceneOpened", lambda: None)
+
+        self.assertEqual(len(self.mgr._subs), 0)
+        self.assertEqual(len(self.mgr._events.get("SceneOpened", [])), 0)
+
     def test_unsubscribe_all_leaves_other_owners(self):
         owner_a = object()
         owner_b = object()
@@ -170,6 +190,16 @@ class TestDispatch(ScriptJobManagerTestCase):
 
         cb_bad.assert_called_once()
         cb_good.assert_called_once()
+
+    def test_dispatch_logs_listener_errors_at_warning(self):
+        """Listener failures must be visible (warning + traceback), not debug-only."""
+        self.mgr.subscribe("SceneOpened", MagicMock(side_effect=RuntimeError("boom")))
+
+        with self.assertLogs(
+            "mayatk.core_utils.script_job_manager", level="WARNING"
+        ) as captured:
+            self.mgr._dispatch("SceneOpened")
+        self.assertTrue(any("boom" in line for line in captured.output))
 
 
 class TestEphemeral(ScriptJobManagerTestCase):
@@ -239,6 +269,101 @@ class TestSuppressResume(ScriptJobManagerTestCase):
         self.mgr._dispatch("SceneOpened")
         cb.assert_called_once()
 
+    def test_suppress_unknown_token_does_not_leak(self):
+        """Suppressing a bogus token must not grow internal state."""
+        self.mgr.suppress(99999)
+        self.assertEqual(len(self.mgr._suppressed), 0)
+
+    def test_suppressed_context_manager_silences_and_restores(self):
+        cb = MagicMock()
+        token = self.mgr.subscribe("SceneOpened", cb)
+
+        with self.mgr.suppressed(token):
+            self.mgr._dispatch("SceneOpened")
+        cb.assert_not_called()
+
+        self.mgr._dispatch("SceneOpened")
+        cb.assert_called_once()
+
+    def test_suppressed_context_manager_restores_on_error(self):
+        cb = MagicMock()
+        token = self.mgr.subscribe("SceneOpened", cb)
+
+        with self.assertRaises(RuntimeError):
+            with self.mgr.suppressed(token):
+                raise RuntimeError("boom")
+
+        self.mgr._dispatch("SceneOpened")
+        cb.assert_called_once()
+
+    def test_suppressed_context_manager_preserves_prior_suppression(self):
+        """A token already suppressed on entry stays suppressed on exit."""
+        cb = MagicMock()
+        token = self.mgr.subscribe("SceneOpened", cb)
+        self.mgr.suppress(token)
+
+        with self.mgr.suppressed(token):
+            pass
+
+        self.mgr._dispatch("SceneOpened")
+        cb.assert_not_called()
+
+    def test_suppressed_context_manager_defers_resume_in_gui(self):
+        """In a GUI session, resume rides evalDeferred(lowestPriority) so the
+        queued idle-time dispatch of an event raised inside the block is
+        swallowed (scriptJobs only run at idle — live-Maya-probed)."""
+        mock_cmds.about.side_effect = lambda **kw: False  # interactive session
+        deferred = []
+        mock_cmds.evalDeferred.side_effect = lambda fn, **kw: deferred.append(fn)
+        self.addCleanup(setattr, mock_cmds.about, "side_effect", None)
+        self.addCleanup(setattr, mock_cmds.evalDeferred, "side_effect", None)
+
+        cb = MagicMock()
+        token = self.mgr.subscribe("SelectionChanged", cb)
+        with self.mgr.suppressed(token):
+            pass
+
+        # Still suppressed after exit — the queued dispatch must be swallowed
+        self.mgr._dispatch("SelectionChanged")
+        cb.assert_not_called()
+
+        for fn in deferred:  # Maya reaches idle → deferred resume runs
+            fn()
+        self.mgr._dispatch("SelectionChanged")
+        cb.assert_called_once()
+
+    def test_back_to_back_suppressed_blocks_survive_pending_resume(self):
+        """A deferred resume from a prior block must not un-silence a
+        currently-open block on the same token (counted suppression)."""
+        mock_cmds.about.side_effect = lambda **kw: False  # interactive session
+        deferred = []
+        mock_cmds.evalDeferred.side_effect = lambda fn, **kw: deferred.append(fn)
+        self.addCleanup(setattr, mock_cmds.about, "side_effect", None)
+        self.addCleanup(setattr, mock_cmds.evalDeferred, "side_effect", None)
+
+        cb = MagicMock()
+        token = self.mgr.subscribe("SelectionChanged", cb)
+        with self.mgr.suppressed(token):
+            pass
+        with self.mgr.suppressed(token):
+            deferred.pop(0)()  # block 1's deferred resume fires mid-block 2
+            self.mgr._dispatch("SelectionChanged")
+        cb.assert_not_called()
+
+        for fn in deferred:
+            fn()
+        self.mgr._dispatch("SelectionChanged")
+        cb.assert_called_once()
+
+    def test_suppressed_context_manager_ignores_none_tokens(self):
+        """None tokens (unsubscribed watchers) are skipped, not an error."""
+        cb = MagicMock()
+        token = self.mgr.subscribe("SceneOpened", cb)
+
+        with self.mgr.suppressed(None, token):
+            self.mgr._dispatch("SceneOpened")
+        cb.assert_not_called()
+
 
 class TestConnectCleanup(ScriptJobManagerTestCase):
     """connect_cleanup ties widget destruction to unsubscribe_all."""
@@ -261,13 +386,32 @@ class TestConnectCleanup(ScriptJobManagerTestCase):
         cb.assert_not_called()
 
     def test_connect_cleanup_idempotent(self):
-        """Calling connect_cleanup twice for same widget is a no-op."""
+        """Calling connect_cleanup twice for same widget/owner pair is a no-op."""
         widget = MagicMock()
         owner = object()
         self.mgr.connect_cleanup(widget, owner)
         self.mgr.connect_cleanup(widget, owner)
 
         widget.destroyed.connect.assert_called_once()
+
+    def test_connect_cleanup_second_owner_same_widget(self):
+        """Two owners sharing one widget must BOTH be cleaned up on destroy."""
+        owner_a, owner_b = object(), object()
+        cb_a, cb_b = MagicMock(), MagicMock()
+        self.mgr.subscribe("SceneOpened", cb_a, owner=owner_a)
+        self.mgr.subscribe("SceneOpened", cb_b, owner=owner_b)
+
+        widget = MagicMock()
+        self.mgr.connect_cleanup(widget, owner_a)
+        self.mgr.connect_cleanup(widget, owner_b)
+
+        self.assertEqual(widget.destroyed.connect.call_count, 2)
+        for call in widget.destroyed.connect.call_args_list:
+            call[0][0]()  # simulate Qt destroy firing each connected slot
+
+        self.mgr._dispatch("SceneOpened")
+        cb_a.assert_not_called()
+        cb_b.assert_not_called()
 
 
 class TestTeardown(ScriptJobManagerTestCase):

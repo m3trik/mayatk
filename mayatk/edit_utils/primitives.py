@@ -342,6 +342,8 @@ class Primitives:
         # Create the primitive with remaining kwargs
         creation_func = primitives[baseType][subType]
         node = creation_func(**kwargs)
+        if isinstance(node, str):  # light creators return a bare node-name string
+            node = [node]
 
         # Post-creation operations
         if selection:

@@ -82,25 +82,17 @@ def get_clean_node_name(node) -> str:
 
 def get_clean_node_name_from_string(node_name: str) -> str:
     """Get a clean node name from a string path (removes namespace prefix)."""
-    if not node_name:
-        return ""
-    last_component = node_name.split("|")[-1] if "|" in node_name else node_name
-    return last_component.split(":")[-1] if ":" in last_component else last_component
+    return ptk.HierarchyPath.clean_namespace(ptk.HierarchyPath.leaf(node_name))
 
 
 def clean_hierarchy_path(path: str) -> str:
     """Clean namespace prefixes from all components of a hierarchical path."""
-    if "|" in path:
-        parts = path.split("|")
-        return "|".join(p.split(":")[-1] if ":" in p else p for p in parts)
-    return path.split(":")[-1] if ":" in path else path
+    return ptk.HierarchyPath.strip_namespaces(path)
 
 
 def format_component(name: str, strip_namespaces: bool = False) -> str:
     """Format a single component name with optional namespace stripping."""
-    if strip_namespaces and ":" in name:
-        return name.split(":")[-1]
-    return name
+    return ptk.HierarchyPath.clean_namespace(name) if strip_namespaces else name
 
 
 # ---------------------------------------------------------------------------
@@ -2476,7 +2468,15 @@ class ObjectSwapper(ptk.LoggingMixin):
             HierarchySync._has_animation_data(d) for d in descendants
         )
 
-        if has_non_transferable or descendant_animated:
+        # The root node's OWN shape may carry keyed animation (camera
+        # focalLength, light intensity/color, shape visibility) that the
+        # transform-only classification and transfer path below cannot move.
+        own_shapes = cmds.listRelatives(name, shapes=True, fullPath=True) or []
+        shape_animated = any(
+            HierarchySync._node_has_animation_connections(s) for s in own_shapes
+        )
+
+        if has_non_transferable or descendant_animated or shape_animated:
             reasons = []
             if classification["constraints"]:
                 reasons.append(f"{len(classification['constraints'])} constraint(s)")
@@ -2490,6 +2490,8 @@ class ObjectSwapper(ptk.LoggingMixin):
                 reasons.append("anim layers")
             if descendant_animated:
                 reasons.append("animated descendants")
+            if shape_animated:
+                reasons.append("shape animation")
             self.logger.info(f"Preserved '{name}' (has {', '.join(reasons)})")
             return False
 

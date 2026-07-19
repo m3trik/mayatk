@@ -15,6 +15,7 @@ from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # From this package:
 from mayatk import NodeUtils
+from mayatk.core_utils._core_utils import leaf_name, short_name
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.core_utils.preview import Preview
 
@@ -67,6 +68,9 @@ class ShadowRig(ptk.LoggingMixin):
     BAKE_CHANNELS = ("translateX", "translateY", "translateZ", "rotateY", "scaleX", "scaleZ")
     # data_export carrier channel (see refresh_export_metadata).
     SHADOW_METADATA = "shadow_metadata"
+    # Multi message attr on the plane linking every support node this rig
+    # created — delete_rigs' rename-proof teardown manifest.
+    _MEMBER_ATTR = "shadowRigMembers"
 
     def __init__(self, targets=None, light=None, ground_height=0.0, mode="stretch"):
         # Accept single target or list of targets
@@ -94,7 +98,10 @@ class ShadowRig(ptk.LoggingMixin):
         # collision (two multi-target "combined" rigs, or re-creating a
         # target's rig) would delete the older rig's decomposeMatrix nodes
         # out from under its expression and overwrite its silhouette PNG.
-        base = str(self.targets[0]) if len(self.targets) == 1 else "combined"
+        # short_name strips DAG path + namespace: '|' is illegal in the name
+        # flag (duplicate leaf names force path-qualified targets) and ':' in
+        # the texture filename silently writes an NTFS alternate data stream.
+        base = short_name(self.targets[0]) if len(self.targets) == 1 else "combined"
         i, unique = 0, base
         while cmds.objExists(f"{unique}_shadow_grp"):
             i += 1
@@ -160,7 +167,15 @@ class ShadowRig(ptk.LoggingMixin):
             source_name: Name for the shadow source locator.
         """
         if cmds.objExists(source_name):
-            self.light = source_name
+            # The rig reads the source's worldMatrix — a DG node (shader,
+            # set, …) squatting the name would fail deep in the build.
+            existing = cmds.ls(source_name, transforms=True)
+            if not existing:
+                raise ValueError(
+                    f"Existing node '{source_name}' is not a transform — "
+                    "choose a different shadow-source name."
+                )
+            self.light = existing[0]
             self.logger.info(f"Using existing shadow source: {self.light}")
         else:
             self.light = cmds.spaceLocator(name=source_name)[0]
@@ -672,6 +687,29 @@ float $pz = ($dz > 0) ? -$radius : $radius;
         expression (FBX-ready). See :meth:`bake_planes`."""
         return self.bake_planes([self.shadow_plane], start=start, end=end)
 
+    @staticmethod
+    def _live_rig_nodes(plane):
+        """``(expressions, decomposeMatrix nodes)`` currently driving ``plane``.
+
+        Resolved via connections, not by name — robust to path-qualified
+        plane names and suffixed expr nodes. Both sets are empty once baked.
+        """
+        exprs = set(
+            cmds.listConnections(
+                plane, source=True, destination=False, type="expression"
+            )
+            or []
+        )
+        dm_nodes = set()
+        for expr in exprs:
+            dm_nodes.update(
+                cmds.listConnections(
+                    expr, source=True, destination=False, type="decomposeMatrix"
+                )
+                or []
+            )
+        return exprs, dm_nodes
+
     # ------------------------------------------------------------------ export metadata
     @staticmethod
     def _plane_texture_path(plane):
@@ -743,7 +781,6 @@ float $pz = ($dz > 0) ? -$radius : $radius;
         """
         import json
 
-        from mayatk.core_utils._core_utils import leaf_name
         from mayatk.node_utils.data_nodes import DataNodes
 
         planes = cls.find_shadow_planes()
@@ -820,42 +857,155 @@ float $pz = ($dz > 0) ? -$radius : $radius;
         if end is None:
             end = cmds.playbackOptions(q=True, max=True)
 
-        baked = []
+        live = []  # (plane, rig nodes to delete after the bake)
         for plane in planes:
-            # Resolve the driving expression via connections, not by name —
-            # robust to path-qualified plane names and suffixed expr nodes.
-            exprs = set(
-                cmds.listConnections(
-                    plane, source=True, destination=False, type="expression"
-                )
-                or []
-            )
+            if cmds.referenceQuery(plane, isNodeReferenced=True):
+                # A referenced rig's expression can't be deleted from here —
+                # bake in the source file instead of half-baking this one.
+                cls.logger.warning(f"Skipping referenced shadow plane: {plane}")
+                continue
+            exprs, dm_nodes = cls._live_rig_nodes(plane)
             if not exprs:
                 continue  # already baked / hand-keyed
-            dm_nodes = set()
-            for expr in exprs:
-                dm_nodes.update(
+            live.append((plane, exprs | dm_nodes))
+        if not live:
+            return []
+
+        # ONE bakeResults over every live plane's plugs — simulation=True
+        # replays the whole timeline, so baking per-plane would cost one
+        # full playback per rig.
+        plugs = [f"{plane}.{ch}" for plane, _ in live for ch in cls.BAKE_CHANNELS]
+        cmds.bakeResults(
+            plugs,
+            time=(start, end),
+            simulation=True,
+            sampleBy=1,
+            disableImplicitControl=True,
+            preserveOutsideKeys=False,
+        )
+        for _, nodes in live:
+            for node in nodes:
+                if cmds.objExists(node):
+                    cmds.delete(node)
+        baked = [plane for plane, _ in live]
+        cls.refresh_export_metadata()
+        return baked
+
+    # ------------------------------------------------------------------ delete
+    def delete(self, delete_textures=False):
+        """Delete this rig completely. See :meth:`delete_rigs`."""
+        return self.delete_rigs(
+            [self.shadow_plane], delete_textures=delete_textures
+        )
+
+    @classmethod
+    def delete_rigs(cls, planes=None, delete_textures=False):
+        """Tear down shadow rig(s) completely — live or baked.
+
+        Removes, per plane: the plane and its enclosing ``*_shadow_grp``
+        (when it holds nothing else), the expression and decomposeMatrix
+        nodes, the whole shading network (shader, SG, file/place2d/opacity
+        nodes — via the ``shadowRigMembers`` manifest stamped at create),
+        and the contact locator parented under the target. The targets and
+        the shared shadow-source locator are left untouched; the
+        ``shadow_metadata`` channel is republished afterwards.
+
+        Rigs built before the manifest existed still lose the plane, group,
+        and any live expression/decomposeMatrix nodes (resolved via
+        connections); their shading network is left assigned-but-orphaned.
+
+        Args:
+            planes: Shadow plane transform(s); None deletes every shadow
+                rig in the scene.
+            delete_textures: Also remove the silhouette PNG from disk.
+
+        Returns:
+            The list of planes that were deleted.
+        """
+        planes = cls.find_shadow_planes(planes)
+        deleted = []
+        for plane in planes:
+            if cmds.referenceQuery(plane, isNodeReferenced=True):
+                # Referenced nodes can't be deleted from here — tear the rig
+                # down in its source file.
+                cls.logger.warning(f"Skipping referenced shadow plane: {plane}")
+                continue
+            doomed = set()
+            # The stamped manifest (rename-proof; includes the shading
+            # network and the ShaderFX graph's stock file nodes).
+            if cmds.attributeQuery(cls._MEMBER_ATTR, node=plane, exists=True):
+                doomed.update(
                     cmds.listConnections(
-                        expr, source=True, destination=False, type="decomposeMatrix"
+                        f"{plane}.{cls._MEMBER_ATTR}",
+                        source=True,
+                        destination=False,
                     )
                     or []
                 )
-            plugs = [f"{plane}.{ch}" for ch in cls.BAKE_CHANNELS]
-            cmds.bakeResults(
-                plugs,
-                time=(start, end),
-                simulation=True,
-                sampleBy=1,
-                disableImplicitControl=True,
-                preserveOutsideKeys=False,
-            )
-            for node in exprs | dm_nodes:
-                if cmds.objExists(node):
+            # Live rig nodes via connections (covers pre-manifest rigs).
+            exprs, dm_nodes = cls._live_rig_nodes(plane)
+            doomed |= exprs | dm_nodes
+
+            if delete_textures:
+                tex = cls._plane_texture_path(plane)
+                if tex and os.path.exists(tex):
+                    try:
+                        os.remove(tex)
+                    except OSError:
+                        pass  # locked/read-only — node teardown still proceeds
+            # The enclosing group — only when named like ours and holding
+            # nothing but this plane (never a user's own parent group).
+            root = plane
+            parent = cmds.listRelatives(plane, parent=True, fullPath=True)
+            if parent and leaf_name(parent[0]).endswith("_shadow_grp"):
+                kids = cmds.listRelatives(parent[0], children=True, fullPath=True)
+                if len(kids or []) == 1:
+                    root = parent[0]
+            for node in [root] + sorted(doomed):
+                if node and cmds.objExists(node):
                     cmds.delete(node)
-            baked.append(plane)
-        if baked:
+            deleted.append(plane)
+        if deleted:
             cls.refresh_export_metadata()
-        return baked
+        return deleted
+
+    def _link_members(self, new_nodes):
+        """Stamp the build's support nodes onto the plane as a multi message
+        attr — :meth:`delete_rigs`' rename-proof teardown manifest.
+
+        ``new_nodes`` is the created-node set diff captured around the build
+        (long names). The plane's and source's subtrees are excluded: the
+        plane/group are the deletion roots, and the source locator is shared
+        across rigs by design. Everything else — contact locator, expression,
+        decomposeMatrix nodes, the whole shading network (including the
+        ShaderFX graph's stock file nodes) — is linked.
+        """
+        if not cmds.attributeQuery(
+            self._MEMBER_ATTR, node=self.shadow_plane, exists=True
+        ):
+            cmds.addAttr(
+                self.shadow_plane,
+                ln=self._MEMBER_ATTR,
+                at="message",
+                multi=True,
+                indexMatters=False,
+            )
+        roots = cmds.ls(
+            [n for n in (self.shadow_plane, self.group, self.light) if n],
+            long=True,
+        )
+        subtree_prefixes = tuple(f"{r}|" for r in roots)
+        for node in sorted(new_nodes):
+            if not cmds.objExists(node):
+                continue
+            if node in roots or node.startswith(subtree_prefixes):
+                continue
+            cmds.connectAttr(
+                f"{node}.message",
+                f"{self.shadow_plane}.{self._MEMBER_ATTR}",
+                nextAvailable=True,
+                force=True,
+            )
 
     @classmethod
     def create(
@@ -894,22 +1044,52 @@ float $pz = ($dz > 0) ? -$radius : $radius;
 
         Returns:
             ShadowRig instance
+
+        Note: a failed build rolls itself back — every node created up to
+        the failure (including a source locator this call created) and any
+        half-written texture are removed before the exception re-raises.
         """
         shadow = cls(targets=targets, mode=mode, ground_height=ground_height)
-        shadow.get_or_create_shadow_source(position=light_pos, source_name=source_name)
-        shadow.create_contact_locator()
-        shadow.create_shadow_plane()
-        shadow.create_silhouette_texture(
-            size=texture_res, axis=axis, recursive=recursive
-        )
-        shadow.create_material()
-        shadow.setup_expression()
+        pre = set(cmds.ls(long=True))
+        try:
+            shadow.get_or_create_shadow_source(
+                position=light_pos, source_name=source_name
+            )
+            shadow.create_contact_locator()
+            shadow.create_shadow_plane()
+            shadow.create_silhouette_texture(
+                size=texture_res, axis=axis, recursive=recursive
+            )
+            shadow.create_material()
+            shadow.setup_expression()
 
-        shadow.group = cmds.group(empty=True, name=f"{shadow._name_base}_shadow_grp")
-        # Re-capture: parenting can path-qualify the name under a collision
-        # (same lesson as Controls.create — the stale ref stops resolving).
-        shadow.shadow_plane = cmds.parent(shadow.shadow_plane, shadow.group)[0]
-        # contact_locator stays on first target
+            shadow.group = cmds.group(
+                empty=True, name=f"{shadow._name_base}_shadow_grp"
+            )
+            # Re-capture: parenting can path-qualify the name under a collision
+            # (same lesson as Controls.create — the stale ref stops resolving).
+            shadow.shadow_plane = cmds.parent(shadow.shadow_plane, shadow.group)[0]
+            # contact_locator stays on first target
+
+            # Stamp the rig's support nodes onto the plane (delete_rigs'
+            # teardown manifest) BEFORE the metadata refresh — the data_export
+            # carrier is shared and must never enter the manifest.
+            shadow._link_members(set(cmds.ls(long=True)) - pre)
+        except Exception:
+            # Roll back the partial build — a failed create() must not leave
+            # orphan nodes (or a half-written texture) behind.
+            for node in set(cmds.ls(long=True)) - pre:
+                if cmds.objExists(node):  # cascade deletions invalidate paths
+                    try:
+                        cmds.delete(node)
+                    except (RuntimeError, ValueError):
+                        pass
+            if shadow.texture_path and os.path.exists(shadow.texture_path):
+                try:
+                    os.remove(shadow.texture_path)
+                except OSError:
+                    pass
+            raise
 
         # Publish the engine hand-off record onto the data_export carrier (the
         # Scene Exporter re-refreshes it at export time via run_export_preparers).
@@ -925,6 +1105,9 @@ float $pz = ($dz > 0) ? -$radius : $radius;
 
 
 class ShadowRigSlots:
+    _AXIS_MAP = {0: "auto", 1: "x", 2: "y", 3: "z"}
+    _MODE_MAP = {0: "stretch", 1: "orbit"}
+
     def __init__(self, switchboard):
         self.sb = switchboard
         # Bind to the UI that corresponds to this slots class (shadow_rig.ui)
@@ -1173,15 +1356,8 @@ class ShadowRigSlots:
         source_name = self.ui.txt_source.text().strip() or "shadow_source"
         recursive = self.ui.chk_combine.isChecked()
 
-        # Axis combobox: 0=Auto, 1=X, 2=Y, 3=Z
-        axis_idx = self.ui.cmb000.currentIndex()
-        axis_map = {0: "auto", 1: "x", 2: "y", 3: "z"}
-        axis = axis_map.get(axis_idx, "auto")
-
-        # Mode combobox: 0=Stretch, 1=Orbit
-        mode_idx = self.ui.cmb_mode.currentIndex()
-        mode_map = {0: "stretch", 1: "orbit"}
-        mode = mode_map.get(mode_idx, "stretch")
+        axis = self._AXIS_MAP.get(self.ui.cmb000.currentIndex(), "auto")
+        mode = self._MODE_MAP.get(self.ui.cmb_mode.currentIndex(), "stretch")
 
         if contract is not None:
             # create() republishes shadow_metadata on the data_export carrier.

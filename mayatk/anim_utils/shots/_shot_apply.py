@@ -19,13 +19,15 @@ When Maya is unavailable only in-memory shot bounds are committed,
 matching the graceful-degradation contract of the rest of the shot
 model.
 """
+import logging
 from typing import Callable, Iterable, Optional
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
+except ImportError:
+    # Maya-soft: planner/tests import this module headless (see module doc).
     cmds = None
-    print(__file__, error)
+    logging.getLogger(__name__).debug("maya.cmds unavailable — headless mode")
 
 from pythontk.core_utils.engines.shots.shot_apply import apply as _engine_apply
 

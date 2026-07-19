@@ -263,10 +263,14 @@ class DuplicateRadial(ptk.LoggingMixin):
             )
 
             x = i / span_divisor if num_copies > 1 else 0.0
+            # Clamp the denominator so weight_curve == 1.0 (a valid input per
+            # _validate_inputs, and the spinbox max) stays finite instead of
+            # raising ZeroDivisionError; the clamp approximates the sharp-curve limit.
+            exponent = 1.0 / (1.0 - min(weight_curve, 0.9999))
             curve_value = (
-                x ** (1 / (1 - weight_curve))
+                x**exponent
                 if weight_bias >= 0.5
-                else 1 - (1 - x) ** (1 / (1 - weight_curve))
+                else 1 - (1 - x) ** exponent
             )
 
             f_x = (1 - weight_factor) * x + weight_factor * curve_value

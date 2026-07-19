@@ -195,8 +195,8 @@ class NurbsUtils(ptk.HelpMixin):
 
         return result
 
-    @CoreUtils.undoable
     @staticmethod
+    @CoreUtils.undoable
     def duplicate_along_curve(path, start, count=6, geometry="Instancer"):
         """Duplicate objects along a given curve using MASH.
 
@@ -241,8 +241,8 @@ class NurbsUtils(ptk.HelpMixin):
 
         return result
 
-    @CoreUtils.undoable
     @classmethod
+    @CoreUtils.undoable
     def angle_loft_between_two_curves(
         cls,
         start,
@@ -349,8 +349,8 @@ class NurbsUtils(ptk.HelpMixin):
             lengths.append(fn.findLengthFromParam(param))
         return lengths
 
-    @CoreUtils.undoable
     @staticmethod
+    @CoreUtils.undoable
     def get_closest_cv(x, curves, tolerance=0.0):
         """Find the closest control vertex between the given vertices, CVs, or objects and each of the given curves.
 

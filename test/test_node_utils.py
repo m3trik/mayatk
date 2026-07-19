@@ -305,6 +305,37 @@ class TestNodeUtils(MayaTkTestCase):
         self.assertTrue(cmds.attributeQuery("myVec", node=str(self.cyl), exists=True))
         self.assertEqual(tuple(cmds.getAttr(f"{self.cyl}.myVec")[0]), (1.0, 2.0, 3.0))
 
+    def test_create_or_set_string_and_array_attributes(self):
+        """String / data-type array attributes must round-trip.
+
+        Regression for two bugs:
+        - ``_set_value`` omitted ``type=`` for string/array attrs, so the
+          ``setAttr`` raised ``RuntimeError`` (uncaught) on creation.
+        - ``get_type``/``_set_value`` used ``"int32Array"`` for integer arrays,
+          but Maya's canonical spelling is the capital-I ``"Int32Array"`` (the
+          lone casing exception vs ``doubleArray``/``stringArray``); the wrong
+          case made ``addAttr``/``setAttr`` raise "Invalid/Unknown data type".
+        """
+        # String data type
+        Attributes.create_or_set(self.cyl, myStr="hello")
+        self.assertEqual(cmds.getAttr(f"{self.cyl}.myStr"), "hello")
+
+        # Integer array -> Maya's Int32Array (length != 2/3 avoids the long2/3
+        # compound path).
+        Attributes.create_or_set(self.cyl, myInts=[1, 2, 3, 4])
+        self.assertTrue(cmds.attributeQuery("myInts", node=str(self.cyl), exists=True))
+        self.assertEqual(list(cmds.getAttr(f"{self.cyl}.myInts") or []), [1, 2, 3, 4])
+
+        # Double array
+        Attributes.create_or_set(self.cyl, myDbls=[1.0, 2.0, 3.0, 4.0])
+        self.assertEqual(
+            list(cmds.getAttr(f"{self.cyl}.myDbls") or []), [1.0, 2.0, 3.0, 4.0]
+        )
+
+        # String array
+        Attributes.create_or_set(self.cyl, myTags=["a", "b"])
+        self.assertEqual(list(cmds.getAttr(f"{self.cyl}.myTags") or []), ["a", "b"])
+
     def test_get_node_attributes_filtering(self):
         """Test get_node_attributes with filtering."""
         # Set a non-default value

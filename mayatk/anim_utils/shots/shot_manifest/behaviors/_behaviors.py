@@ -11,6 +11,7 @@ verifying them (:func:`verify_behavior`), the audio-clip track writer
 (:func:`apply_audio_clip`), and :func:`compute_duration` bound to Maya's
 audio measurement.
 """
+import inspect
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -385,8 +386,11 @@ def apply_audio_clip(
     Parameters:
         obj: Track identifier (canonical or raw — normalized internally).
         start: Shot start frame.
-        end: Shot end frame. Upper bound for the off-key — the clip never
-            plays past this, even if its source is longer.
+        end: Shot end frame — the off-key fallback when the source's
+            duration can't be probed.  When it can, the off-key lands at
+            the clip's natural end (``start + duration``), which may
+            exceed *end*: keys drive shot size (grow-only, via
+            ``apply_to_shots``' upstream plan), not the other way around.
         source_path: Path to the audio file (used when creating a new
             track).  Ignored when the track already exists.
     """
@@ -484,10 +488,11 @@ def compute_duration(
         if _AU is None:
             return None
         if state["fps"] is None:
-            try:
-                state["fps"] = _AU.get_fps()
-            except Exception:
-                state["fps"] = 24.0
+            from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
+                _scene_fps,
+            )
+
+            state["fps"] = _scene_fps()
         dur_frames, _ = _AU.audio_duration_frames(source_path, state["fps"])
         return dur_frames
 
@@ -510,6 +515,21 @@ def compute_duration(
 # ---------------------------------------------------------------------------
 # Batch application
 # ---------------------------------------------------------------------------
+
+
+def _binds(fn, *args, **kwargs) -> bool:
+    """True when *fn* accepts the given call shape (no call is made).
+
+    Callables without an introspectable signature (some builtins, C
+    extensions, mocks) are assumed to accept the full modern contract.
+    """
+    try:
+        inspect.signature(fn).bind(*args, **kwargs)
+        return True
+    except TypeError:
+        return False
+    except ValueError:
+        return True
 
 
 def apply_to_shots(
@@ -542,7 +562,10 @@ def apply_to_shots(
     Parameters:
         shots: :class:`ShotBlock` instances to process.
         apply_fn: Callable ``(obj, behavior, start, end)`` that applies
-            a behavior template.
+            a behavior template.  May optionally accept ``source_path``
+            and/or ``anchor_override`` keywords — support is detected
+            once via signature introspection and the richest supported
+            form is used.
         exists_fn: Callable ``(name) -> bool`` that checks whether an
             object exists in the scene.  Defaults to
             ``cmds.objExists``.
@@ -565,7 +588,7 @@ def apply_to_shots(
     def _default_exists(obj_name, entry=None):
         if entry is not None and _is_audio(entry):
             try:
-                if _audio_utils.has_track(_audio_utils.normalize_track_id(obj_name)):
+                if _audio_utils.is_registered(obj_name):
                     return True
             except Exception:
                 pass
@@ -595,17 +618,26 @@ def apply_to_shots(
 
     # Adapters so callers that pass their own fns (old 3-arg signature)
     # still work, while default fns may use the entry for audio dispatch.
+    # Signature support is probed once via ``inspect`` binding — calling
+    # inside ``except TypeError`` conflated "wrong signature" with genuine
+    # TypeErrors raised *inside* the callable, silently re-invoking it
+    # with reduced arguments and masking real failures as successes.
+    exists_takes_entry = _binds(exists_fn, "", None)
+    has_keys_takes_entry = _binds(has_keys_fn, "", 0.0, 0.0, None)
+    apply_takes_anchor = _binds(
+        apply_fn, "", "", 0.0, 0.0, source_path="", anchor_override=0.0
+    )
+    apply_takes_source = _binds(apply_fn, "", "", 0.0, 0.0, source_path="")
+
     def _call_exists(obj_name, entry):
-        try:
+        if exists_takes_entry:
             return exists_fn(obj_name, entry)
-        except TypeError:
-            return exists_fn(obj_name)
+        return exists_fn(obj_name)
 
     def _call_has_keys(obj_name, start, end, entry):
-        try:
+        if has_keys_takes_entry:
             return has_keys_fn(obj_name, start, end, entry)
-        except TypeError:
-            return has_keys_fn(obj_name, start, end)
+        return has_keys_fn(obj_name, start, end)
 
     applied: list = []
     skipped: list = []
@@ -658,7 +690,7 @@ def apply_to_shots(
 
             source_path = entry.get("source_path", "") or ""
             try:
-                try:
+                if apply_takes_anchor:
                     apply_fn(
                         obj_name,
                         behavior,
@@ -667,9 +699,17 @@ def apply_to_shots(
                         source_path=source_path,
                         anchor_override=0.0,
                     )
-                except TypeError:
+                elif apply_takes_source:
+                    apply_fn(
+                        obj_name,
+                        behavior,
+                        shot.start,
+                        shot.end,
+                        source_path=source_path,
+                    )
+                else:
                     apply_fn(obj_name, behavior, shot.start, shot.end)
-            except RuntimeError as exc:
+            except (RuntimeError, TypeError) as exc:
                 _record_failure(obj_name, behavior, shot, exc)
                 continue
             applied.append(
@@ -720,27 +760,26 @@ def apply_to_shots(
 
             source_path = entry.get("source_path", "") or ""
             try:
-                try:
-                    if total > 1:
-                        apply_fn(
-                            obj_name,
-                            behavior,
-                            shot.start,
-                            shot.end,
-                            source_path=source_path,
-                            anchor_override=idx / max(total - 1, 1),
-                        )
-                    else:
-                        apply_fn(
-                            obj_name,
-                            behavior,
-                            shot.start,
-                            shot.end,
-                            source_path=source_path,
-                        )
-                except TypeError:
+                if total > 1 and apply_takes_anchor:
+                    apply_fn(
+                        obj_name,
+                        behavior,
+                        shot.start,
+                        shot.end,
+                        source_path=source_path,
+                        anchor_override=idx / max(total - 1, 1),
+                    )
+                elif apply_takes_source:
+                    apply_fn(
+                        obj_name,
+                        behavior,
+                        shot.start,
+                        shot.end,
+                        source_path=source_path,
+                    )
+                else:
                     apply_fn(obj_name, behavior, shot.start, shot.end)
-            except RuntimeError as exc:
+            except (RuntimeError, TypeError) as exc:
                 _record_failure(obj_name, behavior, shot, exc)
                 continue
             applied.append(

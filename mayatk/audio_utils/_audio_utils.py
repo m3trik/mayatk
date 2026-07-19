@@ -419,6 +419,15 @@ class AudioUtils(ptk.HelpMixin):
         )
 
     @classmethod
+    def is_registered(cls, raw: str, carrier: Optional[str] = None) -> bool:
+        """True when *raw* (canonical or raw name) resolves to a registered track.
+
+        Convenience for the ubiquitous ``has_track(normalize_track_id(x))``
+        idiom; use it when the normalized id itself isn't needed afterwards.
+        """
+        return cls.has_track(cls.normalize_track_id(raw), carrier)
+
+    @classmethod
     def list_tracks(cls, carrier: Optional[str] = None) -> List[str]:
         """Return all track_ids with attrs on *carrier* (sorted)."""
         if cmds is None:
@@ -450,6 +459,36 @@ class AudioUtils(ptk.HelpMixin):
         pairs.sort(key=lambda p: p[0])
         return pairs
 
+    @staticmethod
+    def pair_on_off_events(pairs) -> List[Tuple[float, Optional[float]]]:
+        """Pair time-ordered ``(frame, value)`` keys into on/off spans.
+
+        The single on/off pairing state machine — shared by
+        :meth:`read_events` and batch readers (e.g. the shot sequencer's
+        all-tracks scan) so the semantics can't drift.  A value rounding
+        to >= 1 starts a span; the next off-key closes it.  Back-to-back
+        on-keys and a trailing unmatched start yield open spans
+        (``stop=None`` — plays to file duration).
+
+        Returns:
+            ``[(start, stop_or_None), ...]`` as floats.
+        """
+        events: List[Tuple[float, Optional[float]]] = []
+        pending_start: Optional[float] = None
+        for frame, val in pairs:
+            is_on = int(round(val)) >= 1
+            if is_on:
+                if pending_start is not None:
+                    events.append((pending_start, None))
+                pending_start = float(frame)
+            else:
+                if pending_start is not None:
+                    events.append((pending_start, float(frame)))
+                    pending_start = None
+        if pending_start is not None:
+            events.append((pending_start, None))
+        return events
+
     @classmethod
     def read_events(
         cls, track_id: str, carrier: Optional[str] = None
@@ -460,21 +499,12 @@ class AudioUtils(ptk.HelpMixin):
         unmatched start becomes an event with ``stop=None`` (plays to file
         duration).
         """
-        events: List[TrackEvent] = []
-        pending_start: Optional[float] = None
-        for frame, val in cls.read_keys(track_id, carrier):
-            is_on = int(round(val)) >= 1
-            if is_on:
-                if pending_start is not None:
-                    events.append(TrackEvent(track_id, pending_start, stop=None))
-                pending_start = frame
-            else:
-                if pending_start is not None:
-                    events.append(TrackEvent(track_id, pending_start, stop=frame))
-                    pending_start = None
-        if pending_start is not None:
-            events.append(TrackEvent(track_id, pending_start, stop=None))
-        return events
+        return [
+            TrackEvent(track_id, start, stop=stop)
+            for start, stop in cls.pair_on_off_events(
+                cls.read_keys(track_id, carrier)
+            )
+        ]
 
     # ------------------------------------------------------------------
     # Events — key write

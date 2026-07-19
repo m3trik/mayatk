@@ -419,15 +419,15 @@ class EditUtils(ptk.HelpMixin):
 
         for vtx1, vtx2 in vertex_pairs:
             try:  # Get the world-space positions of the vertices
-                pos1 = vtx1.getPosition(space="world")
-                pos2 = vtx2.getPosition(space="world")
+                pos1 = cmds.pointPosition(vtx1, world=True)
+                pos2 = cmds.pointPosition(vtx2, world=True)
 
                 # Calculate the midpoint
-                center_point = (pos1 + pos2) / 2
+                center_point = [(a + b) / 2.0 for a, b in zip(pos1, pos2)]
 
                 # Move both vertices to the center point
-                vtx1.setPosition(center_point, space="world")
-                vtx2.setPosition(center_point, space="world")
+                cmds.xform(vtx1, worldSpace=True, translation=center_point)
+                cmds.xform(vtx2, worldSpace=True, translation=center_point)
 
             except Exception as e:
                 cmds.warning(f"Failed to move vertices {vtx1} and {vtx2}: {e}")
@@ -691,7 +691,11 @@ class EditUtils(ptk.HelpMixin):
         # carried over from object-space cuts evaluate in the object frame;
         # everything else (world, center, bbox keys) stays in world space.
         is_tuple_pivot = isinstance(pivot, (tuple, list)) and len(pivot) == 3
-        is_object_pivot = pivot in {"object", "manip", "baked"}
+        is_object_pivot = isinstance(pivot, str) and pivot in {
+            "object",
+            "manip",
+            "baked",
+        }
         use_object_space = use_object_axes and (is_object_pivot or is_tuple_pivot)
 
         if use_object_space:
@@ -813,7 +817,11 @@ class EditUtils(ptk.HelpMixin):
 
         # The pivot type drives the cutting frame; ``use_object_axes`` is a
         # global override that can force world space.
-        use_object_space = use_object_axes and pivot in {"object", "manip", "baked"}
+        use_object_space = (
+            use_object_axes
+            and isinstance(pivot, str)
+            and pivot in {"object", "manip", "baked"}
+        )
 
         for node in cmds.ls(as_strings(objects), type="transform", flatten=True):
             if NodeUtils.is_group(node):
@@ -879,7 +887,13 @@ class EditUtils(ptk.HelpMixin):
                 )
 
             if delete:
-                deepest_cut = cut_positions[-1] if sign == 1 else cut_positions[0]
+                # amount==0 adds no cut lines, so fall back to the pivot
+                # position (which equals the single amount==1 cut position).
+                deepest_cut = (
+                    pivot_value
+                    if not cut_positions
+                    else (cut_positions[-1] if sign == 1 else cut_positions[0])
+                )
                 pivot_point = list(bbox[:3])
                 pivot_point[axis_index] = deepest_cut
 
@@ -1595,7 +1609,7 @@ class EditUtils(ptk.HelpMixin):
 
         faces = []
         for obj in objects:
-            meshes = cmds.listRelatives(obj, type="mesh", fullPath=True)
+            meshes = cmds.listRelatives(obj, type="mesh", fullPath=True) or []
             for mesh in meshes:
                 all_faces = cmds.ls(f"{mesh}.f[*]", flatten=True)
                 faces.extend(all_faces)
@@ -1695,12 +1709,18 @@ class EditUtils(ptk.HelpMixin):
         Returns:
             (list) Similar objects.
         """
-        obj, *other = (
+        polys = (
             cmds.filterExpand(
                 cmds.ls(as_strings(obj), long=True, tr=True), selectionMask=12
             )
             or []
         )  # polygon selection mask.
+        if not polys:
+            cmds.warning(
+                "get_similar_topo: no polygon object found in the given input."
+            )
+            return []
+        obj = polys[0]
 
         otherSceneMeshes = EditUtils._get_scene_polygon_transforms()
         similar = cmds.ls(

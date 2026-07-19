@@ -232,7 +232,9 @@ def wire_materials_from_manifest(manifest_path, verbose=True):
             # accepts the path silently and the slot appears empty in the
             # UI. Surface this clearly so the user knows it's a *data*
             # problem (e.g. an unresolved Dropbox path), not a wire bug.
-            if not os.path.isfile(tex_path):
+            if not tex_path or not isinstance(tex_path, str) or not os.path.isfile(
+                tex_path
+            ):
                 if verbose:
                     log(f"    ! {slot_key}: file not found on disk -> {tex_path}")
                 continue

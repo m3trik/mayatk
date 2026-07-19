@@ -195,6 +195,11 @@ class ExplodedView:
             cmds.move(x, y, z, obj, absolute=True)
             cmds.deleteAttr(obj, attribute="original_position")
 
+        # Invalidate cached exploded positions so a later re-explode recomputes
+        # from the objects' current world positions (e.g. after the assembly is
+        # moved between explode cycles) instead of teleporting to stale coords.
+        self.exploded_objects.clear()
+
     @_inject_objects_if_given
     def toggle_explode(self):
         """Toggle explode state of the objects.
@@ -226,6 +231,10 @@ class ExplodedView:
             x, y, z = cmds.getAttr(f"{obj}.original_position")[0]
             cmds.move(x, y, z, obj, absolute=True)
             cmds.deleteAttr(obj, attribute="original_position")
+
+        # Nothing remains exploded; drop all cached positions so a later
+        # explode recomputes from current world positions.
+        self.exploded_objects.clear()
 
 
 class ExplodedViewSlots(ExplodedView):

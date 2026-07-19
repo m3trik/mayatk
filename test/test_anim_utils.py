@@ -2286,6 +2286,48 @@ class TestAnimUtils(MayaTkTestCase):
                 k, round(k), f"Key at {k} is not on a whole frame after snap"
             )
 
+    def test_snap_keys_selected_only_does_not_overwrite_unselected_frame(self):
+        """A selected fractional key must not overwrite an UNSELECTED whole-frame key.
+
+        Bug: with selected_only=True the collision set was built only from the
+        selected/time-range-filtered query, so it was blind to unselected
+        whole-frame keys. A fractional key snapping onto an occupied whole frame
+        was then moved with option="over", silently destroying the unselected
+        key's value and tangents (data loss).
+        Fixed: collision set now includes ALL whole-frame keys on the curve.
+        """
+        cmds.cutKey(self.cube, attribute="translateY", clear=True)
+        # Unselected key sitting exactly on the target whole frame.
+        cmds.setKeyframe(self.cube, attribute="translateY", time=10, value=100.0)
+        # Selected fractional key that rounds to the occupied whole frame.
+        cmds.setKeyframe(self.cube, attribute="translateY", time=10.4, value=42.0)
+
+        cmds.selectKey(clear=True)
+        cmds.selectKey(self.cube, attribute="translateY", time=(10.4, 10.4))
+
+        count = AnimUtils.snap_keys_to_frames(
+            objects=[self.cube], selected_only=True, method="nearest"
+        )
+
+        # The snap must be skipped — the target frame is already occupied.
+        self.assertEqual(count, 0, "Snap should be skipped when target frame is occupied")
+
+        # The unselected whole-frame key must survive unchanged.
+        val_at_10 = cmds.keyframe(
+            str(self.cube),
+            attribute="translateY",
+            query=True,
+            time=(10, 10),
+            valueChange=True,
+        )
+        self.assertEqual(val_at_10, [100.0], "Unselected frame-10 key was destroyed")
+
+        # The fractional key must remain (it was not merged away).
+        all_times = cmds.keyframe(
+            str(self.cube), attribute="translateY", query=True, timeChange=True
+        )
+        self.assertIn(10.4, all_times, "Fractional key vanished")
+
     def test_optimize_keys_returns_strings(self):
         """Verify optimize_keys returns string curve names, not PyNodes.
 

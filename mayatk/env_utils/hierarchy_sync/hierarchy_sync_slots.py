@@ -1116,6 +1116,20 @@ class _MiddleButtonDragFilter(QtCore.QObject):
                     )
                     return True
 
+            # A genuine left-button press (native drag start or plain click)
+            # invalidates any stale middle-captured selection so a subsequent
+            # native left-drag drop falls back to the live selection instead of
+            # mirroring — or crashing on a now-dangling item from — an earlier
+            # middle-click that produced no drop. Guard on ``not _mid_dragging``
+            # to skip the synthetic left-press injected during a middle drag
+            # (which runs with ``_mid_dragging`` already True).
+            if (
+                etype == QtCore.QEvent.MouseButtonPress
+                and event.button() == QtCore.Qt.LeftButton
+                and not self._mid_dragging
+            ):
+                self._dragged_items = []
+
             return super().eventFilter(obj, event)
 
         # --- tree-widget-level: intercept Drop to reparent in Maya ----------
@@ -1126,7 +1140,16 @@ class _MiddleButtonDragFilter(QtCore.QObject):
             # callback rebuilds the tree, which deletes every QTreeWidgetItem —
             # a per-item callback left the remaining iterations holding dead
             # items (RuntimeError, partial reparent on multi-select drags).
-            moves = [(item, item.parent()) for item in self._dragged_items]
+            #
+            # ``_dragged_items`` is populated only for a middle-button drag.
+            # A native left-button InternalMove drop (enabled via
+            # setDragDropMode(InternalMove) in tree001_init) leaves it empty,
+            # which previously mirrored nothing — the tree moved the item but
+            # Maya was left unchanged. Fall back to the tree's live selection:
+            # the just-moved items stay selected and their ``parent()``
+            # reflects the new parent, exactly like the middle-drag path.
+            items = self._dragged_items or list(obj.selectedItems())
+            moves = [(item, item.parent()) for item in items]
             self._dragged_items.clear()
             if moves:
                 self._reparent_callback(moves)
@@ -1503,6 +1526,13 @@ class HierarchySyncSlots(ptk.LoggingMixin):
             node_uuid = (cmds.ls(node, uuid=True) or [None])[0]
             if not node_uuid:
                 continue
+            # InternalMove drops also fire on same-parent reorders and
+            # accidental micro-drags of a selected item; cmds.parent would
+            # raise "already a child of" per item and trigger a full tree
+            # rebuild for a no-op — skip pairs already under the drop target.
+            cur_parent = (
+                cmds.listRelatives(node, parent=True, fullPath=True) or [None]
+            )[0]
             if new_parent_item is not None:
                 parent_node = new_parent_item.data(0, role)
                 if not parent_node or not cmds.objExists(parent_node):
@@ -1510,9 +1540,14 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                         "Drop target has no Maya node — reparent skipped."
                     )
                     continue
+                target_long = (cmds.ls(parent_node, long=True) or [None])[0]
+                if cur_parent is not None and cur_parent == target_long:
+                    continue  # same-parent reorder — nothing to mirror
                 parent_uuid = (cmds.ls(parent_node, uuid=True) or [None])[0]
                 pending.append((node_uuid, parent_uuid, node))
             else:
+                if cur_parent is None:
+                    continue  # already at world root — nothing to mirror
                 pending.append((node_uuid, None, node))  # dropped at root
         if not pending:
             return
@@ -1979,8 +2014,17 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                     "Trees may need to be refreshed manually. Try the Refresh button."
                 )
 
-        # Clean up any remaining temp namespaces after diff analysis
-        self.controller._cleanup_temp_namespaces()
+        # NOTE: Do NOT sweep temp namespaces here. The reference import is
+        # deliberately kept alive in ``_cached_reference_import`` (see
+        # analyze_hierarchies) for tree display and subsequent Pull ops, and it
+        # lives under a ``temp_import_`` namespace — the exact prefix
+        # ``_cleanup_temp_namespaces`` matches. Sweeping it deleted the cached
+        # objects while tree000 still referenced them (stale nodes) and forced
+        # a full re-import on every subsequent Diff. The Diff path creates no
+        # other temp namespace (analysis reuses the cached sandbox), so there is
+        # nothing else to clean here; the cache is released on window-hide,
+        # reference-path change, and force-reanalysis via
+        # ``_cleanup_cached_reference_import``.
 
         # Update footer with diff summary (uses effective counts excluding ignored)
         if hasattr(self.ui, "footer") and self.ui.footer:

@@ -132,21 +132,25 @@ class UiUtils:
 
             to use main progressBar: name=string $gMainProgressBar
         """
+        import maya.mel as mel
+
         status = "processing: {} items ..".format(size)
 
-        edit = False
-        if cmds.progressBar(name, exists=1):
-            edit = True
+        # beginProgress/step are edit-only flags, so operate on an existing bar:
+        # the named control if it exists, else Maya's always-present main bar.
+        if not cmds.progressBar(name, exists=True):
+            name = mel.eval("$tmp = $gMainProgressBar")
 
         cmds.progressBar(
             name,
-            edit=edit,
-            beginProgress=1,
+            edit=True,
+            beginProgress=True,
             isInterruptable=True,
             status=status,
             maxValue=size,
             step=step_amount,
         )
+        return name
 
     @staticmethod
     def list_ui_objects():
@@ -191,9 +195,10 @@ class UiUtils:
         """Reveal and select objects in the Outliner panel."""
         if not objects:
             return
-        outliner_editor = cmds.outlinerPanel(
-            "outlinerPanel1", query=True, outlinerEditor=True
-        )
+        panels = cmds.getPanel(type="outlinerPanel") or []
+        if not panels:
+            return
+        outliner_editor = cmds.outlinerPanel(panels[0], query=True, outlinerEditor=True)
         cmds.select(objects, replace=True)
         cmds.outlinerEditor(outliner_editor, edit=True, showSelected=True)
 
@@ -216,7 +221,6 @@ class UiUtils:
         Returns:
             True if the link was handled, False otherwise.
         """
-        import os
         from urllib.parse import parse_qs
 
         if url.scheme() != "action":
@@ -236,13 +240,11 @@ class UiUtils:
             )
             if not filepath:
                 return False
-            try:
-                os.startfile(filepath)
-            except OSError as e:
-                if logger:
-                    logger.warning(f"Could not open file: {e}")
-                return False
-            return True
+            import pythontk as ptk
+
+            # Cross-platform open (win/mac/linux); returns False on failure and
+            # avoids the Windows-only os.startfile AttributeError off-Windows.
+            return ptk.FileUtils.open_explorer(filepath, logger=logger)
 
         # Node-based actions need cmds; defer the import so the ``open``
         # branch above stays usable in non-Maya contexts.

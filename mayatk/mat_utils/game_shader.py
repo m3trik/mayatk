@@ -851,11 +851,11 @@ class GameShader(ptk.LoggingMixin):
             )
             # AO (R) -> Multiply with Base Color
             existing_conn = cmds.listConnections(
-                f"{std_node}.baseColor", source=True, destination=False
+                f"{std_node}.baseColor", source=True, destination=False, plugs=True
             )
             if existing_conn:
                 mult_node = cmds.shadingNode("multiplyDivide", asUtility=True)
-                cmds.connectAttr(f"{existing_conn[0]}.outColor", f"{mult_node}.input1", force=True)
+                cmds.connectAttr(existing_conn[0], f"{mult_node}.input1", force=True)
                 cmds.connectAttr(f"{texture_node}.outColorR", f"{mult_node}.input2X", force=True)
                 cmds.connectAttr(f"{texture_node}.outColorR", f"{mult_node}.input2Y", force=True)
                 cmds.connectAttr(f"{texture_node}.outColorR", f"{mult_node}.input2Z", force=True)
@@ -882,11 +882,11 @@ class GameShader(ptk.LoggingMixin):
             cmds.connectAttr(f"{reverse_node}.outputX", f"{std_node}.specularRoughness", force=True)
             # AO in green channel - multiply with base color if already connected
             existing_conn = cmds.listConnections(
-                f"{std_node}.baseColor", source=True, destination=False
+                f"{std_node}.baseColor", source=True, destination=False, plugs=True
             )
             if existing_conn:
                 mult_node = cmds.shadingNode("multiplyDivide", asUtility=True)
-                cmds.connectAttr(f"{existing_conn[0]}.outColor", f"{mult_node}.input1", force=True)
+                cmds.connectAttr(existing_conn[0], f"{mult_node}.input1", force=True)
                 cmds.connectAttr(f"{texture_node}.outColorG", f"{mult_node}.input2X", force=True)
                 cmds.connectAttr(f"{texture_node}.outColorG", f"{mult_node}.input2Y", force=True)
                 cmds.connectAttr(f"{texture_node}.outColorG", f"{mult_node}.input2Z", force=True)
@@ -930,10 +930,10 @@ class GameShader(ptk.LoggingMixin):
             mult_node = cmds.shadingNode("multiplyDivide", asUtility=True)
             # If base color already connected, insert multiply
             existing_conn = cmds.listConnections(
-                f"{std_node}.baseColor", source=True, destination=False
+                f"{std_node}.baseColor", source=True, destination=False, plugs=True
             )
             if existing_conn:
-                cmds.connectAttr(f"{existing_conn[0]}.outColor", f"{mult_node}.input1", force=True)
+                cmds.connectAttr(existing_conn[0], f"{mult_node}.input1", force=True)
             cmds.connectAttr(f"{texture_node}.outColor", f"{mult_node}.input2", force=True)
             cmds.connectAttr(f"{mult_node}.output", f"{std_node}.baseColor", force=True)
 
@@ -1055,11 +1055,11 @@ class GameShader(ptk.LoggingMixin):
             )
             # AO (R) -> Multiply with Base Color
             existing_conn = cmds.listConnections(
-                f"{op_node}.baseColor", source=True, destination=False
+                f"{op_node}.baseColor", source=True, destination=False, plugs=True
             )
             if existing_conn:
                 mult_node = cmds.shadingNode("multiplyDivide", asUtility=True)
-                cmds.connectAttr(f"{existing_conn[0]}.outColor", f"{mult_node}.input1", force=True)
+                cmds.connectAttr(existing_conn[0], f"{mult_node}.input1", force=True)
                 cmds.connectAttr(f"{texture_node}.outColorR", f"{mult_node}.input2X", force=True)
                 cmds.connectAttr(f"{texture_node}.outColorR", f"{mult_node}.input2Y", force=True)
                 cmds.connectAttr(f"{texture_node}.outColorR", f"{mult_node}.input2Z", force=True)
@@ -1085,11 +1085,11 @@ class GameShader(ptk.LoggingMixin):
             cmds.connectAttr(f"{reverse_node}.outputX", f"{op_node}.specularRoughness", force=True)
             # AO (G) -> multiply with base color if already connected
             existing_conn = cmds.listConnections(
-                f"{op_node}.baseColor", source=True, destination=False
+                f"{op_node}.baseColor", source=True, destination=False, plugs=True
             )
             if existing_conn:
                 mult_node = cmds.shadingNode("multiplyDivide", asUtility=True)
-                cmds.connectAttr(f"{existing_conn[0]}.outColor", f"{mult_node}.input1", force=True)
+                cmds.connectAttr(existing_conn[0], f"{mult_node}.input1", force=True)
                 cmds.connectAttr(f"{texture_node}.outColorG", f"{mult_node}.input2X", force=True)
                 cmds.connectAttr(f"{texture_node}.outColorG", f"{mult_node}.input2Y", force=True)
                 cmds.connectAttr(f"{texture_node}.outColorG", f"{mult_node}.input2Z", force=True)
@@ -1133,10 +1133,10 @@ class GameShader(ptk.LoggingMixin):
             )
             mult_node = cmds.shadingNode("multiplyDivide", asUtility=True)
             existing_conn = cmds.listConnections(
-                f"{op_node}.baseColor", source=True, destination=False
+                f"{op_node}.baseColor", source=True, destination=False, plugs=True
             )
             if existing_conn:
-                cmds.connectAttr(f"{existing_conn[0]}.outColor", f"{mult_node}.input1", force=True)
+                cmds.connectAttr(existing_conn[0], f"{mult_node}.input1", force=True)
             cmds.connectAttr(f"{texture_node}.outColor", f"{mult_node}.input2", force=True)
             cmds.connectAttr(f"{mult_node}.output", f"{op_node}.baseColor", force=True)
 
@@ -1321,15 +1321,32 @@ class GameShader(ptk.LoggingMixin):
                 if tex not in metallic_smoothness_map + smoothness_map
             ]
 
-            if not metallic_map and specular_map:
-                # Create a metallic map from the specular map
-                created_metallic_map = ptk.MapFactory.create_metallic_from_spec(specular_map[0])
-                filtered_textures.append(created_metallic_map)
+            if (not metallic_map or not roughness_map) and specular_map:
+                # create_*_from_spec return in-memory Image.Image objects; save them
+                # to disk and append the resulting paths (mirrors the True-branch),
+                # keeping filtered_textures a pure list of file-path strings.
+                base_name = ptk.MapFactory.get_base_texture_name(specular_map[0])
+                out_dir = os.path.dirname(specular_map[0])
 
-            if not roughness_map and specular_map:
-                # Create a roughness map from the specular map
-                created_roughness_map = ptk.MapFactory.create_roughness_from_spec(specular_map[0])
-                filtered_textures.append(created_roughness_map)
+                if not metallic_map:
+                    created_metallic_map = ptk.MapFactory.create_metallic_from_spec(
+                        specular_map[0]
+                    )
+                    metal_path = os.path.join(
+                        out_dir, f"{base_name}_Metallic.{output_extension}"
+                    )
+                    ptk.ImgUtils.save_image(created_metallic_map, metal_path)
+                    filtered_textures.append(metal_path)
+
+                if not roughness_map:
+                    created_roughness_map = ptk.MapFactory.create_roughness_from_spec(
+                        specular_map[0]
+                    )
+                    rough_path = os.path.join(
+                        out_dir, f"{base_name}_Roughness.{output_extension}"
+                    )
+                    ptk.ImgUtils.save_image(created_roughness_map, rough_path)
+                    filtered_textures.append(rough_path)
 
             return filtered_textures
 
@@ -1384,6 +1401,7 @@ class GameShader(ptk.LoggingMixin):
                 "No roughness or smoothness map found for Mask Map alpha channel."
             )
             alpha_map = None
+            invert_alpha = False  # no alpha source; pack_msao_texture fills a default
 
         # Use AO if available, otherwise create a white map
         if not ao_map:

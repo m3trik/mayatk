@@ -1,7 +1,7 @@
 import os
 import logging
 import yaml
-from typing import Any, List, Optional, Dict, Callable
+from typing import Any, List, Optional
 
 try:
     import maya.cmds as cmds
@@ -22,9 +22,17 @@ from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.env_utils._env_utils import EnvUtils
 
+# Default logger for library (non-panel) use. The slots pass their own
+# LoggingMixin logger in so save/restore feedback lands in the panel's
+# text widget — a stdlib logger here would never reach that handler.
+_LOGGER = logging.getLogger("ShaderTemplateManager")
+
 
 class GraphCollector:
-    def __init__(self):
+    """Walk a shading network and serialize it to placeholder-keyed graph info."""
+
+    def __init__(self, logger: Optional[logging.Logger] = None):
+        self.logger = logger or _LOGGER
         self.placeholder_counter = {}
         self.node_name_map = {}
 
@@ -172,7 +180,7 @@ class GraphSaver(GraphCollector):
         exclude_types: Optional[List[str]] = None,
     ) -> None:
         if not nodes:
-            cmds.warning("No nodes selected or provided for template saving.")
+            self.logger.warning("No nodes selected or provided for template saving.")
             return
 
         nodes = cmds.listHistory(nodes) or []
@@ -189,9 +197,9 @@ class GraphSaver(GraphCollector):
         try:
             with open(file_path, "w") as file:
                 yaml.dump(graph_info_basic, file, default_flow_style=False)
-            print(f"Graph information saved to {file_path}")
+            self.logger.info(f"Graph information saved to {file_path}")
         except IOError as e:
-            print(f"Failed to save graph to {file_path}. Error: {e}")
+            self.logger.error(f"Failed to save graph to {file_path}. Error: {e}")
 
     @staticmethod
     def _convert_to_basic_types(data: Any) -> Any:
@@ -206,7 +214,14 @@ class GraphSaver(GraphCollector):
 
 
 class GraphRestorer:
-    def __init__(self, yaml_file_path, texture_paths, name=None):
+    def __init__(
+        self,
+        yaml_file_path: str,
+        texture_paths: List[str],
+        name: Optional[str] = None,
+        logger: Optional[logging.Logger] = None,
+    ):
+        self.logger = logger or _LOGGER
         self.yaml_file_path = yaml_file_path
         self.texture_paths = texture_paths  # List of texture paths
         self.name = name  # Custom name for the shader if provided
@@ -218,26 +233,30 @@ class GraphRestorer:
         """Load and return graph configuration from a YAML file."""
         try:
             with open(self.yaml_file_path, "r") as file:
-                return yaml.safe_load(file)
+                data = yaml.safe_load(file)
         except Exception as e:
-            logging.error(
+            self.logger.error(
                 f"Failed to load YAML file: {self.yaml_file_path}. Error: {e}"
             )
             return {}
+        if data and not isinstance(data, dict):
+            self.logger.error(
+                f"Malformed template (expected a mapping): {self.yaml_file_path}"
+            )
+            return {}
+        return data or {}
 
     def restore_graph(self):
         """Restore the graph based on the YAML configuration and textures."""
         if not self.graph_config:
-            logging.warning("Graph configuration is empty. Nothing to restore.")
+            self.logger.warning("Graph configuration is empty. Nothing to restore.")
             return
-
-        logger = logging.getLogger("ShaderTemplateManager")
 
         file_nodes_found = any(
             info["type"] == "file" for info in self.graph_config.values()
         )
         if self.texture_paths and not file_nodes_found:
-            logger.warning(
+            self.logger.warning(
                 "Texture paths provided but no file nodes found in template. The template might be incomplete or saved with an older version."
             )
 
@@ -246,31 +265,26 @@ class GraphRestorer:
             map_type = MapFactory.resolve_map_type(path)
             if map_type:
                 available_map_types[map_type] = path
-                logger.info(f"Resolved '{os.path.basename(path)}' as '{map_type}'")
+                self.logger.info(
+                    f"Resolved '{os.path.basename(path)}' as '{map_type}'"
+                )
             else:
-                logger.warning(
+                self.logger.warning(
                     f"Could not resolve map type for '{os.path.basename(path)}'"
                 )
 
-        for placeholder, node_info in self.graph_config.items():
-            self._restore_node(placeholder, node_info, available_map_types)
-
-        self.restore_connections()
-
-    def _restore_node(self, placeholder, node_info, available_map_types):
-        logger = logging.getLogger("ShaderTemplateManager")
-        node_type = node_info["type"]
-        attributes = node_info.get("attributes", {})
-        metadata = node_info.get("metadata", {})
-        required_map_type = metadata.get("map_type", "")
-
+        # ONE processor for the whole restore: its conversion cache is
+        # per-instance, so a derived map shared by several slots (e.g. an
+        # ORM pack feeding metallic/roughness/AO) is computed once, not
+        # once per file node.
         output_dir = ""
         base_name = "generated_map"
         ext = "png"
-
         if available_map_types:
             first_path = next(iter(available_map_types.values()))
-            output_dir = os.path.dirname(first_path)
+            # abspath: a bare relative filename would yield dirname "" and
+            # send generated maps to whatever the CWD happens to be.
+            output_dir = os.path.dirname(os.path.abspath(first_path))
             base_name = ptk.get_base_texture_name(first_path)
             ext = os.path.splitext(first_path)[1].lstrip(".")
 
@@ -280,9 +294,22 @@ class GraphRestorer:
             output_dir=output_dir,
             base_name=base_name,
             ext=ext,
-            logger=logger,
+            logger=self.logger,
             conversion_registry=self.registry,
         )
+
+        for placeholder, node_info in self.graph_config.items():
+            self._restore_node(placeholder, node_info, context)
+
+        self.restore_connections()
+
+    def _restore_node(self, placeholder, node_info, context: TextureProcessor):
+        logger = self.logger
+        node_type = node_info["type"]
+        # Copy so texture-path fixups below never mutate the loaded config.
+        attributes = dict(node_info.get("attributes", {}))
+        metadata = node_info.get("metadata", {})
+        required_map_type = metadata.get("map_type", "")
 
         file_path = None
         if required_map_type:
@@ -290,19 +317,16 @@ class GraphRestorer:
             candidates = [required_map_type] + list(fallbacks)
             file_path = context.resolve_map(*candidates, allow_conversion=True)
 
-        if file_path:
-            if not isinstance(file_path, (str, bytes, os.PathLike)):
-                import tempfile
-
-                temp_dir = tempfile.gettempdir()
-                temp_name = f"generated_{required_map_type}_{id(file_path)}.png"
-                temp_path = os.path.join(temp_dir, temp_name)
-                try:
-                    file_path.save(temp_path)
-                    file_path = temp_path
-                except Exception as e:
-                    logger.error(f"Failed to save generated map: {e}")
-                    file_path = None
+        # A conversion can return an in-memory PIL image; persist it beside
+        # the source textures with the processor's own naming/optimization.
+        if file_path and not isinstance(file_path, (str, bytes, os.PathLike)):
+            try:
+                file_path = context.save_map(file_path, required_map_type)
+            except Exception as e:
+                logger.error(
+                    f"Failed to save generated '{required_map_type}' map: {e}"
+                )
+                file_path = None
 
         if file_path:
             attributes["fileTextureName"] = file_path
@@ -384,9 +408,8 @@ class GraphRestorer:
 
         if node:
             self.nodes[placeholder] = node
-            self._handle_shading_group(node, node_name, node_type)
         else:
-            logging.error(f"Failed to create node: {placeholder}")
+            logger.error(f"Failed to create node: {placeholder}")
 
     def _determine_node_name(self, node_type):
         classification_string = cmds.getClassification(node_type)
@@ -397,22 +420,12 @@ class GraphRestorer:
                 return ptk.get_base_texture_name(self.texture_paths[0])
         return None
 
-    def _handle_shading_group(self, node, node_name, node_type):
-        if node_name and "shader" in node_type:
-            shading_group = cmds.sets(
-                renderable=True,
-                noSurfaceShader=True,
-                empty=True,
-                name=f"{node_name}SG",
-            )
-            cmds.connectAttr(f"{node}.outColor", f"{shading_group}.surfaceShader")
-
     def restore_connections(self):
         """Connect nodes as specified in the graph configuration."""
         for placeholder, node_info in self.graph_config.items():
             node = self.nodes.get(placeholder)
             if not node:
-                logging.error(f"Node for placeholder {placeholder} not found.")
+                self.logger.error(f"Node for placeholder {placeholder} not found.")
                 continue
 
             for connection in node_info.get("connections", []):
@@ -434,15 +447,15 @@ class GraphRestorer:
                         )
                     else:
                         if not src_node:
-                            logging.warning(
+                            self.logger.warning(
                                 f"Source node {src_placeholder} not found for connection {src_str} -> {tgt_str}"
                             )
                         if not tgt_node:
-                            logging.warning(
+                            self.logger.warning(
                                 f"Target node {tgt_placeholder} not found for connection {src_str} -> {tgt_str}"
                             )
                 except Exception as e:
-                    logging.error(
+                    self.logger.error(
                         f"Failed to connect {connection.get('source')} to {connection.get('target')}: {str(e)}"
                     )
 
@@ -454,7 +467,7 @@ class ShaderTemplates:
     """
 
     @staticmethod
-    def save_template(nodes, file_path, exclude_types=None):
+    def save_template(nodes, file_path, exclude_types=None, logger=None):
         """
         Save the specified nodes as a shader template.
 
@@ -462,13 +475,15 @@ class ShaderTemplates:
             nodes (list): List of Maya nodes to save.
             file_path (str): Path to the output YAML file.
             exclude_types (list, optional): List of node types to exclude.
+            logger (logging.Logger, optional): Destination for progress and
+                error messages (e.g. a panel-redirected logger).
         """
-        saver = GraphSaver()
+        saver = GraphSaver(logger=logger)
         saver.save_graph(nodes, file_path, exclude_types=exclude_types)
 
     @staticmethod
     @CoreUtils.undoable
-    def restore_template(file_path, texture_paths=None, name=None):
+    def restore_template(file_path, texture_paths=None, name=None, logger=None):
         """
         Restore a shader template from a file.
 
@@ -479,13 +494,15 @@ class ShaderTemplates:
             file_path (str): Path to the YAML template file.
             texture_paths (list, optional): List of texture paths to use.
             name (str, optional): Name for the restored shader.
+            logger (logging.Logger, optional): Destination for progress and
+                error messages (e.g. a panel-redirected logger).
 
         Returns:
             dict: Mapping of placeholder names to created Maya nodes.
         """
         if texture_paths is None:
             texture_paths = []
-        restorer = GraphRestorer(file_path, texture_paths, name)
+        restorer = GraphRestorer(file_path, texture_paths, name, logger=logger)
         restorer.restore_graph()
         return restorer.nodes
 
@@ -614,6 +631,11 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         for label, path in items.items():
             widget.addItem(label, path)
 
+    @staticmethod
+    def _sanitize_name(name) -> str:
+        """Strip and drop filesystem-invalid characters from a template name."""
+        return "".join(c for c in (name or "").strip() if c not in '\\/:*?"<>|')
+
     def rename_template_safe(self, widget, new_name):
         """Safe rename that checks for None."""
         current_path = widget.currentData()
@@ -621,13 +643,22 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
             self.logger.error("No template selected or data is missing.")
             return
 
+        new_name = self._sanitize_name(new_name)
+        if not new_name:
+            self.logger.error("Invalid template name.")
+            return
+
         new_path = os.path.join(os.path.dirname(current_path), new_name + ".yaml")
+        if os.path.normcase(new_path) == os.path.normcase(current_path):
+            widget.setEditable(False)  # name unchanged (e.g. focus-out): no-op
+            return
         if os.path.exists(new_path):
             self.logger.error("File with new name already exists.")
             return
 
         os.rename(current_path, new_path)
         self.logger.info(f"Template renamed to: {new_path}")
+        widget.setEditable(False)
         widget.init_slot()
 
     def lbl000(self):
@@ -638,6 +669,9 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
     def lbl001(self):
         """Delete the selected template."""
         template_path = self.ui.cmb002.currentData()
+        if not template_path:
+            self.logger.error("No template selected.")
+            return
         if os.path.exists(template_path):
             os.remove(template_path)
             self.logger.info(f"Template deleted: {template_path}")
@@ -646,6 +680,9 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
     def lbl002(self):
         """Open the selected template in the default editor."""
         template_path = self.ui.cmb002.currentData()
+        if not template_path:
+            self.logger.error("No template selected.")
+            return
         ptk.open_explorer(template_path)
 
     def b000(self):
@@ -668,7 +705,7 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
                 self.logger.debug(str(e))
 
         restored_nodes = ShaderTemplates.restore_template(
-            yaml_file_path, self.image_files or []
+            yaml_file_path, self.image_files or [], logger=self.logger
         )
         self.last_restored_nodes = list(restored_nodes.values())
 
@@ -706,7 +743,7 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         name, ok = QtWidgets.QInputDialog.getText(
             self.ui, "Save Template", "Template name:", text=default_name
         )
-        name = "".join(c for c in (name or "").strip() if c not in '\\/:*?"<>|')
+        name = self._sanitize_name(name)
         if not ok or not name:
             self.logger.info("Save cancelled.")
             return
@@ -722,6 +759,7 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         ShaderTemplates.save_template(
             selected_nodes,
             file_path,
+            logger=self.logger,
             exclude_types=[
                 "shadingEngine",
                 "transform",

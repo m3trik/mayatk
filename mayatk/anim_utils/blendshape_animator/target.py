@@ -10,6 +10,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 
+from mayatk.core_utils._core_utils import leaf_name
 from mayatk.node_utils.attributes._attributes import Attributes
 
 from pythontk import Weights
@@ -69,8 +70,19 @@ class Targets(ptk.LoggingMixin):
     DEFAULT_GROUPS = ["_morphInbetweens_GRP", "_preciseTweens_GRP"]
 
     @classmethod
-    def find_all_targets(cls) -> List[Target]:
-        """Find all tween meshes in the scene (deduplicated)."""
+    def find_all_targets(
+        cls,
+        blendshape: Optional[str] = None,
+        base_mesh: Optional[str] = None,
+    ) -> List[Target]:
+        """Find all tween meshes in the scene (deduplicated).
+
+        ``blendshape`` / ``base_mesh`` scope the result to tweens tagged for
+        that setup (leaf-name comparison, tolerant of DAG paths). Without
+        filters, every tagged tween in the scene is returned — callers acting
+        on a specific setup should scope, or they will touch tweens belonging
+        to other BlendshapeAnimator setups sharing the scene.
+        """
         seen = set()
         candidates = []
 
@@ -103,6 +115,13 @@ class Targets(ptk.LoggingMixin):
                 cls.logger.warning(f"Skipping invalid tween mesh: {mesh}")
                 continue
 
+        if blendshape is not None:
+            want = leaf_name(blendshape)
+            tweens = [t for t in tweens if leaf_name(t.blendshape_name) == want]
+        if base_mesh is not None:
+            want = leaf_name(base_mesh)
+            tweens = [t for t in tweens if leaf_name(t.base_mesh_name) == want]
+
         return sorted(tweens, key=lambda t: t.weight)
 
     @classmethod
@@ -117,9 +136,45 @@ class Targets(ptk.LoggingMixin):
     def update_all_references(
         cls, new_blendshape: str, new_base_mesh: str
     ) -> int:
-        """Update all tween mesh references to new nodes."""
-        tweens = cls.find_all_targets()
+        """Rebind tween references after a blendShape rebuild.
+
+        Scoped to tweens tagged for ``new_base_mesh`` (the mesh name survives
+        a rebuild even when the blendShape node is replaced) so a recovery on
+        one setup can't stomp the tags of other setups sharing the scene.
+        """
+        tweens = cls.find_all_targets(base_mesh=new_base_mesh)
         for tween in tweens:
             tween.update_references(new_blendshape, new_base_mesh)
         cls.logger.info(f"Updated {len(tweens)} tween references")
         return len(tweens)
+
+    # -- Internal helpers (shared by the facade + UI controller) --------------
+
+    @classmethod
+    def _delete_targets(cls, tweens: List[Target]) -> List[str]:
+        """Delete the given tween meshes; return the names actually deleted."""
+        deleted: List[str] = []
+        for tween in tweens:
+            try:
+                mesh_name = tween.mesh
+                cmds.delete(mesh_name)
+                deleted.append(mesh_name)
+            except RuntimeError as e:
+                cls.logger.warning(f"Could not delete {tween.mesh}: {e}")
+        return deleted
+
+    @classmethod
+    def _delete_empty_groups(cls) -> List[str]:
+        """Delete any now-empty default tween groups; return the names removed."""
+        removed: List[str] = []
+        for group_name in cls.DEFAULT_GROUPS:
+            if not cmds.objExists(group_name):
+                continue
+            if cmds.listRelatives(group_name, children=True):
+                continue
+            try:
+                cmds.delete(group_name)
+                removed.append(group_name)
+            except RuntimeError:
+                pass
+        return removed

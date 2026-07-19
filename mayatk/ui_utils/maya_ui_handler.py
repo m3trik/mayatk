@@ -54,6 +54,18 @@ class MayaUiHandler(UiHandler):
             **kwargs,
         )
 
+        # Route the log panel's node actions (select/reveal) through uitk's
+        # dependency-inverted registry so uitk needn't import mayatk. Registered
+        # here (a runtime init point, not on module import) per the no-import-
+        # side-effects rule; idempotent, so repeated handler construction is safe.
+        try:
+            from uitk.bridge.slots import register_log_link_handler
+            from mayatk.ui_utils._ui_utils import UiUtils
+
+            register_log_link_handler(UiUtils.dispatch_log_link)
+        except Exception:  # never let a wiring hiccup block UI-handler startup
+            pass
+
     @classmethod
     def instance(cls, switchboard: Switchboard = None, **kwargs) -> "MayaUiHandler":
         """Return the MayaUiHandler singleton, bootstrapping if needed.

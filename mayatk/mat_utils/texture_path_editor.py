@@ -9,6 +9,7 @@ except ImportError:
 import os
 
 from pythontk.img_utils._img_utils import ImgUtils
+from pythontk.file_utils._file_utils import FileUtils
 from pythontk.core_utils.engines.textures.map_factory import MapFactory
 from pythontk.str_utils.fuzzy_matcher import FuzzyMatcher
 from uitk.widgets.footer import FooterStatusController
@@ -436,7 +437,7 @@ class TexturePathEditorSlots:
         """Open the project's sourceimages directory."""
         path = EnvUtils.get_env_info("sourceimages")
         if path and os.path.exists(path):
-            os.startfile(path)
+            FileUtils.open_explorer(path)
         else:
             cmds.warning(f"Source images directory not found: {path}")
 

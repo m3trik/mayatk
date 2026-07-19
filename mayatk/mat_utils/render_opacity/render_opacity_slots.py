@@ -244,22 +244,21 @@ class RenderOpacitySlots:
             start, end = current, current + frames
 
         # Suppress the SelectionChanged callback while we modify the DG
-        # to prevent reentrant evaluation (which can crash Maya).
-        mgr = ScriptJobManager.instance()
-        mgr.suppress(self._sel_token)
+        # to prevent reentrant evaluation (which can crash Maya). The context
+        # manager defers resume past the queued idle-time dispatch — a manual
+        # suppress/resume pair resumes too early to silence it.
         try:
-            keyed = mtk.RenderOpacity.key_fade(
-                objects,
-                start=start,
-                end=end,
-                direction=direction_mode,
-                auto_create=auto_create,
-            )
+            with ScriptJobManager.instance().suppressed(self._sel_token):
+                keyed = mtk.RenderOpacity.key_fade(
+                    objects,
+                    start=start,
+                    end=end,
+                    direction=direction_mode,
+                    auto_create=auto_create,
+                )
         except Exception as e:
             self.sb.message_box(f"Error: {e}")
             return
-        finally:
-            mgr.resume(self._sel_token)
 
         if keyed:
             dirs = {"Fade In" if d == "in" else "Fade Out" for _, d in keyed}

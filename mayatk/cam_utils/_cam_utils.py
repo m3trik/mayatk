@@ -74,10 +74,7 @@ class CamUtils(ptk.HelpMixin):
         for cam in all_camera_transforms:
             if non_default:
                 cam_short = short_name(cam)
-                if not any(
-                    cam_short.endswith(def_cam)
-                    for def_cam in CamUtils.DEFAULT_CAMERAS
-                ):
+                if cam_short not in CamUtils.DEFAULT_CAMERAS:
                     cmds.parent(cam, group)
             else:
                 cmds.parent(cam, group)

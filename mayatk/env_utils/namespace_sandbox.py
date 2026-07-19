@@ -951,17 +951,6 @@ class NamespaceSandbox(ptk.LoggingMixin):
             namespace_filter, preserve_user_cameras
         )
 
-        # Final check - see if any temp namespaces remain
-        remaining_namespaces = cmds.namespaceInfo(listOnlyNamespaces=True)
-        remaining_temp_namespaces = [
-            ns for ns in remaining_namespaces if ns.startswith("temp_import_")
-        ]
-
-        if remaining_temp_namespaces:
-            self.logger.warning(
-                f"WARNING: Temp namespaces still exist after cleanup: {remaining_temp_namespaces}"
-            )
-
     def cleanup_all_temp_namespaces_force(self) -> None:
         """Force cleanup of ALL temp namespaces in Maya, not just tracked ones.
 

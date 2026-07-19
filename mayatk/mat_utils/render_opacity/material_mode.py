@@ -294,17 +294,22 @@ class OpacityMaterialMode(ptk.LoggingMixin):
                     continue
                 # Already connected from this transform → skip
                 if cmds.isConnected(
-                    f"{obj}.{OpacityAttributeMode.ATTR_NAME}", mat.opacity
+                    f"{obj}.{OpacityAttributeMode.ATTR_NAME}", f"{mat}.opacity"
                 ):
                     continue
                 # If the material opacity is already driven by another
                 # object, skip to avoid stealing the connection.
-                existing = mat.opacity.inputs(plugs=True)
+                existing = cmds.listConnections(
+                    f"{mat}.opacity",
+                    source=True,
+                    destination=False,
+                    plugs=True,
+                )
                 if existing:
                     continue
                 cmds.connectAttr(
                     f"{obj}.{OpacityAttributeMode.ATTR_NAME}",
-                    mat.opacity,
+                    f"{mat}.opacity",
                     force=True,
                 )
                 cls.logger.info(f"Reconnected {obj}.opacity -> {mat}.opacity")

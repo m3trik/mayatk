@@ -1,12 +1,21 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Tests for mayatk.anim_utils.playblast_exporter"""
+"""Tests for mayatk.anim_utils.playblast_exporter (2026-07 overhaul).
+
+Covers the target registry, frame-range resolution, capture primitives, the
+single-capture/multi-encode export planner, and regressions:
+- encoded outputs from ranges not starting near frame 0 (ffmpeg start_number)
+- 'still' captures exactly one frame (was a full sequence)
+- render_with_arnold returns only files the run wrote (was: any stale
+  prefix-matching file in the output dir)
+"""
 
 import os
-import unittest
+import shutil
 import sys
-import math
-from unittest.mock import patch, MagicMock
+import tempfile
+import unittest
+from unittest.mock import patch
 
 try:
     from PySide2.QtWidgets import QApplication
@@ -22,730 +31,431 @@ if QApplication and not QApplication.instance():
 
 import maya.cmds as cmds
 
-# --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
-from contextlib import contextmanager as _contextmanager
-
-
-def _pm_open_file(*args, **kw):
-    kw.setdefault("open", True)
-    return cmds.file(*args, **kw)
-
-
-def _pm_new_file(**kw):
-    kw.setdefault("new", True)
-    return cmds.file(**kw)
-
-
-def _pm_rename_file(path):
-    return cmds.file(rename=path)
-
-
-@_contextmanager
-def _pm_undo_chunk():
-    cmds.undoInfo(openChunk=True)
-    try:
-        yield
-    finally:
-        cmds.undoInfo(closeChunk=True)
-# --- end shims ---
-import mayatk as mtk
-from mayatk.anim_utils.playblast_exporter import PlayblastExporter
+import pythontk as ptk
+from mayatk.anim_utils.playblast_exporter import (
+    CaptureResult,
+    ExportTarget,
+    PlayblastExporter,
+)
 
 try:
     import cv2
-    import numpy as np
 
     CV2_AVAILABLE = True
 except ImportError:
     CV2_AVAILABLE = False
 
+FFMPEG_AVAILABLE = ptk.VidUtils.resolve_ffmpeg(required=False) is not None
+
 from base_test import MayaTkTestCase
 
-# Check for full test mode
-FULL_TESTS = os.environ.get("MAYATK_FULL_TESTS", "0") == "1"
+
+def _fake_capture(calls=None):
+    """A capture_sequence stand-in that writes placeholder frames."""
+
+    def capture(
+        directory,
+        prefix=None,
+        start=None,
+        end=None,
+        camera=None,
+        image_format="png",
+        **kwargs,
+    ):
+        if calls is not None:
+            calls.append(image_format)
+        os.makedirs(directory, exist_ok=True)
+        frames = []
+        for f in range(start, end + 1):
+            path = os.path.join(directory, f"{prefix}.{f:04d}.{image_format}")
+            with open(path, "w") as handle:
+                handle.write("frame")
+            frames.append(path)
+        return CaptureResult(
+            directory=directory,
+            prefix=prefix,
+            image_format=image_format,
+            start=start,
+            end=end,
+            padding=4,
+            frames=frames,
+            fps=24.0,
+        )
+
+    return capture
+
+
+def _fake_encode(encoded=None):
+    """An encode_sequence stand-in that writes the output file."""
+
+    def encode(capture, output_filepath, **kwargs):
+        if encoded is not None:
+            encoded.append(output_filepath)
+        with open(output_filepath, "w") as handle:
+            handle.write("video")
+        return output_filepath
+
+    return encode
 
 
 class TestPlayblastExporter(MayaTkTestCase):
     def setUp(self):
         super().setUp()
-        if FULL_TESTS:
-            print(f"\nRunning {self._testMethodName} in FULL mode")
-        else:
-            print(f"\nRunning {self._testMethodName} in QUICK mode")
-
-        _pm_new_file(force=True)
+        cmds.file(new=True, force=True)
+        self.tmp = tempfile.mkdtemp(prefix="playblast_test_")
         self.cube = cmds.polyCube(name="testCube")[0]
-        # Create some animation
         cmds.setKeyframe(self.cube, t=1, v=0, at="tx")
         cmds.setKeyframe(self.cube, t=10, v=10, at="tx")
-
-        # Set playback range
         cmds.playbackOptions(min=1, max=10)
 
-    def analyze_video(self, filepath):
-        """Analyze video for glitches using OpenCV."""
-        if not CV2_AVAILABLE:
-            print("Skipping video analysis (OpenCV not available)")
-            return True
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        super().tearDown()
 
-        cap = cv2.VideoCapture(filepath)
-        if not cap.isOpened():
-            return False, "Could not open video file"
+    def _skip_if_batch_capture_failed(self, exc):
+        if cmds.about(batch=True):
+            self.skipTest(f"playblast unavailable in batch mode: {exc}")
+        raise exc
 
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-        if frame_count == 0:
-            return False, "Video has 0 frames"
-
-        if width == 0 or height == 0:
-            return False, f"Invalid dimensions: {width}x{height}"
-
-        prev_frame = None
-        glitches = []
-
-        frame_idx = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            # Check for black frame (mean pixel value < threshold)
-            mean_val = np.mean(frame)
-            if mean_val < 1.0:  # Almost completely black
-                glitches.append(f"Frame {frame_idx} is black (mean: {mean_val})")
-
-            # Check for static frame (if animation is expected)
-            # In our test scene, the cube moves every frame.
-            if prev_frame is not None:
-                diff = cv2.absdiff(frame, prev_frame)
-                non_zero_count = np.count_nonzero(diff)
-                if non_zero_count == 0:
-                    # Note: This might happen if movement is sub-pixel or identical,
-                    # but for a moving cube it should change.
-                    # However, playblast compression might cause identical frames.
-                    # We'll just log it for now or use a loose threshold.
-                    pass
-
-            prev_frame = frame
-            frame_idx += 1
-
-        cap.release()
-
-        if glitches:
-            return False, "; ".join(glitches)
-
-        return True, f"Analyzed {frame_count} frames. OK."
-
-    def test_init_defaults(self):
-        """Test initialization with defaults."""
-        exporter = PlayblastExporter()
-        self.assertEqual(exporter.start_frame, 1)
-        self.assertEqual(exporter.end_frame, 10)
-        self.assertIsNone(exporter.camera_name)
-
-    def test_init_overrides(self):
-        """Test initialization with overrides."""
-        exporter = PlayblastExporter(start_frame=5, end_frame=15, camera_name="persp")
-        self.assertEqual(exporter.start_frame, 5)
-        self.assertEqual(exporter.end_frame, 15)
-        self.assertEqual(exporter.camera_name, "persp")
-
-    def test_scene_name_property(self):
-        """Test scene_name property."""
-        exporter = PlayblastExporter()
-        # Untitled scene
-        self.assertEqual(exporter.scene_name, "playblast")
-
-        # Save scene (mock or real)
-        temp_file = os.path.join(os.environ["TEMP"], "test_scene.ma")
-        _pm_rename_file(temp_file)
-        # Reset cached property if needed, but it's cached in instance
-        exporter._scene_name = None
-        self.assertEqual(exporter.scene_name, "test_scene")
-
-    def test_resolve_filepath_directory(self):
-        """Test _resolve_filepath with directory input."""
-        exporter = PlayblastExporter()
-        exporter._scene_name = "myScene"
-
-        # Video format
-        path = exporter._resolve_filepath("C:/temp", "avi", ".avi")
-        self.assertTrue(path.endswith("myScene.avi"))
-
-        # Image format
-        path = exporter._resolve_filepath("C:/temp", "image", ".png")
-        self.assertTrue(
-            path.endswith("myScene")
-        )  # Image sequence uses directory/prefix
-
-    def test_resolve_filepath_file(self):
-        """Test _resolve_filepath with file input."""
-        exporter = PlayblastExporter()
-
-        # Exact match
-        path = exporter._resolve_filepath("C:/temp/custom.mov", "qt", ".mov")
-        self.assertEqual(path, "C:/temp/custom.mov")
-
-        # Mismatch extension raises error
-        with self.assertRaises(ValueError):
-            exporter._resolve_filepath("C:/temp/custom.mov", "avi", ".avi")
-
-    def test_default_variations(self):
-        """Test default variations structure."""
-        variations = PlayblastExporter._default_variations()
-        self.assertIsInstance(variations, list)
-        self.assertTrue(len(variations) >= 1)
-
-        labels = [v["label"] for v in variations]
-        self.assertIn("video", labels)
-        self.assertNotIn("mov_animation", labels)
-
-    def test_playblast_metadata(self):
-        """Verify playblast output metadata (duration, resolution) using export_variations (Sequence -> MP4)."""
-        if not CV2_AVAILABLE:
-            print("Skipping metadata test (OpenCV not available)")
-            return
-
-        if FULL_TESTS:
-            cmds.playbackOptions(min=1, max=10)
-        else:
-            cmds.playbackOptions(min=1, max=5)
-
-        exporter = PlayblastExporter()
-        # Use a temp directory for the output
-        output_base = os.path.join(os.environ["TEMP"], "test_metadata_export")
-
-        # Cleanup before run to avoid leftover frames from previous runs
-        if os.path.exists(output_base + "_test_vid"):
-            import shutil
-
-            try:
-                shutil.rmtree(output_base + "_test_vid")
-            except OSError:
-                pass
-        # Also check for files if it wasn't a directory (since make_directory defaults to False)
-        # The exporter creates files with prefix output_base + "_test_vid"
-        # We should probably use a unique directory to be safe
-        import uuid
-
-        unique_dir = os.path.join(
-            os.environ["TEMP"], f"test_metadata_{uuid.uuid4().hex}"
-        )
-        os.makedirs(unique_dir, exist_ok=True)
-        output_base = os.path.join(unique_dir, "test_export")
-
-        # Use specific resolution
-        width, height = 320, 240
-
-        # Define a variation that uses the sequence -> mp4 workflow
-        variations = [
-            {
-                "label": "test_vid",
-                "playblast": {
-                    "format": "image",
-                    "compression": "png",
-                    "widthHeight": (width, height),
-                    "percent": 100,
-                    "viewer": False,
-                    "offScreen": True,
-                },
-                "post": "mp4",
-            }
-        ]
-
-        try:
-            results = exporter.export_variations(
-                output_path=output_base, variations=variations, scene_name="test_scene"
-            )
-
-            self.assertEqual(len(results), 1)
-            result = results[0]
-
-            self.assertNotIn("error", result, f"Export failed: {result.get('error')}")
+    # ------------------------------------------------------------------
+    # Registry / pure logic
+    # ------------------------------------------------------------------
+    def test_target_registry_integrity(self):
+        targets = PlayblastExporter.available_targets()
+        names = [name for name, _ in targets]
+        self.assertEqual(len(names), len(set(names)), "duplicate target names")
+        for name, spec in PlayblastExporter.TARGETS.items():
+            self.assertIsInstance(spec, ExportTarget)
+            self.assertEqual(spec.name, name)
             self.assertIn(
-                "compressed", result, "MP4 compression failed or not performed"
+                spec.kind, ("encode", "sequence", "still", "native", "arnold")
             )
+            self.assertTrue(spec.extension, f"{name} has no extension")
+            if spec.kind == "native":
+                self.assertIn(spec.native_format, PlayblastExporter.NATIVE_EXTENSIONS)
+        # The QuickTime-era 'qt' targets must be gone from the registry.
+        self.assertNotIn("mov_animation", PlayblastExporter.TARGETS)
 
-            mp4_path = result["compressed"]
-            self.assertTrue(os.path.exists(mp4_path), f"MP4 file not found: {mp4_path}")
-
-            cap = cv2.VideoCapture(mp4_path)
-            self.assertTrue(cap.isOpened(), "Could not open generated video")
-
-            vid_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            vid_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            fps = cap.get(cv2.CAP_PROP_FPS)
-
-            cap.release()
-
-            # Check resolution
-            # Note: Some codecs/containers might align dimensions to multiples of 2 or 4
-            self.assertEqual(
-                vid_width, width, f"Width mismatch: expected {width}, got {vid_width}"
-            )
-            self.assertEqual(
-                vid_height,
-                height,
-                f"Height mismatch: expected {height}, got {vid_height}",
-            )
-
-            # Check duration
-            if FULL_TESTS:
-                expected_frames = 10
-            else:
-                expected_frames = 5
-
-            # Allow small variance due to ffmpeg encoding quirks or container overhead, but for small frames it should be exact
-            self.assertEqual(
-                frame_count,
-                expected_frames,
-                f"Frame count mismatch: expected {expected_frames}, got {frame_count}",
-            )
-
-            # Check FPS (Maya default is usually 24)
-            self.assertGreater(fps, 0)
-
-        except RuntimeError as e:
-            if cmds.about(batch=True):
-                print(f"Playblast failed in batch mode (hardware limitation): {e}")
-            else:
-                self.fail(f"Playblast failed: {e}")
-        finally:
-            # Cleanup
-            if "unique_dir" in locals() and os.path.exists(unique_dir):
-                import shutil
-
-                try:
-                    shutil.rmtree(unique_dir)
-                except OSError:
-                    pass
-            elif os.path.exists(output_base + "_test_vid"):
-                import shutil
-
-                try:
-                    shutil.rmtree(output_base + "_test_vid")
-                except OSError:
-                    pass
-
-    def test_playblast_visual_content(self):
-        """Verify visual content of the playblast with heavy animation."""
-        if not CV2_AVAILABLE:
-            print("Skipping visual content test (OpenCV not available)")
-            return
-
-        # Setup scene
-        _pm_new_file(force=True)
-
-        # Camera
-        cam_shape = cmds.createNode("camera")
-        cam = (cmds.listRelatives(str(cam_shape), parent=True) or [None])[0]
-        cmds.xform(cam, t=(0, 0, 20))
-        cam = cmds.rename(cam, "test_cam")
-
-        # Red Sphere
-        sphere = cmds.polySphere(radius=2)[0]
-        shader = cmds.shadingNode("lambert", asShader=True)
-        cmds.setAttr(f"{shader}.color", 1, 0, 0, type="double3")  # Red
-        sg = cmds.sets(
-            renderable=True, noSurfaceShader=True, empty=True, name=str(shader) + "SG"
+    def test_quality_to_crf_mapping(self):
+        self.assertEqual(PlayblastExporter._quality_to_crf(100), 16)
+        self.assertEqual(PlayblastExporter._quality_to_crf(0), 40)
+        self.assertEqual(PlayblastExporter._quality_to_crf(999), 16)  # clamped
+        self.assertTrue(
+            PlayblastExporter._quality_to_crf(50) > PlayblastExporter._quality_to_crf(90)
         )
-        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
-        cmds.sets(str(sphere), edit=True, forceElement=sg)
 
-        # Heavy Animation: Keyframes on every frame
-        if FULL_TESTS:
-            start_frame = 1
-            end_frame = 48  # 2 seconds
-        else:
-            start_frame = 1
-            end_frame = 5  # Short test
-
-        for i in range(start_frame, end_frame + 1):
-            # Move in a circle
-            tx = math.sin(i * 0.2) * 5
-            ty = math.cos(i * 0.2) * 5
-            cmds.setKeyframe(sphere, t=i, v=tx, at="tx")
-            cmds.setKeyframe(sphere, t=i, v=ty, at="ty")
-            cmds.setKeyframe(sphere, t=i, v=i * 10, at="ry")
-            cmds.setKeyframe(sphere, t=i, v=i * 10, at="rx")
-
-        exporter = PlayblastExporter()
-        output = os.path.join(os.environ["TEMP"], "test_visual_anim.avi")
-
-        try:
-            result = exporter.create_playblast(
-                filepath=output,
-                camera_name=cam,
-                start_frame=start_frame,
-                end_frame=end_frame,
-                offScreen=True,
-                viewer=False,
-                percent=100,
-                widthHeight=(320, 240),
-            )
-
-            self.assertTrue(os.path.exists(result))
-
-            cap = cv2.VideoCapture(result)
-            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            self.assertEqual(frame_count, end_frame - start_frame + 1)
-
-            # Batch mode (mayapy without GUI) produces all-black playblast
-            # frames — viewport rendering needs a display. Verifying behavior
-            # against black frames is meaningless; skip outright rather than
-            # silently disable assertions (the original code did the latter,
-            # which let real regressions through).
-            if cmds.about(batch=True):
-                self.skipTest("playblast pixel checks require a GUI session")
-
-            prev_frame = None
-            has_movement = False
-            frames_checked = 0
-            non_black_frames = 0
-
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-
-                b_channel, g_channel, r_channel = cv2.split(frame)
-                is_black = np.mean(frame) < 1.0
-
-                if not is_black:
-                    non_black_frames += 1
-                    # At least some pixels should be bright red (the sphere).
-                    self.assertGreater(
-                        np.max(r_channel),
-                        100,
-                        f"Frame {frames_checked} missing red object",
-                    )
-
-                if prev_frame is not None:
-                    diff = cv2.absdiff(frame, prev_frame)
-                    if np.sum(diff) > 0:
-                        has_movement = True
-
-                prev_frame = frame
-                frames_checked += 1
-
-            cap.release()
-
-            self.assertGreater(
-                non_black_frames,
-                0,
-                "All playblast frames were black — viewport render failed",
-            )
-            self.assertTrue(
-                has_movement,
-                "Video contains no animation (frames are identical)",
-            )
-
-        except RuntimeError as e:
-            if cmds.about(batch=True):
-                print(f"Playblast failed in batch mode: {e}")
-            else:
-                self.fail(f"Playblast failed: {e}")
-        finally:
-            if os.path.exists(output):
-                try:
-                    os.remove(output)
-                except OSError:
-                    pass
-
-    def test_custom_frame_range(self):
-        """Test playblast with custom frame range."""
-        if not CV2_AVAILABLE:
-            print("Skipping frame range test (OpenCV not available)")
-            return
-
-        exporter = PlayblastExporter()
-        output = os.path.join(os.environ["TEMP"], "test_range.avi")
-
-        # Range 2-5 (4 frames)
-        start, end = 2, 5
-        expected_frames = end - start + 1
-
-        try:
-            result = exporter.create_playblast(
-                filepath=output,
-                start_frame=start,
-                end_frame=end,
-                offScreen=True,
-                viewer=False,
-                percent=100,
-            )
-            self.assertTrue(os.path.exists(result))
-
-            cap = cv2.VideoCapture(result)
-            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            cap.release()
-
-            self.assertEqual(
-                frame_count,
-                expected_frames,
-                f"Frame count mismatch: expected {expected_frames}, got {frame_count}",
-            )
-
-        except RuntimeError as e:
-            if cmds.about(batch=True):
-                print(f"Playblast failed in batch mode: {e}")
-            else:
-                self.fail(f"Playblast failed: {e}")
-        finally:
-            if os.path.exists(output):
-                try:
-                    os.remove(output)
-                except OSError:
-                    pass
-
-    def test_invalid_camera(self):
-        """Test behavior with invalid camera name."""
-        exporter = PlayblastExporter()
-        output = os.path.join(os.environ["TEMP"], "test_invalid_cam.avi")
-
-        # Now we expect ValueError because we added validation
+    def test_resolve_frame_range_modes(self):
+        cmds.playbackOptions(min=5, max=20, animationStartTime=1, animationEndTime=30)
+        cmds.currentTime(7)
+        self.assertEqual(PlayblastExporter.resolve_frame_range("playback"), (5, 20))
+        self.assertEqual(PlayblastExporter.resolve_frame_range("animation"), (1, 30))
+        self.assertEqual(PlayblastExporter.resolve_frame_range("current"), (7, 7))
+        self.assertEqual(
+            PlayblastExporter.resolve_frame_range("custom", 3, 9), (3, 9)
+        )
+        # Explicit values override the mode individually.
+        self.assertEqual(
+            PlayblastExporter.resolve_frame_range("playback", start=8), (8, 20)
+        )
         with self.assertRaises(ValueError):
-            exporter.create_playblast(
-                filepath=output,
-                camera_name="non_existent_camera_999",
-                offScreen=True,
-                viewer=False,
+            PlayblastExporter.resolve_frame_range("custom")  # needs both
+        with self.assertRaises(ValueError):
+            PlayblastExporter.resolve_frame_range("custom", 10, 2)  # inverted
+        with self.assertRaises(ValueError):
+            PlayblastExporter.resolve_frame_range("bogus")
+
+    def test_scene_name(self):
+        self.assertEqual(PlayblastExporter.scene_name(), "playblast")
+        cmds.file(rename=os.path.join(self.tmp, "my_shot.ma"))
+        self.assertEqual(PlayblastExporter.scene_name(), "my_shot")
+
+    def test_capture_movie_validation(self):
+        exporter = PlayblastExporter()
+        with self.assertRaises(ValueError):
+            exporter.capture_movie(os.path.join(self.tmp, "x.avi"), fmt="qtx")
+        with self.assertRaises(ValueError):  # extension/format mismatch
+            exporter.capture_movie(os.path.join(self.tmp, "x.mov"), fmt="avi")
+
+    def test_invalid_camera_raises(self):
+        exporter = PlayblastExporter()
+        with self.assertRaises(ValueError):
+            exporter.capture_sequence(
+                self.tmp, prefix="x", camera="non_existent_camera_999"
             )
 
-    def test_export_variations_multiple(self):
-        """Test exporting multiple variations at once."""
+    def test_export_unknown_target_raises(self):
+        with self.assertRaises(ValueError):
+            PlayblastExporter().export(self.tmp, targets=["mp4", "nope"])
+
+    def test_resolve_sound_node(self):
+        # No audio nodes -> nothing to resolve.
+        self.assertIsNone(PlayblastExporter.resolve_sound_node())
+        first = cmds.createNode("audio", name="trackA")
+        self.assertEqual(PlayblastExporter.resolve_sound_node(), first)
+        cmds.createNode("audio", name="trackB")
+        # Two nodes and no active timeline sound -> ambiguous.
+        if cmds.about(batch=True):
+            self.assertIsNone(PlayblastExporter.resolve_sound_node())
+
+    # ------------------------------------------------------------------
+    # Export planner (mocked primitives — no viewport/ffmpeg needed)
+    # ------------------------------------------------------------------
+    def test_export_single_capture_feeds_all_encodes(self):
+        """mp4 + mov + png_sequence must trigger exactly ONE viewport capture."""
         exporter = PlayblastExporter()
-        output_base = os.path.join(os.environ["TEMP"], "test_multi_var")
+        capture_calls, encoded = [], []
+        exporter.capture_sequence = _fake_capture(capture_calls)
+        exporter.encode_sequence = _fake_encode(encoded)
 
-        variations = [
-            {
-                "label": "var1",
-                "playblast": {
-                    "format": "avi",
-                    "compression": "none",
-                    "percent": 50,
-                    "viewer": False,
-                    "offScreen": True,
-                },
-            },
-            {
-                "label": "var2",
-                "playblast": {
-                    "format": "avi",
-                    "compression": "none",
-                    "percent": 25,
-                    "viewer": False,
-                    "offScreen": True,
-                },
-            },
-        ]
+        results = exporter.export(
+            self.tmp, name="shot", targets=["mp4", "mov", "png_sequence"],
+            start=1, end=3,
+        )
 
+        self.assertEqual(capture_calls, ["png"], "expected exactly one capture")
+        self.assertEqual(len(encoded), 2)
+        by_target = {r.target: r for r in results}
+        self.assertTrue(all(r.ok for r in results), [r.error for r in results])
+        self.assertEqual(len(by_target["png_sequence"].output), 3)
+        self.assertTrue(by_target["mp4"].output.endswith("shot.mp4"))
+        self.assertTrue(by_target["mov"].output.endswith("shot.mov"))
+        # Shared frames live in the png_sequence deliverable dir — kept.
+        self.assertTrue(os.path.isdir(os.path.join(self.tmp, "shot_png")))
+
+    def test_export_encode_only_cleans_intermediate_frames(self):
+        exporter = PlayblastExporter()
+        exporter.capture_sequence = _fake_capture()
+        exporter.encode_sequence = _fake_encode()
+
+        results = exporter.export(self.tmp, name="clip", targets="mp4", start=1, end=2)
+        self.assertTrue(results[0].ok, results[0].error)
+        self.assertFalse(
+            os.path.exists(os.path.join(self.tmp, "clip_png_tmp")),
+            "intermediate frames must be cleaned up",
+        )
+
+        results = exporter.export(
+            self.tmp, name="clip2", targets="mp4", start=1, end=2, keep_frames=True
+        )
+        self.assertTrue(results[0].ok)
+        kept = os.path.join(self.tmp, "clip2_png_tmp")
+        self.assertTrue(os.path.isdir(kept), "keep_frames=True must retain frames")
+        self.assertEqual(len(os.listdir(kept)), 2)
+
+    def test_export_capture_failure_isolates_targets(self):
+        """A failed shared capture errors its dependents; independent targets
+        still run."""
+        exporter = PlayblastExporter()
+
+        def broken_capture(*args, **kwargs):
+            raise RuntimeError("viewport exploded")
+
+        def fake_still(filepath, **kwargs):
+            with open(filepath, "w") as handle:
+                handle.write("still")
+            return filepath
+
+        exporter.capture_sequence = broken_capture
+        exporter.capture_still = fake_still
+
+        results = exporter.export(
+            self.tmp, name="mix", targets=["mp4", "png_sequence", "still"],
+            start=1, end=2,
+        )
+        by_target = {r.target: r for r in results}
+        self.assertIn("viewport exploded", by_target["mp4"].error)
+        self.assertIn("viewport exploded", by_target["png_sequence"].error)
+        self.assertTrue(by_target["still"].ok, by_target["still"].error)
+
+    def test_export_progress_reaches_done(self):
+        exporter = PlayblastExporter()
+        exporter.capture_sequence = _fake_capture()
+        exporter.encode_sequence = _fake_encode()
+        seen = []
+        exporter.export(
+            self.tmp, name="prog", targets="mp4", start=1, end=2,
+            progress_callback=lambda i, total, text: seen.append((i, total, text)),
+        )
+        self.assertTrue(seen)
+        self.assertEqual(seen[-1][0], seen[-1][1], "final tick must be (total, total)")
+        self.assertEqual(seen[-1][2], "Done")
+
+    # ------------------------------------------------------------------
+    # Capture primitives (real playblast — batch-tolerant)
+    # ------------------------------------------------------------------
+    def test_capture_sequence_keeps_real_frame_numbers(self):
+        cmds.playbackOptions(min=101, max=105)
+        exporter = PlayblastExporter(width=320, height=240)
         try:
-            results = exporter.export_variations(
-                output_path=output_base, variations=variations, scene_name="test_scene"
+            capture = exporter.capture_sequence(self.tmp, prefix="rangecheck")
+        except RuntimeError as exc:
+            self._skip_if_batch_capture_failed(exc)
+        self.assertEqual((capture.start, capture.end), (101, 105))
+        self.assertEqual(len(capture.frames), 5)
+        self.assertTrue(capture.frames[0].endswith("rangecheck.0101.png"))
+        self.assertIn("%04d", capture.pattern)
+
+    def test_capture_sequence_clears_stale_frames(self):
+        """Regression: frames left by an earlier/wider run passed the frame
+        count check and got encoded past the requested end (ffmpeg reads a
+        printf pattern contiguously)."""
+        cmds.playbackOptions(min=101, max=103)
+        for stale in (102, 106):  # one inside, one beyond the range
+            with open(
+                os.path.join(self.tmp, f"rangecheck.{stale:04d}.png"), "w"
+            ) as handle:
+                handle.write("stale")
+        exporter = PlayblastExporter(width=320, height=240)
+        try:
+            capture = exporter.capture_sequence(self.tmp, prefix="rangecheck")
+        except RuntimeError as exc:
+            self._skip_if_batch_capture_failed(exc)
+        self.assertEqual(
+            sorted(os.listdir(self.tmp)),
+            [f"rangecheck.{n:04d}.png" for n in (101, 102, 103)],
+            "stale out-of-range frame must be removed",
+        )
+        with open(capture.frames[1], "rb") as handle:
+            self.assertNotEqual(
+                handle.read(5), b"stale", "in-range stale frame must be recaptured"
             )
 
-            self.assertEqual(len(results), 2)
-            self.assertEqual(results[0]["label"], "var1")
-            self.assertEqual(results[1]["label"], "var2")
+    def test_collect_frames_sorts_numerically(self):
+        """Regression: lexicographic sort misordered frames across a padding
+        boundary (\"10000\" < \"9999\")."""
+        for n in (9999, 10000, 10001):
+            with open(os.path.join(self.tmp, f"seq.{n:04d}.png"), "w") as handle:
+                handle.write("x")
+        frames = PlayblastExporter._collect_frames(self.tmp, "seq", "png", 9999, 10001)
+        numbers = [int(os.path.basename(f).split(".")[1]) for f in frames]
+        self.assertEqual(numbers, [9999, 10000, 10001])
+        # Unbounded collection returns everything, still ordered.
+        self.assertEqual(
+            len(PlayblastExporter._collect_frames(self.tmp, "seq", "png")), 3
+        )
 
-            # Check outputs exist
-            for res in results:
-                self.assertNotIn("error", res)
-                self.assertTrue(os.path.exists(res["output"]))
+    def test_capture_still_writes_exactly_one_file(self):
+        """Regression: the old 'png_still' preset captured the whole range."""
+        target = os.path.join(self.tmp, "single.png")
+        exporter = PlayblastExporter(width=320, height=240)
+        try:
+            result = exporter.capture_still(target, frame=3)
+        except RuntimeError as exc:
+            self._skip_if_batch_capture_failed(exc)
+        self.assertEqual(result, ptk.format_path(target))
+        written = os.listdir(self.tmp)
+        self.assertEqual(
+            written, ["single.png"], f"expected one file, found: {written}"
+        )
 
-        except RuntimeError as e:
-            if cmds.about(batch=True):
-                print(f"Playblast failed in batch mode: {e}")
-        finally:
-            # Cleanup
-            for res in results:
-                if "output" in res and os.path.exists(res["output"]):
-                    try:
-                        os.remove(res["output"])
-                    except OSError:
-                        pass
+    def test_export_mp4_from_offset_range(self):
+        """Regression: encoding a range not starting near 0 used to fail
+        (ffmpeg image2 only auto-detects start numbers 0-4)."""
+        if not FFMPEG_AVAILABLE:
+            self.skipTest("ffmpeg not available")
+        cmds.playbackOptions(min=101, max=105)
+        exporter = PlayblastExporter(width=320, height=240)
+        results = exporter.export(self.tmp, name="offset", targets="mp4")
+        result = results[0]
+        if not result.ok:
+            self._skip_if_batch_capture_failed(RuntimeError(result.error))
+        self.assertTrue(os.path.exists(result.output))
+        self.assertGreater(os.path.getsize(result.output), 0)
+        if CV2_AVAILABLE:
+            cap = cv2.VideoCapture(result.output)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap.release()
+            self.assertEqual(frame_count, 5)
 
-    def test_arnold_render_mock(self):
-        """Test Arnold render path using mocks (avoids actual rendering)."""
+    def test_export_mp4_honors_scene_fps(self):
+        if not (FFMPEG_AVAILABLE and CV2_AVAILABLE):
+            self.skipTest("ffmpeg/cv2 not available")
+        cmds.currentUnit(time="game")  # 15 fps
+        cmds.playbackOptions(min=1, max=15)
+        cube = cmds.polyCube()[0]
+        cmds.setKeyframe(cube, t=1, v=0, at="tx")
+        cmds.setKeyframe(cube, t=15, v=10, at="tx")
+        exporter = PlayblastExporter(width=320, height=240)
+        results = exporter.export(self.tmp, name="lowfps", targets="mp4")
+        result = results[0]
+        if not result.ok:
+            self._skip_if_batch_capture_failed(RuntimeError(result.error))
+        cap = cv2.VideoCapture(result.output)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        self.assertAlmostEqual(fps, 15.0, delta=0.1)
+        duration = frame_count / fps if fps else 0
+        self.assertAlmostEqual(duration, 1.0, delta=0.2)
+
+    def test_capture_movie_avi_smoke(self):
+        exporter = PlayblastExporter(width=320, height=240)
+        target = os.path.join(self.tmp, "smoke.avi")
+        try:
+            result = exporter.capture_movie(target, start=1, end=5)
+        except RuntimeError as exc:
+            self._skip_if_batch_capture_failed(exc)
+        self.assertTrue(os.path.exists(result))
+        self.assertGreater(os.path.getsize(result), 0)
+
+    # ------------------------------------------------------------------
+    # Arnold (mocked — no real render)
+    # ------------------------------------------------------------------
+    def test_render_with_arnold_returns_only_new_files(self):
+        """Regression: stale prefix-matching files from earlier renders were
+        returned as if this run produced them."""
+        out_dir = os.path.join(self.tmp, "arnold")
+        os.makedirs(out_dir)
+        stale = os.path.join(out_dir, "shot.0099.exr")
+        with open(stale, "w") as handle:
+            handle.write("old render")
+        old_time = os.path.getmtime(stale) - 1000
+        os.utime(stale, (old_time, old_time))
+
+        def fake_render(**kwargs):
+            for frame in (1, 2):
+                with open(os.path.join(out_dir, f"shot.{frame:04d}.exr"), "w") as f:
+                    f.write("new render")
+
+        def fake_getattr(attr, *args, **kwargs):
+            values = {
+                "defaultArnoldDriver.ai_translator": "exr",
+                "defaultRenderGlobals.imageFilePrefix": "",
+            }
+            return values.get(attr, 0)
+
         exporter = PlayblastExporter()
-        output_base = os.path.join(os.environ["TEMP"], "test_arnold")
-
-        variations = [{"label": "arnold_pass", "renderer": "arnold", "framePadding": 4}]
-
-        # Production migrated to cmds.* — patch at the playblast_exporter
-        # import path. arnoldRender is plugin-provided; patch with create=True
-        # since the plugin isn't loaded under tests.
         pe_path = "mayatk.anim_utils.playblast_exporter.cmds"
         with (
-            patch(f"{pe_path}.arnoldRender", create=True) as mock_render,
-            patch(f"{pe_path}.pluginInfo", return_value=True),
-            patch(f"{pe_path}.workspace"),
+            patch(f"{pe_path}.arnoldRender", create=True, side_effect=fake_render),
+            patch("mayatk.env_utils._env_utils.EnvUtils.load_plugin"),
+            patch(f"{pe_path}.workspace", return_value="images"),
             patch(f"{pe_path}.setAttr"),
-            patch(f"{pe_path}.getAttr"),
-            patch(f"{pe_path}.editRenderLayerGlobals", create=True),
-            patch("os.walk") as mock_walk,
+            patch(f"{pe_path}.getAttr", side_effect=fake_getattr),
+            patch(
+                f"{pe_path}.editRenderLayerGlobals",
+                create=True,
+                return_value="defaultRenderLayer",
+            ),
             patch.object(exporter, "_resolve_camera_shape", return_value="perspShape"),
         ):
-
-            # Setup mock for os.walk to simulate finding rendered files
-            mock_walk.return_value = [
-                (
-                    output_base + "_arnold_pass",
-                    [],
-                    ["test_scene.0001.exr", "test_scene.0002.exr"],
-                )
-            ]
-
-            results = exporter.export_variations(
-                output_path=output_base,
-                variations=variations,
-                scene_name="test_scene",
+            frames = exporter.render_with_arnold(
+                out_dir, start=1, end=2, prefix="shot"
             )
 
-            # Verify arnoldRender was called
-            self.assertTrue(mock_render.called)
+        basenames = sorted(os.path.basename(f) for f in frames)
+        self.assertEqual(basenames, ["shot.0001.exr", "shot.0002.exr"])
 
-            # Verify results
-            self.assertEqual(len(results), 1)
-            self.assertEqual(results[0]["type"], "arnold_sequence")
-            self.assertEqual(len(results[0]["output"]), 2)  # 2 files mocked
-
-    def test_low_fps_duration(self):
-        """Verify duration is correct for low FPS animations (ensures -framerate is used)."""
-        if not CV2_AVAILABLE:
-            print("Skipping low FPS test (OpenCV not available)")
-            return
-
-        _pm_new_file(force=True)
-
-        # Set scene to 15 fps ("game")
-        cmds.currentUnit(time="game")
-
-        # Create animation
-        if FULL_TESTS:
-            # 30 frames = 2 seconds at 15fps
-            start, end = 1, 30
-            expected_duration = 2.0
-        else:
-            # 15 frames = 1 second at 15fps
-            start, end = 1, 15
-            expected_duration = 1.0
-
-        # Explicitly set playback range in the new unit
-        cmds.playbackOptions(min=start, max=end)
-
-        cube = cmds.polyCube()[0]
-        cmds.setKeyframe(cube, t=start, v=0, at="tx")
-        cmds.setKeyframe(cube, t=end, v=10, at="tx")
-
-        exporter = PlayblastExporter()
-        output_base = os.path.join(os.environ["TEMP"], "test_low_fps")
-
-        # Use sequence -> mp4 workflow
-        variations = [
-            {
-                "label": "vid",
-                "playblast": {
-                    "format": "image",
-                    "compression": "png",
-                    "offScreen": True,
-                },
-                "post": "mp4",
-            }
-        ]
-
-        try:
-            results = exporter.export_variations(
-                output_path=output_base, variations=variations, scene_name="test_scene"
-            )
-
-            mp4_path = results[0]["compressed"]
-            self.assertTrue(os.path.exists(mp4_path))
-
-            cap = cv2.VideoCapture(mp4_path)
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            cap.release()
-
-            duration = frame_count / fps if fps > 0 else 0
-            print(
-                f"Low FPS Test: FPS={fps}, Frames={frame_count}, Duration={duration}s"
-            )
-
-            # Check FPS
-            self.assertAlmostEqual(fps, 15.0, delta=0.1)
-
-            # Check Duration
-            # Allow small delta
-            self.assertAlmostEqual(
-                duration,
-                expected_duration,
-                delta=0.2,
-                msg=f"Duration mismatch! Expected {expected_duration}s, got {duration}s. (Did ffmpeg use default 25fps input?)",
-            )
-
-        except RuntimeError as e:
-            if cmds.about(batch=True):
-                print(f"Playblast failed in batch mode: {e}")
-            else:
-                self.fail(f"Playblast failed: {e}")
-        finally:
-            # Cleanup
-            if os.path.exists(output_base + "_vid"):
-                import shutil
-
-                try:
-                    shutil.rmtree(output_base + "_vid")
-                except OSError:
-                    pass
-
-    def test_create_playblast_smoke(self):
-        """Smoke test for create_playblast.
-
-        Note: Actual playblast generation might fail in headless mode without offScreen=True
-        or specific hardware setup, but we check if it runs through the logic.
-        """
-        # We attempt to run this even in batch mode now, but catch specific errors
-        # if the hardware doesn't support it.
-
-        exporter = PlayblastExporter()
-        output = os.path.join(os.environ["TEMP"], "test_playblast.avi")
-
-        try:
-            # Ensure offScreen is True for batch stability
-            result = exporter.create_playblast(
-                filepath=output, offScreen=True, viewer=False
-            )
-            self.assertTrue(os.path.exists(result))
-
-            # Analyze the output
-            is_valid, message = self.analyze_video(result)
-            if not is_valid:
-                # If analysis fails, we fail the test, unless it's a known batch issue
-                if cmds.about(batch=True) and "black" in message:
-                    print(
-                        f"Warning: Playblast generated black frames in batch mode (expected on some hardware): {message}"
-                    )
-                else:
-                    self.fail(f"Video analysis failed: {message}")
-            else:
-                print(f"Video analysis passed: {message}")
-
-            # Cleanup
-            try:
-                os.remove(result)
-            except OSError:
-                pass
-
-        except RuntimeError as e:
-            if cmds.about(batch=True):
-                print(f"Playblast failed in batch mode (hardware limitation): {e}")
-            else:
-                self.fail(f"Playblast failed: {e}")
+    def test_arnold_extension_translator_map(self):
+        pe_path = "mayatk.anim_utils.playblast_exporter.cmds"
+        for translator, expected in (
+            ("jpeg", "jpg"),
+            ("exr", "exr"),
+            ("deepexr", "exr"),
+            (None, "exr"),
+        ):
+            with patch(f"{pe_path}.getAttr", return_value=translator):
+                self.assertEqual(PlayblastExporter._arnold_extension(), expected)
 
 
 if __name__ == "__main__":

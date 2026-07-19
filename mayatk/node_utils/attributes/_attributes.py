@@ -84,7 +84,7 @@ class Attributes(ptk.HelpMixin):
             "stringArray",
             "matrix",
             "doubleArray",
-            "int32Array",
+            "Int32Array",
             "vectorArray",
             "pointArray",
             "mesh",
@@ -215,6 +215,12 @@ class Attributes(ptk.HelpMixin):
                 print(f"[{cls.__name__}] Skipping {path.name}: {exc}")
                 continue
 
+            if not isinstance(data, dict):
+                # Empty/comment-only (yaml -> None) or top-level-list YAML:
+                # skip so the ``data.get("attributes", ...)`` below can't
+                # raise AttributeError and break module import.
+                continue
+
             attrs = []
             for entry in data.get("attributes", []):
                 attrs.append(
@@ -321,7 +327,13 @@ class Attributes(ptk.HelpMixin):
             kwargs["minValue"] = template.min_value
         if template.max_value is not None:
             kwargs["maxValue"] = template.max_value
-        if template.default_value is not None:
+        # Maya's addAttr rejects ``defaultValue`` on data-type attrs (string,
+        # matrix, *Array …) — passing it makes addAttr raise, so the whole
+        # attribute is silently never created. Pass defaultValue only for
+        # numeric/enum attrs; data-type defaults are applied via a typed
+        # setAttr after creation (below).
+        is_data_type = template.attribute_type in cls._DATA_TYPES
+        if template.default_value is not None and not is_data_type:
             kwargs["defaultValue"] = template.default_value
 
         try:
@@ -334,7 +346,21 @@ class Attributes(ptk.HelpMixin):
                 cmds.setAttr(plug, channelBox=True)
 
             if template.default_value is not None:
-                cmds.setAttr(plug, template.default_value)
+                if is_data_type:
+                    # Data-type attrs need a typed setAttr; reuse the class's
+                    # own type-aware setter (handles string/array/matrix)
+                    # instead of the bare numeric setAttr, which errors.
+                    # Pass the DECLARED type — inferring from the default's
+                    # shape mis-routes e.g. a 3-element doubleArray default
+                    # into the double3 compound branch.
+                    cls._set_value(
+                        str(obj),
+                        template.long_name,
+                        template.default_value,
+                        attr_type=template.attribute_type,
+                    )
+                else:
+                    cmds.setAttr(plug, template.default_value)
 
             return True
         except Exception as e:
@@ -365,10 +391,12 @@ class Attributes(ptk.HelpMixin):
         Returns:
             dict: ``{attr_name: value, ...}``
         """
-        if inc is None:
-            inc = []
-        if exc is None:
-            exc = []
+        # Copy caller-supplied lists so the exc_defaults accumulation below
+        # (``exc.append``) never mutates a list owned by the caller. A lone
+        # string is wrapped, not ``list()``-ed, so "opacity" stays one pattern
+        # instead of char-splitting into ['o','p','a',...].
+        inc = [inc] if isinstance(inc, str) else (list(inc) if inc else [])
+        exc = [exc] if isinstance(exc, str) else (list(exc) if exc else [])
 
         list_attr_kwargs = {
             "read": True,
@@ -433,15 +461,25 @@ class Attributes(ptk.HelpMixin):
         elif isinstance(value, str):
             return "string"
         elif isinstance(value, (list, tuple, set)):
-            element_type = cls.get_type(value[0])
-            length = len(value)
+            seq = list(value)  # normalize sets (unindexable) to a list
+            if not seq:
+                return "compound"  # empty sequence — no element to introspect
+            element_type = cls.get_type(seq[0])
+            length = len(seq)
             if element_type in ("double", "float", "long", "short"):
                 if length == 2:
                     return f"{element_type}2"
                 elif length == 3:
                     return f"{element_type}3"
+                # Maya's only integer array data-type is Int32Array (note the
+                # capital-I casing exception vs doubleArray); there is no
+                # longArray/shortArray. Map integer elements to Int32Array and
+                # real elements to doubleArray so
+                # the returned name is always a valid ``_DATA_TYPES`` member.
+                elif element_type in ("long", "short"):
+                    return "Int32Array"
                 else:
-                    return f"{element_type}Array"
+                    return "doubleArray"
             elif element_type == "string":
                 return "stringArray"
             elif element_type == "vector":
@@ -612,15 +650,47 @@ class Attributes(ptk.HelpMixin):
             )
 
     @classmethod
-    def _set_value(cls, node, attr_name, value):
-        """Set an attribute value, handling compound children automatically."""
-        attr_type = cls.get_type(value)
+    def _set_value(cls, node, attr_name, value, attr_type=None):
+        """Set an attribute value, handling compound children automatically.
+
+        ``attr_type`` overrides value-shape inference. Pass it when the
+        DECLARED type is known (e.g. a template's ``doubleArray`` whose
+        2/3-element default would otherwise be mis-inferred as a
+        ``double2``/``double3`` compound, or a ``matrix`` default whose 16
+        floats would be mis-inferred as ``doubleArray``).
+        """
+        if attr_type is None:
+            attr_type = cls.get_type(value)
 
         if attr_type.endswith("3") or attr_type.endswith("2"):
             suffixes = ["X", "Y", "Z"] if attr_type.endswith("3") else ["X", "Y"]
             for i, comp in enumerate(value):
                 cmds.setAttr(f"{node}.{attr_name}{suffixes[i]}", comp)
-        else:
+        elif attr_type in cls._DATA_TYPES:
+            # Data-type attrs (string, stringArray, matrix …) require an
+            # explicit ``type=`` on setAttr — Maya errors without it. Branch
+            # on the data type exactly as ``_create_attr`` does.
+            plug = f"{node}.{attr_name}"
+            if attr_type == "stringArray":
+                # stringArray takes a leading element count, then each string.
+                cmds.setAttr(plug, len(value), *value, type=attr_type)
+            elif attr_type in (
+                "doubleArray",
+                "Int32Array",
+                "vectorArray",
+                "pointArray",
+            ):
+                # Numeric arrays take the flat value LIST directly — Maya's
+                # cmds.setAttr wants no count prefix and no unpacking here
+                # (either raises "Too much data was provided"). This differs
+                # from stringArray above; grouping them together silently
+                # corrupted every numeric-array write.
+                cmds.setAttr(plug, value, type=attr_type)
+            elif attr_type == "matrix":
+                cmds.setAttr(plug, *value, type=attr_type)
+            else:  # string / mesh / lattice / nurbsCurve / nurbsSurface
+                cmds.setAttr(plug, value, type=attr_type)
+        else:  # numeric / bool scalars
             cmds.setAttr(f"{node}.{attr_name}", value)
 
     @staticmethod

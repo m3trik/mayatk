@@ -8,8 +8,7 @@ from typing import Dict, List, Tuple, Any
 
 from qtpy import QtCore, QtWidgets
 import pythontk as ptk
-from pythontk.core_utils.hierarchy_utils.hierarchy_matching import HierarchyMatching
-from pythontk.core_utils.hierarchy_utils.hierarchy_indexer import HierarchyIndexer
+from pythontk.core_utils.hierarchy_utils.hierarchy_path import HierarchyPath
 
 from mayatk.env_utils.hierarchy_sync._hierarchy_sync import clean_hierarchy_path
 
@@ -53,7 +52,7 @@ class TreePathMatcher(ptk.LoggingMixin):
         for item in items:
             path = self._get_item_path(item)
             if path:
-                last_component = HierarchyMatching._clean_namespace(path.split("|")[-1])
+                last_component = HierarchyPath.clean_namespace(HierarchyPath.leaf(path))
                 by_last.setdefault(last_component, []).append(item)
 
         return by_full, by_clean_full, by_last
@@ -69,7 +68,7 @@ class TreePathMatcher(ptk.LoggingMixin):
     ):
         """Find tree items matching a target path using multiple strategies."""
         cleaned_path = clean_hierarchy_path(target_path)
-        last_clean = HierarchyMatching._clean_namespace(target_path.split("|")[-1])
+        last_clean = HierarchyPath.clean_namespace(HierarchyPath.leaf(target_path))
 
         candidates = []
         strategy = "none"
@@ -133,7 +132,7 @@ class TreePathMatcher(ptk.LoggingMixin):
         while cur:
             parts.insert(0, cur.text(0))
             cur = cur.parent()
-        return HierarchyIndexer._join_hierarchy_path(parts)
+        return HierarchyPath.join(parts)
 
     def _get_item_raw_path(self, item) -> str:
         """Extract the full hierarchy path using raw names (with namespaces) if stored."""
@@ -143,7 +142,7 @@ class TreePathMatcher(ptk.LoggingMixin):
             part = getattr(cur, "_raw_name", cur.text(0))
             parts.insert(0, part)
             cur = cur.parent()
-        return HierarchyIndexer._join_hierarchy_path(parts)
+        return HierarchyPath.join(parts)
 
     def log_matching_debug(self, path, candidates, strategy, prefix=""):
         """Log debug information about path matching."""

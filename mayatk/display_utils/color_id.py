@@ -248,19 +248,23 @@ class ColorId(ColorUtils):
                 if cls.get_color_difference(outliner_color, target_color) <= threshold:
                     matched = True
             if check_vertex_color and not matched:
-                vtx_colors = cmds.polyColorPerVertex(
-                    obj, query=True, rgb=True
-                )
-                if vtx_colors:
-                    # vtx_colors is flat [r,g,b,r,g,b,...]; group into triples
-                    triples = list(zip(vtx_colors[0::3], vtx_colors[1::3], vtx_colors[2::3]))
-                    if triples:
-                        average_vtx_color = [sum(c) / len(triples) for c in zip(*triples)]
-                        if (
-                            cls.get_color_difference(average_vtx_color, target_color)
-                            <= threshold
-                        ):
-                            matched = True
+                if cmds.listRelatives(obj, shapes=True, type="mesh"):
+                    try:
+                        vtx_colors = cmds.polyColorPerVertex(
+                            f"{obj}.vtx[*]", query=True, rgb=True
+                        )
+                    except RuntimeError:
+                        vtx_colors = None
+                    if vtx_colors:
+                        # vtx_colors is flat [r,g,b,r,g,b,...]; group into triples
+                        triples = list(zip(vtx_colors[0::3], vtx_colors[1::3], vtx_colors[2::3]))
+                        if triples:
+                            average_vtx_color = [sum(c) / len(triples) for c in zip(*triples)]
+                            if (
+                                cls.get_color_difference(average_vtx_color, target_color)
+                                <= threshold
+                            ):
+                                matched = True
             if matched:
                 matching_objects.append(obj)
 

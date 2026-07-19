@@ -1250,15 +1250,42 @@ class RigUtils(ptk.HelpMixin):
                 original_inherits = cmds.getAttr(inherits_plug)
                 lock_state = Attributes.get_lock_state(transform, unlock=True)
 
-                # Cache influences and bindPreMatrix
+                # Cache influences and bindPreMatrix.
+                # bindPreMatrix[]/matrix[] are indexed by the LOGICAL plug
+                # index, which becomes sparse once any influence has been
+                # removed (e.g. remaining plugs at [0, 2] with [1] gone).
+                # Resolve each influence's logical index from its matrix[]
+                # connection rather than its dense position in the ``-influence``
+                # query, which would otherwise read the wrong (or an
+                # unpopulated identity) bindPreMatrix plug.
                 influences = (
                     cmds.skinCluster(skin_cluster, query=True, influence=True) or []
                 )
+
+                def _full_path(node):
+                    resolved = cmds.ls(node, long=True)
+                    return resolved[0] if resolved else node
+
+                logical_by_influence = {}
+                for i in (
+                    cmds.getAttr(f"{skin_cluster}.matrix", multiIndices=True) or []
+                ):
+                    src = (
+                        cmds.listConnections(
+                            f"{skin_cluster}.matrix[{i}]",
+                            source=True,
+                            destination=False,
+                        )
+                        or []
+                    )
+                    if src:
+                        logical_by_influence[_full_path(src[0])] = i
+
                 bind_pre_matrices = {}
                 for jnt in influences:
-                    idx = cmds.skinCluster(
-                        skin_cluster, query=True, influence=True
-                    ).index(jnt)
+                    idx = logical_by_influence.get(_full_path(jnt))
+                    if idx is None:  # Contiguous-cluster fallback.
+                        idx = influences.index(jnt)
                     bind_pre_matrices[jnt] = cmds.getAttr(
                         f"{skin_cluster}.bindPreMatrix[{idx}]"
                     )

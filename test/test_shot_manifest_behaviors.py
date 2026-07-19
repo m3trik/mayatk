@@ -16,7 +16,9 @@ from mayatk.anim_utils.shots.shot_manifest.behaviors import (
     BehaviorSpec,
     load_behavior,
     list_behaviors,
+    apply_to_shots,
 )
+from mayatk.anim_utils.shots._shots import ShotBlock
 
 
 class BehaviorSpecTest(unittest.TestCase):
@@ -62,6 +64,110 @@ class BehaviorDiscoveryTest(unittest.TestCase):
             self.assertEqual(
                 load_behavior("custom", Path(d))["description"], "a custom one"
             )
+
+
+class ApplyToShotsDispatchTest(unittest.TestCase):
+    """Signature adaptation in ``apply_to_shots``.
+
+    Regression: the old adapters probed callables by calling them inside
+    ``except TypeError``, so a genuine TypeError raised *inside* a modern
+    applier was misread as "legacy signature", silently re-invoked the
+    applier with reduced arguments, and could report the entry as applied.
+    """
+
+    def _shot(self, behaviors):
+        shot = ShotBlock(shot_id=1, name="A01", start=0, end=30)
+        shot.metadata["behaviors"] = behaviors
+        return shot
+
+    def test_legacy_four_arg_apply_fn_still_supported(self):
+        calls = []
+
+        def apply_fn(obj, behavior, start, end):
+            calls.append((obj, behavior, start, end))
+
+        result = apply_to_shots(
+            [self._shot([{"name": "cube", "behavior": "fade_in"}])],
+            apply_fn,
+            exists_fn=lambda name: True,
+            has_keys_fn=lambda name, s, e: False,
+        )
+        self.assertEqual(calls, [("cube", "fade_in", 0, 30)])
+        self.assertEqual(len(result["applied"]), 1)
+        self.assertEqual(result["failed"], [])
+
+    def test_internal_typeerror_is_a_failure_not_a_retry(self):
+        calls = []
+
+        def apply_fn(obj, behavior, start, end, source_path="", anchor_override=None):
+            calls.append(obj)
+            raise TypeError("boom from inside the applier")
+
+        result = apply_to_shots(
+            [
+                self._shot(
+                    [
+                        {
+                            "name": "clip",
+                            "behavior": "set_clip",
+                            "kind": "audio",
+                            "source_path": "x.wav",
+                        }
+                    ]
+                )
+            ],
+            apply_fn,
+            exists_fn=lambda name, entry=None: True,
+            has_keys_fn=lambda name, s, e, entry=None: False,
+        )
+        # One invocation only — no silent reduced-signature retry — and
+        # the entry lands in "failed", never "applied".
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result["applied"], [])
+        self.assertEqual(len(result["failed"]), 1)
+        self.assertIn("boom", result["failed"][0]["error"])
+
+    def test_source_only_apply_fn_still_receives_source_path(self):
+        """An applier with ``source_path`` but no ``anchor_override`` must
+        get the source path in the audio pass (middle dispatch tier)."""
+        calls = []
+
+        def apply_fn(obj, behavior, start, end, source_path=""):
+            calls.append(source_path)
+
+        result = apply_to_shots(
+            [
+                self._shot(
+                    [
+                        {
+                            "name": "clip",
+                            "behavior": "set_clip",
+                            "kind": "audio",
+                            "source_path": "x.wav",
+                        }
+                    ]
+                )
+            ],
+            apply_fn,
+            exists_fn=lambda name, entry=None: True,
+            has_keys_fn=lambda name, s, e, entry=None: False,
+        )
+        self.assertEqual(calls, ["x.wav"])
+        self.assertEqual(len(result["applied"]), 1)
+        self.assertEqual(result["failed"], [])
+
+    def test_legacy_exists_fn_internal_typeerror_propagates_unmasked(self):
+        def exists_fn(name, entry):
+            raise TypeError("real bug in exists_fn")
+
+        with self.assertRaises(TypeError) as ctx:
+            apply_to_shots(
+                [self._shot([{"name": "cube", "behavior": "fade_in"}])],
+                lambda o, b, s, e: None,
+                exists_fn=exists_fn,
+                has_keys_fn=lambda name, s, e: False,
+            )
+        self.assertIn("real bug", str(ctx.exception))
 
 
 if __name__ == "__main__":

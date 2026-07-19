@@ -689,7 +689,7 @@ class MatUpdaterSlots(MatUpdater):
             sourceimages = EnvUtils.get_env_info("sourceimages")
             info = ptk.truncate(
                 f"<br><font color='#888'>Source Images: {sourceimages}</font><br>",
-                "middle",
+                mode="middle",
             )
             self.ui.txt001.setText(self.msg_intro + info)
         except Exception:

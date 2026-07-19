@@ -15,8 +15,9 @@ Auto-detects optimal time range from driver animation.
 Designed for Unity/game engine export workflows.
 """
 import math
+import collections
 from contextlib import contextmanager
-from typing import Dict, List, Optional, Set, Tuple, Any
+from typing import Dict, List, Optional, Set, Tuple, Union
 from dataclasses import dataclass, field
 
 try:
@@ -24,6 +25,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 
+import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.anim_utils._anim_utils import STANDARD_TRANSFORM_ATTRS
 
@@ -181,7 +183,7 @@ class SmartBake:
         bake_inherited_visibility: bool = False,
         use_override_layer: bool = True,
         mute_drivers: bool = False,
-        backup_file: Any = None,
+        backup_file: Union[bool, str, None] = None,
         restorable: bool = True,
     ):
         """Initialize SmartBake with configuration.
@@ -243,9 +245,6 @@ class SmartBake:
         self.backup_file = backup_file
         self.restorable = restorable
 
-        # Cache for node type inheritance lookups
-        self._type_cache: Dict[str, List[str]] = {}
-
     # -------------------------------------------------------------------------
     # Connection Tracing
     # -------------------------------------------------------------------------
@@ -284,15 +283,15 @@ class SmartBake:
     def _get_objects(self) -> List[str]:
         """Get objects to analyze, defaulting to all transforms and joints.
 
-        Includes both transforms and joints since joints are a separate Maya
-        type but are essential for skeletal animation export.
+        ``ls(type="transform")`` already includes joints (joint derives from
+        transform); the explicit joint query is kept as a safety net for any
+        Maya version where it doesn't, with duplicates removed.
         """
         if self.objects:
             return list(self.objects)
-        # Get all transforms AND joints (joints are separate type in Maya)
         transforms = cmds.ls(type="transform", long=True) or []
         joints = cmds.ls(type="joint", long=True) or []
-        return transforms + joints
+        return ptk.remove_duplicates(transforms + joints)
 
     def analyze(self) -> Dict[str, BakeAnalysis]:
         """Analyze objects to determine what needs baking.
@@ -306,10 +305,12 @@ class SmartBake:
         if not objects:
             return results
 
-        # Batch query all connections for performance
-        # Get all incoming connections to our objects
+        # Skip the per-joint IK-chain scan entirely when the scene has no
+        # IK handles — it is O(joints x handles) otherwise.
+        check_ik = bool(cmds.ls(type="ikHandle"))
+
         for obj in objects:
-            analysis = self._analyze_object(obj)
+            analysis = self._analyze_object(obj, check_ik=check_ik)
             if analysis.requires_bake or analysis.already_keyed:
                 results[obj] = analysis
 
@@ -507,14 +508,14 @@ class SmartBake:
 
         return results
 
-    def _analyze_object(self, obj: str) -> BakeAnalysis:
+    def _analyze_object(self, obj: str, check_ik: bool = True) -> BakeAnalysis:
         """Analyze a single object for bake requirements."""
         from mayatk.node_utils._node_utils import NodeUtils
 
         analysis = BakeAnalysis(object=obj)
 
         # Check for IK chain membership (joints in IK chains need rotation baking)
-        ik_handles = self._get_ik_handles_for_joint(obj)
+        ik_handles = self._get_ik_handles_for_joint(obj) if check_ik else []
         if ik_handles:
             # Joint is part of an IK chain - rotations need baking
             analysis.driven_channels["ik"] = ["rx", "ry", "rz"]
@@ -703,6 +704,11 @@ class SmartBake:
             start: First frame of the bake range.
             end: Last frame of the bake range (inclusive).
             result: Live ``BakeResult`` to update with baked/skipped info.
+            session: Restorable-session manifest to record visibility
+                stashes into, or ``None`` to skip stash bookkeeping (the
+                caller passes None for non-restorable sessions — restore()
+                refuses those, so their stash nodes could never be
+                reclaimed).
         """
         for obj, data in objects.items():
             # Reuse plugs from analysis; fall back to source_nodes curves.
@@ -855,7 +861,9 @@ class SmartBake:
             unique_name=True,
         )
 
-    def _mute_driver_nodes(self, to_bake: Dict[str, Any]) -> List[Tuple[str, int]]:
+    def _mute_driver_nodes(
+        self, to_bake: Dict[str, BakeAnalysis]
+    ) -> List[Tuple[str, int]]:
         """Mute driver nodes by setting nodeState=2 (Blocking).
 
         Parameters:
@@ -1033,12 +1041,16 @@ class SmartBake:
         # through animation-layer blend nodes.
         # -----------------------------------------------------------
         if inherited_vis_objects:
+            # Only record/stash for restorable sessions: restore() refuses
+            # non-restorable (delete_inputs) sessions outright, so any stash
+            # created for one could never be reclaimed and would leak locked
+            # nodes into the scene.
             self._bake_inherited_visibility(
                 inherited_vis_objects,
                 start,
                 end,
                 result,
-                session=session,
+                session=session if session and session["restorable"] else None,
             )
 
         # -----------------------------------------------------------
@@ -1047,8 +1059,6 @@ class SmartBake:
 
         # Bake each object with its specific channels
         # Group by channels to use batched bake
-        import collections
-
         grouped_by_channels = collections.defaultdict(
             list
         )  # tuple(channels) -> list[objects]
@@ -1124,7 +1134,10 @@ class SmartBake:
 
                 if baked:
                     for obj in objects:
-                        result.baked[obj] = list(channels)
+                        # Merge, don't assign: the inherited-visibility pass
+                        # may already have recorded ["v"] for this object.
+                        prior = result.baked.get(obj, [])
+                        result.baked[obj] = sorted(set(prior) | set(channels))
                 else:
                     for obj in objects:
                         result.skipped.append(obj)
@@ -1158,6 +1171,11 @@ class SmartBake:
                     if obj not in result.baked:
                         continue
                     for source_type, nodes in data.source_nodes.items():
+                        # Ancestor vis curves/plugs are NOT driver inputs to
+                        # this object — the parent's own animation was never
+                        # baked away and must survive.
+                        if source_type.startswith("inherited_visibility"):
+                            continue
                         for node in nodes:
                             if not cmds.objExists(node):
                                 continue
@@ -1180,8 +1198,6 @@ class SmartBake:
         # delete pre-existing curves (e.g. stepped keys the user placed
         # manually) that happen to be constant-valued.
         if self.optimize_keys and result.baked:
-            from mayatk.anim_utils._anim_utils import AnimUtils
-
             baked_curves = []
             # When an override layer exists, query its curves directly.
             # listConnections(plug) won't traverse animBlendNodes.
@@ -1236,6 +1252,9 @@ class SmartBake:
                 for entry in session["visibility"]:
                     if entry.get("stash"):
                         bake_session.discard_stash(entry["stash"])
+
+        # An object can be skipped by more than one phase — report it once.
+        result.skipped = ptk.remove_duplicates(result.skipped)
 
         return result
 

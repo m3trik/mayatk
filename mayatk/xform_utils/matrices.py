@@ -489,7 +489,15 @@ class _DagTransforms:
         if reset_offset_parent_matrix:
             set_matrix(node, "offsetParentMatrix", MMatrix())
 
-        tm = MTransformationMatrix(m)
+        # Localize the world-space target into the node's parent (and any existing
+        # offsetParentMatrix) space so the resulting worldMatrix matches ``m``.
+        # Maya evaluates worldMatrix = local * offsetParentMatrix * parentWorld,
+        # so local = m * parentInverse [* offsetParentMatrix.inverse()].
+        local = m * MMatrix(get_matrix(node, "parentInverseMatrix"))
+        if not reset_offset_parent_matrix:
+            local = local * MMatrix(get_matrix(node, "offsetParentMatrix")).inverse()
+
+        tm = MTransformationMatrix(local)
         t = tm.translation(SPACE_WORLD)
         s = tm.scale(SPACE_WORLD)
 
@@ -741,8 +749,11 @@ class _NodeBuilders:
         cmds.connectAttr(f"{target}.worldMatrix[0]", f"{aim}.primaryTargetMatrix", force=True)
         cmds.setAttr(f"{aim}.primaryInputAxis", *primary_axis, type="double3")
 
-        # Secondary axis setup
-        cmds.setAttr(f"{aim}.secondaryMode", 1 if secondary_mode == "align" else 0)  # 1=align, 0=aim
+        # Secondary axis setup. aimMatrix.secondaryMode enum: 0=None, 1=Aim, 2=Align.
+        cmds.setAttr(
+            f"{aim}.secondaryMode",
+            {"none": 0, "aim": 1, "align": 2}.get(secondary_mode.lower(), 2),
+        )
         cmds.setAttr(f"{aim}.secondaryInputAxis", *secondary_axis, type="double3")
 
         if up_object:

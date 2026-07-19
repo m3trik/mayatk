@@ -110,6 +110,17 @@ class TestTubeRigBuild(unittest.TestCase):
             math.dist(before, after), 0.2, "start-control twist had no effect"
         )
 
+    def test_build_nodes_carry_rig_prefix(self):
+        """Regression: the driver-curve bind left default-named debris
+        ('skinCluster1' + 'bindPose1/2') that name-based cleanup sweeps and
+        multi-rig scenes can't attribute — every DG node a build creates
+        must carry the rig prefix."""
+        tube = _make_tube()
+        rig = TubeRig(tube, rig_name="Prefixed")
+        rig.build(strategy="spline", num_joints=-1)
+        self.assertEqual(cmds.ls("skinCluster*", type="skinCluster") or [], [])
+        self.assertEqual(cmds.ls("bindPose*", type="dagPose") or [], [])
+
     def test_for_node_finds_rig_from_joint(self):
         """Joint/control-based lookup must resolve to the owning rig (b002 /
         b004 select joints, not the mesh)."""
@@ -1009,6 +1020,35 @@ class TestHoseNaturalBehavior(unittest.TestCase):
         self.assertFalse(
             cmds.listRelatives(mid_ctrl, type="pointConstraint"),
             "mid control must stay unconstrained (follow group takes it)",
+        )
+
+    def test_vertical_hose_auto_bend_bows_perpendicular(self):
+        """Regression: auto-bend drove the mid group's translateY, and
+        translation runs in PARENT space (world-aligned) — on a VERTICAL
+        hose the mid control slid ALONG the tube axis instead of bowing
+        outward, so auto-bend was a silent no-op on any non-horizontal
+        tube. The bow must run perpendicular to the hose's chord."""
+        tube = _make_tube(axis=(0, 1, 0))  # spans y in [-5, 5]
+        rig = TubeRig(tube, rig_name="VHose")
+        rig.build(strategy="spline", num_joints=-1, enable_auto_bend=True)
+
+        start_ctrl, end_ctrl = str(rig.bundle.controls[0]), str(rig.bundle.controls[-1])
+        s, e = _ws(start_ctrl), _ws(end_ctrl)
+        d = [s[i] - e[i] for i in range(3)]
+        length = math.sqrt(sum(v * v for v in d))
+        # Compress by 4 along the hose axis.
+        cmds.xform(
+            end_ctrl, ws=True, t=[e[i] + d[i] / length * 4.0 for i in range(3)]
+        )
+        cmds.refresh()
+        max_perp = max(
+            math.hypot(p[0], p[2]) for p in _all_vertex_positions(tube)
+        )
+        self.assertGreater(
+            max_perp,
+            1.8,
+            f"vertical hose accordioned straight (max perpendicular offset "
+            f"{max_perp:.2f}, tube radius 1)",
         )
 
     def test_compression_bows_not_accordions(self):

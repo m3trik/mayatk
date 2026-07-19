@@ -146,11 +146,11 @@ class AssemblyManager:
                     # Optionally remove the original reference after conversion
                     ref.remove()
                 else:
-                    cls.logger.error(
+                    cmds.warning(
                         f"Failed to set active representation for {assembly_name}"
                     )
             else:
-                cls.logger.error(
+                cmds.warning(
                     f"Failed to create assembly definition for {file_path}"
                 )
 
@@ -802,28 +802,48 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             item.setSelected(False)
 
         current_references = self.current_references
-        current_namespaces = {ref.namespace for ref in current_references}
 
-        namespaces_to_add = {ns for ns, _ in selected_data} - current_namespaces
-        namespaces_to_remove = current_namespaces - {ns for ns, _ in selected_data}
+        # Diff the selection against current references by normalized file
+        # path (which is unique) rather than by display text.  Two files
+        # sharing a display name in different folders -- or rendered
+        # identically once "Hide Extension" is on -- must each be referenced,
+        # not collapse to a single arbitrary entry.
+        current_refs_by_path = {
+            os.path.normcase(os.path.normpath(ref.path)): ref
+            for ref in current_references
+        }
+        selected_by_path = {
+            os.path.normcase(os.path.normpath(file_path)): (text, file_path)
+            for text, file_path in selected_data
+        }
+
+        paths_to_add = set(selected_by_path) - set(current_refs_by_path)
+        paths_to_remove = set(current_refs_by_path) - set(selected_by_path)
 
         self.logger.debug(
-            f"Selected namespaces to add: {namespaces_to_add}, to remove: {namespaces_to_remove}"
+            f"Selected paths to add: {paths_to_add}, to remove: {paths_to_remove}"
         )
 
-        for namespace in namespaces_to_remove:
-            self.logger.debug(f"Removing reference for namespace: {namespace}")
-            self.remove_references(namespace)
+        for norm_path in paths_to_remove:
+            ref = current_refs_by_path[norm_path]
+            self.logger.debug(f"Removing reference for namespace: {ref.namespace}")
+            self.remove_references(ref.namespace)
 
-        for namespace in namespaces_to_add:
-            file_path = next(fp for ns, fp in selected_data if ns == namespace)
+        for norm_path in paths_to_add:
+            # The display text seeds the namespace (add_reference sanitizes it);
+            # Maya makes it unique per reference, so same-named files coexist.
+            namespace, file_path = selected_by_path[norm_path]
             self.logger.debug(
                 f"Adding reference for namespace: {namespace}, file_path: {file_path}"
             )
             success = self.add_reference(namespace, file_path)
             if not success:
                 for item in selected_items:
-                    if item.text() == namespace:
+                    item_fp = item.data(self.sb.QtCore.Qt.UserRole)
+                    if (
+                        item_fp
+                        and os.path.normcase(os.path.normpath(item_fp)) == norm_path
+                    ):
                         item.setSelected(False)
                         break
 
@@ -1683,13 +1703,17 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 subfolder_structure_text
             )
 
-            resolved_path = ptk.StrUtils.replace_placeholders(
-                pattern,
-                scenes=scenes_folder,
-                name=base_name_formatted,
-                workspace=workspace_name,
-                suffix=suffix,
-            )
+            try:
+                resolved_path = ptk.StrUtils.replace_placeholders(
+                    pattern,
+                    scenes=scenes_folder,
+                    name=base_name_formatted,
+                    workspace=workspace_name,
+                    suffix=suffix,
+                )
+            except ValueError as e:
+                self.sb.message_box(f"Invalid folder structure pattern: {e}")
+                return
             target_dir = os.path.join(workspace, resolved_path)
 
             if not os.path.exists(target_dir):
@@ -1848,19 +1872,74 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 os.remove(path)
                 self.logger.info(f"Deleted file: {path}")
 
+                # Remove the file's metadata sidecar too (ptk.Metadata's
+                # "<file>.metadata.json" convention) so it doesn't outlive the
+                # scene it describes -- especially when sibling scenes keep the
+                # folder alive below.
+                sidecar = path + ".metadata.json"
+                if os.path.exists(sidecar):
+                    try:
+                        os.remove(sidecar)
+                    except OSError as e:
+                        self.logger.warning(f"Could not remove sidecar {sidecar}: {e}")
+
                 if use_folder:
                     parent_dir = os.path.dirname(path)
-                    parent_name = os.path.basename(parent_dir)
-                    file_base = os.path.splitext(os.path.basename(path))[0]
+                    # rmtree is permanent (no recycle bin), so BOTH guards must
+                    # hold before removing the per-scene folder:
+                    # 1. Ownership: the folder must be named for this scene
+                    #    (per-scene layout from the {name} structure). Without
+                    #    this, deleting a scene sitting loose in the scenes
+                    #    ROOT -- whose siblings are per-scene subfolders, not
+                    #    .ma/.mb files -- makes `remaining` empty and rmtree
+                    #    wipes the entire root.
+                    # 2. Emptiness: no other scene files remain. Without this,
+                    #    a name-prefix match alone over-reaches -- deleting
+                    #    "Env_v1.ma" must never delete "Env_v2.ma" in the same
+                    #    "Env" folder.
+                    # Case-insensitive: Windows filenames — "Env_v1.ma" in
+                    # folder "env" is scene-owned.
+                    file_base = os.path.splitext(os.path.basename(path))[0].lower()
+                    parent_name = os.path.basename(
+                        os.path.normpath(parent_dir)
+                    ).lower()
+                    owns_folder = bool(parent_name) and file_base.startswith(
+                        parent_name
+                    )
+                    try:
+                        entries = os.listdir(parent_dir)
+                        remaining = [
+                            f
+                            for f in entries
+                            if os.path.splitext(f)[1].lower() in (".ma", ".mb")
+                        ]
+                        # A per-scene leaf folder holds files, not subfolders.
+                        # Any subdirectory means this is NOT a simple per-scene
+                        # folder (it may be the scenes ROOT via a name
+                        # coincidence, e.g. "scenes_final.ma" loose in a root
+                        # named "scenes") — leave it alone.
+                        has_subdirs = any(
+                            os.path.isdir(os.path.join(parent_dir, e))
+                            for e in entries
+                        )
+                    except OSError:
+                        remaining = None  # cannot inspect: leave the folder alone
+                        has_subdirs = True
 
-                    # Check if parent folder name is contained in the file base name
-                    # This handles cases where file has a suffix (e.g., folder "MyScene", file "MyScene_v01")
-                    if file_base.startswith(parent_name):
+                    if (
+                        owns_folder
+                        and not has_subdirs
+                        and remaining is not None
+                        and not remaining
+                    ):
                         shutil.rmtree(parent_dir)
-                        self.logger.info(f"Deleted folder: {parent_dir}")
+                        self.logger.info(f"Deleted empty scene folder: {parent_dir}")
                     else:
                         self.logger.debug(
-                            f"Folder '{parent_name}' doesn't match file base '{file_base}', skipping folder delete"
+                            f"Keeping folder '{parent_dir}'; not scene-owned, "
+                            f"has subfolders, scene files remain, or it could "
+                            f"not be inspected (owns={owns_folder}, "
+                            f"subdirs={has_subdirs}, remaining={remaining})."
                         )
 
             except Exception as e:

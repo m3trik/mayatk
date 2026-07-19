@@ -255,6 +255,91 @@ class TestControlsExtended(MayaTkTestCase):
         self.assertFalse(cmds.objExists("c1_CTRL"))
         self.assertFalse(cmds.objExists("c2_CTRL"))
 
+    def test_shapes_lists_presets(self):
+        """shapes() returns sorted preset names (parity with blendertk.Controls.shapes)."""
+        shapes = mtk.Controls.shapes()
+        for expected in ("circle", "square", "diamond", "box", "cube", "ball", "arrow"):
+            self.assertIn(expected, shapes)
+        self.assertEqual(shapes, sorted(shapes))
+
+    def test_dir_exposes_presets(self):
+        """Dynamic presets should be discoverable via dir() for tab-completion."""
+        listing = dir(mtk.Controls)
+        self.assertIn("diamond", listing)
+        self.assertIn("circle", listing)
+
+    def test_circle_and_square_presets(self):
+        c = mtk.Controls.circle(name="testCircle", offset_group=False)
+        s = mtk.Controls.square(name="testSquare", offset_group=False)
+        self.assertNodeExists("testCircle_CTRL")
+        self.assertNodeExists("testSquare_CTRL")
+        for node in (c, s):
+            shapes = cmds.listRelatives(node, shapes=True, type="nurbsCurve") or []
+            self.assertGreaterEqual(len(shapes), 1)
+
+    def test_cube_alias(self):
+        """'cube' is an alias of 'box' (blendertk parity)."""
+        ctrl = mtk.Controls.create("cube", name="testCubeAlias", offset_group=False)
+        self.assertNodeExists("testCubeAlias_CTRL")
+        self.assertNodeType(ctrl, "transform")
+
+    def test_register_custom_preset_before_builtins(self):
+        """Registering a custom preset first must not block builtin registration."""
+        saved = dict(mtk.Controls._PRESETS)
+        saved_flag = getattr(mtk.Controls, "_builtins_registered", False)
+        try:
+            mtk.Controls._PRESETS.clear()
+            mtk.Controls._builtins_registered = False
+
+            def _build_tri(*, name, axis="y", **_):
+                pts = [(0, 0, 0), (1, 0, 0), (0, 0, 1), (0, 0, 0)]
+                return cmds.curve(name=name, p=pts, d=1)
+
+            mtk.Controls.register_preset("tri_custom", _build_tri)
+            # Builtins must still be reachable after a custom preset was added first.
+            ctrl = mtk.Controls.create(
+                "diamond", name="testAfterCustom", offset_group=False
+            )
+            self.assertNodeExists("testAfterCustom_CTRL")
+            self.assertNodeType(ctrl, "transform")
+        finally:
+            mtk.Controls._PRESETS.clear()
+            mtk.Controls._PRESETS.update(saved)
+            mtk.Controls._builtins_registered = saved_flag
+
+    def test_combine_preserves_world_positions(self):
+        """Merged shapes keep their world placement, not just the first source's."""
+        c1 = mtk.Controls.diamond(name="cwp1", offset_group=False)
+        c2 = mtk.Controls.diamond(name="cwp2", offset_group=False)
+        cmds.move(5, 0, 0, c2)
+
+        combined = mtk.Controls.combine([c1, c2], name="cwpCombined")
+        bb = cmds.exactWorldBoundingBox(combined)
+        # xmin still covers c1 at the origin; xmax reaches c2 at x=5.
+        self.assertLess(bb[0], -0.5)
+        self.assertGreater(bb[3], 4.0)
+
+    def test_combine_keep_sources_intact(self):
+        """delete_sources=False leaves the originals untouched (shapes + placement)."""
+        c1 = mtk.Controls.diamond(name="keep1", offset_group=False)
+        c2 = mtk.Controls.diamond(name="keep2", offset_group=False)
+        cmds.move(3, 0, 0, c2)
+
+        combined = mtk.Controls.combine(
+            [c1, c2], name="keepCombined", delete_sources=False
+        )
+
+        for src in ("keep1_CTRL", "keep2_CTRL"):
+            self.assertTrue(cmds.objExists(src))
+            shapes = cmds.listRelatives(src, shapes=True) or []
+            self.assertGreaterEqual(len(shapes), 1, f"{src} lost its shapes")
+        pos = cmds.xform("keep2_CTRL", q=True, ws=True, t=True)
+        self.assertAlmostEqual(pos[0], 3.0, places=3)
+
+        self.assertNodeExists("keepCombined_CTRL")
+        merged = cmds.listRelatives(combined, shapes=True) or []
+        self.assertGreaterEqual(len(merged), 2)
+
     def test_invalid_axis_raises_error(self):
         """Verify invalid axis raises ValueError."""
         with self.assertRaises(ValueError):
