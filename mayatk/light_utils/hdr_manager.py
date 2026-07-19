@@ -36,7 +36,6 @@ Maya 2025+ / Arnold (``mtoa``) plugin required for any network mutation.
 """
 import os
 import shutil
-import subprocess
 from typing import Optional
 
 try:
@@ -1587,7 +1586,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         if not src or not os.path.isdir(src):
             self._notify("No sourceimages directory in workspace.", level="warning")
             return
-        os.startfile(src)
+        ptk.FileUtils.open_explorer(src, logger=self.logger)
 
     def clear_network(self) -> None:
         """Delete the skydome network and reset the UI to defaults."""
@@ -1628,13 +1627,13 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         """Reveal the skydome's HDR texture file in the system file explorer."""
         path = self.manager.hdr_file_path
         if path and os.path.exists(path):
-            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+            ptk.FileUtils.reveal_in_file_manager(path)
             return
         # Fall back to the workspace sourceimages folder so the user can
         # still navigate from there when the texture is missing/unsaved.
         src = EnvUtils.get_env_info("sourceimages")
         if src and os.path.isdir(src):
-            os.startfile(src)
+            ptk.FileUtils.open_explorer(src, logger=self.logger)
         else:
             self._notify(
                 "HDR file not found and no sourceimages folder.", level="warning"

@@ -2,7 +2,7 @@
 # coding=utf-8
 import math
 import re
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Type
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -18,6 +18,7 @@ from uitk.widgets.mixins.tooltip_mixin import fmt
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.components import Components
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.rig_utils._rig_utils import RigUtils
 from mayatk.rig_utils.controls import Controls
@@ -246,22 +247,34 @@ class TubePath:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _loop_is_closed(mesh, loop_edges: List[int]) -> bool:
-        """True when an edge loop forms a closed cycle (#verts == #unique edges).
+    def _mesh_fn(mesh) -> "om.MFnMesh":
+        """``MFnMesh`` over *mesh*'s DAG path (world-space capable)."""
+        sel = om.MSelectionList()
+        sel.add(str(mesh))
+        return om.MFnMesh(sel.getDagPath(0))
 
-        Open paths — longitudinal loops that terminate at caps or open
-        boundaries — carry one extra vertex. This is the topology-exact test
-        for "is this loop a circumferential cross-section". Counts UNIQUE
-        edges because ``polySelect -q -edgeLoop`` signals closure by repeating
-        the seed edge at the end of the returned list.
+    @staticmethod
+    def _loop_topology(
+        fn_mesh: "om.MFnMesh", loop_edges: List[int]
+    ) -> Tuple[Tuple[int, ...], set]:
+        """(unique_edges, vertex_ids) for an edge loop — pure API, no cmds
+        round-trips (the previous per-edge component conversions dominated
+        dense-mesh extraction time).
+
+        A loop is a closed cycle (a circumferential cross-section) exactly
+        when ``len(vertex_ids) == len(unique_edges)``; open paths —
+        longitudinal loops that terminate at caps or open boundaries — carry
+        one extra vertex. Uniqueness matters because ``polySelect -q
+        -edgeLoop`` signals closure by repeating the seed edge; the sorted
+        unique-edge tuple doubles as a seed-independent visited-set key.
         """
-        unique_edges = set(loop_edges)
-        edges = [f"{mesh}.e[{i}]" for i in unique_edges]
-        verts = cmds.ls(
-            cmds.polyListComponentConversion(edges, fromEdge=True, toVertex=True),
-            flatten=True,
-        )
-        return len({str(v) for v in verts}) == len(unique_edges)
+        unique_edges = tuple(sorted(set(loop_edges)))
+        vertex_ids = set()
+        for e in unique_edges:
+            v0, v1 = fn_mesh.getEdgeVertices(e)
+            vertex_ids.add(v0)
+            vertex_ids.add(v1)
+        return unique_edges, vertex_ids
 
     @staticmethod
     def get_edge_loop_centers(mesh) -> Tuple[List[om.MPoint], int]:
@@ -284,11 +297,12 @@ class TubePath:
         if not mesh:
             return [], 0
 
-        # Get all edges of the mesh
-        all_edges = cmds.ls(
-            cmds.polyListComponentConversion(mesh, toEdge=True), flatten=True
-        )
-        if not all_edges:
+        # One API handle for the whole extraction: loop topology comes from
+        # getEdgeVertices and positions from a single getPoints call, instead
+        # of per-edge component conversions and per-vertex pointPosition
+        # round-trips (which dominated dense-mesh runtime).
+        fn_mesh = TubePath._mesh_fn(mesh)
+        if not fn_mesh.numEdges:
             return [], 0
 
         # Seed with a CLOSED (circumferential) edge loop. An arbitrary first
@@ -297,15 +311,12 @@ class TubePath:
         # transposes the loop/ring traversal, and every "cross-section centre"
         # becomes a longitudinal-strip centroid: a small ring of points around
         # the mesh centroid instead of a path down the tube. Closure is the
-        # topology-exact discriminator: a cross-section cycle has
-        # #verts == #edges, while longitudinal loops end open at caps or
-        # boundaries (#verts == #edges + 1). Skip edges already covered by a
-        # rejected loop, so the scan is bounded by the number of distinct
-        # loops, not the edge count.
+        # topology-exact discriminator (see ``_loop_topology``). Skip edges
+        # already covered by a rejected loop, so the scan is bounded by the
+        # number of distinct loops, not the edge count.
         first_loop = None
         checked_edges = set()
-        for edge in all_edges:
-            edge_idx = int(str(edge).rsplit("[", 1)[-1].rstrip("]"))
+        for edge_idx in range(fn_mesh.numEdges):
             if edge_idx in checked_edges:
                 continue
             loop = cmds.polySelect(mesh, q=True, edgeLoop=edge_idx)
@@ -313,9 +324,11 @@ class TubePath:
                 checked_edges.add(edge_idx)
                 continue
             checked_edges.update(loop)
-            if len(loop) >= 3 and TubePath._loop_is_closed(mesh, loop):
-                first_loop = loop
-                break
+            if len(loop) >= 3:
+                unique_edges, vertex_ids = TubePath._loop_topology(fn_mesh, loop)
+                if len(vertex_ids) == len(unique_edges):
+                    first_loop = loop
+                    break
         if not first_loop:
             return [], 0
 
@@ -323,6 +336,9 @@ class TubePath:
         ring_edges = cmds.polySelect(mesh, q=True, edgeRing=first_loop[0])
         if not ring_edges:
             return [], 0
+
+        # World-space positions for every vertex, fetched once.
+        points = fn_mesh.getPoints(om.MSpace.kWorld)
 
         visited_loops = set()
         loop_centers = []
@@ -336,43 +352,26 @@ class TubePath:
             # too: an arc's centroid sits off the tube axis.
             if not loop_edges or len(loop_edges) < 3:
                 continue
-            if not TubePath._loop_is_closed(mesh, loop_edges):
+            unique_edges, vertex_ids = TubePath._loop_topology(fn_mesh, loop_edges)
+            if len(vertex_ids) != len(unique_edges):
                 continue
 
-            # Canonical key over UNIQUE edges: polySelect repeats the seed
-            # edge on closed loops, and the duplicate's sort position would
-            # otherwise vary with the seed, defeating the visited-set.
-            loop_key = tuple(sorted(set(loop_edges)))
-            if loop_key in visited_loops:
+            # The unique-edge tuple is the visited-set key: polySelect repeats
+            # the seed edge on closed loops, and the duplicate's sort position
+            # would otherwise vary with the seed, defeating the visited-set.
+            if unique_edges in visited_loops:
                 continue
-            visited_loops.add(loop_key)
+            visited_loops.add(unique_edges)
 
-            # Collect unique vertex names in this loop.
-            loop_vert_names = set()
-            for e_idx in loop_edges:
-                # Full shape path (resolved above, matching the component
-                # base used for the loop queries) — keeps the component
-                # unambiguous when another mesh shares this short name.
-                edge = f"{mesh}.e[{e_idx}]"
-                verts = cmds.polyListComponentConversion(
-                    edge, fromEdge=True, toVertex=True
-                )
-                for v in cmds.ls(verts, flatten=True):
-                    # Store vertex name string (hashable) to avoid MeshVertex type error
-                    loop_vert_names.add(str(v))
-
-            # Calculate center of this loop. cmds.pointPosition returns a plain
-            # 3-list, so accumulate via MVector and divide to get the centroid.
-            if loop_vert_names:
-                accum = om.MVector(0.0, 0.0, 0.0)
-                for v in loop_vert_names:
-                    p = cmds.pointPosition(v, world=True)
-                    accum += om.MVector(p[0], p[1], p[2])
-                count = len(loop_vert_names)
-                center = om.MPoint(
-                    accum.x / count, accum.y / count, accum.z / count
-                )
-                loop_centers.append(center)
+            # Centroid of the loop's vertices.
+            accum = om.MVector(0.0, 0.0, 0.0)
+            for v in vertex_ids:
+                p = points[v]
+                accum += om.MVector(p.x, p.y, p.z)
+            count = len(vertex_ids)
+            loop_centers.append(
+                om.MPoint(accum.x / count, accum.y / count, accum.z / count)
+            )
 
         # Sort centers to form a continuous path along the tube, then filter
         # near-coincident points (bevels/high-res loops produce virtually
@@ -405,10 +404,7 @@ class TubePath:
         if not shape:
             return centers
 
-        cpom = cmds.createNode("closestPointOnMesh")
-        try:
-            cmds.connectAttr(f"{shape}.outMesh", f"{cpom}.inMesh")
-            cmds.connectAttr(f"{shape}.worldMatrix[0]", f"{cpom}.inputMatrix")
+        with Components.closest_point_probe(shape) as cpom:
             prepend, append = None, None
             for end, neighbor in ((0, 1), (-1, -2)):
                 c_end = om.MVector(centers[end][0], centers[end][1], centers[end][2])
@@ -440,8 +436,6 @@ class TubePath:
             if append is not None:
                 centers = list(centers) + [append]
             return centers
-        finally:
-            cmds.delete(cpom)
 
     @staticmethod
     def _dedupe_consecutive(points: List, min_dist: float = 0.001) -> List:
@@ -511,10 +505,7 @@ class TubePath:
         stride = max(1, len(interior) // 15)
         samples = interior[::stride]
 
-        cpom = cmds.createNode("closestPointOnMesh")
-        try:
-            cmds.connectAttr(f"{shape}.outMesh", f"{cpom}.inMesh")
-            cmds.connectAttr(f"{shape}.worldMatrix[0]", f"{cpom}.inputMatrix")
+        with Components.closest_point_probe(shape) as cpom:
             dists = []
             for p in samples:
                 cmds.setAttr(f"{cpom}.inPosition", p.x, p.y, p.z, type="double3")
@@ -526,8 +517,6 @@ class TubePath:
                 return None
             dists.sort()
             return dists[len(dists) // 2]
-        finally:
-            cmds.delete(cpom)
 
     # ------------------------------------------------------------------
     # Algorithm: User-selected edges (manual override)
@@ -643,11 +632,7 @@ class TubePath:
         """Refine interior estimates onto the tube axis by averaging opposing
         ``closestPointOnMesh`` hits. Shared by the surface-normal sampler and
         the edge-selection path."""
-        cpom = cmds.createNode("closestPointOnMesh")
-        try:
-            cmds.connectAttr(f"{mesh_shape}.outMesh", f"{cpom}.inMesh")
-            cmds.connectAttr(f"{mesh_shape}.worldMatrix[0]", f"{cpom}.inputMatrix")
-
+        with Components.closest_point_probe(mesh_shape) as cpom:
             # Upper bound for the tube radius: half the smallest bounding-box
             # dimension (≈ the tube diameter). Used to step surface-coincident
             # seeds into the interior.
@@ -711,8 +696,6 @@ class TubePath:
 
                 centers = refined
             return centers
-        finally:
-            cmds.delete(cpom)
 
     # ------------------------------------------------------------------
     # Algorithm: Bounding-box slicing (approximate, works on any mesh)
@@ -944,6 +927,14 @@ class TubeRig(ptk.LoggingMixin):
     # reparent (path strings are not).
     _instances: Dict[str, "TubeRig"] = {}
 
+    #: Build-strategy registry (name -> TubeStrategy subclass). Register new
+    #: strategies here instead of editing ``build``.
+    STRATEGIES: Dict[str, Type[TubeStrategy]] = {
+        "spline": SplineIKStrategy,
+        "anchor": AnchorStrategy,
+        "fk": FKChainStrategy,
+    }
+
     def __init__(self, obj, rig_name: str = None, rig_group: str = None):
         if rig_name:
             # The UI's free-text field flows in verbatim. Illegal characters
@@ -956,7 +947,7 @@ class TubeRig(ptk.LoggingMixin):
         self._rig_name = rig_name
         self._rig_group = rig_group  # Only assigned if explicitly passed (else will be handled by property)
         if isinstance(obj, (set, list, tuple)):
-            obj = next(iter(obj))
+            obj = next(iter(obj), None)
         # Prefer the mesh transform even when a GROUP was picked (common
         # outliner selection) — everything downstream (centerline, skinning)
         # needs the mesh, not its group.
@@ -1140,17 +1131,17 @@ class TubeRig(ptk.LoggingMixin):
         first (joint names would collide and the re-bind would fail).
 
         Args:
-            strategy (str): The rigging strategy to use ("spline", "anchor", "fk").
+            strategy (str): The rigging strategy to use — a key of
+                ``STRATEGIES`` ("spline", "anchor", "fk").
             **kwargs: Additional arguments for the build process.
         """
-        if strategy == "spline":
-            strat = SplineIKStrategy()
-        elif strategy == "anchor":
-            strat = AnchorStrategy()
-        elif strategy == "fk":
-            strat = FKChainStrategy()
-        else:
-            raise NotImplementedError(f"Strategy '{strategy}' not implemented.")
+        strategy_cls = self.STRATEGIES.get(strategy)
+        if strategy_cls is None:
+            raise NotImplementedError(
+                f"Strategy '{strategy}' not implemented. "
+                f"Available: {', '.join(sorted(self.STRATEGIES))}."
+            )
+        strat = strategy_cls()
 
         existing_grp = self._rig_group or f"{self.rig_name}_GRP"
         if self.bundle or cmds.objExists(str(existing_grp)):
@@ -1685,11 +1676,24 @@ class TubeRig(ptk.LoggingMixin):
         return (controls, driver_joints, [start_up_loc, end_up_loc])
 
     @CoreUtils.undoable
-    def skin_curve_to_drivers(self, curve, driver_joints):
+    def skin_curve_to_drivers(self, curve, driver_joints) -> Optional[str]:
+        """Bind the IK logic curve to the driver joints.
+
+        Both the skinCluster and its dagPose carry the rig prefix so
+        name-based sweeps and multi-rig scenes can attribute them.
+        """
         try:
-            cmds.skinCluster(driver_joints, curve, toSelectedBones=True)
+            sc = cmds.skinCluster(
+                driver_joints,
+                str(curve),
+                toSelectedBones=True,
+                name=f"{self.rig_name}_curve_skinCluster",
+            )[0]
         except Exception as e:
             self.logger.warning(f"Failed to skin curve: {e}")
+            return None
+        SkinUtils.name_bind_pose(sc, f"{self.rig_name}_curve_pose")
+        return sc
 
     # ------------------------------------------------------------------
     # Control Rigs (shared by strategies and the step-by-step UI)
@@ -2004,7 +2008,10 @@ class TubeRig(ptk.LoggingMixin):
 
     @CoreUtils.undoable
     def setup_auto_bend(self, start_ctrl, mid_ctrl, end_ctrl):
-        """Setup automatic bending of the mid control based on compression distance."""
+        """Setup automatic bending of the mid control based on compression
+        distance. The bow runs perpendicular to the start→end chord (the
+        chord frame's Y), so hoses at any orientation bow outward rather
+        than sliding along their own axis."""
         start_ctrl = str(start_ctrl)
         mid_ctrl = str(mid_ctrl)
         end_ctrl = str(end_ctrl)
@@ -2023,25 +2030,40 @@ class TubeRig(ptk.LoggingMixin):
         if not offset_grp or short_name(offset_grp) == short_name(rig_grp):
             offset_grp = mid_ctrl
 
+        start_pos = om.MVector(*_xform_t_ws(start_ctrl))
+        end_pos = om.MVector(*_xform_t_ws(end_ctrl))
+        chord = end_pos - start_pos
+        initial_length = chord.length()
+
+        # The bend group's translateY moves it in PARENT space, so the bow
+        # direction is the parent frame's Y — previously world Y, which on a
+        # vertical hose slid the mid control ALONG the tube instead of
+        # bowing it outward. An orient group aligned to the chord frame
+        # (X down the hose, Y its stable perpendicular) makes the driven
+        # translateY bow perpendicular to the hose at any orientation.
+        orient_grp = cmds.group(
+            empty=True, name=f"{self.rig_name}_mid_autoBend_ORIENT_GRP"
+        )
+        cmds.delete(cmds.parentConstraint(offset_grp, orient_grp))
+        if initial_length > 1e-6:
+            cmds.xform(orient_grp, ws=True, ro=_euler_deg(_frame_rotation(chord)))
+
         auto_bend_grp = cmds.group(empty=True, name=f"{self.rig_name}_mid_autoBend_GRP")
 
         # Match transform of the offset group (which is at mid position)
         cmds.delete(cmds.parentConstraint(offset_grp, auto_bend_grp))
 
-        # Insert into hierarchy: RigGroup -> AutoBend -> Offset -> Control
+        # Insert into hierarchy: RigGroup -> Orient -> AutoBend -> Offset -> Control
         current_parent = NodeUtils.get_parent(offset_grp, type=None, full_path=True)
         if current_parent:
-            auto_bend_grp = _parent_to(auto_bend_grp, current_parent)
+            orient_grp = _parent_to(orient_grp, current_parent)
+        auto_bend_grp = _parent_to(auto_bend_grp, orient_grp)
         offset_grp = _parent_to(offset_grp, auto_bend_grp)
 
         # Logic: (Initial_Length - Current_Dist) * autoBend -> translateY
         dist_node = cmds.createNode("distanceBetween", name=f"{self.rig_name}_ab_dist")
         cmds.connectAttr(f"{start_ctrl}.worldMatrix[0]", f"{dist_node}.inMatrix1", force=True)
         cmds.connectAttr(f"{end_ctrl}.worldMatrix[0]", f"{dist_node}.inMatrix2", force=True)
-
-        start_pos = om.MVector(*_xform_t_ws(start_ctrl))
-        end_pos = om.MVector(*_xform_t_ws(end_ctrl))
-        initial_length = (end_pos - start_pos).length()
 
         # Calculate compression: initial_length - current_dist
         pma = cmds.createNode("plusMinusAverage", name=f"{self.rig_name}_ab_sub")
@@ -2060,7 +2082,8 @@ class TubeRig(ptk.LoggingMixin):
         cmds.connectAttr(f"{clamp}.outputR", f"{md}.input1X", force=True)
         cmds.connectAttr(f"{start_ctrl}.autoBend", f"{md}.input2X", force=True)
 
-        # Apply to Y translation of the auto_bend_grp (Y-up is standard for this rig).
+        # translateY of the bend group — its parent is the chord-frame orient
+        # group, so this bows perpendicular to the hose at any orientation.
         cmds.connectAttr(f"{md}.outputX", f"{auto_bend_grp}.translateY", force=True)
 
     @CoreUtils.undoable

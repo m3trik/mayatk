@@ -66,11 +66,16 @@ class Applicator(ptk.LoggingMixin):
     ) -> List[Tuple[Target, ApplyStatus]]:
         """Apply tween mesh edits to blendShape in-between targets.
 
+        ``tweens=None`` applies every tween tagged for THIS setup — never
+        tweens belonging to other BlendshapeAnimator setups in the scene.
         ``validate_topology`` defaults to False — topology mismatches surface as
         per-tween errors rather than being silently filtered away.
         """
         if tweens is None:
-            tweens = Targets.find_all_targets()
+            tweens = Targets.find_all_targets(
+                blendshape=self.keyframes.blendshape,
+                base_mesh=self.keyframes.base_mesh,
+            )
 
         if not tweens:
             self.logger.info("No tween meshes found to apply")

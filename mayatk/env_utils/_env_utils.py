@@ -96,7 +96,7 @@ class EnvUtils(ptk.HelpMixin):
             "active_layers": lambda: [
                 layer
                 for layer in (cmds.ls(type="displayLayer") or [])
-                if not cmds.getAttr(f"{layer}.visibility", lock=True)
+                if cmds.getAttr(f"{layer}.visibility")
             ],
             "current_tool": lambda: cmds.currentCtx(),
             "up_axis": lambda: cmds.upAxis(q=True, axis=True),
@@ -331,14 +331,21 @@ class EnvUtils(ptk.HelpMixin):
                 return []
 
         format = format.split("|")
+        # Normalize to a list for the format transforms so a scalar (int) index
+        # is not iterated character-by-character; unwrap it again below.
+        scalar = isinstance(index, int)
+        items = [result] if scalar else result
+
         if len(format) == 2 and "timestamp" in format and "standard" in format:
             if format[0] == "timestamp":
-                result = {ptk.time_stamp(res): res for res in result}
+                result = {ptk.time_stamp(res): res for res in items}
             else:
-                result = {res: ptk.time_stamp(res) for res in result}
+                result = {res: ptk.time_stamp(res) for res in items}
         elif "timestamp" in format:
-            result = [ptk.time_stamp(res) for res in result]
-        # else return the standard format
+            result = [ptk.time_stamp(res) for res in items]
+            if scalar:
+                result = result[0]
+        # else return the standard format (unchanged)
 
         return result
 

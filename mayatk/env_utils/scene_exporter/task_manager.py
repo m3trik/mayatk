@@ -284,12 +284,10 @@ class _TaskActionsMixin(_TaskDataMixin):
 
         self.logger.info(", ".join(log_parts) + ".")
 
-        # Refresh self.objects (no deletions expected, but re-validate)
+        # Refresh self.objects (no deletions expected, but re-validate). The
+        # objects.setter already invalidates the _key_times cache, so no
+        # explicit invalidation is needed here.
         self.objects = cmds.ls(self.objects, long=True) or []
-
-        # Invalidate keyframe cache since we added new keys
-        if hasattr(self, "_key_times"):
-            delattr(self, "_key_times")
 
     def optimize_keys(self):
         """Optimize baked animation keys."""
@@ -317,12 +315,13 @@ class _TaskActionsMixin(_TaskDataMixin):
             return
 
         first_key, last_key = all_keyframes[0], all_keyframes[-1]
-        mel.eval(f"FBXExportBakeComplexStart -v {int(first_key)}")
-        mel.eval(f"FBXExportBakeComplexEnd -v {int(last_key)}")
+        # Enclose fractional bookend keys: floor the start and ceil the end so
+        # keys like -0.5 or 100.6 are not truncated inward (int() clips them).
+        start, end = math.floor(first_key), math.ceil(last_key)
+        mel.eval(f"FBXExportBakeComplexStart -v {start}")
+        mel.eval(f"FBXExportBakeComplexEnd -v {end}")
 
-        self.logger.info(
-            f"Set animation range to start: {int(first_key)}, end: {int(last_key)}"
-        )
+        self.logger.info(f"Set animation range to start: {start}, end: {end}")
 
     def tie_all_keyframes(self):
         """Use AnimUtils to tie all keyframes for the specified objects."""
@@ -589,8 +588,21 @@ class _TaskChecksMixin(_TaskDataMixin):
         if not target_names:
             return
 
+        # self.objects contains only geometry transforms (never assemblies),
+        # so derive each object's root ancestor from its long DAG path. Unlike
+        # check_root_default_transforms (which requires len(parts) > 2 AND gates
+        # on NodeUtils.is_group), this uses len(parts) > 1 and no is_group gate,
+        # so it also matches a top-level *ungrouped* node whose short name equals
+        # a target — intentional here (a target need not be a group), but note
+        # the boundaries deliberately differ.
+        root_groups = set()
+        for obj in self.objects:
+            parts = obj.split("|")  # "|root|...|geo" — root is segment [1]
+            if len(parts) > 1:
+                root_groups.add("|" + parts[1])
+
         # Find top-level groups whose short name matches any target
-        root_nodes = cmds.ls(self.objects, assemblies=True, long=True) or []
+        root_nodes = cmds.ls(list(root_groups), long=True) or []
         matched_roots = [
             node for node in root_nodes if node.split("|")[-1].lower() in target_names
         ]
@@ -1429,9 +1441,11 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
 
     @objects.setter
     def objects(self, value):
-        """Invalidate the materials cache whenever objects change."""
+        """Invalidate the materials and keyframe caches whenever objects change."""
         self._objects = value
         self._cached_materials = None
+        if hasattr(self, "_key_times"):
+            delattr(self, "_key_times")
 
     _export_mode_options: Dict[str, Any] = {
         "Export: All Scene Objects": "all",

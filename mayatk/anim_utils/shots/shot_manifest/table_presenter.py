@@ -279,22 +279,16 @@ class ManifestTableMixin:
             # Child rows: object name in Description column, behavior label
             for obj in step.objects:
                 display = leaf_name(obj.name) if self._use_short_names else obj.name
+                child = tree.create_item(
+                    ["", "", display, "", "", ""],
+                    data=obj,
+                    parent=parent,
+                )
                 if obj.kind == "audio":
-                    child = tree.create_item(
-                        ["", "", display, "", "", ""],
-                        data=obj,
-                        parent=parent,
-                    )
                     font = child.font(COL_DESC)
                     font.setItalic(True)
                     for c in range(tree.columnCount()):
                         child.setFont(c, font)
-                else:
-                    child = tree.create_item(
-                        ["", "", display, "", "", ""],
-                        data=obj,
-                        parent=parent,
-                    )
                 if display != obj.name:
                     child.setToolTip(COL_DESC, obj.name)
                 if obj.kind not in _kind_cache:
@@ -700,7 +694,7 @@ class ManifestTableMixin:
                         leaf_name(extra_name) if self._use_short_names else extra_name
                     )
                     extra_item = tree.create_item(
-                        ["", "", display, "scene", ""],
+                        ["", "", display, "", "", ""],
                         parent=parent,
                     )
                     tip = "Unexpected: object is in the shot but not listed in the manifest CSV."
@@ -759,10 +753,10 @@ class ManifestTableMixin:
             self._set_footer("No issues found.")
             return
 
-        print(f"\n--- Expand Missing ({len(lines)} steps) ---")
-        for line in lines:
-            print(line)
-        print("---")
+        self.logger.info(
+            "Expand Missing (%d steps):\n%s", len(lines), "\n".join(lines)
+        )
+        self._set_footer(f"{len(problem_ids)} step(s) with issues expanded.")
 
         tree = self.ui.tbl_steps
         for i in range(tree.topLevelItemCount()):

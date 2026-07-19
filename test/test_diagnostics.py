@@ -133,41 +133,92 @@ class TestMeshDiagnostics(MayaTkTestCase):
         # Plain quad cube has no n-gons
         self.assertIsInstance(result, list)
 
+    def test_get_ngons_none_uses_selection(self):
+        facet = cmds.polyCreateFacet(
+            p=[(0, 0, 0), (2, 0, 0), (2, 2, 0), (1, 3, 0), (0, 2, 0)]
+        )
+        cmds.select(facet[0])
+        result = MeshDiagnostics.get_ngons(objects=None, repair=False)
+        self.assertTrue(result, "selection fallback should find the n-gon")
+
+    def test_get_ngons_empty_selection_raises(self):
+        cmds.select(clear=True)
+        with self.assertRaises(ValueError):
+            MeshDiagnostics.get_ngons(objects=None)
+
 
 class TestTransformDiagnostics(MayaTkTestCase):
-    """TransformDiagnostics — fix_non_orthogonal_axes."""
+    """TransformDiagnostics — get_sheared + fix_non_orthogonal_axes."""
 
     def test_no_shear_no_action(self):
         cube = cmds.polyCube(name="td_clean")[0]
-        # Cube has zero shear; running should be a no-op
-        TransformDiagnostics.fix_non_orthogonal_axes(objects=[cube])
+        # Cube has zero shear; running should be a no-op returning []
+        result = TransformDiagnostics.fix_non_orthogonal_axes(
+            objects=[cube], quiet=True
+        )
+        self.assertEqual(result, [])
 
         # Shear remains zero
         shear = cmds.xform(cube, q=True, shear=True)
         for s in shear:
             self.assertAlmostEqual(s, 0.0, places=6)
 
-    def test_dry_run_does_not_modify(self):
+    def test_get_sheared_detects(self):
+        clean = cmds.polyCube(name="td_gs_clean")[0]
+        bad = cmds.polyCube(name="td_gs_bad")[0]
+        cmds.xform(bad, shear=(0.5, 0.0, 0.0))
+
+        sheared = TransformDiagnostics.get_sheared(objects=[clean, bad])
+        self.assertEqual(sheared, [bad])
+
+    def test_dry_run_reports_but_does_not_modify(self):
         cube = cmds.polyCube(name="td_dry")[0]
         cmds.xform(cube, shear=(0.5, 0.0, 0.0))
         before = cmds.xform(cube, q=True, shear=True)
 
-        TransformDiagnostics.fix_non_orthogonal_axes(objects=[cube], dry_run=True)
+        result = TransformDiagnostics.fix_non_orthogonal_axes(
+            objects=[cube], dry_run=True, quiet=True
+        )
+        self.assertEqual(result, [cube])  # would-fix list
 
         after = cmds.xform(cube, q=True, shear=True)
         for a, b in zip(before, after):
             self.assertAlmostEqual(a, b, places=6)
 
-    def test_fixes_shear(self):
+    def test_fixes_shear_and_returns_fixed(self):
         cube = cmds.polyCube(name="td_fix")[0]
         cmds.xform(cube, shear=(0.5, 0.0, 0.0))
 
-        TransformDiagnostics.fix_non_orthogonal_axes(objects=[cube], dry_run=False)
+        result = TransformDiagnostics.fix_non_orthogonal_axes(
+            objects=[cube], dry_run=False, quiet=True
+        )
+        self.assertEqual([r.split("|")[-1] for r in result], [cube])
 
         # After freeze, shear should be reduced near zero
         new_shear = cmds.xform(cube, q=True, shear=True)
         for s in new_shear:
             self.assertAlmostEqual(s, 0.0, places=4)
+
+    def test_fixes_shear_on_instance(self):
+        # Instanced transforms must be uninstanced before freezing; the
+        # sibling instance keeps the original (shared) shape untouched.
+        cube = cmds.polyCube(name="td_inst_src")[0]
+        inst = cmds.instance(cube, name="td_inst_copy")[0]
+        cmds.xform(inst, shear=(0.5, 0.0, 0.0))
+
+        result = TransformDiagnostics.fix_non_orthogonal_axes(
+            objects=[inst], quiet=True
+        )
+        self.assertEqual(len(result), 1)
+
+        new_shear = cmds.xform(result[0], q=True, shear=True)
+        for s in new_shear:
+            self.assertAlmostEqual(s, 0.0, places=4)
+        # The uninstanced transform no longer shares a shape with the source.
+        self.assertFalse(
+            set(cmds.listRelatives(result[0], shapes=True, fullPath=True) or [])
+            & set(cmds.listRelatives(cube, shapes=True, fullPath=True) or [])
+        )
 
 
 class TestUvSetCleanupResult(QuickTestCase):

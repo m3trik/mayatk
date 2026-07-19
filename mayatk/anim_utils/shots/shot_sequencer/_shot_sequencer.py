@@ -4,15 +4,18 @@
 Shots are contiguous keyframe ranges ("blocks") along the timeline.
 Changing one shot's duration or position ripples downstream shots.
 """
+import logging
 from typing import List, Dict, Optional, Any
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
+except ImportError:
+    # Maya-soft: planner/tests import this module headless.
     cmds = None
-    print(__file__, error)
+    logging.getLogger(__name__).debug("maya.cmds unavailable — headless mode")
 
 
+from mayatk.core_utils._core_utils import leaf_name
 from mayatk.anim_utils.shots._shots import ShotBlock, ShotStore, detect_shot_regions
 
 
@@ -154,36 +157,6 @@ class ShotSequencer:
             description=description,
         )
 
-    @classmethod
-    def from_current_range(
-        cls,
-        name: str = "Shot",
-        objects: Optional[List[str]] = None,
-    ) -> "ShotSequencer":
-        """Create a ShotSequencer with one shot spanning Maya's current
-        playback range.
-
-        Parameters:
-            name: Label for the shot.
-            objects: Transform node names.  If ``None``, automatically
-                discovers all transforms with keyframes in the range.
-
-        Returns:
-            A new :class:`ShotSequencer` with a single shot.
-        """
-        start = cmds.playbackOptions(q=True, min=True)
-        end = cmds.playbackOptions(q=True, max=True)
-        if objects is None:
-            objects = cls._find_keyed_transforms(start, end)
-        block = ShotBlock(
-            shot_id=0,
-            name=name,
-            start=float(start),
-            end=float(end),
-            objects=sorted(set(objects)),
-        )
-        return cls([block])
-
     @staticmethod
     def _disambiguate_matches(matches: list) -> str:
         """Pick a single node from several same-named DAG matches.
@@ -251,8 +224,7 @@ class ShotSequencer:
             if cmds.objExists(obj):
                 new_objects.append(obj)
                 continue
-            short = obj.rsplit("|", 1)[-1]
-            matches = cmds.ls(short, long=True, type="transform") or []
+            matches = cmds.ls(leaf_name(obj), long=True, type="transform") or []
             if len(matches) == 1:
                 new_objects.append(matches[0])
                 updated = True
@@ -430,20 +402,9 @@ class ShotSequencer:
                 continue
             vals = cmds.keyframe(plug, q=True, valueChange=True) or []
             pairs = sorted(zip(frames, vals), key=lambda p: p[0])
-            events: List[tuple] = []
-            pending_start: Optional[float] = None
-            for frame, val in pairs:
-                is_on = int(round(val)) >= 1
-                if is_on:
-                    if pending_start is not None:
-                        events.append((pending_start, None))
-                    pending_start = float(frame)
-                else:
-                    if pending_start is not None:
-                        events.append((pending_start, float(frame)))
-                        pending_start = None
-            if pending_start is not None:
-                events.append((pending_start, None))
+            # One shared pairing state machine (AudioUtils) — only the
+            # batched per-track key *queries* stay local for perf.
+            events = AudioUtils.pair_on_off_events(pairs)
             if events:
                 out[AudioUtils.track_id_from_attr(attr_name)] = events
         return out
@@ -693,7 +654,7 @@ class ShotSequencer:
             def _owned_elsewhere(t: float) -> bool:
                 return any(lo <= t <= hi for lo, hi in other_spans)
 
-            for obj in shot.objects:
+            for obj in self._shot_nodes(shot):
                 kt = cmds.keyframe(obj, q=True) or []
                 for t in kt:
                     # Only consider keys outside the current shot bounds —
@@ -882,11 +843,12 @@ class ShotSequencer:
         """
         import maya.cmds as cmds
 
-        # Resolve to full DAG path to avoid crashes on ambiguous short names
+        # Resolve to full DAG path to avoid crashes on ambiguous short names,
+        # preferring the match that actually carries anim curves.
         matches = cmds.ls(obj, long=True)
         if not matches:
             return
-        obj_path = matches[0]
+        obj_path = self._disambiguate_matches(matches)
 
         delta = new_start - old_start
         if abs(delta) < 1e-6:
@@ -1127,7 +1089,6 @@ class ShotSequencer:
         old_start: float,
         old_end: float,
         new_start: float,
-        prevent_overlap: bool = False,
     ) -> None:
         """Move one object's keys within a shot, expanding the shot and
         rippling downstream shots when the clip exceeds shot boundaries.
@@ -1138,8 +1099,6 @@ class ShotSequencer:
             old_start: Original first frame of the object segment.
             old_end: Original last frame of the object segment.
             new_start: Desired first frame after the move.
-            prevent_overlap: If True, push other objects in the same shot
-                that would overlap with the moved object's new range.
         """
         shot = self.shot_by_id(shot_id)
         if shot is None:
@@ -1151,10 +1110,6 @@ class ShotSequencer:
 
         # Move the object's keys
         self.move_object_keys(obj, old_start, old_end, new_start)
-
-        # Optionally push overlapping objects within the same shot
-        if prevent_overlap:
-            self._push_overlapping_objects(shot, obj, new_start, new_end)
 
         # Check if the clip now exceeds the shot boundaries
         prior_start = shot.start
@@ -1188,46 +1143,6 @@ class ShotSequencer:
         # tangent types on objects the user didn't touch.  Gap holds are
         # enforced by respace() and move_shot() (whole-shot operations).
 
-    def _push_overlapping_objects(
-        self,
-        shot: ShotBlock,
-        moved_obj: str,
-        moved_start: float,
-        moved_end: float,
-    ) -> None:
-        """Push other objects in *shot* to resolve overlaps with the moved object.
-
-        Objects whose animation range overlaps with [moved_start, moved_end]
-        are shifted forward so they start at moved_end.  This cascades: if
-        pushing one object causes a new overlap with the next, that object
-        is pushed too.
-        """
-        segments = self.collect_object_segments(shot.shot_id)
-        # Build per-object ranges (excluding the moved object)
-        obj_ranges = {}
-        for seg in segments:
-            name = seg["obj"]
-            if name == moved_obj:
-                continue
-            if name in obj_ranges:
-                obj_ranges[name] = (
-                    min(obj_ranges[name][0], seg["start"]),
-                    max(obj_ranges[name][1], seg["end"]),
-                )
-            else:
-                obj_ranges[name] = (seg["start"], seg["end"])
-
-        # Sort by start time and cascade pushes
-        sorted_objs = sorted(obj_ranges.items(), key=lambda x: x[1][0])
-        push_end = moved_end
-        for name, (s, e) in sorted_objs:
-            if s < push_end and e > moved_start:
-                delta = push_end - s
-                self.move_object_keys(name, s, e, s + delta)
-                push_end = e + delta
-            else:
-                push_end = max(push_end, e)
-
     def scale_object_keys(
         self,
         obj: str,
@@ -1248,12 +1163,16 @@ class ShotSequencer:
         """
         import maya.cmds as cmds
 
-        if not cmds.objExists(obj):
+        # Resolve to a single DAG path first — shot.objects entries may be
+        # short names that turn ambiguous when the scene gains a same-named
+        # node, and cmds.scaleKey raises on ambiguity (see _shot_nodes).
+        matches = cmds.ls(obj, long=True)
+        if not matches:
             return
         if abs(old_end - old_start) < 1e-6:
             return
         cmds.scaleKey(
-            obj,
+            self._disambiguate_matches(matches),
             time=(old_start, old_end),
             newStartTime=new_start,
             newEndTime=new_end,
@@ -1497,9 +1416,15 @@ class ShotSequencer:
         self.scale_object_keys(obj, old_start, old_end, new_start, new_end)
 
         # The shot envelope may need updating
+        prior_start = shot.start
         prior_end = shot.end
         shot.start = min(shot.start, new_start)
         shot.end = max(shot.end, new_end)
+
+        # Ripple upstream shots by the change at the head
+        head_delta = shot.start - prior_start
+        if abs(head_delta) > 1e-6:
+            self.ripple_upstream(shot_id, prior_start, head_delta)
 
         # Ripple downstream shots by the change at the tail
         delta = shot.end - prior_end

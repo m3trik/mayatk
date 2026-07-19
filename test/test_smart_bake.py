@@ -855,6 +855,62 @@ class TestSmartBake(unittest.TestCase):
         cube_long = cmds.ls(cube, long=True)[0]
         self.assertIn(cube_long, objects)
 
+    def test_get_objects_no_duplicates(self):
+        """Default object query must not list joints twice.
+
+        Bug: ls(type='transform') already includes joints (joint derives
+        from transform), so appending a separate ls(type='joint') query
+        duplicated every joint and analyzed each twice.
+        """
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cmds.select(clear=True)
+        cmds.joint(name="dup_joint1", position=(0, 0, 0))
+        cmds.joint(name="dup_joint2", position=(0, 2, 0))
+        cmds.polyCube(name="dup_cube")
+
+        objects = SmartBake()._get_objects()
+        self.assertEqual(
+            len(objects), len(set(objects)), f"duplicate entries in {objects}"
+        )
+
+    def test_baked_channels_merge_vis_and_transform(self):
+        """An object baked in BOTH the inherited-visibility pass and the
+        standard channel pass must report the union of its baked channels.
+
+        Bug: phase 2 assigned result.baked[obj] = channels, clobbering the
+        ["v"] entry phase 1 recorded for the same object.
+        """
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        parent = cmds.group(empty=True, name="merge_parent")
+        child_short = cmds.polyCube(name="merge_child")[0]
+        cmds.parent(child_short, parent)
+        child = cmds.ls(child_short, long=True)[0]
+
+        # Parent toggles visibility (inherited-vis pass picks this up).
+        cmds.setKeyframe(parent, attribute="visibility", time=3, value=0)
+        cmds.setKeyframe(parent, attribute="visibility", time=6, value=1)
+
+        # Child is also constraint-driven (standard pass picks this up).
+        loc = cmds.spaceLocator(name="merge_loc")[0]
+        cmds.setKeyframe(loc, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(loc, attribute="translateX", time=10, value=5)
+        cmds.pointConstraint(loc, child)
+
+        result = SmartBake(
+            objects=[child], bake_inherited_visibility=True
+        ).execute()
+
+        baked_channels = result.baked.get(child, [])
+        self.assertIn("v", baked_channels, f"vis channel lost: {baked_channels}")
+        self.assertTrue(
+            any(c in baked_channels for c in ("tx", "ty", "tz")),
+            f"translate channels missing: {baked_channels}",
+        )
+
     def test_ik_chain_detection(self):
         """Verify joints in IK chains are detected as needing bake."""
         from maya import cmds
@@ -1327,6 +1383,49 @@ class TestNondestructiveRestore(unittest.TestCase):
             )
         )
         self.assertEqual(cmds.getAttr(f"{child}.visibility"), 1.0)
+
+    def test_destructive_vis_bake_leaves_no_stash_nodes(self):
+        """A non-restorable session (delete_inputs, base layer) must not
+        stash visibility curves — restore() refuses such sessions, so the
+        locked stash nodes could never be reclaimed and would leak into
+        the scene permanently."""
+        from maya import cmds
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        parent = cmds.group(empty=True, name="leak_parent")
+        child_short = cmds.polyCube(name="leak_child")[0]
+        cmds.parent(child_short, parent)
+        child = cmds.ls(child_short, long=True)[0]
+        # Child's own vis keys — the vis pass would stash this curve.
+        cmds.setKeyframe(child, attribute="visibility", time=1, value=1)
+        cmds.setKeyframe(child, attribute="visibility", time=10, value=0)
+        cmds.setKeyframe(parent, attribute="visibility", time=3, value=0)
+        cmds.setKeyframe(parent, attribute="visibility", time=6, value=1)
+
+        result = SmartBake(
+            objects=[child],
+            bake_inherited_visibility=True,
+            use_override_layer=False,
+            delete_inputs=True,
+            backup_file=False,
+        ).execute()
+        self.assertIn("v", result.baked.get(child, []))
+
+        self.assertFalse(
+            cmds.ls("*__smartBakeStash*"),
+            "orphaned stash nodes left by a non-restorable session",
+        )
+
+        # delete_inputs must not treat ancestor vis curves/plugs as driver
+        # inputs: the parent's own animation was never baked and must survive.
+        parent_vis_times = cmds.keyframe(
+            f"{parent}.visibility", query=True, timeChange=True
+        )
+        self.assertEqual(
+            parent_vis_times,
+            [3.0, 6.0],
+            "delete_inputs destroyed the parent's visibility animation",
+        )
 
     # -- base-layer (destructive-mode) round trips --------------------------
 

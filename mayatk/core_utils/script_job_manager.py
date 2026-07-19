@@ -24,14 +24,18 @@ Usage::
         owner=self,
     )
     mgr.connect_cleanup(self.ui, owner=self)  # auto-unsubscribe on widget destroy
+
+    with mgr.suppressed(token):  # silence listeners while mutating the scene
+        ...
 """
 from __future__ import annotations
 
 import maya.cmds as cmds
 
+import contextlib
 import itertools
 import logging
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
 
 
 logger = logging.getLogger(__name__)
@@ -110,8 +114,12 @@ class ScriptJobManager:
         self._jobs: Dict[str, int] = {}  # event -> scriptJob id
         self._om_subs: Dict[int, _OMSubscription] = {}
         self._counter = itertools.count(1)
-        self._connected_widgets: Set[int] = set()
-        self._suppressed: Dict[int, bool] = {}  # token -> True while suppressed
+        # (id(widget), id(owner)) pairs — one cleanup connection per pair, so
+        # several owners can share a widget without shadowing each other.
+        self._cleanup_pairs: Set[Tuple[int, int]] = set()
+        # token -> nested suppress count; counted so overlapping suppressed()
+        # blocks (and their in-flight deferred resumes) compose correctly.
+        self._suppressed: Dict[int, int] = {}
 
     # -------------------------------------------------------------- public API
 
@@ -144,11 +152,10 @@ class ScriptJobManager:
         int
             Opaque token passed to :meth:`unsubscribe`.
         """
+        self._ensure_job(event)  # before bookkeeping: a failure leaves no orphan
         token = next(self._counter)
-        sub = _Subscription(token, event, callback, owner, ephemeral)
-        self._subs[token] = sub
+        self._subs[token] = _Subscription(token, event, callback, owner, ephemeral)
         self._events.setdefault(event, []).append(token)
-        self._ensure_job(event)
         return token
 
     def add_om_callback(
@@ -203,11 +210,11 @@ class ScriptJobManager:
         """
         try:
             cb_id = register_fn(*register_args)
-        except Exception as exc:
-            logger.debug(
-                "ScriptJobManager.add_om_callback: %s failed (%s)",
+        except Exception:
+            logger.warning(
+                "ScriptJobManager.add_om_callback: %s failed",
                 register_fn,
-                exc,
+                exc_info=True,
             )
             return None
         token = next(self._counter)
@@ -246,21 +253,74 @@ class ScriptJobManager:
     def connect_cleanup(self, widget, owner: Any) -> None:
         """Connect *widget*.destroyed → :meth:`unsubscribe_all` for *owner*.
 
-        Safe to call multiple times for the same *widget* / *owner* pair.
+        Safe to call multiple times for the same *widget* / *owner* pair, and
+        several owners may share one widget — each gets its own cleanup.
         """
-        wid = id(widget)
-        if wid in self._connected_widgets:
+        pair = (id(widget), id(owner))
+        if pair in self._cleanup_pairs:
             return
-        self._connected_widgets.add(wid)
-        widget.destroyed.connect(lambda: self._on_widget_destroyed(wid, owner))
+        self._cleanup_pairs.add(pair)
+        widget.destroyed.connect(lambda: self._on_widget_destroyed(pair, owner))
 
     def suppress(self, token: int) -> None:
-        """Temporarily silence a subscription without removing it."""
-        self._suppressed[token] = True
+        """Temporarily silence a subscription without removing it.
+
+        Counted: each ``suppress`` needs a matching :meth:`resume`, so
+        nested/overlapping suppressions compose (prefer :meth:`suppressed`).
+        """
+        if token in self._subs:
+            self._suppressed[token] = self._suppressed.get(token, 0) + 1
 
     def resume(self, token: int) -> None:
-        """Re-enable a previously suppressed subscription."""
-        self._suppressed.pop(token, None)
+        """Undo one :meth:`suppress`; the subscription re-enables at zero."""
+        count = self._suppressed.get(token, 0)
+        if count <= 1:
+            self._suppressed.pop(token, None)
+        else:
+            self._suppressed[token] = count - 1
+
+    @contextlib.contextmanager
+    def suppressed(self, *tokens: Optional[int]) -> Iterator[None]:
+        """Silence *tokens* for the duration of a ``with`` block.
+
+        Replaces the manual ``suppress`` / ``try``/``finally`` ``resume``
+        dance around scene-mutating code.  ``None`` tokens are skipped, and
+        tokens already suppressed on entry stay suppressed on exit —
+        suppression is counted, so nested and overlapping blocks (including
+        an earlier block's still-pending deferred resume) compose correctly.
+
+        Notes
+        -----
+        Maya runs event scriptJobs at **idle**, never inside a synchronous
+        block — so an event raised inside the block dispatches only after
+        the block exits (live-Maya-probed).  To actually swallow that
+        queued dispatch, interactive sessions resume via
+        ``cmds.evalDeferred`` — the dispatch was queued before the resume,
+        so it runs (silenced) first; an immediate resume would let it
+        escape, and ``lowestPriority=True`` starves and never resumes
+        (both observed live).  Batch sessions resume immediately —
+        scriptJobs never dispatch there and a deferred callback might
+        never run.
+        """
+        active = [t for t in tokens if t is not None]
+        for token in active:
+            self.suppress(token)
+        try:
+            yield
+        finally:
+            if active:
+
+                def _resume_all(tokens=tuple(active)):
+                    for token in tokens:
+                        self.resume(token)
+
+                try:
+                    if cmds.about(batch=True):
+                        _resume_all()
+                    else:
+                        cmds.evalDeferred(_resume_all)
+                except Exception:
+                    _resume_all()
 
     def status(self) -> Dict[str, Any]:
         """Return a snapshot of managed and unmanaged Maya event listeners.
@@ -273,23 +333,22 @@ class ScriptJobManager:
         dict
             ``managed_jobs`` — ``{event: job_id}`` for SJM-owned scriptJobs.
             ``subscriptions`` — list of dicts (token, event, owner, ephemeral, suppressed).
-            ``om_callbacks`` — list of dicts (token, owner) for OpenMaya callbacks.
+            ``om_callbacks`` — list of dicts (token, cb_id, owner) for OpenMaya callbacks.
             ``unmanaged_jobs`` — raw ``cmds.scriptJob(listJobs=True)`` entries
             whose leading id is not present in ``managed_jobs.values()``.
         """
         managed_ids = set(self._jobs.values())
         unmanaged: List[str] = []
-        if cmds is not None:
-            try:
-                for entry in cmds.scriptJob(listJobs=True) or []:
-                    head, _, _ = entry.partition(":")
-                    try:
-                        if int(head.strip()) not in managed_ids:
-                            unmanaged.append(entry)
-                    except ValueError:
+        try:
+            for entry in cmds.scriptJob(listJobs=True) or []:
+                head, _, _ = entry.partition(":")
+                try:
+                    if int(head.strip()) not in managed_ids:
                         unmanaged.append(entry)
-            except Exception as exc:
-                logger.debug("ScriptJobManager.status: listJobs failed (%s)", exc)
+                except ValueError:
+                    unmanaged.append(entry)
+        except Exception as exc:
+            logger.debug("ScriptJobManager.status: listJobs failed (%s)", exc)
         return {
             "managed_jobs": dict(self._jobs),
             "subscriptions": [
@@ -342,32 +401,42 @@ class ScriptJobManager:
         self._events.clear()
         self._om_subs.clear()
         self._suppressed.clear()
-        self._connected_widgets.clear()
+        self._cleanup_pairs.clear()
 
     # -------------------------------------------------------------- internals
 
     def _ensure_job(self, event: str) -> None:
-        """Create the shared scriptJob for *event* if it doesn't exist yet."""
+        """Create the shared scriptJob for *event* if it doesn't exist yet.
+
+        The job is ``protected`` so a stray ``scriptJob -killAll`` from
+        another tool can't silently kill the dispatcher; SJM's own
+        :meth:`_kill_job` uses ``force=True``, which removes protected jobs.
+        """
         if event in self._jobs:
             return
-        if cmds is None:
-            return
-        job_id = cmds.scriptJob(event=[event, lambda e=event: self._dispatch(e)])
+        job_id = cmds.scriptJob(
+            event=[event, lambda e=event: self._dispatch(e)], protected=True
+        )
         self._jobs[event] = job_id
         logger.debug("ScriptJobManager: created job %d for %r", job_id, event)
 
     def _kill_job(self, event: str) -> None:
         """Kill the scriptJob for *event* and remove it from tracking."""
         job_id = self._jobs.pop(event, None)
-        if job_id is not None and cmds is not None:
+        if job_id is not None:
             try:
                 if cmds.scriptJob(exists=job_id):
                     cmds.scriptJob(kill=job_id, force=True)
                     logger.debug(
                         "ScriptJobManager: killed job %d for %r", job_id, event
                     )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "ScriptJobManager: failed to kill job %r for %r (%s)",
+                    job_id,
+                    event,
+                    exc,
+                )
         self._events.pop(event, None)
 
     def _dispatch(self, event: str) -> None:
@@ -380,8 +449,13 @@ class ScriptJobManager:
             if sub is not None:
                 try:
                     sub.callback()
-                except Exception as exc:
-                    logger.debug("ScriptJobManager: %r listener error: %s", event, exc)
+                except Exception:
+                    logger.warning(
+                        "ScriptJobManager: %r listener error (owner=%r)",
+                        event,
+                        sub.owner,
+                        exc_info=True,
+                    )
         # Prune ephemeral subscriptions on scene change
         if event in _SCENE_CHANGE_EVENTS:
             self._prune_ephemerals()
@@ -405,7 +479,7 @@ class ScriptJobManager:
         for token in to_remove:
             self.unsubscribe(token)
 
-    def _on_widget_destroyed(self, wid: int, owner: Any) -> None:
+    def _on_widget_destroyed(self, pair: Tuple[int, int], owner: Any) -> None:
         """Handle Qt widget destruction — clean up all owner subscriptions."""
-        self._connected_widgets.discard(wid)
+        self._cleanup_pairs.discard(pair)
         self.unsubscribe_all(owner)

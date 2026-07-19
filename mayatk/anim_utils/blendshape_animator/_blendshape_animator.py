@@ -11,6 +11,7 @@ except ImportError as error:
     print(__file__, error)
 
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.anim_utils.blendshape_animator.applicator import Applicator, ApplyStatus
 from mayatk.anim_utils.blendshape_animator.creator import Creator
 from mayatk.anim_utils.blendshape_animator.helpers import list_history
@@ -136,13 +137,20 @@ class BlendshapeAnimator(ptk.LoggingMixin):
     # EDIT — three explicit methods (no string dispatch)
     # =============================================================================
 
+    @CoreUtils.undoable
     def edit_weight_based(
         self,
         weights: Optional[List[float]] = None,
         count: int = 3,
         weight_range: Tuple[float, float] = (0.0, 1.0),
+        group_name: Optional[str] = None,
+        name_prefix: Optional[str] = None,
     ) -> List[Target]:
-        """Create tweens at specific weights or evenly spaced."""
+        """Create tweens at specific weights or evenly spaced.
+
+        ``group_name`` / ``name_prefix`` override the Creator defaults when
+        given; a single undo undoes the whole batch.
+        """
         if not self._validate_setup():
             return []
         self.logger.info("=== EDIT PHASE: Creating weight-based tweens ===")
@@ -152,7 +160,12 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         else:
             weights = [Weights.round_weight(w) for w in weights]
 
-        tweens = self.tween_creator.create_weight_based_tweens(weights)
+        kwargs = {}
+        if group_name is not None:
+            kwargs["group_name"] = group_name
+        if name_prefix is not None:
+            kwargs["name_prefix"] = name_prefix
+        tweens = self.tween_creator.create_weight_based_tweens(weights, **kwargs)
 
         if tweens:
             self.logger.info(
@@ -162,28 +175,36 @@ class BlendshapeAnimator(ptk.LoggingMixin):
 
         return tweens
 
+    @CoreUtils.undoable
     def edit_frame_based(
         self,
         frames: Optional[List[int]] = None,
         target_frame: Optional[int] = None,
+        group_name: Optional[str] = None,
+        name_prefix: Optional[str] = None,
     ) -> List[Target]:
         """Create tweens at specific animation frames."""
         if not self._validate_setup():
             return []
         self.logger.info("=== EDIT PHASE: Creating frame-based tweens ===")
 
-        created_tweens: List[Target] = []
+        kwargs = {}
+        if group_name is not None:
+            kwargs["group_name"] = group_name
+        if name_prefix is not None:
+            kwargs["name_prefix"] = name_prefix
 
+        all_frames: List[int] = []
         if target_frame is not None:
-            tween = self.tween_creator.create_frame_based_tween(target_frame)
+            all_frames.append(target_frame)
+        if frames:
+            all_frames.extend(frames)
+
+        created_tweens: List[Target] = []
+        for frame in all_frames:
+            tween = self.tween_creator.create_frame_based_tween(frame, **kwargs)
             if tween:
                 created_tweens.append(tween)
-
-        if frames:
-            for frame in frames:
-                tween = self.tween_creator.create_frame_based_tween(frame)
-                if tween:
-                    created_tweens.append(tween)
 
         if created_tweens:
             self.logger.info(
@@ -193,6 +214,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
 
         return created_tweens
 
+    @CoreUtils.undoable
     def edit_apply_tweens(
         self, tweens: Optional[List[Target]] = None
     ) -> List[Target]:
@@ -212,6 +234,23 @@ class BlendshapeAnimator(ptk.LoggingMixin):
     # =============================================================================
     # INTERNAL
     # =============================================================================
+
+    @staticmethod
+    def _geometry_transform(geometry: str) -> str:
+        """Return the transform for ``geometry`` (which may be a shape name)."""
+        if cmds.objExists(geometry) and cmds.ls(geometry, shapes=True):
+            parent = cmds.listRelatives(geometry, parent=True) or []
+            return parent[0] if parent else geometry
+        return geometry
+
+    @classmethod
+    def _is_tween_geometry(cls, geometry: str) -> bool:
+        """True if ``geometry`` (shape or transform) is a tagged tween mesh."""
+        if not cmds.objExists(geometry):
+            return False
+        return Attributes.has_attr(
+            cls._geometry_transform(geometry), "isInbetweenTarget"
+        )
 
     def _validate_setup(self) -> bool:
         """Return True if base mesh + blendShape + keyframes engine are bound.
@@ -239,13 +278,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
 
         for mesh, weight in zip(inbetween_meshes, weights):
             try:
-                cmds.blendShape(
-                    self.blendshape,
-                    edit=True,
-                    inBetween=True,
-                    target=(self.base_mesh, 0, mesh, weight),
-                )
-                self.tween_creator.tag_tween_mesh(mesh, weight)
+                self.tween_creator._add_inbetween(mesh, weight)
                 self.logger.info(f"  Added {mesh} as in-between at weight {weight:.3f}")
             except RuntimeError as e:
                 self.logger.error(f"  Failed to add {mesh}: {e}")
@@ -367,33 +400,16 @@ class BlendshapeAnimator(ptk.LoggingMixin):
                     )
 
             if delete_inbetween_meshes:
-                tweens = Targets.find_all_targets()
-                deleted_count = 0
-                for tween in tweens:
-                    try:
-                        cmds.delete(tween.mesh)
-                        deleted_count += 1
-                    except RuntimeError as e:
-                        self.logger.warning(
-                            f"  Could not delete: {tween.mesh} ({e})"
-                        )
-
-                if deleted_count > 0:
+                tweens = Targets.find_all_targets(
+                    blendshape=self.blendshape, base_mesh=self.base_mesh
+                )
+                deleted = Targets._delete_targets(tweens)
+                if deleted:
                     self.logger.info(
-                        f"  Deleted {deleted_count} in-between mesh objects"
+                        f"  Deleted {len(deleted)} in-between mesh objects"
                     )
-
-                for group_name in Targets.DEFAULT_GROUPS:
-                    if cmds.objExists(group_name):
-                        children = cmds.listRelatives(group_name, children=True) or []
-                        if not children:
-                            try:
-                                cmds.delete(group_name)
-                                self.logger.info(
-                                    f"  Deleted empty group: {group_name}"
-                                )
-                            except RuntimeError:
-                                pass
+                for group_name in Targets._delete_empty_groups():
+                    self.logger.info(f"  Deleted empty group: {group_name}")
             else:
                 for group_name in Targets.DEFAULT_GROUPS:
                     if cmds.objExists(group_name):
@@ -471,20 +487,27 @@ class BlendshapeAnimator(ptk.LoggingMixin):
             cls.logger.error(f"No targets found in blendShape {blendshape}")
             return None
 
-        # Heuristic: pick the first target whose name doesn't look like a tween
-        # mesh. Brittle — relies on naming patterns set by Creator (Bug 12).
-        # If the convention changes, update both this list and Creator.
+        # Tween meshes carry the isInbetweenTarget tag (Creator.tag_tween_mesh),
+        # so they can be excluded regardless of naming. The name-pattern
+        # heuristic remains only as a fallback for legacy untagged scenes.
+        candidates = [t for t in targets if not cls._is_tween_geometry(t)]
+
         TWEEN_NAME_PATTERNS = ("tween_f", "_w0", "_ib_")
         target_mesh = next(
-            (t for t in targets if not any(p in t for p in TWEEN_NAME_PATTERNS)),
+            (t for t in candidates if not any(p in t for p in TWEEN_NAME_PATTERNS)),
             None,
         )
-
+        if target_mesh is None and candidates:
+            target_mesh = candidates[0]
         if target_mesh is None:
             target_mesh = targets[0]
             cls.logger.warning(
                 f"Using {target_mesh} as target - might be an in-between mesh"
             )
+
+        # The blendShape query returns geometry (often shape) names; the
+        # animator state stores transforms (matching create()).
+        target_mesh = cls._geometry_transform(target_mesh)
 
         animator = cls()
         animator.base_mesh = base_mesh
@@ -520,9 +543,12 @@ class BlendshapeAnimator(ptk.LoggingMixin):
 
         self.logger.warning("No animation keyframes found - attempting recovery...")
 
-        tweens = Targets.find_all_targets()
+        tweens = Targets.find_all_targets(
+            blendshape=self.blendshape, base_mesh=self.base_mesh
+        )
         if tweens:
-            frames = [t.target_frame for t in tweens if t.target_frame]
+            # Explicit None check — frame 0 is a valid recorded frame.
+            frames = [t.target_frame for t in tweens if t.target_frame is not None]
 
             if len(frames) >= 2:
                 start_frame = min(frames)
@@ -570,7 +596,9 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         except RuntimeError as e:
             self.logger.error(f"Cannot read target mesh topology ({e})")
 
-        tweens = Targets.find_all_targets()
+        tweens = Targets.find_all_targets(
+            blendshape=self.blendshape, base_mesh=self.base_mesh
+        )
         if not tweens:
             self.logger.info("No in-between meshes found")
             return True
@@ -640,7 +668,9 @@ class BlendshapeAnimator(ptk.LoggingMixin):
             self.logger.warning(f"Cannot validate target mesh topology ({e})")
             target_topology_mismatch = True
 
-        all_tweens = Targets.find_all_targets()
+        all_tweens = Targets.find_all_targets(
+            blendshape=self.blendshape, base_mesh=self.base_mesh
+        )
         if not all_tweens:
             self.logger.info("No in-between meshes found")
             if target_topology_mismatch and delete_mismatched:
@@ -666,33 +696,17 @@ class BlendshapeAnimator(ptk.LoggingMixin):
 
         if delete_mismatched and invalid_tweens:
             self.logger.info(f"Deleting {len(invalid_tweens)} mismatched meshes...")
-            deleted_count = 0
-
-            for tween in invalid_tweens:
-                try:
-                    mesh_name = tween.mesh
-                    cmds.delete(tween.mesh)
-                    self.logger.info(f"  Deleted: {mesh_name}")
-                    deleted_count += 1
-                except RuntimeError as e:
-                    self.logger.error(f"  Failed to delete {tween.mesh}: {e}")
-
-            for group_name in Targets.DEFAULT_GROUPS:
-                if cmds.objExists(group_name):
-                    children = cmds.listRelatives(group_name, children=True) or []
-                    if not children:
-                        try:
-                            cmds.delete(group_name)
-                            self.logger.info(f"  Deleted empty group: {group_name}")
-                        except RuntimeError:
-                            pass
-
-            self.logger.info(f"Deleted {deleted_count} mismatched meshes")
+            deleted = Targets._delete_targets(invalid_tweens)
+            for group_name in Targets._delete_empty_groups():
+                self.logger.info(f"  Deleted empty group: {group_name}")
+            self.logger.info(f"Deleted {len(deleted)} mismatched meshes")
 
         if target_topology_mismatch and delete_mismatched:
             self._cleanup_target_mesh()
 
-        remaining_tweens = Targets.find_all_targets()
+        remaining_tweens = Targets.find_all_targets(
+            blendshape=self.blendshape, base_mesh=self.base_mesh
+        )
         self.logger.info("Cleanup complete")
         self.logger.info(f"  Remaining in-between meshes: {len(remaining_tweens)}")
         self.logger.info(

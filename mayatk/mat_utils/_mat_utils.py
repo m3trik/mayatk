@@ -158,7 +158,9 @@ class MatUtilsInternals(ptk.HelpMixin):
                 textures.append(abs_path)
                 continue
 
-            if abs_path.startswith(project_sourceimages):
+            if os.path.normcase(abs_path).startswith(
+                os.path.normcase(project_sourceimages) + os.sep
+            ):
                 rel_path = os.path.relpath(abs_path, project_sourceimages).replace(
                     "\\", "/"
                 )
@@ -915,6 +917,7 @@ class MatUtils(MatUtilsInternals):
         )
 
         file_to_shader_name = {}
+        file_to_shaders = {}
         if needs_shader:
             shading_engines = cmds.ls(type="shadingEngine") or []
             shader_attrs = ["surfaceShader", "volumeShader", "displacementShader"]
@@ -937,6 +940,9 @@ class MatUtils(MatUtilsInternals):
                             )
                             file_nodes_in_history = cmds.ls(history, type="file") or []
                             for node in file_nodes_in_history:
+                                file_to_shaders.setdefault(node, set()).add(
+                                    shader_name
+                                )
                                 if node not in file_to_shader_name:
                                     file_to_shader_name[node] = shader_name
                     except Exception:
@@ -945,7 +951,9 @@ class MatUtils(MatUtilsInternals):
         if materials:
             mat_names = {str(m) for m in materials}
             file_node_names = [
-                fn for fn in file_node_names if file_to_shader_name.get(fn) in mat_names
+                fn
+                for fn in file_node_names
+                if mat_names & file_to_shaders.get(fn, set())
             ]
 
         file_paths = {}
@@ -1078,9 +1086,9 @@ class MatUtils(MatUtilsInternals):
             mat = cmds.shadingNode(preferred_type, asShader=True, name=name)
             convertedRGB = [round(float(v) / 255, 3) for v in rgb]
             color_attr = (
-                f"{name}.baseColor"
+                f"{mat}.baseColor"
                 if preferred_type == "standardSurface"
-                else f"{name}.color"
+                else f"{mat}.color"
             )
             cmds.setAttr(
                 color_attr,
@@ -1380,14 +1388,14 @@ class MatUtils(MatUtilsInternals):
         """Find objects or faces by the material ID."""
         material = str(material)
 
+        if not cmds.objExists(material):
+            print(f"Material '{material}' does not exist.")
+            return []
+
         if cmds.nodeType(material) == "VRayMultiSubTex":
             raise TypeError(
                 "Invalid material type. If material is a multimaterial, please select a submaterial."
             )
-
-        if not cmds.objExists(material):
-            print(f"Material '{material}' does not exist.")
-            return []
 
         shading_groups = cmds.listConnections(material, type="shadingEngine")
         if not shading_groups:

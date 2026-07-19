@@ -141,18 +141,23 @@ class RenderUtils(ptk.HelpMixin):
 
     # ----------------------------------------------------------- render view
     @staticmethod
-    def render_camera(camera: str, editor: str = "render") -> None:
+    def render_camera(camera: str, render_mode: str = "render") -> None:
         """Render *camera* into the Render View, opening it if needed.
 
         Uses ``renderWindowRenderCamera`` (an interactive Render-View proc) so
-        the result surfaces in the editor rather than rendering offscreen.
+        the result surfaces in the editor rather than rendering offscreen. The
+        proc's first MEL argument is the render *mode*, not an editor; the
+        editor slot is left empty so Maya auto-resolves it via
+        ``showRenderView``. Valid ``render_mode`` values: "render",
+        "renderRegion", "snapshot", "redoPreviousRender", "iprRender",
+        "redoPreviousIprRender".
         """
-        mel.eval(f'renderWindowRenderCamera "{editor}" "" "{camera}";')
+        mel.eval(f'renderWindowRenderCamera "{render_mode}" "" "{camera}";')
 
     @staticmethod
-    def redo_previous_render(editor: str = "render") -> None:
+    def redo_previous_render(render_mode: str = "render") -> None:
         """Re-render the last render with its previous settings (fast path)."""
-        mel.eval(f'redoPreviousRender "{editor}";')
+        mel.eval(f'redoPreviousRender "{render_mode}";')
 
     @staticmethod
     def _ipr_procedure(renderer: str) -> Optional[str]:

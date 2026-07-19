@@ -62,6 +62,12 @@ class SegmentKeysInfo:
     ) -> List[str]:
         """Build the formatted-line list used by both the print and the
         text/HTML formatters. Returns ``[]`` when the source is empty.
+
+        Note:
+            ``object_fmt`` and ``segment_fmt`` are honored only in the default
+            (per-object) layout. When ``by_time=True`` the segments are
+            re-ordered chronologically and emitted with a fixed per-segment
+            layout, so both custom templates are ignored in that mode.
         """
         if not source:
             return []
@@ -216,6 +222,10 @@ class SegmentKeysInfo:
         """Print formatted time ranges to stdout. See
         :meth:`format_time_ranges_text` for the same output as a string,
         and :meth:`format_time_ranges_html` for HTML.
+
+        ``object_fmt`` / ``segment_fmt`` customize the default per-object
+        layout only; they are ignored when ``by_time=True`` (which uses a
+        fixed chronological per-segment layout).
         """
         for line in cls._format_time_ranges_lines(
             source,
@@ -351,6 +361,8 @@ class SegmentKeys(SegmentKeysInfo):
         from mayatk.anim_utils._anim_utils import AnimUtils
 
         segments: List[Dict[str, Any]] = []
+        if isinstance(objects, str):
+            objects = [objects]
         if not objects:
             return segments
 
@@ -587,6 +599,8 @@ class SegmentKeys(SegmentKeysInfo):
             List of segment dictionaries (see :meth:`collect_segments`),
             or an empty list when nothing animates in the resolved set.
         """
+        if isinstance(objects, str):
+            objects = [objects]
         if not objects:
             objects = cmds.ls(selection=True, type="transform") or []
         if not objects:

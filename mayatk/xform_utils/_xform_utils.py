@@ -440,8 +440,12 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         }
 
         if isinstance(value, int):
+            if value not in index_to_axis:
+                raise ValueError(f"Invalid axis value: {value!r}")
             axis = index_to_axis[value]
         elif isinstance(value, str):
+            if value not in axis_to_index:
+                raise ValueError(f"Invalid axis value: {value!r}")
             axis = value
         else:
             raise TypeError(
@@ -2055,7 +2059,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
     def aim_object_at_point(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0)):
         """Aim the given object(s) at the given world space position."""
         created_target = False
-        if isinstance(target_pos, (tuple, set, list)):
+        if isinstance(target_pos, (tuple, list)):
             target = cmds.createNode("transform", name="target_helper")
             cmds.xform(target, translation=target_pos, absolute=True)
             created_target = True
@@ -2307,7 +2311,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             v = cls.get_bounding_box(obj, value)
             valueAndObjs.append((v, obj))
 
-        sorted_ = sorted(valueAndObjs, key=lambda x: int(x[0]), reverse=descending)
+        sorted_ = sorted(valueAndObjs, key=lambda x: x[0], reverse=descending)
         if also_return_value:
             return sorted_
         return [obj for v, obj in sorted_]
@@ -2406,6 +2410,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
         plane_point = om.MPoint(*plane_point)
         plane_normal = om.MVector(*plane_normal).normalize()
 
+        objects = as_strings(objects)
         objects_below_threshold = []
 
         for obj in objects:
@@ -2436,6 +2441,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             points = mesh_fn.getPoints(om.MSpace.kObject)
 
             falling_vertices = []
+            below = False
 
             for idx, point in enumerate(points):
                 transformed_point = point * world_matrix
@@ -2443,7 +2449,7 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
 
                 if distance < 0:
                     if return_type == "bool":
-                        objects_below_threshold.append((obj, True))
+                        below = True
                         break
                     elif return_type == "mpoint":
                         falling_vertices.append(transformed_point)
@@ -2466,8 +2472,8 @@ class XformUtils(XformUtilsInternals, ptk.HelpMixin):
             if falling_vertices and return_type != "bool":
                 objects_below_threshold.append((obj, falling_vertices))
 
-            if return_type == "bool" and not objects_below_threshold:
-                objects_below_threshold.append((obj, False))
+            if return_type == "bool":
+                objects_below_threshold.append((obj, below))
 
         return objects_below_threshold
 

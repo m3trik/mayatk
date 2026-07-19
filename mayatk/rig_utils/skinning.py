@@ -362,7 +362,31 @@ class SkinUtils(ptk.HelpMixin):
             kwargs["bindMethod"] = cls.BIND_METHODS["closest"]
             kwargs.pop("heatmapFalloff", None)
             result = cmds.skinCluster(joints, mesh, **kwargs)
-        return result[0] if isinstance(result, (list, tuple)) else result
+        skin_cluster = result[0] if isinstance(result, (list, tuple)) else result
+        if name:
+            cls.name_bind_pose(skin_cluster, f"{name}_pose")
+        return skin_cluster
+
+    @staticmethod
+    def name_bind_pose(skin_cluster, name: str) -> Optional[str]:
+        """Rename *skin_cluster*'s dagPose to *name*.
+
+        ``cmds.skinCluster`` honors ``name`` for the cluster but always
+        leaves the dagPose it creates default-named ('bindPose1') — debris
+        that name-based cleanup sweeps can't attribute in multi-rig scenes.
+
+        Returns:
+            (str) The new pose name, or None when the cluster has no pose.
+        """
+        poses = (
+            cmds.listConnections(
+                f"{skin_cluster}.bindPose", source=True, destination=False
+            )
+            or []
+        )
+        if not poses:
+            return None
+        return cmds.rename(poses[0], name)
 
     @classmethod
     @CoreUtils.undoable
@@ -458,15 +482,29 @@ class SkinUtils(ptk.HelpMixin):
             )
 
         if not undoable:
-            old = fn.setWeights(
+            if influences is None:
+                old = fn.setWeights(
+                    dag,
+                    comp,
+                    om.MIntArray(influence_indices),
+                    om.MDoubleArray([float(w) for w in weights]),
+                    normalize,
+                    True,  # returnOldWeights
+                )
+                return list(old)
+            # Influence subset: setWeights' returnOldWeights covers only the
+            # subset columns, which would violate the documented all-influence
+            # restore contract. Snapshot every influence before writing.
+            old_weights, _ = cls.get_weights(skin_cluster, vertices)
+            fn.setWeights(
                 dag,
                 comp,
                 om.MIntArray(influence_indices),
                 om.MDoubleArray([float(w) for w in weights]),
                 normalize,
-                True,  # returnOldWeights
+                False,
             )
-            return list(old)
+            return old_weights
 
         # Undo-safe route: per-vertex skinPercent inside one undo chunk.
         old_weights, _ = cls.get_weights(skin_cluster, vertices)

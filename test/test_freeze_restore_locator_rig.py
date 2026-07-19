@@ -28,6 +28,8 @@ encoded as assertions:
     operation needs to read the geo's world bbox center, shift vertices by -P
     in geo local space, and set GRP.translate = P (in parent space).
 """
+import unittest
+
 import maya.cmds as cmds
 
 from mayatk.rig_utils._rig_utils import RigUtils

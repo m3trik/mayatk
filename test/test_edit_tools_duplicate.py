@@ -427,6 +427,68 @@ class TestDuplicateGrid(MayaTkTestCase):
         self.assertIn("dg_comb1", result[0])
         self.assertTrue(cmds.objExists(cube))
 
+    def test_combine_with_non_mesh_in_selection_does_not_crash(self):
+        """A selection mixing a mesh with a non-mesh object (locator) must still
+        combine: only the poly copy reaches polyUnite, so the raw copy count is
+        the wrong gate. Regression for 'polyUnite needs at least 2 polygonal
+        objects' raised when mesh+locator produced one mesh + one non-mesh copy.
+        """
+        cube = cmds.polyCube(name="dg_mix")[0]
+        loc = cmds.spaceLocator(name="dg_loc")[0]
+        result = DuplicateGrid.duplicate_grid(
+            objects=[cube, loc], dimensions=(1, 1, 1), spacing=0, mode="combine"
+        )
+        self.assertIsInstance(result, list)
+        self.assertEqual(len(result), 1)
+        self.assertTrue(cmds.objExists(result[0]))
+        # The result is a real mesh named after the source, not a crash.
+        self.assertEqual(
+            len(cmds.listRelatives(result[0], shapes=True, type="mesh") or []), 1
+        )
+        self.assertIn("dg_mix", result[0])
+        self.assertTrue(cmds.objExists(cube))
+
+    def test_combine_pure_non_mesh_falls_back_to_group(self):
+        """Combine on a selection with no polygon geometry can't produce a mesh —
+        it must group the copies and warn rather than crash polyUnite (which
+        rejects fewer than two polygonal objects)."""
+        loc = cmds.spaceLocator(name="dg_only_loc")[0]
+        result = DuplicateGrid.duplicate_grid(
+            objects=[loc], dimensions=(3, 1, 1), spacing=1, mode="combine"
+        )
+        self.assertIsInstance(result, list)
+        self.assertEqual(len(result), 1)
+        group = result[0]
+        self.assertTrue(cmds.objExists(group))
+        # Fallback keeps the three copies grouped; no mesh was fabricated
+        # anywhere in the result hierarchy (not merely at the group's own level).
+        self.assertEqual(
+            len(cmds.listRelatives(group, children=True) or []), 3
+        )
+        self.assertFalse(
+            cmds.listRelatives(group, allDescendents=True, type="mesh") or []
+        )
+        self.assertTrue(cmds.objExists(loc))
+
+    def test_combine_group_source_merges_descendant_meshes(self):
+        """A group source (transform with no direct mesh shape, meshes nested
+        below) must still combine into one mesh — polyUnite gathers descendant
+        geometry, so the poly-copy gate must descend rather than only check each
+        copy's own shape. Guards _is_polygonal's descent."""
+        cube = cmds.polyCube(name="dg_grp_src")[0]
+        grp = cmds.group(cube, name="dg_grp_holder")
+        result = DuplicateGrid.duplicate_grid(
+            objects=[grp], dimensions=(3, 1, 1), spacing=1, mode="combine"
+        )
+        self.assertIsInstance(result, list)
+        self.assertEqual(len(result), 1)
+        # The three group-copies' cubes are united into a single mesh.
+        self.assertEqual(
+            len(cmds.listRelatives(result[0], allDescendents=True, type="mesh") or []),
+            1,
+        )
+        self.assertTrue(cmds.objExists(grp))
+
     def test_result_named_after_source(self):
         """instance/copy return a group whose name derives from the source."""
         cube = cmds.polyCube(name="dg_named")[0]

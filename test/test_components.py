@@ -314,6 +314,26 @@ class TestComponents(MayaTkTestCase):
         self.assertIsInstance(res, dict)
         self.assertEqual(len(res), 1)
 
+    def test_get_closest_vertex_on_transformed_object(self):
+        """Regression: the closestPointOnMesh probe never connected the
+        target's worldMatrix to inputMatrix, so WORLD-space query positions
+        were interpreted in the target's LOCAL space — on a transformed
+        target the returned vertex was wrong (probe-verified: a box at x=10
+        rotated 180° about Y returned its FAR side, world x=12, instead of
+        the near side at x=8)."""
+        query_obj = cmds.polyCube(w=0.1, h=0.1, d=0.1)[0]  # at origin
+        target = cmds.polyCube(w=4, h=1, d=1)[0]
+        cmds.xform(target, ws=True, t=(10, 0, 0), ro=(0, 180, 0))
+
+        res = Components.get_closest_vertex(f"{query_obj}.vtx[0]", target)
+        self.assertEqual(len(res), 1)
+        v2 = next(iter(res.values()))
+        x = cmds.pointPosition(str(v2), world=True)[0]
+        self.assertLess(
+            x, 10.0, f"returned far-side vertex (world x={x:.2f}, near side is 8)"
+        )
+        cmds.delete(query_obj, target)
+
     def test_get_vertices_within_threshold(self):
         """Test getting vertices within threshold."""
         inside, outside = Components.get_vertices_within_threshold(

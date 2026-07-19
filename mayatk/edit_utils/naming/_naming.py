@@ -140,6 +140,12 @@ class Naming(ptk.HelpMixin):
                     old_suffix = oldName[oldName.rfind("_") :]
                     # Strip trailing digits to get the base suffix (e.g. _GRP1 -> _GRP)
                     old_suffix_base = old_suffix.rstrip("0123456789")
+                    # A purely-numeric trailing token (e.g. _01) collapses to just
+                    # "_" after stripping digits; that's not a real type suffix, so
+                    # don't retain it (avoids renaming "Screw" -> "Screw_"). Mirrors
+                    # blendertk's Naming.rename guard.
+                    if old_suffix_base == "_":
+                        old_suffix_base = ""
                     # If valid_suffixes is provided, only retain if base suffix is in the list
                     if (
                         valid_suffixes is not None
@@ -395,7 +401,7 @@ class Naming(ptk.HelpMixin):
             target_suffix = default_map.get(typ, "")
             if not target_suffix:
                 # fallback to nodeType-based detection if needed
-                node_type = obj.nodeType()
+                node_type = cmds.objectType(obj)
                 target_suffix = default_map.get(node_type, "")
 
             # Strip wrong suffixes from the END of the name only

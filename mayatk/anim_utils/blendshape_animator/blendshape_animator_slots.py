@@ -16,7 +16,6 @@ from mayatk.anim_utils.blendshape_animator._blendshape_animator import (
 )
 from mayatk.anim_utils.blendshape_animator.applicator import ApplyStatus
 from mayatk.anim_utils.blendshape_animator.target import Target, Targets
-from pythontk import Weights
 from mayatk.anim_utils.blendshape_animator.helpers import list_history
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.script_job_manager import ScriptJobManager
@@ -385,14 +384,25 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         )
 
     def b001(self, widget) -> None:
-        """Add Tweens — dispatches by mode."""
+        """Add Tweens — dispatches by mode through the domain facade
+        (single code path, one undo chunk per batch)."""
         if not self._validate_setup():
             self._set_status("Setup not complete — Create or Load first.")
             return
 
+        # None → keep the Creator defaults (SSoT lives in the domain layer).
+        group_name = name_prefix = None
+        try:
+            group_name = widget.option_box.menu.group_name.text() or None
+            name_prefix = widget.option_box.menu.name_prefix.text() or None
+        except (AttributeError, RuntimeError):
+            pass
+
         mode = self.ui.cmb000.currentText()
         if mode == MODE_WEIGHT:
             csv = (self.ui.le001.text() or "").strip()
+            weights = None
+            count = 3
             if csv:
                 try:
                     weights = [float(p.strip()) for p in csv.split(",") if p.strip()]
@@ -402,32 +412,30 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
                     )
                     return
             else:
-                count = 3
                 try:
                     count = widget.option_box.menu.count.value()
                 except (AttributeError, RuntimeError):
                     pass
-                weights = Weights.generate_weights(count)
 
-            kwargs = {}
-            try:
-                kwargs["group_name"] = (
-                    widget.option_box.menu.group_name.text() or "_morphInbetweens_GRP"
-                )
-                kwargs["name_prefix"] = (
-                    widget.option_box.menu.name_prefix.text() or "morph_ib"
-                )
-            except (AttributeError, RuntimeError):
-                pass
-
-            # Pre-rounding handled by the domain method.
-            tweens = self.tween_creator.create_weight_based_tweens(weights, **kwargs)
-            self._set_status(f"Added {len(tweens)} weight-based tween(s).")
+            tweens = self.edit_weight_based(
+                weights=weights,
+                count=count,
+                group_name=group_name,
+                name_prefix=name_prefix,
+            )
+            requested = len(weights) if weights else count
+            self._set_status(
+                f"Added {len(tweens)}/{requested} weight-based tween(s)."
+                if tweens
+                else "No tweens added — see Script Editor."
+            )
         else:
             frame = self.ui.s003.value()
-            tween = self.tween_creator.create_frame_based_tween(frame)
+            tweens = self.edit_frame_based(
+                target_frame=frame, group_name=group_name, name_prefix=name_prefix
+            )
             self._set_status(
-                f"Added frame-based tween at frame {frame}" if tween
+                f"Added frame-based tween at frame {frame}" if tweens
                 else "Frame-based tween creation failed — see Script Editor."
             )
 
@@ -665,7 +673,9 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
     def _tree_tooltip_provider(self) -> str:
         if not self.blendshape:
             return "No setup loaded. Click Create Setup or load via the option box."
-        tweens = Targets.find_all_targets()
+        tweens = Targets.find_all_targets(
+            blendshape=self.blendshape, base_mesh=self.base_mesh
+        )
         n = len(tweens)
         n_mismatch = sum(
             1 for t in tweens
@@ -689,7 +699,11 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             return
 
         base_vert_count = cmds.polyEvaluate(self.base_mesh, vertex=True)
-        tweens = Targets.find_all_targets()
+        # Scoped to the bound setup — other animator setups sharing the
+        # scene keep their tweens out of this panel's list.
+        tweens = Targets.find_all_targets(
+            blendshape=self.blendshape, base_mesh=self.base_mesh
+        )
 
         for tween in tweens:
             try:
@@ -833,17 +847,13 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             )
             self._refresh_tree()
         elif chosen is act_delete:
-            deleted = 0
             with CoreUtils.undo_chunk("Delete Tween Meshes"):
-                for tween in tweens:
-                    try:
-                        cmds.delete(tween.mesh)
-                        self._row_status.pop(tween.mesh, None)
-                        deleted += 1
-                    except RuntimeError as e:
-                        self.logger.error(f"Could not delete {tween.mesh}: {e}")
+                deleted = Targets._delete_targets(tweens)
+                Targets._delete_empty_groups()
+            for mesh_name in deleted:
+                self._row_status.pop(mesh_name, None)
             self._set_status(
-                f"Deleted {deleted}/{len(tweens)} tween mesh(es)"
+                f"Deleted {len(deleted)}/{len(tweens)} tween mesh(es)"
             )
             self._refresh_tree()
 

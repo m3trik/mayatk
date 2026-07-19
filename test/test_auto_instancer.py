@@ -1779,9 +1779,17 @@ class TestCombineNonInstanced(MayaTkTestCase):
 
     @staticmethod
     def _assign_new_material(objs, name):
+        # Assign via a shading group + ``sets`` (headless-safe). ``cmds.hyperShade``
+        # is a GUI command that silently no-ops under mayapy / ``--background``
+        # (it pokes the hypershade window — the connectWindow.mel errors), so
+        # the objects stayed on the default shader and combine_by_material
+        # lumped them together.
         mat = cmds.shadingNode("lambert", asShader=True, name=name)
-        cmds.select(objs)
-        cmds.hyperShade(assign=mat)
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=name + "SG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(objs, edit=True, forceElement=sg)
 
     def test_defaults_true(self):
         inst = AutoInstancer()
@@ -1926,6 +1934,74 @@ class TestAutoInstancerCombineDefaults(MayaTkTestCase):
             cmds.ls(list(shapes)[0], long=True)[0], allParents=True
         )
         self.assertEqual(len(parents), 2)
+
+
+class TestAutoInstancerRunSummary(MayaTkTestCase):
+    """``return_summary`` + ``last_run_summary`` explain why matching meshes
+    did (or did not) become instances — the data the duplicate slot surfaces
+    in its message box / console."""
+
+    def test_dense_duplicates_instanced(self):
+        a = cmds.polySphere(name="sumDense0")[0]
+        b = cmds.polySphere(name="sumDense1")[0]
+        cmds.setAttr(f"{b}.translateX", 5)
+        created, summary = auto_instance(
+            [a, b], combine_non_instanced=False, return_summary=True
+        )
+        self.assertEqual(summary["matched_groups"], 1)
+        self.assertEqual(summary["instanced_groups"], 1)
+        self.assertEqual(summary["instances_created"], 1)
+        self.assertEqual(summary["simple_groups"], 0)
+
+    def test_micro_duplicates_flagged_too_simple(self):
+        a = cmds.polyCube(name="sumTiny0")[0]
+        b = cmds.polyCube(name="sumTiny1")[0]
+        cmds.setAttr(f"{b}.translateX", 3)
+        created, summary = auto_instance(
+            [a, b], combine_non_instanced=True, return_summary=True
+        )
+        self.assertEqual(summary["matched_groups"], 1)
+        self.assertEqual(summary["simple_groups"], 1)
+        self.assertEqual(summary["instanced_groups"], 0)
+        self.assertTrue(
+            any(d["reason"] == "too_simple" for d in summary["details"])
+        )
+        text = AutoInstancer.format_summary(summary, len(created))
+        self.assertIn("too simple", text)
+
+    def test_no_matches_reported_as_such(self):
+        a = cmds.polyCube(name="sumUq0")[0]
+        b = cmds.polySphere(name="sumUq1")[0]
+        cmds.setAttr(f"{b}.translateX", 3)
+        _, summary = auto_instance(
+            [a, b], combine_non_instanced=False, return_summary=True
+        )
+        self.assertEqual(summary["matched_groups"], 0)
+        self.assertIn(
+            "no geometrically identical meshes were found",
+            AutoInstancer.format_summary(summary, 0),
+        )
+
+    def test_return_summary_defaults_off_bare_list(self):
+        """Backward compatible: without ``return_summary`` the wrapper still
+        returns just the created-node list."""
+        a = cmds.polyCube(name="sumSolo")[0]
+        result = auto_instance([a])
+        self.assertIsInstance(result, list)
+
+    def test_format_summary_output_is_ascii(self):
+        """The console/message text is ASCII so a non-UTF-8 console print
+        cannot raise."""
+        summary = AutoInstancer.default_summary()
+        summary.update(
+            matched_groups=2,
+            simple_groups=2,
+            details=[
+                {"name": "Bolt", "reason": "too_simple", "count": 4, "tris": 12},
+                {"name": "Nut", "reason": "too_simple", "count": 6, "tris": 8},
+            ],
+        )
+        AutoInstancer.format_summary(summary, 1).encode("ascii")
 
 
 class TestAutoInstancerProductionSafety(MayaTkTestCase):

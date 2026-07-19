@@ -3,6 +3,7 @@
 from typing import List, Callable, Any, Tuple, Optional
 from functools import wraps
 import contextlib
+import inspect
 
 try:
     import maya.cmds as cmds
@@ -255,22 +256,34 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
 
     @staticmethod
     def selected(func: Callable) -> Callable:
-        """A decorator to pass the current selection to the first parameter if None is given."""
+        """A decorator to pass the current selection to the target parameter if None is given.
+
+        The selection is injected into the first *non-receiver* parameter: index 0
+        for static methods, index 1 for instance / class methods. The receiver is
+        detected by introspecting the wrapped callable's signature (``functools.wraps``
+        exposes ``__wrapped__``, so the real parameter names are visible even through
+        an inner ``undoable`` / ``reparent`` wrapper) rather than guessing from the
+        runtime type of the first argument, which misidentifies a data-bearing first
+        positional argument as ``self``.
+        """
+
+        # Receiver detection is fixed at decoration time (the wrapped callable's
+        # signature never changes), so resolve the target index once here rather
+        # than re-introspecting on every call.
+        try:
+            params = list(inspect.signature(func).parameters.values())
+            has_receiver = bool(params) and params[0].name in ("self", "cls")
+        except (TypeError, ValueError):
+            has_receiver = False
+        target = 1 if has_receiver else 0
 
         @wraps(func)
         def wrapped(*args, **kwargs) -> Any:
-            if args and (hasattr(args[0], "__class__") or isinstance(args[0], type)):
-                if len(args) < 2 or args[1] is None:
-                    selection = cmds.ls(selection=True) or []
-                    if not selection:
-                        return []
-                    args = (args[0], selection) + args[2:]
-            else:
-                if not args or args[0] is None:
-                    selection = cmds.ls(selection=True) or []
-                    if not selection:
-                        return []
-                    args = (selection,) + args[1:]
+            if len(args) <= target or args[target] is None:
+                selection = cmds.ls(selection=True) or []
+                if not selection:
+                    return []
+                args = args[:target] + (selection,) + args[target + 1 :]
 
             return func(*args, **kwargs)
 

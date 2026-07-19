@@ -30,11 +30,7 @@ class _ControlsMeta(type):
         if not name or name.startswith("_"):
             raise AttributeError(name)
 
-        if not getattr(cls, "_PRESETS", None):
-            try:
-                cls._register_builtin_presets()
-            except Exception:
-                pass
+        cls._register_builtin_presets()
 
         preset = name.lower()
         if preset in cls._PRESETS:
@@ -53,6 +49,11 @@ class _ControlsMeta(type):
 
         raise AttributeError(name)
 
+    def __dir__(cls):
+        # Expose dynamic presets for tab-completion / discoverability.
+        cls._register_builtin_presets()
+        return sorted(set(super().__dir__()) | set(cls._PRESETS))
+
 
 class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
     """Factory for creating NURBS animation controls.
@@ -67,6 +68,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
     """
 
     _PRESETS: ClassVar[Dict[str, Callable[..., str]]] = {}
+    _builtins_registered: ClassVar[bool] = False
 
     @staticmethod
     def _addressable(node) -> str:
@@ -90,11 +92,12 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
     def _merge_curve_shapes(
         target_transform: str,
         source_transforms: Iterable[str],
-        *,
-        delete_sources: bool = True,
     ) -> None:
-        """Merge NURBS curve shapes from sources into target as a single object."""
+        """Merge NURBS curve shapes from sources into target as a single object.
 
+        Sources are consumed (deleted) — callers that need to keep an original
+        must pass a duplicate.
+        """
         for src in source_transforms:
             if not src or src == target_transform:
                 continue
@@ -104,11 +107,10 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
                     cmds.parent(s, target_transform, r=True, s=True)
                 except Exception:
                     cmds.parent(s, target_transform, s=True)
-            if delete_sources:
-                try:
-                    cmds.delete(src)
-                except Exception:
-                    pass
+            try:
+                cmds.delete(src)
+            except Exception:
+                pass
 
     @classmethod
     def _curves_from_poly(
@@ -138,7 +140,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
                 curves.append(cmds.curve(p=positions, d=1))
 
         base = cmds.group(em=True, n=name)
-        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        cls._merge_curve_shapes(base, curves)
         cmds.delete(poly_transform)
         return base
 
@@ -278,15 +280,15 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         if not tgt:
             return
         try:
-            cmds.delete(cmds.parentConstraint(tgt, node, mo=False))
-            cmds.delete(cmds.scaleConstraint(tgt, node, mo=False))
+            cmds.matchTransform(
+                str(node), str(tgt), position=True, rotation=True, scale=True
+            )
         except Exception:
-            cmds.delete(cmds.parentConstraint(tgt, node, mo=False))
+            # Locked scale channels etc. — match what we can.
+            cmds.matchTransform(str(node), str(tgt), position=True, rotation=True)
 
     @classmethod
-    def register_preset(
-        cls, name: str, builder: Callable[..., str]
-    ) -> None:
+    def register_preset(cls, name: str, builder: Callable[..., str]) -> None:
         """Register a new control preset.
 
         The builder must return the control transform node.
@@ -294,6 +296,12 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         if not name:
             raise ValueError("Preset name cannot be empty")
         cls._PRESETS[name.lower()] = builder
+
+    @classmethod
+    def shapes(cls) -> List[str]:
+        """Sorted names of the registered presets (for a UI combo / validation)."""
+        cls._register_builtin_presets()
+        return sorted(cls._PRESETS)
 
     @classmethod
     @CoreUtils.undoable
@@ -336,8 +344,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         Returns:
             str (control transform name) by default, or ControlNodes if return_nodes=True.
         """
-        if not cls._PRESETS:
-            cls._register_builtin_presets()
+        cls._register_builtin_presets()
 
         preset_norm = (preset or "diamond").lower()
         if preset_norm not in cls._PRESETS:
@@ -384,8 +391,8 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
                 top = cmds.parent(top, str(parent))[0]
                 if grp is not None:
                     grp = top  # the group moved with the top node
-            except Exception:
-                pass
+            except Exception as exc:
+                cmds.warning(f"Controls: could not parent {top} under {parent}: {exc}")
 
         # The names above go stale/ambiguous after the moves; resolve each to
         # its shortest UNAMBIGUOUS form (bare leaf when unique, full DAG path
@@ -424,7 +431,11 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
     ) -> str:
         """Combine multiple control transforms into a single selectable transform.
 
-        This merges all curve shapes under the provided transforms into one transform.
+        This merges all curve shapes under the provided transforms into one
+        transform. Every source keeps its world placement (offsets are baked
+        into the CVs); the combined pivot sits at the first control's xform.
+        With ``delete_sources=False`` the originals are left untouched and
+        duplicates are merged instead.
         Typical use: merge a control with a standalone text control.
         """
 
@@ -450,6 +461,11 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         if ctrl_suffix and not base.endswith(ctrl_suffix):
             base = f"{base}{ctrl_suffix}"
 
+        # When keeping sources, operate on duplicates — the shape merge consumes
+        # its inputs, so working on the originals would leave gutted husks.
+        if not delete_sources:
+            resolved = [cmds.duplicate(src, renameChildren=True)[0] for src in resolved]
+
         if len(resolved) == 1:
             combined = resolved[0]
             try:
@@ -465,7 +481,22 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             except Exception:
                 pass
 
-            cls._merge_curve_shapes(combined, resolved, delete_sources=delete_sources)
+            # Bake each source's world placement before the merge: parent it under
+            # the combined transform (world preserved), then freeze so the offset
+            # lands in the CVs. Shape-parenting alone (-r -s) keeps local CVs, which
+            # would snap every source except the matched one to the combined pivot.
+            baked: List[str] = []
+            for src in resolved:
+                try:
+                    src = cmds.parent(src, combined)[0]
+                    cls._safe_freeze(src)
+                except Exception as exc:
+                    cmds.warning(
+                        f"Controls.combine: could not bake {src}'s placement: {exc}"
+                    )
+                baked.append(src)
+
+            cls._merge_curve_shapes(combined, baked)
 
         if match is not None:
             cls._match_transform(combined, match)
@@ -473,8 +504,10 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         if parent is not None:
             try:
                 combined = cmds.parent(combined, str(parent))[0]
-            except Exception:
-                pass
+            except Exception as exc:
+                cmds.warning(
+                    f"Controls: could not parent {combined} under {parent}: {exc}"
+                )
 
         cls._apply_wire_color(combined, color)
         return combined
@@ -485,9 +518,15 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
 
     @classmethod
     def _register_builtin_presets(cls) -> None:
-        if cls._PRESETS:
+        # Guarded by a flag, not `if cls._PRESETS` — a custom preset registered
+        # before the first create()/shapes() call must not block the builtins.
+        if cls._builtins_registered:
             return
+        cls._builtins_registered = True
 
+        # Flat curves
+        cls.register_preset("circle", cls._build_circle)
+        cls.register_preset("square", cls._build_square)
         cls.register_preset("diamond", cls._build_diamond)
         cls.register_preset("arrow", cls._build_arrow)
         cls.register_preset("two_way_arrow", cls._build_two_way_arrow)
@@ -497,6 +536,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         # 3D primitives
         cls.register_preset("target", cls._build_target)
         cls.register_preset("box", cls._build_box)
+        cls.register_preset("cube", cls._build_box)
         cls.register_preset("beveled_cube", cls._build_beveled_cube)
         cls.register_preset("ball", cls._build_ball)
         cls.register_preset("sphere", cls._build_ball)
@@ -510,6 +550,26 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
 
         # Standalone text
         cls.register_preset("text", cls._build_text)
+
+    @classmethod
+    def _build_circle(
+        cls, *, name: str, axis: str = "y", sections: int = 16, **_
+    ) -> str:
+        """Flat circle — the standard rig control."""
+        return cmds.circle(name=name, ch=False, r=1.0, s=int(sections), nr=(0, 1, 0))[0]
+
+    @classmethod
+    def _build_square(cls, *, name: str, axis: str = "y", **_) -> str:
+        """Flat square outline."""
+        p = 1.0
+        pts = [
+            (-p, 0.0, -p),
+            (p, 0.0, -p),
+            (p, 0.0, p),
+            (-p, 0.0, p),
+            (-p, 0.0, -p),
+        ]
+        return cmds.curve(name=name, p=pts, d=1)
 
     @classmethod
     def _build_diamond(cls, *, name: str, axis: str = "y", **_) -> str:
@@ -534,7 +594,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             curves.append(cmds.curve(p=[top, pt, bot], d=1))
 
         base = cmds.group(em=True, n=name)
-        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        cls._merge_curve_shapes(base, curves)
         return base
 
     @classmethod
@@ -565,7 +625,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             curves.append(cmds.curve(p=[top_pts[i], bot_pts[i]], d=1))
 
         base = cmds.group(em=True, n=name)
-        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        cls._merge_curve_shapes(base, curves)
         return base
 
     @classmethod
@@ -598,7 +658,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             curves.append(cmds.curve(p=[top_pts[i], bot_pts[i]], d=1))
 
         base = cmds.group(em=True, n=name)
-        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        cls._merge_curve_shapes(base, curves)
         return base
 
     @classmethod
@@ -652,7 +712,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             curves.append(cmds.curve(p=[top_pts[i], bot_pts[i]], d=1))
 
         base = cmds.group(em=True, n=name)
-        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        cls._merge_curve_shapes(base, curves)
         return base
 
     @classmethod
@@ -668,7 +728,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             name=f"{name}_yz", ch=False, r=1.0, s=int(sections), nr=(1, 0, 0)
         )[0]
 
-        cls._merge_curve_shapes(xy, [xz, yz], delete_sources=True)
+        cls._merge_curve_shapes(xy, [xz, yz])
         return xy
 
     @classmethod
@@ -720,7 +780,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             curves.append(cmds.curve(p=[verts[i], verts[j]], d=1))
 
         base = cmds.group(em=True, n=name)
-        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        cls._merge_curve_shapes(base, curves)
         return base
 
     @classmethod
@@ -809,7 +869,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             curves.append(cmds.curve(p=[verts[i], verts[j]], d=1))
 
         base = cmds.group(em=True, n=name)
-        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        cls._merge_curve_shapes(base, curves)
         return base
 
     @classmethod
@@ -863,7 +923,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             curves.append(cmds.curve(p=[apex, pt], d=1))
 
         base = cmds.group(em=True, n=name)
-        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        cls._merge_curve_shapes(base, curves)
         return base
 
     @classmethod
@@ -902,7 +962,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             curves.append(cmds.curve(p=[top_pts[i], bot_pts[i]], d=1))
 
         base = cmds.group(em=True, n=name)
-        cls._merge_curve_shapes(base, curves, delete_sources=True)
+        cls._merge_curve_shapes(base, curves)
         return base
 
     @classmethod

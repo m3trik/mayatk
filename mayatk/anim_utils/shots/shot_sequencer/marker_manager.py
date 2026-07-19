@@ -12,6 +12,19 @@ from __future__ import annotations
 __all__ = ["MarkerManagerMixin"]
 
 
+def _marker_to_dict(md) -> dict:
+    """Serialize a widget marker into the store's marker dict shape."""
+    return {
+        "time": md.time,
+        "note": md.note,
+        "color": md.color,
+        "draggable": md.draggable,
+        "style": md.style,
+        "line_style": md.line_style,
+        "opacity": md.opacity,
+    }
+
+
 class MarkerManagerMixin:
     """Mixin supplying marker CRUD persistence.
 
@@ -31,17 +44,7 @@ class MarkerManagerMixin:
         md = widget.get_marker(marker_id)
         if md is None:
             return
-        self.sequencer.markers.append(
-            {
-                "time": md.time,
-                "note": md.note,
-                "color": md.color,
-                "draggable": md.draggable,
-                "style": md.style,
-                "line_style": md.line_style,
-                "opacity": md.opacity,
-            }
-        )
+        self.sequencer.markers.append(_marker_to_dict(md))
         # Markers are serialized with the store — without marking it
         # dirty the edit is silently dropped on the next save cycle.
         self.sequencer.store.mark_dirty()
@@ -65,16 +68,5 @@ class MarkerManagerMixin:
         widget = self._get_sequencer_widget()
         if widget is None:
             return
-        self.sequencer.markers = [
-            {
-                "time": md.time,
-                "note": md.note,
-                "color": md.color,
-                "draggable": md.draggable,
-                "style": md.style,
-                "line_style": md.line_style,
-                "opacity": md.opacity,
-            }
-            for md in widget.markers()
-        ]
+        self.sequencer.markers = [_marker_to_dict(md) for md in widget.markers()]
         self.sequencer.store.mark_dirty()

@@ -1293,7 +1293,12 @@ class LightmapBaker(ptk.LoggingMixin):
             )
             bgr = np.nan_to_num(bgr, nan=0.0, posinf=cls._HALF_MAX, neginf=0.0)
         np.clip(bgr, 0.0, cls._HALF_MAX, out=bgr)
-        cv2.imwrite(path, bgr, [cv2.IMWRITE_EXR_TYPE, cv2.IMWRITE_EXR_TYPE_HALF])
+        # cv2 returns False (no exception) when EXR write support is missing:
+        # callers delete per-object maps once this returns, so a silent failure
+        # would destroy the source with no atlas on disk -- raise to enforce it.
+        ok = cv2.imwrite(path, bgr, [cv2.IMWRITE_EXR_TYPE, cv2.IMWRITE_EXR_TYPE_HALF])
+        if not ok:
+            raise RuntimeError(f"failed to write EXR: {path}")
 
     @classmethod
     def _dilate_lightmap(cls, path: str, alpha_threshold: float, iterations: int) -> bool:

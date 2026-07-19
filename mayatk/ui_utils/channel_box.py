@@ -263,7 +263,11 @@ class ChannelBox:
             attrs = cmds.channelBox(cb, q=True, **{attr_flag: True}) or []
             for obj in objs:
                 for attr in attrs:
-                    plugs.append(f"{obj}.{attr}")
+                    plug = f"{obj}.{attr}"
+                    # Drop cross-invalid pairs from heterogeneous selections
+                    # (e.g. a mesh shape paired with a light-only attribute).
+                    if cmds.objExists(plug):
+                        plugs.append(plug)
 
         return list(dict.fromkeys(plugs))
 

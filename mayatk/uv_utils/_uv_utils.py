@@ -1073,8 +1073,8 @@ class UvUtils(ptk.HelpMixin):
 
             # Calculate bounding box center for UVs
             bc = cmds.polyEvaluate(shell_uvs, bc2=True)
-            pU = (bc[0][0] + bc[1][0]) / 2
-            pV = (bc[0][1] + bc[1][1]) / 2
+            pU = (bc[0][0] + bc[0][1]) / 2
+            pV = (bc[1][0] + bc[1][1]) / 2
 
             # Scale UVs
             cmds.polyEditUV(shell_uvs, pu=pU, pv=pV, su=scale, sv=scale)
@@ -1163,8 +1163,17 @@ class UvUtils(ptk.HelpMixin):
                 continue
             if original_set in all_sets:
                 UvUtils._copy_uv_set_in_place(shape, snap_set, original_set)
-            cmds.polyUVSet(shape, currentUVSet=True, uvSet=original_set)
-            cmds.polyUVSet(shape, delete=True, uvSet=snap_set)
+                cmds.polyUVSet(shape, currentUVSet=True, uvSet=original_set)
+                cmds.polyUVSet(shape, delete=True, uvSet=snap_set)
+            else:
+                # A destructive op removed the original set; rename the
+                # snapshot back into its place rather than selecting a set
+                # that no longer exists (which raises RuntimeError and
+                # would abort restoration of every remaining shape).
+                cmds.polyUVSet(
+                    shape, rename=True, uvSet=snap_set, newUVSet=original_set
+                )
+                cmds.polyUVSet(shape, currentUVSet=True, uvSet=original_set)
 
     @staticmethod
     @CoreUtils.undoable
@@ -1402,7 +1411,7 @@ class UvUtils(ptk.HelpMixin):
 
             deleted: list[str] = []
             all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
-            current = cmds.polyUVSet(shape, query=True, currentUVSet=True)
+            current = (cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None])[0]
 
             for uv_set in list(all_sets):
                 try:

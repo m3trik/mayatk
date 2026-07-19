@@ -21,32 +21,6 @@ class AnimCurveDiagnostics:
 
     @classmethod
     @CoreUtils.undoable
-    def repair_corrupted_curves(
-        cls,
-        objects: Optional[Union[NodeLike, Sequence[NodeLike]]] = None,
-        recursive: bool = True,
-        delete_corrupted: bool = False,
-        fix_infinite: bool = True,
-        fix_invalid_times: bool = True,
-        time_range_threshold: float = 1e6,
-        value_threshold: float = 1e6,
-        quiet: bool = False,
-    ) -> Dict[str, Any]:
-        """Detect and (optionally) repair corrupted animation curves."""
-
-        return cls._repair_corrupted_curves(
-            objects=objects,
-            recursive=recursive,
-            delete_corrupted=delete_corrupted,
-            fix_infinite=fix_infinite,
-            fix_invalid_times=fix_invalid_times,
-            time_range_threshold=time_range_threshold,
-            value_threshold=value_threshold,
-            quiet=quiet,
-        )
-
-    @classmethod
-    @CoreUtils.undoable
     def repair_visibility_tangents(
         cls,
         objects: Optional[Union[NodeLike, Sequence[NodeLike]]] = None,
@@ -106,7 +80,8 @@ class AnimCurveDiagnostics:
         return count
 
     @classmethod
-    def _repair_corrupted_curves(
+    @CoreUtils.undoable
+    def repair_corrupted_curves(
         cls,
         objects: Optional[Union[NodeLike, Sequence[NodeLike]]] = None,
         recursive: bool = True,
@@ -117,8 +92,22 @@ class AnimCurveDiagnostics:
         value_threshold: float = 1e6,
         quiet: bool = False,
     ) -> Dict[str, Any]:
-        """Internal implementation shared by public API and legacy wrappers."""
+        """Detect and (optionally) repair corrupted animation curves.
 
+        Parameters:
+            objects: Specific objects to check. None checks every curve in the scene.
+            recursive: Also check the hierarchy when ``objects`` are transforms.
+            delete_corrupted: Delete curves whose keys cannot be repaired.
+            fix_infinite: Flag/remove keys with NaN/Inf or extreme values.
+            fix_invalid_times: Flag/remove keys with NaN/Inf or extreme times.
+            time_range_threshold: Abs time beyond which a key is invalid.
+            value_threshold: Abs value beyond which a key is invalid.
+            quiet: Suppress console output.
+
+        Returns:
+            dict: ``corrupted_found`` / ``curves_repaired`` / ``curves_deleted``
+            / ``keys_fixed`` counters plus a ``details`` list.
+        """
         anim_curves = cls._collect_anim_curves(objects, recursive)
 
         if not anim_curves:

@@ -19,11 +19,9 @@ except ImportError:
         pass
 
 import maya.cmds as cmds
-from mayatk.core_utils.diagnostics.scene_diag import (
-    SceneAnalyzer,
-    SceneDiagnostics,
-    AuditProfile,
-)
+from mayatk.core_utils.diagnostics.audit_records import AuditProfile
+from mayatk.core_utils.diagnostics.scene_audit import SceneAnalyzer
+from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
 from base_test import MayaTkTestCase
 
 
@@ -246,6 +244,19 @@ class TestSceneDiagnostics(MayaTkTestCase):
 
         findings_str_single = str(rec1_single.findings)
         self.assertIn("Oversized Texture", findings_str_single)
+
+
+class TestSceneRepair(MayaTkTestCase):
+    """SceneDiagnostics — repair helpers (clean-scene smoke)."""
+
+    def test_fix_unknown_plugins_clean_scene_returns_empty(self):
+        result = SceneDiagnostics.fix_unknown_plugins(dry_run=True, verbose=False)
+        self.assertEqual(result, {"nodes": [], "plugins": []})
+
+    def test_cleanup_scene_returns_summary(self):
+        result = SceneDiagnostics.cleanup_scene(quiet=True)
+        self.assertIn("unknown", result)
+        self.assertEqual(result["xgen_removed"], 0)
 
 
 if __name__ == "__main__":

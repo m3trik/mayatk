@@ -62,5 +62,28 @@ class TestMayaUiHandlerCanResolve(unittest.TestCase):
         self.assertFalse(self.handler.can_resolve(""))
 
 
+class TestMayaUiHandlerLogLinkRegistration(unittest.TestCase):
+    """Lock the log-link dependency-inversion wiring MayaUiHandler.__init__ does.
+
+    That registration is wrapped in try/except (never block UI startup), so a
+    drifted import path would be swallowed silently. This exercises the exact
+    import + registration the handler performs, so a move of
+    ``UiUtils.dispatch_log_link`` fails loudly here (the blendertk suite covers
+    the full-construction path; MayaUiHandler.__init__ needs a GUI Maya).
+    """
+
+    def test_dispatch_log_link_registers_with_uitk(self):
+        from uitk.bridge.slots import _LOG_LINK_HANDLERS, register_log_link_handler
+        from mayatk.ui_utils._ui_utils import UiUtils
+
+        saved = list(_LOG_LINK_HANDLERS)
+        try:
+            _LOG_LINK_HANDLERS.clear()
+            register_log_link_handler(UiUtils.dispatch_log_link)
+            self.assertIn(UiUtils.dispatch_log_link, _LOG_LINK_HANDLERS)
+        finally:
+            _LOG_LINK_HANDLERS[:] = saved
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -119,26 +119,44 @@ class DuplicateGrid(ptk.LoggingMixin):
 
         # "instance" / "copy": keep the holder as the result group, named after
         # the source rather than a fixed "grid_duplicated_group".
-        result = cmds.rename(volume, Naming.generate_unique_name(f"{base}_grid_grp"))
-        DisplayUtils.add_to_isolation_set(
-            cmds.listRelatives(result, children=True, fullPath=True) or []
-        )
-        return result
+        return cls._finalize_group(volume, base)
 
     @classmethod
     def _combine(cls, objects: List[str], holder: str, base: str) -> List[str]:
-        """Merge ``objects`` into a single mesh named ``{base}_grid``.
+        """Merge the polygonal copies in ``objects`` into one mesh ``{base}_grid``.
 
-        ``polyUnite`` consumes the copies' shapes and emits one new transform;
-        the now-empty source transforms remain inside ``holder``, which is then
-        deleted. The combined mesh is lifted to world first so the holder delete
-        can't take it with it. A lone copy (e.g. a 1x1x1 grid) skips polyUnite —
-        which rejects a single input — and is just lifted out and renamed.
+        ``polyUnite`` consumes the copies' mesh shapes and emits one new
+        transform; the now-empty source transforms remain inside ``holder``,
+        which is then deleted. The combined mesh is lifted to world first so the
+        holder delete can't take it with it.
+
+        Only polygonal copies can be merged, and ``polyUnite`` demands *at least
+        two* of them — it rejects a single (or zero) input with a cryptic
+        "needs at least 2 polygonal objects". The selection can carry non-mesh
+        objects (locators, curves, empty groups), so the raw copy count is the
+        wrong gate; partition the copies by whether they hold real geometry:
+
+          * ``>= 2`` meshes — ``polyUnite`` them (non-mesh copies are discarded
+            with the holder, matching combine's one-mesh contract).
+          * exactly ``1`` — lift-and-rename it (a 1x1x1 grid, or a lone mesh
+            among non-mesh copies); ``polyUnite`` is skipped.
+          * ``0`` — nothing to merge; fall back to grouping the copies so the
+            grid still gets built, and warn instead of crashing.
         """
-        if len(objects) > 1:
-            combined = cmds.polyUnite(objects, ch=False, mergeUVSets=True)[0]
+        poly = [o for o in objects if cls._is_polygonal(o)]
+
+        if not poly:
+            # No geometry to unite -- keep the copies grouped (like "copy" mode)
+            # rather than handing polyUnite an empty set and crashing the op.
+            cls.logger.warning(
+                "Combine: selection has no polygon geometry; returning grouped copies."
+            )
+            return [cls._finalize_group(holder, base)]
+
+        if len(poly) > 1:
+            combined = cmds.polyUnite(poly, ch=False, mergeUVSets=True)[0]
         else:
-            combined = objects[0]
+            combined = poly[0]
         if cmds.listRelatives(combined, parent=True, fullPath=True):
             combined = cmds.parent(combined, world=True)[0]
         if cmds.objExists(holder):
@@ -147,6 +165,29 @@ class DuplicateGrid(ptk.LoggingMixin):
         DisplayUtils.add_to_isolation_set(combined)
         cls.logger.debug(f"Combined grid into: {combined}")
         return [combined]
+
+    @staticmethod
+    def _finalize_group(holder: str, base: str) -> str:
+        """Rename ``holder`` to the source-derived ``{base}_grid_grp`` and register
+        its children with the isolation set. Returns the renamed group. Shared by
+        the ``instance``/``copy`` result and combine's no-geometry fallback."""
+        result = cmds.rename(holder, Naming.generate_unique_name(f"{base}_grid_grp"))
+        DisplayUtils.add_to_isolation_set(
+            cmds.listRelatives(result, children=True, fullPath=True) or []
+        )
+        return result
+
+    @staticmethod
+    def _is_polygonal(obj: str) -> bool:
+        """Return True if ``obj`` (itself or any descendant) holds a polygon mesh
+        — i.e. something ``polyUnite`` can actually merge. Descends so a group of
+        meshes counts, matching how ``polyUnite`` gathers its inputs."""
+        # Descendant check first: it resolves the common mesh/group copy in one
+        # call. Only genuine non-mesh copies (locators, curves) fall through to
+        # the self-check, which catches a bare mesh *shape* passed directly.
+        if cmds.listRelatives(obj, allDescendents=True, type="mesh", fullPath=True):
+            return True
+        return bool(cmds.ls(obj, type="mesh"))
 
     @staticmethod
     def _replicate_axis(

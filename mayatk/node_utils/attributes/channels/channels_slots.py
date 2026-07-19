@@ -513,7 +513,10 @@ class ChannelsSlots:
             if not name:
                 self.sb.message_box("Warning: Attribute name cannot be empty.")
                 return
-            sel = cmds.ls(sl=True)
+            # Honor pins / single-object mode like every other operation in
+            # the panel — reading cmds.ls(sl=True) directly would target the
+            # live viewport selection instead of the pinned/displayed targets.
+            sel = self.controller.get_selected_nodes()
             if not sel:
                 self.sb.message_box("Warning: Nothing selected.")
                 return
@@ -1293,61 +1296,69 @@ class ChannelsSlots:
                 )
                 self._configure_columns(widget)
                 self._apply_row_height(widget)
-                return
+                # Fall through (no early return) so the post-refresh reconcile
+                # after the try/finally — Type-column restore, footer update,
+                # and auto-fit resize — still runs on the empty-selection path.
+            else:
+                self._footer_warning = ""
 
-            self._footer_warning = ""
-
-            filter_kwargs = self._get_filter_kwargs()
-            rows, attr_states = self.controller.build_table_data(nodes, filter_kwargs)
-
-            # Apply wildcard text filter when the toggle is on and a
-            # pattern is present.  Filtering itself is delegated to
-            # ``pythontk.IterUtils.filter_list``, which already handles
-            # comma-separated patterns, wildcards, and case-insensitivity.
-            pattern = getattr(self.ui, "txt000", None)
-            if self._filter_enabled and pattern and pattern.text().strip():
-                text = pattern.text().strip()
-                names = [r[0] for r in rows]
-                filtered = ptk.IterUtils.filter_list(names, inc=text, ignore_case=True)
-                keep = set(filtered)
-                zipped = [(r, s) for r, s in zip(rows, attr_states) if r[0] in keep]
-                if zipped:
-                    rows, attr_states = zip(*zipped)
-                    rows, attr_states = list(rows), list(attr_states)
-                else:
-                    rows, attr_states = [], []
-
-            widget.add(rows, headers=["Name", "", "", "Value", "Type"])
-            self._configure_columns(widget)
-
-            # Set action states (icon colours are handled by the action column config)
-            for row_idx, (is_locked, conn_type) in enumerate(attr_states):
-                widget.actions.set(
-                    row_idx,
-                    self.COL_LOCK,
-                    "locked" if is_locked else "unlocked",
-                )
-                widget.actions.set(
-                    row_idx,
-                    self.COL_CONN,
-                    conn_type,  # "none", "keyframe", "expression", etc.
+                filter_kwargs = self._get_filter_kwargs()
+                rows, attr_states = self.controller.build_table_data(
+                    nodes, filter_kwargs
                 )
 
-            # Make name cells editable for user-defined attrs and
-            # store the original name so renames can be detected.
-            self._set_name_editability(widget, nodes)
-            self._apply_row_height(widget)
+                # Apply wildcard text filter when the toggle is on and a
+                # pattern is present.  Filtering itself is delegated to
+                # ``pythontk.IterUtils.filter_list``, which already handles
+                # comma-separated patterns, wildcards, and case-insensitivity.
+                pattern = getattr(self.ui, "txt000", None)
+                if self._filter_enabled and pattern and pattern.text().strip():
+                    text = pattern.text().strip()
+                    names = [r[0] for r in rows]
+                    filtered = ptk.IterUtils.filter_list(
+                        names, inc=text, ignore_case=True
+                    )
+                    keep = set(filtered)
+                    zipped = [
+                        (r, s) for r, s in zip(rows, attr_states) if r[0] in keep
+                    ]
+                    if zipped:
+                        rows, attr_states = zip(*zipped)
+                        rows, attr_states = list(rows), list(attr_states)
+                    else:
+                        rows, attr_states = [], []
 
-            # Replace enum value cells with comboboxes.
-            self._setup_enum_combos(widget, nodes)
+                widget.add(rows, headers=["Name", "", "", "Value", "Type"])
+                self._configure_columns(widget)
 
-            # Sync table selection with channel box selection.
-            # Fetch fresh CB data *before* syncing so the table reflects
-            # the current state rather than a stale cache.
-            self._last_cb_selection = self._normalize_cb_attrs(
-                set(self.controller.get_channel_box_selection())
-            )
-            self._sync_table_to_channel_box(widget)
+                # Set action states (icon colours are handled by the action column config)
+                for row_idx, (is_locked, conn_type) in enumerate(attr_states):
+                    widget.actions.set(
+                        row_idx,
+                        self.COL_LOCK,
+                        "locked" if is_locked else "unlocked",
+                    )
+                    widget.actions.set(
+                        row_idx,
+                        self.COL_CONN,
+                        conn_type,  # "none", "keyframe", "expression", etc.
+                    )
+
+                # Make name cells editable for user-defined attrs and
+                # store the original name so renames can be detected.
+                self._set_name_editability(widget, nodes)
+                self._apply_row_height(widget)
+
+                # Replace enum value cells with comboboxes.
+                self._setup_enum_combos(widget, nodes)
+
+                # Sync table selection with channel box selection.
+                # Fetch fresh CB data *before* syncing so the table reflects
+                # the current state rather than a stale cache.
+                self._last_cb_selection = self._normalize_cb_attrs(
+                    set(self.controller.get_channel_box_selection())
+                )
+                self._sync_table_to_channel_box(widget)
 
         except RuntimeError:
             # Widget (or a child) destroyed mid-refresh.
@@ -2030,7 +2041,9 @@ class ChannelsSlots:
         attrs, nodes = self._selected_attrs_and_nodes(selection)
         if not attrs:
             return
-        any_broken = any(self.controller.break_connections(nodes, a) for a in attrs)
+        # Materialize the list first — a generator would let any() short-circuit
+        # after the first connected attr, leaving the rest still connected.
+        any_broken = any([self.controller.break_connections(nodes, a) for a in attrs])
         if any_broken:
             self._refresh_table(self.ui.tbl000)
         else:

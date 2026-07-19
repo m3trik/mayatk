@@ -275,29 +275,204 @@ class TestRigUtils(MayaTkTestCase):
         self.assertFalse(cmds.getAttr(f"{b}.tx", lock=True))
         self.assertTrue(cmds.getAttr(f"{b}.ry", lock=True))
 
-    def test_setup_telescope_rig(self):
-        """Test setup_telescope_rig method."""
-        # Setup
+    def _build_telescope(self, segment_count=3, end_pos=(0, 10, 0), **kwargs):
+        """Build a telescope rig test scene: base at origin, end at *end_pos*,
+        cubes stacked along Y. Returns (base, end, segments, rig, bundle)."""
         base = cmds.spaceLocator(n="base_loc")[0]
         end = cmds.spaceLocator(n="end_loc")[0]
-        cmds.move(0, 10, 0, end)
-
-        seg1 = cmds.polyCube(n="seg1")[0]
-        seg2 = cmds.polyCube(n="seg2")[0]
-        seg3 = cmds.polyCube(n="seg3")[0]
-
-        # Test
+        cmds.xform(end, ws=True, t=end_pos)
+        segments = []
+        for i in range(segment_count):
+            seg = cmds.polyCube(n=f"seg{i + 1}")[0]
+            cmds.xform(seg, ws=True, t=(0, 1 + i * 2, 0))
+            segments.append(seg)
         rig = TelescopeRig()
-        rig.setup_telescope_rig(base, end, [seg1, seg2, seg3])
+        kwargs.setdefault("collapsed_distance", 2.0)
+        bundle = rig.setup_telescope_rig(base, end, segments, **kwargs)
+        return base, end, segments, rig, bundle
 
-        # Verify distance node created
-        self.assertTrue(cmds.objExists("strut_distance"))
+    def test_setup_telescope_rig(self):
+        """Basic 3-segment build: bundle, constraints, driven keys, locks."""
+        base, end, segs, rig, bundle = self._build_telescope()
 
-        # Verify constraints
+        # Distance node exists and reads WORLD-space distance.
+        self.assertTrue(cmds.objExists(bundle.distance_node))
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{bundle.distance_node}.distance"), 10.0, places=4
+        )
+
+        # Constraints: mutual locator aims + end parents + interior point/aim.
         self.assertTrue(cmds.listConnections(base, type="aimConstraint"))
+        self.assertTrue(cmds.listConnections(end, type="aimConstraint"))
+        for node in bundle.constraints:
+            self.assertTrue(cmds.objExists(node))
 
-        # Verify driven keys (scaleY should be connected to animCurve)
-        self.assertTrue(cmds.listConnections(f"{seg2}.scaleY", type="animCurve"))
+        # Driven key on the interior segment's along-axis scale only.
+        self.assertEqual(bundle.driven_plugs, [f"{segs[1]}.scaleY"])
+        self.assertTrue(cmds.listConnections(f"{segs[1]}.scaleY", type="animCurve"))
+
+        # Off-axis scales locked, driven axis left free.
+        self.assertTrue(cmds.getAttr(f"{segs[1]}.scaleX", lock=True))
+        self.assertTrue(cmds.getAttr(f"{segs[1]}.scaleZ", lock=True))
+        self.assertFalse(cmds.getAttr(f"{segs[1]}.scaleY", lock=True))
+
+        # User hierarchy untouched: no re-parenting, no helper locators.
+        for seg in segs:
+            self.assertIsNone(cmds.listRelatives(seg, parent=True))
+
+    def test_telescope_rig_five_segments_cycle_free(self):
+        """4+ segments must build cycle-free and distribute interiors evenly.
+
+        Regression: interiors were point-constrained to neighboring segments
+        (which hung under the adjacent helper locators), producing DG cycles
+        for any build beyond three segments.
+        """
+        base, end, segs, rig, bundle = self._build_telescope(segment_count=5)
+
+        self.assertFalse(cmds.cycleCheck(all=True, list=True) or [])
+
+        # Build pose preserved (maintained offsets — no pop on build): every
+        # segment still sits exactly where _build_telescope placed it.
+        for i, seg in enumerate(segs):
+            got = cmds.xform(seg, q=True, ws=True, t=True)
+            for got_c, want_c in zip(got, (0.0, 1 + i * 2, 0.0)):
+                self.assertAlmostEqual(got_c, want_c, places=4)
+
+        # Extend the strut: each interior shifts by its fraction of the delta.
+        cmds.xform(end, ws=True, t=(0, 16, 0))
+        for i, seg in enumerate(segs[1:-1], start=1):
+            fraction = i / 4.0
+            expected_y = (1 + i * 2) + fraction * 6.0
+            self.assertAlmostEqual(
+                cmds.xform(seg, q=True, ws=True, t=True)[1], expected_y, places=3
+            )
+
+    def test_telescope_rig_scale_tracks_distance(self):
+        """Interior scale = distance/initial, clamped at the collapse ratio.
+
+        Regression: default driven-key tangents/infinity stopped the scale at
+        the key range, tearing the rig open when extended past build pose.
+        """
+        base, end, segs, rig, bundle = self._build_telescope(
+            segment_count=3, collapsed_distance=2.0
+        )
+        plug = f"{segs[1]}.scaleY"
+
+        cmds.xform(end, ws=True, t=(0, 16, 0))  # beyond build pose
+        self.assertAlmostEqual(cmds.getAttr(plug), 1.6, places=3)
+
+        cmds.xform(end, ws=True, t=(0, 5, 0))  # mid travel
+        self.assertAlmostEqual(cmds.getAttr(plug), 0.5, places=3)
+
+        cmds.xform(end, ws=True, t=(0, 1, 0))  # past full collapse: clamp
+        self.assertAlmostEqual(cmds.getAttr(plug), 0.2, places=3)
+
+    def test_telescope_rig_world_space_driver(self):
+        """distanceBetween must read world positions, not local .translate.
+
+        Regression: the driver read local translate, so a parented locator
+        measured the wrong distance.
+        """
+        base = cmds.spaceLocator(n="base_loc")[0]
+        grp = cmds.group(base, n="base_grp")
+        cmds.xform(grp, ws=True, t=(10, 0, 0))
+        end = cmds.spaceLocator(n="end_loc")[0]
+        cmds.xform(end, ws=True, t=(0, 10, 0))
+        segs = [cmds.polyCube(n=f"seg{i}")[0] for i in (1, 2, 3)]
+
+        rig = TelescopeRig()
+        bundle = rig.setup_telescope_rig(base, end, segs, collapsed_distance=2.0)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{bundle.distance_node}.distance"), 14.1421, places=3
+        )
+
+    def test_telescope_rig_axis_parameter(self):
+        """aim_axis remaps the driven scale channel and the lock set."""
+        base = cmds.spaceLocator(n="base_loc")[0]
+        end = cmds.spaceLocator(n="end_loc")[0]
+        cmds.xform(end, ws=True, t=(10, 0, 0))
+        segs = []
+        for i in range(3):
+            seg = cmds.polyCube(n=f"seg{i + 1}")[0]
+            cmds.xform(seg, ws=True, t=(1 + i * 2, 0, 0))
+            segs.append(seg)
+
+        rig = TelescopeRig()
+        bundle = rig.setup_telescope_rig(
+            base, end, segs, collapsed_distance=2.0, aim_axis="x"
+        )
+        self.assertEqual(bundle.driven_plugs, [f"{segs[1]}.scaleX"])
+        self.assertTrue(cmds.getAttr(f"{segs[1]}.scaleY", lock=True))
+        self.assertTrue(cmds.getAttr(f"{segs[1]}.scaleZ", lock=True))
+        self.assertFalse(cmds.getAttr(f"{segs[1]}.scaleX", lock=True))
+
+        with self.assertRaises(ValueError):
+            rig.setup_telescope_rig(
+                base, end, segs, collapsed_distance=2.0, aim_axis="w"
+            )
+
+    def test_telescope_rig_failed_validation_leaves_scene_clean(self):
+        """A refused build must not create or modify anything.
+
+        Regression: the zero-distance check ran after constraints and
+        re-parenting, leaving debris in the scene on failure.
+        """
+        base = cmds.spaceLocator(n="base_loc")[0]
+        end = cmds.spaceLocator(n="end_loc")[0]  # coincident with base
+        segs = [cmds.polyCube(n=f"seg{i}")[0] for i in (1, 2, 3)]
+        before = set(cmds.ls(long=True))
+
+        rig = TelescopeRig()
+        with self.assertRaises(ValueError):
+            rig.setup_telescope_rig(base, end, segs)
+        self.assertEqual(set(cmds.ls(long=True)), before)
+
+        # Out-of-range collapsed_distance refuses just as cleanly.
+        cmds.xform(end, ws=True, t=(0, 10, 0))
+        with self.assertRaises(ValueError):
+            rig.setup_telescope_rig(base, end, segs, collapsed_distance=15.0)
+        self.assertEqual(set(cmds.ls(long=True)), before)
+
+        # Duplicate / nonexistent segments and overlapping roles refuse cleanly.
+        with self.assertRaises(ValueError):
+            rig.setup_telescope_rig(
+                base, end, [segs[0], segs[0], segs[1]], collapsed_distance=2.0
+            )
+        with self.assertRaises(ValueError):
+            rig.setup_telescope_rig(
+                base, end, [segs[0], "does_not_exist", segs[1]], collapsed_distance=2.0
+            )
+        with self.assertRaises(ValueError):
+            rig.setup_telescope_rig(base, base, segs, collapsed_distance=2.0)
+        self.assertEqual(set(cmds.ls(long=True)), before)
+
+        # A locked driven channel is caught pre-flight, not mid-build.
+        cmds.setAttr(f"{segs[1]}.scaleY", lock=True)
+        with self.assertRaises(ValueError):
+            rig.setup_telescope_rig(base, end, segs, collapsed_distance=2.0)
+        self.assertEqual(set(cmds.ls(long=True)), before)
+
+    def test_telescope_rig_teardown(self):
+        """teardown removes every created node and restores locks/scales."""
+        base, end, segs, rig, bundle = self._build_telescope()
+        cmds.xform(end, ws=True, t=(0, 16, 0))  # leave the rig posed
+
+        self.assertTrue(rig.teardown())
+
+        self.assertFalse(cmds.objExists(bundle.distance_node))
+        for node in bundle.constraints:
+            self.assertFalse(cmds.objExists(node))
+        self.assertFalse(
+            cmds.listConnections(f"{segs[1]}.scaleY", type="animCurve") or []
+        )
+        # Locks released, build-pose scale restored, geometry still present.
+        self.assertFalse(cmds.getAttr(f"{segs[1]}.scaleX", lock=True))
+        self.assertAlmostEqual(cmds.getAttr(f"{segs[1]}.scaleY"), 1.0, places=4)
+        for node in (base, end, *segs):
+            self.assertTrue(cmds.objExists(node))
+
+        # Nothing left to tear down on a second call.
+        self.assertFalse(rig.teardown())
 
     def test_create_switch(self):
         """Test create_switch method via Attributes."""

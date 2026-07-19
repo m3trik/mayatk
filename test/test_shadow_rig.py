@@ -91,6 +91,54 @@ class TestShadowRig(MayaTkTestCase):
         rig = self._make(axis="y")
         self.assertTrue(os.path.exists(rig.texture_path))
 
+    def test_namespaced_target(self):
+        """A namespaced target builds with namespace-free rig node names and
+        a legal texture filename (':' is invalid in Windows filenames)."""
+        cmds.namespace(add="char")
+        cube = cmds.polyCube(name="char:NsBox", width=2, height=2, depth=2)[0]
+        rig = ShadowRig.create([cube], light_pos=(5, 10, 5), texture_res=64)
+        if rig.texture_path:
+            self._textures.append(rig.texture_path)
+        self.assertNodeExists("NsBox_shadow")
+        self.assertNodeExists("NsBox_shadow_grp")
+        self.assertNotIn(":", os.path.basename(rig.texture_path))
+        self.assertTrue(os.path.exists(rig.texture_path))
+
+    def test_path_qualified_target(self):
+        """Duplicate leaf names force a path-qualified target — '|' must not
+        leak into rig node names (illegal in the name flag)."""
+        grp = cmds.group(self.cube)
+        cmds.polyCube(name="Box", width=2, height=2, depth=2)  # second root "Box"
+        rig = ShadowRig.create(
+            [f"{grp}|Box"], light_pos=(5, 10, 5), texture_res=64
+        )
+        if rig.texture_path:
+            self._textures.append(rig.texture_path)
+        self.assertTrue(rig.shadow_plane and cmds.objExists(rig.shadow_plane))
+        self.assertNotIn("|", os.path.basename(rig.texture_path))
+        # Same reference geometry as the plain build -> same evaluated stretch.
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{rig.shadow_plane}.scaleX"), 1.4545, places=2
+        )
+
+    def test_create_rollback_on_failure(self):
+        """A failed create() (mesh-less target) rolls back every node it
+        created — no orphan source/locator/plane left behind."""
+        empty = cmds.spaceLocator(name="no_mesh_loc")[0]
+        before = set(cmds.ls(long=True))
+        with self.assertRaises(ValueError):
+            ShadowRig.create([empty], texture_res=64)
+        self.assertEqual(set(cmds.ls(long=True)), before)
+
+    def test_source_name_conflict(self):
+        """An existing non-transform node squatting the source name raises a
+        clear ValueError (and rolls back) instead of failing mid-build."""
+        cmds.createNode("multiplyDivide", name="taken_src")
+        before = set(cmds.ls(long=True))
+        with self.assertRaises(ValueError):
+            ShadowRig.create([self.cube], source_name="taken_src", texture_res=64)
+        self.assertEqual(set(cmds.ls(long=True)), before)
+
     # ------------------------------------------------------------------ evaluate
     def test_stretch_evaluation(self):
         """Grounded target: objectHeight-proportional stretch, heel at the
@@ -165,6 +213,86 @@ class TestShadowRig(MayaTkTestCase):
         )
         # A second bake finds no live expression -> no-op.
         self.assertEqual(ShadowRig.bake_planes([plane]), [])
+
+    def test_bake_planes_batch(self):
+        """bake_planes(None) bakes every live rig in a single pass."""
+        rig1 = self._make()
+        cube2 = cmds.polyCube(name="Box2", width=2, height=2, depth=2)[0]
+        rig2 = ShadowRig.create([cube2], light_pos=(5, 10, 5), texture_res=64)
+        if rig2.texture_path:
+            self._textures.append(rig2.texture_path)
+        cmds.playbackOptions(min=1, max=3)
+        baked = ShadowRig.bake_planes()
+        self.assertEqual(
+            sorted(baked), sorted([rig1.shadow_plane, rig2.shadow_plane])
+        )
+        for plane in (rig1.shadow_plane, rig2.shadow_plane):
+            self.assertEqual(
+                cmds.keyframe(f"{plane}.translateX", q=True, keyframeCount=True), 3
+            )
+            self.assertFalse(
+                cmds.listConnections(
+                    plane, source=True, destination=False, type="expression"
+                )
+            )
+
+    # ------------------------------------------------------------------ delete
+    def test_delete_rigs(self):
+        """delete_rigs tears down the WHOLE rig — plane, group, expression,
+        decomposeMatrix nodes, shading network, contact locator — clears the
+        metadata channel, and leaves the target + shared source untouched."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        rig = self._make()
+        doomed = (
+            "Box_shadow", "Box_shadow_grp", "Box_shadow_expr",
+            "Box_contact_dm", "Box_light_dm", "Box_contact_loc",
+            "Box_shadow_mat", "Box_shadow_mat_SG", "Box_shadow_tex",
+            "Box_shadow_place2d", "Box_shadow_opacity_mult",
+        )
+        deleted = ShadowRig.delete_rigs([rig.shadow_plane])
+        self.assertEqual(deleted, [rig.shadow_plane])
+        for node in doomed:
+            self.assertFalse(cmds.objExists(node), node)
+        self.assertTrue(cmds.objExists(self.cube))
+        self.assertTrue(cmds.objExists("shadow_source"))
+        self.assertIsNone(DataNodes.get_export_string(ShadowRig.SHADOW_METADATA))
+
+        # A BAKED rig (expression already gone) still tears down fully, and
+        # delete_textures removes the silhouette PNG from disk.
+        rig2 = self._make()
+        cmds.playbackOptions(min=1, max=2)
+        rig2.bake(1, 2)
+        tex = rig2.texture_path
+        self.assertTrue(os.path.exists(tex))
+        rig2.delete(delete_textures=True)
+        self.assertFalse(cmds.objExists("Box_shadow"))
+        self.assertFalse(cmds.objExists("Box_contact_loc"))
+        self.assertFalse(os.path.exists(tex))
+
+    def test_referenced_rig_skipped(self):
+        """A REFERENCED shadow plane can't have its rig nodes deleted from
+        the referencing scene — bake_planes and delete_rigs must skip it
+        (with a warning) instead of erroring mid-batch."""
+        self._make()
+        temp_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "temp_tests"
+        )
+        os.makedirs(temp_dir, exist_ok=True)
+        scene = os.path.join(temp_dir, "shadow_ref_src.ma")
+        cmds.file(rename=scene)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        self.addCleanup(
+            lambda: os.remove(scene) if os.path.exists(scene) else None
+        )
+        cmds.file(new=True, force=True)
+        cmds.file(scene, reference=True, namespace="ref")
+
+        planes = ShadowRig.find_shadow_planes()
+        self.assertEqual(len(planes), 1)
+        self.assertEqual(ShadowRig.bake_planes(), [])
+        self.assertEqual(ShadowRig.delete_rigs(), [])
+        self.assertTrue(cmds.objExists(planes[0]))
 
     def test_find_shadow_planes(self):
         """Planes are found by the stamped basePlaneSize attr, including via

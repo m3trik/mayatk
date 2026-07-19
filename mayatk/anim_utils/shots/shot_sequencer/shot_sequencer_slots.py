@@ -54,6 +54,7 @@ from mayatk.anim_utils.shots.shot_sequencer.segment_collector import (
 from mayatk.anim_utils.shots.shot_sequencer.shot_nav import ShotNavMixin
 from mayatk.anim_utils.shots.shot_sequencer.marker_manager import MarkerManagerMixin
 from mayatk.anim_utils.shots._shots import StoreEvent
+from mayatk.core_utils._core_utils import leaf_name
 from mayatk.node_utils.attributes._attributes import Attributes
 
 
@@ -1224,12 +1225,6 @@ class ShotSequencerController(
         spn_snap = getattr(self.ui, "spn_snap", None)
         if spn_snap is not None:
             widget.snap_interval = float(spn_snap.value())
-        spn_gap = getattr(self.ui, "spn_gap", None)
-        if spn_gap is not None:
-            stored_gap = self.sequencer.store.gap if self.sequencer else 0
-            spn_gap.blockSignals(True)
-            spn_gap.setValue(int(stored_gap))
-            spn_gap.blockSignals(False)
 
         # QSettings.allKeys() is a disk-backed scan (~4ms each) — cache
         # the resolved color map and only rebuild when the color dialog
@@ -1339,7 +1334,7 @@ class ShotSequencerController(
                     if fg:
                         color_kw["text_color"] = fg
             tid = widget.add_track(
-                obj_name.split("|")[-1],
+                leaf_name(obj_name),
                 icon=icon,
                 dimmed=not in_active or not exists,
                 italic=not in_active and exists,
@@ -1913,9 +1908,22 @@ class ShotSequencerController(
                     if not curves:
                         continue
                     for t in times:
+                        # Count a time only when at least one cutKey succeeded
+                        # — otherwise an all-failed pass still reports "Deleted
+                        # N keys" and triggers the state resync for nothing.
+                        cut_ok = False
                         for crv in curves:
-                            cmds.cutKey(str(crv), time=(t, t), clear=True)
-                    deleted += len(times)
+                            try:
+                                cmds.cutKey(str(crv), time=(t, t), clear=True)
+                                cut_ok = True
+                            except Exception:
+                                self.logger.debug(
+                                    "_delete_selected_clip_keys: cutKey failed for '%s'.",
+                                    crv,
+                                    exc_info=True,
+                                )
+                        if cut_ok:
+                            deleted += 1
 
             if deleted:
                 self._save_shot_state()
@@ -1946,7 +1954,7 @@ class ShotSequencerController(
         # Check shot objects
         for shot in self.sequencer.shots:
             for obj in shot.objects:
-                if obj.split("|")[-1] == short_name:
+                if leaf_name(obj) == short_name:
                     return obj
         # Check audio source nodes
         if cmds is not None:
@@ -2013,30 +2021,11 @@ class ShotSequencerController(
         color_map = widget.attribute_colors if widget else {}
         show_holds = self._show_internal_holds
 
-        # Discover which attributes this object has animated curves for.
-        # We need the attribute names to iterate; the actual per-attribute
-        # curve filtering is handled by collect_segments via channel_box_attrs.
-        attr_names: set = set()
-        for curve in all_curves:
-            try:
-                conns = (
-                    cmds.listConnections(
-                        str(curve), plugs=True, destination=True, source=False
-                    )
-                    or []
-                )
-                for conn in conns:
-                    if "." in conn:
-                        attr_names.add(conn.rsplit(".", 1)[-1])
-            except Exception:
-                continue
-
-        store = self.sequencer.store if self.sequencer else None
-        is_obj_locked = bool(store and obj_name in store.locked_objects)
-
-        # Build a map from attribute name to its animCurve node so we can
-        # produce full-range background curve previews after the per-segment
-        # clips are assembled.
+        # Discover this object's animated attributes in one pass, mapping
+        # each to its animCurve node (first curve wins) — the names drive
+        # the per-attribute iteration below, the curves feed the
+        # full-range background previews.  Per-attribute curve filtering
+        # is handled by collect_segments via channel_box_attrs.
         attr_to_curve: dict = {}
         for curve in all_curves:
             try:
@@ -2048,10 +2037,13 @@ class ShotSequencerController(
                 )
                 for conn in conns:
                     if "." in conn:
-                        a = conn.rsplit(".", 1)[-1]
-                        attr_to_curve.setdefault(a, curve)
+                        attr_to_curve.setdefault(conn.rsplit(".", 1)[-1], curve)
             except Exception:
                 continue
+        attr_names = set(attr_to_curve)
+
+        store = self.sequencer.store if self.sequencer else None
+        is_obj_locked = bool(store and obj_name in store.locked_objects)
 
         # Determine the visible time range for the full-range curve based
         # on the current display mode.
@@ -2239,8 +2231,19 @@ class ShotSequencerController(
         footer = getattr(self.ui, "footer", None)
         if footer is None:
             return
-        if getattr(self, "_transport_controls", None) is not None:
-            return  # already built
+
+        # Key the rebuild guard off the persistent footer, not this
+        # controller's own attr: a slots re-init builds a NEW controller
+        # whose _transport_controls is always None, so a per-controller guard
+        # never trips and attach_to_footer (append-only) would stack a
+        # duplicate row plus a second _MayaPlayController on every reopen.
+        existing = getattr(footer, "_shot_transport_controls", None)
+        if existing is not None:
+            # Re-init over a live UI: adopt the existing row and repoint its
+            # playback at this controller instead of building a second one.
+            existing.set_play_controller(_MayaPlayController(self))
+            self._transport_controls = existing
+            return
 
         widget = self._get_sequencer_widget()
         if widget is None:
@@ -2265,6 +2268,7 @@ class ShotSequencerController(
         )
         transport.attach_to_footer(footer, side="right")
         self._transport_controls = transport
+        footer._shot_transport_controls = transport
 
         # Prime the audio binding now so the first scrub produces
         # sound — the widget's built-in audio slot runs before the
@@ -2431,8 +2435,23 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         if cmb_shot is not None:
             cmb_shot.restore_state = False
 
-        # Create controller
+        # Create controller. A slots re-init over the same still-alive loaded
+        # UI does NOT destroy self.ui, so the previous controller's
+        # remove_callbacks() (wired only to ui.destroyed at __init__) never
+        # runs — its Maya OM callbacks, ShotStore listener, and the
+        # class-global invalidation listener would otherwise accumulate
+        # one-per-reopen (bound methods of distinct instances never dedup),
+        # leaving orphaned controllers that rebuild the widget N times per
+        # event. remove_callbacks() is idempotent, so the old controller's
+        # still-connected ui.destroyed lambda stays harmless.
+        prev_controller = getattr(self.ui, "_shot_seq_controller", None)
+        if prev_controller is not None:
+            try:
+                prev_controller.remove_callbacks()
+            except Exception:
+                self.logger.debug("prev controller teardown failed", exc_info=True)
         self.controller = ShotSequencerController(self)
+        self.ui._shot_seq_controller = self.controller
 
         # SequencerWidget is promoted directly in the .ui file.
         # When loaded outside tentacle (deferred promotion), the widget

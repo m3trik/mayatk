@@ -7,6 +7,7 @@ passing in only the data they need.
 """
 from __future__ import annotations
 
+import logging
 import math
 
 try:
@@ -183,7 +184,11 @@ def extract_attributes(segments) -> list:
 
                 attrs.add(attr)
             except Exception:
-                pass
+                # Attribute discovery is best-effort, but a failing curve
+                # (deleted mid-query, ambiguous name) is worth a trace.
+                logging.getLogger(__name__).debug(
+                    "extract_attributes: skipped curve '%s'", curve, exc_info=True
+                )
     return sorted(attrs)
 
 

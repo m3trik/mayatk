@@ -214,6 +214,98 @@ class AutoInstancer(ptk.LoggingMixin):
             verbose=verbose,
         )
 
+        # Diagnostic tally of the last run — why matching meshes did (or did
+        # not) become instances. Populated in ``_process_groups``; read by the
+        # slot to explain "found matches but instanced nothing" (too simple /
+        # count) instead of the generic "no matching geometry".
+        self._reset_summary()
+
+    # ------------------------------------------------------------------
+    # Run summary (diagnostics)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def default_summary() -> Dict[str, object]:
+        """A zeroed run-summary — the shape of :attr:`last_run_summary`.
+
+        Keys mirror blendertk's ``AutoInstancer`` for parity:
+        ``matched_groups`` (viable groups of >=2 identical meshes discovered),
+        ``instanced_groups`` / ``instances_created`` (converted to shared
+        shapes), ``simple_groups`` (identical but below the micro-triangle
+        threshold — combined instead of instanced), ``kept_separate_groups``
+        (left as-is by the strategy: flagged individual / non-static),
+        ``micro_threshold`` (the triangle cutoff in force) and ``details``
+        (per-skipped-group records for the console:
+        ``{"name", "reason", "count", "tris"}``).
+        """
+        return {
+            "matched_groups": 0,
+            "instanced_groups": 0,
+            "instances_created": 0,
+            "simple_groups": 0,
+            "kept_separate_groups": 0,
+            "micro_threshold": InstancingStrategy.MICRO_TRI_THRESHOLD,
+            "details": [],
+        }
+
+    def _reset_summary(self) -> None:
+        self.last_run_summary = self.default_summary()
+        self.last_run_summary["micro_threshold"] = (
+            self.strategy_analyzer.MICRO_TRI_THRESHOLD
+        )
+
+    @staticmethod
+    def format_summary(summary: Dict[str, object], output_count: int) -> str:
+        """Human-readable, DCC-agnostic description of a run *summary*.
+
+        ``output_count`` is the number of live result nodes the caller kept
+        (prototypes + instances + combined remainder). Returns ASCII plain
+        text with ``-`` bullets (ASCII so a non-UTF-8 console ``print`` can't
+        raise) — the slot shows it in its message box (newlines → ``<br>``)
+        and prints it to the console verbatim.
+        """
+        matched = summary.get("matched_groups", 0)
+        if matched == 0:
+            if output_count > 0:
+                return (
+                    "Auto Instance: no geometrically identical meshes to "
+                    f"instance; combined loose geometry into {output_count} "
+                    "mesh(es)."
+                )
+            return "Auto Instance: no geometrically identical meshes were found."
+
+        micro = summary.get("micro_threshold", InstancingStrategy.MICRO_TRI_THRESHOLD)
+        details = summary.get("details", []) or []
+        simple = [d for d in details if d.get("reason") == "too_simple"]
+        kept = [d for d in details if d.get("reason") == "kept_separate"]
+        instanced = summary.get("instanced_groups", 0)
+        instances = summary.get("instances_created", 0)
+
+        def _names(items):
+            return ", ".join(
+                f"{d['name']} (x{d['count']}, {d['tris']} tris)" for d in items
+            )
+
+        lines = [f"Auto Instance: {matched} matching group(s) found."]
+        if instanced:
+            lines.append(
+                f"- Instanced {instanced} group(s) -> {instances} new instance(s)."
+            )
+        if simple:
+            lines.append(
+                f"- {len(simple)} group(s) too simple to instance (< {micro} "
+                f"tris); combined where possible: {_names(simple)}."
+            )
+        if kept:
+            lines.append(
+                f"- {len(kept)} group(s) left separate (flagged individual / "
+                f"non-static): {_names(kept)}."
+            )
+        # Only when no line above explains the outcome (e.g. every group's
+        # conversion failed) — otherwise the reasons above already say it.
+        if not (instanced or simple or kept):
+            lines.append("- Nothing was instanced.")
+        return "\n".join(lines)
+
     # ------------------------------------------------------------------
     # Configuration properties — forwarded to collaborators so post-init
     # changes stay in sync.
@@ -353,6 +445,7 @@ class AutoInstancer(ptk.LoggingMixin):
         return out
 
     def _run(self, nodes: List[str]) -> List[str]:
+        self._reset_summary()
         # ``check_hierarchy`` is derived per-run from the flow flags; the
         # instance attribute is user configuration and is never mutated here.
         check_hierarchy = self.check_hierarchy
@@ -804,7 +897,22 @@ class AutoInstancer(ptk.LoggingMixin):
             group_size = len(group.members) + 1
             strategy, tri_count = self._evaluate_group_strategy(group, group_size)
 
+            # A viable group of >=2 identical meshes — record it before the
+            # strategy gate so the summary can explain matches that were found
+            # but not instanced (too simple / count).
+            self.last_run_summary["matched_groups"] += 1
+            proto_name = short_name(group.prototype.transform)
+
             if strategy not in allowed_strategies:
+                self.last_run_summary["kept_separate_groups"] += 1
+                self.last_run_summary["details"].append(
+                    {
+                        "name": proto_name,
+                        "reason": "kept_separate",
+                        "count": group_size,
+                        "tris": tri_count,
+                    }
+                )
                 if self.verbose:
                     self.logger.info(
                         "Skipping instancing for %s (Strategy: %s, Count: %s)",
@@ -820,6 +928,15 @@ class AutoInstancer(ptk.LoggingMixin):
                 and tri_count < self.strategy_analyzer.MICRO_TRI_THRESHOLD
                 and group.prototype.transform not in defer_micro_except
             ):
+                self.last_run_summary["simple_groups"] += 1
+                self.last_run_summary["details"].append(
+                    {
+                        "name": proto_name,
+                        "reason": "too_simple",
+                        "count": group_size,
+                        "tris": tri_count,
+                    }
+                )
                 if self.verbose:
                     self.logger.info(
                         "Deferring %s micro duplicates of %s (%s tris) to the "
@@ -834,6 +951,8 @@ class AutoInstancer(ptk.LoggingMixin):
             if len(created) <= 1:
                 continue
             all_instances.extend(created)
+            self.last_run_summary["instanced_groups"] += 1
+            self.last_run_summary["instances_created"] += len(created) - 1
             report.append(
                 {
                     "prototype": group.prototype.transform,
@@ -1055,12 +1174,18 @@ def auto_instance(
     can_gpu_instance: bool = True,
     verbose: bool = True,
     log_level: str = "WARNING",
-) -> List[str]:
+    return_summary: bool = False,
+) -> Union[List[str], Tuple[List[str], Dict[str, object]]]:
     """Find and convert geometrically identical meshes into instances.
 
     One-shot convenience wrapper around :class:`AutoInstancer` — mirrors
     ``replace_with_instances``/``get_instances``/``uninstance``. See
     ``AutoInstancer.__init__``/``run`` for parameter details.
+
+    With ``return_summary=True`` returns ``(created, summary)`` where
+    ``summary`` is the run's :meth:`AutoInstancer.default_summary`-shaped
+    diagnostics (see :attr:`AutoInstancer.last_run_summary`); otherwise
+    returns just ``created`` (backward compatible).
     """
     instancer = AutoInstancer(
         tolerance=tolerance,
@@ -1082,7 +1207,10 @@ def auto_instance(
         verbose=verbose,
         log_level=log_level,
     )
-    return instancer.run(nodes)
+    created = instancer.run(nodes)
+    if return_summary:
+        return created, instancer.last_run_summary
+    return created
 
 
 if __name__ == "__main__":

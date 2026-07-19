@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.12.96"
+__version__ = "0.12.99"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -57,8 +57,9 @@ DEFAULT_INCLUDE = {
     "core_utils.preview": "Preview",
     "core_utils.script_job_manager": "ScriptJobManager",
     "core_utils.diagnostics->Diagnostics": "*",
-    "core_utils.diagnostics.scene_diag": [
-        "SceneAnalyzer",
+    "core_utils.diagnostics.scene_diag": "SceneDiagnostics",
+    "core_utils.diagnostics.scene_audit": "SceneAnalyzer",
+    "core_utils.diagnostics.audit_records": [
         "SceneInfoSection",
         "SceneReport",
         "AnalysisManifest",
@@ -81,7 +82,6 @@ DEFAULT_INCLUDE = {
         "SlotStats",
         "InstanceStats",
         "AuditProfile",
-        "SceneDiagnostics",
     ],
     # Edit utils - specific classes
     "edit_utils.selection": "Selection",

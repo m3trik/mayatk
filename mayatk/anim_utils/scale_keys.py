@@ -113,6 +113,28 @@ class ScaleKeys:
             )
             selected_keys_only = False
 
+        # Validate snap_mode up front (warn-and-fallback, mirroring mode and
+        # group_mode). An unvalidated value would reach ptk.MathUtils.round_value
+        # mid-operation and raise ValueError, leaving the scene half-processed.
+        # 'aggressive' is a valid alias here (mapped to 'aggressive_preferred'
+        # at the call site); None keeps its distinct bulk-scale branch.
+        if snap_mode is not None:
+            snap_normalized = str(snap_mode).strip().lower()
+            valid_snap = {
+                "none",
+                "nearest",
+                "floor",
+                "ceil",
+                "half_up",
+                "preferred",
+                "aggressive",
+                "aggressive_preferred",
+            }
+            if snap_normalized not in valid_snap:
+                cmds.warning(f"Invalid snap_mode '{snap_mode}'. Using 'nearest'.")
+                snap_normalized = "nearest"
+            snap_mode = snap_normalized
+
         # Initialize state
         self.objects = objects
         self.mode = mode
@@ -213,6 +235,12 @@ class ScaleKeys:
                 start = _coerce(values[0])
                 end = _coerce(values[1])
                 if start is not None or end is not None:
+                    # Order the pair when both ends are present, matching the
+                    # unconditional sort in the N-element path below. A
+                    # descending (start, end) would otherwise produce an
+                    # inverted time range that silently matches no keys.
+                    if start is not None and end is not None and start > end:
+                        start, end = end, start
                     return (start, end), False
 
             times: List[float] = []
@@ -346,7 +374,7 @@ class ScaleKeys:
         self,
         groups: List[List[Dict[str, Any]]],
         overlap_groups_data: List[Dict[str, Any]],
-    ) -> int:
+    ) -> Tuple[int, int]:
         """Execute speed-based scaling."""
         keys_scaled = 0
         processed_objects = 0
@@ -355,11 +383,11 @@ class ScaleKeys:
             factor_val = float(self.factor)
         except (TypeError, ValueError):
             cmds.warning("Factor must be a numeric value in speed mode.")
-            return 0
+            return 0, 0
 
         if factor_val <= 0.0:
             cmds.warning("Factor must be greater than 0 in speed mode.")
-            return 0
+            return 0, 0
 
         for group in groups:
             group_range = (

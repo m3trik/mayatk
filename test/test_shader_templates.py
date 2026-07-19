@@ -17,32 +17,6 @@ import shutil
 from base_test import MayaTkTestCase
 import maya.cmds as cmds
 
-# --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
-from contextlib import contextmanager as _contextmanager
-
-
-def _pm_open_file(*args, **kw):
-    kw.setdefault("open", True)
-    return cmds.file(*args, **kw)
-
-
-def _pm_new_file(**kw):
-    kw.setdefault("new", True)
-    return cmds.file(**kw)
-
-
-def _pm_rename_file(path):
-    return cmds.file(rename=path)
-
-
-@_contextmanager
-def _pm_undo_chunk():
-    cmds.undoInfo(openChunk=True)
-    try:
-        yield
-    finally:
-        cmds.undoInfo(closeChunk=True)
-# --- end shims ---
 from mayatk.mat_utils.shader_templates._shader_templates import (
     GraphCollector,
     GraphSaver,
@@ -57,9 +31,12 @@ class TestShaderTemplates(MayaTkTestCase):
     """Comprehensive tests for ShaderTemplates class."""
 
     def setUp(self):
-        """Set up test environment."""
-        # Override to avoid _pm_new_file(force=True) which might kill the test runner connection
-        # in some environments, but we'll try to be safe.
+        """Set up test environment.
+
+        Overrides the base scene reset: a forced new-file here can kill the
+        test-runner connection in some environments, so nodes are tracked and
+        deleted in tearDown instead.
+        """
         self.temp_dir = tempfile.mkdtemp()
         self.template_path = os.path.join(self.temp_dir, "test_template.yaml")
         self.nodes_to_delete = []
@@ -459,6 +436,51 @@ class TestShaderTemplates(MayaTkTestCase):
             "'colorR' should be present when keyable arg is removed.",
         )
 
+    def test_logger_injection_receives_feedback(self):
+        """A caller-supplied logger (e.g. the panel's redirected LoggingMixin
+        logger) must receive save/restore feedback.
+
+        Regression: GraphSaver printed and GraphRestorer logged to its own
+        detached stdlib logger ('ShaderTemplateManager'), so texture-resolution
+        and save messages never reached the panel's text-widget handler.
+        """
+        import logging
+
+        shader = cmds.shadingNode("lambert", asShader=True, name="log_test_lambert")
+        self.nodes_to_delete.append(shader)
+
+        records = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):
+                records.append(record.getMessage())
+
+        logger = logging.getLogger("test_shader_templates_capture")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        handler = _Capture()
+        logger.addHandler(handler)
+        try:
+            ShaderTemplates.save_template([shader], self.template_path, logger=logger)
+            self.assertTrue(
+                any("saved to" in m for m in records),
+                f"save feedback missing from injected logger: {records}",
+            )
+
+            records.clear()
+            restored = ShaderTemplates.restore_template(
+                self.template_path,
+                texture_paths=["C:/nowhere/Foo_Base_Color.png"],
+                logger=logger,
+            )
+            self.nodes_to_delete.extend(restored.values())
+            self.assertTrue(
+                any("Resolved" in m for m in records),
+                f"restore feedback missing from injected logger: {records}",
+            )
+        finally:
+            logger.removeHandler(handler)
+
     def test_full_restoration_with_maps(self):
         """
         Extensive test to verify full graph restoration with correct map connections
@@ -662,11 +684,12 @@ class TestShaderTemplates(MayaTkTestCase):
 
         if original_pbs:
             nodes_to_save.extend(cmds.listHistory(original_pbs))
-            # Set a specific attribute value to test restoration
-            if hasattr(original_pbs, "use_color_map"):
-                cmds.setAttr(f"{original_pbs}.use_color_map", 1.0)
-            if hasattr(original_pbs, "use_metallic_map"):
-                cmds.setAttr(f"{original_pbs}.use_metallic_map", 1.0)
+            # Set a specific attribute value to test restoration.
+            # (attributeQuery, not hasattr-on-string — the PyMel-migration
+            # leftover hasattr was always False, so these never ran.)
+            for attr in ("use_color_map", "use_metallic_map"):
+                if cmds.attributeQuery(attr, node=str(original_pbs), exists=True):
+                    cmds.setAttr(f"{original_pbs}.{attr}", 1.0)
 
         self.nodes_to_delete.extend(nodes_to_save)
 
@@ -690,22 +713,48 @@ class TestShaderTemplates(MayaTkTestCase):
         self.assertEqual(len(pbs_nodes), 1)
         pbs_node = pbs_nodes[0]
 
-        # Check Base Color Connection (Should be updated)
-        color_attr = getattr(pbs_node, "TEX_color_map", None)
-        if color_attr:
-            inputs = color_attr.inputs()
-            self.assertTrue(len(inputs) > 0, "Base Color should be connected")
-            file_node = inputs[0]
-            path = cmds.getAttr(f"{file_node}.fileTextureName")
-            self.assertTrue(
-                "Test_Base_Color.png" in path, "Base Color path should be updated"
+        # Check Base Color Connection (Should be updated). These were vacuous
+        # before: getattr/hasattr on a node-name *string* is always falsy, a
+        # PyMel-migration leftover — the assertions below never executed.
+        pbs_name = str(pbs_node)
+        self.assertTrue(
+            cmds.attributeQuery("TEX_color_map", node=pbs_name, exists=True),
+            "StingrayPBS node missing TEX_color_map (Standard.sfx not loaded?)",
+        )
+        inputs = (
+            cmds.listConnections(
+                f"{pbs_name}.TEX_color_map", source=True, destination=False
             )
+            or []
+        )
+        if not inputs:
+            # Compound attrs may carry connections only on their children.
+            children = (
+                cmds.attributeQuery("TEX_color_map", node=pbs_name, listChildren=True)
+                or []
+            )
+            for child in children:
+                inputs.extend(
+                    cmds.listConnections(
+                        f"{pbs_name}.{child}", source=True, destination=False
+                    )
+                    or []
+                )
+        self.assertTrue(inputs, "Base Color should be connected")
+        file_node = inputs[0]
+        path = cmds.getAttr(f"{file_node}.fileTextureName")
+        self.assertIn("Test_Base_Color.png", path, "Base Color path should be updated")
 
         # Check Attributes
-        if hasattr(pbs_node, "use_color_map"):
-            self.assertEqual(
-                cmds.getAttr(f"{pbs_node}.use_color_map"), 1.0, "use_color_map should be 1.0"
-            )
+        self.assertTrue(
+            cmds.attributeQuery("use_color_map", node=pbs_name, exists=True),
+            "StingrayPBS node missing use_color_map",
+        )
+        self.assertEqual(
+            cmds.getAttr(f"{pbs_name}.use_color_map"),
+            1.0,
+            "use_color_map should be 1.0",
+        )
 
         # Check Shading Engine Connection
         outputs = cmds.listConnections(f"{pbs_node}.outColor", source=False, destination=True, type="shadingEngine") or []
