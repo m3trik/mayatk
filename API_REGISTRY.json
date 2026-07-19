@@ -18470,7 +18470,7 @@
               "kind": "method",
               "signature": "(self, bundle: Optional[TelescopeRigBundle] = None) -> bool",
               "summary": "Remove a telescope rig built by this class.",
-              "line": 433,
+              "line": 436,
               "deprecated": false
             }
           ]
@@ -18478,7 +18478,7 @@
         {
           "name": "TelescopeRigSlots",
           "summary": "",
-          "line": 461,
+          "line": 464,
           "bases": [
             "ptk.LoggingMixin"
           ],
@@ -18489,7 +18489,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Configure header help text.",
-              "line": 488,
+              "line": 491,
               "deprecated": false
             },
             {
@@ -18498,7 +18498,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 577,
+              "line": 580,
               "deprecated": false
             }
           ]

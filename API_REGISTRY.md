@@ -3006,7 +3006,7 @@ Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
 - **[`class TelescopeRig(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L42)** — Telescope Rig
   - `TelescopeRig.setup_telescope_rig(self, base_locator: Union[str, List[str]], end_locator: Union[str, List[str]], segments: List[str], collapsed_distance: float = 1.0, aim_axis: str = 'y', world_up_type: str = 'scene', lock_attributes: bool = True, name: str = 'telescope') -> TelescopeRigBundle` — Sets up constraints and driven keys to make a series of segments telescope between two locators.
   - `TelescopeRig.teardown(self, bundle: Optional[TelescopeRigBundle] = None) -> bool` — Remove a telescope rig built by this class.
-- **[`class TelescopeRigSlots(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L461)**
+- **[`class TelescopeRigSlots(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L464)**
   - `TelescopeRigSlots.header_init(self, widget)` — Configure header help text.
   - `TelescopeRigSlots.build_rig(self)`
 
