@@ -865,27 +865,4 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             self.logger.debug(f"Rebuilt-network purge skipped: {e}")
 
 
-def import_blender_scene(src_path: str, **kwargs: Any) -> List[str]:
-    """Import a Blender scene (.blend) into the current Maya scene.
-
-    Convenience wrapper over :meth:`BlenderSceneImport.import_scene` -- launches a
-    fresh headless Blender to convert the scene to FBX, imports the FBX, rebuilds
-    manifest materials, and cleans up. Returns the transforms created. Requires a
-    local Blender install.
-    """
-    return BlenderSceneImport().import_scene(src_path, **kwargs)
-
-
-def bake_blender_scene(src_path: str, **kwargs: Any) -> str:
-    """Bake a foreign scene (.blend/.fbx) to a cached .ma and return its path.
-
-    Convenience wrapper over :meth:`BlenderSceneImport.bake_scene` -- the referenceable
-    counterpart of :func:`import_blender_scene`: pass the result to
-    ``cmds.file(..., reference=True)`` (or ``ReferenceManager.add_reference``) to
-    REFERENCE a foreign scene instead of importing it. A ``.blend`` source requires a
-    local Blender install; an ``.fbx`` does not.
-    """
-    return BlenderSceneImport().bake_scene(src_path, **kwargs)
-
-
-__all__ = ["BlenderSceneImport", "import_blender_scene", "bake_blender_scene"]
+__all__ = ["BlenderSceneImport"]

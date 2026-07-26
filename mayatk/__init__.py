@@ -52,7 +52,7 @@ DEFAULT_INCLUDE = {
     "audio_utils._audio_utils": "AudioUtils",
     # Core utils - specific classes
     "core_utils.components": "Components",
-    "core_utils.auto_instancer._auto_instancer": ["AutoInstancer", "auto_instance"],
+    "core_utils.auto_instancer._auto_instancer": "AutoInstancer",
     "core_utils.mash->Mash": "*",
     "core_utils.preview": "Preview",
     "core_utils.script_job_manager": "ScriptJobManager",
@@ -129,11 +129,7 @@ DEFAULT_INCLUDE = {
     # Pull direction — import a .blend into the CURRENT Maya scene via a headless
     # Blender FBX round-trip. Counterpart of blendertk's ``MayaSceneImport`` /
     # ``btk.import_maya_scene``.
-    "env_utils.blender_bridge._scene_import": [
-        "BlenderSceneImport",
-        "import_blender_scene",
-        "bake_blender_scene",
-    ],
+    "env_utils.blender_bridge._scene_import": "BlenderSceneImport",
     # Material utils
     "mat_utils.game_shader": "GameShader",
     "mat_utils.arnold_bridge": "ArnoldBridge",

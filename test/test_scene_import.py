@@ -31,7 +31,6 @@ from mayatk.env_utils.blender_bridge import _blender_bridge as bb
 from mayatk.env_utils.blender_bridge import _scene_import as si
 from mayatk.env_utils.blender_bridge._scene_import import (
     BlenderSceneImport,
-    import_blender_scene,
     _IMPORT_TEMPLATE,
 )
 
@@ -545,7 +544,6 @@ class TestSceneImportSurface(unittest.TestCase):
     def test_registered(self):
         import mayatk as mtk
 
-        self.assertIs(mtk.import_blender_scene, import_blender_scene)
         self.assertIs(mtk.BlenderSceneImport, BlenderSceneImport)
 
 
