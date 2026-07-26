@@ -6,6 +6,7 @@ Pure-Python tests run without Maya.  Maya-dependent tests bootstrap a
 standalone session via ``MayaConnection`` so they can run from a normal
 ``python -m pytest`` invocation (provided Maya is installed).
 """
+
 import unittest
 import sys
 import os
@@ -22,11 +23,9 @@ from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
 from mayatk.anim_utils.shots._shots import ShotStore
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import ColumnMap
 from mayatk.anim_utils.shots.shot_manifest.behaviors import (
+    Behaviors,
     load_behavior,
     resolve_keys,
-    apply_behavior,
-    compute_duration,
-    apply_to_shots,
 )
 from mayatk.audio_utils._audio_utils import AudioUtils
 import maya.cmds as cmds
@@ -52,6 +51,7 @@ except Exception:
         HAS_MAYA = _conn.is_connected
     except Exception:
         pass
+
 
 class TestShotBlock(unittest.TestCase):
     """Test ShotBlock dataclass."""
@@ -559,14 +559,12 @@ class TestSequencerMaya(unittest.TestCase):
         s1_start_before = seq.shot_by_id(1).start
         seq.set_shot_start(0, 10, ripple=True)
 
-        self.assertAlmostEqual(
-            seq.shot_by_id(1).start, s1_start_before + 10, places=1
-        )
+        self.assertAlmostEqual(seq.shot_by_id(1).start, s1_start_before + 10, places=1)
 
     def test_apply_behavior_sets_keys(self):
         """apply_behavior should create keyframes on the object."""
         cube = self._create_animated_cube("obj", {0: 0, 100: 10})
-        apply_behavior(str(cube), "fade_in", 0, 100, attrs=["visibility"])
+        Behaviors.apply_behavior(str(cube), "fade_in", 0, 100, attrs=["visibility"])
 
         # Visibility should now have keyframes
         vis_keys = cmds.keyframe(cube, attribute="visibility", query=True)
@@ -577,7 +575,7 @@ class TestSequencerMaya(unittest.TestCase):
         """apply_behavior with an unknown template raises FileNotFoundError."""
         cube = self._create_animated_cube("ab_unknown", {0: 0, 10: 5})
         with self.assertRaises(FileNotFoundError):
-            apply_behavior(str(cube), "nonexistent_xyz_behavior", 0, 100)
+            Behaviors.apply_behavior(str(cube), "nonexistent_xyz_behavior", 0, 100)
 
     # -- gap hold enforcement ----------------------------------------------
 
@@ -714,7 +712,9 @@ class TestSequencerMaya(unittest.TestCase):
         c1 = self._create_animated_cube("seq_a", {0: 0, 30: 5})
         seq = ShotSequencer([ShotBlock(0, "S0", 0, 30, [str(c1)])])
         sequences = seq.collect_shot_sequences(0, include_audio=False)
-        self.assertTrue(any(s["kind"] == "anim" and s["obj"] == str(c1) for s in sequences))
+        self.assertTrue(
+            any(s["kind"] == "anim" and s["obj"] == str(c1) for s in sequences)
+        )
         for s in sequences:
             self.assertIn("start", s)
             self.assertIn("end", s)
@@ -728,9 +728,7 @@ class TestSequencerMaya(unittest.TestCase):
         """_move_sequence with kind='anim' shifts the object's keys."""
         c1 = self._create_animated_cube("mvs_a", {10: 0, 20: 5})
         seq = ShotSequencer()
-        seq._move_sequence(
-            {"kind": "anim", "obj": str(c1), "start": 10, "end": 20}, 30
-        )
+        seq._move_sequence({"kind": "anim", "obj": str(c1), "start": 10, "end": 20}, 30)
         keys = sorted(cmds.keyframe(c1, q=True, attribute="translateX"))
         self.assertAlmostEqual(keys[0], 30.0, places=1)
         self.assertAlmostEqual(keys[-1], 40.0, places=1)
@@ -739,9 +737,7 @@ class TestSequencerMaya(unittest.TestCase):
         """_move_sequence is a no-op when new_start matches old start."""
         c1 = self._create_animated_cube("mvs_b", {10: 0, 20: 5})
         seq = ShotSequencer()
-        seq._move_sequence(
-            {"kind": "anim", "obj": str(c1), "start": 10, "end": 20}, 10
-        )
+        seq._move_sequence({"kind": "anim", "obj": str(c1), "start": 10, "end": 20}, 10)
         keys = sorted(cmds.keyframe(c1, q=True, attribute="translateX"))
         self.assertAlmostEqual(keys[0], 10.0, places=1)
         self.assertAlmostEqual(keys[-1], 20.0, places=1)
@@ -749,9 +745,7 @@ class TestSequencerMaya(unittest.TestCase):
     def test_recompute_shot_objects_drops_orphans(self):
         """_recompute_shot_objects drops objects with no keys in the shot range."""
         c1 = self._create_animated_cube("rc_a", {0: 0, 20: 5})
-        seq = ShotSequencer(
-            [ShotBlock(0, "S0", 0, 20, [str(c1), "ghost_node"])]
-        )
+        seq = ShotSequencer([ShotBlock(0, "S0", 0, 20, [str(c1), "ghost_node"])])
         seq._recompute_shot_objects(0)
         objs = seq.shot_by_id(0).objects
         self.assertIn(str(c1), objs)
@@ -760,9 +754,7 @@ class TestSequencerMaya(unittest.TestCase):
     def test_recompute_shot_objects_preserves_pinned(self):
         """_recompute_shot_objects keeps pinned objects even when keyless."""
         c1 = self._create_animated_cube("rc_b", {0: 0, 20: 5})
-        seq = ShotSequencer(
-            [ShotBlock(0, "S0", 0, 20, [str(c1), "pinned_ghost"])]
-        )
+        seq = ShotSequencer([ShotBlock(0, "S0", 0, 20, [str(c1), "pinned_ghost"])])
         seq.store.pinned_objects.add("pinned_ghost")
         seq._recompute_shot_objects(0)
         self.assertIn("pinned_ghost", seq.shot_by_id(0).objects)
@@ -881,9 +873,7 @@ class TestSequencerMaya(unittest.TestCase):
         # Single object with two key clusters — one in S0, one in S1.
         # The "existing" check in move_sequences_to_shot keys by obj name,
         # so the same obj must appear in dest to trigger the after-anchor path.
-        c1 = self._create_animated_cube(
-            "mvs_after_a", {10: 0, 20: 5, 110: 0, 130: 5}
-        )
+        c1 = self._create_animated_cube("mvs_after_a", {10: 0, 20: 5, 110: 0, 130: 5})
         seq = ShotSequencer(
             [
                 ShotBlock(0, "S0", 0, 50, [str(c1)]),
@@ -1062,9 +1052,7 @@ class TestMayaScenePersistenceRoundTrip(unittest.TestCase):
         payload = {"shots": [{"id": 1, "name": "legacy", "start": 5, "end": 42}]}
         node = cmds.createNode("network", name=LEGACY_NODE_NAME)
         cmds.addAttr(node, longName=LEGACY_ATTR_NAME, dataType="string")
-        cmds.setAttr(
-            f"{node}.{LEGACY_ATTR_NAME}", json.dumps(payload), type="string"
-        )
+        cmds.setAttr(f"{node}.{LEGACY_ATTR_NAME}", json.dumps(payload), type="string")
         cmds.lockNode(node, lock=False, lockName=True)  # matches old carrier
 
         persistence = MayaScenePersistence()
@@ -1072,9 +1060,7 @@ class TestMayaScenePersistenceRoundTrip(unittest.TestCase):
 
         # Old carrier is gone; payload now lives on data_internal.
         self.assertFalse(cmds.objExists(LEGACY_NODE_NAME))
-        self.assertEqual(
-            DataNodes.get_internal_string(ATTR_NAME), json.dumps(payload)
-        )
+        self.assertEqual(DataNodes.get_internal_string(ATTR_NAME), json.dumps(payload))
         # Subsequent loads read the migrated channel directly.
         self.assertEqual(persistence.load(), payload)
 
@@ -1146,8 +1132,7 @@ class TestReconcileStalePaths(unittest.TestCase):
 from unittest.mock import patch
 
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
-    detect_behaviors,
-    parse_csv,
+    ManifestModel,
     BuilderObject,
     BuilderStep,
     ShotManifest,
@@ -1158,25 +1143,27 @@ class TestDetectBehaviors(unittest.TestCase):
     """Test behavior auto-detection from step-contents text."""
 
     def test_fade_in(self):
-        self.assertEqual(detect_behaviors("Arrow fades in."), ["fade_in"])
+        self.assertEqual(ManifestModel.detect_behaviors("Arrow fades in."), ["fade_in"])
 
     def test_fade_out(self):
-        self.assertEqual(detect_behaviors("Checklist fades out."), ["fade_out"])
+        self.assertEqual(
+            ManifestModel.detect_behaviors("Checklist fades out."), ["fade_out"]
+        )
 
     def test_fade_in_and_out(self):
         self.assertEqual(
-            detect_behaviors("Arrow fades in, then fades out."),
+            ManifestModel.detect_behaviors("Arrow fades in, then fades out."),
             ["fade_in", "fade_out"],
         )
 
     def test_no_behavior(self):
-        self.assertEqual(detect_behaviors("User is teleported."), [])
+        self.assertEqual(ManifestModel.detect_behaviors("User is teleported."), [])
 
     def test_empty(self):
-        self.assertEqual(detect_behaviors(""), [])
+        self.assertEqual(ManifestModel.detect_behaviors(""), [])
 
     def test_na(self):
-        self.assertEqual(detect_behaviors("N/A"), [])
+        self.assertEqual(ManifestModel.detect_behaviors("N/A"), [])
 
 
 class TestParseCSV(unittest.TestCase):
@@ -1234,16 +1221,16 @@ class TestParseCSV(unittest.TestCase):
         shutil.rmtree(cls._tmp_dir, ignore_errors=True)
 
     def test_step_count(self):
-        steps = parse_csv(self._csv_path)
+        steps = ManifestModel.parse_csv(self._csv_path)
         self.assertEqual(len(steps), 3)  # A01, A02, B01
 
     def test_section_assignment(self):
-        steps = parse_csv(self._csv_path)
+        steps = ManifestModel.parse_csv(self._csv_path)
         self.assertEqual(steps[0].section, "A")
         self.assertEqual(steps[2].section, "B")
 
     def test_continuation_row_merges(self):
-        steps = parse_csv(self._csv_path)
+        steps = ManifestModel.parse_csv(self._csv_path)
         a01 = steps[0]
         self.assertEqual(len(a01.objects), 2)
         self.assertEqual(a01.objects[0].name, "ARROW_01")
@@ -1251,28 +1238,29 @@ class TestParseCSV(unittest.TestCase):
 
     def test_continuation_inherits_behavior(self):
         """Continuation-row objects inherit the parent step's behavior."""
-        steps = parse_csv(self._csv_path)
+        steps = ManifestModel.parse_csv(self._csv_path)
         a01 = steps[0]
         self.assertEqual(a01.objects[0].behaviors, ["fade_in"])
         self.assertEqual(a01.objects[1].behaviors, ["fade_in"])  # inherited
 
     def test_behavior_detected(self):
-        steps = parse_csv(self._csv_path)
+        steps = ManifestModel.parse_csv(self._csv_path)
         self.assertEqual(steps[0].objects[0].behaviors, ["fade_in"])
         self.assertEqual(steps[1].objects[0].behaviors, ["fade_out"])
 
     def test_na_objects_excluded(self):
-        steps = parse_csv(self._csv_path)
+        steps = ManifestModel.parse_csv(self._csv_path)
         b01 = steps[2]
         self.assertEqual(len(b01.objects), 0)
 
     def test_section_title(self):
-        steps = parse_csv(self._csv_path)
+        steps = ManifestModel.parse_csv(self._csv_path)
         self.assertEqual(steps[0].section_title, "AILERON RIGGING")
 
     def test_duplicate_step_id_skipped(self):
         """Duplicate step_id rows should be skipped with a warning."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
@@ -1286,7 +1274,7 @@ class TestParseCSV(unittest.TestCase):
                 w.writerow(["A01.)", "", "", "", "first", "OBJ1", "", ""])
                 w.writerow(["A01.)", "", "", "", "duplicate", "OBJ2", "", ""])
                 w.writerow(["A02.)", "", "", "", "second", "OBJ3", "", ""])
-            steps = parse_csv(csv_path)
+            steps = ManifestModel.parse_csv(csv_path)
             self.assertEqual(len(steps), 2)  # A01 + A02 only
             self.assertEqual(steps[0].description, "first")
             self.assertEqual(steps[1].step_id, "A02")
@@ -1295,7 +1283,8 @@ class TestParseCSV(unittest.TestCase):
 
     def test_continuation_merges_content(self):
         """Continuation rows with content should merge text into parent step."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
@@ -1308,7 +1297,7 @@ class TestParseCSV(unittest.TestCase):
                 w.writerow(["Step", "", "", "", "Contents", "Asset", "", "Status"])
                 w.writerow(["A01.)", "", "", "", "First line.", "OBJ1", "", ""])
                 w.writerow(["", "", "", "", "Second line.", "OBJ2", "", ""])
-            steps = parse_csv(csv_path)
+            steps = ManifestModel.parse_csv(csv_path)
             self.assertIn("Second line.", steps[0].description)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -1320,7 +1309,8 @@ class TestParseCSV(unittest.TestCase):
         Headers at different positions caused wrong columns to be read.
         Fixed: 2026-03-13
         """
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
@@ -1334,7 +1324,7 @@ class TestParseCSV(unittest.TestCase):
                 w.writerow(["A01.)", "", "Arrow fades in.", "ARROW_01", "Complete"])
                 w.writerow(["", "", "", "ARROW_02", ""])
                 w.writerow(["A02.)", "", "Checklist fades out.", "CHECK_01", ""])
-            steps = parse_csv(csv_path)
+            steps = ManifestModel.parse_csv(csv_path)
             self.assertEqual(len(steps), 2)
             self.assertEqual(steps[0].objects[0].name, "ARROW_01")
             self.assertEqual(steps[0].objects[1].name, "ARROW_02")
@@ -1346,7 +1336,8 @@ class TestParseCSV(unittest.TestCase):
 
     def test_missing_header_raises(self):
         """ValueError when required column header is not found."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
@@ -1358,7 +1349,7 @@ class TestParseCSV(unittest.TestCase):
                 w.writerow(["SECTION A: SEC", "", ""])
                 w.writerow(["Step", "Ref", "Bad Column"])
             with self.assertRaises(ValueError):
-                parse_csv(csv_path)
+                ManifestModel.parse_csv(csv_path)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1369,7 +1360,8 @@ class TestParseCSV(unittest.TestCase):
         SETUP rows from 'SECTION X: OPENING SETUP'.
         Fixed: 2026-03-24
         """
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
@@ -1386,7 +1378,9 @@ class TestParseCSV(unittest.TestCase):
                 w.writerow(["SECTION A: AILERON RIGGING", "", "", "", ""])
                 w.writerow(["Step", "Ref", "Step Contents", "Asset Names", "Status"])
                 w.writerow(["A01.)", "", "Arrow fades in.", "ARROW_01", "Complete"])
-            steps = parse_csv(csv_path, columns=ColumnMap(exclude_steps=()))
+            steps = ManifestModel.parse_csv(
+                csv_path, columns=ColumnMap(exclude_steps=())
+            )
             self.assertEqual(len(steps), 2)  # SETUP + A01
             setup = steps[0]
             self.assertEqual(setup.step_id, "SETUP")
@@ -1443,7 +1437,8 @@ class TestShotManifestPure(unittest.TestCase):
 
     def test_from_csv_accepts_existing_store(self):
         """from_csv should use the provided store, not create a new one."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
@@ -1698,25 +1693,25 @@ class TestContentDrivenDuration(unittest.TestCase):
     def test_fade_in_duration(self):
         """Step with fade_in objects: duration = 15f (template phase)."""
         entries = [BuilderObject("OBJ", ["fade_in"])]
-        dur = compute_duration(entries, fallback=30)
+        dur = Behaviors.compute_duration(entries, fallback=30)
         self.assertEqual(dur, 15)
 
     def test_fade_in_and_out_duration(self):
         """Step with fade_in + fade_out: duration = 15 + 15 = 30f."""
         entries = [BuilderObject("OBJ", ["fade_in", "fade_out"])]
-        dur = compute_duration(entries, fallback=30)
+        dur = Behaviors.compute_duration(entries, fallback=30)
         self.assertEqual(dur, 30)
 
     def test_no_behavior_uses_fallback(self):
         """Step with no behaviors -> fallback duration."""
         entries = [BuilderObject("OBJ")]
-        dur = compute_duration(entries, fallback=42)
+        dur = Behaviors.compute_duration(entries, fallback=42)
         self.assertEqual(dur, 42)
 
     def test_empty_step_uses_fallback(self):
         """Step with no objects -> fallback duration."""
         entries = []
-        dur = compute_duration(entries, fallback=50)
+        dur = Behaviors.compute_duration(entries, fallback=50)
         self.assertEqual(dur, 50)
 
     def test_mixed_behaviors_takes_max(self):
@@ -1725,7 +1720,7 @@ class TestContentDrivenDuration(unittest.TestCase):
             BuilderObject("A", ["fade_in"]),
             BuilderObject("B", ["fade_in", "fade_out"]),
         ]
-        dur = compute_duration(entries, fallback=30)
+        dur = Behaviors.compute_duration(entries, fallback=30)
         self.assertEqual(dur, 30)
 
     def test_update_uses_content_duration(self):
@@ -1820,7 +1815,7 @@ class TestSelectiveRebuild(unittest.TestCase):
         mock_apply = MagicMock()
 
         # Simulate: all objects already have keys in the range
-        result = apply_to_shots(
+        result = Behaviors.apply_to_shots(
             store.sorted_shots(),
             apply_fn=mock_apply,
             exists_fn=lambda _: True,
@@ -2457,7 +2452,7 @@ class TestApplyBehaviors(unittest.TestCase):
         def mock_apply(obj, beh, start, end, **kw):
             applied.append({"object": obj, "behavior": beh})
 
-        result = apply_to_shots(
+        result = Behaviors.apply_to_shots(
             store.sorted_shots(),
             apply_fn=mock_apply,
             exists_fn=lambda _: True,
@@ -2485,7 +2480,7 @@ class TestApplyBehaviors(unittest.TestCase):
         )
 
         mock_apply = MagicMock()
-        result = apply_to_shots(
+        result = Behaviors.apply_to_shots(
             store.sorted_shots(),
             apply_fn=mock_apply,
             exists_fn=lambda _: True,
@@ -2512,7 +2507,7 @@ class TestApplyBehaviors(unittest.TestCase):
         )
 
         mock_apply = MagicMock()
-        result = apply_to_shots(
+        result = Behaviors.apply_to_shots(
             store.sorted_shots(),
             apply_fn=mock_apply,
             exists_fn=lambda _: True,
@@ -2539,7 +2534,7 @@ class TestApplyBehaviors(unittest.TestCase):
         )
 
         mock_apply = MagicMock()
-        result = apply_to_shots(
+        result = Behaviors.apply_to_shots(
             store.sorted_shots(),
             apply_fn=mock_apply,
             exists_fn=lambda _: False,
@@ -2556,7 +2551,7 @@ class TestApplyBehaviors(unittest.TestCase):
         store = ShotStore()
         store.define_shot(name="A01", start=1, end=16, objects=["OBJ"])
         mock_apply = MagicMock()
-        result = apply_to_shots(
+        result = Behaviors.apply_to_shots(
             store.sorted_shots(),
             apply_fn=mock_apply,
             exists_fn=lambda _: True,
@@ -2579,7 +2574,7 @@ class TestApplyBehaviors(unittest.TestCase):
             },
         )
         with self.assertRaises(TypeError):
-            apply_to_shots(store.sorted_shots(), exists_fn=lambda _: True)
+            Behaviors.apply_to_shots(store.sorted_shots(), exists_fn=lambda _: True)
 
     def test_zero_duration_shot_skips_behaviors(self):
         """Zero-duration shots should skip behavior application to avoid
@@ -2602,7 +2597,7 @@ class TestApplyBehaviors(unittest.TestCase):
             },
         )
         mock_apply = MagicMock()
-        result = apply_to_shots(
+        result = Behaviors.apply_to_shots(
             store.sorted_shots(),
             apply_fn=mock_apply,
             exists_fn=lambda _: True,
@@ -2636,6 +2631,7 @@ class TestControllerColumnLayout(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
+            ManifestData,
             HEADERS,
             COL_STEP,
             COL_SECTION,
@@ -2644,7 +2640,6 @@ class TestControllerColumnLayout(unittest.TestCase):
             COL_START,
             COL_END,
             PASTEL_STATUS,
-            fmt_behavior,
         )
 
         cls.HEADERS = HEADERS
@@ -2655,7 +2650,7 @@ class TestControllerColumnLayout(unittest.TestCase):
         cls.COL_START = COL_START
         cls.COL_END = COL_END
         cls.PASTEL_STATUS = PASTEL_STATUS
-        cls.fmt_behavior = staticmethod(fmt_behavior)
+        cls.fmt_behavior = staticmethod(ManifestData.fmt_behavior)
 
     def test_headers_count(self):
         """Unified layout should have exactly 6 columns."""
@@ -2848,12 +2843,12 @@ class TestRenderedRowColors(unittest.TestCase):
 
         from uitk.widgets.treeWidget import TreeWidget
         from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
+            ManifestData,
             HEADERS,
             COL_STEP,
             COL_DESC,
             COL_BEHAVIORS,
             PASTEL_STATUS,
-            fmt_behavior,
         )
 
         cls._HEADERS = HEADERS
@@ -2861,7 +2856,7 @@ class TestRenderedRowColors(unittest.TestCase):
         cls._COL_DESC = COL_DESC
         cls._COL_BEHAVIORS = COL_BEHAVIORS
         cls._PASTEL_STATUS = PASTEL_STATUS
-        cls._fmt_behavior = staticmethod(fmt_behavior)
+        cls._fmt_behavior = staticmethod(ManifestData.fmt_behavior)
 
         # ---- build a tree with rows for each status ---------------------
         tree = TreeWidget()
@@ -2916,7 +2911,8 @@ class TestRenderedRowColors(unittest.TestCase):
 
         # Behavior column formatter
         display_colors = {
-            fmt_behavior(k).lower(): v for k, v in {}  # BEHAVIOR_COLORS removed.items()
+            ManifestData.fmt_behavior(k).lower(): v
+            for k, v in {}  # BEHAVIOR_COLORS removed.items()
         }
         formatter = tree.make_color_map_formatter(display_colors)
         tree.set_column_formatter(COL_BEHAVIORS, formatter)
@@ -3140,7 +3136,8 @@ class TestRenderedRowColors(unittest.TestCase):
             if v[0]
         }
         self.assertNotIn(
-            fg_hex, problem_fgs,
+            fg_hex,
+            problem_fgs,
             f"Valid parent should not have a problem color: {fg_hex}",
         )
 
@@ -3658,7 +3655,9 @@ class TestColumnMap(unittest.TestCase):
 
     def test_custom_column_map_parses_csv(self):
         """parse_csv respects a ColumnMap with non-default aliases."""
-        import tempfile, shutil, csv as csv_mod
+        import tempfile
+        import shutil
+        import csv as csv_mod
 
         tmp = tempfile.mkdtemp()
         try:
@@ -3673,7 +3672,7 @@ class TestColumnMap(unittest.TestCase):
                 description=("Description",),
                 assets=("Object",),
             )
-            steps = parse_csv(csv_path, columns=custom)
+            steps = ManifestModel.parse_csv(csv_path, columns=custom)
             self.assertEqual(len(steps), 1)
             self.assertEqual(steps[0].step_id, "A01")
             self.assertEqual(steps[0].objects[0].name, "ARROW_01")
@@ -3687,7 +3686,9 @@ class TestColumnMap(unittest.TestCase):
         Audio text flows into metadata as voice_text.
         Refactored: 2026-04-14 â€” display_text flipped to return description.
         """
-        import tempfile, shutil, csv as csv_mod
+        import tempfile
+        import shutil
+        import csv as csv_mod
 
         tmp = tempfile.mkdtemp()
         try:
@@ -3706,7 +3707,7 @@ class TestColumnMap(unittest.TestCase):
                 w.writerow(["A02.)", "The clamps are removed.", "N/A", "N/A", ""])
                 # A03: silent action (Voice=N/A) â€” should show action description
                 w.writerow(["A03.)", "N/A", "Poker chips push in.", "CHIPS_01", ""])
-            steps = parse_csv(csv_path)
+            steps = ManifestModel.parse_csv(csv_path)
             self.assertEqual(len(steps), 3)
 
             # A01: display_text = description (Step Contents)
@@ -3732,7 +3733,9 @@ class TestColumnMap(unittest.TestCase):
 
     def test_no_audio_column_falls_back_to_description(self):
         """Without an Audio column, display_text falls back to description."""
-        import tempfile, shutil, csv as csv_mod
+        import tempfile
+        import shutil
+        import csv as csv_mod
 
         tmp = tempfile.mkdtemp()
         try:
@@ -3742,7 +3745,7 @@ class TestColumnMap(unittest.TestCase):
                 w.writerow(["SECTION A: TEST", "", "", ""])
                 w.writerow(["Step", "Step Contents", "Asset Names", "Status"])
                 w.writerow(["A01.)", "Arrow fades in.", "ARROW_01", "Complete"])
-            steps = parse_csv(csv_path)
+            steps = ManifestModel.parse_csv(csv_path)
             self.assertEqual(steps[0].audio, "")
             self.assertEqual(steps[0].display_text, "Arrow fades in.")
         finally:
@@ -3761,7 +3764,9 @@ class TestColumnMap(unittest.TestCase):
 
     def test_exclude_steps_filters_parse_csv(self):
         """Steps listed in exclude_steps are removed from parse results."""
-        import tempfile, shutil, csv as csv_mod
+        import tempfile
+        import shutil
+        import csv as csv_mod
 
         tmp = tempfile.mkdtemp()
         try:
@@ -3774,7 +3779,7 @@ class TestColumnMap(unittest.TestCase):
                 w.writerow(["A01.)", "Arrow fades in.", "ARROW_01", "Complete"])
                 w.writerow(["A02.)", "Box fades out.", "BOX_01", ""])
             # Default excludes SETUP
-            steps = parse_csv(csv_path)
+            steps = ManifestModel.parse_csv(csv_path)
             ids = [s.step_id for s in steps]
             self.assertNotIn("SETUP", ids)
             self.assertIn("A01", ids)
@@ -3785,7 +3790,9 @@ class TestColumnMap(unittest.TestCase):
 
     def test_exclude_steps_empty_includes_all(self):
         """Empty exclude_steps keeps all steps including SETUP."""
-        import tempfile, shutil, csv as csv_mod
+        import tempfile
+        import shutil
+        import csv as csv_mod
 
         tmp = tempfile.mkdtemp()
         try:
@@ -3797,7 +3804,7 @@ class TestColumnMap(unittest.TestCase):
                 w.writerow(["SETUP", "Setup step.", "N/A", ""])
                 w.writerow(["A01.)", "Arrow fades in.", "ARROW_01", ""])
             no_exclude = ColumnMap(exclude_steps=())
-            steps = parse_csv(csv_path, columns=no_exclude)
+            steps = ManifestModel.parse_csv(csv_path, columns=no_exclude)
             ids = [s.step_id for s in steps]
             self.assertIn("SETUP", ids)
             self.assertIn("A01", ids)
@@ -3813,7 +3820,9 @@ class TestColumnMap(unittest.TestCase):
 
     def test_exclude_values_default_filters_na_assets(self):
         """Default exclude_values filters N/A from asset column."""
-        import tempfile, shutil, csv as csv_mod
+        import tempfile
+        import shutil
+        import csv as csv_mod
 
         tmp = tempfile.mkdtemp()
         try:
@@ -3824,7 +3833,7 @@ class TestColumnMap(unittest.TestCase):
                 w.writerow(["Step", "Step Contents", "Asset Names", "Status"])
                 w.writerow(["A01.)", "Intro.", "N/A", ""])
                 w.writerow(["A02.)", "Box appears.", "BOX_01", ""])
-            steps = parse_csv(csv_path)
+            steps = ManifestModel.parse_csv(csv_path)
             self.assertEqual(steps[0].objects, [])  # N/A filtered
             self.assertEqual(len(steps[1].objects), 1)
         finally:
@@ -3832,7 +3841,9 @@ class TestColumnMap(unittest.TestCase):
 
     def test_exclude_values_case_insensitive(self):
         """exclude_values comparison is case-insensitive."""
-        import tempfile, shutil, csv as csv_mod
+        import tempfile
+        import shutil
+        import csv as csv_mod
 
         tmp = tempfile.mkdtemp()
         try:
@@ -3842,7 +3853,7 @@ class TestColumnMap(unittest.TestCase):
                 w.writerow(["SECTION A: TEST", "", "", ""])
                 w.writerow(["Step", "Step Contents", "Asset Names", "Status"])
                 w.writerow(["A01.)", "Intro.", "n/a", ""])
-            steps = parse_csv(csv_path)
+            steps = ManifestModel.parse_csv(csv_path)
             self.assertEqual(steps[0].objects, [])
 
             # Custom exclude value
@@ -3854,7 +3865,7 @@ class TestColumnMap(unittest.TestCase):
                 w.writerow(["Step", "Step Contents", "Asset Names", "Status"])
                 w.writerow(["A01.)", "Intro.", "none", ""])
                 w.writerow(["A02.)", "Next.", "N/A", ""])
-            steps2 = parse_csv(csv_path2, columns=cm)
+            steps2 = ManifestModel.parse_csv(csv_path2, columns=cm)
             self.assertEqual(steps2[0].objects, [])  # "none" excluded
             self.assertEqual(len(steps2[1].objects), 1)  # "N/A" kept
         finally:
@@ -3869,7 +3880,9 @@ class TestColumnMap(unittest.TestCase):
 
     def test_metadata_pass_columns_collected(self):
         """metadata_pass columns are resolved and stored on step._pass_through."""
-        import tempfile, shutil, csv as csv_mod
+        import tempfile
+        import shutil
+        import csv as csv_mod
 
         tmp = tempfile.mkdtemp()
         try:
@@ -3881,7 +3894,7 @@ class TestColumnMap(unittest.TestCase):
                 w.writerow(["A01.)", "Intro.", "OBJ_01", "High", ""])
                 w.writerow(["A02.)", "Next.", "OBJ_02", "", ""])
             cm = ColumnMap(metadata_pass={"priority": ("Priority",)})
-            steps = parse_csv(csv_path, columns=cm)
+            steps = ManifestModel.parse_csv(csv_path, columns=cm)
             self.assertEqual(steps[0]._pass_through, {"priority": "High"})
             self.assertEqual(steps[1]._pass_through, {})  # Empty value not stored
         finally:
@@ -3898,7 +3911,9 @@ class TestColumnMap(unittest.TestCase):
 
     def test_post_process_appends_audio_object(self):
         """post_process callable can append audio BuilderObject."""
-        import tempfile, shutil, csv as csv_mod
+        import tempfile
+        import shutil
+        import csv as csv_mod
 
         tmp = tempfile.mkdtemp()
         try:
@@ -3914,7 +3929,7 @@ class TestColumnMap(unittest.TestCase):
                     BuilderObject(name=f"clip_{step.step_id}", kind="audio")
                 )
 
-            steps = parse_csv(csv_path, post_process=_derive)
+            steps = ManifestModel.parse_csv(csv_path, post_process=_derive)
             ao = next((o for o in steps[0].objects if o.kind == "audio"), None)
             self.assertIsNotNone(ao)
             self.assertEqual(ao.name, "clip_A01")
@@ -3950,11 +3965,7 @@ class TestColumnMap(unittest.TestCase):
 # Mapping resolver tests (JSON mapping files)
 # ---------------------------------------------------------------------------
 
-from mayatk.anim_utils.shots.shot_manifest.mapping import (
-    discover,
-    load_mapping,
-    resolve,
-)
+from mayatk.anim_utils.shots.shot_manifest.mapping import Mapping
 
 
 class TestMappingResolver(unittest.TestCase):
@@ -3985,63 +3996,67 @@ class TestMappingResolver(unittest.TestCase):
     # ---- discovery ----
 
     def test_discover_lists_json_files(self):
-        """discover() finds .json mapping files in a directory."""
-        import tempfile, shutil
+        """Mapping.discover() finds .json mapping files in a directory."""
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
             self._write_json(tmp, "project_a.json", {"columns": {}})
             self._write_json(tmp, "project_b.json", {"columns": {}})
             self._write_json(tmp, "_private.json", {"columns": {}})
-            names = discover(tmp)
+            names = Mapping.discover(tmp)
             self.assertEqual(names, ["project_a", "project_b"])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_discover_empty_dir(self):
-        """discover() returns empty list for nonexistent directory."""
-        self.assertEqual(discover("/nonexistent"), [])
+        """Mapping.discover() returns empty list for nonexistent directory."""
+        self.assertEqual(Mapping.discover("/nonexistent"), [])
 
     def test_discover_default_dir_has_default(self):
         """The default mapping directory contains 'default'."""
-        names = discover()
+        names = Mapping.discover()
         self.assertIn("default", names)
 
     # ---- load_mapping ----
 
     def test_load_mapping_reads_json(self):
-        """load_mapping() reads and parses a JSON file."""
-        import tempfile, shutil
+        """Mapping.load_mapping() reads and parses a JSON file."""
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
             data = {"columns": {"step_id": ["ID"]}}
             self._write_json(tmp, "test.json", data)
-            result = load_mapping("test", tmp)
+            result = Mapping.load_mapping("test", tmp)
             self.assertEqual(result["columns"]["step_id"], ["ID"])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_load_mapping_missing_raises(self):
-        """load_mapping() raises FileNotFoundError for missing file."""
-        import tempfile, shutil
+        """Mapping.load_mapping() raises FileNotFoundError for missing file."""
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
             with self.assertRaises(FileNotFoundError):
-                load_mapping("nonexistent", tmp)
+                Mapping.load_mapping("nonexistent", tmp)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_load_mapping_accepts_full_path(self):
-        """load_mapping() accepts a full .json path as name."""
-        import tempfile, shutil
+        """Mapping.load_mapping() accepts a full .json path as name."""
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
             data = {"columns": {"step_id": ["ID"]}}
             path = self._write_json(tmp, "full.json", data)
-            result = load_mapping(path)
+            result = Mapping.load_mapping(path)
             self.assertEqual(result["columns"]["step_id"], ["ID"])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -4050,12 +4065,13 @@ class TestMappingResolver(unittest.TestCase):
 
     def test_resolve_with_empty_mapping(self):
         """resolve() with empty mapping uses default ColumnMap."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
             csv_path = self._make_csv(tmp)
-            steps = resolve(csv_path, mapping={})
+            steps = Mapping.resolve(csv_path, mapping={})
             self.assertEqual(len(steps), 2)
             self.assertEqual(steps[0].step_id, "A01")
         finally:
@@ -4063,7 +4079,9 @@ class TestMappingResolver(unittest.TestCase):
 
     def test_resolve_with_column_remap(self):
         """resolve() applies column aliases from the mapping."""
-        import tempfile, shutil, csv as csv_mod
+        import tempfile
+        import shutil
+        import csv as csv_mod
 
         tmp = tempfile.mkdtemp()
         try:
@@ -4080,7 +4098,7 @@ class TestMappingResolver(unittest.TestCase):
                     "assets": ["Objects"],
                 }
             }
-            steps = resolve(csv_path, mapping=mapping)
+            steps = Mapping.resolve(csv_path, mapping=mapping)
             self.assertEqual(len(steps), 1)
             self.assertEqual(steps[0].description, "Arrow fades in.")
         finally:
@@ -4088,25 +4106,27 @@ class TestMappingResolver(unittest.TestCase):
 
     def test_resolve_by_name(self):
         """resolve() loads a mapping by name from a directory."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
             csv_path = self._make_csv(tmp)
             self._write_json(tmp, "my_map.json", {"columns": {}})
-            steps = resolve(csv_path, name="my_map", directory=tmp)
+            steps = Mapping.resolve(csv_path, name="my_map", directory=tmp)
             self.assertEqual(len(steps), 2)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_resolve_default_mapping(self):
         """The built-in default.json produces correct steps."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
             csv_path = self._make_csv(tmp)
-            steps = resolve(csv_path, name="default")
+            steps = Mapping.resolve(csv_path, name="default")
             self.assertEqual(len(steps), 2)
             self.assertEqual(steps[0].step_id, "A01")
         finally:
@@ -4116,7 +4136,8 @@ class TestMappingResolver(unittest.TestCase):
 
     def test_audio_prefix_resolves_clip(self):
         """audio_resolve with method=prefix adds audio BuilderObject."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
@@ -4133,7 +4154,7 @@ class TestMappingResolver(unittest.TestCase):
                     "directory": audio_dir,
                 },
             }
-            steps = resolve(csv_path, mapping=mapping)
+            steps = Mapping.resolve(csv_path, mapping=mapping)
             ao0 = next((o for o in steps[0].objects if o.kind == "audio"), None)
             ao1 = next((o for o in steps[1].objects if o.kind == "audio"), None)
             self.assertIsNotNone(ao0)
@@ -4145,7 +4166,8 @@ class TestMappingResolver(unittest.TestCase):
 
     def test_audio_prefix_no_match(self):
         """audio_resolve prefix leaves no audio object when no match."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
@@ -4157,7 +4179,7 @@ class TestMappingResolver(unittest.TestCase):
                 "columns": {},
                 "audio_resolve": {"method": "prefix", "directory": audio_dir},
             }
-            steps = resolve(csv_path, mapping=mapping)
+            steps = Mapping.resolve(csv_path, mapping=mapping)
             ao = next((o for o in steps[0].objects if o.kind == "audio"), None)
             self.assertIsNone(ao)
         finally:
@@ -4165,7 +4187,8 @@ class TestMappingResolver(unittest.TestCase):
 
     def test_audio_prefix_nonexistent_dir(self):
         """audio_resolve prefix is a no-op when directory missing."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
@@ -4177,7 +4200,7 @@ class TestMappingResolver(unittest.TestCase):
                     "directory": "/nonexistent/path",
                 },
             }
-            steps = resolve(csv_path, mapping=mapping)
+            steps = Mapping.resolve(csv_path, mapping=mapping)
             ao = next((o for o in steps[0].objects if o.kind == "audio"), None)
             self.assertIsNone(ao)
         finally:
@@ -4187,7 +4210,8 @@ class TestMappingResolver(unittest.TestCase):
 
     def test_audio_regex_resolves_clip(self):
         """audio_resolve with method=regex adds audio BuilderObject."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
@@ -4204,7 +4228,7 @@ class TestMappingResolver(unittest.TestCase):
                     "pattern": r"{step_id}-\d+",
                 },
             }
-            steps = resolve(csv_path, mapping=mapping)
+            steps = Mapping.resolve(csv_path, mapping=mapping)
             ao = next((o for o in steps[0].objects if o.kind == "audio"), None)
             self.assertIsNotNone(ao)
             self.assertEqual(ao.name, "A01-001")
@@ -4215,7 +4239,8 @@ class TestMappingResolver(unittest.TestCase):
 
     def test_audio_map_resolves_clip(self):
         """audio_resolve with method=map adds audio BuilderObjects."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
@@ -4227,7 +4252,7 @@ class TestMappingResolver(unittest.TestCase):
                     "clips": {"A01": "intro_clip", "A02": "demo_clip"},
                 },
             }
-            steps = resolve(csv_path, mapping=mapping)
+            steps = Mapping.resolve(csv_path, mapping=mapping)
             ao0 = next((o for o in steps[0].objects if o.kind == "audio"), None)
             ao1 = next((o for o in steps[1].objects if o.kind == "audio"), None)
             self.assertIsNotNone(ao0)
@@ -4239,7 +4264,8 @@ class TestMappingResolver(unittest.TestCase):
 
     def test_audio_map_missing_key(self):
         """audio_resolve map adds no audio object for unmapped steps."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
@@ -4251,7 +4277,7 @@ class TestMappingResolver(unittest.TestCase):
                     "clips": {"A01": "only_a01"},
                 },
             }
-            steps = resolve(csv_path, mapping=mapping)
+            steps = Mapping.resolve(csv_path, mapping=mapping)
             ao0 = next((o for o in steps[0].objects if o.kind == "audio"), None)
             ao1 = next((o for o in steps[1].objects if o.kind == "audio"), None)
             self.assertIsNotNone(ao0)
@@ -4264,7 +4290,8 @@ class TestMappingResolver(unittest.TestCase):
 
     def test_unknown_audio_method_raises(self):
         """Unknown audio_resolve method raises ValueError."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
@@ -4274,11 +4301,9 @@ class TestMappingResolver(unittest.TestCase):
                 "audio_resolve": {"method": "unknown"},
             }
             with self.assertRaises(ValueError):
-                resolve(csv_path, mapping=mapping)
+                Mapping.resolve(csv_path, mapping=mapping)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -4368,9 +4393,7 @@ class TestAssessBatched(unittest.TestCase):
         store.define_shot(name="C", start=40, end=50, objects=[])
         result = store.assess()
         self.assertEqual(result[store.shot_by_name("A").shot_id], "valid")
-        self.assertEqual(
-            result[store.shot_by_name("B").shot_id], "missing_object"
-        )
+        self.assertEqual(result[store.shot_by_name("B").shot_id], "missing_object")
         self.assertEqual(result[store.shot_by_name("C").shot_id], "valid")
 
 
@@ -4457,7 +4480,7 @@ class TestParseCSVRobustness(unittest.TestCase):
                 ["", "B01.)", "Rudder fades in.", "RUDDER_01"],
             ]
         )
-        steps = parse_csv(path)
+        steps = ManifestModel.parse_csv(path)
         self.assertEqual([s.step_id for s in steps], ["A01", "A02", "B01"])
         a02 = steps[1]
         self.assertNotIn("Contents", a02.description)
@@ -4471,7 +4494,7 @@ class TestParseCSVRobustness(unittest.TestCase):
             ],
             encoding="cp1252",
         )
-        steps = parse_csv(path)
+        steps = ManifestModel.parse_csv(path)
         self.assertEqual(len(steps), 1)
         self.assertIn("fades in", steps[0].description)
 
@@ -4480,10 +4503,10 @@ class TestParseCSVRobustness(unittest.TestCase):
         must be stripped from the RAW bytes before the fallback decode,
         or it leaks into the first header cell and 0 steps parse."""
         path = os.path.join(self._tmp_dir, "bom_mixed.csv")
-        body = 'Step,Contents,Asset\r\nA01.),Fl\xe8che fades in.,ARROW_01\r\n'
+        body = "Step,Contents,Asset\r\nA01.),Fl\xe8che fades in.,ARROW_01\r\n"
         with open(path, "wb") as f:
             f.write(b"\xef\xbb\xbf" + body.encode("cp1252"))
-        steps = parse_csv(path)
+        steps = ManifestModel.parse_csv(path)
         self.assertEqual([s.step_id for s in steps], ["A01"])
 
     def test_no_header_returns_empty_not_crash(self):
@@ -4493,7 +4516,7 @@ class TestParseCSVRobustness(unittest.TestCase):
                 ["A02.)", "Checklist fades out.", "CHECK_01"],
             ]
         )
-        self.assertEqual(parse_csv(path), [])
+        self.assertEqual(ManifestModel.parse_csv(path), [])
 
 
 class TestRangeResolverClamp(unittest.TestCase):
@@ -4501,22 +4524,18 @@ class TestRangeResolverClamp(unittest.TestCase):
     auto-resolved end of the preceding step."""
 
     def test_next_start_before_cursor_clamps(self):
-        from mayatk.anim_utils.shots.shot_manifest.range_resolver import (
-            resolve_ranges,
-        )
+        from mayatk.anim_utils.shots.shot_manifest.range_resolver import RangeResolver
         from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
             BuilderStep,
         )
 
         steps = [
-            BuilderStep(
-                step_id=sid, section="A", section_title="", description=""
-            )
+            BuilderStep(step_id=sid, section="A", section_title="", description="")
             for sid in ("A01", "A02")
         ]
         # A02 pinned to start almost immediately after A01 starts; with
         # gap wider than the spacing, A01's derived end used to invert.
-        resolved = resolve_ranges(
+        resolved = RangeResolver.resolve_ranges(
             steps,
             user_ranges={"A01": (100.0, None), "A02": (102.0, 200.0)},
             gap_starts=[],
@@ -4537,9 +4556,7 @@ class TestRangeResolverSparseFrozenPrefix(unittest.TestCase):
     the edited step."""
 
     def test_sparse_prefix_freezes_by_id(self):
-        from mayatk.anim_utils.shots.shot_manifest.range_resolver import (
-            resolve_ranges,
-        )
+        from mayatk.anim_utils.shots.shot_manifest.range_resolver import RangeResolver
         from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
             BuilderStep,
         )
@@ -4554,7 +4571,7 @@ class TestRangeResolverSparseFrozenPrefix(unittest.TestCase):
             ("A01", 0.0, 50.0, False),
             ("A03", 500.0, 700.0, True),
         ]
-        resolved = resolve_ranges(
+        resolved = RangeResolver.resolve_ranges(
             steps,
             user_ranges={"A03": (550.0, 700.0)},
             gap_starts=[560.0],
@@ -4565,9 +4582,7 @@ class TestRangeResolverSparseFrozenPrefix(unittest.TestCase):
             from_step_idx=2,
         )
         ids = [entry[0] for entry in resolved]
-        self.assertEqual(
-            ids.count("A03"), 1, "edited step must not be duplicated"
-        )
+        self.assertEqual(ids.count("A03"), 1, "edited step must not be duplicated")
         by_id = {entry[0]: entry for entry in resolved}
         self.assertEqual(
             (by_id["A01"][1], by_id["A01"][2]),
@@ -4669,21 +4684,21 @@ class TestResolveToTransformSubclasses(unittest.TestCase):
         cmds.file(new=True, force=True)
 
     def test_child_joint_resolves_to_itself(self):
-        from mayatk.anim_utils.shots._detection import resolve_to_transform
+        from mayatk.anim_utils.shots._detection import Detection
 
         grp = cmds.group(em=True, name="rig_grp")
         cmds.select(grp)
         jnt = cmds.joint(name="root_jnt")
-        resolved = resolve_to_transform(jnt)
+        resolved = Detection.resolve_to_transform(jnt)
         self.assertIsNotNone(resolved)
         self.assertEqual(resolved.rsplit("|", 1)[-1], "root_jnt")
 
     def test_root_joint_resolves_to_itself(self):
-        from mayatk.anim_utils.shots._detection import resolve_to_transform
+        from mayatk.anim_utils.shots._detection import Detection
 
         cmds.select(clear=True)
         jnt = cmds.joint(name="lone_jnt")
-        resolved = resolve_to_transform(jnt)
+        resolved = Detection.resolve_to_transform(jnt)
         self.assertIsNotNone(resolved)
         self.assertEqual(resolved.rsplit("|", 1)[-1], "lone_jnt")
 

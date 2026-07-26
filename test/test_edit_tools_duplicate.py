@@ -386,6 +386,26 @@ class TestDuplicateGrid(MayaTkTestCase):
         )
         self.assertEqual(xy, [(0.0, 0.0), (0.0, 2.0), (2.0, 0.0), (2.0, 2.0)])
 
+    def test_grid_per_axis_spacing(self):
+        """A (sx, sy, sz) spacing tuple sets the gap per axis independently
+        (unit cube, base 1; spacing (1, 3, 0) -> steps (2, 4, 1))."""
+        cube = cmds.polyCube(name="dg_peraxis")[0]  # spans -0.5..0.5
+        result = DuplicateGrid.duplicate_grid(
+            objects=[cube], dimensions=(2, 2, 1), spacing=(1, 3, 0), mode="instance"
+        )
+        xy = sorted(
+            tuple(round(v, 3) for v in cmds.xform(o, q=True, ws=True, t=True)[:2])
+            for o in self._copies(result)
+        )
+        # X step = base(1) + 1 = 2 ; Y step = base(1) + 3 = 4
+        self.assertEqual(xy, [(0.0, 0.0), (0.0, 4.0), (2.0, 0.0), (2.0, 4.0)])
+
+    def test_grid_scalar_spacing_matches_uniform_tuple(self):
+        """A scalar spacing is equivalent to the same value on all three axes
+        (backward-compat contract of ``_normalize_spacing``)."""
+        self.assertEqual(DuplicateGrid._normalize_spacing(2), (2.0, 2.0, 2.0))
+        self.assertEqual(DuplicateGrid._normalize_spacing((1, 2, 3)), (1.0, 2.0, 3.0))
+
     def test_grid_negative_count_lays_out_in_opposite_direction(self):
         cube = cmds.polyCube(name="dg_negdir")[0]
         result = DuplicateGrid.duplicate_grid(

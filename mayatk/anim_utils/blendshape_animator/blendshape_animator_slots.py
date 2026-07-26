@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Switchboard slots controller for blendshape_animator.ui."""
+
 from typing import Dict, List, Optional
 
 try:
@@ -9,14 +10,14 @@ except ImportError:
     cmds = None
 
 from qtpy import QtCore, QtWidgets
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 from mayatk.anim_utils.blendshape_animator._blendshape_animator import (
     BlendshapeAnimator,
 )
 from mayatk.anim_utils.blendshape_animator.applicator import ApplyStatus
 from mayatk.anim_utils.blendshape_animator.target import Target, Targets
-from mayatk.anim_utils.blendshape_animator.helpers import list_history
+from mayatk.anim_utils.blendshape_animator.helpers import BlendshapeHelpers
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.node_utils.attributes._attributes import Attributes
@@ -163,7 +164,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             if Attributes.has_attr(node, "isInbetweenTarget"):
                 continue
             try:
-                history = list_history(node, type_filter="blendShape")
+                history = BlendshapeHelpers.list_history(node, type_filter="blendShape")
             except RuntimeError:
                 continue
             if not history:
@@ -194,33 +195,42 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         widget.config_buttons("menu", "minimize", "hide")
 
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Blendshape Animator",
                 body="Build a morph between two meshes, add in-between "
                 "(tween) shapes for custom curve control, edit them, and "
                 "apply the edits back to the rig.",
                 sections=[
-                    ("Setup", [
-                        "Select two meshes — <b>source</b> first, <b>target</b> "
-                        "second.",
-                        "Click <b>Create Setup</b>. The option box (▸) offers "
-                        "<i>Load From Existing</i> for resuming an in-progress "
-                        "setup.",
-                    ]),
-                    ("Edit", [
-                        "Add tweens by <b>weight</b> (count or comma-separated "
-                        "values) or by <b>frame</b>.",
-                        "Click rows in the tween list to select; right-click "
-                        "for per-tween actions (re-apply, delete, etc.) — "
-                        "supports multi-select.",
-                    ]),
-                    ("Apply &amp; export", [
-                        "<b>Apply All Edits</b> — bulk-apply every queued edit "
-                        "back to the blendshape rig.",
-                        "<b>Diagnostics</b> — flag topology mismatches and "
-                        "recover lost keys.",
-                        "<b>Export</b> — finalize the scene for baking / FBX.",
-                    ]),
+                    (
+                        "Setup",
+                        [
+                            "Select two meshes — <b>source</b> first, <b>target</b> "
+                            "second.",
+                            "Click <b>Create Setup</b>. The option box (▸) offers "
+                            "<i>Load From Existing</i> for resuming an in-progress "
+                            "setup.",
+                        ],
+                    ),
+                    (
+                        "Edit",
+                        [
+                            "Add tweens by <b>weight</b> (count or comma-separated "
+                            "values) or by <b>frame</b>.",
+                            "Click rows in the tween list to select; right-click "
+                            "for per-tween actions (re-apply, delete, etc.) — "
+                            "supports multi-select.",
+                        ],
+                    ),
+                    (
+                        "Apply &amp; export",
+                        [
+                            "<b>Apply All Edits</b> — bulk-apply every queued edit "
+                            "back to the blendshape rig.",
+                            "<b>Diagnostics</b> — flag topology mismatches and "
+                            "recover lost keys.",
+                            "<b>Export</b> — finalize the scene for baking / FBX.",
+                        ],
+                    ),
                 ],
             )
         )
@@ -236,7 +246,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             "QPushButton",
             setText="Load From Existing",
             setObjectName="btn_from_existing",
-            setToolTip=fmt(
+            setToolTip=TooltipFormat.fmt(
                 title="Load From Existing",
                 body=(
                     "Bind to the blendShape on the selected base mesh "
@@ -252,7 +262,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             "QPushButton",
             setText="Recover Setup",
             setObjectName="btn_recover_setup",
-            setToolTip=fmt(
+            setToolTip=TooltipFormat.fmt(
                 title="Recover Setup",
                 body=(
                     "Rebuild a corrupted blendShape, preserving keyframes "
@@ -302,7 +312,8 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
     def _action_from_existing(self) -> None:
         ok = self._adopt_state(BlendshapeAnimator.from_existing())
         self._set_status(
-            f"Loaded existing setup on {self.base_mesh}" if ok
+            f"Loaded existing setup on {self.base_mesh}"
+            if ok
             else "Load From Existing failed — see Script Editor."
         )
         self._refresh_tree()
@@ -311,7 +322,8 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
     def _action_recover_setup(self) -> None:
         ok = self._adopt_state(BlendshapeAnimator.recover_setup())
         self._set_status(
-            f"Recovered setup on {self.base_mesh}" if ok
+            f"Recovered setup on {self.base_mesh}"
+            if ok
             else "Recover Setup failed — see Script Editor."
         )
         self._refresh_tree()
@@ -435,7 +447,8 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
                 target_frame=frame, group_name=group_name, name_prefix=name_prefix
             )
             self._set_status(
-                f"Added frame-based tween at frame {frame}" if tweens
+                f"Added frame-based tween at frame {frame}"
+                if tweens
                 else "Frame-based tween creation failed — see Script Editor."
             )
 
@@ -557,14 +570,24 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         """Finalize for Export — option_box for the four boolean flags."""
         widget.option_box.menu.setTitle("Finalize for Export")
         for name, label, default, tip in (
-            ("cleanup_scene", "Cleanup scene", True, "Hide target mesh and tween meshes."),
+            (
+                "cleanup_scene",
+                "Cleanup scene",
+                True,
+                "Hide target mesh and tween meshes.",
+            ),
             (
                 "delete_construction_history",
                 "Delete construction history",
                 True,
                 "Delete construction history except the blendShape itself.",
             ),
-            ("hide_target_mesh", "Hide target mesh", True, "Hide the target instead of leaving it visible."),
+            (
+                "hide_target_mesh",
+                "Hide target mesh",
+                True,
+                "Hide the target instead of leaving it visible.",
+            ),
             (
                 "delete_inbetween_meshes",
                 "Delete in-between meshes",
@@ -605,8 +628,8 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         # Per-column color formatters: read the cell's value and apply
         # semantic action color from TreeFormatMixin.ACTION_COLOR_MAP.
         topology_map = {
-            "match": ("#3C8D3C", None),    # green text
-            "mismatch": ("#B97A7A", None), # red text
+            "match": ("#3C8D3C", None),  # green text
+            "mismatch": ("#B97A7A", None),  # red text
             "unknown": ("#AAAAAA", None),  # gray
         }
         status_map = {
@@ -618,9 +641,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         tree.set_column_formatter(
             COL_TOPOLOGY, tree.make_color_map_formatter(topology_map)
         )
-        tree.set_column_formatter(
-            COL_STATUS, tree.make_color_map_formatter(status_map)
-        )
+        tree.set_column_formatter(COL_STATUS, tree.make_color_map_formatter(status_map))
 
         # Selection sync: clicking a row selects the tween mesh in Maya.
         tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
@@ -650,6 +671,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         # Subtle tints to differentiate the numeric columns
         try:
             from qtpy.QtGui import QColor
+
             tree.set_column_tint(COL_WEIGHT, QColor(255, 255, 255, 8))
             tree.set_column_tint(COL_FRAME, QColor(255, 255, 255, 8))
         except Exception:
@@ -665,7 +687,9 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         try:
             self.ui.tree000.tooltip.bind(self._tree_tooltip_provider)
             self.ui.footer.tooltip.bind(
-                lambda: f"Setup: {self.blendshape or '(none)'} on {self.base_mesh or '(none)'}"
+                lambda: (
+                    f"Setup: {self.blendshape or '(none)'} on {self.base_mesh or '(none)'}"
+                )
             )
         except (AttributeError, RuntimeError):
             pass
@@ -678,7 +702,8 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         )
         n = len(tweens)
         n_mismatch = sum(
-            1 for t in tweens
+            1
+            for t in tweens
             if self.base_mesh
             and cmds.objExists(t.mesh)
             and cmds.polyEvaluate(t.mesh, vertex=True)
@@ -740,9 +765,12 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
                     tween.mesh,
                     f"{tween.weight:.3f}",
                     "" if frame is None else str(frame),
-                    "Match" if topology == "match" else (
+                    "Match"
+                    if topology == "match"
+                    else (
                         f"Mismatch ({vert_count} vs {base_vert_count})"
-                        if vert_count is not None else "Unknown"
+                        if vert_count is not None
+                        else "Unknown"
                     ),
                     status.capitalize(),
                 ]
@@ -758,8 +786,12 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             if frame is not None:
                 item.setData(COL_FRAME, _NumericSortItem._NUM_ROLE, frame)
             # Right-align numeric cells (display only)
-            item.setTextAlignment(COL_WEIGHT, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-            item.setTextAlignment(COL_FRAME, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            item.setTextAlignment(
+                COL_WEIGHT, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter
+            )
+            item.setTextAlignment(
+                COL_FRAME, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter
+            )
             tree.addTopLevelItem(item)
 
         tree.apply_formatting()
@@ -842,9 +874,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             for t, s in results:
                 self._row_status[t.mesh] = s
             applied = sum(1 for _, s in results if s is ApplyStatus.APPLIED)
-            self._set_status(
-                f"Re-applied {applied}/{len(results)} tween(s)"
-            )
+            self._set_status(f"Re-applied {applied}/{len(results)} tween(s)")
             self._refresh_tree()
         elif chosen is act_delete:
             with CoreUtils.undo_chunk("Delete Tween Meshes"):
@@ -852,9 +882,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
                 Targets._delete_empty_groups()
             for mesh_name in deleted:
                 self._row_status.pop(mesh_name, None)
-            self._set_status(
-                f"Deleted {len(deleted)}/{len(tweens)} tween mesh(es)"
-            )
+            self._set_status(f"Deleted {len(deleted)}/{len(tweens)} tween mesh(es)")
             self._refresh_tree()
 
     def _toggle_filter_mismatches(self, checked: bool) -> None:

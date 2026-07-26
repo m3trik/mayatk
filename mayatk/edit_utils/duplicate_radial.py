@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import List, Dict, Tuple, Union
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 try:
     import maya.cmds as cmds
@@ -13,7 +13,7 @@ except ImportError as error:
     print(__file__, error)
 # from this package:
 from mayatk.core_utils.preview import Preview
-from mayatk.core_utils._core_utils import short_name
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk import DisplayUtils
 from mayatk import XformUtils
@@ -21,7 +21,6 @@ from mayatk.edit_utils.naming._naming import Naming
 
 
 class DuplicateRadial(ptk.LoggingMixin):
-
     @staticmethod
     def duplicate_radial(
         objects: List[str],
@@ -70,7 +69,12 @@ class DuplicateRadial(ptk.LoggingMixin):
         DuplicateRadial._validate_inputs(rotate_axis, weight_bias, weight_curve)
         originals_to_copies = {}
 
-        for node in objects:
+        for orig in CoreUtils.as_strings(objects):
+            # Resolve to a full path for the scene ops below — especially
+            # _cleanup_original's delete when keep_original=False — so an
+            # ambiguous short name can't hit the wrong same-named object. The
+            # result stays keyed by the caller's original reference.
+            node = (cmds.ls(orig, long=True) or [orig])[0]
             print(f"\n[duplicate radial] Processing node: {node} ..")
 
             driven_group, driven_node, pivot_pos = (
@@ -109,7 +113,7 @@ class DuplicateRadial(ptk.LoggingMixin):
                     or finalized
                 )
 
-            originals_to_copies[node] = finalized
+            originals_to_copies[orig] = finalized
             print(
                 f"[duplicate radial] [{node}] Created {len(finalized)} total instances"
             )
@@ -255,7 +259,9 @@ class DuplicateRadial(ptk.LoggingMixin):
                 copy_group = cmds.instance(group_node, leaf=True)[0]
             else:
                 copy_group = cmds.duplicate(group_node, rr=True)[0]
-            children = cmds.listRelatives(copy_group, children=True, fullPath=True) or []
+            children = (
+                cmds.listRelatives(copy_group, children=True, fullPath=True) or []
+            )
             copy = children[0]
             copies.append(copy)
             cls.logger.debug(
@@ -267,11 +273,7 @@ class DuplicateRadial(ptk.LoggingMixin):
             # _validate_inputs, and the spinbox max) stays finite instead of
             # raising ZeroDivisionError; the clamp approximates the sharp-curve limit.
             exponent = 1.0 / (1.0 - min(weight_curve, 0.9999))
-            curve_value = (
-                x**exponent
-                if weight_bias >= 0.5
-                else 1 - (1 - x) ** exponent
-            )
+            curve_value = x**exponent if weight_bias >= 0.5 else 1 - (1 - x) ** exponent
 
             f_x = (1 - weight_factor) * x + weight_factor * curve_value
             current_rotation = [0, 0, 0]
@@ -311,7 +313,7 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
         self.ui = self.sb.loaded_ui.duplicate_radial
 
         self.logger.setLevel(log_level)
-        self.logger.set_log_prefix(f"[duplicate radial] ")
+        self.logger.set_log_prefix("[duplicate radial] ")
 
         # Output mode: independent copies vs shared-shape instances (was the
         # "Instance" checkbox). Copy is the default, matching the prior unchecked state.
@@ -361,7 +363,7 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Duplicate Radial",
                 body="Duplicate selected objects in a radial / circular pattern "
                 "around a chosen pivot.",
@@ -375,14 +377,17 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
                     "Toggle <b>Preview</b>, then <b>Duplicate</b> to commit.",
                 ],
                 sections=[
-                    ("Options", [
-                        "<b>Instance</b> — copies share a shape; cheaper and "
-                        "edits propagate.",
-                        "<b>Keep Original</b> — leave the source object in place "
-                        "(off discards it after the pattern is built).",
-                        "<b>Combine</b> — merge result into a single mesh.",
-                        "<b>Suffix</b> — append a numeric suffix to copy names.",
-                    ]),
+                    (
+                        "Options",
+                        [
+                            "<b>Instance</b> — copies share a shape; cheaper and "
+                            "edits propagate.",
+                            "<b>Keep Original</b> — leave the source object in place "
+                            "(off discards it after the pattern is built).",
+                            "<b>Combine</b> — merge result into a single mesh.",
+                            "<b>Suffix</b> — append a numeric suffix to copy names.",
+                        ],
+                    ),
                 ],
                 notes=[
                     "<b>Weight Bias</b> and <b>Weight Curve</b> control "
@@ -412,7 +417,9 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
             "rotate_axis": (
                 "x"
                 if self.ui.chk002.isChecked()
-                else "y" if self.ui.chk003.isChecked() else "z"
+                else "y"
+                if self.ui.chk003.isChecked()
+                else "z"
             ),
             "offset": (
                 self.ui.s010.value(),
@@ -459,7 +466,7 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
                 if not copies:
                     continue
 
-                first_obj_name = short_name(copies[0])
+                first_obj_name = CoreUtils.short_name(copies[0])
                 name = re.sub(r"\d+$", "", first_obj_name)
                 name += "_array"
                 unique_name = Naming.generate_unique_name(name)

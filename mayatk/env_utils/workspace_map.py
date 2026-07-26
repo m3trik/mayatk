@@ -3,10 +3,10 @@
 import maya.cmds as cmds
 import os
 import re
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # from this package:
 from mayatk.env_utils._env_utils import EnvUtils
@@ -378,7 +378,7 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Workspace Map",
                 body="Browse a directory tree of Maya workspaces; click a "
                 "node to set it as the active workspace.",
@@ -390,13 +390,16 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
                     "<i>workspace</i> command switches to it.",
                 ],
                 sections=[
-                    ("Directory field option box (▸)", [
-                        "<b>Browse…</b> — pick a root directory.",
-                        "<b>Set To Workspace</b> — set the root to the "
-                        "current workspace's directory.",
-                        "<b>Recursive Search</b> — also discover nested "
-                        "workspace folders under each child folder.",
-                    ]),
+                    (
+                        "Directory field option box (▸)",
+                        [
+                            "<b>Browse…</b> — pick a root directory.",
+                            "<b>Set To Workspace</b> — set the root to the "
+                            "current workspace's directory.",
+                            "<b>Recursive Search</b> — also discover nested "
+                            "workspace folders under each child folder.",
+                        ],
+                    ),
                 ],
             )
         )

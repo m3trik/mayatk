@@ -8,7 +8,7 @@ Covers:
     - audio_utils.migrate (legacy detection)
     - audio_utils.batch (batch context manager)
 """
-import os
+
 import unittest
 import tempfile
 import shutil
@@ -28,12 +28,12 @@ class TestAudioNodesPaths(MayaTkTestCase):
     """nodes.workspace_sound_dir / resolve_playable_path."""
 
     def test_workspace_sound_dir_returns_string_or_none(self):
-        result = nodes.workspace_sound_dir()
+        result = nodes.Nodes.workspace_sound_dir()
         self.assertTrue(result is None or isinstance(result, str))
 
     def test_resolve_playable_path_with_nonexistent_returns_none(self):
         # ptk.AudioUtils.resolve_playable_path returns None for missing files
-        result = nodes.resolve_playable_path("/__nonexistent__/audio.wav")
+        result = nodes.Nodes.resolve_playable_path("/__nonexistent__/audio.wav")
         self.assertTrue(result is None or isinstance(result, str))
 
 
@@ -49,17 +49,17 @@ class TestAudioNodesLifecycle(MayaTkTestCase):
         super().tearDown()
 
     def test_create_dg_with_invalid_path_returns_none(self):
-        result = nodes.create_dg("/__nonexistent__/audio.wav")
+        result = nodes.Nodes.create_dg("/__nonexistent__/audio.wav")
         self.assertIsNone(result)
 
     def test_query_duration_on_nonexistent_returns_zero(self):
         # No audio node — duration should be 0 (gracefully handled)
-        self.assertEqual(nodes.query_duration("nonexistent_audio_node"), 0.0)
+        self.assertEqual(nodes.Nodes.query_duration("nonexistent_audio_node"), 0.0)
 
     def test_stamp_marker_creates_attr(self):
         # Create a bare audio node manually
         node = cmds.createNode("audio", name="test_marker_audio")
-        nodes._stamp_marker(node, "track_xyz")
+        nodes.Nodes._stamp_marker(node, "track_xyz")
         self.assertTrue(cmds.attributeQuery(MARKER_ATTR, node=node, exists=True))
         self.assertEqual(cmds.getAttr(f"{node}.{MARKER_ATTR}"), "track_xyz")
 
@@ -69,22 +69,22 @@ class TestCompositorManagedNodes(MayaTkTestCase):
 
     def test_unmarked_node_is_not_managed(self):
         node = cmds.createNode("audio", name="unmanaged_audio")
-        self.assertFalse(compositor.is_managed_dg(node))
+        self.assertFalse(compositor.Compositor.is_managed_dg(node))
 
     def test_marked_node_is_managed(self):
         node = cmds.createNode("audio", name="managed_audio")
-        nodes._stamp_marker(node, "track_a")
-        self.assertTrue(compositor.is_managed_dg(node))
+        nodes.Nodes._stamp_marker(node, "track_a")
+        self.assertTrue(compositor.Compositor.is_managed_dg(node))
 
     def test_find_dg_node_for_track(self):
         node = cmds.createNode("audio", name="findable_audio")
-        nodes._stamp_marker(node, "find_track")
+        nodes.Nodes._stamp_marker(node, "find_track")
 
-        result = compositor.find_dg_node_for_track("find_track")
+        result = compositor.Compositor.find_dg_node_for_track("find_track")
         self.assertEqual(result, node)
 
     def test_find_dg_node_for_unknown_track_returns_none(self):
-        result = compositor.find_dg_node_for_track("never_made")
+        result = compositor.Compositor.find_dg_node_for_track("never_made")
         self.assertIsNone(result)
 
 
@@ -92,22 +92,26 @@ class TestMigrateDetection(MayaTkTestCase):
     """migrate.detect_legacy."""
 
     def test_detect_on_nonexistent_object(self):
-        self.assertFalse(migrate.detect_legacy("never_existed"))
+        self.assertFalse(migrate.Migrate.detect_legacy("never_existed"))
 
     def test_detect_without_legacy_attr_is_false(self):
         cube = cmds.polyCube(name="leg_cube")[0]
-        self.assertFalse(migrate.detect_legacy(cube))
+        self.assertFalse(migrate.Migrate.detect_legacy(cube))
 
     def test_detect_with_legacy_attr_is_true(self):
         cube = cmds.polyCube(name="leg_cube_pos")[0]
-        cmds.addAttr(cube, longName="audio_trigger", attributeType="enum", enumName="None:hit")
-        self.assertTrue(migrate.detect_legacy(cube))
+        cmds.addAttr(
+            cube, longName="audio_trigger", attributeType="enum", enumName="None:hit"
+        )
+        self.assertTrue(migrate.Migrate.detect_legacy(cube))
 
     def test_detect_custom_category(self):
         cube = cmds.polyCube(name="leg_custom")[0]
-        cmds.addAttr(cube, longName="vfx_trigger", attributeType="enum", enumName="None:bang")
-        self.assertTrue(migrate.detect_legacy(cube, category="vfx"))
-        self.assertFalse(migrate.detect_legacy(cube, category="audio"))
+        cmds.addAttr(
+            cube, longName="vfx_trigger", attributeType="enum", enumName="None:bang"
+        )
+        self.assertTrue(migrate.Migrate.detect_legacy(cube, category="vfx"))
+        self.assertFalse(migrate.Migrate.detect_legacy(cube, category="audio"))
 
 
 class TestBatchStack(QuickTestCase):
@@ -115,7 +119,7 @@ class TestBatchStack(QuickTestCase):
 
     def test_get_stack_initialized_empty(self):
         # In a fresh thread the stack starts empty
-        stack = batch_mod._get_stack()
+        stack = batch_mod.Batch._get_stack()
         self.assertIsInstance(stack, list)
 
 
@@ -143,20 +147,19 @@ class TestBatchContext(MayaTkTestCase):
 
     def test_outer_batch_opens_undo_chunk(self):
         # Just verify entering and exiting doesn't raise
-        with batch_mod.batch() as b:
+        with batch_mod.Batch.batch() as b:
             self.assertIsInstance(b, batch_mod._BatchContext)
 
     def test_nested_batches_share_outer(self):
-        outer_dirty = set()
-        with batch_mod.batch() as outer:
-            with batch_mod.batch() as inner:
+        with batch_mod.Batch.batch():
+            with batch_mod.Batch.batch() as inner:
                 inner.mark_dirty(["from_inner"])
             # Inner mark_dirty should have flowed to the outer
-            stack = batch_mod._get_stack()
+            stack = batch_mod.Batch._get_stack()
             self.assertEqual(len(stack), 1)
 
     def test_batch_returns_context_manager(self):
-        ctx = batch_mod.batch()
+        ctx = batch_mod.Batch.batch()
         self.assertTrue(hasattr(ctx, "__enter__"))
         self.assertTrue(hasattr(ctx, "__exit__"))
 

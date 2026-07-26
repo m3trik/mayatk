@@ -34,6 +34,7 @@ and ``visibility`` is the ``camera`` flag, so those go direct.)
 
 Maya 2025+ / Arnold (``mtoa``) plugin required for any network mutation.
 """
+
 import os
 import shutil
 from typing import Optional
@@ -45,7 +46,7 @@ except ImportError as error:
     print(__file__, error)
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
@@ -139,11 +140,14 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
         # panel open / refresh cheap now that Arnold is no longer force-loaded.
         if not self.arnold_loaded():
             return None
-        domes = sorted(cmds.ls(exactType="aiSkyDomeLight") or [])
+        domes = sorted(cmds.ls(exactType="aiSkyDomeLight", long=True) or [])
         if not domes:
             return None
-        if self.hdr_env_name in domes:
-            return self.hdr_env_name
+        matched = next(
+            (d for d in domes if d.rsplit("|", 1)[-1] == self.hdr_env_name), None
+        )
+        if matched:
+            return matched
         for dome in domes:
             if self._connected_file_node(dome):
                 return dome
@@ -162,7 +166,9 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
         if not tex:
             return
         if not self.arnold_available():
-            self.logger.warning("Arnold (mtoa) plugin not available — cannot set HDR env.")
+            self.logger.warning(
+                "Arnold (mtoa) plugin not available — cannot set HDR env."
+            )
             return
 
         tex = str(tex)
@@ -421,7 +427,8 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
         file_node = self._connected_file_node(node)
         place2d = (
             cmds.listConnections(file_node, type="place2dTexture") or []
-            if file_node else []
+            if file_node
+            else []
         )
         transform = NodeUtils.get_transform_node(node)
         for n in [*place2d, file_node, transform or node]:
@@ -482,8 +489,8 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
             "aiSkyDomeLight",
             "asLight",
             name=self.hdr_env_name,
-            camera=0,        # hidden from primary rays by default
-            skyRadius=0,     # hide the sphere preview in viewport
+            camera=0,  # hidden from primary rays by default
+            skyRadius=0,  # hide the sphere preview in viewport
         )
         transform = NodeUtils.get_transform_node(node)
         if transform:
@@ -502,9 +509,12 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
     @staticmethod
     def _connected_file_node(skydome: str) -> Optional[str]:
         """Return the file node feeding ``skydome.color``, if any."""
-        files = cmds.listConnections(
-            f"{skydome}.color", source=True, destination=False, type="file"
-        ) or []
+        files = (
+            cmds.listConnections(
+                f"{skydome}.color", source=True, destination=False, type="file"
+            )
+            or []
+        )
         return files[0] if files else None
 
     @staticmethod
@@ -516,9 +526,7 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
         would otherwise produce when fed a name already ending in ``_file``).
         """
         stem = os.path.splitext(os.path.basename(path))[0] or "hdr"
-        file_node, _ = MatUtils.create_file_node(
-            path, name=stem, color_space="Raw"
-        )
+        file_node, _ = MatUtils.create_file_node(path, name=stem, color_space="Raw")
         cmds.connectAttr(f"{file_node}.outColor", f"{skydome}.color", force=True)
         return file_node
 
@@ -582,7 +590,10 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         # an event unavailable on some Maya build can't block the panel open.
         mgr = ScriptJobManager.instance()
         for events, handler in (
-            (("SceneOpened", "NewSceneOpened", "SceneImported"), self._on_scene_changed),
+            (
+                ("SceneOpened", "NewSceneOpened", "SceneImported"),
+                self._on_scene_changed,
+            ),
             (("Undo", "Redo"), self._sync_ui_to_scene),
         ):
             for event in events:
@@ -763,7 +774,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             setToolTip="Delete the skydome and its connected file / place2d nodes.",
         )
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="HDR Manager",
                 body="Manage the scene's Arnold HDR environment lighting "
                 "(aiSkyDomeLight + file + place2dTexture network).",
@@ -784,34 +795,46 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                     "Arnold <i>render</i>).",
                 ],
                 sections=[
-                    ("Advanced Options (collapsible)", [
-                        "<b>Samples</b> — light samples; raise to clean up "
-                        "soft-IBL noise (<i>aiSamples</i>).",
-                        "<b>Diffuse</b> / <b>Specular</b> — scale the dome's "
-                        "diffuse vs specular contribution independently "
-                        "(<i>aiDiffuse</i> / <i>aiSpecular</i>).",
-                    ]),
-                    ("Add HDR(s)… (option-box menu ▸)", [
-                        "One dialog picks <b>loose files and/or a whole folder</b>; "
-                        "folders are expanded to their .hdr/.exr contents. "
-                        "Incomplete/corrupt files are skipped.",
-                        "Files already inside <i>sourceimages</i> (any subfolder) "
-                        "are used in place — never duplicated; the dropdown lists "
-                        "them automatically.",
-                        "<b>Copy</b> — duplicate an <i>external</i> file into "
-                        "sourceimages (default; keeps scenes portable).",
-                        "<b>Move</b> — relocate an external file into sourceimages.",
-                        "<b>Link</b> — wire each in at its original path.",
-                    ]),
-                    ("Dropdown right-click", [
-                        "Select skydome / file / transform nodes.",
-                        "Reveal the texture in Explorer.",
-                    ]),
-                    ("Header menu", [
-                        "<b>Open Sourceimages Folder</b> — Explorer shortcut.",
-                        "<b>Clear Network</b> — delete the skydome and its "
-                        "file / place2d nodes.",
-                    ]),
+                    (
+                        "Advanced Options (collapsible)",
+                        [
+                            "<b>Samples</b> — light samples; raise to clean up "
+                            "soft-IBL noise (<i>aiSamples</i>).",
+                            "<b>Diffuse</b> / <b>Specular</b> — scale the dome's "
+                            "diffuse vs specular contribution independently "
+                            "(<i>aiDiffuse</i> / <i>aiSpecular</i>).",
+                        ],
+                    ),
+                    (
+                        "Add HDR(s)… (option-box menu ▸)",
+                        [
+                            "One dialog picks <b>loose files and/or a whole folder</b>; "
+                            "folders are expanded to their .hdr/.exr contents. "
+                            "Incomplete/corrupt files are skipped.",
+                            "Files already inside <i>sourceimages</i> (any subfolder) "
+                            "are used in place — never duplicated; the dropdown lists "
+                            "them automatically.",
+                            "<b>Copy</b> — duplicate an <i>external</i> file into "
+                            "sourceimages (default; keeps scenes portable).",
+                            "<b>Move</b> — relocate an external file into sourceimages.",
+                            "<b>Link</b> — wire each in at its original path.",
+                        ],
+                    ),
+                    (
+                        "Dropdown right-click",
+                        [
+                            "Select skydome / file / transform nodes.",
+                            "Reveal the texture in Explorer.",
+                        ],
+                    ),
+                    (
+                        "Header menu",
+                        [
+                            "<b>Open Sourceimages Folder</b> — Explorer shortcut.",
+                            "<b>Clear Network</b> — delete the skydome and its "
+                            "file / place2d nodes.",
+                        ],
+                    ),
                 ],
                 notes=[
                     "Requires the Arnold (mtoa) plugin to be loaded — the "
@@ -1283,7 +1306,9 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         )
         return False
 
-    def _clear_environment(self, absent_msg: str, *, absent_level: str = "info") -> bool:
+    def _clear_environment(
+        self, absent_msg: str, *, absent_level: str = "info"
+    ) -> bool:
         """Remove the skydome network, resync the UI, and report.
 
         Single owner of the clear path — shared by the deferred apply's "None"
@@ -1440,9 +1465,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         dialog.setNameFilters(self.HDR_FILTER.split(";;"))
         # ``findChildren`` with a tuple of types isn't portable across bindings;
         # collect the list + tree views separately.
-        views = dialog.findChildren(QtW.QListView) + dialog.findChildren(
-            QtW.QTreeView
-        )
+        views = dialog.findChildren(QtW.QListView) + dialog.findChildren(QtW.QTreeView)
         for view in views:
             view.setSelectionMode(QtW.QAbstractItemView.ExtendedSelection)
         if dialog.exec_():

@@ -92,6 +92,68 @@ class TestPivotTransferScenarios(MayaTkTestCase):
         m2 = self._get_pivot_matrix(t)
         self._assert_matrices_close(m1, m2)
 
+    def test_mirror_translate_reflects_position(self):
+        """mirror='x' reflects the transferred translate pivot across the world YZ plane."""
+        print("\n--- test_mirror_translate_reflects_position ---")
+        s = cmds.polyCube(n="source")[0]
+        t = cmds.polyCube(n="target")[0]
+
+        # Place the source pivot off-origin on all axes.
+        cmds.xform(s, ws=True, rp=[3, 4, 5])
+
+        XformUtils.transfer_pivot(
+            [s, t], translate=True, world_space=True, mirror="x"
+        )
+
+        rp = cmds.xform(t, q=True, ws=True, rp=True)
+        # X is negated; Y and Z are copied straight.
+        self.assertAlmostEqual(rp[0], -3, delta=self.thresh)
+        self.assertAlmostEqual(rp[1], 4, delta=self.thresh)
+        self.assertAlmostEqual(rp[2], 5, delta=self.thresh)
+
+    def test_mirror_rotate_reflects_orientation(self):
+        """mirror='x' of a Z-rotated source pivot yields the negated Z rotation on the target."""
+        print("\n--- test_mirror_rotate_reflects_orientation ---")
+        s = cmds.polyCube(n="source")[0]
+        t = cmds.polyCube(n="target")[0]
+
+        cmds.rotate(0, 0, 30, s)
+
+        XformUtils.transfer_pivot(
+            [s, t], rotate=True, world_space=True, mirror="x"
+        )
+
+        # Reflecting a +30 deg Z-rotation across the X plane gives -30 deg about Z.
+        m_target = self._get_pivot_matrix(t)
+        expected_loc = cmds.spaceLocator()[0]
+        cmds.rotate(0, 0, -30, expected_loc)
+        m_expected = cmds.xform(expected_loc, q=True, ws=True, matrix=True)
+        cmds.delete(expected_loc)
+        # Compare rotation part (upper 3x3).
+        for i in [0, 1, 2, 4, 5, 6, 8, 9, 10]:
+            if abs(m_target[i] - m_expected[i]) > self.thresh:
+                self.fail(
+                    f"Mirrored rotation differs at index {i}: "
+                    f"{m_target[i]} vs {m_expected[i]}"
+                )
+
+    def test_mirror_objectspace_negates_rotateaxis(self):
+        """world_space=False mirror='x' reflects rotateAxis: X preserved, Y/Z negated."""
+        print("\n--- test_mirror_objectspace_negates_rotateaxis ---")
+        s = cmds.polyCube(n="source")[0]
+        t = cmds.polyCube(n="target")[0]
+
+        cmds.xform(s, ra=[20, 35, 50])
+
+        XformUtils.transfer_pivot(
+            [s, t], rotate=True, world_space=False, mirror="x"
+        )
+
+        ra = cmds.xform(t, q=True, ra=True)
+        self.assertAlmostEqual(ra[0], 20, delta=self.thresh)
+        self.assertAlmostEqual(ra[1], -35, delta=self.thresh)
+        self.assertAlmostEqual(ra[2], -50, delta=self.thresh)
+
     def test_transfer_preserve_target_pos(self):
         """Ensure transfer pivot (Rotation only) doesn't move Pivot Position if translate=False."""
         print("\n--- test_transfer_preserve_target_pos ---")

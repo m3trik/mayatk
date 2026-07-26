@@ -8,7 +8,8 @@ try:
 except ModuleNotFoundError as error:
     print(__file__, error)
 
-from uitk.widgets.mixins.tooltip_mixin import fmt, kbd
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
+
 # from this package:
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils.attributes._attributes import Attributes
@@ -140,9 +141,7 @@ class ColorUtils:
         return colors if colors else None
 
     @staticmethod
-    def set_vertex_color(
-        objects: List[str], color: Tuple[float, float, float]
-    ) -> None:
+    def set_vertex_color(objects: List[str], color: Tuple[float, float, float]) -> None:
         """Applies the specified color to the object's vertices."""
         for obj in cmds.ls(objects, long=True) or []:
             shapes = cmds.listRelatives(obj, shapes=True, type="mesh")
@@ -257,11 +256,17 @@ class ColorId(ColorUtils):
                         vtx_colors = None
                     if vtx_colors:
                         # vtx_colors is flat [r,g,b,r,g,b,...]; group into triples
-                        triples = list(zip(vtx_colors[0::3], vtx_colors[1::3], vtx_colors[2::3]))
+                        triples = list(
+                            zip(vtx_colors[0::3], vtx_colors[1::3], vtx_colors[2::3])
+                        )
                         if triples:
-                            average_vtx_color = [sum(c) / len(triples) for c in zip(*triples)]
+                            average_vtx_color = [
+                                sum(c) / len(triples) for c in zip(*triples)
+                            ]
                             if (
-                                cls.get_color_difference(average_vtx_color, target_color)
+                                cls.get_color_difference(
+                                    average_vtx_color, target_color
+                                )
                                 <= threshold
                             ):
                                 matched = True
@@ -306,14 +311,15 @@ class ColorId(ColorUtils):
     def reset_vertex_colors(objects: List[str]) -> None:
         """Resets vertex colors for the given object(s), handling potential errors gracefully."""
         transforms = cmds.ls(objects, type="transform", long=True) or []
-        shapes = cmds.listRelatives(transforms, children=True, shapes=True) or []
+        shapes = (
+            cmds.listRelatives(transforms, children=True, shapes=True, fullPath=True)
+            or []
+        )
 
         for shape in shapes:
             if cmds.nodeType(shape) == "mesh":
                 try:
-                    color_sets = cmds.polyColorSet(
-                        shape, query=True, allColorSets=True
-                    )
+                    color_sets = cmds.polyColorSet(shape, query=True, allColorSets=True)
                     if color_sets:
                         for color_set in color_sets:
                             cmds.polyColorSet(shape, delete=True, colorSet=color_set)
@@ -362,9 +368,7 @@ class ColorIdSlots(ColorId):
 
         for i, button in enumerate(buttons):
             button._initialColor = self.sb.QtGui.QColor(
-                *ColorId.DEFAULT_SWATCH_COLORS[
-                    i % len(ColorId.DEFAULT_SWATCH_COLORS)
-                ]
+                *ColorId.DEFAULT_SWATCH_COLORS[i % len(ColorId.DEFAULT_SWATCH_COLORS)]
             )
             button.keep_square = True  # square swatches that track column width
             button.settings = self.ui.settings
@@ -374,11 +378,7 @@ class ColorIdSlots(ColorId):
 
     def _export_swatch_colors(self) -> dict:
         """``PresetManager.metadata_provider`` — capture current swatch colors."""
-        return {
-            "swatches": [
-                btn.color.name() for btn in self.button_grp.buttons()
-            ]
-        }
+        return {"swatches": [btn.color.name() for btn in self.button_grp.buttons()]}
 
     def _import_swatch_colors(self, meta: dict) -> None:
         """``PresetManager.on_metadata_loaded`` — apply colors from a preset."""
@@ -398,8 +398,7 @@ class ColorIdSlots(ColorId):
         original = presets.metadata_provider
         presets.metadata_provider = lambda: {
             "swatches": [
-                self._hex_from_rgb(rgb)
-                for rgb in ColorId.DEFAULT_SWATCH_COLORS
+                self._hex_from_rgb(rgb) for rgb in ColorId.DEFAULT_SWATCH_COLORS
             ]
         }
         try:
@@ -412,7 +411,7 @@ class ColorIdSlots(ColorId):
         # Gesture-scoped window: pin button + auto-hide on key_show release.
         widget.config_buttons("menu", "collapse", "pin")
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Color ID",
                 body="Assign colors to scene objects through any combination "
                 "of four channels: material, outliner tint, wireframe "
@@ -428,18 +427,24 @@ class ColorIdSlots(ColorId):
                     "matching the active color across the enabled channels.",
                 ],
                 sections=[
-                    ("Other actions", [
-                        "<b>Reset Colors</b> — clear assignments on the "
-                        f"current selection (or every geometry node with "
-                        f"{kbd('Ctrl')}-click).",
-                        "<b>Remove Vertex Colors</b> — clear vertex-color "
-                        "data without touching other channels.",
-                    ]),
-                    ("Presets", [
-                        "The header menu's preset combo saves / restores "
-                        "swatch palettes. Use <b>Save</b> to capture the "
-                        "current colors; pick a preset to restore them.",
-                    ]),
+                    (
+                        "Other actions",
+                        [
+                            "<b>Reset Colors</b> — clear assignments on the "
+                            f"current selection (or every geometry node with "
+                            f"{TooltipFormat.kbd('Ctrl')}-click).",
+                            "<b>Remove Vertex Colors</b> — clear vertex-color "
+                            "data without touching other channels.",
+                        ],
+                    ),
+                    (
+                        "Presets",
+                        [
+                            "The header menu's preset combo saves / restores "
+                            "swatch palettes. Use <b>Save</b> to capture the "
+                            "current colors; pick a preset to restore them.",
+                        ],
+                    ),
                 ],
             )
         )
@@ -454,7 +459,7 @@ class ColorIdSlots(ColorId):
     @property
     def selected_objects(self) -> List[str]:
         """Return the currently selected objects, or an empty list if no objects are selected."""
-        objects = cmds.ls(selection=True) or []
+        objects = cmds.ls(selection=True, long=True) or []
         if not objects:
             self.sb.message_box("No objects selected.")
         return objects

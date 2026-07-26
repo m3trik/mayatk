@@ -14,21 +14,20 @@
 # further work on top.
 #
 # ============================================================================
-# STATUS: BLOCKED on Painter-side plugin (same wall as reimport / render)
+# STATUS: transport OK (substance_rpc plugin); JS body unverified
 # ============================================================================
-# Stock Substance 3D Painter doesn't auto-bind a JSON-RPC port on launch.
-# Until a custom Painter Python plugin under
-# ``%USERPROFILE%\Documents\Adobe\Adobe Substance 3D Painter\python\plugins``
-# stands up an HTTP JSON-RPC server, sending this template will hang on
-# ``PainterRpcClient.wait_until_ready`` and surface a timeout error.
+# The bridge's Painter-side ``substance_rpc`` plugin (auto-installed on
+# send) routes this RPC_SCRIPT through
+# :func:`substance_painter.js.evaluate` via its ``js.evaluate`` op, so
+# the script reaches Painter's JS engine.
 #
 # The JS API symbol names below (``alg.shaders.setCurrent``,
 # ``alg.imageExporter.exportRenderImage``, ``alg.resources.importResource``,
 # ``alg.layers.insertLayerInstance``) are best-effort guesses against
-# Painter's published JS surface; the plugin shim should map them to the
-# concrete ``substance_painter.*`` Python equivalents and may need to
-# adjust field names. The Maya side is right; only the Painter shim
-# needs verification.
+# Painter's published legacy-JS surface and need verification against a
+# live Painter (the RPC response carries Painter's exception text on a
+# bad symbol). The Maya side is right; only the JS body needs
+# verification.
 #
 # Plugin-shim responsibilities not expressed in the JS below:
 #

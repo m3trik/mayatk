@@ -8,11 +8,11 @@ except ImportError as error:
     print(__file__, error)
 from typing import List, Tuple, Union
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.core_utils.preview import Preview
-from mayatk.core_utils._core_utils import short_name
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.edit_utils.naming._naming import Naming
 
 
@@ -30,7 +30,7 @@ class DuplicateGrid(ptk.LoggingMixin):
         cls,
         objects: List[str],
         dimensions: Tuple[int, int, int],
-        spacing: float = 0,
+        spacing: Union[float, Tuple[float, float, float]] = 0,
         mode: str = "instance",
     ) -> Union[str, List[str]]:
         """Duplicate objects in a grid pattern.
@@ -46,7 +46,10 @@ class DuplicateGrid(ptk.LoggingMixin):
             objects (List[str]): List of objects to duplicate.
             dimensions (Tuple[int, int, int]): Number of copies in x, y, z.
                 Negative counts lay the grid out in the opposite direction.
-            spacing (float): Extra spacing between copies (added to bounding box).
+            spacing (float | Tuple[float, float, float]): Extra spacing between
+                copies (added to the bounding-box size on each axis). A single
+                float applies uniformly to all three axes; a ``(sx, sy, sz)``
+                tuple sets the gap per axis.
             mode (str): How the copies are produced — one of :attr:`MODES`.
                 ``"combine"`` merges every copy into a single mesh; ``"instance"``
                 makes instanced copies (shared shape); ``"copy"`` makes independent
@@ -62,12 +65,19 @@ class DuplicateGrid(ptk.LoggingMixin):
             raise ValueError(f"Invalid mode {mode!r}; expected one of {cls.MODES}.")
 
         x_count, y_count, z_count = dimensions
+        # Accept a scalar (uniform) or a per-axis (sx, sy, sz) spacing. Keeping
+        # the scalar form makes this backward-compatible with every existing
+        # caller; the tuple form backs the per-axis Spacing X/Y/Z fields.
+        space_x, space_y, space_z = cls._normalize_spacing(spacing)
         cls.logger.info(
-            f"Duplicating grid: {dimensions}, spacing: {spacing}, mode: {mode}"
+            f"Duplicating grid: {dimensions}, spacing: "
+            f"({space_x}, {space_y}, {space_z}), mode: {mode}"
         )
 
         if not objects:
             return []
+
+        objects = cmds.ls(objects, long=True) or []
 
         # A zero dimension produces no volume — bail before any scene mutation
         # (also matches the documented early-out the slots rely on).
@@ -80,9 +90,9 @@ class DuplicateGrid(ptk.LoggingMixin):
         # Bounding box of the sources, read in place (no temp reparenting).
         bbox = cmds.exactWorldBoundingBox(objects)
         base_x, base_y, base_z = bbox[3] - bbox[0], bbox[4] - bbox[1], bbox[5] - bbox[2]
-        step_x = (base_x + spacing) * (1 if x_count >= 0 else -1)
-        step_y = (base_y + spacing) * (1 if y_count >= 0 else -1)
-        step_z = (base_z + spacing) * (1 if z_count >= 0 else -1)
+        step_x = (base_x + space_x) * (1 if x_count >= 0 else -1)
+        step_y = (base_y + space_y) * (1 if y_count >= 0 else -1)
+        step_z = (base_z + space_z) * (1 if z_count >= 0 else -1)
 
         # Prototype unit: a fresh duplicate of each source, grouped so the whole
         # unit replicates as one. The originals stay exactly where they are.
@@ -105,14 +115,20 @@ class DuplicateGrid(ptk.LoggingMixin):
         # (one duplicate + one batched reparent per step) — total O(X+Y+Z), not
         # O(X*Y*Z) — and the result stays flat, so there is no deep hierarchy to
         # walk and unwrap afterward (the old per-cell flatten was the slow path).
-        row = cls._replicate_axis(proto, x_count, (step_x, 0, 0), instance, "temp_grid_row")
-        plane = cls._replicate_axis(row, y_count, (0, step_y, 0), instance, "temp_grid_plane")
-        volume = cls._replicate_axis(plane, z_count, (0, 0, step_z), instance, "temp_grid_volume")
+        row = cls._replicate_axis(
+            proto, x_count, (step_x, 0, 0), instance, "temp_grid_row"
+        )
+        plane = cls._replicate_axis(
+            row, y_count, (0, step_y, 0), instance, "temp_grid_plane"
+        )
+        volume = cls._replicate_axis(
+            plane, z_count, (0, 0, step_z), instance, "temp_grid_volume"
+        )
 
         final_objects = cmds.listRelatives(volume, children=True, fullPath=True) or []
 
         # Name every result after the source object (first of the selection).
-        base = short_name(objects[0])
+        base = CoreUtils.short_name(objects[0])
 
         if mode == "combine":
             return cls._combine(final_objects, volume, base)
@@ -120,6 +136,21 @@ class DuplicateGrid(ptk.LoggingMixin):
         # "instance" / "copy": keep the holder as the result group, named after
         # the source rather than a fixed "grid_duplicated_group".
         return cls._finalize_group(volume, base)
+
+    @staticmethod
+    def _normalize_spacing(
+        spacing: Union[float, Tuple[float, float, float]],
+    ) -> Tuple[float, float, float]:
+        """Coerce a scalar or per-axis spacing into an ``(sx, sy, sz)`` tuple.
+
+        A plain number applies uniformly to all three axes (the historical
+        contract); any 3-element sequence is used verbatim so callers can pass
+        per-axis gaps.
+        """
+        if isinstance(spacing, (int, float)):
+            return float(spacing), float(spacing), float(spacing)
+        sx, sy, sz = spacing
+        return float(sx), float(sy), float(sz)
 
     @classmethod
     def _combine(cls, objects: List[str], holder: str, base: str) -> List[str]:
@@ -207,7 +238,9 @@ class DuplicateGrid(ptk.LoggingMixin):
         """
         dst = cmds.group(em=True, name=name)
         for i in range(1, abs(count)):
-            dup = cmds.duplicate(src_grp, instanceLeaf=instance, returnRootsOnly=True)[0]
+            dup = cmds.duplicate(src_grp, instanceLeaf=instance, returnRootsOnly=True)[
+                0
+            ]
             cmds.xform(
                 dup,
                 relative=True,
@@ -256,6 +289,11 @@ class DuplicateGridSlots(ptk.LoggingMixin):
         # invalidates any already-deferred wrapper (see add_reset_buttons docstring).
         self.sb.add_reset_buttons(self.ui)
 
+        # Per-axis Spacing X/Y/Z (s003-5) each get a lock toggle: locking two or
+        # more links them so a change to one shifts the others by the same delta.
+        # Same wrap-before-defer ordering constraint as add_reset_buttons.
+        self.sb.link_spinboxes(self.ui, "s003-5")
+
         self.preview = Preview(
             self,
             self.ui.chk000,
@@ -263,9 +301,10 @@ class DuplicateGridSlots(ptk.LoggingMixin):
             message_func=self.sb.message_box,
         )
 
+        # s000-2 are the X/Y/Z counts, s003-5 the per-axis spacing.
         self.sb.connect_multi(
             self.ui,
-            "s000-3",
+            "s000-5",
             "valueChanged",
             self.preview.refresh,
         )
@@ -286,30 +325,36 @@ class DuplicateGridSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Duplicate Grid",
                 body="Duplicate selected objects into a 3D grid layout.",
                 steps=[
                     "Select one or more transforms.",
-                    "Set per-axis counts <b>X</b> / <b>Y</b> / <b>Z</b> and a "
-                    "uniform <b>Spacing</b>.",
+                    "Set per-axis counts <b>Dimensions X/Y/Z</b> (minimum 1) and "
+                    "the per-axis <b>Spacing X/Y/Z</b> gap added between copies.",
+                    "Each field has a reset button; each spacing field also has a "
+                    "<b>lock</b> — lock two or more to move them together by the "
+                    "same amount.",
                     "Toggle <b>Preview</b> to iterate, or press <b>Duplicate</b> "
                     "to commit.",
                 ],
                 sections=[
-                    ("Output", [
-                        "<b>Combine</b> — merge every copy into a single mesh "
-                        "named after the source.",
-                        "<b>Instance</b> — instanced copies that share one shape "
-                        "(cheaper; editing any copy updates the rest), grouped "
-                        "and named after the source.",
-                        "<b>Unique</b> — independent copies, grouped and named "
-                        "after the source.",
-                    ]),
+                    (
+                        "Output",
+                        [
+                            "<b>Combine</b> — merge every copy into a single mesh "
+                            "named after the source.",
+                            "<b>Instance</b> — instanced copies that share one shape "
+                            "(cheaper; editing any copy updates the rest), grouped "
+                            "and named after the source.",
+                            "<b>Unique</b> — independent copies, grouped and named "
+                            "after the source.",
+                        ],
+                    ),
                 ],
                 notes=[
-                    "Counts can be negative to lay the grid out in the opposite "
-                    "direction. Very large grids prompt for confirmation first.",
+                    "Spacing may be negative to overlap copies. Very large grids "
+                    "prompt for confirmation first.",
                 ],
             )
         )
@@ -325,7 +370,12 @@ class DuplicateGridSlots(ptk.LoggingMixin):
             self.ui.s001.value(),
             self.ui.s002.value(),
         )
-        spacing = self.ui.s003.value()
+        # Per-axis spacing: Spacing X / Y / Z (s003 / s004 / s005).
+        spacing = (
+            self.ui.s003.value(),
+            self.ui.s004.value(),
+            self.ui.s005.value(),
+        )
         mode = self.ui.cmb000.currentData()
 
         if not self._confirm_bulk(dimensions, objects, contract):

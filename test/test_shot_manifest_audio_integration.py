@@ -7,6 +7,7 @@ and on rebuild **grow only** to accommodate members (never shrink).
 The same grow-to-fit behavior applies when a clip (audio OR animation)
 is moved across shot boundaries in the sequencer.
 """
+
 import os
 import struct
 import sys
@@ -37,12 +38,8 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (  # noqa: E402
     BuilderObject,
     ShotManifest,
 )
-from mayatk.anim_utils.shots.shot_manifest.range_resolver import (  # noqa: E402
-    resolve_ranges,
-)
-from mayatk.anim_utils.shots.shot_manifest.behaviors import (  # noqa: E402
-    compute_duration,
-)
+from mayatk.anim_utils.shots.shot_manifest.range_resolver import RangeResolver
+from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
 
 _TEMP_DIR = os.path.join(scripts_dir, "mayatk", "test", "temp_tests")
@@ -105,7 +102,9 @@ class TestComputeDuration(MayaTkTestCase):
     def test_reads_source_path_directly(self):
         wav = _make_wav("cd_src", duration_sec=2.0)  # ~48f at 24fps
         step = _make_audio_step("A01", "A01_Hello", source_path=wav)
-        self.assertAlmostEqual(compute_duration(step.objects), 48.0, delta=1.0)
+        self.assertAlmostEqual(
+            Behaviors.compute_duration(step.objects), 48.0, delta=1.0
+        )
 
     def test_falls_back_to_registered_track_path(self):
         """BuilderObject with source_path='' resolves via the track registry."""
@@ -116,7 +115,7 @@ class TestComputeDuration(MayaTkTestCase):
             behaviors=["set_clip"],
             source_path="",
         )
-        self.assertAlmostEqual(compute_duration([obj]), 48.0, delta=1.0)
+        self.assertAlmostEqual(Behaviors.compute_duration([obj]), 48.0, delta=1.0)
 
     def test_returns_fallback_when_unresolvable(self):
         obj = BuilderObject(
@@ -125,7 +124,7 @@ class TestComputeDuration(MayaTkTestCase):
             behaviors=["set_clip"],
             source_path="",
         )
-        self.assertEqual(compute_duration([obj]), 30)
+        self.assertEqual(Behaviors.compute_duration([obj]), 30)
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +154,7 @@ class TestResolverSharedSizing(MayaTkTestCase):
             _make_audio_step(sid, n, source_path="")
             for sid, n in zip(["A01", "A02", "A03"], names)
         ]
-        resolved = resolve_ranges(
+        resolved = RangeResolver.resolve_ranges(
             steps=steps,
             user_ranges={},
             gap_starts=[],  # no animation detected
@@ -177,7 +176,7 @@ class TestResolverSharedSizing(MayaTkTestCase):
             section_title="Sec",
             description="no members",
         )
-        resolved = resolve_ranges(
+        resolved = RangeResolver.resolve_ranges(
             steps=[step],
             user_ranges={},
             gap_starts=[],
@@ -215,9 +214,7 @@ class TestShotManifestGrowOnly(MayaTkTestCase):
         ShotManifest(self.store).update(
             [_make_audio_step("A01", clip_name, source_path="")]
         )
-        self.assertEqual(
-            self.store.shots[0].end - self.store.shots[0].start, 30.0
-        )
+        self.assertEqual(self.store.shots[0].end - self.store.shots[0].start, 30.0)
 
         _register_track(clip_name, 2.0, "grow")
 
@@ -235,9 +232,7 @@ class TestShotManifestGrowOnly(MayaTkTestCase):
             [_make_audio_step("A01", clip_name, source_path="")],
             ranges={"A01": (1.0, 201.0)},
         )
-        self.assertEqual(
-            self.store.shots[0].end - self.store.shots[0].start, 200.0
-        )
+        self.assertEqual(self.store.shots[0].end - self.store.shots[0].start, 200.0)
 
         _register_track(clip_name, 2.0, "noshrink")  # 48f < 200f
 
@@ -333,12 +328,8 @@ class TestSequencerMoveResizeShared(MayaTkTestCase):
         delta = shot_a_after.end - 50.0  # how far A grew
 
         self.assertGreater(delta, 0.0)
-        self.assertAlmostEqual(
-            shot_b_after.start, b_prior_start + delta, delta=0.1
-        )
-        self.assertAlmostEqual(
-            shot_b_after.end, b_prior_end + delta, delta=0.1
-        )
+        self.assertAlmostEqual(shot_b_after.start, b_prior_start + delta, delta=0.1)
+        self.assertAlmostEqual(shot_b_after.end, b_prior_end + delta, delta=0.1)
         # A and B remain back-to-back (no overlap).
         self.assertGreaterEqual(shot_b_after.start, shot_a_after.end - 1e-6)
 
@@ -395,11 +386,9 @@ class TestBuildButtonWithAudioClipsUI(MayaTkTestCase):
     def _run_build(self, builder, steps, incremental: bool):
         """Same range_map logic as shot_manifest_slots.build()."""
         if incremental:
-            range_map = {
-                s.name: (s.start, s.end) for s in self.store.sorted_shots()
-            }
+            range_map = {s.name: (s.start, s.end) for s in self.store.sorted_shots()}
         else:
-            resolved = resolve_ranges(
+            resolved = RangeResolver.resolve_ranges(
                 steps=steps,
                 user_ranges={},
                 gap_starts=[],
@@ -409,9 +398,7 @@ class TestBuildButtonWithAudioClipsUI(MayaTkTestCase):
                 last_resolved=[],
                 default_duration=200.0,
             )
-            range_map = {
-                sid: (s, e) for sid, s, e, _ in resolved if e is not None
-            }
+            range_map = {sid: (s, e) for sid, s, e, _ in resolved if e is not None}
         return builder.sync(
             steps,
             ranges=range_map,
@@ -443,9 +430,7 @@ class TestBuildButtonWithAudioClipsUI(MayaTkTestCase):
         shots = {s.name: s for s in self.store.sorted_shots()}
         self.assertEqual(set(shots), {"A01", "A02", "A03"})
 
-        for sid, name, exp_dur in zip(
-            ["A01", "A02", "A03"], names, [48.0, 36.0, 60.0]
-        ):
+        for sid, name, exp_dur in zip(["A01", "A02", "A03"], names, [48.0, 36.0, 60.0]):
             shot = shots[sid]
             on, off = self._audio_keys(name)
             self.assertTrue(on, f"No on-key for {name}")
@@ -476,21 +461,15 @@ class TestBuildButtonWithAudioClipsUI(MayaTkTestCase):
         builder = ShotManifest(self.store)
         self._run_build(builder, steps, incremental=False)
 
-        before_shots = {
-            s.name: (s.start, s.end) for s in self.store.sorted_shots()
-        }
+        before_shots = {s.name: (s.start, s.end) for s in self.store.sorted_shots()}
         before_keys = {n: self._audio_keys(n) for n in names}
 
         self._run_build(builder, steps, incremental=True)
 
-        after_shots = {
-            s.name: (s.start, s.end) for s in self.store.sorted_shots()
-        }
+        after_shots = {s.name: (s.start, s.end) for s in self.store.sorted_shots()}
         after_keys = {n: self._audio_keys(n) for n in names}
 
-        self.assertEqual(
-            before_shots, after_shots, "Shots moved across rebuilds"
-        )
+        self.assertEqual(before_shots, after_shots, "Shots moved across rebuilds")
         self.assertEqual(
             before_keys, after_keys, "Audio clip keys moved across rebuilds"
         )
@@ -506,9 +485,7 @@ class TestBuildButtonWithAudioClipsUI(MayaTkTestCase):
 
         # First build: no audio registered yet. Shots use 30f fallback.
         self._run_build(builder, steps, incremental=False)
-        first = {
-            s.name: (s.start, s.end) for s in self.store.sorted_shots()
-        }
+        first = {s.name: (s.start, s.end) for s in self.store.sorted_shots()}
 
         # Now load audio via the audio_clips UI workflow.
         for n, d in zip(names, [2.0, 1.5]):  # 48f, 36f
@@ -527,7 +504,9 @@ class TestBuildButtonWithAudioClipsUI(MayaTkTestCase):
             )
             # Grow-only: start unchanged.
             self.assertAlmostEqual(
-                shot.start, first[sid][0], delta=0.1,
+                shot.start,
+                first[sid][0],
+                delta=0.1,
                 msg=f"{sid}.start moved — should be grow-only",
             )
 

@@ -54,7 +54,7 @@ class NurbsUtils(ptk.HelpMixin):
                 (obj) nurbsToPoly history node.
         """
         # cmds.undoInfo(openChunk=1)
-        sel = cmds.ls(sl=True)
+        sel = cmds.ls(sl=True, long=True)
 
         if len(sel) > 1:
             if angle_loft_between_two_curves:
@@ -413,11 +413,11 @@ class NurbsUtils(ptk.HelpMixin):
         ex. filtered = get_cv_info(<curve>, 'normal', <normal>) #filter results for those that match the given value.
         """
         result = {}
-        for curve in cmds.ls(c):
+        for curve in cmds.ls(c, long=True):
             curve = str(curve)
             if ".cv" in curve:  # if CV given.
                 cvs = curve
-                curve = cmds.listRelatives(cvs, parent=1)
+                curve = cmds.listRelatives(cvs, parent=1, fullPath=True)
             else:  # if curve(s) given
                 cvs = f"{curve}.cv[*]"
 
@@ -492,7 +492,7 @@ class NurbsUtils(ptk.HelpMixin):
                 (dict)(list)
         """
         result = {}
-        for curve in cmds.ls(curves):
+        for curve in cmds.ls(curves, long=True):
             p0 = cmds.objectCenter(curve)
 
             cvPos = cls.get_cv_info(curve, "position")

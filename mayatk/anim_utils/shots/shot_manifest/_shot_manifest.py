@@ -18,10 +18,12 @@ engine's :class:`~pythontk.ShotManifest` and overrides only its scene hooks:
   audio onto each shot's objects;
 - ``rewire_audio`` → the audio compositor sync.
 
-The pure model names (:class:`BuilderStep`, :class:`ColumnMap`,
-:func:`parse_csv`, …) are re-exported so existing
-``mayatk.anim_utils.shots.shot_manifest._shot_manifest`` imports keep working.
+The pure model classes (:class:`BuilderStep`, :class:`ColumnMap`,
+:class:`ManifestModel`, …) are re-exported so existing
+``mayatk.anim_utils.shots.shot_manifest._shot_manifest`` imports keep working;
+CSV/behavior helpers are called as ``ManifestModel.parse_csv`` etc.
 """
+
 import logging
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -34,6 +36,7 @@ from pythontk.core_utils.engines.shots.manifest.manifest_model import (  # noqa:
     DEFAULT_FIT_MODE,
     DEFAULT_INITIAL_SHOT_LENGTH,
     FitMode,
+    ManifestModel,
     ObjectStatus,
     PlannedShot,
     StepStatus,
@@ -42,20 +45,17 @@ from pythontk.core_utils.engines.shots.manifest.manifest_model import (  # noqa:
     _ResolvedColumns,
     _SECTION_RE,
     _STEP_RE,
-    _read_csv_rows,
-    _resolve_columns,
-    _strip_cell,
-    detect_behaviors,
-    parse_csv,
 )
+
 from pythontk.core_utils.engines.shots.manifest.manifest_engine import (
     ShotManifest as _EngineShotManifest,
 )
 
-from mayatk.anim_utils.shots._shots import (
-    ShotStore,
-    _resolve_long_names_keep_missing,
-)
+from mayatk.anim_utils.shots._shots import ShotStore
+
+# Re-exported so ``from ._shot_manifest import Detection`` keeps working for the
+# slots layer (region-detection type lives canonically in ``_shots``).
+from mayatk.anim_utils.shots._shots import Detection  # noqa: F401
 
 # Imported at module scope (not deferred like the other AudioUtils uses) so tests
 # can patch ``_shot_manifest.AudioUtils`` as the seam for ``_default_audio_exists``.
@@ -69,41 +69,9 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _measure_audio_obj(obj: BuilderObject, fps: float) -> Optional[float]:
-    """Length in frames of *obj*'s audio source (path or registered track)."""
-    from mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors import (
-        _track_source_path,
-    )
-
-    src = getattr(obj, "source_path", "") or ""
-    if not src:
-        src = _track_source_path(getattr(obj, "name", "") or "")
-    if not src:
-        return None
-    try:
-        frames, _ = AudioUtils.audio_duration_frames(src, fps)
-    except Exception as exc:
-        log.debug("audio duration probe failed for %r: %s", obj.name, exc)
-        return None
-    return float(frames) if frames > 0 else None
-
-
-def _scene_fps() -> float:
-    """Scene FPS, or 24 when Maya is unavailable."""
-    try:
-        return float(AudioUtils.get_fps())
-    except Exception:
-        return 24.0
-
-
 # ---------------------------------------------------------------------------
 # Shot-region detection  (canonical implementation lives in _shots)
 # ---------------------------------------------------------------------------
-
-from mayatk.anim_utils.shots._shots import (  # noqa: E402,F401
-    detect_shot_regions,
-    regions_from_selected_keys,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +79,36 @@ from mayatk.anim_utils.shots._shots import (  # noqa: E402,F401
 # ---------------------------------------------------------------------------
 
 
-class ShotManifest(_EngineShotManifest):
+class _ShotManifestInternal(object):
+    """Internal helpers for ShotManifest."""
+
+    @staticmethod
+    def _measure_audio_obj(obj: BuilderObject, fps: float) -> Optional[float]:
+        """Length in frames of *obj*'s audio source (path or registered track)."""
+        from mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors import Behaviors
+
+        src = getattr(obj, "source_path", "") or ""
+        if not src:
+            src = Behaviors._track_source_path(getattr(obj, "name", "") or "")
+        if not src:
+            return None
+        try:
+            frames, _ = AudioUtils.audio_duration_frames(src, fps)
+        except Exception as exc:
+            log.debug("audio duration probe failed for %r: %s", obj.name, exc)
+            return None
+        return float(frames) if frames > 0 else None
+
+    @staticmethod
+    def _scene_fps() -> float:
+        """Scene FPS, or 24 when Maya is unavailable."""
+        try:
+            return float(AudioUtils.get_fps())
+        except Exception:
+            return 24.0
+
+
+class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
     """:class:`pythontk.ShotManifest` with the scene hooks bound to Maya.
 
     Only the DCC-reaching hooks are overridden; the planner
@@ -130,12 +127,12 @@ class ShotManifest(_EngineShotManifest):
         """
         if self._fps_cache is not None:
             return self._fps_cache
-        self._fps_cache = _scene_fps()
+        self._fps_cache = _ShotManifestInternal._scene_fps()
         return self._fps_cache
 
     def _measure_audio(self, obj: BuilderObject) -> Optional[float]:
         """Audio-clip length in frames via source path or registered track."""
-        return _measure_audio_obj(obj, self._resolve_fps())
+        return _ShotManifestInternal._measure_audio_obj(obj, self._resolve_fps())
 
     def _audio_grow_duration(self, audio_objs: List[BuilderObject]) -> float:
         """Content-driven duration for an existing audio step.
@@ -144,14 +141,14 @@ class ShotManifest(_EngineShotManifest):
         resolves registered track paths and probes files itself) — imported
         lazily from the package, the established mock seam.
         """
-        from mayatk.anim_utils.shots.shot_manifest.behaviors import compute_duration
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
-        return compute_duration(audio_objs, fallback=0.0)
+        return Behaviors.compute_duration(audio_objs, fallback=0.0)
 
     def _resolve_names_keep_missing(self, names: List[str]) -> List[str]:
         """Long-name-resolve *names*, keeping the CSV form for missing objects
         so the pinned-object system can surface them."""
-        return _resolve_long_names_keep_missing(names)
+        return ShotStore._resolve_long_names_keep_missing(names)
 
     # ---- behavior application / audio rewire ------------------------------
 
@@ -161,14 +158,11 @@ class ShotManifest(_EngineShotManifest):
         Lazy package imports preserve the ``...behaviors.apply_behavior`` /
         ``...behaviors.apply_to_shots`` mock seams.
         """
-        from mayatk.anim_utils.shots.shot_manifest.behaviors import (
-            apply_behavior,
-            apply_to_shots,
-        )
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
-        return apply_to_shots(
+        return Behaviors.apply_to_shots(
             self.store.sorted_shots(),
-            apply_fn=apply_behavior,
+            apply_fn=Behaviors.apply_behavior,
             store=self.store,
         )
 
@@ -190,9 +184,9 @@ class ShotManifest(_EngineShotManifest):
             unavailable.
         """
         try:
-            from mayatk.audio_utils.compositor import sync as _sync
+            from mayatk.audio_utils.compositor import Compositor
 
-            return _sync(tracks=tracks)
+            return Compositor.sync(tracks=tracks)
         except Exception as exc:
             log.debug("rewire_audio failed: %s", exc)
             return {"created": [], "updated": [], "deleted": []}
@@ -214,9 +208,9 @@ class ShotManifest(_EngineShotManifest):
     ) -> bool:
         # Lazy package import — the established ``...behaviors.verify_behavior``
         # mock seam.
-        from mayatk.anim_utils.shots.shot_manifest.behaviors import verify_behavior
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
-        return verify_behavior(
+        return Behaviors.verify_behavior(
             obj, behavior, start, end, anchor_override=anchor_override
         )
 
@@ -254,8 +248,9 @@ class ShotManifest(_EngineShotManifest):
         animated = self._transform_curve_map()
 
         found: list = []
-        from mayatk.core_utils._core_utils import leaf_name as _short
+        from mayatk.core_utils._core_utils import CoreUtils
 
+        _short = CoreUtils.leaf_name
         for obj in sorted(animated):
             if _short(obj) in exclude_names:
                 continue
@@ -275,11 +270,9 @@ class ShotManifest(_EngineShotManifest):
         per-step animation check.
         """
         if self._animated_transforms is None:
-            from mayatk.anim_utils.shots._shots import (
-                _map_standard_curves_to_transforms,
-            )
+            from mayatk.anim_utils.shots._shots import Detection
 
-            self._animated_transforms = _map_standard_curves_to_transforms()
+            self._animated_transforms = Detection._map_standard_curves_to_transforms()
         return self._animated_transforms
 
     def _curve_varies_in_range(self, crv: str, start: float, end: float) -> bool:
@@ -403,6 +396,6 @@ class ShotManifest(_EngineShotManifest):
             ``(builder, steps)`` tuple. Call ``builder.sync(steps)`` to
             execute.
         """
-        steps = parse_csv(filepath, columns, post_process=post_process)
+        steps = ManifestModel.parse_csv(filepath, columns, post_process=post_process)
         st = store or ShotStore.active()
         return cls(st), steps

@@ -30,6 +30,7 @@ Usage::
     else:
         print("No Toolbag with marmoset_rpc plugin reachable.")
 """
+
 from pythontk.net_utils.rpc.client import RpcClient
 
 
@@ -37,13 +38,18 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
 
-def _find_toolbag():
-    """AppLauncher hook bound at construction time for the default finder."""
-    from pythontk import AppLauncher
-    return AppLauncher.find_app("toolbag")
+class _MarmosetConnectionInternal(object):
+    """Internal helpers for MarmosetConnection."""
+
+    @staticmethod
+    def _find_toolbag():
+        """AppLauncher hook bound at construction time for the default finder."""
+        from pythontk import AppLauncher
+
+        return AppLauncher.find_app("toolbag")
 
 
-class MarmosetConnection(RpcClient):
+class MarmosetConnection(RpcClient, _MarmosetConnectionInternal):
     """JSON-RPC client bound to Toolbag's default port + finder.
 
     By default, :meth:`connect` reuses an already-running Toolbag if it
@@ -60,5 +66,5 @@ class MarmosetConnection(RpcClient):
             host=host,
             port=port,
             app_label="Marmoset Toolbag",
-            find_exe=_find_toolbag,
+            find_exe=_MarmosetConnectionInternal._find_toolbag,
         )

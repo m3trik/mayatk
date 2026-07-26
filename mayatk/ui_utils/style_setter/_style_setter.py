@@ -44,6 +44,7 @@ Maya runtime to import, unlike blendertk's DCC-optional ``bpy``). All three unde
 are GUI-mode only and raise in batch/mayapy (``cmds.displayRGBColor`` et al. are unavailable in
 batch mode) — this module requires an interactive Maya session.
 """
+
 import os
 import glob
 import json
@@ -59,77 +60,50 @@ STYLES_DIR = os.path.join(_HERE, "styles")
 
 
 # ---- shipped-style discovery ----------------------------------------------------------------
-def list_styles():
-    """Names of the shipped color styles (e.g. ``["Blender", "Maya"]``)."""
-    return sorted(os.path.splitext(os.path.basename(p))[0] for p in glob.glob(os.path.join(STYLES_DIR, "*.json")))
-
-
-def _shipped_path(name):
-    return os.path.join(STYLES_DIR, f"{name}.json")
-
-
-def _load_style(name):
-    path = _shipped_path(name)
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"No color style named {name!r} (looked in {STYLES_DIR}).")
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
 
 
 # ---- apply the underlying Maya color primitives -----------------------------------------------
-def _apply_rgb(name, rgba):
-    cmds.displayRGBColor(name, *rgba)
-
-
-def _apply_display_color(name, spec):
-    for state, rgb in spec.items():
-        idx = cmds.displayColor(name, query=True, **{state: True})
-        cmds.colorIndex(int(idx), *rgb)
-
-
-def _apply_snapshot(snapshot):
-    for name, rgba in snapshot.get("rgb", {}).items():
-        _apply_rgb(name, rgba)
-    for name, spec in snapshot.get("display_color", {}).items():
-        _apply_display_color(name, spec)
-
-
-def set_style(name, persist=False):
-    """Switch Maya's viewport colors to the named style — a targeted overlay of just the keys
-    that style's JSON defines (see the module scope-boundary note; this never bulk-resets Maya's
-    hundreds of unrelated colors).
-
-    Parameters:
-        name: A shipped style from :func:`list_styles` (e.g. ``"Blender"``).
-        persist: Also write Maya's own prefs to disk (``cmds.savePrefs(colors=True)``) so the
-            change survives a restart — otherwise it's live-session only.
-    """
-    _apply_snapshot(_load_style(name))
-    if persist:
-        cmds.savePrefs(colors=True)
 
 
 # ---- the full template set a UI selector drives -------------------------------------------
-def list_templates():
-    """Ordered ``{display_name: token}`` of everything a style-selector combo offers: each shipped
-    style (e.g. ``Blender``). ``token`` is what :func:`apply_template` takes.
-
-    This is the mayatk counterpart to blendertk's :func:`list_templates`, but Maya has no *native*
-    color-preset selector to mirror (its "Colors" editor offers no named-template dropdown — only
-    Save/Reset), so the set is just our own shipped styles, not a host-provided list.
-    """
-    return {name: name for name in list_styles()}
 
 
-def apply_template(name, persist=False):
-    """Apply a selection from :func:`list_templates` by its token — a shipped style name, applied
-    via :func:`set_style`. The uniform ``(name)`` surface lets a shared UI slot drive Maya and
-    Blender identically (Blender's :func:`apply_template` takes a preset filepath instead — same
-    method name + role, host-appropriate token)."""
-    set_style(name, persist=persist)
+class _StyleSetterInternal(object):
+    """Internal helpers for StyleSetter."""
+
+    @staticmethod
+    def _shipped_path(name):
+        return os.path.join(STYLES_DIR, f"{name}.json")
+
+    @staticmethod
+    def _load_style(name):
+        path = _StyleSetterInternal._shipped_path(name)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(
+                f"No color style named {name!r} (looked in {STYLES_DIR})."
+            )
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    @staticmethod
+    def _apply_rgb(name, rgba):
+        cmds.displayRGBColor(name, *rgba)
+
+    @staticmethod
+    def _apply_display_color(name, spec):
+        for state, rgb in spec.items():
+            idx = cmds.displayColor(name, query=True, **{state: True})
+            cmds.colorIndex(int(idx), *rgb)
+
+    @staticmethod
+    def _apply_snapshot(snapshot):
+        for name, rgba in snapshot.get("rgb", {}).items():
+            _StyleSetterInternal._apply_rgb(name, rgba)
+        for name, spec in snapshot.get("display_color", {}).items():
+            _StyleSetterInternal._apply_display_color(name, spec)
 
 
-class StyleSetter:
+class StyleSetter(_StyleSetterInternal):
     """Public namespace for the style-setter helpers (``mtk.StyleSetter.set_style("Blender")`` …).
 
     Mirrors ``blendertk``'s ``StyleSetter`` at the name + behavior level (registered as just the
@@ -137,7 +111,44 @@ class StyleSetter:
     its "Colors" preferences — rather than widget chrome, which Maya has no equivalent for.
     """
 
-    list_styles = staticmethod(list_styles)
-    list_templates = staticmethod(list_templates)
-    apply_template = staticmethod(apply_template)
-    set_style = staticmethod(set_style)
+    @staticmethod
+    def list_styles():
+        """Names of the shipped color styles (e.g. ``["Blender", "Maya"]``)."""
+        return sorted(
+            os.path.splitext(os.path.basename(p))[0]
+            for p in glob.glob(os.path.join(STYLES_DIR, "*.json"))
+        )
+
+    @staticmethod
+    def set_style(name, persist=False):
+        """Switch Maya's viewport colors to the named style — a targeted overlay of just the keys
+        that style's JSON defines (see the module scope-boundary note; this never bulk-resets Maya's
+        hundreds of unrelated colors).
+
+        Parameters:
+            name: A shipped style from :func:`list_styles` (e.g. ``"Blender"``).
+            persist: Also write Maya's own prefs to disk (``cmds.savePrefs(colors=True)``) so the
+                change survives a restart — otherwise it's live-session only.
+        """
+        _StyleSetterInternal._apply_snapshot(_StyleSetterInternal._load_style(name))
+        if persist:
+            cmds.savePrefs(colors=True)
+
+    @staticmethod
+    def list_templates():
+        """Ordered ``{display_name: token}`` of everything a style-selector combo offers: each shipped
+        style (e.g. ``Blender``). ``token`` is what :func:`apply_template` takes.
+
+        This is the mayatk counterpart to blendertk's :func:`list_templates`, but Maya has no *native*
+        color-preset selector to mirror (its "Colors" editor offers no named-template dropdown — only
+        Save/Reset), so the set is just our own shipped styles, not a host-provided list.
+        """
+        return {name: name for name in StyleSetter.list_styles()}
+
+    @staticmethod
+    def apply_template(name, persist=False):
+        """Apply a selection from :func:`list_templates` by its token — a shipped style name, applied
+        via :func:`set_style`. The uniform ``(name)`` surface lets a shared UI slot drive Maya and
+        Blender identically (Blender's :func:`apply_template` takes a preset filepath instead — same
+        method name + role, host-appropriate token)."""
+        StyleSetter.set_style(name, persist=persist)

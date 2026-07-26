@@ -18,6 +18,7 @@ The zero-dep floor (format sniffing, USDZ packaging) is shared upstream in
 is exported as a temp text layer, its on-disk texture references are pulled
 in-package, and the result is a self-contained, QuickLook-ready archive.
 """
+
 import os
 import logging
 from typing import Any, Dict, List, Optional
@@ -67,7 +68,7 @@ class UsdUtils(ptk.HelpMixin):
     @staticmethod
     def is_usd_file(file_path: str) -> bool:
         """True when *file_path* is a USD layer/package (delegates to pythontk)."""
-        return ptk.is_usd_file(file_path)
+        return ptk.UsdFile.is_usd_file(file_path)
 
     @classmethod
     def export(
@@ -123,9 +124,7 @@ class UsdUtils(ptk.HelpMixin):
             store = ptk.TempArtifacts("mtk_usdz_export", policy="scoped")
             tmp_layer = store.path(extension=".usda")
             try:
-                cmds.mayaUSDExport(
-                    file=tmp_layer, selection=selection_only, **opts
-                )
+                cmds.mayaUSDExport(file=tmp_layer, selection=selection_only, **opts)
                 result = ptk.UsdzPackager.from_layer(tmp_layer, file_path)
             finally:
                 store.cleanup()

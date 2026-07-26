@@ -11,28 +11,24 @@ The bridge mirrors :mod:`mayatk.mat_utils.marmoset_bridge`:
 
 * :mod:`_substance_bridge` -- export/launch logic (:class:`SubstanceBridge`).
 * :mod:`connection` -- live process I/O: stdio capture, log tail.
-* :mod:`substance_rpc` -- JSON-RPC client for a running Painter.
+* :mod:`substance_rpc` -- RPC client + installer + Painter-side plugin
+  (``plugin_src/substance_rpc``) for a running Painter.
 * :mod:`parameters` -- registry of tunable knobs surfaced in the UI.
 * :mod:`manifest` -- ``MatManifest`` re-export shim.
 * ``templates/`` -- declarative Painter handoffs (``__KEY__`` placeholders).
 """
-from mayatk.mat_utils.substance_bridge._substance_bridge import (  # noqa: F401
+
+from mayatk.mat_utils.substance_bridge._substance_bridge import (
     SubstanceBridge,
     SEND_TO,
     ROUNDTRIP,
     TARGET_AUTO,
     TARGET_NEW,
     TARGET_CURRENT,
-    list_templates,
-    list_template_modes,
-    parse_template,
-    resolve_painter_log_path,
 )
-from mayatk.mat_utils.substance_bridge.connection import (  # noqa: F401
+from mayatk.mat_utils.substance_bridge.connection import (
     OutputStream,
     SubstanceConnection,
-    default_log_path,
-    find_painter_exe,
 )
 
 # RPC client lives under :mod:`substance_bridge.substance_rpc` for clear
@@ -48,12 +44,6 @@ __all__ = [
     "TARGET_AUTO",
     "TARGET_NEW",
     "TARGET_CURRENT",
-    "list_templates",
-    "list_template_modes",
-    "parse_template",
-    "resolve_painter_log_path",
     "OutputStream",
     "SubstanceConnection",
-    "default_log_path",
-    "find_painter_exe",
 ]

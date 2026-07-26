@@ -7,61 +7,64 @@ Two layers:
 - Integration tests — bind a real Maya runtimeCommand, query it through
   the checker, assert a CollisionConflict is reported.
 """
+
 import unittest
 
 import maya.cmds as cmds
 
 from base_test import MayaTkTestCase
-from mayatk.ui_utils.hotkey_collisions import (
-    parse_qt_sequence,
-    keystring_to_token,
-    maya_collision_checker,
-)
+from mayatk.ui_utils.hotkey_collisions import HotkeyCollisions
 
 
 class TestParseQtSequence(unittest.TestCase):
     """Pure parser — no Maya state required."""
 
     def test_simple_letter(self):
-        self.assertEqual(parse_qt_sequence("S"), {"keyShortcut": "s"})
+        self.assertEqual(HotkeyCollisions.parse_qt_sequence("S"), {"keyShortcut": "s"})
 
     def test_ctrl_letter(self):
         self.assertEqual(
-            parse_qt_sequence("Ctrl+S"),
+            HotkeyCollisions.parse_qt_sequence("Ctrl+S"),
             {"keyShortcut": "s", "ctrlModifier": True},
         )
 
     def test_ctrl_alt_letter(self):
         self.assertEqual(
-            parse_qt_sequence("Ctrl+Alt+S"),
+            HotkeyCollisions.parse_qt_sequence("Ctrl+Alt+S"),
             {"keyShortcut": "s", "ctrlModifier": True, "altModifier": True},
         )
 
     def test_shift_letter_uppercases(self):
         # Maya wants the uppercase glyph for shift+letter, no shift flag.
         self.assertEqual(
-            parse_qt_sequence("Shift+S"),
+            HotkeyCollisions.parse_qt_sequence("Shift+S"),
             {"keyShortcut": "S"},
         )
 
     def test_function_key_passthrough(self):
-        self.assertEqual(parse_qt_sequence("F5"), {"keyShortcut": "F5"})
+        self.assertEqual(
+            HotkeyCollisions.parse_qt_sequence("F5"), {"keyShortcut": "F5"}
+        )
 
     def test_named_key_fixup(self):
-        self.assertEqual(parse_qt_sequence("Esc"), {"keyShortcut": "Escape"})
-        self.assertEqual(parse_qt_sequence("Return"), {"keyShortcut": "Enter"})
+        self.assertEqual(
+            HotkeyCollisions.parse_qt_sequence("Esc"), {"keyShortcut": "Escape"}
+        )
+        self.assertEqual(
+            HotkeyCollisions.parse_qt_sequence("Return"), {"keyShortcut": "Enter"}
+        )
 
     def test_meta_returns_none(self):
-        self.assertIsNone(parse_qt_sequence("Meta+S"))
+        self.assertIsNone(HotkeyCollisions.parse_qt_sequence("Meta+S"))
 
     def test_empty_returns_none(self):
-        self.assertIsNone(parse_qt_sequence(""))
-        self.assertIsNone(parse_qt_sequence(None))
+        self.assertIsNone(HotkeyCollisions.parse_qt_sequence(""))
+        self.assertIsNone(HotkeyCollisions.parse_qt_sequence(None))
 
     def test_multistep_returns_none(self):
         # "Ctrl+K, Ctrl+S" is a multi-step sequence Maya can't represent
         # as a single hotkey query.
-        self.assertIsNone(parse_qt_sequence("Ctrl+K, Ctrl+S"))
+        self.assertIsNone(HotkeyCollisions.parse_qt_sequence("Ctrl+K, Ctrl+S"))
 
 
 class TestKeystringToToken(unittest.TestCase):
@@ -76,11 +79,13 @@ class TestKeystringToToken(unittest.TestCase):
 
     def test_ctrl_letter(self):
         # Maya stores a non-shifted letter as its lower-case glyph.
-        self.assertEqual(keystring_to_token(self._ks("i", ctrl="1")), "ctl+i")
+        self.assertEqual(
+            HotkeyCollisions.keystring_to_token(self._ks("i", ctrl="1")), "ctl+i"
+        )
 
     def test_uppercase_letter_becomes_shift(self):
         # Maya stores shift+letter as the upper-case glyph, no shift flag.
-        self.assertEqual(keystring_to_token(self._ks("K")), "sht+k")
+        self.assertEqual(HotkeyCollisions.keystring_to_token(self._ks("K")), "sht+k")
 
     def test_shift_function_key(self):
         """The shift FLAG must be read for non-letter keys (live layout: last
@@ -90,19 +95,20 @@ class TestKeystringToToken(unittest.TestCase):
         clear released the WRONG (shift-less) chord, leaving the real binding
         live. Probe-verified layout: ``["F9","1","1","0","0","0","1"]``."""
         self.assertEqual(
-            keystring_to_token(["F9", "1", "1", "0", "0", "0", "1"]),
+            HotkeyCollisions.keystring_to_token(["F9", "1", "1", "0", "0", "0", "1"]),
             "ctl+alt+sht+F9",
         )
         self.assertEqual(
-            keystring_to_token(["F9", "0", "0", "0", "0", "0", "1"]), "sht+F9"
+            HotkeyCollisions.keystring_to_token(["F9", "0", "0", "0", "0", "0", "1"]),
+            "sht+F9",
         )
 
     def test_empty_array(self):
-        self.assertEqual(keystring_to_token([]), "")
-        self.assertEqual(keystring_to_token(None), "")
+        self.assertEqual(HotkeyCollisions.keystring_to_token([]), "")
+        self.assertEqual(HotkeyCollisions.keystring_to_token(None), "")
 
     def test_empty_key(self):
-        self.assertEqual(keystring_to_token(self._ks("")), "")
+        self.assertEqual(HotkeyCollisions.keystring_to_token(self._ks("")), "")
 
     def test_none_sentinel_key_is_empty(self):
         """Maya reports a keyless (cleared) command's key as the string 'NONE'.
@@ -112,9 +118,13 @@ class TestKeystringToToken(unittest.TestCase):
         Case varies across Maya versions, so the guard is case-insensitive.
         """
         for sentinel in ("NONE", "None", "none"):
-            self.assertEqual(keystring_to_token(self._ks(sentinel)), "", sentinel)
+            self.assertEqual(
+                HotkeyCollisions.keystring_to_token(self._ks(sentinel)), "", sentinel
+            )
         # …even if a stray modifier flag is set on the orphan entry.
-        self.assertEqual(keystring_to_token(self._ks("NONE", ctrl="1")), "")
+        self.assertEqual(
+            HotkeyCollisions.keystring_to_token(self._ks("NONE", ctrl="1")), ""
+        )
 
 
 class TestMayaCollisionChecker(MayaTkTestCase):
@@ -185,7 +195,7 @@ class TestMayaCollisionChecker(MayaTkTestCase):
 
     def test_detects_bound_press_command(self):
         """A sequence that matches a bound hotkey should report a conflict."""
-        conflicts = maya_collision_checker(
+        conflicts = HotkeyCollisions.maya_collision_checker(
             "Ctrl+Alt+J", "application", "ui_x", "method_x"
         )
         self.assertEqual(len(conflicts), 1)
@@ -198,14 +208,20 @@ class TestMayaCollisionChecker(MayaTkTestCase):
     def test_ignore_predicate_suppresses_bound_command(self):
         """``ignore`` returning True for the bound command suppresses the
         report — the editor's own managed-binding check owns that conflict."""
-        conflicts = maya_collision_checker(
-            "Ctrl+Alt+J", "application", "ui_x", "method_x",
+        conflicts = HotkeyCollisions.maya_collision_checker(
+            "Ctrl+Alt+J",
+            "application",
+            "ui_x",
+            "method_x",
             ignore=lambda cmd: cmd == self.RUNTIME_CMD,
         )
         self.assertEqual(conflicts, [])
         # A predicate that does NOT match must leave the report intact.
-        conflicts = maya_collision_checker(
-            "Ctrl+Alt+J", "application", "ui_x", "method_x",
+        conflicts = HotkeyCollisions.maya_collision_checker(
+            "Ctrl+Alt+J",
+            "application",
+            "ui_x",
+            "method_x",
             ignore=lambda cmd: cmd.startswith("somethingElse"),
         )
         self.assertEqual(len(conflicts), 1)
@@ -213,21 +229,23 @@ class TestMayaCollisionChecker(MayaTkTestCase):
     def test_unbound_sequence_returns_no_conflicts(self):
         """A sequence that isn't bound in Maya should report nothing."""
         # F19 is virtually never bound by default
-        conflicts = maya_collision_checker(
+        conflicts = HotkeyCollisions.maya_collision_checker(
             "Ctrl+Alt+F19", "application", "ui_x", "method_x"
         )
         self.assertEqual(conflicts, [])
 
     def test_unparseable_sequence_returns_no_conflicts(self):
         """Sequences the parser rejects should silently return []."""
-        conflicts = maya_collision_checker("", "window", "ui_x", "method_x")
+        conflicts = HotkeyCollisions.maya_collision_checker(
+            "", "window", "ui_x", "method_x"
+        )
         self.assertEqual(conflicts, [])
 
     def test_conflict_in_editable_set_carries_clear_action(self):
         """In an editable (user) hotkey set, a Maya conflict is clearable: it
         carries a callable clear_action so the editor can free the binding.
         (setUp makes TEST_SET — a user set — current, so unbinding is allowed.)"""
-        conflicts = maya_collision_checker(
+        conflicts = HotkeyCollisions.maya_collision_checker(
             "Ctrl+Alt+J", "application", "ui_x", "method_x"
         )
         self.assertEqual(len(conflicts), 1)
@@ -237,7 +255,7 @@ class TestMayaCollisionChecker(MayaTkTestCase):
         """Querying with Shift added shouldn't match a Ctrl+Alt-only binding."""
         # Setup binds Ctrl+Alt+J. Ctrl+Alt+Shift+J is a different shortcut
         # and must not be reported as colliding.
-        conflicts = maya_collision_checker(
+        conflicts = HotkeyCollisions.maya_collision_checker(
             "Ctrl+Alt+Shift+J", "application", "ui_x", "method_x"
         )
         self.assertEqual(conflicts, [])
@@ -254,7 +272,7 @@ class TestMayaCollisionChecker(MayaTkTestCase):
         )
         cmds.hotkey(keyShortcut="K", name="mayatk_test_shift_nc")
 
-        conflicts = maya_collision_checker(
+        conflicts = HotkeyCollisions.maya_collision_checker(
             "Shift+K", "application", "ui_x", "method_x"
         )
         self.assertEqual(len(conflicts), 1, msg=f"got: {conflicts}")
@@ -304,9 +322,17 @@ class TestGlobalContextOnly(unittest.TestCase):
         # Nothing bound in the global context, but assignCommand still lists a
         # Time Editor binding on the key -> must report NO collision.
         hc = self._patch(
-            "", [("TimeEditorToggleSoloSelectedTracksNameCommand", "TimeEditorToggleSoloSelectedTracks")]
+            "",
+            [
+                (
+                    "TimeEditorToggleSoloSelectedTracksNameCommand",
+                    "TimeEditorToggleSoloSelectedTracks",
+                )
+            ],
         )
-        self.assertEqual(hc._find_bound_command({"keyShortcut": "n"}), "")
+        self.assertEqual(
+            hc.HotkeyCollisions._find_bound_command({"keyShortcut": "n"}), ""
+        )
 
     def test_reports_global_binding_resolved_to_runtime(self):
         # A real global binding is reported, resolved to the friendly runtime
@@ -315,28 +341,35 @@ class TestGlobalContextOnly(unittest.TestCase):
             "NameComCreate_Reference", [("NameComCreate_Reference", "CreateReference")]
         )
         self.assertEqual(
-            hc._find_bound_command({"keyShortcut": "r", "ctrlModifier": True}),
+            hc.HotkeyCollisions._find_bound_command(
+                {"keyShortcut": "r", "ctrlModifier": True}
+            ),
             "CreateReference",
         )
 
     def test_none_sentinel_global_binding_is_empty(self):
         hc = self._patch("NONE", [])
-        self.assertEqual(hc._find_bound_command({"keyShortcut": "n"}), "")
+        self.assertEqual(
+            hc.HotkeyCollisions._find_bound_command({"keyShortcut": "n"}), ""
+        )
 
     def test_unresolvable_global_name_falls_back_to_name_command(self):
         # Global context has a binding whose name command isn't in the registry
         # scan (defensive) -> still reported, by its name command.
         hc = self._patch("SomeOrphanNameCommand", [])
         self.assertEqual(
-            hc._find_bound_command({"keyShortcut": "n"}), "SomeOrphanNameCommand"
+            hc.HotkeyCollisions._find_bound_command({"keyShortcut": "n"}),
+            "SomeOrphanNameCommand",
         )
 
     def test_mod_kwargs_emit_only_set_modifiers(self):
         import mayatk.ui_utils.hotkey_collisions as hc
 
-        self.assertEqual(hc._hotkey_mod_kwargs({"keyShortcut": "r"}), {})
         self.assertEqual(
-            hc._hotkey_mod_kwargs(
+            hc.HotkeyCollisions._hotkey_mod_kwargs({"keyShortcut": "r"}), {}
+        )
+        self.assertEqual(
+            hc.HotkeyCollisions._hotkey_mod_kwargs(
                 {"keyShortcut": "r", "ctrlModifier": True, "altModifier": True}
             ),
             {"ctl": True, "alt": True},

@@ -14,6 +14,7 @@ Companion modules provide orthogonal concerns:
 - :mod:`.migrate`      — legacy schema migration
 - :mod:`.segments` — segment discovery for sequencer / manifest
 """
+
 import maya.mel as mel
 import json
 import logging
@@ -501,9 +502,7 @@ class AudioUtils(ptk.HelpMixin):
         """
         return [
             TrackEvent(track_id, start, stop=stop)
-            for start, stop in cls.pair_on_off_events(
-                cls.read_keys(track_id, carrier)
-            )
+            for start, stop in cls.pair_on_off_events(cls.read_keys(track_id, carrier))
         ]
 
     # ------------------------------------------------------------------
@@ -850,23 +849,23 @@ class AudioUtils(ptk.HelpMixin):
 
         See :func:`._compositor.sync` for full documentation.
         """
-        from mayatk.audio_utils.compositor import sync
+        from mayatk.audio_utils.compositor import Compositor
 
-        return sync(tracks=tracks, carrier=carrier)
+        return Compositor.sync(tracks=tracks, carrier=carrier)
 
     @staticmethod
     def find_dg_node_for_track(track_id):
         """Return the managed DG audio node for *track_id*, or ``None``."""
-        from mayatk.audio_utils.compositor import find_dg_node_for_track
+        from mayatk.audio_utils.compositor import Compositor
 
-        return find_dg_node_for_track(track_id)
+        return Compositor.find_dg_node_for_track(track_id)
 
     @staticmethod
     def is_managed_dg(node):
         """True if *node* has the ``audio_node_source`` marker attr."""
-        from mayatk.audio_utils.compositor import is_managed_dg
+        from mayatk.audio_utils.compositor import Compositor
 
-        return is_managed_dg(node)
+        return Compositor.is_managed_dg(node)
 
     @staticmethod
     def batch(auto_sync=True, undo=True):
@@ -874,9 +873,9 @@ class AudioUtils(ptk.HelpMixin):
 
         See :func:`._batch.batch` for full documentation.
         """
-        from mayatk.audio_utils.batch import batch
+        from mayatk.audio_utils.batch import Batch
 
-        return batch(auto_sync=auto_sync, undo=undo)
+        return Batch.batch(auto_sync=auto_sync, undo=undo)
 
     @staticmethod
     def detect_legacy(obj=CARRIER_NODE, category="audio"):
@@ -884,9 +883,9 @@ class AudioUtils(ptk.HelpMixin):
 
         See :func:`._migrate.detect_legacy` for full documentation.
         """
-        from mayatk.audio_utils.migrate import detect_legacy
+        from mayatk.audio_utils.migrate import Migrate
 
-        return detect_legacy(obj, category)
+        return Migrate.detect_legacy(obj, category)
 
     @staticmethod
     def migrate_legacy_triggers(obj, category="audio", keep_old_attrs=False):
@@ -894,6 +893,6 @@ class AudioUtils(ptk.HelpMixin):
 
         See :func:`._migrate.migrate_legacy_triggers` for full documentation.
         """
-        from mayatk.audio_utils.migrate import migrate_legacy_triggers
+        from mayatk.audio_utils.migrate import Migrate
 
-        return migrate_legacy_triggers(obj, category, keep_old_attrs)
+        return Migrate.migrate_legacy_triggers(obj, category, keep_old_attrs)

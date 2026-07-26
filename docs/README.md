@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-3782%20passed-brightgreen.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-3890%20passed%202%20failed-orange.svg)](../test/)
 
 # mayatk
 
@@ -41,7 +41,7 @@ mayatk also ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-pack
 | `nurbs_utils` | NURBS surfaces, `ImageTracer` |
 | `rig_utils` | `Controls`, `ShadowRig` |
 | `ui_utils` | `MayaUiHandler`, channel box, native menus, hotkey collision check, node icons |
-| `uv_utils` | UV utilities, Rizom bridge |
+| `uv_utils` | UV utilities, Rizom bridge ([upgrade plan](rizom_bridge_upgrade_plan.md)) |
 | `xform_utils` | Transforms, matrices, pivot watcher |
 
 Classes and module-level functions are exposed at the package root via the lazy-loading resolver. Both bare and class-qualified forms work:

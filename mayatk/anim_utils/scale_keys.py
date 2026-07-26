@@ -82,7 +82,7 @@ class ScaleKeys:
             # and checking in execute
             objects = []
         else:
-            objects = cmds.ls(objects, flatten=True)
+            objects = cmds.ls(objects, flatten=True, long=True)
 
         channel_box_attrs = None
         if channel_box_attrs_only:

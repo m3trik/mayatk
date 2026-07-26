@@ -21,6 +21,7 @@ Not collected by run_tests.py (name doesn't match test_*.py) -- it needs
 the external RizomUV executable, so it's a manual gate: run it after ANY
 edit to scripts/*.lua or templates/*.lua.
 """
+
 import argparse
 import math
 import subprocess
@@ -32,10 +33,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
 
 from mayatk.uv_utils.rizom_bridge import parameters as _params  # noqa: E402
-from mayatk.uv_utils.rizom_bridge._rizom_bridge import (  # noqa: E402
-    _RIZOM_SCAN_GLOBS,
-    _parse_rizom_version,
-)
+from mayatk.uv_utils.rizom_bridge._rizom_bridge import RizomUVBridge, _RIZOM_SCAN_GLOBS
 from pythontk.core_utils.app_launcher import AppLauncher  # noqa: E402
 
 _PKG_DIR = _REPO_ROOT / "mayatk" / "uv_utils" / "rizom_bridge"
@@ -53,7 +51,7 @@ def _find_rizom() -> "tuple[str, tuple]":
     exe = next(AppLauncher.scan_install_dirs(_RIZOM_SCAN_GLOBS), None)
     if not exe:
         sys.exit("RizomUV not found under 'Program Files\\Rizom Lab'.")
-    return exe, _parse_rizom_version(exe)
+    return exe, RizomUVBridge._parse_rizom_version(exe)
 
 
 RIZOM_EXE, RIZOM_VERSION = _find_rizom()
@@ -67,17 +65,28 @@ _SCRATCH = Path(__file__).parent / "temp_tests" / "_rizom_probe_scratch"
 # OBJ generation
 # ---------------------------------------------------------------------------
 
+
 def write_cube_obj(path: Path) -> None:
     """Unit cube, per-face UVs (6 separate islands -> existing seams)."""
     v = [
-        (-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1),
-        (-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1),
+        (-1, -1, -1),
+        (1, -1, -1),
+        (1, 1, -1),
+        (-1, 1, -1),
+        (-1, -1, 1),
+        (1, -1, 1),
+        (1, 1, 1),
+        (-1, 1, 1),
     ]
     faces = [  # quads, 1-based vertex indices
-        (1, 2, 3, 4), (5, 8, 7, 6), (1, 5, 6, 2),
-        (2, 6, 7, 3), (3, 7, 8, 4), (4, 8, 5, 1),
+        (1, 2, 3, 4),
+        (5, 8, 7, 6),
+        (1, 5, 6, 2),
+        (2, 6, 7, 3),
+        (3, 7, 8, 4),
+        (4, 8, 5, 1),
     ]
-    lines = ["# probe cube"]
+    lines = ["# probe cube", "o probe_cube"]
     lines += [f"v {x} {y} {z}" for x, y, z in v]
     # 4 unique vts per face, packed into a rough 3x2 grid of islands.
     vt_lines, f_lines = [], []
@@ -86,9 +95,7 @@ def write_cube_obj(path: Path) -> None:
         corners = [(u0, v0), (u0 + 0.3, v0), (u0 + 0.3, v0 + 0.45), (u0, v0 + 0.45)]
         base = fi * 4 + 1
         vt_lines += [f"vt {u:.4f} {w:.4f}" for u, w in corners]
-        f_lines.append(
-            "f " + " ".join(f"{vi}/{base + k}" for k, vi in enumerate(quad))
-        )
+        f_lines.append("f " + " ".join(f"{vi}/{base + k}" for k, vi in enumerate(quad)))
     path.write_text("\n".join(lines + vt_lines + f_lines) + "\n", encoding="ascii")
 
 
@@ -126,7 +133,9 @@ def write_cylinder_obj(path: Path, segments: int = 24, rows: int = 4) -> None:
         s2 = (s + 1) % segments
         faces.append(f"f {bot_c}/{bot_c} {s2 + 1}/{s2 + 1} {s + 1}/{s + 1}")
         t0 = rows * segments
-        faces.append(f"f {top_c}/{top_c} {t0 + s + 1}/{t0 + s + 1} {t0 + s2 + 1}/{t0 + s2 + 1}")
+        faces.append(
+            f"f {top_c}/{top_c} {t0 + s + 1}/{t0 + s + 1} {t0 + s2 + 1}/{t0 + s2 + 1}"
+        )
     path.write_text("\n".join(lines + vts + faces) + "\n", encoding="ascii")
 
 
@@ -134,21 +143,28 @@ def write_cylinder_obj(path: Path, segments: int = 24, rows: int = 4) -> None:
 # Script rendering (same steps as RizomUVBridge._construct_full_script)
 # ---------------------------------------------------------------------------
 
+
 def render_script(user_lua: str, obj_path: Path, overrides: dict = None) -> str:
     from pythontk.str_utils._str_utils import StrUtils
 
-    user_lua = _params.strip_unsupported(user_lua, RIZOM_VERSION)
-    values = _params.defaults()
+    # Mirror the bridge: expand shared includes (__PACK_BLOCK__) before
+    # version-stripping + substitution.
+    user_lua = _params.Parameters.expand_includes(user_lua)
+    user_lua = _params.Parameters.strip_unsupported(user_lua, RIZOM_VERSION)
+    values = _params.Parameters.defaults()
     values.update(overrides or {})
-    context = _params.render_context(values)
+    context = _params.Parameters.render_context(values)
     user_lua = StrUtils.replace_delimited(user_lua, context)
 
     wrapper = (_TEMPLATE_DIR / "wrapper.lua").read_text(encoding="utf-8")
-    return StrUtils.replace_delimited(wrapper, {
-        "EXPORT_PATH": obj_path.as_posix(),
-        "FBX_FLAG": "",  # OBJ probe: extension auto-detect
-        "USER_SCRIPT": user_lua,
-    })
+    return StrUtils.replace_delimited(
+        wrapper,
+        {
+            "EXPORT_PATH": obj_path.as_posix(),
+            "FBX_FLAG": "",  # OBJ probe: extension auto-detect
+            "USER_SCRIPT": user_lua,
+        },
+    )
 
 
 def vt_signature(path: Path):
@@ -157,8 +173,46 @@ def vt_signature(path: Path):
     return len(vts), hash("\n".join(vts))
 
 
-def run_case(name: str, user_lua: str, mesh_writer, overrides: dict = None) -> dict:
-    _SCRATCH.mkdir(parents=True, exist_ok=True)  # temp_tests/ is gitignored — absent on fresh clones
+def uv_bounds(path: Path) -> "tuple[float, float, float, float]":
+    """(min_u, max_u, min_v, max_v) over the OBJ's ``vt`` records."""
+    us, vs = [], []
+    for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if ln.startswith("vt "):
+            parts = ln.split()
+            us.append(float(parts[1]))
+            vs.append(float(parts[2]))
+    return (min(us), max(us), min(vs), max(vs))
+
+
+def check_bounds(
+    umin: float, umax: float, vmin: float, vmax: float, tol: float = 0.02
+):
+    """Case checker: assert the saved OBJ's UVs sit inside the given box."""
+
+    def _check(obj_path: Path):
+        lo_u, hi_u, lo_v, hi_v = uv_bounds(obj_path)
+        ok = (
+            lo_u >= umin - tol
+            and hi_u <= umax + tol
+            and lo_v >= vmin - tol
+            and hi_v <= vmax + tol
+        )
+        if not ok:
+            return (
+                f"UVs outside [{umin},{umax}]x[{vmin},{vmax}]: "
+                f"got u[{lo_u:.3f},{hi_u:.3f}] v[{lo_v:.3f},{hi_v:.3f}]"
+            )
+        return None
+
+    return _check
+
+
+def run_case(
+    name: str, user_lua: str, mesh_writer, overrides: dict = None, check=None
+) -> dict:
+    _SCRATCH.mkdir(
+        parents=True, exist_ok=True
+    )  # temp_tests/ is gitignored — absent on fresh clones
     obj_path = _SCRATCH / f"{name}.obj"
     mesh_writer(obj_path)
     pre_sig = vt_signature(obj_path)
@@ -172,7 +226,9 @@ def run_case(name: str, user_lua: str, mesh_writer, overrides: dict = None) -> d
     try:
         proc = subprocess.run(
             [RIZOM_EXE, "-cfi", str(lua_path)],
-            capture_output=True, text=True, timeout=TIMEOUT,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT,
         )
         rc = proc.returncode
         out_tail = ((proc.stdout or "") + (proc.stderr or ""))[-400:].strip()
@@ -182,6 +238,9 @@ def run_case(name: str, user_lua: str, mesh_writer, overrides: dict = None) -> d
 
     saved = obj_path.stat().st_mtime != pre_mtime
     post_sig = vt_signature(obj_path) if saved else pre_sig
+    check_err = None
+    if check is not None and saved:
+        check_err = check(obj_path)
     return {
         "name": name,
         "rc": rc,
@@ -189,6 +248,7 @@ def run_case(name: str, user_lua: str, mesh_writer, overrides: dict = None) -> d
         "saved": saved,
         "uvs_changed": saved and post_sig != pre_sig,
         "vt": f"{pre_sig[0]} -> {post_sig[0]}",
+        "check_err": check_err,
         "tail": out_tail,
     }
 
@@ -234,11 +294,28 @@ ZomUnfold({PrimType="Edge", MinAngle=1e-05, Mix=1, Iterations=10, PreIterations=
     BorderIntersections=true, TriangleFlips=true})
 """
 
+# Probe results on RizomUV 2020.1 (recorded 2026-07 for the phase 1/2 rollout;
+# re-run and update when a newer Rizom is installed). SAFE = rc 0 + saved;
+# CRASH = access violation (0xC0000409 family) => the field is version-gated
+# in parameters.py / the presets and must be re-verified for EFFECT on >= 2022.
+#   ZomPack MarginSize .............. SAFE   (shipped ungated)
+#   ZomPack SpacingSize ............. SAFE   (shipped <= 2021; PaddingSize >= 2022)
+#   ZomPack PaddingSize ............. CRASH  (gated >= 2022, effect owed)
+#   ZomPack MapResolution ........... CRASH  (not shipped)
+#   Auto.ReWeld ..................... CRASH  (gated >= 2022 in unwrap_hard/hybrid)
+#   Auto.BooleanUnoverlap ........... CRASH  (gated >= 2022 in unwrap_hard/hybrid)
+#   Auto.SkeletonUnoverlap .......... SAFE   (shipped ungated in unwrap_organic)
+#   QuasiDevelopable.FitCones=true .. SAFE   (shipped as FIT_CONES, real effect)
+#   SharpEdges + QuasiDevelopable ... CRASH  (unwrap_hybrid preset-gated >= 2022)
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--experiments", action="store_true",
-                    help="Also probe candidate (not yet shipped) Lua snippets.")
+    ap.add_argument(
+        "--experiments",
+        action="store_true",
+        help="Also probe candidate (not yet shipped) Lua snippets.",
+    )
     ap.add_argument("--only", help="Run a single named case.")
     args = ap.parse_args()
 
@@ -248,33 +325,85 @@ def main() -> int:
         "optimize": write_cube_obj,
         "unwrap_hard": write_cube_obj,
         "unwrap_organic": write_cylinder_obj,
+        # Needs >= 2022 (both segmenters in one Auto block); auto-skipped
+        # below its @min_rizom gate.
+        "unwrap_hybrid": write_cube_obj,
+        # Needs a >= 2022.2 Rizom (island-group selection + pack WorkingSet);
+        # auto-skipped below the preset's @min_rizom gate. NOTE: uses OBJ
+        # o-groups as stand-ins for the FBX island groups the production
+        # bridge sends -- confirm on a gated-in install that they resolve.
+        "pack_into_existing": write_cube_obj,
+    }
+    # Per-preset placeholder overrides (defaults otherwise).
+    preset_overrides = {
+        # Bridge-injected selection token; a probe run has no Maya-side
+        # export map, so name the probe mesh's group directly.
+        "pack_into_existing": {"PACK_SELECT_NAMES": '{"probe_cube"}'},
     }
     for preset, writer in preset_meshes.items():
         lua = (_SCRIPT_DIR / f"{preset}.lua").read_text(encoding="utf-8")
-        cases.append((preset, lua, writer, None))
+        required = _params.Parameters.preset_min_version(lua)
+        if required and RIZOM_VERSION < required:
+            print(
+                f"skip {preset}: needs Rizom >= {'.'.join(map(str, required))} "
+                f"(installed {'.'.join(map(str, RIZOM_VERSION))})"
+            )
+            continue
+        cases.append((preset, lua, writer, preset_overrides.get(preset), None))
     # Exercise the weld-off Lua branch too (if false then ... end).
     hard = (_SCRIPT_DIR / "unwrap_hard.lua").read_text(encoding="utf-8")
-    cases.append(("unwrap_hard_noweld", hard, write_cube_obj, {"WELD_SEAMS": False}))
+    cases.append(
+        ("unwrap_hard_noweld", hard, write_cube_obj, {"WELD_SEAMS": False}, None)
+    )
+    # Post-pack placement: pack into UDIM 1012 at quarter coverage and
+    # assert the layout landed in the tile's bottom-left quadrant.
+    pack = (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+    cases.append(
+        (
+            "pack_udim_quarter",
+            pack,
+            write_cube_obj,
+            {"TARGET_UDIM": 1012, "UV_AREA": 3},
+            check_bounds(1.0, 1.5, 1.0, 1.5),
+        )
+    )
 
     if args.experiments:
-        cases.append(("exp_weld_then_hard", EXP_WELD_PREFIX + hard, write_cube_obj, None))
         cases.append(
-            ("exp_quasi_developable", EXP_QUASI_DEVELOPABLE, write_cylinder_obj, None)
+            ("exp_weld_then_hard", EXP_WELD_PREFIX + hard, write_cube_obj, None, None)
+        )
+        cases.append(
+            (
+                "exp_quasi_developable",
+                EXP_QUASI_DEVELOPABLE,
+                write_cylinder_obj,
+                None,
+                None,
+            )
         )
 
     if args.only:
         cases = [c for c in cases if c[0] == args.only]
 
-    results = [run_case(name, lua, writer, ov) for name, lua, writer, ov in cases]
+    results = [
+        run_case(name, lua, writer, ov, check)
+        for name, lua, writer, ov, check in cases
+    ]
 
-    print(f"\n{'case':<24} {'rc':>8} {'time':>7} {'saved':>6} {'uvs_chg':>8} {'vt':>14}")
+    print(
+        f"\n{'case':<24} {'rc':>8} {'time':>7} {'saved':>6} {'uvs_chg':>8} {'vt':>14}"
+    )
     ok = True
     for r in results:
-        print(f"{r['name']:<24} {str(r['rc']):>8} {r['elapsed']:>7} "
-              f"{str(r['saved']):>6} {str(r['uvs_changed']):>8} {r['vt']:>14}")
+        print(
+            f"{r['name']:<24} {str(r['rc']):>8} {r['elapsed']:>7} "
+            f"{str(r['saved']):>6} {str(r['uvs_changed']):>8} {r['vt']:>14}"
+        )
         if r["tail"] and (r["rc"] != 0 or not r["saved"]):
             print(f"    tail: {r['tail']}")
-        if r["rc"] != 0 or not r["saved"] or not r["uvs_changed"]:
+        if r["check_err"]:
+            print(f"    CHECK FAILED: {r['check_err']}")
+        if r["rc"] != 0 or not r["saved"] or not r["uvs_changed"] or r["check_err"]:
             ok = False
     print("\n===RESULT=== " + ("PASS" if ok else "FAIL"))
     return 0 if ok else 1

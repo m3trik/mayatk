@@ -5,6 +5,7 @@
 Provides ``RenderOpacitySlots`` — a standalone window for creating,
 keying fades, and removing per-object opacity in Maya.
 """
+
 try:
     import maya.cmds as cmds
 except ImportError:
@@ -14,7 +15,7 @@ import logging
 
 import mayatk as mtk
 from mayatk.core_utils.script_job_manager import ScriptJobManager
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 
 class RenderOpacitySlots:
@@ -60,7 +61,7 @@ class RenderOpacitySlots:
             setText="Last Selected Only",
             setObjectName="chk_last_selected",
             setChecked=False,
-            setToolTip=fmt(
+            setToolTip=TooltipFormat.fmt(
                 body="Applies to Create, Key, and Remove operations.",
                 bullets=[
                     "<b>On:</b> Only the last selected object is processed.",
@@ -73,7 +74,7 @@ class RenderOpacitySlots:
             setText="Delete Visibility Keys",
             setObjectName="chk_delete_vis_keys",
             setChecked=False,
-            setToolTip=fmt(
+            setToolTip=TooltipFormat.fmt(
                 bullets=[
                     "<b>On:</b> Existing visibility keyframes are deleted before applying opacity.",
                     "<b>Off:</b> Objects with visibility keys are skipped with a warning.",
@@ -81,7 +82,7 @@ class RenderOpacitySlots:
             ),
         )
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Render Opacity",
                 body="Add a keyable opacity attribute to objects for "
                 "engine-ready transparency control. The <b>Mode</b> combo "
@@ -98,13 +99,16 @@ class RenderOpacitySlots:
                     "Auto).",
                 ],
                 sections=[
-                    ("Header menu", [
-                        "<b>Last Selected Only</b> — only the most-recent "
-                        "selection participates in Create / Key / Remove.",
-                        "<b>Delete Visibility Keys</b> — when on, existing "
-                        "visibility keys are removed before Create; when off, "
-                        "objects with vis keys are skipped with a warning.",
-                    ]),
+                    (
+                        "Header menu",
+                        [
+                            "<b>Last Selected Only</b> — only the most-recent "
+                            "selection participates in Create / Key / Remove.",
+                            "<b>Delete Visibility Keys</b> — when on, existing "
+                            "visibility keys are removed before Create; when off, "
+                            "objects with vis keys are skipped with a warning.",
+                        ],
+                    ),
                 ],
                 notes=[
                     "Use <b>Remove Opacity</b> to clean up every artifact "
@@ -181,7 +185,7 @@ class RenderOpacitySlots:
             setText="End at Playhead",
             setObjectName="chk000",
             setChecked=True,
-            setToolTip=fmt(
+            setToolTip=TooltipFormat.fmt(
                 bullets=[
                     "<b>On:</b> Fade ends at the playhead (keys span current\u2212frames \u2192 current).",
                     "<b>Off:</b> Fade starts at the playhead (keys span current \u2192 current+frames).",
@@ -191,7 +195,7 @@ class RenderOpacitySlots:
         cmb = widget.option_box.menu.add(
             "QComboBox",
             setObjectName="cmb_direction",
-            setToolTip=fmt(
+            setToolTip=TooltipFormat.fmt(
                 title="Fade Direction",
                 bullets=[
                     "<b>Fade In:</b> Key opacity 0 \u2192 1.",
@@ -339,7 +343,8 @@ class RenderOpacitySlots:
             )
 
             has_opacity = any(
-                cmds.attributeQuery("opacity", node=obj, exists=True) for obj in selected
+                cmds.attributeQuery("opacity", node=obj, exists=True)
+                for obj in selected
             )
             for item in self.ui.tb000.option_box.menu.get_items():
                 item.setEnabled(has_opacity)

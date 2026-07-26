@@ -20,6 +20,7 @@ Cross-scene detection prefs live in the engine's JSON store
 QSettings values are migrated on first access (see
 :meth:`ShotStore._restore_user_prefs`).
 """
+
 import logging
 
 try:
@@ -53,18 +54,13 @@ from pythontk.core_utils.engines.shots.shot_model import (  # noqa: F401 — re-
     StoreInvalidated,
     ScenePersistence,
     CLIP_NAME_STRATEGIES,
-    _sanitize_clip_name,
-    resolve_clip_specs,
 )
 
-from mayatk.anim_utils.shots._detection import (  # noqa: F401 — re-exports
-    STANDARD_TRANSFORM_ATTRS,
-    _map_standard_curves_to_transforms,
-    detect_shot_regions,
-    _filter_flat_objects,
-    regions_from_selected_keys,
-    resolve_to_transform,
-)
+# ``resolve_clip_specs`` moved onto :class:`pythontk.ShotStore`; re-export it under
+# the historical flat name for mayatk-internal callers (e.g. the export view).
+resolve_clip_specs = ptk.ShotStore.resolve_clip_specs
+
+from mayatk.anim_utils.shots._detection import Detection, STANDARD_TRANSFORM_ATTRS
 
 _log = logging.getLogger(__name__)
 
@@ -74,16 +70,6 @@ ATTR_NAME = "shot_store"  # string channel on the shared ``data_internal`` node
 LEGACY_NODE_NAME = "shotStore"
 LEGACY_ATTR_NAME = "shotData"
 _DEFAULT_FPS = 24.0
-
-
-def _get_scene_fps() -> float:
-    """Return the current Maya scene framerate, or *_DEFAULT_FPS* outside Maya."""
-    if cmds is None:
-        return _DEFAULT_FPS
-    try:
-        return float(mel.eval("float $fps = `currentTimeUnitToFPS`"))
-    except Exception:
-        return _DEFAULT_FPS
 
 
 __all__ = [
@@ -101,8 +87,7 @@ __all__ = [
     "ScenePersistence",
     "MayaScenePersistence",
     "STANDARD_TRANSFORM_ATTRS",
-    "detect_shot_regions",
-    "regions_from_selected_keys",
+    "Detection",
 ]
 
 
@@ -175,7 +160,9 @@ class MayaScenePersistence:
             return None
         # The attr is the carrier's signature — a node that merely shares the
         # name (a user transform called "shotStore") must be left untouched.
-        if not cmds.attributeQuery(LEGACY_ATTR_NAME, node=LEGACY_NODE_NAME, exists=True):
+        if not cmds.attributeQuery(
+            LEGACY_ATTR_NAME, node=LEGACY_NODE_NAME, exists=True
+        ):
             return None
         raw = cmds.getAttr(f"{LEGACY_NODE_NAME}.{LEGACY_ATTR_NAME}") or None
 
@@ -252,7 +239,7 @@ class MayaScenePersistence:
         store = ShotStore._active
         if store is None or not store.shots:
             return
-        new_fps = _get_scene_fps()
+        new_fps = _ShotStoreInternal._get_scene_fps()
         old_fps = store.scene_fps
         if old_fps and abs(new_fps - old_fps) > 0.01:
             store.rescale_to_fps(new_fps)
@@ -269,7 +256,58 @@ class MayaScenePersistence:
 # ---------------------------------------------------------------------------
 
 
-class ShotStore(ptk.ShotStore):
+class _ShotStoreInternal(object):
+    """Internal helpers for ShotStore."""
+
+    @staticmethod
+    def _get_scene_fps() -> float:
+        """Return the current Maya scene framerate, or *_DEFAULT_FPS* outside Maya."""
+        if cmds is None:
+            return _DEFAULT_FPS
+        try:
+            return float(mel.eval("float $fps = `currentTimeUnitToFPS`"))
+        except Exception:
+            return _DEFAULT_FPS
+
+    @staticmethod
+    def _resolve_long_names(names):
+        """Resolve object names to long DAG paths.
+
+        Returns only names that exist in the scene.  This is the single
+        source of truth for disambiguation — all code paths that store or
+        query Maya objects should go through this helper.
+        """
+        try:
+            import maya.cmds as cmds
+        except ImportError:
+            return list(names) if names else []
+        if not names:
+            return []
+        return cmds.ls(names, long=True) or []
+
+    @staticmethod
+    def _resolve_long_names_keep_missing(names):
+        """Long-name-resolve *names*, keeping the caller's form for entries
+        that don't (yet) exist in the scene.
+
+        Unlike :func:`_resolve_long_names`, nothing is dropped: missing
+        objects stay tracked under their original name so the pinned-object
+        system can surface them as "missing" instead of silently losing
+        them.  Ambiguous short names (multiple scene matches) also keep the
+        caller's form.
+        """
+        try:
+            import maya.cmds as cmds
+        except ImportError:
+            return list(names) if names else []
+        resolved = []
+        for n in names:
+            hits = cmds.ls(n, long=True) or []
+            resolved.append(hits[0] if len(hits) == 1 else n)
+        return resolved
+
+
+class ShotStore(ptk.ShotStore, _ShotStoreInternal):
     """:class:`pythontk.ShotStore` with the scene hooks bound to Maya.
 
     Only the DCC-reaching hooks are overridden; every CRUD / observer /
@@ -294,7 +332,7 @@ class ShotStore(ptk.ShotStore):
 
     def _scene_fps(self) -> float:
         """Current Maya scene framerate (24.0 outside Maya)."""
-        return _get_scene_fps()
+        return _ShotStoreInternal._get_scene_fps()
 
     def _schedule_flush(self) -> None:
         """Coalesce rapid mutations into a single deferred write."""
@@ -330,7 +368,7 @@ class ShotStore(ptk.ShotStore):
         if cmds.ls(list(conns), type="transform"):
             return True
         node_cache: dict = {}
-        return any(resolve_to_transform(n, cache=node_cache) for n in conns)
+        return any(Detection.resolve_to_transform(n, cache=node_cache) for n in conns)
 
     def detect_regions(self) -> List[Dict[str, Any]]:
         """Detect shot candidates using the store's detection settings.
@@ -344,11 +382,11 @@ class ShotStore(ptk.ShotStore):
             ``"end"``, and ``"objects"`` keys.
         """
         if self.detection_mode != "auto":
-            return regions_from_selected_keys(
+            return Detection.regions_from_selected_keys(
                 gap_threshold=self.detection_threshold,
                 key_filter=self.detection_mode,
             )
-        return detect_shot_regions(gap_threshold=self.detection_threshold)
+        return Detection.detect_shot_regions(gap_threshold=self.detection_threshold)
 
     def assess(self) -> Dict[int, str]:
         """Lightweight assessment: check if shot objects exist in the scene.
@@ -366,9 +404,7 @@ class ShotStore(ptk.ShotStore):
         # _resolve_long_names SSoT), so exact membership is the
         # contract — no second-guessing via objExists.
         all_objs = {obj for shot in self.shots for obj in shot.objects}
-        existing = (
-            set(cmds.ls(list(all_objs), long=True) or []) if all_objs else set()
-        )
+        existing = set(cmds.ls(list(all_objs), long=True) or []) if all_objs else set()
         return {
             shot.shot_id: (
                 "valid"
@@ -380,7 +416,7 @@ class ShotStore(ptk.ShotStore):
 
     def _resolve_long_names(self, names):
         """Resolve object names to long DAG paths (drops missing objects)."""
-        return _resolve_long_names(names)
+        return _ShotStoreInternal._resolve_long_names(names)
 
     # ---- export-view projection (Maya carriers) ----------------------------
 
@@ -488,40 +524,3 @@ class ShotStore(ptk.ShotStore):
         # Persist immediately so the JSON store exists and the legacy
         # read never runs again.
         self._save_user_prefs()
-
-
-def _resolve_long_names(names):
-    """Resolve object names to long DAG paths.
-
-    Returns only names that exist in the scene.  This is the single
-    source of truth for disambiguation — all code paths that store or
-    query Maya objects should go through this helper.
-    """
-    try:
-        import maya.cmds as cmds
-    except ImportError:
-        return list(names) if names else []
-    if not names:
-        return []
-    return cmds.ls(names, long=True) or []
-
-
-def _resolve_long_names_keep_missing(names):
-    """Long-name-resolve *names*, keeping the caller's form for entries
-    that don't (yet) exist in the scene.
-
-    Unlike :func:`_resolve_long_names`, nothing is dropped: missing
-    objects stay tracked under their original name so the pinned-object
-    system can surface them as "missing" instead of silently losing
-    them.  Ambiguous short names (multiple scene matches) also keep the
-    caller's form.
-    """
-    try:
-        import maya.cmds as cmds
-    except ImportError:
-        return list(names) if names else []
-    resolved = []
-    for n in names:
-        hits = cmds.ls(n, long=True) or []
-        resolved.append(hits[0] if len(hits) == 1 else n)
-    return resolved

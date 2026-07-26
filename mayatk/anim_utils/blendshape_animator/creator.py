@@ -34,6 +34,16 @@ class Creator(ptk.LoggingMixin):
             return cmds.group(empty=True, name=group_name)
         return group_name
 
+    def _parent_to_group(self, dup: str, group_name: str) -> str:
+        """Parent ``dup`` under ``group_name`` and return its resulting full path.
+
+        ``cmds.parent`` reports the node's final name after any collision
+        auto-rename (a same-named tween from another setup sharing the group
+        forces a rename), so re-resolving here keeps the reference valid.
+        """
+        parented = cmds.parent(dup, self._ensure_group(group_name)) or [dup]
+        return (cmds.ls(parented, long=True) or [dup])[0]
+
     def _duplicate_at_weight(self, name: str, weight: float) -> str:
         """Duplicate the base mesh frozen at ``weight``, history-free.
 
@@ -45,6 +55,7 @@ class Creator(ptk.LoggingMixin):
         dup = cmds.duplicate(
             self.keyframes.base_mesh, name=name, returnRootsOnly=True
         )[0]
+        dup = (cmds.ls(dup, long=True) or [dup])[0]
         cmds.delete(dup, constructionHistory=True)
         cmds.setAttr(f"{self.keyframes.blendshape}.weight[0]", 0.0)
         cmds.refresh()
@@ -110,7 +121,7 @@ class Creator(ptk.LoggingMixin):
                 tween_name = f"{name_prefix}_w{int(weight * 1000):03d}"
                 dup = self._duplicate_at_weight(tween_name, weight)
                 self._add_inbetween(dup, weight)
-                cmds.parent(dup, self._ensure_group(group_name))
+                dup = self._parent_to_group(dup, group_name)
 
                 created_tweens.append(Target(dup))
                 existing_weights.add(weight)
@@ -183,7 +194,7 @@ class Creator(ptk.LoggingMixin):
                     return None
                 raise
 
-            cmds.parent(dup, self._ensure_group(group_name))
+            dup = self._parent_to_group(dup, group_name)
 
             self.logger.info(
                 f"Created frame-based tween: {tween_name} (frame {target_frame}, weight {weight:.3f})"

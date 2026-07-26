@@ -13,6 +13,7 @@ be added or removed *after* material creation, on any scope (given materials,
 given objects, the current selection, or the whole scene). ``GameShader``
 delegates its ``create_arnold`` option here.
 """
+
 from functools import wraps
 from typing import List, Optional, Tuple, Union
 
@@ -23,41 +24,45 @@ except ImportError as error:
 import pythontk as ptk
 
 try:  # UI-only helper; keep the headless ArnoldBridge import clean if uitk is absent
-    from uitk.widgets.mixins.tooltip_mixin import fmt
+    from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 except Exception:
-    fmt = None
+    TooltipFormat = None
 
-from mayatk.core_utils._core_utils import CoreUtils, short_name
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.env_utils._env_utils import EnvUtils
 
 
-def _selection_neutral(fn):
-    """Restore the viewport selection after the wrapped op.
+class _ArnoldBridgeInternal(object):
+    """Internal helpers for ArnoldBridge."""
 
-    Bridge ops create/delete shading nodes, which Maya would otherwise leave
-    selected — clobbering the user's selection so a follow-up action (e.g.
-    Remove after Add) reads the wrong scope. Keeps each op selection-neutral.
-    """
+    @staticmethod
+    def _selection_neutral(fn):
+        """Restore the viewport selection after the wrapped op.
 
-    @wraps(fn)
-    def wrapper(self, *args, **kwargs):
-        selection = cmds.ls(selection=True, long=True) or []
-        try:
-            return fn(self, *args, **kwargs)
-        finally:
-            survivors = [s for s in selection if cmds.objExists(s)]
-            if survivors:
-                cmds.select(survivors, replace=True)
-            else:
-                cmds.select(clear=True)
+        Bridge ops create/delete shading nodes, which Maya would otherwise leave
+        selected — clobbering the user's selection so a follow-up action (e.g.
+        Remove after Add) reads the wrong scope. Keeps each op selection-neutral.
+        """
 
-    return wrapper
+        @wraps(fn)
+        def wrapper(self, *args, **kwargs):
+            selection = cmds.ls(selection=True, long=True) or []
+            try:
+                return fn(self, *args, **kwargs)
+            finally:
+                survivors = [s for s in selection if cmds.objExists(s)]
+                if survivors:
+                    cmds.select(survivors, replace=True)
+                else:
+                    cmds.select(clear=True)
+
+        return wrapper
 
 
-class ArnoldBridge(ptk.LoggingMixin):
+class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
     """Add, remove, query, and rebuild Arnold ``aiStandardSurface`` bridges.
 
     The bridge owns *dedicated* ``file`` nodes (it never shares the base
@@ -104,7 +109,7 @@ class ArnoldBridge(ptk.LoggingMixin):
 
     # ------------------------------------------------------------------ public
     @CoreUtils.undoable
-    @_selection_neutral
+    @_ArnoldBridgeInternal._selection_neutral
     def add(
         self,
         materials: Optional[Union[str, List[str]]] = None,
@@ -137,16 +142,20 @@ class ArnoldBridge(ptk.LoggingMixin):
             existing = self.get_bridge(mat)
             if existing:
                 if not force:
-                    self.logger.info(f"{short_name(mat)}: bridge exists — skipped.")
+                    self.logger.info(
+                        f"{CoreUtils.short_name(mat)}: bridge exists — skipped."
+                    )
                     continue
                 self.remove(materials=mat)
 
             sg = self._get_shading_engine(mat)
             if not sg:
-                self.logger.warning(f"{short_name(mat)}: no shading engine — skipped.")
+                self.logger.warning(
+                    f"{CoreUtils.short_name(mat)}: no shading engine — skipped."
+                )
                 continue
 
-            name = short_name(mat)
+            name = CoreUtils.short_name(mat)
             ai_node, aiMult_node, bump_node = self._setup_nodes(mat, sg, name)
 
             textures = self._iter_base_textures(mat)
@@ -155,12 +164,12 @@ class ArnoldBridge(ptk.LoggingMixin):
 
             results.append(ai_node)
             self.logger.success(
-                f"{short_name(mat)}: Arnold bridge added ({len(textures)} maps)."
+                f"{CoreUtils.short_name(mat)}: Arnold bridge added ({len(textures)} maps)."
             )
         return results
 
     @CoreUtils.undoable
-    @_selection_neutral
+    @_ArnoldBridgeInternal._selection_neutral
     def remove(
         self,
         materials: Optional[Union[str, List[str]]] = None,
@@ -194,13 +203,11 @@ class ArnoldBridge(ptk.LoggingMixin):
             protected = set(cmds.listHistory(str(mat)) or [])
             protected.add(str(mat))
 
-            to_delete = [
-                n for n in island if n not in protected and cmds.objExists(n)
-            ]
+            to_delete = [n for n in island if n not in protected and cmds.objExists(n)]
             if to_delete:
                 cmds.delete(to_delete)
             removed.append(mat)
-            self.logger.success(f"{short_name(mat)}: Arnold bridge removed.")
+            self.logger.success(f"{CoreUtils.short_name(mat)}: Arnold bridge removed.")
 
         if not removed:
             self.logger.info("No Arnold bridges found in scope.")
@@ -431,7 +438,9 @@ class ArnoldBridge(ptk.LoggingMixin):
         return f"{file_node}.outColor{channel}"
 
     @staticmethod
-    def _wire_roughness(ai_node: str, source_plug: str, *, invert: bool = False) -> None:
+    def _wire_roughness(
+        ai_node: str, source_plug: str, *, invert: bool = False
+    ) -> None:
         """Drive ``specularRoughness`` (+ transmission blur) from a scalar plug.
 
         Inserts a ``reverse`` node when the source is smoothness / glossiness
@@ -603,9 +612,9 @@ class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin):
             setToolTip="Select every scene material that currently has an "
             "Arnold bridge.",
         )
-        if fmt is not None:
+        if TooltipFormat is not None:
             widget.set_help_text(
-                fmt(
+                TooltipFormat.fmt(
                     title="Arnold Render Bridge",
                     body="Attach (or remove) an Arnold <i>aiStandardSurface</i> "
                     "shader alongside a game material so the asset renders in "
@@ -622,15 +631,18 @@ class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin):
                         "rebuild a material that already has a network.",
                     ],
                     sections=[
-                        ("Scene-only by design", [
-                            "The bridge drives <i>aiSurfaceShader</i>, which FBX "
-                            "doesn't represent — only the Stingray / Standard "
-                            "Surface material on <i>surfaceShader</i> exports. The "
-                            "Arnold network never leaves the Maya scene.",
-                            "It owns dedicated file nodes, so Remove cleanly deletes "
-                            "the whole Arnold island and the base material's "
-                            "textures stay put.",
-                        ]),
+                        (
+                            "Scene-only by design",
+                            [
+                                "The bridge drives <i>aiSurfaceShader</i>, which FBX "
+                                "doesn't represent — only the Stingray / Standard "
+                                "Surface material on <i>surfaceShader</i> exports. The "
+                                "Arnold network never leaves the Maya scene.",
+                                "It owns dedicated file nodes, so Remove cleanly deletes "
+                                "the whole Arnold island and the base material's "
+                                "textures stay put.",
+                            ],
+                        ),
                     ],
                 )
             )
@@ -694,9 +706,7 @@ class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin):
 
         selection = cmds.ls(selection=True, long=True) or []
         if not selection:
-            return None, (
-                "Select object(s), or switch Scope to All Scene Materials."
-            )
+            return None, ("Select object(s), or switch Scope to All Scene Materials.")
         return {"objects": selection}, "selection"
 
     def _run(self, op: str, force: bool = False) -> None:

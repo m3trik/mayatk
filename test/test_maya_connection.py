@@ -5,9 +5,9 @@ Tests for Maya Connection Module
 
 Verifies the functionality of mayatk.env_utils.maya_connection
 """
+
 import unittest
 import sys
-import os
 from unittest.mock import MagicMock, patch
 
 from base_test import MayaTkTestCase
@@ -69,6 +69,30 @@ class TestMayaConnection(MayaTkTestCase):
         self.assertTrue(result)
         self.assertEqual(conn.mode, "interactive")
         self.assertTrue(conn.is_connected)
+
+    def test_port_helpers_are_not_self_recursive(self):
+        """Regression: the encapsulation pass duplicated the module-level port
+        helpers (``open_command_ports`` / ``toggle_command_ports`` /
+        ``open_available_command_ports``) as in-class staticmethods of the SAME
+        name whose body called ``MayaConnection.<same_name>(...)`` — i.e.
+        themselves — and, being defined later in the class body, they shadowed
+        the real implementations. Any call then recursed infinitely. The names
+        must resolve to the canonical implementations, never the self-wrapper.
+        """
+        import inspect
+
+        for name in (
+            "open_command_ports",
+            "toggle_command_ports",
+            "open_available_command_ports",
+        ):
+            src = inspect.getsource(getattr(MayaConnection, name))
+            self.assertNotIn(
+                "Wrapper for MayaConnection",
+                src,
+                f"MayaConnection.{name} resolves to the recursive self-wrapper "
+                f"instead of the real implementation",
+            )
 
     def test_singleton_access(self):
         """Test get_instance singleton behavior."""
@@ -266,7 +290,6 @@ class TestMayaConnectionMocked(unittest.TestCase):
             patch.object(MayaConnection, "_connect_via_port") as mock_connect_port,
             patch.object(MayaConnection, "_launch_maya_gui") as mock_launch_gui,
         ):
-
             # Scenario: Auto detect sees nothing (returns standalone as fallback)
             mock_detect_mode.return_value = "standalone"
 
@@ -356,10 +379,14 @@ class TestMayaConnectionMocked(unittest.TestCase):
 
         conn = MayaConnection()
 
-        with patch.object(conn, "connect", wraps=conn.connect) as spy_connect, \
-             patch.object(conn, "shutdown") as mock_shutdown:
+        with (
+            patch.object(conn, "connect", wraps=conn.connect) as spy_connect,
+            patch.object(conn, "shutdown") as mock_shutdown,
+        ):
             # Force connect to succeed
-            spy_connect.side_effect = lambda **kw: setattr(conn, "is_connected", True) or True
+            spy_connect.side_effect = lambda **kw: (
+                setattr(conn, "is_connected", True) or True
+            )
 
             with conn:
                 self.assertTrue(conn.is_connected)
@@ -372,8 +399,10 @@ class TestMayaConnectionMocked(unittest.TestCase):
         conn.is_connected = True
         conn.mode = "port"
 
-        with patch.object(conn, "connect") as mock_connect, \
-             patch.object(conn, "shutdown"):
+        with (
+            patch.object(conn, "connect") as mock_connect,
+            patch.object(conn, "shutdown"),
+        ):
             with conn:
                 pass
             mock_connect.assert_not_called()
@@ -444,8 +473,10 @@ class TestMayaConnectionMocked(unittest.TestCase):
         """connect(auto_cleanup=True) registers an atexit handler exactly once."""
         conn = MayaConnection()
 
-        with patch("atexit.register") as mock_register, \
-             patch.object(conn, "_connect_interactive", return_value=True):
+        with (
+            patch("atexit.register") as mock_register,
+            patch.object(conn, "_connect_interactive", return_value=True),
+        ):
             conn.connect(mode="interactive", auto_cleanup=True)
             self.assertEqual(mock_register.call_count, 1)
 
@@ -457,8 +488,10 @@ class TestMayaConnectionMocked(unittest.TestCase):
         """A failed connect must NOT register the cleanup handler."""
         conn = MayaConnection()
 
-        with patch("atexit.register") as mock_register, \
-             patch.object(conn, "_connect_interactive", return_value=False):
+        with (
+            patch("atexit.register") as mock_register,
+            patch.object(conn, "_connect_interactive", return_value=False),
+        ):
             conn.connect(mode="interactive", auto_cleanup=True)
             mock_register.assert_not_called()
 
@@ -466,8 +499,10 @@ class TestMayaConnectionMocked(unittest.TestCase):
         """Without auto_cleanup, no atexit handler is registered."""
         conn = MayaConnection()
 
-        with patch("atexit.register") as mock_register, \
-             patch.object(conn, "_connect_interactive", return_value=True):
+        with (
+            patch("atexit.register") as mock_register,
+            patch.object(conn, "_connect_interactive", return_value=True),
+        ):
             conn.connect(mode="interactive")
             mock_register.assert_not_called()
 
@@ -480,8 +515,10 @@ class TestMayaConnectionMocked(unittest.TestCase):
             conn.is_connected = True
             return True
 
-        with patch("atexit.register", side_effect=captured_handler.append), \
-             patch.object(conn, "_connect_interactive", side_effect=_fake_connect):
+        with (
+            patch("atexit.register", side_effect=captured_handler.append),
+            patch.object(conn, "_connect_interactive", side_effect=_fake_connect),
+        ):
             conn.connect(mode="interactive", auto_cleanup=True)
 
         self.assertEqual(len(captured_handler), 1)
@@ -500,8 +537,10 @@ class TestMayaConnectionMocked(unittest.TestCase):
             conn.is_connected = True
             return True
 
-        with patch("atexit.register", side_effect=captured_handler.append), \
-             patch.object(conn, "_connect_interactive", side_effect=_fake_connect):
+        with (
+            patch("atexit.register", side_effect=captured_handler.append),
+            patch.object(conn, "_connect_interactive", side_effect=_fake_connect),
+        ):
             conn.connect(mode="interactive", auto_cleanup=True)
 
         # Caller already shut down explicitly.
@@ -520,8 +559,10 @@ class TestMayaConnectionMocked(unittest.TestCase):
             conn.is_connected = True
             return True
 
-        with patch("atexit.register", side_effect=captured_handler.append), \
-             patch.object(conn, "_connect_interactive", side_effect=_fake_connect):
+        with (
+            patch("atexit.register", side_effect=captured_handler.append),
+            patch.object(conn, "_connect_interactive", side_effect=_fake_connect),
+        ):
             conn.connect(mode="interactive", auto_cleanup=True)
 
         with patch.object(conn, "shutdown", side_effect=RuntimeError("boom")):

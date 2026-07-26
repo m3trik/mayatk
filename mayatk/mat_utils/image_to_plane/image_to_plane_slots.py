@@ -5,7 +5,6 @@
 Provides ``ImageToPlaneSlots`` — a standalone window for batch-creating
 textured polygon planes from image files in Maya.
 """
-import os
 
 try:
     import maya.cmds as cmds
@@ -13,7 +12,7 @@ except ImportError:
     pass
 
 import mayatk as mtk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 
 class ImageToPlaneSlots:
@@ -56,7 +55,7 @@ class ImageToPlaneSlots:
         )
 
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Image to Plane",
                 body="Creates textured polygon planes from image files — one "
                 "plane per image, sized to its aspect ratio and assigned a "
@@ -64,8 +63,7 @@ class ImageToPlaneSlots:
                 steps=[
                     "Press <b>Browse…</b> to select one or more image files "
                     "(or drop a folder).",
-                    "Pick a <b>Material Type</b> (Stingray PBS / Standard "
-                    "Surface).",
+                    "Pick a <b>Material Type</b> (Stingray PBS / Standard Surface).",
                     "Set the <b>Material Affix</b> (default <code>_MAT</code>). "
                     "The affix option box selects Suffix / Prefix / Auto.",
                     "Set the <b>Plane Height</b> in scene units (width is "
@@ -73,10 +71,13 @@ class ImageToPlaneSlots:
                     "Press <b>Create Planes</b>.",
                 ],
                 sections=[
-                    ("Menu options", [
-                        "<b>Group Result</b> — parent all created planes under "
-                        "a single group node.",
-                    ]),
+                    (
+                        "Menu options",
+                        [
+                            "<b>Group Result</b> — parent all created planes under "
+                            "a single group node.",
+                        ],
+                    ),
                 ],
                 notes=[
                     "Use <b>Remove Selected</b> to delete planes and their "
@@ -103,13 +104,13 @@ class ImageToPlaneSlots:
         if mode == "prefix":
             widget.setPlaceholderText("Material Prefix")
             widget.setToolTip(
-                'Prefix prepended to the image name for material naming.\n'
+                "Prefix prepended to the image name for material naming.\n"
                 'Example: image "brick" with prefix "MAT_" → material "MAT_brick".'
             )
         elif mode == "suffix":
             widget.setPlaceholderText("Material Suffix")
             widget.setToolTip(
-                'Suffix appended to the image name for material naming.\n'
+                "Suffix appended to the image name for material naming.\n"
                 'Example: image "brick" with suffix "_MAT" → material "brick_MAT".'
             )
         else:  # auto

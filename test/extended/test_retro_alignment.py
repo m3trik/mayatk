@@ -7,7 +7,7 @@ Tests the actual ShotManifest pipeline against:
   CSV:   Speed_Run_C-130H Rigging Verification - Sequence Doc.csv
 
 This validates:
-  1. parse_csv() produces sane BuilderSteps from the real CSV
+  1. ManifestModel.parse_csv() produces sane BuilderSteps from the real CSV
   2. assess() identifies real naming mismatches when run against the live scene
   3. detect_shots() discovers animation clusters in the real scene
   4. Quantifies the gap between CSV names and scene object names
@@ -15,9 +15,9 @@ This validates:
 Run via: python mayatk/test/run_tests.py retro_alignment --extended
 Or directly in a Maya standalone/port session.
 """
+
 import unittest
 import sys
-import os
 from pathlib import Path
 import maya.cmds as cmds
 
@@ -47,6 +47,8 @@ def _pm_undo_chunk():
         yield
     finally:
         cmds.undoInfo(closeChunk=True)
+
+
 # --- end shims ---
 # ---------------------------------------------------------------------------
 # Paths
@@ -71,13 +73,11 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 # Pureâ€‘Python imports (always available)
 # ---------------------------------------------------------------------------
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
-    parse_csv,
-    BuilderStep,
-    BuilderObject,
+    ManifestModel,
     ShotManifest as ManifestBuilder,
 )
 from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import ShotSequencer
-from mayatk.anim_utils.shots._shots import ShotStore, ShotBlock
+from mayatk.anim_utils.shots._shots import ShotStore
 
 # ---------------------------------------------------------------------------
 # Maya bootstrap (standalone)
@@ -104,13 +104,13 @@ except Exception:
 # PHASE 1: Pure-Python CSV Parsing Tests (no Maya needed)
 # ======================================================================
 class TestParseCSVReal(unittest.TestCase):
-    """Validate parse_csv() against the real C-130H CSV."""
+    """Validate ManifestModel.parse_csv() against the real C-130H CSV."""
 
     @classmethod
     def setUpClass(cls):
         if not Path(CSV_PATH).exists():
             raise unittest.SkipTest(f"CSV not found: {CSV_PATH}")
-        cls.steps = parse_csv(CSV_PATH)
+        cls.steps = ManifestModel.parse_csv(CSV_PATH)
 
     def test_steps_nonempty(self):
         """CSV should parse into a non-trivial number of steps."""
@@ -192,7 +192,7 @@ class TestParseCSVReal(unittest.TestCase):
         out = RESULTS_DIR / "parsed_steps.txt"
         with open(out, "w") as f:
             for step in self.steps:
-                f.write(f"\n{'='*60}\n")
+                f.write(f"\n{'=' * 60}\n")
                 f.write(f"Step: {step.step_id}  Section: {step.section}\n")
                 f.write(f"Content: {step.description[:100]}\n")
                 f.write(f"Objects ({len(step.objects)}):\n")
@@ -236,7 +236,7 @@ class TestAssessAgainstRealScene(unittest.TestCase):
         if not Path(SCENE_PATH).exists() or not Path(CSV_PATH).exists():
             raise unittest.SkipTest("Scene or CSV not found")
         _pm_open_file(SCENE_PATH, force=True)
-        cls.steps = parse_csv(CSV_PATH)
+        cls.steps = ManifestModel.parse_csv(CSV_PATH)
         cls.store = ShotStore()  # Empty store â€” no shots built yet
 
     def test_assess_unbuilt(self):
@@ -295,7 +295,7 @@ class TestDetectShotsRealScene(unittest.TestCase):
 
         out = RESULTS_DIR / "detected_shots.txt"
         with open(out, "w") as f:
-            f.write(f"Gap threshold: 10.0\n")
+            f.write("Gap threshold: 10.0\n")
             f.write(f"Detected shots: {len(candidates)}\n\n")
             for c in candidates:
                 f.write(
@@ -348,7 +348,7 @@ class TestBuildAndAssessFullPipeline(unittest.TestCase):
         if not Path(SCENE_PATH).exists() or not Path(CSV_PATH).exists():
             raise unittest.SkipTest("Scene or CSV not found")
         _pm_open_file(SCENE_PATH, force=True)
-        cls.steps = parse_csv(CSV_PATH)
+        cls.steps = ManifestModel.parse_csv(CSV_PATH)
 
     def test_build_then_assess(self):
         """Build shots from CSV, then assess against scene. Full pipeline."""
@@ -375,7 +375,7 @@ class TestBuildAndAssessFullPipeline(unittest.TestCase):
         with open(out, "w") as f:
             f.write(f"Steps parsed: {len(self.steps)}\n")
             f.write(f"Shots created: {created}\n")
-            f.write(f"Assessment results:\n\n")
+            f.write("Assessment results:\n\n")
 
             for status, items in sorted(statuses.items()):
                 f.write(f"\n--- {status.upper()} ({len(items)}) ---\n")
@@ -383,7 +383,7 @@ class TestBuildAndAssessFullPipeline(unittest.TestCase):
                     f.write(f"  {step_id}: {name:<40} behavior={behavior}\n")
 
             # Additional objects (in shots but not in CSV)
-            f.write(f"\n--- ADDITIONAL OBJECTS ---\n")
+            f.write("\n--- ADDITIONAL OBJECTS ---\n")
             for r in results:
                 if r.additional_objects:
                     f.write(f"  {r.step_id}: {r.additional_objects}\n")

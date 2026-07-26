@@ -1,9 +1,13 @@
 # !/usr/bin/python
 # coding=utf-8
 """Constants, column layout, and pure helper functions for the Shot Manifest UI."""
+
 from pythontk.core_utils.engines.shots.manifest.range_resolver import (  # noqa: F401
-    prune_to_top_boundaries,  # canonical home is the engine; re-exported for callers
+    RangeResolver as _PyRangeResolver,
 )
+
+# canonical home is the engine class; re-exported under the historical name for callers
+prune_to_top_boundaries = _PyRangeResolver.prune_to_top_boundaries  # noqa: F401
 
 from mayatk.anim_utils.shots._shots import SHOT_PALETTE
 
@@ -37,47 +41,51 @@ BEHAVIOR_STATUS_COLORS = {
 ERROR_COLOR = PASTEL_STATUS["error"][0]
 
 
-def fmt_behavior(name: str) -> str:
-    """``'fade_in'`` → ``'Fade In'``."""
-    return name.replace("_", " ").title() if name else ""
+class ManifestData:
+    """ManifestData — module namespace."""
 
+    @staticmethod
+    def fmt_behavior(name: str) -> str:
+        """``'fade_in'`` → ``'Fade In'``."""
+        return name.replace("_", " ").title() if name else ""
 
-def format_behavior_html(behaviors, broken=(), status_color=None) -> str:
-    """Return rich-text HTML for a list of behavior names.
+    @staticmethod
+    def format_behavior_html(behaviors, broken=(), status_color=None) -> str:
+        """Return rich-text HTML for a list of behavior names.
 
-    Parameters:
-        behaviors: Sequence of raw behavior names to display.
-        broken: Subset of *behaviors* that failed verification.
-            These are rendered with the ``missing_behavior`` palette
-            colour; the rest are left uncoloured.
-        status_color: Optional override colour applied to *all* behaviours.
-            When set, *broken* is ignored and every behaviour is rendered
-            in this colour (e.g. the error colour for missing objects).
-    """
-    if not behaviors:
-        return ""
-    spans = []
-    if status_color:
-        for b in behaviors:
-            display = fmt_behavior(b)
-            spans.append(f'<span style="color:{status_color}">{display}</span>')
-    else:
-        broken_set = set(broken)
-        for b in behaviors:
-            display = fmt_behavior(b)
-            if b in broken_set:
-                color = BEHAVIOR_STATUS_COLORS.get("missing")
-                spans.append(f'<span style="color:{color}">{display}</span>')
-            else:
-                spans.append(display)
-    return "  ".join(spans)
+        Parameters:
+            behaviors: Sequence of raw behavior names to display.
+            broken: Subset of *behaviors* that failed verification.
+                These are rendered with the ``missing_behavior`` palette
+                colour; the rest are left uncoloured.
+            status_color: Optional override colour applied to *all* behaviours.
+                When set, *broken* is ignored and every behaviour is rendered
+                in this colour (e.g. the error colour for missing objects).
+        """
+        if not behaviors:
+            return ""
+        spans = []
+        if status_color:
+            for b in behaviors:
+                display = ManifestData.fmt_behavior(b)
+                spans.append(f'<span style="color:{status_color}">{display}</span>')
+        else:
+            broken_set = set(broken)
+            for b in behaviors:
+                display = ManifestData.fmt_behavior(b)
+                if b in broken_set:
+                    color = BEHAVIOR_STATUS_COLORS.get("missing")
+                    spans.append(f'<span style="color:{color}">{display}</span>')
+                else:
+                    spans.append(display)
+        return "  ".join(spans)
 
-
-def try_load_maya_icons():
-    """Return the :class:`NodeIcons` class if Maya is available, else ``None``."""
-    try:
-        from mayatk.ui_utils.node_icons import NodeIcons
-        import maya.cmds as cmds  # noqa: F401 — availability check
-    except ImportError:
-        return None
-    return NodeIcons
+    @staticmethod
+    def try_load_maya_icons():
+        """Return the :class:`NodeIcons` class if Maya is available, else ``None``."""
+        try:
+            from mayatk.ui_utils.node_icons import NodeIcons
+            import maya.cmds as cmds  # noqa: F401 — availability check
+        except ImportError:
+            return None
+        return NodeIcons

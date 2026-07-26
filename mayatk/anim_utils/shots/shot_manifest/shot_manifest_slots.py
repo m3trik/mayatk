@@ -10,31 +10,31 @@ are inherited from :class:`~._table_presenter.ManifestTableMixin`.
 Constants and pure helpers live in :mod:`._manifest_data`.
 Range resolution is delegated to :func:`._range_resolver.resolve_ranges`.
 """
+
 from typing import Dict, List, Optional, Tuple
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
+    Detection,
     BuilderStep,
     BuilderObject,
     ColumnMap,
     ShotManifest,
-    parse_csv,
-    detect_shot_regions,
-    regions_from_selected_keys,
+    ManifestModel,
 )
 from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
+    ManifestData,
     ERROR_COLOR,
     SETTINGS_NS,
     COL_STEP,
     COL_DESC,
     COL_START,
     COL_END,
-    fmt_behavior,
 )
-from mayatk.anim_utils.shots.shot_manifest.range_resolver import resolve_ranges
+from mayatk.anim_utils.shots.shot_manifest.range_resolver import RangeResolver
 from mayatk.anim_utils.shots._shots import (
     BatchComplete,
     SettingsChanged,
@@ -226,10 +226,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         store = self._active_store()
         mode = store.detection_mode if store is not None else "auto"
         if mode != "auto":
-            return regions_from_selected_keys(
+            return Detection.regions_from_selected_keys(
                 gap_threshold=gap_threshold, key_filter=mode
             )
-        return detect_shot_regions(gap_threshold=gap_threshold)
+        return Detection.detect_shot_regions(gap_threshold=gap_threshold)
 
     def detect(self, gap: Optional[float] = None) -> None:
         """Detect animation regions in the scene and populate the table.
@@ -329,9 +329,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             # Reject a rename colliding with another step's id — duplicate
             # step_ids clobber each other's ranges at build time (parse_csv
             # guards the same way).
-            if any(
-                s.step_id == new_name for s in self._steps if s is not step_data
-            ):
+            if any(s.step_id == new_name for s in self._steps if s is not step_data):
                 import maya.cmds as cmds
 
                 cmds.warning(f"Duplicate step name '{new_name}' — rename reverted.")
@@ -513,7 +511,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             self._initial_shot_length if (not gap_starts and not use_sel) else 0
         )
 
-        resolved = resolve_ranges(
+        resolved = RangeResolver.resolve_ranges(
             steps=self._steps,
             user_ranges=self._user_ranges,
             gap_starts=gap_starts,
@@ -776,7 +774,9 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 act_outliner = menu.addAction(f"Show '{obj_name}' in Outliner")
                 act_copy = menu.addAction(f"Copy '{obj_name}' to Clipboard")
                 if self._is_built and obj_data.behaviors:
-                    names = ", ".join(fmt_behavior(b) for b in obj_data.behaviors)
+                    names = ", ".join(
+                        ManifestData.fmt_behavior(b) for b in obj_data.behaviors
+                    )
                     act_reapply = menu.addAction(f"Apply [{names}]")
 
         chosen = menu.exec_(tree.viewport().mapToGlobal(pos))
@@ -1051,35 +1051,47 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         )
 
         self.ui.header.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Shot Manifest",
                 body="Build and validate shots from a CSV file or by generating from scene animation.",
                 sections=[
-                    ("Quick Start \u2014 CSV", [
-                        "Check the <b>CSV</b> checkbox and browse to a CSV file.",
-                        "Review parsed steps in the table; edit ranges or exclude steps as needed.",
-                        "Click <b>Build</b> to create shots with behaviors applied.",
-                        "Click <b>Assess</b> to verify completeness.",
-                    ]),
-                    ("Quick Start \u2014 Animation", [
-                        "Uncheck <b>CSV</b> \u2014 shots are generated from animation using the settings in Shot Settings.",
-                        "Refine ranges in the table if needed.",
-                        "Click <b>Build</b>, then <b>Assess</b>.",
-                    ]),
-                    ("Table Columns", [
-                        "<b>Step</b> \u2014 Step ID (e.g. A01).",
-                        "<b>Section</b> \u2014 Read-only grouping label from CSV.",
-                        "<b>Description</b> \u2014 Audio narration or step notes.",
-                        "<b>Behaviors</b> \u2014 Per-object actions; click the child row label to toggle.",
-                        "<b>Start / End</b> \u2014 Frame range. Solid text = user-entered; dim italic = auto-filled.",
-                    ]),
-                    ("Editing &amp; Actions", [
-                        "Double-click Start or End to type a frame. Downstream steps re-flow.",
-                        "Right-click a range cell: Set Start to Current Frame, Auto-fill from Gaps, Clear Range.",
-                        "<b>Assess</b> \u2014 Read-only comparison; red tint = missing, grey = locked, normal = valid.",
-                        "<b>Build</b> \u2014 Create or update shots from loaded steps. Locked shots are never modified.",
-                        "Right-click step row: Exclude, Open in Sequencer, Show Excluded.",
-                    ]),
+                    (
+                        "Quick Start \u2014 CSV",
+                        [
+                            "Check the <b>CSV</b> checkbox and browse to a CSV file.",
+                            "Review parsed steps in the table; edit ranges or exclude steps as needed.",
+                            "Click <b>Build</b> to create shots with behaviors applied.",
+                            "Click <b>Assess</b> to verify completeness.",
+                        ],
+                    ),
+                    (
+                        "Quick Start \u2014 Animation",
+                        [
+                            "Uncheck <b>CSV</b> \u2014 shots are generated from animation using the settings in Shot Settings.",
+                            "Refine ranges in the table if needed.",
+                            "Click <b>Build</b>, then <b>Assess</b>.",
+                        ],
+                    ),
+                    (
+                        "Table Columns",
+                        [
+                            "<b>Step</b> \u2014 Step ID (e.g. A01).",
+                            "<b>Section</b> \u2014 Read-only grouping label from CSV.",
+                            "<b>Description</b> \u2014 Audio narration or step notes.",
+                            "<b>Behaviors</b> \u2014 Per-object actions; click the child row label to toggle.",
+                            "<b>Start / End</b> \u2014 Frame range. Solid text = user-entered; dim italic = auto-filled.",
+                        ],
+                    ),
+                    (
+                        "Editing &amp; Actions",
+                        [
+                            "Double-click Start or End to type a frame. Downstream steps re-flow.",
+                            "Right-click a range cell: Set Start to Current Frame, Auto-fill from Gaps, Clear Range.",
+                            "<b>Assess</b> \u2014 Read-only comparison; red tint = missing, grey = locked, normal = valid.",
+                            "<b>Build</b> \u2014 Create or update shots from loaded steps. Locked shots are never modified.",
+                            "Right-click step row: Exclude, Open in Sequencer, Show Excluded.",
+                        ],
+                    ),
                 ],
             )
         )
@@ -1269,18 +1281,18 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         mapping name is stored as item *data* so selection stays robust.
         Selection priority: *select* arg > last-used > ``default`` > ``(none)``.
         """
-        from mayatk.anim_utils.shots.shot_manifest.mapping import discover, templates
+        from mayatk.anim_utils.shots.shot_manifest.mapping import Mapping
 
         cmb = self._cmb_mapping
         cmb.blockSignals(True)
         cmb.clear()
         cmb.addItem("(none)", None)
         if self._mapping_dir:
-            names = list(discover(self._mapping_dir))
+            names = list(Mapping.discover(self._mapping_dir))
             for name in names:
                 cmb.addItem(name, name)
         else:
-            ts = templates()
+            ts = Mapping.templates()
             names = ts.names()
             for name in names:
                 tag = "user" if ts.source(name) == "user" else "built-in"
@@ -1288,7 +1300,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
         target = select
         if target is None and not self._mapping_dir:
-            target = templates().active
+            target = Mapping.templates().active
         idx = self._combo_data_index(target) if target else -1
         if idx < 0 and "default" in names:
             idx = self._combo_data_index("default")
@@ -1325,13 +1337,15 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         *persist* records the choice as last-used (skipped in directory-override
         mode, whose pointer belongs to a different store).
         """
-        from mayatk.anim_utils.shots.shot_manifest.mapping import load_mapping, templates
+        from mayatk.anim_utils.shots.shot_manifest.mapping import Mapping
 
         if not name:
             self._active_mapping = None
         else:
             try:
-                self._active_mapping = load_mapping(name, self._mapping_dir or None)
+                self._active_mapping = Mapping.load_mapping(
+                    name, self._mapping_dir or None
+                )
             except Exception as exc:
                 self.logger.error("Failed to load mapping '%s': %s", name, exc)
                 self._set_footer(f"Mapping error: {exc}", color=ERROR_COLOR)
@@ -1339,7 +1353,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 return
             if persist and not self._mapping_dir:
                 try:
-                    templates().active = name  # remember last-used across sessions
+                    Mapping.templates().active = name  # remember last-used across sessions
                 except Exception:
                     pass
 
@@ -1356,9 +1370,9 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         example and the format reference, so there's a model to copy and a spec
         to read.
         """
-        from mayatk.anim_utils.shots.shot_manifest.mapping import templates
+        from mayatk.anim_utils.shots.shot_manifest.mapping import Mapping
 
-        ts = templates()
+        ts = Mapping.templates()
         d = ts.user_dir
         d.mkdir(parents=True, exist_ok=True)
         self._seed_mappings_folder(ts)
@@ -1377,7 +1391,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         shipped doc, so it's always current with the schema.
         """
         from pathlib import Path
-        from mayatk.anim_utils.shots.shot_manifest.mapping import format_markdown
+        from mayatk.anim_utils.shots.shot_manifest.mapping import MappingSpec
 
         folder = Path(ts.user_dir)
         try:
@@ -1395,7 +1409,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             pass
         try:
             (folder / "MAPPING_FORMAT.md").write_text(
-                format_markdown(), encoding="utf-8"
+                MappingSpec.format_markdown(), encoding="utf-8"
             )
         except Exception:
             pass
@@ -1496,11 +1510,11 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
         try:
             if self._active_mapping is not None:
-                from mayatk.anim_utils.shots.shot_manifest.mapping import resolve
+                from mayatk.anim_utils.shots.shot_manifest.mapping import Mapping
 
-                steps = resolve(path, mapping=self._active_mapping)
+                steps = Mapping.resolve(path, mapping=self._active_mapping)
             else:
-                steps = parse_csv(path, columns=self._column_map)
+                steps = ManifestModel.parse_csv(path, columns=self._column_map)
         except OSError as exc:
             # isfile() passed but the bytes can't be read.  Don't assume a
             # single cause -- _describe_read_failure enumerates the likely

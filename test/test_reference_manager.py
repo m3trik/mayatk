@@ -154,6 +154,9 @@ class QtWidgets:
         def isRowHidden(self, row):
             return row in self._hidden_rows
 
+        def selectedIndexes(self):
+            return []  # nothing selectable is selected — the foreign-row scenario
+
 
 class MockSettings:
     """Mock for uitk SettingsManager — stores values in a plain dict."""
@@ -461,6 +464,174 @@ class TestReferenceManager(unittest.TestCase):
         self.assertTrue(
             t.isRowHidden(0),
             "Row should be hidden when include_notes is disabled",
+        )
+
+    def test_is_foreign_classifies_blend_only(self):
+        """_is_foreign flags .blend (the cross-DCC row) and nothing else — .fbx is NATIVE
+        on this side (Maya references it directly), so it must not classify as foreign."""
+        C = ref_mgr.ReferenceManagerController
+        self.assertTrue(C._is_foreign("C:/proj/mesh.blend"))
+        self.assertFalse(C._is_foreign("C:/proj/scene.ma"))
+        self.assertFalse(C._is_foreign("C:/proj/scene.mb"))
+        self.assertFalse(C._is_foreign("C:/proj/prop.fbx"))
+        self.assertFalse(C._is_foreign(""))
+
+    def test_include_type_classification_is_the_inverse_of_blendertk(self):
+        """The panel's file-type split is the mirror of the Blender panel's: this side's
+        natives are .ma/.mb/.fbx and its only foreign type is .blend, and every include
+        toggle names one of the four shared types."""
+        S = ref_mgr.ReferenceManagerSlots
+        self.assertEqual(S._INCLUDE_TYPES, ("ma", "mb", "fbx", "blend"))
+        self.assertEqual(S.NATIVE_EXTENSIONS, (".ma", ".mb", ".fbx"))
+        self.assertEqual(S.FOREIGN_EXTENSIONS, (".blend",))
+        self.assertEqual(S._INCLUDE_DEFAULTS, (".ma", ".mb"))
+        self.assertEqual(
+            set(f".{t}" for t in S._INCLUDE_TYPES),
+            set(S.NATIVE_EXTENSIONS) | set(S.FOREIGN_EXTENSIONS),
+            "every include toggle must classify as native or foreign",
+        )
+
+    def test_included_extensions_falls_back_to_defaults_without_a_menu(self):
+        """An early refresh (header menu not built yet) must still list this panel's own
+        native scenes rather than an empty set."""
+        # Use the REAL slots class (bypassing its Qt-heavy __init__) so the fallback
+        # under test is the production method, not a mock.
+        slot = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slot.ui = type("U", (), {})()  # no header attr -> menu is None -> defaults
+        self.assertEqual(
+            slot._included_extensions(),
+            set(ref_mgr.ReferenceManagerSlots._INCLUDE_DEFAULTS),
+        )
+
+    def test_workspace_scan_covers_every_native_type(self):
+        """The workspace-file cache scans the natively referenceable superset, so toggling
+        an Include Type only re-filters — it never has to re-scan disk."""
+        self.assertEqual(
+            set(ref_mgr.ReferenceManager.SCENE_FILE_TYPES),
+            {f"*{e}" for e in ref_mgr.ReferenceManagerSlots.NATIVE_EXTENSIONS},
+        )
+
+    @staticmethod
+    def _action_recorder():
+        """A stand-in for TableActions that records what update_table set per cell."""
+
+        class _ActionRec:
+            def __init__(self):
+                self.states = {}
+
+            def set(self, row, col, state):
+                self.states[(row, col)] = state
+
+            def get(self, row, col):
+                return self.states.get((row, col))
+
+        return _ActionRec()
+
+    def test_update_table_foreign_row_toggles_like_a_native_row(self):
+        """A Blender (.blend) row carries the SAME reference-toggle AND Open states as a native
+        row (its icon bakes + references; Open bakes + opens as a new scene). It stays
+        non-selectable so the selection->reference sync can't reference the .blend itself."""
+        t = self.controller.ui.tbl000
+        t.actions = self._action_recorder()
+
+        self.controller.update_table(["mesh"], ["C:/proj/mesh.blend"])
+
+        self.assertEqual(
+            t.actions.get(0, 1),
+            "unreferenced",
+            "reference col mirrors a native row (no import-only state)",
+        )
+        self.assertEqual(
+            t.actions.get(0, 2), "default", "open col clickable (bakes + opens) for a .blend"
+        )
+        self.assertEqual(
+            t.actions.get(0, 3), "unavailable", "display col disabled until referenced"
+        )
+        item = t.item(0, 0)
+        self.assertFalse(
+            item.flags() & MockQt.ItemIsSelectable,
+            "a foreign row must be non-selectable (kept out of the reference sync)",
+        )
+
+    def test_update_table_foreign_row_reads_referenced_through_its_bake(self):
+        """A foreign row references a cached .ma, so update_table must resolve that
+        reference back through the bake sidecar or the row reads as unreferenced."""
+        t = self.controller.ui.tbl000
+        t.actions = self._action_recorder()
+
+        ref = MagicMock()
+        ref.path = "C:/temp/maya_bake_cache_abc.ma"
+        with patch.object(
+            type(self.controller),
+            "current_references",
+            new_callable=PropertyMock,
+            return_value=[ref],
+        ), patch.object(
+            ref_mgr.ReferenceManagerController,
+            "_bake_source_key",
+            staticmethod(
+                lambda p: os.path.normcase(os.path.normpath("C:/proj/mesh.blend"))
+            ),
+        ), patch.object(
+            ref_mgr.ReferenceManagerController,
+            "get_reference_display_mode",
+            lambda self, r: "off",
+        ):
+            self.controller.update_table(["mesh  (Blender)"], ["C:/proj/mesh.blend"])
+
+        self.assertEqual(
+            t.actions.get(0, 1),
+            "referenced",
+            "the source row must reflect its bake's reference",
+        )
+
+    def test_bake_backed_reference_survives_a_selection_change(self):
+        """A foreign row is non-selectable, so its reference can never appear in the
+        selection — handle_item_selection must not treat that as 'deselected' and remove
+        it (that silently un-referenced every foreign row)."""
+        ref = MagicMock()
+        ref.path = "C:/temp/maya_bake_cache_abc.ma"
+        ref.namespace = "mesh"
+        removed = []
+        with patch.object(
+            type(self.controller),
+            "current_references",
+            new_callable=PropertyMock,
+            return_value=[ref],
+        ), patch.object(
+            ref_mgr.ReferenceManagerController,
+            "_bake_source_key",
+            staticmethod(
+                lambda p: os.path.normcase(os.path.normpath("C:/proj/mesh.blend"))
+            ),
+        ), patch.object(
+            ref_mgr.ReferenceManagerController,
+            "remove_references",
+            lambda self, ns: removed.append(ns),
+        ), patch.object(
+            ref_mgr.ReferenceManagerController, "_sync_reference_icons", lambda self: None
+        ):
+            self.controller.handle_item_selection()
+
+        self.assertEqual(removed, [], "a bake-backed reference must not be auto-removed")
+
+    def test_update_table_native_row_editable_after_reusing_foreign_item(self):
+        """update_table reuses items across refreshes: a row that held a non-editable
+        foreign (.blend) file, reused for a native scene once the toggle is turned off,
+        must be renameable again (not stuck non-editable from its foreign state)."""
+        t = self.controller.ui.tbl000
+
+        self.controller.update_table(["mesh  (Blender)"], ["C:/proj/mesh.blend"])
+        self.assertFalse(
+            t.item(0, 0).flags() & MockQt.ItemIsEditable,
+            "foreign row starts non-editable",
+        )
+
+        # Same row index now holds a native .ma — the QTableWidgetItem is reused.
+        self.controller.update_table(["shot.ma"], ["C:/proj/shot.ma"])
+        self.assertTrue(
+            t.item(0, 0).flags() & MockQt.ItemIsEditable,
+            "a reused item must regain editability for a native scene",
         )
 
 
@@ -970,6 +1141,285 @@ class TestUpdateCurrentDirNormalization(unittest.TestCase):
         """
         self._run("O:/Projects/shot_020", "O:/Projects/shot_010")
         self.controller._update_workspace_combo.assert_called_once()
+
+
+class TestOpenSceneClearsModifiedFlag(unittest.TestCase):
+    """open_scene must not leave Maya's load-time 'modified' flag set.
+
+    Regression: opening a reference-bearing scene via the Open icon leaves
+    ``cmds.file(q=True, modified=True)`` True (reference edits are applied during
+    load), so an immediate close/reference toggle falsely prompted "unsaved
+    changes — close anyway?" even though the user made no edits.
+    """
+
+    def _make_controller(self):
+        slot = MockSlot()
+        controller = ref_mgr.ReferenceManagerController.__new__(
+            ref_mgr.ReferenceManagerController
+        )
+        controller.slot = slot
+        controller.sb = slot.sb
+        controller.ui = slot.ui
+        controller.logger = MockLogger()
+        return controller
+
+    def test_open_scene_resets_modified_flag(self):
+        controller = self._make_controller()
+        with patch.object(ref_mgr.os.path, "exists", return_value=True), patch.object(
+            ref_mgr.cmds, "file", create=True
+        ) as mock_file:
+            result = controller.open_scene("/proj/scenes/shot.ma", set_workspace=False)
+
+        self.assertTrue(result)
+        # The open call, then an explicit clear of the load-time dirty flag.
+        mock_file.assert_any_call("/proj/scenes/shot.ma", open=True, force=True)
+        mock_file.assert_any_call(modified=False)
+
+
+class _FakeRef:
+    """Minimal stand-in for a scene reference (``.path`` / ``.namespace``)."""
+
+    def __init__(self, path, namespace):
+        self.path = path
+        self.namespace = namespace
+
+
+try:
+    from qtpy import QtWidgets as _RealQtWidgets, QtCore as _RealQtCore
+
+    _HAVE_QT = True
+except Exception:  # pragma: no cover - Qt not installed
+    _HAVE_QT = False
+
+
+@unittest.skipUnless(_HAVE_QT, "needs a real Qt binding")
+class TestToggleReferenceOnCurrentSceneIsOneClick(unittest.TestCase):
+    """Referencing the currently-open scene must take ONE click, not two.
+
+    Regression (real Qt, real ``_toggle_reference_at_row`` + real
+    ``handle_item_selection``; only the Maya scene ops are stubbed):
+    ``_toggle_reference_at_row`` closed the current scene then added the
+    reference, but the *unblocked* ``item.setSelected(True)`` fired
+    ``itemSelectionChanged`` -> ``handle_item_selection`` (the selection->reference
+    sync). The just-closed row's name item is still flagged non-selectable, and
+    ``setSelected`` on a non-selectable item fires the signal yet leaves the item
+    UN-selected — so the handler saw the freshly-added reference as a stale
+    selection diff and removed it. Net effect: the first click only closed the
+    scene; a second click was needed to reference it. Blocking the table's signals
+    around the programmatic ``setSelected`` fixes it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        # Run headless even under the mayapy runner / CI (no-op if a QApplication
+        # already exists, e.g. a GUI Maya session or an offscreen already set).
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        cls.app = _RealQtWidgets.QApplication.instance() or _RealQtWidgets.QApplication(
+            []
+        )
+
+    def _build(self, file_path, refs):
+        from uitk.widgets.tableWidget import TableWidget
+
+        class _StubController(ref_mgr.ReferenceManagerController):
+            # Real: handle_item_selection, _sync_reference_icons, _bake_source_key,
+            # _is_foreign. Stubbed: the Maya scene ops (mutate an in-memory list).
+            def __init__(self, ui, sb, ref_list):
+                self.ui = ui
+                self.sb = sb
+                self.logger = MockLogger()
+                self._refs = ref_list
+
+            @property
+            def current_references(self):
+                return list(self._refs)
+
+            def add_reference(self, namespace, fp):
+                self._refs.append(_FakeRef(fp, namespace))
+                return True
+
+            def remove_references(self, namespaces=None):
+                if namespaces is None:
+                    self._refs.clear()
+                    return
+                ns = (
+                    namespaces
+                    if isinstance(namespaces, (list, tuple, set))
+                    else [namespaces]
+                )
+                self._refs[:] = [r for r in self._refs if r.namespace not in ns]
+
+            def new_scene(self):
+                return True
+
+            def refresh_file_list(self, invalidate=False):
+                pass
+
+            def get_reference_display_mode(self, ref):
+                return "off"
+
+        sb = type(
+            "SB",
+            (),
+            {
+                "QtWidgets": _RealQtWidgets,
+                "QtCore": _RealQtCore,
+                "message_box": lambda self, *a, **k: None,
+            },
+        )()
+        table = TableWidget()
+        table.setColumnCount(5)
+        table.setRowCount(1)
+        table.actions.add(
+            1,
+            states={
+                "referenced": {"icon": "link"},
+                "unreferenced": {"icon": "link"},
+            },
+        )
+        table.actions.add(
+            3,
+            states={
+                "off": {"icon": "grid"},
+                "unavailable": {"icon": "grid"},
+                "reference": {"icon": "lock"},
+                "template": {"icon": "grid"},
+            },
+        )
+        ui = type("UI", (), {})()
+        ui.tbl000 = table
+
+        controller = _StubController(ui, sb, refs)
+
+        slot = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slot.ui = ui
+        slot.sb = sb
+        slot.controller = controller
+        slot.logger = MockLogger()
+
+        # The clicked row is the OPEN scene: enabled but non-selectable (current-scene styling).
+        item = _RealQtWidgets.QTableWidgetItem("asset_a")
+        item.setData(_RealQtCore.Qt.UserRole, file_path)
+        item.setFlags(
+            (item.flags() | _RealQtCore.Qt.ItemIsEnabled)
+            & ~_RealQtCore.Qt.ItemIsSelectable
+        )
+        table.setItem(0, 0, item)
+
+        # The selection->reference sync that clobbered the reference.
+        table.itemSelectionChanged.connect(controller.handle_item_selection)
+        return slot, controller, table
+
+    def test_referencing_open_scene_sticks_after_one_click(self):
+        file_path = os.path.normpath("/proj/scenes/asset_a.ma")
+        refs = []
+        slot, controller, table = self._build(file_path, refs)
+
+        def fake_file(*args, **kwargs):
+            if kwargs.get("sceneName"):
+                return file_path  # the clicked file IS the current scene
+            if kwargs.get("modified"):
+                return False  # no unsaved changes -> no discard prompt
+            return ""
+
+        try:
+            with patch.object(ref_mgr.cmds, "file", create=True, side_effect=fake_file):
+                slot._toggle_reference_at_row(0, 1)
+
+            # One click: the scene was closed AND the reference persists.
+            self.assertEqual(
+                [r.path for r in controller._refs],
+                [file_path],
+                "reference was clobbered by handle_item_selection -> needs a 2nd click",
+            )
+            self.assertEqual(table.actions.get(0, 1), "referenced")
+        finally:
+            table.deleteLater()
+
+
+class TestFolderStructurePreview(unittest.TestCase):
+    """The Folder Structure field's live tooltip (``_folder_structure_preview``).
+
+    Regression guard: the preview + its ``_wire_structure_tooltip`` binder live on
+    ``ReferenceManagerController`` (which owns the UI-state reads via ``self.slot``),
+    NOT on ``ReferenceManagerSlots`` — so ``header_init`` must route through
+    ``self.controller``. A ``self._wire_structure_tooltip`` call from the slots would
+    ``AttributeError`` on every panel open. These tests also cover the HTML-escaping
+    of the ``<scene name>`` sentinel (else Qt's rich-text parser eats it as a tag).
+    """
+
+    def _make_controller(self, pattern="{scenes}/{name}", suffix="_v01", case="None"):
+        slot = MockSlot()
+        controller = ref_mgr.ReferenceManagerController.__new__(
+            ref_mgr.ReferenceManagerController
+        )
+        controller.slot = slot
+        controller.sb = slot.sb
+        controller.logger = MockLogger()
+
+        menu = MagicMock()
+        menu.txt_subfolder_structure = MockLineEdit(pattern)
+        menu.txt_suffix = MockLineEdit(suffix)
+        menu.cmb_case_style = MagicMock()
+        menu.cmb_case_style.currentText.return_value = case
+        slot.ui.header = MagicMock()
+        slot.ui.header.menu = menu
+        return controller
+
+    def test_wiring_and_preview_live_on_controller_not_slots(self):
+        # header_init (on Slots) reaches these via self.controller; guard that split.
+        self.assertTrue(hasattr(ref_mgr.ReferenceManagerController, "_folder_structure_preview"))
+        self.assertTrue(hasattr(ref_mgr.ReferenceManagerController, "_wire_structure_tooltip"))
+        self.assertFalse(hasattr(ref_mgr.ReferenceManagerSlots, "_wire_structure_tooltip"))
+
+    def test_preview_resolves_tokens_against_live_context(self):
+        controller = self._make_controller(pattern="{scenes}/{name}")
+        with patch.object(
+            ref_mgr.ReferenceManagerController,
+            "current_working_dir",
+            new_callable=PropertyMock,
+            return_value="C:/proj/MyGame",
+        ), patch.object(
+            ref_mgr.cmds, "workspace", create=True, return_value="scenes"
+        ), patch.object(
+            ref_mgr.cmds, "file", create=True, return_value=""
+        ):
+            html = controller._folder_structure_preview()
+
+        # Tokens present, {scenes} resolved, {workspace} basename shown.
+        self.assertIn("{scenes}", html)
+        self.assertIn("{name}", html)
+        self.assertIn("scenes", html)
+        # No open scene -> the "<scene name>" sentinel, HTML-escaped (not eaten as a tag).
+        self.assertIn("&lt;scene name&gt;", html)
+        self.assertNotIn("<scene name>", html)
+        # The resolved absolute save dir is shown.
+        self.assertIn("MyGame", html)
+        # Instruction is NOT lost: the field's purpose + every key's meaning render,
+        # and all supported keys appear even though the pattern uses only two.
+        self.assertIn("Save To Workspace", html)  # purpose (body)
+        self.assertIn("workspace scenes folder", html)  # {scenes} meaning
+        self.assertIn("excludes the suffix", html)  # {name} meaning
+        self.assertIn("{workspace}", html)  # available key, unused in pattern
+        self.assertIn("{suffix}", html)  # available key, unused in pattern
+
+    def test_preview_warns_on_scene_typo(self):
+        controller = self._make_controller(pattern="{scene}/x")
+        with patch.object(
+            ref_mgr.ReferenceManagerController,
+            "current_working_dir",
+            new_callable=PropertyMock,
+            return_value="C:/proj/MyGame",
+        ), patch.object(
+            ref_mgr.cmds, "workspace", create=True, return_value="scenes"
+        ), patch.object(
+            ref_mgr.cmds, "file", create=True, return_value=""
+        ):
+            html = controller._folder_structure_preview()
+
+        # {scene} is corrected locally for resolution AND surfaced as a typo note.
+        self.assertIn("did you mean", html)
+        self.assertIn("{scenes}", html)
 
 
 if __name__ == "__main__":

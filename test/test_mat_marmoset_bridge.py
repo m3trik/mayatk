@@ -17,6 +17,7 @@ Tests run inside a live Maya session via ``run_tests.py`` and catch:
 - The UI window shrinks/grows when the selected template's parameter
   references change.
 """
+
 import ast
 import json
 import os
@@ -28,11 +29,10 @@ from pathlib import Path
 import maya.cmds as cmds
 
 from mayatk.mat_utils.marmoset_bridge._marmoset_bridge import (
+    MarmosetEngine,
     MarmosetBridge,
     SEND_TO,
     ROUNDTRIP,
-    _TEMPLATE_DIR,
-    list_template_modes,
 )
 from mayatk.mat_utils.marmoset_bridge import parameters as _params
 
@@ -55,7 +55,7 @@ class TestMarmosetBridgeRender(MayaTkTestCase):
     def test_every_template_mode_renders_and_parses(self):
         """Every declared (template, mode) pair must render to valid Python."""
         bridge = MarmosetBridge()
-        pairs = list_template_modes()
+        pairs = MarmosetEngine.list_template_modes()
         self.assertTrue(pairs, "No bundled templates found.")
 
         for stem, mode in pairs:
@@ -223,9 +223,7 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
         Path(tex_path).write_bytes(b"")  # empty stub is fine for path serialisation
         file_node = cmds.shadingNode("file", asTexture=True, name="file_M_Test_BC")
         cmds.setAttr(f"{file_node}.fileTextureName", tex_path, type="string")
-        cmds.connectAttr(
-            f"{file_node}.outColor", f"{shader}.baseColor", force=True
-        )
+        cmds.connectAttr(f"{file_node}.outColor", f"{shader}.baseColor", force=True)
 
         bridge = MarmosetBridge(toolbag_path="not-used.exe")
         bridge.send(
@@ -242,7 +240,8 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
         self.assertIn("materials", manifest)
         mat_entry = manifest["materials"].get(shader)
         self.assertIsNotNone(
-            mat_entry, f"Expected '{shader}' in manifest, got {list(manifest['materials'])}"
+            mat_entry,
+            f"Expected '{shader}' in manifest, got {list(manifest['materials'])}",
         )
         # MatManifest preserves Maya's native path separator (\\ on Windows);
         # normalize both sides before comparing so the test is OS-portable.
@@ -280,13 +279,13 @@ class TestMarmosetBridgeUiResize(MayaTkTestCase):
         # the test applies the same "_"-prefixed filter the combo does — else the
         # templates/ package's __init__.py is picked up as a bogus "__init__"
         # template and has no combo entry.
-        templates = sorted(p.stem for p in bridge_mod.list_templates())
+        templates = sorted(p.stem for p in bridge_mod.MarmosetEngine.list_templates())
         if len(templates) < 2:
             self.skipTest("Need at least two bundled templates to compare heights.")
 
         def row_count(stem):
             path = bridge_mod._TEMPLATE_DIR / f"{stem}.py"
-            return len(_p.referenced_keys(path.read_text(encoding="utf-8")))
+            return len(_p.Parameters.referenced_keys(path.read_text(encoding="utf-8")))
 
         sorted_by_rows = sorted(templates, key=row_count)
         few, many = sorted_by_rows[0], sorted_by_rows[-1]

@@ -333,10 +333,38 @@ class TestCoreUtils(MayaTkTestCase):
 
         mapping = CoreUtils.build_mesh_similarity_mapping(source=self.cyl, target=cyl2)
 
-        # Mapping is keyed by short name; production returns string values.
+        # Mapping is keyed by leaf name (namespace preserved, DAG path
+        # stripped); production returns string values. No namespace here,
+        # so leaf name and short name coincide -- see
+        # test_build_mesh_similarity_mapping_preserves_namespace for the
+        # namespace-preserving case this fixture can't exercise.
         cyl_key = str(self.cyl).split("|")[-1]
         self.assertIn(cyl_key, mapping)
         self.assertEqual(str(mapping[cyl_key]), str(cyl2).split("|")[-1])
+
+    def test_build_mesh_similarity_mapping_preserves_namespace(self):
+        """Regression: mapping values must stay resolvable via cmds -- a
+        namespaced target (e.g. RizomUV's re-imported ``ns:mesh``) used to
+        come back with its namespace stripped (short_name), so consumers
+        like UvUtils.transfer_uvs fed cmds.transferAttributes an
+        unresolvable name and raised 'No object matches name'."""
+        cmds.namespace(add="ns")
+        cyl2 = cmds.duplicate(self.cyl, name="ns:cyl")[0]
+        cmds.move(10, 0, 0, cyl2)
+
+        mapping = CoreUtils.build_mesh_similarity_mapping(source=self.cyl, target=cyl2)
+
+        cyl_key = str(self.cyl).split("|")[-1]
+        self.assertIn(cyl_key, mapping)
+        target_name = mapping[cyl_key]
+        self.assertTrue(
+            target_name.startswith("ns:"),
+            f"namespace stripped from mapped value: {target_name!r}",
+        )
+        self.assertTrue(
+            cmds.objExists(target_name),
+            f"mapped value not resolvable by cmds: {target_name!r}",
+        )
 
     def test_confirm_existence(self):
         """Test confirming object existence."""

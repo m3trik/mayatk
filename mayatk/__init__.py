@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.12.99"
+__version__ = "0.13.2"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -96,6 +96,13 @@ DEFAULT_INCLUDE = {
     "edit_utils.duplicate_linear": "DuplicateLinear",
     "edit_utils.duplicate_radial": "DuplicateRadial",
     "edit_utils.dynamic_pipe": "DynamicPipe",
+    "edit_utils.rack_builder": [
+        "RackBuilder",
+        "RackSpec",
+        "BaySpec",
+        "OccupantSpec",
+        "EIA310",
+    ],
     "edit_utils.mirror": "Mirror",
     "edit_utils.mesh_graph": "MeshGraph",
     # Environment utilities
@@ -125,6 +132,7 @@ DEFAULT_INCLUDE = {
     "env_utils.blender_bridge._scene_import": [
         "BlenderSceneImport",
         "import_blender_scene",
+        "bake_blender_scene",
     ],
     # Material utils
     "mat_utils.game_shader": "GameShader",
@@ -148,7 +156,7 @@ DEFAULT_INCLUDE = {
     "light_utils.lightmap_baker.lightmap_baker": "LightmapBaker",
     # UI utils
     "ui_utils.channel_box": "ChannelBox",
-    "ui_utils.hotkey_collisions": ["maya_collision_checker", "parse_qt_sequence"],
+    "ui_utils.hotkey_collisions": "HotkeyCollisions",
     "ui_utils.maya_native_menus": "MayaNativeMenus",
     "ui_utils.maya_ui_handler": "MayaUiHandler",
     "ui_utils.node_icons": "NodeIcons",

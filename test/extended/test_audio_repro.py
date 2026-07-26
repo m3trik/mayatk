@@ -1,4 +1,5 @@
 """Reproduce user's Build-audio-misalignment bug using their actual scene."""
+
 import os
 import sys
 import unittest
@@ -38,7 +39,6 @@ def _log(msg):
 
 
 class TestAudioReproFromScene(MayaTkTestCase):
-
     @classmethod
     def setUpClass(cls):
         if os.path.exists(LOG):
@@ -46,19 +46,12 @@ class TestAudioReproFromScene(MayaTkTestCase):
 
     @unittest.skipUnless(os.path.exists(SCENE), f"Scene file missing: {SCENE}")
     def test_repro(self):
-        from mayatk.anim_utils.shots._shots import (
-            ShotStore,
-            detect_shot_regions,
-        )
+        from mayatk.anim_utils.shots._shots import Detection, ShotStore
         from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
             ShotManifest,
         )
-        from mayatk.anim_utils.shots.shot_manifest.mapping import (
-            resolve as mapping_resolve,
-        )
-        from mayatk.anim_utils.shots.shot_manifest.range_resolver import (
-            resolve_ranges,
-        )
+        from mayatk.anim_utils.shots.shot_manifest.mapping import Mapping
+        from mayatk.anim_utils.shots.shot_manifest.range_resolver import RangeResolver
         from mayatk.audio_utils._audio_utils import AudioUtils as au
 
         cmds.file(SCENE, open=True, force=True)
@@ -86,29 +79,38 @@ class TestAudioReproFromScene(MayaTkTestCase):
             keys = au.read_keys(tid) or []
             _log(f"  track {tn}: keys={keys[:4]} path={au.get_path(tid)}")
 
-        steps = mapping_resolve(CSV, name="speedrun")
+        steps = Mapping.resolve(CSV, name="speedrun")
         n_aud = sum(1 for st in steps for o in st.objects if o.kind == "audio")
-        _log(f"parsed {len(steps)} steps with mapping=speedrun "
-             f"(audio objects: {n_aud})")
+        _log(
+            f"parsed {len(steps)} steps with mapping=speedrun (audio objects: {n_aud})"
+        )
 
         builder = ShotManifest(store)
 
         det_threshold = store.detection_threshold if store else 5.0
-        regions = detect_shot_regions(gap_threshold=det_threshold)
+        regions = Detection.detect_shot_regions(gap_threshold=det_threshold)
         gap_starts = [r["start"] for r in regions] if regions else []
-        gap_end_map = {
-            r["start"]: r["end"] for r in regions if r.get("end") is not None
-        } if regions else {}
-        _log(f"detected {len(gap_starts)} animation regions in scene: "
-             f"{gap_starts[:8]}{'...' if len(gap_starts) > 8 else ''}")
+        gap_end_map = (
+            {r["start"]: r["end"] for r in regions if r.get("end") is not None}
+            if regions
+            else {}
+        )
+        _log(
+            f"detected {len(gap_starts)} animation regions in scene: "
+            f"{gap_starts[:8]}{'...' if len(gap_starts) > 8 else ''}"
+        )
 
         default_dur = 200.0 if not gap_starts else 0
 
         range_map = {s.name: (s.start, s.end) for s in store.sorted_shots()}
-        resolved = resolve_ranges(
-            steps=steps, user_ranges={}, gap_starts=gap_starts,
-            gap_end_map=gap_end_map, gap=(store.gap if store else 0.0),
-            use_selected_keys=False, last_resolved=[],
+        resolved = RangeResolver.resolve_ranges(
+            steps=steps,
+            user_ranges={},
+            gap_starts=gap_starts,
+            gap_end_map=gap_end_map,
+            gap=(store.gap if store else 0.0),
+            use_selected_keys=False,
+            last_resolved=[],
             default_duration=default_dur,
         )
         for sid, s, e, _ in resolved:
@@ -117,13 +119,17 @@ class TestAudioReproFromScene(MayaTkTestCase):
 
         with store.batch_update():
             actions, beh, _ = builder.sync(
-                steps, ranges=range_map, remove_missing=True,
+                steps,
+                ranges=range_map,
+                remove_missing=True,
                 zero_duration_fallback=True,
             )
 
-        _log(f"\nactions: created={sum(1 for v in actions.values() if v=='created')} "
-             f"patched={sum(1 for v in actions.values() if v=='patched')} "
-             f"skipped={sum(1 for v in actions.values() if v=='skipped')}")
+        _log(
+            f"\nactions: created={sum(1 for v in actions.values() if v == 'created')} "
+            f"patched={sum(1 for v in actions.values() if v == 'patched')} "
+            f"skipped={sum(1 for v in actions.values() if v == 'skipped')}"
+        )
         _log(f"behaviors applied: {len(beh.get('applied', []))}")
 
         _log("\n--- AFTER build ---")
@@ -149,8 +155,10 @@ class TestAudioReproFromScene(MayaTkTestCase):
                     _log(f"  {s.name}/{name}: NO ON-KEY")
                     mis += 1
                 elif abs(on[0] - s.start) > 0.5:
-                    _log(f"  {s.name}/{name}: on={on[0]} shot.start={s.start} "
-                         f"D={on[0]-s.start:+.1f}")
+                    _log(
+                        f"  {s.name}/{name}: on={on[0]} shot.start={s.start} "
+                        f"D={on[0] - s.start:+.1f}"
+                    )
                     mis += 1
         _log(f"\nTOTAL MISALIGNED: {mis}")
 

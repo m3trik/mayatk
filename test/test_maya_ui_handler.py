@@ -16,6 +16,7 @@ still delegating real ``.ui`` stems to the inherited base hook.
 Pure membership logic — no Maya runtime needed (``maya.cmds`` is mocked by the
 package ``conftest``); ``__init__`` is bypassed so no slot/UI discovery runs.
 """
+
 import types
 import unittest
 
@@ -73,16 +74,17 @@ class TestMayaUiHandlerLogLinkRegistration(unittest.TestCase):
     """
 
     def test_dispatch_log_link_registers_with_uitk(self):
-        from uitk.bridge.slots import _LOG_LINK_HANDLERS, register_log_link_handler
+        from uitk.bridge.slots import _BridgeSlotsInternal, BridgeSlotsBase
         from mayatk.ui_utils._ui_utils import UiUtils
 
-        saved = list(_LOG_LINK_HANDLERS)
+        registry = _BridgeSlotsInternal._LOG_LINK_HANDLERS
+        saved = list(registry)
         try:
-            _LOG_LINK_HANDLERS.clear()
-            register_log_link_handler(UiUtils.dispatch_log_link)
-            self.assertIn(UiUtils.dispatch_log_link, _LOG_LINK_HANDLERS)
+            registry.clear()
+            BridgeSlotsBase.register_log_link_handler(UiUtils.dispatch_log_link)
+            self.assertIn(UiUtils.dispatch_log_link, registry)
         finally:
-            _LOG_LINK_HANDLERS[:] = saved
+            registry[:] = saved
 
 
 if __name__ == "__main__":

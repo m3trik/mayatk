@@ -9,7 +9,7 @@ with an ``Assets/`` directory, and ``LAUNCH_MODE`` defaults to no-launch.
 
 Run inside a live Maya session via ``run_tests.py`` (``run_tests.py unity_bridge``).
 """
-import os
+
 import shutil
 import tempfile
 import unittest
@@ -18,7 +18,7 @@ from pathlib import Path
 import maya.cmds as cmds
 
 from pythontk.core_utils.app_handoff import HandoffRequest
-from mayatk.env_utils.unity_bridge._unity_bridge import UnityBridge, list_delivery_modes
+from mayatk.env_utils.unity_bridge._unity_bridge import UnityBridge
 
 from base_test import MayaTkTestCase
 
@@ -31,7 +31,7 @@ class TestUnityBridgeUnit(unittest.TestCase):
     """Pure (no Maya geometry) -- composition + delivery modes."""
 
     def test_delivery_modes(self):
-        self.assertEqual(list_delivery_modes(), [("copy_to_assets", "")])
+        self.assertEqual(UnityBridge.list_delivery_modes(), [("copy_to_assets", "")])
 
     def test_params_defaults(self):
         d = UnityBridge().params_defaults()
@@ -47,7 +47,9 @@ class TestUnityBridgeUnit(unittest.TestCase):
         Unity Studio is a separate paid, browser-based product (Unity Cloud Asset
         Manager), not this desktop FBX hand-off, so it was removed.
         """
-        from mayatk.env_utils.unity_bridge.unity_bridge_slots import UnityBridgeSlots as S
+        from mayatk.env_utils.unity_bridge.unity_bridge_slots import (
+            UnityBridgeSlots as S,
+        )
 
         # One mode, friendly label over the internal stem (matches the deliverer's stem).
         self.assertEqual(S.MODE_COPY, "copy_to_assets")
@@ -88,7 +90,9 @@ class TestUnityBridgeSend(MayaTkTestCase):
     def test_send_copies_named_fbx_into_assets_subdir(self):
         cube = cmds.polyCube(name="UnityHero")[0]
         result = self.bridge.send(
-            [cube], template="copy_to_assets", mode="send_to",
+            [cube],
+            template="copy_to_assets",
+            mode="send_to",
             params={"ASSETS_SUBDIR": "Models", "ASSET_NAME": ""},
         )
         self.assertIsNotNone(result, "send returned None (delivery failed)")
@@ -102,7 +106,9 @@ class TestUnityBridgeSend(MayaTkTestCase):
     def test_send_default_subdir_and_explicit_name(self):
         cube = cmds.polyCube(name="UnityCube")[0]
         result = self.bridge.send(
-            [cube], template="copy_to_assets", mode="send_to",
+            [cube],
+            template="copy_to_assets",
+            mode="send_to",
             params={"ASSET_NAME": "Custom/Name"},
         )
         dest = Path(result["asset"])
@@ -150,7 +156,7 @@ class TestUnityScopeResolution(MayaTkTestCase):
         self.assertFalse(any("Sphere" in str(o) for o in resolved))
 
     def test_scope_visible_excludes_hidden(self):
-        visible = cmds.polyCube(name="VisibleCube")[0]
+        cmds.polyCube(name="VisibleCube")[0]
         hidden = cmds.polyCube(name="HiddenCube")[0]
         cmds.setAttr(f"{hidden}.visibility", 0)
         cmds.select(clear=True)

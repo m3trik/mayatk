@@ -26,6 +26,7 @@ Design
   there is something to mix.  Callers can disable composite via the
   ``composite=False`` flag for unit-tests or headless export flows.
 """
+
 import os
 import json
 from typing import Dict, List, Optional
@@ -351,9 +352,7 @@ class AudioClips(ptk.LoggingMixin):
         ]
 
     @classmethod
-    def _scope_events(
-        cls, events: list, takes: list, playback_min: float
-    ) -> list:
+    def _scope_events(cls, events: list, takes: list, playback_min: float) -> list:
         """Assign baked ``(frame, name)`` events to their shot takes.
 
         With *takes*: an event lands in every take whose ``[start, end]``
@@ -597,7 +596,7 @@ class AudioClips(ptk.LoggingMixin):
                 if int(round(val)) >= 1:
                     events.append((frame, tid))
             # Resolve to a playable path once per track.
-            playable = _nodes.resolve_playable_path(path)
+            playable = _nodes.Nodes.resolve_playable_path(path)
             if playable:
                 audio_map[tid] = playable
 
@@ -612,5 +611,5 @@ class AudioClips(ptk.LoggingMixin):
         while os.path.basename(output_dir) in {"_audio_cache", _CACHE_DIR_NAME}:
             output_dir = os.path.dirname(output_dir)
         if not output_dir:
-            output_dir = _nodes.workspace_sound_dir() or ""
+            output_dir = _nodes.Nodes.workspace_sound_dir() or ""
         return events, audio_map, output_dir

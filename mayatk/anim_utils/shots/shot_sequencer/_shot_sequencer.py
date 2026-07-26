@@ -4,6 +4,7 @@
 Shots are contiguous keyframe ranges ("blocks") along the timeline.
 Changing one shot's duration or position ripples downstream shots.
 """
+
 import logging
 from typing import List, Dict, Optional, Any
 
@@ -15,8 +16,8 @@ except ImportError:
     logging.getLogger(__name__).debug("maya.cmds unavailable — headless mode")
 
 
-from mayatk.core_utils._core_utils import leaf_name
-from mayatk.anim_utils.shots._shots import ShotBlock, ShotStore, detect_shot_regions
+from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.anim_utils.shots._shots import Detection, ShotBlock, ShotStore
 
 
 # ---------------------------------------------------------------------------
@@ -101,9 +102,9 @@ class ShotSequencer:
         don't appear as scene content.
         """
         import maya.cmds as cmds
-        from mayatk.anim_utils.shots._shots import _map_standard_curves_to_transforms
+        from mayatk.anim_utils.shots._shots import Detection
 
-        transform_curves = _map_standard_curves_to_transforms()
+        transform_curves = Detection._map_standard_curves_to_transforms()
         if not transform_curves:
             return []
 
@@ -224,7 +225,9 @@ class ShotSequencer:
             if cmds.objExists(obj):
                 new_objects.append(obj)
                 continue
-            matches = cmds.ls(leaf_name(obj), long=True, type="transform") or []
+            matches = (
+                cmds.ls(CoreUtils.leaf_name(obj), long=True, type="transform") or []
+            )
             if len(matches) == 1:
                 new_objects.append(matches[0])
                 updated = True
@@ -325,12 +328,7 @@ class ShotSequencer:
             for n in nodes:
                 if n in covered:
                     continue
-                kt = (
-                    cmds.keyframe(
-                        n, q=True, time=(shot.start, shot.end)
-                    )
-                    or []
-                )
+                kt = cmds.keyframe(n, q=True, time=(shot.start, shot.end)) or []
                 if not kt:
                     continue
                 segments.append(
@@ -473,9 +471,7 @@ class ShotSequencer:
             return
         if cmds is None:
             return
-        anim_objs = {
-            seg["obj"] for seg in self.collect_object_segments(shot_id)
-        }
+        anim_objs = {seg["obj"] for seg in self.collect_object_segments(shot_id)}
         keep = self.store.pinned_objects | self.store.locked_objects
         new_objs = sorted(set(shot.objects) & (anim_objs | keep) | anim_objs)
         if new_objs != sorted(shot.objects):
@@ -663,9 +659,7 @@ class ShotSequencer:
                     if shot.start <= t <= shot.end or _owned_elsewhere(t):
                         continue
                     if t < shot.start:
-                        outer_start = (
-                            t if outer_start is None else min(outer_start, t)
-                        )
+                        outer_start = t if outer_start is None else min(outer_start, t)
                     else:
                         outer_end = t if outer_end is None else max(outer_end, t)
 
@@ -764,7 +758,7 @@ class ShotSequencer:
             ``"start"``, ``"end"``, and ``"objects"`` keys — suitable
             for passing to :meth:`define_shot`.
         """
-        return detect_shot_regions(
+        return Detection.detect_shot_regions(
             objects=objects,
             gap_threshold=gap_threshold,
             ignore=ignore,
@@ -1264,13 +1258,13 @@ class ShotSequencer:
         not-yet-moved shots.  The public ripple entry point for
         callers outside the sequencer (settings panel, clip motion).
         """
-        from mayatk.anim_utils.shots._shot_plan import (
-            plan_ripple_downstream,
-        )
-        from mayatk.anim_utils.shots._shot_apply import apply
+        from mayatk.anim_utils.shots._shot_plan import ShotPlanner
+        from mayatk.anim_utils.shots._shot_apply import ShotApply
 
-        plan = plan_ripple_downstream(self.store, shot_id, after_frame, delta)
-        apply(self.store, plan)
+        plan = ShotPlanner.plan_ripple_downstream(
+            self.store, shot_id, after_frame, delta
+        )
+        ShotApply.apply(self.store, plan)
 
     def ripple_upstream(
         self,
@@ -1283,13 +1277,13 @@ class ShotSequencer:
         Routes through the plan/executor pair — see
         :meth:`ripple_downstream` for the rationale.
         """
-        from mayatk.anim_utils.shots._shot_plan import (
-            plan_ripple_upstream,
-        )
-        from mayatk.anim_utils.shots._shot_apply import apply
+        from mayatk.anim_utils.shots._shot_plan import ShotPlanner
+        from mayatk.anim_utils.shots._shot_apply import ShotApply
 
-        plan = plan_ripple_upstream(self.store, shot_id, before_frame, delta)
-        apply(self.store, plan)
+        plan = ShotPlanner.plan_ripple_upstream(
+            self.store, shot_id, before_frame, delta
+        )
+        ShotApply.apply(self.store, plan)
 
     def _enforce_gap_holds(self):
         """Set stepped out-tangents on the last key before every inter-shot gap.
@@ -1495,7 +1489,6 @@ class ShotSequencer:
         old_start, old_end = shot.start, shot.end
         if abs(new_start - old_start) < 1e-6 and abs(new_end - old_end) < 1e-6:
             return
-
 
         # Scale keyframes within this shot
         for obj in shot.objects:
@@ -1720,8 +1713,7 @@ class ShotSequencer:
                     if abs(old_start - new_start) > 1e-6:
                         for obj in s.objects:
                             self.move_object_keys(obj, old_start, old_end, park_offset)
-                        self._shift_audio(old_start, old_end, park_offset - old_start
-                        )
+                        self._shift_audio(old_start, old_end, park_offset - old_start)
                         parked[s.shot_id] = (park_offset, park_offset + s.duration)
                         park_offset += s.duration + 1000
 
@@ -1759,11 +1751,11 @@ class ShotSequencer:
             gap: Frames of gap between consecutive shots.
             start_frame: Timeline frame for the first shot.
         """
-        from mayatk.anim_utils.shots._shot_plan import plan_respace
-        from mayatk.anim_utils.shots._shot_apply import apply
+        from mayatk.anim_utils.shots._shot_plan import ShotPlanner
+        from mayatk.anim_utils.shots._shot_apply import ShotApply
 
-        plan = plan_respace(self.store, gap, start_frame)
-        apply(self.store, plan)
+        plan = ShotPlanner.plan_respace(self.store, gap, start_frame)
+        ShotApply.apply(self.store, plan)
         self._enforce_gap_holds()
 
     def apply_gap(
@@ -1797,9 +1789,7 @@ class ShotSequencer:
 
         if shot_id is None:
             return False
-        idx = next(
-            (i for i, s in enumerate(sorted_s) if s.shot_id == shot_id), None
-        )
+        idx = next((i for i, s in enumerate(sorted_s) if s.shot_id == shot_id), None)
         if idx is None:
             return False
 

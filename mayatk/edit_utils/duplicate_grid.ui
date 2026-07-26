@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>200</width>
-    <height>207</height>
+    <height>267</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -99,8 +99,46 @@
          <property name="verticalSpacing">
           <number>1</number>
          </property>
-         <item row="7" column="0" colspan="2">
-          <widget class="QSpinBox" name="s002">
+         <item row="1" column="0" colspan="2">
+          <layout class="QHBoxLayout" name="horizontalLayout">
+           <property name="spacing">
+            <number>0</number>
+           </property>
+           <item>
+            <widget class="QCheckBox" name="chk000">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>19</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>19</height>
+              </size>
+             </property>
+             <property name="toolTip">
+              <string>Start the duplicate preview using any selected mesh objects.</string>
+             </property>
+             <property name="text">
+              <string>Preview</string>
+             </property>
+             <property name="iconSize">
+              <size>
+               <width>18</width>
+               <height>18</height>
+              </size>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+         <item row="2" column="0" colspan="2">
+          <widget class="ComboBox" name="cmb000">
            <property name="minimumSize">
             <size>
              <width>0</width>
@@ -114,23 +152,264 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>Duplicate: transform Z amount</string>
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;How the grid copies are produced — all three name the result after the source object:&lt;/p&gt;&lt;p&gt;&lt;span style=&quot; font-weight:600;&quot;&gt;Combine&lt;/span&gt; — merge every copy into a single mesh.&lt;/p&gt;&lt;p&gt;&lt;span style=&quot; font-weight:600;&quot;&gt;Instance&lt;/span&gt; — instanced copies (shared shape), grouped.&lt;/p&gt;&lt;p&gt;&lt;span style=&quot; font-weight:600;&quot;&gt;Unique&lt;/span&gt; — independent copies, grouped.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="0" colspan="2">
+          <widget class="SpinBox" name="s000">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Number of copies along X (minimum 1).</string>
            </property>
            <property name="buttonSymbols">
             <enum>QAbstractSpinBox::NoButtons</enum>
            </property>
            <property name="prefix">
-            <string>Dimentions Z:	</string>
+            <string>Dimensions X:	</string>
            </property>
            <property name="minimum">
-            <number>-100</number>
+            <number>1</number>
            </property>
            <property name="maximum">
             <number>100</number>
            </property>
+           <property name="value">
+            <number>1</number>
+           </property>
+          </widget>
+         </item>
+         <item row="4" column="0" colspan="2">
+          <widget class="DoubleSpinBox" name="s003">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Extra spacing between copies along X (added to the bounding-box size).&lt;/p&gt;&lt;p&gt;Use the lock button to move the other locked spacing fields by the same amount.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Spacing X:	</string>
+           </property>
+           <property name="decimals">
+            <number>4</number>
+           </property>
+           <property name="minimum">
+            <double>-100000.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>1000000.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>0.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item row="5" column="0" colspan="2">
+          <widget class="SpinBox" name="s001">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Number of copies along Y (minimum 1).</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Dimensions Y:	</string>
+           </property>
+           <property name="minimum">
+            <number>1</number>
+           </property>
+           <property name="maximum">
+            <number>100</number>
+           </property>
+           <property name="value">
+            <number>1</number>
+           </property>
+          </widget>
+         </item>
+         <item row="6" column="0" colspan="2">
+          <widget class="DoubleSpinBox" name="s004">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Extra spacing between copies along Y (added to the bounding-box size).&lt;/p&gt;&lt;p&gt;Use the lock button to move the other locked spacing fields by the same amount.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Spacing Y:	</string>
+           </property>
+           <property name="decimals">
+            <number>4</number>
+           </property>
+           <property name="minimum">
+            <double>-100000.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>1000000.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>0.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item row="7" column="0" colspan="2">
+          <widget class="SpinBox" name="s002">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Number of copies along Z (minimum 1).</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Dimensions Z:	</string>
+           </property>
+           <property name="minimum">
+            <number>1</number>
+           </property>
+           <property name="maximum">
+            <number>100</number>
+           </property>
+           <property name="value">
+            <number>1</number>
+           </property>
+          </widget>
+         </item>
+         <item row="8" column="0" colspan="2">
+          <widget class="DoubleSpinBox" name="s005">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Extra spacing between copies along Z (added to the bounding-box size).&lt;/p&gt;&lt;p&gt;Use the lock button to move the other locked spacing fields by the same amount.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           </property>
+           <property name="buttonSymbols">
+            <enum>QAbstractSpinBox::NoButtons</enum>
+           </property>
+           <property name="prefix">
+            <string>Spacing Z:	</string>
+           </property>
+           <property name="decimals">
+            <number>4</number>
+           </property>
+           <property name="minimum">
+            <double>-100000.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>1000000.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>0.000000000000000</double>
+           </property>
           </widget>
          </item>
          <item row="9" column="0" colspan="2">
+          <widget class="QPushButton" name="b001">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="text">
+            <string>Reset to Defaults</string>
+           </property>
+           <property name="iconSize">
+            <size>
+             <width>18</width>
+             <height>18</height>
+            </size>
+           </property>
+           <property name="checkable">
+            <bool>false</bool>
+           </property>
+           <property name="checked">
+            <bool>false</bool>
+           </property>
+          </widget>
+         </item>
+         <item row="10" column="0" colspan="2">
           <layout class="QHBoxLayout" name="horizontalLayout_2">
            <property name="spacing">
             <number>0</number>
@@ -177,196 +456,6 @@
            </item>
           </layout>
          </item>
-         <item row="6" column="0" colspan="2">
-          <widget class="QSpinBox" name="s001">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Duplicate: transform Y amount</string>
-           </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
-           </property>
-           <property name="prefix">
-            <string>Dimentions Y:	</string>
-           </property>
-           <property name="minimum">
-            <number>-100</number>
-           </property>
-           <property name="maximum">
-            <number>100</number>
-           </property>
-          </widget>
-         </item>
-         <item row="4" column="0" colspan="2">
-          <widget class="QDoubleSpinBox" name="s003">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Controls the spacing between each object on all three axis.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-           </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
-           </property>
-           <property name="prefix">
-            <string>Spacing:	</string>
-           </property>
-           <property name="decimals">
-            <number>4</number>
-           </property>
-           <property name="minimum">
-            <double>-100000.000000000000000</double>
-           </property>
-           <property name="maximum">
-            <double>1000000.000000000000000</double>
-           </property>
-           <property name="singleStep">
-            <double>1.000000000000000</double>
-           </property>
-           <property name="value">
-            <double>0.000000000000000</double>
-           </property>
-          </widget>
-         </item>
-         <item row="5" column="0" colspan="2">
-          <widget class="QSpinBox" name="s000">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Duplicate: transform X amount</string>
-           </property>
-           <property name="buttonSymbols">
-            <enum>QAbstractSpinBox::NoButtons</enum>
-           </property>
-           <property name="prefix">
-            <string>Dimentions X:	</string>
-           </property>
-           <property name="minimum">
-            <number>-100</number>
-           </property>
-           <property name="maximum">
-            <number>100</number>
-           </property>
-          </widget>
-         </item>
-         <item row="3" column="0" colspan="2">
-          <widget class="ComboBox" name="cmb000">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;How the grid copies are produced — all three name the result after the source object:&lt;/p&gt;&lt;p&gt;&lt;span style=&quot; font-weight:600;&quot;&gt;Combine&lt;/span&gt; — merge every copy into a single mesh.&lt;/p&gt;&lt;p&gt;&lt;span style=&quot; font-weight:600;&quot;&gt;Instance&lt;/span&gt; — instanced copies (shared shape), grouped.&lt;/p&gt;&lt;p&gt;&lt;span style=&quot; font-weight:600;&quot;&gt;Unique&lt;/span&gt; — independent copies, grouped.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="0" colspan="2">
-          <layout class="QHBoxLayout" name="horizontalLayout">
-           <property name="spacing">
-            <number>0</number>
-           </property>
-           <item>
-            <widget class="QCheckBox" name="chk000">
-             <property name="minimumSize">
-              <size>
-               <width>0</width>
-               <height>19</height>
-              </size>
-             </property>
-             <property name="maximumSize">
-              <size>
-               <width>16777215</width>
-               <height>19</height>
-              </size>
-             </property>
-             <property name="toolTip">
-              <string>Start the duplicate preview using any selected mesh objects.</string>
-             </property>
-             <property name="text">
-              <string>Preview</string>
-             </property>
-             <property name="iconSize">
-              <size>
-               <width>18</width>
-               <height>18</height>
-              </size>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-          </layout>
-         </item>
-         <item row="8" column="0" colspan="2">
-          <widget class="QPushButton" name="b001">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="text">
-            <string>Reset to Defaults</string>
-           </property>
-           <property name="iconSize">
-            <size>
-             <width>18</width>
-             <height>18</height>
-            </size>
-           </property>
-           <property name="checkable">
-            <bool>false</bool>
-           </property>
-           <property name="checked">
-            <bool>false</bool>
-           </property>
-          </widget>
-         </item>
         </layout>
        </widget>
       </item>
@@ -409,6 +498,16 @@
    <class>ComboBox</class>
    <extends>QComboBox</extends>
    <header>uitk.widgets.comboBox.ComboBox.h</header>
+  </customwidget>
+  <customwidget>
+   <class>DoubleSpinBox</class>
+   <extends>QDoubleSpinBox</extends>
+   <header>widgets.doublespinbox.h</header>
+  </customwidget>
+  <customwidget>
+   <class>SpinBox</class>
+   <extends>QSpinBox</extends>
+   <header>uitk.widgets.spinBox.SpinBox.h</header>
   </customwidget>
   <customwidget>
    <class>Footer</class>

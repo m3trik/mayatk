@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import List, Optional, Union
 
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 try:
     import cv2
@@ -197,9 +197,9 @@ class ImageTracer(BluePencilMixin):
             cmds.parent(curves_grp, parent_grp)
 
         # Planar Surface
-        planar_surfaces = cmds.planarSrf(
-            curves, d=3, keepOutside=0, tolerance=0.01, polygon=0
-        ) or []
+        planar_surfaces = (
+            cmds.planarSrf(curves, d=3, keepOutside=0, tolerance=0.01, polygon=0) or []
+        )
         nurbs_surfaces = [x for x in planar_surfaces if cmds.nodeType(x) == "transform"]
 
         if group_output and nurbs_surfaces:
@@ -293,9 +293,10 @@ class ImageTracer(BluePencilMixin):
             cmds.parent(boundary_curve, parent_grp)
 
         all_curves = [boundary_curve] + list(curves)
-        planar_surfaces = cmds.planarSrf(
-            all_curves, d=3, keepOutside=0, tolerance=0.01, polygon=0
-        ) or []
+        planar_surfaces = (
+            cmds.planarSrf(all_curves, d=3, keepOutside=0, tolerance=0.01, polygon=0)
+            or []
+        )
         nurbs_surfaces = [x for x in planar_surfaces if cmds.nodeType(x) == "transform"]
 
         if group_output and nurbs_surfaces:
@@ -435,7 +436,7 @@ class ImageTracerSlots:
             clicked=lambda: mel.eval("OpenBluePencil"),
         )
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Image Tracer",
                 body="Trace contours from a raster image (or Blue Pencil "
                 "strokes) into editable NURBS curves.",

@@ -58,6 +58,7 @@ PLUGIN_CMDS = frozenset(
         "shaderfx",                          # ShaderFX plugin
         "gpuCache",                          # gpuCache plugin
         "AbcExport", "AbcImport",            # Alembic
+        "mayaUSDExport",                     # mayaUsdPlugin (USD export; env_utils/usd)
         "FBXExport", "FBXImport",            # FBX plugin
         "FBXImportMode", "FBXUICallBack",    # FBX plugin (UI/import-mode helpers)
         "FBXExportBakeComplexAnimation",     # FBX plugin (export-option setter)

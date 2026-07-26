@@ -202,6 +202,64 @@ class TestCurveToTube(MayaTkTestCase):
         # coarse total (+ a fixed end-anchor ring per open end, outside both bands)
         self.assertLessEqual(cmds.polyEvaluate(tube, vertex=True) // 8, 16)
 
+    def test_polygon_immune_to_skewed_parameterization(self):
+        """Twisted/mangled-tube regression: the dense centerline sampling must
+        be ARC-LENGTH uniform, not parameter uniform. On a curve with a skewed
+        knot vector (attach/detach, imported CAD, knot edits) parameter-uniform
+        sampling bunched ~99% of the samples into one span, starving RDP of the
+        geometry inside the huge gap -> corner-cutting path -> twisted rings
+        and flipped faces (8/48 inward in the repro)."""
+        pts = [(i * 1.5, math.sin(i * 0.8) * 3.0, 0) for i in range(12)]
+        # 12 CVs, degree 3 -> 14 knots; 99% of the parameter range covers the
+        # last span (the shape a lopsided attachCurve produces).
+        skewed = [0, 0, 0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 9, 9, 9]
+        crv = cmds.curve(d=3, p=pts, k=skewed)
+        shape = cmds.listRelatives(crv, shapes=True, fullPath=True)[0]
+
+        # Mechanism: consecutive dense samples must be evenly spaced along the
+        # curve regardless of the knot vector (was ~331x max/median skew).
+        dense = CurveToTube._sample_centerline(shape, 200)
+        steps = sorted(
+            sum((b[k] - a[k]) ** 2 for k in range(3)) ** 0.5
+            for a, b in zip(dense, dense[1:])
+        )
+        self.assertLess(steps[-1] / steps[len(steps) // 2], 3.0)
+
+        # Symptom: the tube hugs the curve (no corner-cutting past the RDP
+        # tolerance) and no side face points inward (twist). Radius must
+        # comfortably exceed the allowed RDP deviation or the radial check
+        # reads legitimate corner-cutting as a flip.
+        radius = 0.4
+        tube = CurveToTube.create(
+            crv, output_type="polygon", radius=radius, sections=8,
+            path_divisions=2, caps=False,
+        )[0]
+        cl = [om.MVector(*p) for p in dense]
+        sel = om.MSelectionList()
+        sel.add(tube)
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        fn = om.MFnMesh(dag)
+        vpts = fn.getPoints(om.MSpace.kWorld)
+        max_dev = max(
+            abs(min((om.MVector(p) - c).length() for c in cl) - radius)
+            for p in vpts
+        )
+        self.assertLess(max_dev, radius)  # was 0.76 (1.9x radius) pre-fix
+        inward = 0
+        for i in range(fn.numPolygons):
+            verts = fn.getPolygonVertices(i)
+            fc = om.MVector(0, 0, 0)
+            for vi in verts:
+                fc += om.MVector(vpts[vi])
+            fc /= len(verts)
+            radial = fc - min(cl, key=lambda c: (c - fc).length())
+            if radial.length() < 1e-9:
+                continue
+            if fn.getPolygonNormal(i, om.MSpace.kWorld) * radial <= 0:
+                inward += 1
+        self.assertEqual(inward, 0, f"{inward}/{fn.numPolygons} faces flipped")
+
     def test_polygon_uv_seams(self):
         """The polygon tube is UV-seamed for a clean unwrap: one cut along the
         length and one per cap -> a capped tube is 3 UV shells (body + 2 caps),

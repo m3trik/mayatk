@@ -1,7 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # from this package:
 from mayatk.core_utils.preview import Preview
@@ -71,7 +71,7 @@ class MirrorSlots(ptk.LoggingMixin):
         # Gesture-scoped window: pin button + auto-hide on key_show release.
         widget.config_buttons("menu", "collapse", "pin")
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Mirror",
                 body="Mirror selected geometry across an axis, optionally "
                 "merging seam vertices and discarding the original half.",
@@ -87,18 +87,24 @@ class MirrorSlots(ptk.LoggingMixin):
                     "to commit.",
                 ],
                 sections=[
-                    ("Bounding Box pivots", [
-                        "<b>Center</b> — keep one half and mirror it across the "
-                        "center to symmetrize. The <b>—</b> toggle flips which "
-                        "half is kept.",
-                        "<b>Border</b> — mirror across the max face of the axis; "
-                        "the <b>—</b> toggle flips it to the min face.",
-                    ]),
-                    ("Options", [
-                        "<b>Uninstance</b> — break instance links before mirroring.",
-                        "<b>Delete Original Half</b> — discard the source side "
-                        "after the mirror copy is created.",
-                    ]),
+                    (
+                        "Bounding Box pivots",
+                        [
+                            "<b>Center</b> — keep one half and mirror it across the "
+                            "center to symmetrize. The <b>—</b> toggle flips which "
+                            "half is kept.",
+                            "<b>Border</b> — mirror across the max face of the axis; "
+                            "the <b>—</b> toggle flips it to the min face.",
+                        ],
+                    ),
+                    (
+                        "Options",
+                        [
+                            "<b>Uninstance</b> — break instance links before mirroring.",
+                            "<b>Delete Original Half</b> — discard the source side "
+                            "after the mirror copy is created.",
+                        ],
+                    ),
                 ],
             )
         )

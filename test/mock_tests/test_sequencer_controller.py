@@ -16,11 +16,11 @@ Bugs covered:
     - Batch clip moves preserving shot context
     - Undo after stepped key move
 """
+
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock, call
-from collections import defaultdict
+from unittest.mock import MagicMock, patch, call
 
 import pytest
 
@@ -59,6 +59,7 @@ else:
             mock_undo_chunk,
             mock_om2,
         )
+
         _CONFTEST_LOADED = True
     except ImportError:
         mock_cmds = MagicMock()
@@ -66,7 +67,6 @@ else:
         mock_om2 = MagicMock()
         _CONFTEST_LOADED = False
 
-import maya.cmds as cmds
 
 # Aliases for backward-compat with existing test code
 _mock_cmds = mock_cmds
@@ -92,7 +92,7 @@ if _app is None:
 # Imports under test
 # ---------------------------------------------------------------------------
 from uitk.widgets.sequencer._sequencer import SequencerWidget
-from mayatk.anim_utils.shots._shots import ShotBlock, ShotStore
+from mayatk.anim_utils.shots._shots import ShotStore
 from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import ShotSequencer
 from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
     ShotSequencerController,
@@ -307,6 +307,7 @@ def _running_under_mayapy():
     that alone produced false negatives.
     """
     import sys as _sys
+
     cmds_mod = _sys.modules.get("maya.cmds")
     return cmds_mod is not None and not isinstance(cmds_mod, MagicMock)
 
@@ -774,7 +775,7 @@ class TestBatchClipMoves(ControllerTestCase):
 
     def test_batch_move_preserves_shot(self):
         """Moving multiple clips in a batch must sync to the correct shot."""
-        expected_sid = self._active_shot_id()
+        self._active_shot_id()
         clips = self._anim_clips()
         moves = [(c.clip_id, c.start + 5) for c in clips]
 
@@ -1351,7 +1352,7 @@ class TestMultiShotNavigation(ControllerTestCase):
     def test_edit_on_shot1_doesnt_corrupt_shot2(self):
         """Moving a clip on Shot_1 should not affect Shot_2's segments."""
         clip = self._anim_clips()[0]
-        shot1 = self.sequencer.sorted_shots()[1]
+        self.sequencer.sorted_shots()[1]
 
         self.sequencer.move_object_in_shot = MagicMock()
         self.ctrl.on_clip_moved(clip.clip_id, clip.start + 5)
@@ -2037,7 +2038,7 @@ class TestShotLabelUpdatedAfterExpansion(ControllerTestCase):
 
     def test_label_range_updated_after_move(self):
         """The shot label should show the new range after expansion."""
-        shot = self.sequencer.sorted_shots()[0]
+        self.sequencer.sorted_shots()[0]
         cmb = self.slots.ui.cmb_shot
 
         clip = None
@@ -2247,7 +2248,7 @@ class TestShiftOutKeyExclusion(ControllerTestCase):
 
     def test_normal_move_clears_exclusion(self):
         """A non-shift move of the same object should clear its exclusion."""
-        shot = self.sequencer.sorted_shots()[0]
+        self.sequencer.sorted_shots()[0]
 
         # Shift-move ARROW_L to 168 â†’ excluded
         self.widget.shift_held_at_press = True
@@ -2434,7 +2435,7 @@ class TestAutoDiscoveryEmptyShot(ControllerTestCase):
             "_find_keyed_transforms",
             return_value=["ObjX", "ObjY"],
         ):
-            segs = self.sequencer.collect_object_segments(shot.shot_id)
+            self.sequencer.collect_object_segments(shot.shot_id)
 
         # shot.objects should now be populated
         self.assertEqual(
@@ -2739,7 +2740,6 @@ class TestZoneContextMenu(ControllerTestCase):
 
     def test_ruler_zone_delegates_to_widget_default_menu(self):
         """Ruler zone should delegate to widget's built-in default context menu."""
-        from qtpy import QtCore
 
         with patch.object(
             self.widget._timeline, "_show_default_context_menu"
@@ -2751,7 +2751,6 @@ class TestZoneContextMenu(ControllerTestCase):
 
     def test_shot_lane_zone_calls_shot_menu(self):
         """shot_lane zone should call _show_shot_lane_context_menu."""
-        from qtpy import QtCore
 
         with patch.object(self.ctrl, "_show_shot_lane_context_menu") as mock_lane:
             self.ctrl.on_zone_context_menu("shot_lane", 150.0, QtCore.QPoint(100, 30))
@@ -2759,7 +2758,6 @@ class TestZoneContextMenu(ControllerTestCase):
 
     def test_tracks_zone_delegates_to_widget_default_menu(self):
         """Tracks zone should also delegate to widget's built-in default context menu."""
-        from qtpy import QtCore
 
         with patch.object(
             self.widget._timeline, "_show_default_context_menu"
@@ -2771,7 +2769,6 @@ class TestZoneContextMenu(ControllerTestCase):
 
     def test_signal_routes_through_dispatch(self):
         """Emitting zone_context_menu_requested signal routes correctly."""
-        from qtpy import QtCore
 
         with patch.object(self.ctrl, "_show_shot_lane_context_menu") as mock_lane:
             self.widget.zone_context_menu_requested.emit(
@@ -2886,12 +2883,12 @@ class TestFlatObjectExclusion(ControllerTestCase):
     def test_collect_segments_excludes_flat_objects(self):
         """collect_segments should not include objects without segments."""
         from mayatk.anim_utils.shots.shot_sequencer.segment_collector import (
-            collect_segments,
+            SegmentCollector,
         )
 
         shot = self.sequencer.sorted_shots()[0]
         visible = self.sequencer.sorted_shots()
-        segs_by_shot, all_objects = collect_segments(
+        segs_by_shot, all_objects = SegmentCollector.collect_segments(
             self.sequencer,
             shot,
             visible,
@@ -2906,12 +2903,12 @@ class TestFlatObjectExclusion(ControllerTestCase):
     def test_active_object_set_excludes_flat_objects(self):
         """active_object_set should only include objects with segments."""
         from mayatk.anim_utils.shots.shot_sequencer.segment_collector import (
-            active_object_set,
+            SegmentCollector,
         )
 
         shot = self.sequencer.sorted_shots()[0]
         segs_by_shot = {shot.shot_id: make_segments("ObjA", [(110, 180)])}
-        active = active_object_set(shot, segs_by_shot)
+        active = SegmentCollector.active_object_set(shot, segs_by_shot)
         self.assertIn("ObjA", active)
         self.assertNotIn("FlatObj", active)
         self.assertNotIn("ObjB", active)
@@ -2919,13 +2916,13 @@ class TestFlatObjectExclusion(ControllerTestCase):
     def test_pinned_objects_still_shown(self):
         """Pinned objects should appear even without segments."""
         from mayatk.anim_utils.shots.shot_sequencer.segment_collector import (
-            collect_segments,
+            SegmentCollector,
         )
 
         self.sequencer.store.set_object_pinned("FlatObj")
         shot = self.sequencer.sorted_shots()[0]
         visible = self.sequencer.sorted_shots()
-        _, all_objects = collect_segments(
+        _, all_objects = SegmentCollector.collect_segments(
             self.sequencer,
             shot,
             visible,
@@ -2940,7 +2937,7 @@ class TestFlatObjectExclusion(ControllerTestCase):
     def test_multi_shot_flat_object_excluded(self):
         """Flat objects should be excluded even across multiple visible shots."""
         from mayatk.anim_utils.shots.shot_sequencer.segment_collector import (
-            collect_segments,
+            SegmentCollector,
         )
 
         # Add a second shot with ObjA + FlatObj2
@@ -2950,7 +2947,7 @@ class TestFlatObjectExclusion(ControllerTestCase):
         self._set_segments(1, make_segments("ObjA", [(210, 280)]))
         shot = self.sequencer.sorted_shots()[0]
         visible = self.sequencer.sorted_shots()
-        _, all_objects = collect_segments(
+        _, all_objects = SegmentCollector.collect_segments(
             self.sequencer,
             shot,
             visible,
@@ -4026,7 +4023,7 @@ class TestObjectTracksIgnoreHolds(ControllerTestCase):
         """collect_segments calls collect_object_segments with ignore_holds=True
         regardless of _show_internal_holds setting."""
         from mayatk.anim_utils.shots.shot_sequencer.segment_collector import (
-            collect_segments,
+            SegmentCollector,
         )
 
         calls_log = []
@@ -4045,7 +4042,7 @@ class TestObjectTracksIgnoreHolds(ControllerTestCase):
         # With holds enabled
         self.ctrl._show_internal_holds = True
         self.ctrl._segment_cache.clear()
-        collect_segments(
+        SegmentCollector.collect_segments(
             self.sequencer,
             shot,
             visible,
@@ -4059,7 +4056,7 @@ class TestObjectTracksIgnoreHolds(ControllerTestCase):
         self.ctrl._show_internal_holds = False
         self.ctrl._segment_cache.clear()
         calls_log.clear()
-        collect_segments(
+        SegmentCollector.collect_segments(
             self.sequencer,
             shot,
             visible,

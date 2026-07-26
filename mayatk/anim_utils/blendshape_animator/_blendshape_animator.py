@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Main workflow facade for blendShape morph-animation creation, editing, and export."""
+
 from typing import List, Optional, Tuple, Union
 
 import pythontk as ptk
@@ -14,7 +15,7 @@ from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.anim_utils.blendshape_animator.applicator import Applicator, ApplyStatus
 from mayatk.anim_utils.blendshape_animator.creator import Creator
-from mayatk.anim_utils.blendshape_animator.helpers import list_history
+from mayatk.anim_utils.blendshape_animator.helpers import BlendshapeHelpers
 from mayatk.anim_utils.blendshape_animator.keyframes import Keyframes
 from mayatk.anim_utils.blendshape_animator.recovery import Recovery
 from mayatk.anim_utils.blendshape_animator.target import Target, Targets
@@ -84,7 +85,9 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         self.target_mesh = target_mesh
 
         try:
-            history = list_history(base_mesh, type_filter="blendShape")
+            history = BlendshapeHelpers.list_history(
+                base_mesh, type_filter="blendShape"
+            )
             if history:
                 self.blendshape = history[0]
                 self.logger.info(f"Found existing blendShape: {self.blendshape}")
@@ -102,7 +105,9 @@ class BlendshapeAnimator(ptk.LoggingMixin):
             cmds.setAttr(f"{self.blendshape}.weight[0]", keyable=True, lock=False)
             cmds.setAttr(f"{self.blendshape}.envelope", 1.0)
 
-            self.keyframes = Keyframes(self.base_mesh, self.target_mesh, self.blendshape)
+            self.keyframes = Keyframes(
+                self.base_mesh, self.target_mesh, self.blendshape
+            )
             self.tween_creator = Creator(self.keyframes)
             self.tween_applicator = Applicator(self.keyframes)
 
@@ -215,9 +220,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         return created_tweens
 
     @CoreUtils.undoable
-    def edit_apply_tweens(
-        self, tweens: Optional[List[Target]] = None
-    ) -> List[Target]:
+    def edit_apply_tweens(self, tweens: Optional[List[Target]] = None) -> List[Target]:
         """Apply tween mesh edits back to blendShape."""
         if not self._validate_setup():
             return []
@@ -340,9 +343,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
                 cls.logger.info(
                     "Now edit these meshes in Maya to customize your animation curve"
                 )
-                cls.logger.info(
-                    "When done editing, call: animator.apply_all_edits()"
-                )
+                cls.logger.info("When done editing, call: animator.apply_all_edits()")
 
         return animator
 
@@ -428,9 +429,11 @@ class BlendshapeAnimator(ptk.LoggingMixin):
                 # type-filtered cmds.delete over listHistory would also
                 # delete the weight animCurve (nodeType 'animCurveTU'),
                 # destroying the morph animation this function exports.
-                before = set(list_history(self.base_mesh))
+                before = set(BlendshapeHelpers.list_history(self.base_mesh))
                 cmds.bakePartialHistory(self.base_mesh, prePostDeformers=True)
-                removed = len(before - set(list_history(self.base_mesh)))
+                removed = len(
+                    before - set(BlendshapeHelpers.list_history(self.base_mesh))
+                )
                 if removed:
                     self.logger.info(
                         f"  Cleaned {removed} history nodes "
@@ -475,7 +478,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
                 cls.logger.error("No base mesh provided and nothing selected.")
                 return None
 
-        history = list_history(base_mesh, type_filter="blendShape")
+        history = BlendshapeHelpers.list_history(base_mesh, type_filter="blendShape")
         if not history:
             cls.logger.error(f"No blendShape found on {base_mesh}")
             return None
@@ -629,9 +632,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
                 mismatched_count += 1
 
         if mismatched_count > 0:
-            self.logger.warning(
-                f"{mismatched_count} meshes have topology mismatches"
-            )
+            self.logger.warning(f"{mismatched_count} meshes have topology mismatches")
             self.logger.info(
                 "Possible solutions: delete + recreate / Transfer Attributes / "
                 "manually fix vertex counts / start over with matching topology"
@@ -722,9 +723,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         try:
             old_target_name = self.target_mesh
             cmds.setAttr(f"{self.target_mesh}.visibility", False)
-            self.logger.info(
-                f"  Hidden problematic target mesh: {old_target_name}"
-            )
+            self.logger.info(f"  Hidden problematic target mesh: {old_target_name}")
             self.target_mesh = None
             self.logger.info("  Updated target reference to None")
         except RuntimeError as e:
@@ -749,9 +748,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
                         f"BlendShape {self.blendshape} preserved - animation intact"
                     )
                 else:
-                    self.logger.warning(
-                        "BlendShape not found - animation may be lost"
-                    )
+                    self.logger.warning("BlendShape not found - animation may be lost")
 
                 self.logger.info(
                     "Export cleanup complete - scene contains only base mesh with animation"

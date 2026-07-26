@@ -8,7 +8,7 @@ except ImportError:
 
 import pythontk as ptk
 from uitk import Signals
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # From this package
 from mayatk.edit_utils.naming._naming import Naming
@@ -34,7 +34,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             "QComboBox",
             addItems=["Selection", "All Objects"],
             setObjectName="cmb_scope",
-            setToolTip=fmt(
+            setToolTip=TooltipFormat.fmt(
                 title="Scope",
                 bullets=[
                     "<b>Selection</b> — Only the current selection.",
@@ -44,34 +44,40 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         )
 
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Naming",
                 body="Batch find, rename, and suffix scene objects. Each "
                 "operation button has an option box (▸) for its parameters.",
                 sections=[
-                    ("Operations", [
-                        "<b>Find</b> — select objects by name pattern "
-                        "(wildcards or regex; case-sensitivity, locator-only, "
-                        "and regex toggles in the option box).",
-                        "<b>Rename</b> — replace matched names with a new "
-                        "pattern. Option box: retain existing type suffix.",
-                        "<b>Convert Case</b> — upper / lower / title / "
-                        "capitalize / swapcase the selected names.",
-                        "<b>Strip Chars</b> — remove leading or trailing "
-                        "characters.",
-                        "<b>Suffix by Location</b> — auto-number objects by "
-                        "distance from a reference point (alphabetical or "
-                        "integer).",
-                        "<b>Suffix by Type</b> — append type-based suffixes "
-                        "(<code>_GEO</code>, <code>_GRP</code>, "
-                        "<code>_JNT</code>, etc.). Suffix strings are "
-                        "editable in the option box.",
-                    ]),
-                    ("Header menu", [
-                        "<b>Scope</b> — <i>Selection</i> (the current "
-                        "selection only) or <i>All Objects</i> (the whole "
-                        "scene). Applies to every operation.",
-                    ]),
+                    (
+                        "Operations",
+                        [
+                            "<b>Find</b> — select objects by name pattern "
+                            "(wildcards or regex; case-sensitivity, locator-only, "
+                            "and regex toggles in the option box).",
+                            "<b>Rename</b> — replace matched names with a new "
+                            "pattern. Option box: retain existing type suffix.",
+                            "<b>Convert Case</b> — upper / lower / title / "
+                            "capitalize / swapcase the selected names.",
+                            "<b>Strip Chars</b> — remove leading or trailing "
+                            "characters.",
+                            "<b>Suffix by Location</b> — auto-number objects by "
+                            "distance from a reference point (alphabetical or "
+                            "integer).",
+                            "<b>Suffix by Type</b> — append type-based suffixes "
+                            "(<code>_GEO</code>, <code>_GRP</code>, "
+                            "<code>_JNT</code>, etc.). Suffix strings are "
+                            "editable in the option box.",
+                        ],
+                    ),
+                    (
+                        "Header menu",
+                        [
+                            "<b>Scope</b> — <i>Selection</i> (the current "
+                            "selection only) or <i>All Objects</i> (the whole "
+                            "scene). Applies to every operation.",
+                        ],
+                    ),
                 ],
             )
         )
@@ -142,7 +148,13 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             if locators_only:
                 objects = cmds.ls(type="locator")
                 # Get the transform nodes for the locator shapes
-                objects = [(cmds.listRelatives(obj, parent=True, fullPath=True) or [None])[0] for obj in objects if (cmds.listRelatives(obj, parent=True, fullPath=True) or [None])[0]]
+                objects = [
+                    (cmds.listRelatives(obj, parent=True, fullPath=True) or [None])[0]
+                    for obj in objects
+                    if (cmds.listRelatives(obj, parent=True, fullPath=True) or [None])[
+                        0
+                    ]
+                ]
             else:
                 objects = cmds.ls()
 

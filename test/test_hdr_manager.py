@@ -193,7 +193,7 @@ class TestHdrManager(MayaTkTestCase):
         self.assertIsNone(self.mgr.hdr_env)
         cmds.shadingNode("aiSkyDomeLight", asLight=True, name="myCustomDome")
         self.assertEqual(
-            self.mgr.hdr_env,
+            (self.mgr.hdr_env or "").rsplit("|", 1)[-1],
             "myCustomDome",
             "manager must adopt a foreign-named skydome, not return None",
         )
@@ -208,7 +208,7 @@ class TestHdrManager(MayaTkTestCase):
         cmds.shadingNode("aiSkyDomeLight", asLight=True, name="myCustomDome")
         self.mgr.hdr_env = "C:/tmp/x.exr"
         self.assertEqual(len(cmds.ls(exactType="aiSkyDomeLight") or []), 1)
-        self.assertEqual(self.mgr.hdr_env, "myCustomDome")
+        self.assertEqual((self.mgr.hdr_env or "").rsplit("|", 1)[-1], "myCustomDome")
 
     def test_hdr_env_prefers_canonical_over_foreign(self):
         """With two domes present, the getter prefers the canonically-named one.
@@ -220,7 +220,9 @@ class TestHdrManager(MayaTkTestCase):
         cmds.shadingNode(
             "aiSkyDomeLight", asLight=True, name=HdrManager.hdr_env_name
         )
-        self.assertEqual(self.mgr.hdr_env, HdrManager.hdr_env_name)
+        self.assertEqual(
+            (self.mgr.hdr_env or "").rsplit("|", 1)[-1], HdrManager.hdr_env_name
+        )
 
     def test_apply_sets_arnold_renderer(self):
         """Applying an HDR flips the active renderer to Arnold (issue 2).

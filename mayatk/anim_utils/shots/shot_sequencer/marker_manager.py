@@ -7,25 +7,30 @@ Provides :class:`MarkerManagerMixin` — mixed into
 marker add/move/change/remove events to the underlying
 :class:`ShotSequencer` model.
 """
+
 from __future__ import annotations
 
 __all__ = ["MarkerManagerMixin"]
 
 
-def _marker_to_dict(md) -> dict:
-    """Serialize a widget marker into the store's marker dict shape."""
-    return {
-        "time": md.time,
-        "note": md.note,
-        "color": md.color,
-        "draggable": md.draggable,
-        "style": md.style,
-        "line_style": md.line_style,
-        "opacity": md.opacity,
-    }
+class _MarkerManagerMixinInternal(object):
+    """Internal helpers for MarkerManagerMixin."""
+
+    @staticmethod
+    def _marker_to_dict(md) -> dict:
+        """Serialize a widget marker into the store's marker dict shape."""
+        return {
+            "time": md.time,
+            "note": md.note,
+            "color": md.color,
+            "draggable": md.draggable,
+            "style": md.style,
+            "line_style": md.line_style,
+            "opacity": md.opacity,
+        }
 
 
-class MarkerManagerMixin:
+class MarkerManagerMixin(_MarkerManagerMixinInternal):
     """Mixin supplying marker CRUD persistence.
 
     Expects the host class to provide:
@@ -44,7 +49,7 @@ class MarkerManagerMixin:
         md = widget.get_marker(marker_id)
         if md is None:
             return
-        self.sequencer.markers.append(_marker_to_dict(md))
+        self.sequencer.markers.append(_MarkerManagerMixinInternal._marker_to_dict(md))
         # Markers are serialized with the store — without marking it
         # dirty the edit is silently dropped on the next save cycle.
         self.sequencer.store.mark_dirty()
@@ -68,5 +73,7 @@ class MarkerManagerMixin:
         widget = self._get_sequencer_widget()
         if widget is None:
             return
-        self.sequencer.markers = [_marker_to_dict(md) for md in widget.markers()]
+        self.sequencer.markers = [
+            _MarkerManagerMixinInternal._marker_to_dict(md) for md in widget.markers()
+        ]
         self.sequencer.store.mark_dirty()

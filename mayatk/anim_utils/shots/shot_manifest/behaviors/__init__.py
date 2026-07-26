@@ -22,32 +22,23 @@ To intercept an *intra-module* call — one ``_behaviors`` function calling anot
 ``_verify_audio_clip``) — patch ``...behaviors._behaviors.<name>`` instead, where
 the call is actually resolved; patching the re-export here would not affect it.
 """
-from mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors import (  # noqa: F401
+
+from mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors import (
+    Behaviors,
     load_behavior,
     list_behaviors,
     resolve_keys,
-    apply_behavior,
-    verify_behavior,
-    apply_audio_clip,
-    compute_duration,
-    apply_to_shots,
     templates,
 )
 from pythontk.core_utils.engines.shots.manifest.behaviors._spec import (  # noqa: F401
     BehaviorSpec,
-    format_markdown,
 )
 
 __all__ = [
     "load_behavior",
     "list_behaviors",
     "resolve_keys",
-    "apply_behavior",
-    "verify_behavior",
-    "apply_audio_clip",
-    "compute_duration",
-    "apply_to_shots",
+    "Behaviors",
     "templates",
-    "format_markdown",
     "BehaviorSpec",
 ]

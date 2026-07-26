@@ -11,20 +11,24 @@ verifying them (:func:`verify_behavior`), the audio-clip track writer
 (:func:`apply_audio_clip`), and :func:`compute_duration` bound to Maya's
 audio measurement.
 """
+
 import inspect
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
-from pythontk.core_utils.engines.shots.manifest.behaviors._behaviors import (  # noqa: F401 — re-exports + intra-module call targets
-    templates,
-    load_behavior,
-    list_behaviors,
-    resolve_keys,
-)
 from pythontk.core_utils.engines.shots.manifest.behaviors._behaviors import (
-    compute_duration as _compute_duration_pure,
+    Behaviors as _PyBehaviors,
 )
+
+# Pure-core staticmethods re-exported under their historical flat names; mayatk's
+# ``Behaviors`` (below) wraps them with the Maya appliers. The engine is now
+# class-based, so these read off ``_PyBehaviors`` (``Behaviors.templates`` etc.).
+templates = _PyBehaviors.templates  # noqa: F401
+load_behavior = _PyBehaviors.load_behavior  # noqa: F401
+list_behaviors = _PyBehaviors.list_behaviors  # noqa: F401
+resolve_keys = _PyBehaviors.resolve_keys  # noqa: F401
+_compute_duration_pure = _PyBehaviors.compute_duration
 
 try:
     import maya.cmds as cmds
@@ -37,24 +41,754 @@ except ImportError:
 log = logging.getLogger(__name__.rpartition(".")[0])
 
 
-def _track_source_path(name: str) -> str:
-    """Resolve an audio entry's source path from the ``audio_clips`` track
-    registry (tracks carry paths independently of the manifest CSV).
+class _BehaviorsInternal(object):
+    """Internal helpers for Behaviors."""
 
-    The single lookup shared by :func:`compute_duration`'s source fallback and
-    the manifest adapter's ``_measure_audio`` hook.
-    """
-    if not name:
+    @staticmethod
+    def _track_source_path(name: str) -> str:
+        """Resolve an audio entry's source path from the ``audio_clips`` track
+        registry (tracks carry paths independently of the manifest CSV).
+
+        The single lookup shared by :func:`compute_duration`'s source fallback and
+        the manifest adapter's ``_measure_audio`` hook.
+        """
+        if not name:
+            return ""
+        try:
+            from mayatk.audio_utils._audio_utils import AudioUtils as _AU
+
+            tid = _AU.normalize_track_id(name)
+            if _AU.has_track(tid):
+                return _AU.get_path(tid) or ""
+        except Exception as exc:
+            log.debug("track-path fallback failed for '%s': %s", name, exc)
         return ""
-    try:
-        from mayatk.audio_utils._audio_utils import AudioUtils as _AU
 
-        tid = _AU.normalize_track_id(name)
-        if _AU.has_track(tid):
-            return _AU.get_path(tid) or ""
-    except Exception as exc:
-        log.debug("track-path fallback failed for '%s': %s", name, exc)
-    return ""
+    @staticmethod
+    def _verify_values_in_range(
+        obj: str,
+        attr: str,
+        block: Dict,
+        start: float,
+        end: float,
+    ) -> bool:
+        """Check that every expected value exists on *attr* within the range.
+
+        Uses a small epsilon (0.01) for floating-point comparison so that
+        values like ``0.999999`` match an expected ``1.0``.
+        """
+        expected = block.get("values", [])
+        if not expected:
+            return True
+
+        # Query all keyframe values on this attribute within the shot range.
+        if cmds is not None:
+            vals = cmds.keyframe(
+                obj, q=True, at=attr, time=(start, end), valueChange=True
+            )
+        else:
+            return False
+
+        if not vals:
+            return False
+
+        eps = 0.01
+        for ev in expected:
+            if not any(abs(v - ev) < eps for v in vals):
+                return False
+        return True
+
+    @staticmethod
+    def _verify_audio_clip(obj: str, start: float, end: float) -> bool:
+        """Check that a track exists with start (on) and stop (off) keys.
+
+        Parameters:
+            obj: Track identifier (canonical or raw — normalized internally).
+            start: Expected start frame (value=1).
+            end: Expected stop frame (value=0).
+
+        Returns:
+            ``True`` if the track exists with a start-key at *start* (value >= 1)
+            and a stop-key (value == 0) anywhere in ``[start, end]``. The
+            stop-key position is clip-length driven, not shot-end driven, so
+            we don't pin it to *end* here.
+        """
+        from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
+
+        track_id = audio_utils.normalize_track_id(obj)
+        if not audio_utils.has_track(track_id):
+            return False
+        keys = audio_utils.read_keys(track_id) or []
+        has_start = any(abs(f - start) < 0.5 and int(round(v)) >= 1 for f, v in keys)
+        has_stop = any(
+            (start - 0.5) <= f <= (end + 0.5) and int(round(v)) == 0 for f, v in keys
+        )
+        return has_start and has_stop
+
+    @staticmethod
+    def _binds(fn, *args, **kwargs) -> bool:
+        """True when *fn* accepts the given call shape (no call is made).
+
+        Callables without an introspectable signature (some builtins, C
+        extensions, mocks) are assumed to accept the full modern contract.
+        """
+        try:
+            inspect.signature(fn).bind(*args, **kwargs)
+            return True
+        except TypeError:
+            return False
+        except ValueError:
+            return True
+
+
+class Behaviors(_BehaviorsInternal):
+    """Behaviors — module namespace."""
+
+    @staticmethod
+    def apply_behavior(
+        obj: str,
+        behavior_name: str,
+        start: float,
+        end: float,
+        attrs: Optional[List[str]] = None,
+        search_path: Optional[Path] = None,
+        source_path: str = "",
+        anchor_override: Optional[str] = None,
+    ) -> None:
+        """Apply a named behavior template to an object over a time range.
+
+        When the object has an ``opacity`` attribute (from :class:`RenderOpacity`),
+        this function automatically handles dual-keying:
+
+        - If the template targets ``visibility`` and the object has ``opacity``,
+          the value is keyed on **both** ``opacity`` and ``visibility``.
+        - If the template targets ``opacity`` directly, ``visibility`` is also
+          mirrored automatically.
+
+        This produces real animation curves on both channels so FBX export
+        gives game engines a native ``visibility`` track without baking, while
+        the ``opacity`` channel is available for engines that support it.
+
+        Parameters:
+            obj: Maya node name.
+            behavior_name: Template stem name (e.g. ``"fade_in"``).
+            start: First frame of the range.
+            end: Last frame of the range.
+            attrs: If given, only key these attributes. Otherwise key all
+                attributes defined in the template.
+            search_path: Optional custom behaviors directory.
+            source_path: Audio file path, forwarded to
+                :func:`apply_audio_clip` for ``audio_clip`` behaviors.
+            anchor_override: When provided, overrides the anchor defined
+                in the template.  Accepts ``"start"``, ``"end"``, or
+                a **float** between 0.0 and 1.0 (0.0 = start, 1.0 = end).
+                Used by :func:`apply_to_shots` to place behaviors based on
+                their position in the object's behavior list rather than
+                relying on hardcoded template anchors.
+        """
+        if cmds is None:
+            raise RuntimeError("Maya (cmds) is required to apply behaviors")
+
+        template = load_behavior(behavior_name, search_path)
+
+        # Audio-clip behaviors delegate to the audio-specific helper.
+        verify_mode = (template.get("verify") or {}).get("mode", "")
+        if verify_mode == "audio_clip":
+            Behaviors.apply_audio_clip(obj, start, end, source_path=source_path)
+            return
+
+        node = str(obj)
+        has_opacity = cmds.attributeQuery("opacity", node=node, exists=True)
+
+        # Auto-create opacity attribute when the template targets visibility
+        # OR opacity — a template keying "opacity" directly would otherwise
+        # error on objects without the attribute. This ensures the dual-keying
+        # path is always taken, producing both opacity (smooth) and visibility
+        # (stepped) curves for FBX export.
+        template_attrs = template.get("attributes", {})
+        needs_opacity = not has_opacity and (
+            "visibility" in template_attrs or "opacity" in template_attrs
+        )
+        if needs_opacity:
+            from mayatk.mat_utils.render_opacity.attribute_mode import (
+                OpacityAttributeMode,
+            )
+
+            OpacityAttributeMode.create([node])
+            has_opacity = True
+
+        # Resolve the transform's long name once — plugs built per key below.
+        long_node = (cmds.ls(node, long=True) or [node])[0]
+
+        for attr_name, attr_def in template.get("attributes", {}).items():
+            if attrs and attr_name not in attrs:
+                continue
+
+            # Determine target attribute and whether to mirror to visibility.
+            # When the template targets visibility and the object has opacity,
+            # key opacity instead (smooth channel) and mirror to visibility
+            # (so FBX contains a real visibility curve for game engines).
+            target_attr = attr_name
+            mirror_to_vis = False
+
+            if attr_name == "visibility" and has_opacity:
+                target_attr = "opacity"
+                mirror_to_vis = True
+            elif attr_name == "opacity" and has_opacity:
+                mirror_to_vis = True
+
+            for phase in ("in", "out"):
+                block = attr_def.get(phase)
+                if not block:
+                    continue
+
+                # Anchor: use override if provided, else the template's, else
+                # phase-based default for backward compatibility.
+                if anchor_override is not None:
+                    block = dict(block, anchor=anchor_override)
+                elif "anchor" not in block:
+                    block = dict(block, anchor="start" if phase == "in" else "end")
+
+                keys = resolve_keys(block, start, end)
+                for k in keys:
+                    tan = k["tangent"]
+                    # Maya's in-tangent doesn't accept "step" —
+                    # the equivalent is "stepnext".
+                    itt = "stepnext" if tan == "step" else tan
+                    # Use explicit plug path to target the transform only —
+                    # the kwarg form (attribute=) also hits the shape node.
+                    attr_plug = f"{long_node}.{target_attr}"
+                    cmds.setKeyframe(
+                        attr_plug,
+                        time=k["time"],
+                        value=k["value"],
+                        inTangentType=itt,
+                        outTangentType=tan,
+                    )
+                    # Mirror: set a matching visibility keyframe so FBX
+                    # export produces a real visibility animation curve.
+                    # Use explicit attr path to target the transform only —
+                    # the kwarg form also hits the shape node.
+                    if mirror_to_vis:
+                        # Use longName to target only the transform —
+                        # short names also match the shape node.
+                        vis_plug = f"{long_node}.visibility"
+                        t = k["time"]
+                        cmds.setKeyframe(
+                            vis_plug,
+                            time=t,
+                            value=1.0 if k["value"] > 0 else 0.0,
+                            inTangentType="stepnext",
+                            outTangentType="step",
+                        )
+                        # Belt-and-suspenders: cmds.setKeyframe may not
+                        # honour stepnext on creation — force via keyTangent.
+                        cmds.keyTangent(
+                            vis_plug,
+                            edit=True,
+                            time=(t, t),
+                            inTangentType="stepnext",
+                            outTangentType="step",
+                        )
+
+    @staticmethod
+    def verify_behavior(
+        obj: str,
+        behavior_name: str,
+        start: float,
+        end: float,
+        search_path: Optional[Path] = None,
+        keyframe_fn: Optional[Any] = None,
+        anchor_override: Optional[Any] = None,
+    ) -> bool:
+        """Check whether expected behavior keyframes exist on an object.
+
+        The verification strategy is controlled by the template's optional
+        ``verify.mode`` key:
+
+        ``"exact"`` (default)
+            Every keyframe must exist at the exact time computed from the
+            template offsets/durations.
+        ``"values_in_range"``
+            Every expected *value* must appear on at least one keyframe
+            somewhere within the shot range.  Timing is ignored, so
+            user-repositioned keys still pass.
+
+        Parameters:
+            obj: Maya node name.
+            behavior_name: Template stem name (e.g. ``"fade_in"``).
+            start: First frame of the scene range.
+            end: Last frame of the scene range.
+            search_path: Optional custom behaviors directory.
+            keyframe_fn: Callable ``(obj, attribute, time) -> list``.
+                Defaults to ``cmds.keyframe(obj, q=True, at=attr, time=(t, t))``.
+                Only used for ``exact`` mode.
+            anchor_override: Same semantics as :func:`apply_behavior` —
+                when the keys were placed with a distributed anchor
+                (multi-behavior objects), ``exact`` verification must model
+                the same anchor or it checks the template's default
+                positions and permanently flags the object as broken.
+
+        Returns:
+            ``True`` if every expected keyframe is found.
+        """
+        template = load_behavior(behavior_name, search_path)
+        verify_mode = (template.get("verify") or {}).get("mode", "exact")
+
+        # Audio clip verification — track exists with start+stop keys.
+        if verify_mode == "audio_clip":
+            return _BehaviorsInternal._verify_audio_clip(obj, start, end)
+
+        # No object in the scene → no keys → cannot verify.  Bail out so
+        # cmds.keyframe doesn't raise on a non-existent name.
+        if cmds is not None and not cmds.objExists(obj):
+            return False
+
+        if keyframe_fn is None and verify_mode == "exact":
+            if cmds is not None:
+                keyframe_fn = lambda o, attr, t: cmds.keyframe(
+                    o, q=True, at=attr, time=(t, t)
+                )
+            else:
+                raise RuntimeError("Maya is required to verify behaviors")
+
+        # Match the visibility → opacity redirect in apply_behavior so we
+        # verify the attribute where keys were actually placed.
+        if cmds is not None:
+            _has_opacity = cmds.objExists(f"{obj}.opacity")
+        else:
+            _has_opacity = False
+
+        for attr_name, attr_def in template.get("attributes", {}).items():
+            check_attr = attr_name
+            if attr_name == "visibility" and _has_opacity:
+                check_attr = "opacity"
+
+            for phase in ("in", "out"):
+                block = attr_def.get(phase)
+                if not block:
+                    continue
+
+                if verify_mode == "values_in_range":
+                    if not _BehaviorsInternal._verify_values_in_range(
+                        obj, check_attr, block, start, end
+                    ):
+                        return False
+                else:
+                    # Mirror apply_behavior's anchor precedence exactly:
+                    # override > template > phase-based default.
+                    if anchor_override is not None:
+                        block = dict(block, anchor=anchor_override)
+                    elif "anchor" not in block:
+                        block = dict(block, anchor="start" if phase == "in" else "end")
+                    keys = resolve_keys(block, start, end)
+                    for k in keys:
+                        result = keyframe_fn(obj, check_attr, k["time"])
+                        if not result:
+                            return False
+        return True
+
+    @staticmethod
+    def apply_audio_clip(
+        obj: str,
+        start: float,
+        end: float,
+        source_path: str = "",
+    ) -> None:
+        """Author start/stop keys for an audio track over *(start, end)*.
+
+        Writes a stepped enum key pattern:
+
+        - ``start`` → value=1  (audio on)
+        - ``end``   → value=0  (audio off)
+
+        The compositor materializes the DG audio node to play across this
+        span.  Idempotent: rewrites the two boundary keys every call so the
+        audio span always matches the current shot range exactly.
+
+        Parameters:
+            obj: Track identifier (canonical or raw — normalized internally).
+            start: Shot start frame.
+            end: Shot end frame — the off-key fallback when the source's
+                duration can't be probed.  When it can, the off-key lands at
+                the clip's natural end (``start + duration``), which may
+                exceed *end*: keys drive shot size (grow-only, via
+                ``apply_to_shots``' upstream plan), not the other way around.
+            source_path: Path to the audio file (used when creating a new
+                track).  Ignored when the track already exists.
+        """
+        from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
+
+        if end <= start:
+            log.warning(
+                "apply_audio_clip: non-positive range for '%s' (start=%s end=%s) "
+                "— skipping.",
+                obj,
+                start,
+                end,
+            )
+            return
+
+        track_id = audio_utils.normalize_track_id(obj)
+        with audio_utils.batch() as b:
+            if not audio_utils.has_track(track_id):
+                if not source_path:
+                    log.warning(
+                        "Audio track '%s' not found and no source_path "
+                        "— cannot create.",
+                        obj,
+                    )
+                    return
+                audio_utils.ensure_track_attr(track_id)
+                audio_utils.set_path(track_id, source_path)
+            else:
+                # Drop stale keys (e.g. from the audio_clips UI or a prior
+                # build with different shot boundaries) so the track is
+                # idempotently rewritten to exactly (start, on) and (stop, off).
+                audio_utils.clear_keys(track_id)
+
+            # Place the off-key at the clip's natural end. The shot system
+            # (apply_to_shots) auto-resizes the containing shot to fit the
+            # written keys — grow-only. Do not clamp to shot.end here; that
+            # would force the shot to dictate the clip, the opposite of the
+            # design: keys drive shot size, not the other way around.
+            probe_path = source_path or audio_utils.get_path(track_id) or ""
+            clip_end: float = end
+            if probe_path:
+                try:
+                    fps = audio_utils.get_fps()
+                    dur_frames, _ = audio_utils.audio_duration_frames(probe_path, fps)
+                    if dur_frames > 0:
+                        clip_end = start + float(dur_frames)
+                except Exception as exc:
+                    log.debug("audio duration probe failed for '%s': %s", obj, exc)
+
+            audio_utils.write_key(track_id, frame=start, value=1)
+            audio_utils.write_key(track_id, frame=clip_end, value=0)
+            b.mark_dirty([track_id])
+
+    @staticmethod
+    def compute_duration(
+        behavior_entries: List[Dict[str, str]],
+        fallback: float = 30,
+        fps: Optional[float] = None,
+    ) -> float:
+        """Derive duration from the behavior templates in *behavior_entries*.
+
+        Maya-bound facade over the engine's pure
+        :func:`~pythontk.core_utils.engines.shots.manifest.behaviors.compute_duration`:
+        injects Maya's audio measurement (``from_source`` templates probe the
+        entry's ``source_path`` against the scene FPS) and the ``audio_clips``
+        track-registry fallback (an audio entry with no ``source_path`` may still
+        resolve a path via its normalized track id).
+
+        Parameters:
+            behavior_entries: List of dicts with a ``"behavior"`` key, or
+                ``BuilderObject``-like objects with a ``.behaviors`` list
+                and optional ``.kind`` / ``.source_path`` attributes.
+            fallback: Duration when no behavior-driven duration exists.
+            fps: Scene frame-rate used to resolve ``from_source`` audio
+                durations.  Queried from Maya when omitted.
+
+        Returns:
+            Duration in frames.
+        """
+        try:
+            from mayatk.audio_utils._audio_utils import AudioUtils as _AU
+        except Exception:
+            _AU = None  # type: ignore[assignment]
+
+        # Resolved lazily on the first from_source probe so a template-only
+        # manifest never queries cmds.currentUnit.
+        state = {"fps": fps}
+
+        def _audio_duration_fn(source_path: str) -> Optional[float]:
+            if _AU is None:
+                return None
+            if state["fps"] is None:
+                from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
+                    ShotManifest,
+                )
+
+                state["fps"] = ShotManifest._scene_fps()
+            dur_frames, _ = _AU.audio_duration_frames(source_path, state["fps"])
+            return dur_frames
+
+        def _resolve_source_fn(name: str, kind: str) -> Optional[str]:
+            # Audio-kind entries only: a manifest entry with no source_path may
+            # still resolve a path via its registered track (see _track_source_path).
+            if kind != "audio":
+                return None
+            return _BehaviorsInternal._track_source_path(name) or None
+
+        return _compute_duration_pure(
+            behavior_entries,
+            fallback=fallback,
+            fps=fps,
+            audio_duration_fn=_audio_duration_fn,
+            resolve_source_fn=_resolve_source_fn,
+        )
+
+    @staticmethod
+    def apply_to_shots(
+        shots: list,
+        apply_fn,
+        exists_fn=None,
+        has_keys_fn=None,
+        store=None,
+    ) -> Dict[str, list]:
+        """Apply declared behaviors from shot metadata to Maya objects.
+
+        Reads ``metadata["behaviors"]`` from each shot and applies keyframe
+        patterns via *apply_fn*.  Objects with existing keyframes in the
+        shot range are skipped to avoid overwriting user animation.
+
+        Audio-grow (expanding shot.end to fit audio clips and rippling
+        downstream shots) is handled upstream by
+        ``ShotManifest._compute_plan`` / ``_execute_plan``.  By the time
+        this function runs, ``shot.start`` / ``shot.end`` are already at
+        their final positions.
+
+        Processing uses a **two-pass-per-shot** design:
+
+        1. **Audio pass** — audio entries are applied first so their
+           keyframes exist before non-audio anchors are computed.
+        2. **Non-audio pass** — fade and other behavior entries are applied
+           using the finalized ``shot.start`` / ``shot.end``.  Positional
+           anchors are computed here.
+
+        Parameters:
+            shots: :class:`ShotBlock` instances to process.
+            apply_fn: Callable ``(obj, behavior, start, end)`` that applies
+                a behavior template.  May optionally accept ``source_path``
+                and/or ``anchor_override`` keywords — support is detected
+                once via signature introspection and the richest supported
+                form is used.
+            exists_fn: Callable ``(name) -> bool`` that checks whether an
+                object exists in the scene.  Defaults to
+                ``cmds.objExists``.
+            has_keys_fn: Callable ``(obj, start, end) -> bool``.  Defaults
+                to checking keyframes in range via ``cmds.keyframe``.
+
+        Returns:
+            Dict with ``"applied"``, ``"skipped"``, and ``"failed"`` lists
+            of dicts containing ``object``, ``behavior``, and ``shot`` keys
+            (``failed`` entries also carry ``error``).  A failing entry —
+            e.g. ``setKeyframe`` on a locked/connected attribute of a
+            referenced asset — is recorded and the batch continues instead
+            of aborting the remaining behaviors mid-build.
+        """
+        from mayatk.audio_utils._audio_utils import AudioUtils as _audio_utils
+
+        def _is_audio(entry):
+            return (entry.get("kind") == "audio") or bool(entry.get("source_path"))
+
+        def _default_exists(obj_name, entry=None):
+            if entry is not None and _is_audio(entry):
+                try:
+                    if _audio_utils.is_registered(obj_name):
+                        return True
+                except Exception:
+                    pass
+                # New audio with a source_path counts as "buildable".
+                if entry.get("source_path"):
+                    return True
+            if cmds is None:
+                return False
+            return cmds.objExists(obj_name)
+
+        if exists_fn is None:
+            exists_fn = _default_exists
+
+        def _default_has_keys(obj_name, start, end, entry=None):
+            if entry is not None and _is_audio(entry):
+                return _BehaviorsInternal._verify_audio_clip(obj_name, start, end)
+            if cmds is None:
+                return False
+            try:
+                keys = cmds.keyframe(obj_name, q=True, time=(start, end), tc=True)
+                return bool(keys)
+            except Exception:
+                return False
+
+        if has_keys_fn is None:
+            has_keys_fn = _default_has_keys
+
+        # Adapters so callers that pass their own fns (old 3-arg signature)
+        # still work, while default fns may use the entry for audio dispatch.
+        # Signature support is probed once via ``inspect`` binding — calling
+        # inside ``except TypeError`` conflated "wrong signature" with genuine
+        # TypeErrors raised *inside* the callable, silently re-invoking it
+        # with reduced arguments and masking real failures as successes.
+        exists_takes_entry = _BehaviorsInternal._binds(exists_fn, "", None)
+        has_keys_takes_entry = _BehaviorsInternal._binds(
+            has_keys_fn, "", 0.0, 0.0, None
+        )
+        apply_takes_anchor = _BehaviorsInternal._binds(
+            apply_fn, "", "", 0.0, 0.0, source_path="", anchor_override=0.0
+        )
+        apply_takes_source = _BehaviorsInternal._binds(
+            apply_fn, "", "", 0.0, 0.0, source_path=""
+        )
+
+        def _call_exists(obj_name, entry):
+            if exists_takes_entry:
+                return exists_fn(obj_name, entry)
+            return exists_fn(obj_name)
+
+        def _call_has_keys(obj_name, start, end, entry):
+            if has_keys_takes_entry:
+                return has_keys_fn(obj_name, start, end, entry)
+            return has_keys_fn(obj_name, start, end)
+
+        applied: list = []
+        skipped: list = []
+        failed: list = []
+
+        def _record_failure(obj_name, behavior, shot, exc):
+            log.warning(
+                "Behavior '%s' on '%s' (shot %s) failed: %s",
+                behavior,
+                obj_name,
+                shot.name,
+                exc,
+            )
+            failed.append(
+                {
+                    "object": obj_name,
+                    "behavior": behavior,
+                    "shot": shot.name,
+                    "error": str(exc),
+                }
+            )
+
+        for shot in shots:
+            if shot.locked:
+                continue
+            if abs(shot.end - shot.start) < 1e-6:
+                continue
+
+            entries = shot.metadata.get("behaviors", [])
+
+            # ------------------------------------------------------------------
+            # Pass 1 — Audio entries: apply first so the shot range is
+            # finalized before non-audio behaviors compute positional
+            # anchors.  Audio clips may extend shot.end via grow-after-apply.
+            # ------------------------------------------------------------------
+            for entry in entries:
+                obj_name = entry.get("name", "")
+                behavior = entry.get("behavior", "")
+                if not behavior or not obj_name:
+                    continue
+                if not _is_audio(entry):
+                    continue
+                if not _call_exists(obj_name, entry):
+                    continue
+                if _call_has_keys(obj_name, shot.start, shot.end, entry):
+                    skipped.append(
+                        {"object": obj_name, "behavior": behavior, "shot": shot.name}
+                    )
+                    continue
+
+                source_path = entry.get("source_path", "") or ""
+                try:
+                    if apply_takes_anchor:
+                        apply_fn(
+                            obj_name,
+                            behavior,
+                            shot.start,
+                            shot.end,
+                            source_path=source_path,
+                            anchor_override=0.0,
+                        )
+                    elif apply_takes_source:
+                        apply_fn(
+                            obj_name,
+                            behavior,
+                            shot.start,
+                            shot.end,
+                            source_path=source_path,
+                        )
+                    else:
+                        apply_fn(obj_name, behavior, shot.start, shot.end)
+                except (RuntimeError, TypeError) as exc:
+                    _record_failure(obj_name, behavior, shot, exc)
+                    continue
+                applied.append(
+                    {"object": obj_name, "behavior": behavior, "shot": shot.name}
+                )
+
+                # NOTE: Audio-grow (expanding shot.end + ripple) is handled
+                # upstream by _compute_plan / _execute_plan.  shot.end is
+                # already at the correct position when apply_to_shots runs.
+
+            # ------------------------------------------------------------------
+            # Pass 2 — Non-audio entries: shot.start / shot.end are now
+            # finalized (audio grow is complete).  Compute positional
+            # anchors and place behavior keyframes.
+            # ------------------------------------------------------------------
+            non_audio = [e for e in entries if not _is_audio(e)]
+            obj_indices: Dict[str, int] = {}  # obj_name → count seen so far
+            obj_counts: Dict[str, int] = {}  # obj_name → total behaviors
+            for entry in non_audio:
+                n = entry.get("name", "")
+                if n:
+                    obj_counts[n] = obj_counts.get(n, 0) + 1
+
+            for entry in non_audio:
+                obj_name = entry.get("name", "")
+                behavior = entry.get("behavior", "")
+                if not behavior or not obj_name:
+                    continue
+                if not _call_exists(obj_name, entry):
+                    continue
+                if _call_has_keys(obj_name, shot.start, shot.end, entry):
+                    skipped.append(
+                        {"object": obj_name, "behavior": behavior, "shot": shot.name}
+                    )
+                    continue
+
+                # Positional anchor: distribute evenly across the shot when
+                # an object carries 2+ behaviors.  For a single behavior the
+                # template's anchor (e.g. ``anchor: end`` for fade_out)
+                # must be respected — overriding to 0.0 here would place
+                # every fade_out at the shot start.
+                # 2 behaviors → 0.0, 1.0           (start, end)
+                # 3 behaviors → 0.0, 0.5, 1.0      (start, middle, end)
+                # N behaviors → idx / max(total-1, 1)
+                idx = obj_indices.get(obj_name, 0)
+                obj_indices[obj_name] = idx + 1
+                total = obj_counts.get(obj_name, 1)
+
+                source_path = entry.get("source_path", "") or ""
+                try:
+                    if total > 1 and apply_takes_anchor:
+                        apply_fn(
+                            obj_name,
+                            behavior,
+                            shot.start,
+                            shot.end,
+                            source_path=source_path,
+                            anchor_override=idx / max(total - 1, 1),
+                        )
+                    elif apply_takes_source:
+                        apply_fn(
+                            obj_name,
+                            behavior,
+                            shot.start,
+                            shot.end,
+                            source_path=source_path,
+                        )
+                    else:
+                        apply_fn(obj_name, behavior, shot.start, shot.end)
+                except (RuntimeError, TypeError) as exc:
+                    _record_failure(obj_name, behavior, shot, exc)
+                    continue
+                applied.append(
+                    {"object": obj_name, "behavior": behavior, "shot": shot.name}
+                )
+
+        return {"applied": applied, "skipped": skipped, "failed": failed}
 
 
 # ---------------------------------------------------------------------------
@@ -62,387 +796,9 @@ def _track_source_path(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def apply_behavior(
-    obj: str,
-    behavior_name: str,
-    start: float,
-    end: float,
-    attrs: Optional[List[str]] = None,
-    search_path: Optional[Path] = None,
-    source_path: str = "",
-    anchor_override: Optional[str] = None,
-) -> None:
-    """Apply a named behavior template to an object over a time range.
-
-    When the object has an ``opacity`` attribute (from :class:`RenderOpacity`),
-    this function automatically handles dual-keying:
-
-    - If the template targets ``visibility`` and the object has ``opacity``,
-      the value is keyed on **both** ``opacity`` and ``visibility``.
-    - If the template targets ``opacity`` directly, ``visibility`` is also
-      mirrored automatically.
-
-    This produces real animation curves on both channels so FBX export
-    gives game engines a native ``visibility`` track without baking, while
-    the ``opacity`` channel is available for engines that support it.
-
-    Parameters:
-        obj: Maya node name.
-        behavior_name: Template stem name (e.g. ``"fade_in"``).
-        start: First frame of the range.
-        end: Last frame of the range.
-        attrs: If given, only key these attributes. Otherwise key all
-            attributes defined in the template.
-        search_path: Optional custom behaviors directory.
-        source_path: Audio file path, forwarded to
-            :func:`apply_audio_clip` for ``audio_clip`` behaviors.
-        anchor_override: When provided, overrides the anchor defined
-            in the template.  Accepts ``"start"``, ``"end"``, or
-            a **float** between 0.0 and 1.0 (0.0 = start, 1.0 = end).
-            Used by :func:`apply_to_shots` to place behaviors based on
-            their position in the object's behavior list rather than
-            relying on hardcoded template anchors.
-    """
-    if cmds is None:
-        raise RuntimeError("Maya (cmds) is required to apply behaviors")
-
-    template = load_behavior(behavior_name, search_path)
-
-    # Audio-clip behaviors delegate to the audio-specific helper.
-    verify_mode = (template.get("verify") or {}).get("mode", "")
-    if verify_mode == "audio_clip":
-        apply_audio_clip(obj, start, end, source_path=source_path)
-        return
-
-    node = str(obj)
-    has_opacity = cmds.attributeQuery("opacity", node=node, exists=True)
-
-    # Auto-create opacity attribute when the template targets visibility
-    # OR opacity — a template keying "opacity" directly would otherwise
-    # error on objects without the attribute. This ensures the dual-keying
-    # path is always taken, producing both opacity (smooth) and visibility
-    # (stepped) curves for FBX export.
-    template_attrs = template.get("attributes", {})
-    needs_opacity = not has_opacity and (
-        "visibility" in template_attrs or "opacity" in template_attrs
-    )
-    if needs_opacity:
-        from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
-
-        OpacityAttributeMode.create([node])
-        has_opacity = True
-
-    # Resolve the transform's long name once — plugs built per key below.
-    long_node = (cmds.ls(node, long=True) or [node])[0]
-
-    for attr_name, attr_def in template.get("attributes", {}).items():
-        if attrs and attr_name not in attrs:
-            continue
-
-        # Determine target attribute and whether to mirror to visibility.
-        # When the template targets visibility and the object has opacity,
-        # key opacity instead (smooth channel) and mirror to visibility
-        # (so FBX contains a real visibility curve for game engines).
-        target_attr = attr_name
-        mirror_to_vis = False
-
-        if attr_name == "visibility" and has_opacity:
-            target_attr = "opacity"
-            mirror_to_vis = True
-        elif attr_name == "opacity" and has_opacity:
-            mirror_to_vis = True
-
-        for phase in ("in", "out"):
-            block = attr_def.get(phase)
-            if not block:
-                continue
-
-            # Anchor: use override if provided, else the template's, else
-            # phase-based default for backward compatibility.
-            if anchor_override is not None:
-                block = dict(block, anchor=anchor_override)
-            elif "anchor" not in block:
-                block = dict(block, anchor="start" if phase == "in" else "end")
-
-            keys = resolve_keys(block, start, end)
-            for k in keys:
-                tan = k["tangent"]
-                # Maya's in-tangent doesn't accept "step" —
-                # the equivalent is "stepnext".
-                itt = "stepnext" if tan == "step" else tan
-                # Use explicit plug path to target the transform only —
-                # the kwarg form (attribute=) also hits the shape node.
-                attr_plug = f"{long_node}.{target_attr}"
-                cmds.setKeyframe(
-                    attr_plug,
-                    time=k["time"],
-                    value=k["value"],
-                    inTangentType=itt,
-                    outTangentType=tan,
-                )
-                # Mirror: set a matching visibility keyframe so FBX
-                # export produces a real visibility animation curve.
-                # Use explicit attr path to target the transform only —
-                # the kwarg form also hits the shape node.
-                if mirror_to_vis:
-                    # Use longName to target only the transform —
-                    # short names also match the shape node.
-                    vis_plug = f"{long_node}.visibility"
-                    t = k["time"]
-                    cmds.setKeyframe(
-                        vis_plug,
-                        time=t,
-                        value=1.0 if k["value"] > 0 else 0.0,
-                        inTangentType="stepnext",
-                        outTangentType="step",
-                    )
-                    # Belt-and-suspenders: cmds.setKeyframe may not
-                    # honour stepnext on creation — force via keyTangent.
-                    cmds.keyTangent(
-                        vis_plug,
-                        edit=True,
-                        time=(t, t),
-                        inTangentType="stepnext",
-                        outTangentType="step",
-                    )
-
-
 # ---------------------------------------------------------------------------
 # Verification
 # ---------------------------------------------------------------------------
-
-
-def verify_behavior(
-    obj: str,
-    behavior_name: str,
-    start: float,
-    end: float,
-    search_path: Optional[Path] = None,
-    keyframe_fn: Optional[Any] = None,
-    anchor_override: Optional[Any] = None,
-) -> bool:
-    """Check whether expected behavior keyframes exist on an object.
-
-    The verification strategy is controlled by the template's optional
-    ``verify.mode`` key:
-
-    ``"exact"`` (default)
-        Every keyframe must exist at the exact time computed from the
-        template offsets/durations.
-    ``"values_in_range"``
-        Every expected *value* must appear on at least one keyframe
-        somewhere within the shot range.  Timing is ignored, so
-        user-repositioned keys still pass.
-
-    Parameters:
-        obj: Maya node name.
-        behavior_name: Template stem name (e.g. ``"fade_in"``).
-        start: First frame of the scene range.
-        end: Last frame of the scene range.
-        search_path: Optional custom behaviors directory.
-        keyframe_fn: Callable ``(obj, attribute, time) -> list``.
-            Defaults to ``cmds.keyframe(obj, q=True, at=attr, time=(t, t))``.
-            Only used for ``exact`` mode.
-        anchor_override: Same semantics as :func:`apply_behavior` —
-            when the keys were placed with a distributed anchor
-            (multi-behavior objects), ``exact`` verification must model
-            the same anchor or it checks the template's default
-            positions and permanently flags the object as broken.
-
-    Returns:
-        ``True`` if every expected keyframe is found.
-    """
-    template = load_behavior(behavior_name, search_path)
-    verify_mode = (template.get("verify") or {}).get("mode", "exact")
-
-    # Audio clip verification — track exists with start+stop keys.
-    if verify_mode == "audio_clip":
-        return _verify_audio_clip(obj, start, end)
-
-    # No object in the scene → no keys → cannot verify.  Bail out so
-    # cmds.keyframe doesn't raise on a non-existent name.
-    if cmds is not None and not cmds.objExists(obj):
-        return False
-
-    if keyframe_fn is None and verify_mode == "exact":
-        if cmds is not None:
-            keyframe_fn = lambda o, attr, t: cmds.keyframe(
-                o, q=True, at=attr, time=(t, t)
-            )
-        else:
-            raise RuntimeError("Maya is required to verify behaviors")
-
-    # Match the visibility → opacity redirect in apply_behavior so we
-    # verify the attribute where keys were actually placed.
-    if cmds is not None:
-        _has_opacity = cmds.objExists(f"{obj}.opacity")
-    else:
-        _has_opacity = False
-
-    for attr_name, attr_def in template.get("attributes", {}).items():
-        check_attr = attr_name
-        if attr_name == "visibility" and _has_opacity:
-            check_attr = "opacity"
-
-        for phase in ("in", "out"):
-            block = attr_def.get(phase)
-            if not block:
-                continue
-
-            if verify_mode == "values_in_range":
-                if not _verify_values_in_range(obj, check_attr, block, start, end):
-                    return False
-            else:
-                # Mirror apply_behavior's anchor precedence exactly:
-                # override > template > phase-based default.
-                if anchor_override is not None:
-                    block = dict(block, anchor=anchor_override)
-                elif "anchor" not in block:
-                    block = dict(block, anchor="start" if phase == "in" else "end")
-                keys = resolve_keys(block, start, end)
-                for k in keys:
-                    result = keyframe_fn(obj, check_attr, k["time"])
-                    if not result:
-                        return False
-    return True
-
-
-def _verify_values_in_range(
-    obj: str,
-    attr: str,
-    block: Dict,
-    start: float,
-    end: float,
-) -> bool:
-    """Check that every expected value exists on *attr* within the range.
-
-    Uses a small epsilon (0.01) for floating-point comparison so that
-    values like ``0.999999`` match an expected ``1.0``.
-    """
-    expected = block.get("values", [])
-    if not expected:
-        return True
-
-    # Query all keyframe values on this attribute within the shot range.
-    if cmds is not None:
-        vals = cmds.keyframe(obj, q=True, at=attr, time=(start, end), valueChange=True)
-    else:
-        return False
-
-    if not vals:
-        return False
-
-    eps = 0.01
-    for ev in expected:
-        if not any(abs(v - ev) < eps for v in vals):
-            return False
-    return True
-
-
-def _verify_audio_clip(obj: str, start: float, end: float) -> bool:
-    """Check that a track exists with start (on) and stop (off) keys.
-
-    Parameters:
-        obj: Track identifier (canonical or raw — normalized internally).
-        start: Expected start frame (value=1).
-        end: Expected stop frame (value=0).
-
-    Returns:
-        ``True`` if the track exists with a start-key at *start* (value >= 1)
-        and a stop-key (value == 0) anywhere in ``[start, end]``. The
-        stop-key position is clip-length driven, not shot-end driven, so
-        we don't pin it to *end* here.
-    """
-    from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
-
-    track_id = audio_utils.normalize_track_id(obj)
-    if not audio_utils.has_track(track_id):
-        return False
-    keys = audio_utils.read_keys(track_id) or []
-    has_start = any(abs(f - start) < 0.5 and int(round(v)) >= 1 for f, v in keys)
-    has_stop = any(
-        (start - 0.5) <= f <= (end + 0.5) and int(round(v)) == 0 for f, v in keys
-    )
-    return has_start and has_stop
-
-
-def apply_audio_clip(
-    obj: str,
-    start: float,
-    end: float,
-    source_path: str = "",
-) -> None:
-    """Author start/stop keys for an audio track over *(start, end)*.
-
-    Writes a stepped enum key pattern:
-
-    - ``start`` → value=1  (audio on)
-    - ``end``   → value=0  (audio off)
-
-    The compositor materializes the DG audio node to play across this
-    span.  Idempotent: rewrites the two boundary keys every call so the
-    audio span always matches the current shot range exactly.
-
-    Parameters:
-        obj: Track identifier (canonical or raw — normalized internally).
-        start: Shot start frame.
-        end: Shot end frame — the off-key fallback when the source's
-            duration can't be probed.  When it can, the off-key lands at
-            the clip's natural end (``start + duration``), which may
-            exceed *end*: keys drive shot size (grow-only, via
-            ``apply_to_shots``' upstream plan), not the other way around.
-        source_path: Path to the audio file (used when creating a new
-            track).  Ignored when the track already exists.
-    """
-    from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
-
-    if end <= start:
-        log.warning(
-            "apply_audio_clip: non-positive range for '%s' (start=%s end=%s) "
-            "— skipping.",
-            obj,
-            start,
-            end,
-        )
-        return
-
-    track_id = audio_utils.normalize_track_id(obj)
-    with audio_utils.batch() as b:
-        if not audio_utils.has_track(track_id):
-            if not source_path:
-                log.warning(
-                    "Audio track '%s' not found and no source_path "
-                    "— cannot create.",
-                    obj,
-                )
-                return
-            audio_utils.ensure_track_attr(track_id)
-            audio_utils.set_path(track_id, source_path)
-        else:
-            # Drop stale keys (e.g. from the audio_clips UI or a prior
-            # build with different shot boundaries) so the track is
-            # idempotently rewritten to exactly (start, on) and (stop, off).
-            audio_utils.clear_keys(track_id)
-
-        # Place the off-key at the clip's natural end. The shot system
-        # (apply_to_shots) auto-resizes the containing shot to fit the
-        # written keys — grow-only. Do not clamp to shot.end here; that
-        # would force the shot to dictate the clip, the opposite of the
-        # design: keys drive shot size, not the other way around.
-        probe_path = source_path or audio_utils.get_path(track_id) or ""
-        clip_end: float = end
-        if probe_path:
-            try:
-                fps = audio_utils.get_fps()
-                dur_frames, _ = audio_utils.audio_duration_frames(probe_path, fps)
-                if dur_frames > 0:
-                    clip_end = start + float(dur_frames)
-            except Exception as exc:
-                log.debug("audio duration probe failed for '%s': %s", obj, exc)
-
-        audio_utils.write_key(track_id, frame=start, value=1)
-        audio_utils.write_key(track_id, frame=clip_end, value=0)
-        b.mark_dirty([track_id])
 
 
 # ---------------------------------------------------------------------------
@@ -450,340 +806,6 @@ def apply_audio_clip(
 # ---------------------------------------------------------------------------
 
 
-def compute_duration(
-    behavior_entries: List[Dict[str, str]],
-    fallback: float = 30,
-    fps: Optional[float] = None,
-) -> float:
-    """Derive duration from the behavior templates in *behavior_entries*.
-
-    Maya-bound facade over the engine's pure
-    :func:`~pythontk.core_utils.engines.shots.manifest.behaviors.compute_duration`:
-    injects Maya's audio measurement (``from_source`` templates probe the
-    entry's ``source_path`` against the scene FPS) and the ``audio_clips``
-    track-registry fallback (an audio entry with no ``source_path`` may still
-    resolve a path via its normalized track id).
-
-    Parameters:
-        behavior_entries: List of dicts with a ``"behavior"`` key, or
-            ``BuilderObject``-like objects with a ``.behaviors`` list
-            and optional ``.kind`` / ``.source_path`` attributes.
-        fallback: Duration when no behavior-driven duration exists.
-        fps: Scene frame-rate used to resolve ``from_source`` audio
-            durations.  Queried from Maya when omitted.
-
-    Returns:
-        Duration in frames.
-    """
-    try:
-        from mayatk.audio_utils._audio_utils import AudioUtils as _AU
-    except Exception:
-        _AU = None  # type: ignore[assignment]
-
-    # Resolved lazily on the first from_source probe so a template-only
-    # manifest never queries cmds.currentUnit.
-    state = {"fps": fps}
-
-    def _audio_duration_fn(source_path: str) -> Optional[float]:
-        if _AU is None:
-            return None
-        if state["fps"] is None:
-            from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
-                _scene_fps,
-            )
-
-            state["fps"] = _scene_fps()
-        dur_frames, _ = _AU.audio_duration_frames(source_path, state["fps"])
-        return dur_frames
-
-    def _resolve_source_fn(name: str, kind: str) -> Optional[str]:
-        # Audio-kind entries only: a manifest entry with no source_path may
-        # still resolve a path via its registered track (see _track_source_path).
-        if kind != "audio":
-            return None
-        return _track_source_path(name) or None
-
-    return _compute_duration_pure(
-        behavior_entries,
-        fallback=fallback,
-        fps=fps,
-        audio_duration_fn=_audio_duration_fn,
-        resolve_source_fn=_resolve_source_fn,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Batch application
 # ---------------------------------------------------------------------------
-
-
-def _binds(fn, *args, **kwargs) -> bool:
-    """True when *fn* accepts the given call shape (no call is made).
-
-    Callables without an introspectable signature (some builtins, C
-    extensions, mocks) are assumed to accept the full modern contract.
-    """
-    try:
-        inspect.signature(fn).bind(*args, **kwargs)
-        return True
-    except TypeError:
-        return False
-    except ValueError:
-        return True
-
-
-def apply_to_shots(
-    shots: list,
-    apply_fn,
-    exists_fn=None,
-    has_keys_fn=None,
-    store=None,
-) -> Dict[str, list]:
-    """Apply declared behaviors from shot metadata to Maya objects.
-
-    Reads ``metadata["behaviors"]`` from each shot and applies keyframe
-    patterns via *apply_fn*.  Objects with existing keyframes in the
-    shot range are skipped to avoid overwriting user animation.
-
-    Audio-grow (expanding shot.end to fit audio clips and rippling
-    downstream shots) is handled upstream by
-    ``ShotManifest._compute_plan`` / ``_execute_plan``.  By the time
-    this function runs, ``shot.start`` / ``shot.end`` are already at
-    their final positions.
-
-    Processing uses a **two-pass-per-shot** design:
-
-    1. **Audio pass** — audio entries are applied first so their
-       keyframes exist before non-audio anchors are computed.
-    2. **Non-audio pass** — fade and other behavior entries are applied
-       using the finalized ``shot.start`` / ``shot.end``.  Positional
-       anchors are computed here.
-
-    Parameters:
-        shots: :class:`ShotBlock` instances to process.
-        apply_fn: Callable ``(obj, behavior, start, end)`` that applies
-            a behavior template.  May optionally accept ``source_path``
-            and/or ``anchor_override`` keywords — support is detected
-            once via signature introspection and the richest supported
-            form is used.
-        exists_fn: Callable ``(name) -> bool`` that checks whether an
-            object exists in the scene.  Defaults to
-            ``cmds.objExists``.
-        has_keys_fn: Callable ``(obj, start, end) -> bool``.  Defaults
-            to checking keyframes in range via ``cmds.keyframe``.
-
-    Returns:
-        Dict with ``"applied"``, ``"skipped"``, and ``"failed"`` lists
-        of dicts containing ``object``, ``behavior``, and ``shot`` keys
-        (``failed`` entries also carry ``error``).  A failing entry —
-        e.g. ``setKeyframe`` on a locked/connected attribute of a
-        referenced asset — is recorded and the batch continues instead
-        of aborting the remaining behaviors mid-build.
-    """
-    from mayatk.audio_utils._audio_utils import AudioUtils as _audio_utils
-
-    def _is_audio(entry):
-        return (entry.get("kind") == "audio") or bool(entry.get("source_path"))
-
-    def _default_exists(obj_name, entry=None):
-        if entry is not None and _is_audio(entry):
-            try:
-                if _audio_utils.is_registered(obj_name):
-                    return True
-            except Exception:
-                pass
-            # New audio with a source_path counts as "buildable".
-            if entry.get("source_path"):
-                return True
-        if cmds is None:
-            return False
-        return cmds.objExists(obj_name)
-
-    if exists_fn is None:
-        exists_fn = _default_exists
-
-    def _default_has_keys(obj_name, start, end, entry=None):
-        if entry is not None and _is_audio(entry):
-            return _verify_audio_clip(obj_name, start, end)
-        if cmds is None:
-            return False
-        try:
-            keys = cmds.keyframe(obj_name, q=True, time=(start, end), tc=True)
-            return bool(keys)
-        except Exception:
-            return False
-
-    if has_keys_fn is None:
-        has_keys_fn = _default_has_keys
-
-    # Adapters so callers that pass their own fns (old 3-arg signature)
-    # still work, while default fns may use the entry for audio dispatch.
-    # Signature support is probed once via ``inspect`` binding — calling
-    # inside ``except TypeError`` conflated "wrong signature" with genuine
-    # TypeErrors raised *inside* the callable, silently re-invoking it
-    # with reduced arguments and masking real failures as successes.
-    exists_takes_entry = _binds(exists_fn, "", None)
-    has_keys_takes_entry = _binds(has_keys_fn, "", 0.0, 0.0, None)
-    apply_takes_anchor = _binds(
-        apply_fn, "", "", 0.0, 0.0, source_path="", anchor_override=0.0
-    )
-    apply_takes_source = _binds(apply_fn, "", "", 0.0, 0.0, source_path="")
-
-    def _call_exists(obj_name, entry):
-        if exists_takes_entry:
-            return exists_fn(obj_name, entry)
-        return exists_fn(obj_name)
-
-    def _call_has_keys(obj_name, start, end, entry):
-        if has_keys_takes_entry:
-            return has_keys_fn(obj_name, start, end, entry)
-        return has_keys_fn(obj_name, start, end)
-
-    applied: list = []
-    skipped: list = []
-    failed: list = []
-
-    def _record_failure(obj_name, behavior, shot, exc):
-        log.warning(
-            "Behavior '%s' on '%s' (shot %s) failed: %s",
-            behavior,
-            obj_name,
-            shot.name,
-            exc,
-        )
-        failed.append(
-            {
-                "object": obj_name,
-                "behavior": behavior,
-                "shot": shot.name,
-                "error": str(exc),
-            }
-        )
-
-    for shot in shots:
-        if shot.locked:
-            continue
-        if abs(shot.end - shot.start) < 1e-6:
-            continue
-
-        entries = shot.metadata.get("behaviors", [])
-
-        # ------------------------------------------------------------------
-        # Pass 1 — Audio entries: apply first so the shot range is
-        # finalized before non-audio behaviors compute positional
-        # anchors.  Audio clips may extend shot.end via grow-after-apply.
-        # ------------------------------------------------------------------
-        for entry in entries:
-            obj_name = entry.get("name", "")
-            behavior = entry.get("behavior", "")
-            if not behavior or not obj_name:
-                continue
-            if not _is_audio(entry):
-                continue
-            if not _call_exists(obj_name, entry):
-                continue
-            if _call_has_keys(obj_name, shot.start, shot.end, entry):
-                skipped.append(
-                    {"object": obj_name, "behavior": behavior, "shot": shot.name}
-                )
-                continue
-
-            source_path = entry.get("source_path", "") or ""
-            try:
-                if apply_takes_anchor:
-                    apply_fn(
-                        obj_name,
-                        behavior,
-                        shot.start,
-                        shot.end,
-                        source_path=source_path,
-                        anchor_override=0.0,
-                    )
-                elif apply_takes_source:
-                    apply_fn(
-                        obj_name,
-                        behavior,
-                        shot.start,
-                        shot.end,
-                        source_path=source_path,
-                    )
-                else:
-                    apply_fn(obj_name, behavior, shot.start, shot.end)
-            except (RuntimeError, TypeError) as exc:
-                _record_failure(obj_name, behavior, shot, exc)
-                continue
-            applied.append(
-                {"object": obj_name, "behavior": behavior, "shot": shot.name}
-            )
-
-            # NOTE: Audio-grow (expanding shot.end + ripple) is handled
-            # upstream by _compute_plan / _execute_plan.  shot.end is
-            # already at the correct position when apply_to_shots runs.
-
-        # ------------------------------------------------------------------
-        # Pass 2 — Non-audio entries: shot.start / shot.end are now
-        # finalized (audio grow is complete).  Compute positional
-        # anchors and place behavior keyframes.
-        # ------------------------------------------------------------------
-        non_audio = [e for e in entries if not _is_audio(e)]
-        obj_indices: Dict[str, int] = {}  # obj_name → count seen so far
-        obj_counts: Dict[str, int] = {}  # obj_name → total behaviors
-        for entry in non_audio:
-            n = entry.get("name", "")
-            if n:
-                obj_counts[n] = obj_counts.get(n, 0) + 1
-
-        for entry in non_audio:
-            obj_name = entry.get("name", "")
-            behavior = entry.get("behavior", "")
-            if not behavior or not obj_name:
-                continue
-            if not _call_exists(obj_name, entry):
-                continue
-            if _call_has_keys(obj_name, shot.start, shot.end, entry):
-                skipped.append(
-                    {"object": obj_name, "behavior": behavior, "shot": shot.name}
-                )
-                continue
-
-            # Positional anchor: distribute evenly across the shot when
-            # an object carries 2+ behaviors.  For a single behavior the
-            # template's anchor (e.g. ``anchor: end`` for fade_out)
-            # must be respected — overriding to 0.0 here would place
-            # every fade_out at the shot start.
-            # 2 behaviors → 0.0, 1.0           (start, end)
-            # 3 behaviors → 0.0, 0.5, 1.0      (start, middle, end)
-            # N behaviors → idx / max(total-1, 1)
-            idx = obj_indices.get(obj_name, 0)
-            obj_indices[obj_name] = idx + 1
-            total = obj_counts.get(obj_name, 1)
-
-            source_path = entry.get("source_path", "") or ""
-            try:
-                if total > 1 and apply_takes_anchor:
-                    apply_fn(
-                        obj_name,
-                        behavior,
-                        shot.start,
-                        shot.end,
-                        source_path=source_path,
-                        anchor_override=idx / max(total - 1, 1),
-                    )
-                elif apply_takes_source:
-                    apply_fn(
-                        obj_name,
-                        behavior,
-                        shot.start,
-                        shot.end,
-                        source_path=source_path,
-                    )
-                else:
-                    apply_fn(obj_name, behavior, shot.start, shot.end)
-            except (RuntimeError, TypeError) as exc:
-                _record_failure(obj_name, behavior, shot, exc)
-                continue
-            applied.append(
-                {"object": obj_name, "behavior": behavior, "shot": shot.name}
-            )
-
-    return {"applied": applied, "skipped": skipped, "failed": failed}

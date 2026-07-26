@@ -16,7 +16,7 @@ import pythontk as ptk
 
 
 # From this package:
-from mayatk.core_utils._core_utils import CoreUtils, as_strings
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.components import Components
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.node_utils._node_utils import NodeUtils
@@ -25,27 +25,31 @@ from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.edit_utils.naming._naming import Naming
 
 
-def _safe_rename(node: str, name: str) -> str:
-    """``cmds.rename`` wrapper that warns and falls back to ``node`` on failure.
+class _EditUtilsInternal(object):
+    """Internal helpers for EditUtils."""
 
-    Returns the resulting name (Maya may auto-disambiguate on conflict).
-    """
-    try:
-        return cmds.rename(node, name)
-    except Exception as e:
-        cmds.warning(f"Rename '{node}' -> '{name}' failed: {e}")
-        return node
+    @staticmethod
+    def _safe_rename(node: str, name: str) -> str:
+        """``cmds.rename`` wrapper that warns and falls back to ``node`` on failure.
+
+        Returns the resulting name (Maya may auto-disambiguate on conflict).
+        """
+        try:
+            return cmds.rename(node, name)
+        except Exception as e:
+            cmds.warning(f"Rename '{node}' -> '{name}' failed: {e}")
+            return node
+
+    @staticmethod
+    def _safe_parent(node: str, parent: str) -> None:
+        """``cmds.parent`` wrapper that warns and continues on failure."""
+        try:
+            cmds.parent(node, parent)
+        except Exception as e:
+            cmds.warning(f"Parent '{node}' under '{parent}' failed: {e}")
 
 
-def _safe_parent(node: str, parent: str) -> None:
-    """``cmds.parent`` wrapper that warns and continues on failure."""
-    try:
-        cmds.parent(node, parent)
-    except Exception as e:
-        cmds.warning(f"Parent '{node}' under '{parent}' failed: {e}")
-
-
-class EditUtils(ptk.HelpMixin):
+class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
     """ """
 
     # Backward compatibility aliases - these methods have moved to Snap class
@@ -63,6 +67,7 @@ class EditUtils(ptk.HelpMixin):
         group_by_material=False,
         cluster_by_distance=False,
         threshold=10000.0,
+        uninstance=False,
         **kwargs,
     ):
         """Combine multiple meshes.
@@ -73,9 +78,16 @@ class EditUtils(ptk.HelpMixin):
             cluster_by_distance (bool): Subdivide combine groups by spatial
                 proximity. Works with or without ``group_by_material``.
             threshold (float): The maximum distance between objects to be considered in the same cluster.
+            uninstance (bool): Break instance links on the inputs before
+                uniting. ``polyUnite`` on instanced geometry is destructive —
+                it can silently delete sibling instances that share the shape
+                but are not part of the selection. Forking each input to a
+                unique shape first leaves those siblings untouched.
         """
         if objects is None:
-            objects = cmds.ls(selection=True, )
+            objects = cmds.ls(
+                selection=True,
+            )
 
         # Handle legacy argument
         if "allow_multiple_mats" in kwargs:
@@ -95,6 +107,12 @@ class EditUtils(ptk.HelpMixin):
                 position="topCenter",
             )
             return None
+
+        # Fork instanced inputs to unique shapes first — see ``uninstance`` in
+        # the docstring. Sibling instances outside the selection keep the
+        # original shape and survive the unite.
+        if uninstance:
+            objects = NodeUtils.uninstance(objects) or objects
 
         def unite_group(group_objs, label):
             # Get name before combine destroys the object
@@ -148,9 +166,11 @@ class EditUtils(ptk.HelpMixin):
             str: The created group.
         """
         if objects is None:
-            objects = cmds.ls(selection=True, )
+            objects = cmds.ls(
+                selection=True,
+            )
 
-        objects = cmds.ls(as_strings(objects), objectsOnly=True)
+        objects = cmds.ls(CoreUtils.as_strings(objects), objectsOnly=True)
 
         if objects:
             grp = cmds.group(objects)
@@ -172,6 +192,7 @@ class EditUtils(ptk.HelpMixin):
         group_by_material: bool = False,
         center_pivots: bool = True,
         rename: bool = False,
+        uninstance: bool = False,
     ) -> List:
         """Separate meshes into individual objects.
 
@@ -189,6 +210,11 @@ class EditUtils(ptk.HelpMixin):
             center_pivots: If True, center pivots on resulting transforms.
             rename: If True, rename resulting objects using the original name
                 plus a location-based suffix.
+            uninstance: If True, break instance links on the inputs before
+                separating. ``polySeparate`` on instanced geometry is
+                destructive — it can silently delete sibling instances that
+                share the shape. Forking each input to a unique shape first
+                leaves those siblings untouched.
 
         Returns:
             List of separated transform nodes — or, when ``group_by_material``
@@ -201,12 +227,20 @@ class EditUtils(ptk.HelpMixin):
             cmds.warning("Nothing selected. Operation requires an object selection.")
             return []
 
+        # Fork instanced inputs to unique shapes first — see ``uninstance`` in
+        # the docstring. Sibling instances outside the selection keep the
+        # original shape and survive the separate.
+        if uninstance:
+            objects = NodeUtils.uninstance(objects) or objects
+
         separated_objects: List[str] = []
         # Per-source results so the grouping helper can name the groups and
         # leaves after the originating object instead of after the material.
         results_by_source: List[Tuple[str, List[str]]] = []
 
-        for obj in cmds.ls(as_strings(objects), objectsOnly=True, transforms=True):
+        for obj in cmds.ls(
+            CoreUtils.as_strings(objects), objectsOnly=True, transforms=True
+        ):
             original_name = str(obj).split("|")[-1].split(":")[-1]
             current_results: List[str] = []
             separated = False
@@ -267,18 +301,14 @@ class EditUtils(ptk.HelpMixin):
                     Naming.rename(current_results, to=original_name)
                     if uuids:
                         renamed = [
-                            cmds.ls(u, long=False)[0]
-                            for u in uuids
-                            if cmds.ls(u)
+                            cmds.ls(u, long=False)[0] for u in uuids if cmds.ls(u)
                         ]
                         if renamed:
                             current_results = renamed
                     Naming.append_location_based_suffix(current_results)
                     if uuids:
                         renamed = [
-                            cmds.ls(u, long=False)[0]
-                            for u in uuids
-                            if cmds.ls(u)
+                            cmds.ls(u, long=False)[0] for u in uuids if cmds.ls(u)
                         ]
                         if renamed:
                             current_results = renamed
@@ -316,8 +346,7 @@ class EditUtils(ptk.HelpMixin):
                 [r for r in results if cmds.objExists(r)]
             )
             items = [
-                (k, [m for m in v if cmds.objExists(m)])
-                for k, v in buckets.items()
+                (k, [m for m in v if cmds.objExists(m)]) for k, v in buckets.items()
             ]
             items = [(k, v) for k, v in items if v]
             if not items:
@@ -339,10 +368,10 @@ class EditUtils(ptk.HelpMixin):
                         )
                     ]
                 for member, inner in zip(members, inner_suffixes):
-                    new = _safe_rename(
+                    new = _EditUtilsInternal._safe_rename(
                         member, f"{source_name}_{grp_suffix}{inner}"
                     )
-                    _safe_parent(new, grp)
+                    _EditUtilsInternal._safe_parent(new, grp)
 
                 try:
                     cmds.xform(grp, centerPivots=True)
@@ -442,6 +471,7 @@ class EditUtils(ptk.HelpMixin):
         separate: bool = True,
         offset: bool = False,
         keep_faces_together: bool = True,
+        center_pivot: bool = True,
     ) -> Optional[List]:
         """Detach mesh components (vertices or faces) from their parent mesh.
 
@@ -457,6 +487,9 @@ class EditUtils(ptk.HelpMixin):
                 original position. If False (default), faces maintain their original shape.
             keep_faces_together (bool): If True (default), detached faces remain connected.
                 If False, each face is detached individually.
+            center_pivot (bool): If True (default), give each resulting object its own
+                centered pivot after separating (split geo / multiple objects are centered
+                separately). Only applies on the ``separate`` path.
 
         Returns:
             Optional[List]: The resulting objects after separation, or the polyChipOff node
@@ -475,9 +508,15 @@ class EditUtils(ptk.HelpMixin):
             cmds.warning("Nothing selected. Operation requires a component selection.")
             return None
 
-        # Check component selection mode
-        vertex_mode = cmds.selectType(q=True, vertex=True)
-        face_mode = cmds.selectType(q=True, facet=True)
+        # Branch on the actual component types given, not the UI selection mask:
+        # cmds.selectType(q=True, ...) returns None in mayapy standalone (no UI),
+        # which silently routed every headless call to the generic DetachComponent
+        # branch. filterExpand masks: 31=vertex, 34=facet.
+        vertex_mode = bool(cmds.filterExpand(components, selectionMask=31))
+        face_mode = bool(cmds.filterExpand(components, selectionMask=34))
+        if not (vertex_mode or face_mode):
+            vertex_mode = bool(cmds.selectType(q=True, vertex=True))
+            face_mode = bool(cmds.selectType(q=True, facet=True))
 
         if vertex_mode:
             mel.eval("polySplitVertex")
@@ -496,12 +535,22 @@ class EditUtils(ptk.HelpMixin):
             )
 
             if separate:
-                # polySeparate must be called on transform/mesh objects, not components
-                split_objects = cmds.polySeparate(parent_objects)
-                # Select the last object (typically the extracted/duplicated piece)
-                if split_objects:
-                    cmds.select(split_objects[-1])
-                return split_objects
+                # polySeparate must be called on transform/mesh objects, not components.
+                # Its return also includes the construction (polySeparate) node — keep only
+                # the DAG transforms so downstream pivot/selection ops get valid objects.
+                split_objects = cmds.polySeparate(parent_objects) or []
+                result_objects = cmds.ls(split_objects, type="transform") or []
+                if result_objects:
+                    if center_pivot:
+                        # polySeparate leaves the SOURCE transform's pivot on EVERY piece
+                        # (verified: the extracted shell floats ~off its own bbox center),
+                        # so center each resulting piece separately — split geo / multiple
+                        # objects each get their own pivot instead of the source's corner one.
+                        for obj in result_objects:
+                            cmds.xform(obj, centerPivots=True)
+                    # Select the last resulting transform.
+                    cmds.select(result_objects[-1])
+                return result_objects
 
             return extract
 
@@ -545,7 +594,9 @@ class EditUtils(ptk.HelpMixin):
             The decimated mesh transforms.
         """
         objects = (
-            cmds.ls(objects or cmds.ls(selection=True), objectsOnly=True, type="transform")
+            cmds.ls(
+                objects or cmds.ls(selection=True), objectsOnly=True, type="transform"
+            )
             or []
         )
         if not objects:
@@ -611,7 +662,9 @@ class EditUtils(ptk.HelpMixin):
             The processed mesh transforms.
         """
         objects = (
-            cmds.ls(objects or cmds.ls(selection=True), objectsOnly=True, type="transform")
+            cmds.ls(
+                objects or cmds.ls(selection=True), objectsOnly=True, type="transform"
+            )
             or []
         )
         if not objects:
@@ -679,7 +732,7 @@ class EditUtils(ptk.HelpMixin):
         Returns:
             list: A list of faces on the specified axis.
         """
-        obj_list = cmds.ls(as_strings(obj), type="transform")
+        obj_list = cmds.ls(CoreUtils.as_strings(obj), type="transform")
         if not obj_list:
             raise ValueError(f"No transform node found with the name: {obj}")
         obj = obj_list[0]
@@ -775,6 +828,39 @@ class EditUtils(ptk.HelpMixin):
             math.degrees(combined.z),
         ]
 
+    @staticmethod
+    def _cut_offsets(
+        amount, span, distribution="linear", weight_bias=0.5, weight_curve=2.0
+    ):
+        """Signed axis offsets (from the pivot) for ``amount`` cuts across ``span``.
+
+        Each cut lands at ``(f - 0.5) * span`` where ``f`` is a progression
+        curve (see :class:`pythontk.ProgressionCurves`) evaluated on a
+        *symmetric* parameter ``t`` in ``[0, 1]``. Because ``t`` is centered at
+        ``0.5``, ``"linear"`` yields evenly spaced offsets symmetric about the
+        pivot (the historical even-fill); non-linear modes warp interior density
+        toward one end while endpoints stay at ``±span/2``.
+
+        Parameters:
+            amount (int): Number of cuts.
+            span (float): Distance between the first and last cut.
+            distribution (str): Progression curve name.
+            weight_bias (float): Bias for the ``"weighted"`` curve (0..1).
+            weight_curve (float): Curve strength for non-linear curves.
+
+        Returns:
+            list[float]: One signed offset per cut, in index order.
+        """
+        if amount <= 0:
+            return []
+        curve_fn = ptk.ProgressionCurves.get_curve_function(distribution)
+        offsets = []
+        for i in range(amount):
+            t = i / (amount - 1) if amount > 1 else 0.5
+            f = curve_fn(t, weight_curve, weight_bias)
+            offsets.append((f - 0.5) * span)
+        return offsets
+
     @classmethod
     @CoreUtils.undoable
     def cut_along_axis(
@@ -784,6 +870,10 @@ class EditUtils(ptk.HelpMixin):
         pivot="center",
         amount=1,
         offset=0,
+        spacing=0.0,
+        distribution="linear",
+        weight_bias=0.5,
+        weight_curve=2.0,
         invert=False,
         ortho=False,
         delete=False,
@@ -798,12 +888,31 @@ class EditUtils(ptk.HelpMixin):
             - ``"world"`` / ``"center"`` / ``"xmin"`` / etc. → cuts use world axes.
             - tuple ``(x, y, z)`` → world-space pivot, world axes.
 
+        Cut placement:
+            The ``amount`` cuts are distributed across a span centered on the
+            pivot. ``spacing`` sets that span (``0`` = legacy even-fill of the
+            axis length); ``distribution`` warps where cuts land within it,
+            reusing the same progression curves as ``DuplicateLinear`` — see
+            :class:`pythontk.ProgressionCurves`. ``"linear"`` keeps cuts evenly
+            spaced and centered (the historical behavior); other modes bias
+            density toward one end. ``weight_bias`` (``"weighted"`` only) and
+            ``weight_curve`` (non-linear modes) tune the curve.
+
         Parameters:
             objects (str/obj/list): The object(s) to cut.
             axis (str): The axis to cut along ('x', '-x', 'y', '-y', 'z', '-z').
             amount (int): Number of cuts.
             pivot (str or tuple): See above.
             offset (float): Offset along the axis from the pivot.
+            spacing (float): Distance between adjacent cuts. ``0`` (default)
+                auto-fills the axis length as before; ``>0`` fixes the span to
+                ``spacing * (amount - 1)`` (the exact per-cut gap for the
+                ``"linear"`` distribution).
+            distribution (str): Progression curve name distributing the cuts
+                across the span (``"linear"``, ``"ease_in"``, ``"ease_out"``,
+                ``"weighted"``, …). See :class:`pythontk.ProgressionCurves`.
+            weight_bias (float): Bias for the ``"weighted"`` distribution (0..1).
+            weight_curve (float): Curve strength for non-linear distributions.
             invert (bool): Invert the axis direction.
             ortho (bool): Use the orthogonal axis.
             delete (bool): Delete faces on the +axis half after cutting.
@@ -823,7 +932,9 @@ class EditUtils(ptk.HelpMixin):
             and pivot in {"object", "manip", "baked"}
         )
 
-        for node in cmds.ls(as_strings(objects), type="transform", flatten=True):
+        for node in cmds.ls(
+            CoreUtils.as_strings(objects), type="transform", flatten=True, long=True
+        ):
             if NodeUtils.is_group(node):
                 continue
 
@@ -862,19 +973,28 @@ class EditUtils(ptk.HelpMixin):
                 pivot_value = XformUtils.get_operation_axis_pos(node, pivot, axis_index)
 
             pivot_value += offset * sign
-            cut_spacing = axis_length / (amount + 1)
             rotation = cls._compose_cut_rotation(axis, world_matrix)
 
+            # Span from the first to the last cut. An explicit ``spacing`` fixes
+            # it; otherwise fall back to the legacy even-fill (cut_spacing =
+            # L/(amount+1), so the span is (amount-1)*cut_spacing).
+            if spacing and spacing > 0:
+                span = spacing * (amount - 1)
+            elif amount > 1:
+                span = axis_length * (amount - 1) / (amount + 1)
+            else:
+                span = 0.0
+
+            offsets = cls._cut_offsets(
+                amount, span, distribution, weight_bias, weight_curve
+            )
+
             cut_positions = []
-            for i in range(amount):
+            for off in offsets:
                 # bbox min as anchor for non-axis components — any point on the
                 # cut plane works since rotation alone defines orientation.
                 cut_point = list(bbox[:3])
-                cut_point[axis_index] = (
-                    pivot_value
-                    - ((amount - 1) * cut_spacing / 2)
-                    + (cut_spacing * i)
-                )
+                cut_point[axis_index] = pivot_value + off
                 cut_positions.append(cut_point[axis_index])
 
                 if use_object_space:
@@ -882,25 +1002,24 @@ class EditUtils(ptk.HelpMixin):
                 else:
                     world_cut_point = cut_point
 
-                cmds.polyCut(
-                    node, df=False, pc=world_cut_point, ro=rotation, ch=True
-                )
+                cmds.polyCut(node, df=False, pc=world_cut_point, ro=rotation, ch=True)
 
             if delete:
                 # amount==0 adds no cut lines, so fall back to the pivot
                 # position (which equals the single amount==1 cut position).
+                # Use the extreme cut (max/min), not the last/first, so a
+                # non-monotonic distribution still deletes from the outermost
+                # cut on the delete side.
                 deepest_cut = (
                     pivot_value
                     if not cut_positions
-                    else (cut_positions[-1] if sign == 1 else cut_positions[0])
+                    else (max(cut_positions) if sign == 1 else min(cut_positions))
                 )
                 pivot_point = list(bbox[:3])
                 pivot_point[axis_index] = deepest_cut
 
                 if use_object_space:
-                    world_pivot_point = list(
-                        om.MPoint(*pivot_point) * world_matrix
-                    )[:3]
+                    world_pivot_point = list(om.MPoint(*pivot_point) * world_matrix)[:3]
                 else:
                     world_pivot_point = pivot_point
 
@@ -937,7 +1056,9 @@ class EditUtils(ptk.HelpMixin):
         axis = XformUtils.convert_axis(axis)
         axis_index = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}[axis]
 
-        for node in cmds.ls(as_strings(objects), type="transform", flatten=True):
+        for node in cmds.ls(
+            CoreUtils.as_strings(objects), type="transform", flatten=True, long=True
+        ):
             if NodeUtils.is_group(node):
                 continue
 
@@ -959,7 +1080,9 @@ class EditUtils(ptk.HelpMixin):
             # Updated to use new pivot format
             faces = cls.get_all_faces_on_axis(node, axis, pivot, use_object_axes)
             if not faces:
-                cmds.warning(f"No faces found along {axis} on {node}. Skipping deletion.")
+                cmds.warning(
+                    f"No faces found along {axis} on {node}. Skipping deletion."
+                )
                 continue
 
             total_faces = cmds.polyEvaluate(node, face=True)
@@ -994,6 +1117,7 @@ class EditUtils(ptk.HelpMixin):
         uninstance: bool = False,
         use_object_axes: bool = True,
         delete_original: bool = False,
+        center_pivot: bool = True,
         **kwargs,
     ):
         """Mirror geometry across a given axis.
@@ -1014,6 +1138,12 @@ class EditUtils(ptk.HelpMixin):
                 space (relevant when the object is rotated and pivot is "object", "manip", or "baked").
             delete_original (bool): If True, deletes the original half after mirroring
                 (only applies to ``mergeMode=-1``).
+            center_pivot (bool): If True (default), give each mirror result a pivot on its
+                own bounding-box center — the pre-mirror pivot is meaningless once the halves
+                are combined or a new half is created. The original half is only re-centered
+                when it *is* the combined result (``mergeMode >= 0``); in separate mode
+                (``mergeMode == -1``) only the new half is centered, leaving the source's
+                pivot untouched.
             kwargs: Additional arguments for polyMirrorFace.
 
         Returns:
@@ -1040,7 +1170,9 @@ class EditUtils(ptk.HelpMixin):
         kwargs["axis"] = axis_val
         kwargs["axisDirection"] = axis_direction
 
-        original_objects = cmds.ls(as_strings(objects), type="transform", flatten=True)
+        original_objects = cmds.ls(
+            CoreUtils.as_strings(objects), type="transform", flatten=True, long=True
+        )
         results = []
 
         # Determine whether to compute pivot in object space
@@ -1095,7 +1227,9 @@ class EditUtils(ptk.HelpMixin):
             # Custom separate: use separate_mirrored_mesh for proper separation
             if custom_separate:
                 new_obj = cls.separate_mirrored_mesh(
-                    mirror_node, delete_original=delete_original
+                    mirror_node,
+                    delete_original=delete_original,
+                    center_pivot=center_pivot,
                 )
                 if new_obj is not None:
                     results.append(new_obj)
@@ -1103,11 +1237,19 @@ class EditUtils(ptk.HelpMixin):
                     if not delete_original and cmds.objExists(obj):
                         results.append(obj)
                 else:
-                    # Separation failed, return the combined object
+                    # Separation failed: obj still holds both mirrored halves, so it is
+                    # effectively a combined result — center its pivot like the merge path.
+                    if center_pivot:
+                        cmds.xform(obj, centerPivots=True)
                     results.append(obj)
             else:
                 # Conform normals to fix potential reversal from mirror
                 cmds.polyNormal(obj, normalMode=2, ch=False)
+                # Merge welds both halves into this same transform, so its old
+                # pivot now sits off to one side of the combined result — center
+                # it on the merged bounding box (the mirror plane along the axis).
+                if center_pivot:
+                    cmds.xform(obj, centerPivots=True)
                 results.append(obj)
 
         return ptk.format_return(results, objects)
@@ -1115,13 +1257,19 @@ class EditUtils(ptk.HelpMixin):
     @staticmethod
     def separate_mirrored_mesh(
         mirror_node: str,
-        preserve_pivot: bool = True,
+        center_pivot: bool = True,
         delete_original: bool = False,
     ) -> Optional[str]:
         """Separate mirrored geometry and clean up hierarchy, history, and parenting.
 
         Parameters:
             mirror_node (str): The polyMirrorFace node for face connection.
+            center_pivot (bool): If True (default), give the new mirrored half a pivot on
+                its own bounding-box center. The source half's pivot is never touched — it
+                is the user's existing object. If False, copy the source's world pivot onto
+                the new half (legacy behavior; leaves the new object's pivot floating over
+                the source).
+            delete_original (bool): If True, delete the source half after separating.
 
         Returns:
             The cleaned, renamed transform (or None on failure).
@@ -1134,7 +1282,10 @@ class EditUtils(ptk.HelpMixin):
             try:
                 mesh_outputs = (
                     cmds.listConnections(
-                        f"{mirror_node}.output", type="mesh", source=False, destination=True
+                        f"{mirror_node}.output",
+                        type="mesh",
+                        source=False,
+                        destination=True,
                     )
                     or []
                 )
@@ -1198,19 +1349,18 @@ class EditUtils(ptk.HelpMixin):
                     else:
                         cmds.parent(node, world=True)
 
-            # Pivot handling: preserve original pivot (default) or center.
+            # Pivot handling: the new half is fresh geometry, so its useful pivot is
+            # its own bounding-box center. Leave the source (orig_obj) alone — separate
+            # mode doesn't combine, so the user's existing object keeps its pivot.
             try:
-                if preserve_pivot:
-                    # Get original pivot(s) in world space
+                if center_pivot:
+                    cmds.xform(new_obj, centerPivots=True)
+                else:
+                    # Legacy: copy the source's world pivot onto the new half.
                     orig_rp = cmds.xform(orig_obj, q=True, ws=True, rp=True)
                     orig_sp = cmds.xform(orig_obj, q=True, ws=True, sp=True)
                     cmds.xform(new_obj, ws=True, rp=orig_rp)
                     cmds.xform(new_obj, ws=True, sp=orig_sp)
-                else:
-                    center = XformUtils.get_bounding_box(
-                        [orig_obj, new_obj], "center", world_space=True
-                    )
-                    cmds.xform(new_obj, piv=center, ws=True)
             except Exception as e:
                 cmds.warning(f"[Separate] Pivot handling failed for {new_obj}: {e}")
 
@@ -1226,10 +1376,12 @@ class EditUtils(ptk.HelpMixin):
                 try:
                     cmds.delete(obj, constructionHistory=True)
                 except Exception as e:
-                    cmds.warning(f"Failed to delete construction history for {obj}: {e}")
+                    cmds.warning(
+                        f"Failed to delete construction history for {obj}: {e}"
+                    )
 
             # Capture original name before potential deletion
-            orig_name = str(orig_obj).split('|')[-1]
+            orig_name = str(orig_obj).split("|")[-1]
 
             # Delete original half if requested
             if delete_original:
@@ -1243,7 +1395,9 @@ class EditUtils(ptk.HelpMixin):
                 try:
                     cmds.delete(temp_parent, constructionHistory=True)
                 except Exception as e:
-                    cmds.warning(f"Failed to delete temporary parent {temp_parent}: {e}")
+                    cmds.warning(
+                        f"Failed to delete temporary parent {temp_parent}: {e}"
+                    )
 
             # Rename to match original object — capture the resolved name
             # since cmds.rename may mangle (e.g. when the orig_name is still
@@ -1295,7 +1449,7 @@ class EditUtils(ptk.HelpMixin):
             # Ensure we have full paths for robustness
             # Handle nodes or strings
             objects = [str(o) for o in objects]
-            objects = cmds.ls(as_strings(objects), long=True)
+            objects = cmds.ls(CoreUtils.as_strings(objects), long=True)
             scene_objs = []
             for obj in objects:
                 shapes = cmds.listRelatives(
@@ -1365,7 +1519,7 @@ class EditUtils(ptk.HelpMixin):
                 cmds.ls(list(obj_fingerprints.keys()), sl=True, long=True)
             )
         else:
-            selected_set = set(cmds.ls(as_strings(objects), long=True))
+            selected_set = set(cmds.ls(CoreUtils.as_strings(objects), long=True))
 
         fingerprint_groups = defaultdict(list)
         for obj, fingerprint in obj_fingerprints.items():
@@ -1428,9 +1582,7 @@ class EditUtils(ptk.HelpMixin):
                 ]  # selectedFaces = cmds.ls(sl=1, flatten=1)
                 edges_sorted_by_face.append(connected_edges_flat)
 
-            out = (
-                []
-            )  # 1) take first set A from list. 2) for each other set B in the list do if B has common element(s) with A join B into A; remove B from list. 3) repeat 2. until no more overlap with A. 4) put A into outpup. 5) repeat 1. with rest of list.
+            out = []  # 1) take first set A from list. 2) for each other set B in the list do if B has common element(s) with A join B into A; remove B from list. 3) repeat 2. until no more overlap with A. 4) put A into outpup. 5) repeat 1. with rest of list.
             while len(edges_sorted_by_face) > 0:
                 first, rest = (
                     edges_sorted_by_face[0],
@@ -1605,7 +1757,7 @@ class EditUtils(ptk.HelpMixin):
         if isinstance(objects, str):
             objects = [objects]
 
-        objects = cmds.ls(as_strings(objects), flatten=True, type="transform")
+        objects = cmds.ls(CoreUtils.as_strings(objects), flatten=True, type="transform")
 
         faces = []
         for obj in objects:
@@ -1621,11 +1773,17 @@ class EditUtils(ptk.HelpMixin):
         """All polygon-mesh transforms currently in the scene.
 
         cmds.filterExpand returns None (not []) when nothing matches the
-        mask, so callers must not set() its result directly.
+        mask, so callers must not set() its result directly. Results are
+        re-resolved to long transform names so they compare equal against
+        long-name query objects (filterExpand's short names made `m != obj`
+        self-filters no-op; its fullPath flag returns shapes, not transforms).
         """
         return set(
-            cmds.filterExpand(cmds.ls(long=True, typ="transform"), selectionMask=12)
-            or []
+            cmds.ls(
+                cmds.filterExpand(cmds.ls(long=True, typ="transform"), selectionMask=12)
+                or [],
+                long=True,
+            )
         )
 
     @staticmethod
@@ -1634,7 +1792,9 @@ class EditUtils(ptk.HelpMixin):
         objects, tolerance=0.0, inc_orig=False, select=False, **kwargs
     ):
         """Find similar geometry objects using the polyEvaluate command.
-        Default behaviour is to compare all flags.
+        With no metric kwargs (or all falsy), the default metric set is compared:
+        vertex, edge, face, uvcoord, triangle, shell, area, worldArea
+        (boundingBox excluded — it is position-dependent).
 
         Parameters:
             objects (str/obj/list): The object(s) to find similar for.
@@ -1643,6 +1803,7 @@ class EditUtils(ptk.HelpMixin):
             inc_orig (bool): Include the original given obj(s) with the return results.
             select (bool): Select the resulting similar objects.
             kwargs (bool): Any keyword argument 'polyEvaluate' takes. Used to filter the results.
+                    Falsy values are dropped (polyEvaluate treats flag=False as flag-absent).
                     ex: vertex, edge, face, uvcoord, triangle, shell, boundingBox, boundingBox2d,
                     vertexComponent, boundingBoxComponent, boundingBoxComponent2d, area, worldArea
         Returns:
@@ -1652,7 +1813,31 @@ class EditUtils(ptk.HelpMixin):
         Example:
             get_similar_mesh(selection, vertex=True, area=True)
         """
-        objects_list = cmds.ls(as_strings(objects), long=True, transforms=True)
+        objects_list = cmds.ls(
+            CoreUtils.as_strings(objects), long=True, transforms=True
+        )
+
+        # polyEvaluate treats a flag passed as False the same as no flag at
+        # all and returns the FULL stats dict, which then hit exact
+        # dict-equality inside are_similar — an unchecked metric silently
+        # required every stat to match exactly, overriding tolerance. Drop
+        # falsy flags; with none left, compare the default metric set (the
+        # documented behaviour). boundingBox is deliberately excluded from
+        # the defaults: it is position-dependent, so an identical mesh that
+        # has merely been moved would never match.
+        kwargs = {k: v for k, v in kwargs.items() if v} or {
+            k: True
+            for k in (
+                "vertex",
+                "edge",
+                "face",
+                "uvcoord",
+                "triangle",
+                "shell",
+                "area",
+                "worldArea",
+            )
+        }
 
         otherSceneMeshes = EditUtils._get_scene_polygon_transforms()
 
@@ -1710,11 +1895,15 @@ class EditUtils(ptk.HelpMixin):
             (list) Similar objects.
         """
         polys = (
-            cmds.filterExpand(
-                cmds.ls(as_strings(obj), long=True, tr=True), selectionMask=12
+            cmds.ls(
+                cmds.filterExpand(
+                    cmds.ls(CoreUtils.as_strings(obj), long=True, tr=True),
+                    selectionMask=12,
+                )
+                or [],
+                long=True,
             )
-            or []
-        )  # polygon selection mask.
+        )  # polygon selection mask; long names so `m != obj` matches _get_scene_polygon_transforms names.
         if not polys:
             cmds.warning(
                 "get_similar_topo: no polygon object found in the given input."
@@ -1730,7 +1919,8 @@ class EditUtils(ptk.HelpMixin):
                 if cmds.polyCompare(obj, m, **kwargs) == 0 and m != obj
             ]
         )  # 0:equal,Verts:1,Edges:2,Faces:4,UVSets:8,UVIndices:16,ColorSets:32,ColorIndices:64,UserNormals=128. So a return value of 3 indicates both vertices and edges are different.
-        return similar + [obj] if inc_orig else similar
+        # Re-ls so the appended long-name obj matches similar's name form.
+        return cmds.ls(similar + [obj]) if inc_orig else similar
 
     @staticmethod
     def invert_geometry(
@@ -1748,7 +1938,9 @@ class EditUtils(ptk.HelpMixin):
         if objects is None:
             objects = cmds.ls(selection=True, transforms=True, type="transform")
         else:
-            objects = cmds.ls(as_strings(objects), transforms=True, type="transform")
+            objects = cmds.ls(
+                CoreUtils.as_strings(objects), transforms=True, type="transform"
+            )
 
         def _is_mesh_xform(obj):
             sh = NodeUtils.get_shape(obj)
@@ -1784,7 +1976,7 @@ class EditUtils(ptk.HelpMixin):
         if objects is None:
             objects = cmds.ls(selection=True, flatten=True)
         else:
-            objects = cmds.ls(as_strings(objects), flatten=True)
+            objects = cmds.ls(CoreUtils.as_strings(objects), flatten=True)
 
         if not objects:
             return []
@@ -1817,17 +2009,11 @@ class EditUtils(ptk.HelpMixin):
                 if cmds.objectType(shape) != "mesh":
                     continue
                 if "vertex" in ct_name or ct_name == "vtx":
-                    full_set.extend(
-                        cmds.ls(f"{shape}.vtx[*]", flatten=True) or []
-                    )
+                    full_set.extend(cmds.ls(f"{shape}.vtx[*]", flatten=True) or [])
                 elif "edge" in ct_name or ct_name == "e":
-                    full_set.extend(
-                        cmds.ls(f"{shape}.e[*]", flatten=True) or []
-                    )
+                    full_set.extend(cmds.ls(f"{shape}.e[*]", flatten=True) or [])
                 elif "face" in ct_name or ct_name == "f":
-                    full_set.extend(
-                        cmds.ls(f"{shape}.f[*]", flatten=True) or []
-                    )
+                    full_set.extend(cmds.ls(f"{shape}.f[*]", flatten=True) or [])
 
         inverted = [x for x in full_set if str(x) not in selected_strs]
 

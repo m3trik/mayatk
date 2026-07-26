@@ -12,9 +12,10 @@ Usage::
 
 Nested batches flatten — only the outermost triggers the sync.
 """
+
 import logging
 import threading
-from typing import Iterable, List, Optional
+from typing import Iterable, Optional
 
 from mayatk.audio_utils import compositor
 
@@ -30,10 +31,28 @@ logger = logging.getLogger(__name__)
 _state = threading.local()
 
 
-def _get_stack() -> list:
-    if not hasattr(_state, "stack"):
-        _state.stack = []
-    return _state.stack
+class _BatchInternal(object):
+    """Internal helpers for Batch."""
+
+    @staticmethod
+    def _get_stack() -> list:
+        if not hasattr(_state, "stack"):
+            _state.stack = []
+        return _state.stack
+
+
+class Batch(_BatchInternal):
+    """Batch — module namespace."""
+
+    @staticmethod
+    def batch(auto_sync: bool = True, undo: bool = True) -> "_BatchContext":
+        """Context manager grouping audio edits into one undo + one sync.
+
+        Parameters:
+            auto_sync: If True, compositor.sync() runs on successful exit.
+            undo: If True, wraps the body in a Maya undo chunk.
+        """
+        return _BatchContext(auto_sync=auto_sync, undo=undo)
 
 
 class _Batch:
@@ -67,12 +86,12 @@ class _BatchContext:
     # Delegate dirty-marking to the outermost batch so nested calls
     # aggregate into one sync.
     def mark_dirty(self, track_ids: Optional[Iterable[str]] = None) -> None:
-        stack = _get_stack()
+        stack = _BatchInternal._get_stack()
         if stack:
             stack[0].mark_dirty(track_ids)
 
     def __enter__(self) -> "_BatchContext":
-        stack = _get_stack()
+        stack = _BatchInternal._get_stack()
         self._is_outer = not stack
         if self._is_outer:
             self._batch = _Batch()
@@ -83,26 +102,16 @@ class _BatchContext:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        stack = _get_stack()
+        stack = _BatchInternal._get_stack()
         if self._is_outer:
             try:
                 if exc_type is None and self._auto_sync and self._batch is not None:
                     if self._batch._full_sync:
-                        compositor.sync(tracks=None)
+                        compositor.Compositor.sync(tracks=None)
                     elif self._batch._dirty:
-                        compositor.sync(tracks=sorted(self._batch._dirty))
+                        compositor.Compositor.sync(tracks=sorted(self._batch._dirty))
             finally:
                 if stack and stack[-1] is self._batch:
                     stack.pop()
                 if self._chunk:
                     cmds.undoInfo(closeChunk=True)
-
-
-def batch(auto_sync: bool = True, undo: bool = True) -> _BatchContext:
-    """Context manager grouping audio edits into one undo + one sync.
-
-    Parameters:
-        auto_sync: If True, compositor.sync() runs on successful exit.
-        undo: If True, wraps the body in a Maya undo chunk.
-    """
-    return _BatchContext(auto_sync=auto_sync, undo=undo)

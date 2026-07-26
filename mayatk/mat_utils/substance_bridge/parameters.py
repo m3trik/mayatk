@@ -36,18 +36,12 @@ Known limitations
   slot if the template puts ``__PATH__`` after a flag. Template authors
   should avoid that pattern; the bridge does not auto-skip empty pairs.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
-from uitk.bridge import (
-    AttributeSpec,
-    cli_raw,
-    js_literal,
-    referenced_keys as _refkeys,
-    defaults as _defaults,
-    render_context as _render_context,
-)
+from uitk.bridge import AttributeSpec, Formatters, Parameters as _BridgeParams
 
 
 # Painter has two substitution contexts:
@@ -171,21 +165,35 @@ PARAMS: "dict[str, AttributeSpec]" = {
 }
 
 
-def referenced_keys(script_text: str) -> "set[str]":
-    """Registered keys present in *script_text* (delegates to uitk.bridge)."""
-    return _refkeys(script_text, PARAMS)
+class Parameters:
+    """Parameters — module namespace."""
 
+    #: The parameter registry, exposed on the class so a bridge slot can hand
+    #: this class to the shared base as its ``params_module`` (the base reads
+    #: ``params_module.PARAMS`` and ``.referenced_keys``) — no module-level
+    #: re-export shim required.
+    PARAMS = PARAMS
 
-def defaults() -> "dict[str, Any]":
-    """Return ``{key: default}`` for every registered parameter."""
-    return _defaults(PARAMS)
+    @staticmethod
+    def referenced_keys(script_text: str) -> "set[str]":
+        """Registered keys present in *script_text* (delegates to uitk.bridge)."""
+        return _BridgeParams.referenced_keys(script_text, PARAMS)
 
+    @staticmethod
+    def defaults() -> "dict[str, Any]":
+        """Return ``{key: default}`` for every registered parameter."""
+        return _BridgeParams.defaults(PARAMS)
 
-def render_cli_context(values: "dict[str, Any]") -> "dict[str, str]":
-    """Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting."""
-    return _render_context(values, PARAMS, formatter=cli_raw)
+    @staticmethod
+    def render_cli_context(values: "dict[str, Any]") -> "dict[str, str]":
+        """Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting."""
+        return _BridgeParams.render_context(
+            values, PARAMS, formatter=Formatters.cli_raw
+        )
 
-
-def render_js_context(values: "dict[str, Any]") -> "dict[str, str]":
-    """Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping."""
-    return _render_context(values, PARAMS, formatter=js_literal)
+    @staticmethod
+    def render_js_context(values: "dict[str, Any]") -> "dict[str, str]":
+        """Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping."""
+        return _BridgeParams.render_context(
+            values, PARAMS, formatter=Formatters.js_literal
+        )

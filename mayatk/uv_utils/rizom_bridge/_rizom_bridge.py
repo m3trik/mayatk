@@ -14,7 +14,7 @@ import pythontk as ptk
 
 # From this package:
 from mayatk import NodeUtils, UvUtils
-from mayatk.core_utils._core_utils import leaf_name, short_name, CoreUtils
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.env_utils.fbx_utils import FbxUtils
 from pythontk.core_utils.app_launcher import AppLauncher
 from pythontk.str_utils._str_utils import StrUtils
@@ -41,29 +41,33 @@ _RIZOM_SCAN_GLOBS = (
 _VERSION_RE = re.compile(r"(\d{4}(?:\.\d+)*)")
 
 
-def _parse_rizom_version(exe_path) -> "tuple[int, ...]":
-    """Parse ``(major, minor, ...)`` from *exe_path*'s install-dir name.
+class _RizomUVBridgeInternal(object):
+    """Internal helpers for RizomUVBridge."""
 
-    Walks the path's parents looking for a folder whose name mentions
-    Rizom and contains a year-anchored version. The result is padded to
-    at least length 2 (``(2020, 1)`` / ``(2022, 0)``) so single-segment
-    names still compare correctly against the ``(year, minor)`` gates in
-    :data:`parameters.MIN_VERSIONS` -- Python's lexicographic tuple
-    compare otherwise treats ``(2025,)`` as *less than* ``(2022, 0)``.
+    @staticmethod
+    def _parse_rizom_version(exe_path) -> "tuple[int, ...]":
+        """Parse ``(major, minor, ...)`` from *exe_path*'s install-dir name.
 
-    Returns ``(0, 0)`` when nothing parses.
-    """
-    for parent in Path(exe_path).resolve().parents:
-        if "rizom" not in parent.name.lower():
-            continue
-        matches = _VERSION_RE.findall(parent.name)
-        if matches:
-            parsed = tuple(int(p) for p in matches[-1].split("."))
-            return parsed if len(parsed) >= 2 else parsed + (0,) * (2 - len(parsed))
-    return (0, 0)
+        Walks the path's parents looking for a folder whose name mentions
+        Rizom and contains a year-anchored version. The result is padded to
+        at least length 2 (``(2020, 1)`` / ``(2022, 0)``) so single-segment
+        names still compare correctly against the ``(year, minor)`` gates in
+        :data:`parameters.MIN_VERSIONS` -- Python's lexicographic tuple
+        compare otherwise treats ``(2025,)`` as *less than* ``(2022, 0)``.
+
+        Returns ``(0, 0)`` when nothing parses.
+        """
+        for parent in Path(exe_path).resolve().parents:
+            if "rizom" not in parent.name.lower():
+                continue
+            matches = _VERSION_RE.findall(parent.name)
+            if matches:
+                parsed = tuple(int(p) for p in matches[-1].split("."))
+                return parsed if len(parsed) >= 2 else parsed + (0,) * (2 - len(parsed))
+        return (0, 0)
 
 
-class RizomUVBridge(ptk.LoggingMixin):
+class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
     # Namespace the round-trip FBX is imported into; created fresh per run
     # and removed again during cleanup.
     _IMPORT_NAMESPACE = "RizomUVImport"
@@ -132,11 +136,9 @@ class RizomUVBridge(ptk.LoggingMixin):
         """
         path = self.rizom_path
         if not path:
-            self.logger.debug(
-                "rizom_version: no executable resolved yet -> (0, 0)."
-            )
+            self.logger.debug("rizom_version: no executable resolved yet -> (0, 0).")
             return (0, 0)
-        version = _parse_rizom_version(path)
+        version = _RizomUVBridgeInternal._parse_rizom_version(path)
         if version == (0, 0):
             self.logger.debug(
                 f"rizom_version: could not parse version from {path!r}; "
@@ -182,7 +184,15 @@ class RizomUVBridge(ptk.LoggingMixin):
         else:
             self._script_path = self._prepare_script_file(value)
 
-    def process_with_rizomuv(self, objects, uv_script=None, preset=None, params=None):
+    def process_with_rizomuv(
+        self,
+        objects,
+        uv_script=None,
+        preset=None,
+        params=None,
+        select_objects=None,
+        skip_instances=True,
+    ):
         """Run the full export -> RizomUV -> re-import workflow.
 
         The entire round-trip is wrapped in a Maya undo chunk so a single
@@ -195,15 +205,33 @@ class RizomUVBridge(ptk.LoggingMixin):
             uv_script: Raw Lua string **or** path to a ``.lua`` file.
                        Mutually exclusive with *preset*.
             preset: Name of a built-in preset (``"pack"``, ``"unwrap_hard"``,
-                    ``"unwrap_organic"``, ``"optimize"``). The corresponding
-                    file is loaded from ``scripts/<preset>.lua``. Mutually
+                    ``"unwrap_organic"``, ``"unwrap_hybrid"``, ``"optimize"``,
+                    ``"pack_into_existing"``). The corresponding file is
+                    loaded from ``scripts/<preset>.lua``. Mutually
                     exclusive with *uv_script*.
             params: Optional dict of placeholder overrides
                     (e.g. ``{"ITERATIONS": 25, "WELD_SEAMS": False}``).
                     Keys map to ``__KEY__`` tokens in the script (see
                     ``parameters.PARAMS`` for the registered set).
                     Unknown keys are passed through verbatim.
+            select_objects: Subset of *objects* whose islands the script
+                    should select in Rizom (rendered into the script's
+                    ``PACK_SELECT_NAMES`` token as a Lua table of exported
+                    island-group names). Required by presets that operate
+                    on a sub-selection -- e.g. ``pack_into_existing`` packs
+                    these objects' islands into the gaps left by the rest.
+            skip_instances: When True (default), collapse true DAG instances
+                    (transforms sharing one shape) to a single representative
+                    before export. RizomUV would otherwise unwrap each copy
+                    independently and the UV transfer back onto the shared
+                    shape is last-write-wins -- wasteful and non-deterministic.
+                    The transfer to the representative propagates to every
+                    instance automatically (shared shape). Ignored when a
+                    preset selects a sub-set of islands (the select-objects
+                    mapping needs every named object exported).
         """
+        from mayatk.uv_utils.rizom_bridge import parameters as _params
+
         if not objects:
             raise ValueError("No objects specified for processing.")
 
@@ -215,11 +243,52 @@ class RizomUVBridge(ptk.LoggingMixin):
         if resolved is not None:
             self.script_path = resolved
 
+        # Preset-level version gate (e.g. pack_into_existing needs the
+        # ZomPack WorkingSet field, absent below 2022.2). Fails loudly
+        # instead of letting an unsupported field no-op or crash Rizom.
+        required = _params.Parameters.preset_min_version(resolved or "")
+        if required and self.rizom_version < required:
+            raise RuntimeError(
+                f"Preset '{preset or 'script'}' requires RizomUV >= "
+                f"{'.'.join(map(str, required))}; installed version is "
+                f"{'.'.join(map(str, self.rizom_version))} ({self.rizom_path})."
+            )
+
+        # Presets that select a sub-set of islands need to know which
+        # objects that is -- refuse to render a script whose selection
+        # token would otherwise survive as a Lua syntax error.
+        needs_selection = bool(resolved) and "__PACK_SELECT_NAMES__" in resolved
+        if needs_selection and not select_objects:
+            raise ValueError(
+                f"Preset '{preset or 'script'}' operates on a sub-selection; "
+                "pass select_objects= with the transforms whose islands "
+                "should be packed."
+            )
+
+        # Collapse true DAG instances to one representative per shared shape
+        # (unless a preset needs every named object exported for its
+        # island-group selection). The UV transfer to the representative's
+        # shape propagates to all instances -- see the docstring.
+        if skip_instances and not needs_selection and len(original_transforms) > 1:
+            deduped = NodeUtils.filter_duplicate_instances(original_transforms)
+            if len(deduped) < len(original_transforms):
+                self.logger.info(
+                    f"Skipping {len(original_transforms) - len(deduped)} "
+                    "instance(s): one representative per shared shape is "
+                    "unwrapped; the result applies to all instances."
+                )
+                original_transforms = deduped
+
         self._params = params or {}
 
         chunk_name = f"RizomUV: {preset or 'script'}"
         with CoreUtils.undo_chunk(chunk_name):
             self._export_objects(original_transforms)
+            if needs_selection:
+                self._params = dict(self._params)
+                self._params.setdefault(
+                    "PACK_SELECT_NAMES", self._select_names_lua(select_objects)
+                )
             self._execute_uv_script()
 
             # Directly work with transforms for imported objects for consistency
@@ -237,7 +306,9 @@ class RizomUVBridge(ptk.LoggingMixin):
         # Remove the namespace if it already exists to ensure clean import
         if cmds.namespace(exists=import_namespace):
             self.logger.debug(f"Removing existing namespace: {import_namespace}")
-            cmds.namespace(removeNamespace=import_namespace, mergeNamespaceWithRoot=True)
+            cmds.namespace(
+                removeNamespace=import_namespace, mergeNamespaceWithRoot=True
+            )
 
         # Create a fresh namespace
         cmds.namespace(addNamespace=import_namespace)
@@ -270,9 +341,10 @@ class RizomUVBridge(ptk.LoggingMixin):
                 if shape_nodes:
                     imported_objs = []
                     for shape in shape_nodes:
-                        transforms = cmds.listRelatives(
-                            shape, parent=True, type="transform"
-                        ) or []
+                        transforms = (
+                            cmds.listRelatives(shape, parent=True, type="transform")
+                            or []
+                        )
                         if transforms:
                             imported_objs.extend(transforms)
                     self.logger.debug(f"Transforms found from shapes: {imported_objs}")
@@ -286,7 +358,7 @@ class RizomUVBridge(ptk.LoggingMixin):
                 suffix_objects = [
                     t
                     for t in all_transforms
-                    if leaf_name(t).endswith(self._temp_suffix)
+                    if CoreUtils.leaf_name(t).endswith(self._temp_suffix)
                 ]
                 self.logger.debug(
                     f"Found {len(suffix_objects)} objects with suffix: {suffix_objects}"
@@ -297,7 +369,9 @@ class RizomUVBridge(ptk.LoggingMixin):
             self.logger.warning(f"Import failed: {e}")
             # Final fallback: try without namespace
             try:
-                self.logger.debug("Trying import without namespace as final fallback...")
+                self.logger.debug(
+                    "Trying import without namespace as final fallback..."
+                )
                 existing_transforms = set(cmds.ls(type="transform") or [])
 
                 mel.eval(
@@ -309,7 +383,9 @@ class RizomUVBridge(ptk.LoggingMixin):
 
                 # Filter to only those with our suffix
                 suffix_objects = [
-                    t for t in imported_objs if leaf_name(t).endswith(self._temp_suffix)
+                    t
+                    for t in imported_objs
+                    if CoreUtils.leaf_name(t).endswith(self._temp_suffix)
                 ]
                 self.logger.debug(
                     f"Fallback without namespace found {len(suffix_objects)} suffix objects: {suffix_objects}"
@@ -355,7 +431,7 @@ class RizomUVBridge(ptk.LoggingMixin):
         for i, orig in enumerate(original_transforms):
             try:
                 dup = cmds.duplicate(orig, rr=True, ic=True)[0]
-                new_name = f"{leaf_name(orig)}_{i}{self._temp_suffix}"
+                new_name = f"{CoreUtils.leaf_name(orig)}_{i}{self._temp_suffix}"
                 dup = cmds.rename(dup, new_name)
                 # Resolve to full DAG path so cmds.select can disambiguate when
                 # two duplicates collapse to the same leaf name in different parents.
@@ -369,7 +445,9 @@ class RizomUVBridge(ptk.LoggingMixin):
                 # the request would silently skip that object's UV transfer
                 # on re-import. Short (namespace-free) to match import-side
                 # lookups.
-                self._export_name_map[short_name(leaf_name(dup))] = orig
+                self._export_name_map[
+                    CoreUtils.short_name(CoreUtils.leaf_name(dup))
+                ] = orig
             except Exception as dup_err:
                 self.logger.warning(f"Failed to duplicate {orig}: {dup_err}")
         self.logger.debug(
@@ -449,8 +527,7 @@ class RizomUVBridge(ptk.LoggingMixin):
         exe = self.rizom_path
         if not exe:
             raise RuntimeError(
-                "RizomUV executable not found. Pass rizom_path= or add "
-                "RizomUV to PATH."
+                "RizomUV executable not found. Pass rizom_path= or add RizomUV to PATH."
             )
 
         # Snapshot the export file's pre-run state so we can verify RizomUV
@@ -551,7 +628,7 @@ class RizomUVBridge(ptk.LoggingMixin):
             # Build ordered (source, destination) pairs using the export mapping
             pairs = []
             for imp in imported_objects:
-                dst = self._export_name_map.get(short_name(imp))
+                dst = self._export_name_map.get(CoreUtils.short_name(imp))
                 if dst is None:
                     self.logger.debug(
                         f"Imported object {imp} not found in export map; skipping."
@@ -566,8 +643,14 @@ class RizomUVBridge(ptk.LoggingMixin):
             self.logger.info(f"Transferring UVs to {len(pairs)} object(s).")
             src_list = [s for s, _ in pairs]
             dst_list = [d for _, d in pairs]
+            # These pairs are already verified 1:1 correspondences (via
+            # _export_name_map), not an unordered pile of meshes -- pass
+            # match_by_similarity=False so transfer_uvs applies them
+            # directly instead of re-deriving pairing from geometry, which
+            # could reject a known-correct pair below `tolerance` or
+            # cross-wire two pairs of similar/duplicate geometry.
             try:
-                UvUtils.transfer_uvs(src_list, dst_list)
+                UvUtils.transfer_uvs(src_list, dst_list, match_by_similarity=False)
                 self.logger.debug("Batch UV transfer completed successfully!")
             except Exception as batch_err:
                 self.logger.warning(
@@ -575,7 +658,7 @@ class RizomUVBridge(ptk.LoggingMixin):
                 )
                 for s, d in pairs:
                     try:
-                        UvUtils.transfer_uvs([s], [d])
+                        UvUtils.transfer_uvs([s], [d], match_by_similarity=False)
                         self.logger.debug(f"Pairwise UV transfer success: {s} -> {d}")
                     except Exception as pair_err:
                         self.logger.error(
@@ -603,6 +686,52 @@ class RizomUVBridge(ptk.LoggingMixin):
             except Exception as cleanup_err:
                 self.logger.warning(f"Post-transfer cleanup failed: {cleanup_err}")
             self.logger.debug("Cleanup completed.")
+
+    def _select_names_lua(self, select_objects) -> str:
+        """Render *select_objects* as a Lua table of exported group names.
+
+        Must run after :meth:`_export_objects` -- it resolves each object
+        through ``_export_name_map`` to the suffixed duplicate name the FBX
+        (and therefore Rizom's imported island groups) actually carries.
+        """
+        sel_transforms = NodeUtils.get_transform_node(select_objects) or []
+        sel_set = set(cmds.ls(sel_transforms, long=True) or [])
+        names = [
+            dup
+            for dup, orig in self._export_name_map.items()
+            if (cmds.ls(orig, long=True) or [str(orig)])[0] in sel_set
+        ]
+        if not names:
+            raise ValueError(
+                "select_objects did not match any exported object -- "
+                "they must be a subset of the objects passed for processing."
+            )
+        return "{" + ", ".join(f'"{n}"' for n in names) + "}"
+
+    @staticmethod
+    def expand_by_materials(objects) -> "tuple[list[str], list[str]]":
+        """Expand *objects* to every mesh sharing their assigned materials.
+
+        Companion to the ``pack_into_existing`` preset: the caller selects
+        only the NEW meshes; the full set Rizom needs (so the existing
+        layout is present as the locked forbidden area) is every mesh that
+        uses the same material(s) -- the material defines "the map".
+
+        Returns ``(all_objects, selected_objects)`` as long names, where
+        *selected_objects* is the normalized input (the pack subset).
+        """
+        # Deferred: mat_utils pulls in shading-network helpers the plain
+        # round-trip flow never needs.
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        selected = cmds.ls(
+            NodeUtils.get_transform_node(objects) or [], long=True
+        ) or []
+        expanded = set(selected)
+        for mat in MatUtils.get_mats(selected, as_strings=True) or []:
+            members = MatUtils.find_by_mat_id(mat, shell=True) or []
+            expanded.update(cmds.ls(members, long=True) or [])
+        return sorted(expanded), selected
 
     # -- Script resolution helpers -----------------------------------------
 
@@ -648,16 +777,20 @@ class RizomUVBridge(ptk.LoggingMixin):
         is_fbx = Path(self.export_path).suffix.lower() == ".fbx"
         version = self.rizom_version
 
+        # Expand shared includes (__PACK_BLOCK__) so their lines participate
+        # in version-stripping + param substitution below.
+        user_script = _params.Parameters.expand_includes(user_script)
+
         # Strip lines referencing placeholders that the installed Rizom
         # doesn't support -- otherwise the unsupported field hits Rizom and
         # crashes the process (access violation on 2020.1, see MIN_VERSIONS
         # in parameters.py for the gate list).
-        user_script = _params.strip_unsupported(user_script, version)
+        user_script = _params.Parameters.strip_unsupported(user_script, version)
 
         # Resolve param values: registered defaults, then user overrides.
-        merged = _params.defaults()
+        merged = _params.Parameters.defaults()
         merged.update(self._params or {})
-        param_context = _params.render_context(merged)
+        param_context = _params.Parameters.render_context(merged)
 
         # User-script substitution happens first so its placeholders see the
         # resolved param values; the wrapper then sees the (already-substituted)
@@ -683,11 +816,14 @@ class RizomUVBridge(ptk.LoggingMixin):
         )
 
         wrapper = (_TEMPLATE_DIR / "wrapper.lua").read_text(encoding="utf-8")
-        full_script = StrUtils.replace_delimited(wrapper, {
-            "EXPORT_PATH": export_path_normalized,
-            "FBX_FLAG": fbx_flag,
-            "USER_SCRIPT": user_script,
-        })
+        full_script = StrUtils.replace_delimited(
+            wrapper,
+            {
+                "EXPORT_PATH": export_path_normalized,
+                "FBX_FLAG": fbx_flag,
+                "USER_SCRIPT": user_script,
+            },
+        )
 
         self.logger.debug(f"Constructed full script:\n{full_script}")
         return full_script
@@ -711,9 +847,7 @@ class RizomUVBridge(ptk.LoggingMixin):
         already log the FBX + script paths as clickable links during the run.
         Re-linking them here would clutter the panel for a one-shot tool.
         """
-        self.logger.info(
-            f"RizomUV '{preset}' applied to {transform_count} object(s)."
-        )
+        self.logger.info(f"RizomUV '{preset}' applied to {transform_count} object(s).")
 
     # ------------------------------------------------------------------
     # One-way send (open in RizomUV without re-importing UVs)
@@ -770,9 +904,7 @@ class RizomUVBridge(ptk.LoggingMixin):
 
         self._export_for_send(original_transforms, send_fbx_path)
 
-        send_script = self._construct_send_script(
-            original_transforms, send_fbx_path
-        )
+        send_script = self._construct_send_script(original_transforms, send_fbx_path)
         Path(send_script_path).write_text(send_script, encoding="utf-8")
 
         self.logger.info(
@@ -784,8 +916,7 @@ class RizomUVBridge(ptk.LoggingMixin):
         exe = self.rizom_path
         if not exe:
             raise RuntimeError(
-                "RizomUV executable not found. Pass rizom_path= or add "
-                "RizomUV to PATH."
+                "RizomUV executable not found. Pass rizom_path= or add RizomUV to PATH."
             )
 
         # Detached launch: Rizom stays open for the artist; Maya returns
@@ -871,9 +1002,9 @@ class RizomUVBridge(ptk.LoggingMixin):
         version = self.rizom_version
 
         # Resolve param values: registered defaults, then user overrides.
-        merged = _params.defaults()
+        merged = _params.Parameters.defaults()
         merged.update(self._params or {})
-        param_context = _params.render_context(merged)
+        param_context = _params.Parameters.render_context(merged)
 
         # ``LOAD_TEXTURES`` is a Python-side toggle (controls whether we
         # build the ZomLoadTexture block) -- the rendered Lua literal

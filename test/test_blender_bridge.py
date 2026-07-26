@@ -14,6 +14,7 @@ and the FBX export are stubbed (launching Blender would open a GUI; export is co
 
 Run inside a live Maya session via ``run_tests.py`` (``run_tests.py blender_bridge``).
 """
+
 import os
 import tempfile
 import unittest
@@ -22,13 +23,7 @@ from unittest import mock
 
 import maya.cmds as cmds
 
-from mayatk.env_utils.blender_bridge import _blender_bridge as bb
-from mayatk.env_utils.blender_bridge._blender_bridge import (
-    BlenderBridge,
-    list_template_modes,
-    template_modes,
-    _TEMPLATE_DIR,
-)
+from mayatk.env_utils.blender_bridge._blender_bridge import BlenderBridge, _TEMPLATE_DIR
 from mayatk.env_utils.blender_bridge import parameters as params
 
 # Shared engine internals moved upstream: the Maya FBX export lives on
@@ -44,7 +39,10 @@ class TestBlenderBridgeDiscovery(unittest.TestCase):
     """Executable discovery -- pure."""
 
     def test_blender_path_no_raise(self):
-        self.assertTrue(BlenderBridge().blender_path is None or isinstance(BlenderBridge().blender_path, str))
+        self.assertTrue(
+            BlenderBridge().blender_path is None
+            or isinstance(BlenderBridge().blender_path, str)
+        )
 
     def test_env_override(self):
         fd, path = tempfile.mkstemp(suffix=".exe", prefix="fake_blender_")
@@ -60,20 +58,24 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
     """Template discovery + rendering -- pure (no Maya geometry)."""
 
     def test_list_template_modes(self):
-        pairs = list_template_modes()
+        pairs = BlenderBridge.list_template_modes()
         stems = {t for t, _ in pairs}
         # The three near-identical recipes collapsed into one options-driven template.
         self.assertEqual(stems, {"import"})
         self.assertTrue(all(mode == "send_to" for _, mode in pairs))
 
     def test_template_modes_parsed(self):
-        self.assertEqual(template_modes(_TEMPLATE_DIR / "import.py"), ("send_to",))
+        self.assertEqual(
+            BlenderBridge.template_modes(_TEMPLATE_DIR / "import.py"), ("send_to",)
+        )
 
     def test_render_substitutes_path_and_params(self):
-        merged = params.defaults()
+        merged = params.Parameters.defaults()
         rendered = BlenderBridge().render_template("import", r"C:\t\x.fbx", merged)
         self.assertIn("bpy.ops.import_scene.fbx", rendered)
-        self.assertIn('FBX_PATH = r"C:/t/x.fbx"', rendered)  # forward-slashed, no __KEY__ left
+        self.assertIn(
+            'FBX_PATH = r"C:/t/x.fbx"', rendered
+        )  # forward-slashed, no __KEY__ left
         self.assertNotIn("__", rendered)  # every placeholder substituted
         self.assertIn("APPLY_UNIT_SCALE = True", rendered)
         self.assertIn("INCLUDE_ANIMATION = False", rendered)
@@ -82,7 +84,9 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
 
     def test_import_exposes_scene_and_frame_options(self):
         # The unified template exposes both scene-behavior knobs so the panel shows them.
-        used = params.referenced_keys((_TEMPLATE_DIR / "import.py").read_text())
+        used = params.Parameters.referenced_keys(
+            (_TEMPLATE_DIR / "import.py").read_text()
+        )
         self.assertIn("FRAME_VIEW", used)
         self.assertIn("CLEAR_SCENE", used)
 
@@ -96,7 +100,12 @@ class TestBlenderBridgeSend(MayaTkTestCase):
 
     def _patches(self, export_side_effect=None):
         return (
-            mock.patch.object(handoff_export.FbxUtils, "export", side_effect=export_side_effect, return_value="x.fbx"),
+            mock.patch.object(
+                handoff_export.FbxUtils,
+                "export",
+                side_effect=export_side_effect,
+                return_value="x.fbx",
+            ),
             mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
             mock.patch.object(bridge_base.AppLauncher, "launch", return_value=object()),
         )
@@ -106,8 +115,13 @@ class TestBlenderBridgeSend(MayaTkTestCase):
         export, load, launch = self._patches()
         with export as m_export, load, launch as m_launch:
             result = self.bridge.send(
-                [cube], template="import",
-                params={"EMBED_TEXTURES": True, "TRIANGULATE": True, "INCLUDE_ANIMATION": False},
+                [cube],
+                template="import",
+                params={
+                    "EMBED_TEXTURES": True,
+                    "TRIANGULATE": True,
+                    "INCLUDE_ANIMATION": False,
+                },
             )
         opts = m_export.call_args.kwargs["options"]
         self.assertTrue(opts["FBXExportEmbeddedTextures"])
@@ -130,7 +144,9 @@ class TestBlenderBridgeSend(MayaTkTestCase):
     def test_strip_materials_exports_shaderless_copies(self):
         cube = cmds.polyCube(name="bb_strip")[0]
         shader = cmds.shadingNode("lambert", asShader=True, name="bb_lam")
-        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="bb_lamSG")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="bb_lamSG"
+        )
         cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
         cmds.sets(cube, edit=True, forceElement=sg)
 
@@ -148,7 +164,9 @@ class TestBlenderBridgeSend(MayaTkTestCase):
 
         export, load, launch = self._patches(export_side_effect=capture)
         with export, load, launch:
-            self.bridge.send([cube], template="import", params={"INCLUDE_MATERIALS": False})
+            self.bridge.send(
+                [cube], template="import", params={"INCLUDE_MATERIALS": False}
+            )
 
         self.assertTrue(captured["objects"])
         self.assertNotIn(cube, captured["objects"])

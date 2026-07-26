@@ -6,9 +6,10 @@ Extracted from HierarchySyncController to isolate presentation logic
 from orchestration and state management.  All Controller state is accessed
 via ``self._ctrl``.
 """
+
 import re
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, Any
 
 import maya.cmds as cmds
 from qtpy import QtCore, QtWidgets, QtGui
@@ -58,7 +59,7 @@ class HierarchyTreeRenderer(ptk.LoggingMixin):
 
             tree_widget.clear()
 
-            all_transforms = cmds.ls(type="transform")
+            all_transforms = cmds.ls(type="transform", long=True)
             self.logger.debug(
                 f"Current scene has {len(all_transforms)} total transforms"
             )
@@ -197,7 +198,9 @@ class HierarchyTreeRenderer(ptk.LoggingMixin):
                 tree_widget.create_item([f"No {tree_type} objects"])
                 return
 
-            object_items, root_objects = tree_utils.build_hierarchy_structure(objects)
+            object_items, root_objects = (
+                tree_utils.TreePathMatcher.build_hierarchy_structure(objects)
+            )
 
             if not object_items:
                 tree_widget.create_item(["No Objects"])
@@ -574,7 +577,7 @@ class HierarchyTreeRenderer(ptk.LoggingMixin):
 
     def get_selected_object_names(self, tree_widget):
         """Extract object names from selected tree widget items."""
-        return tree_utils.get_selected_object_names(tree_widget)
+        return tree_utils.TreePathMatcher.get_selected_object_names(tree_widget)
 
     # ------------------------------------------------------------------ #
     # Selection persistence

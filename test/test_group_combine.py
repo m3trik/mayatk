@@ -213,6 +213,60 @@ class TestGroupCombine(MayaTkTestCase):
         # The untouched child should still be there
         self.assertTrue(cmds.objExists("keep_me"))
 
+    # ---- uninstance guard ---------------------------------------------------
+
+    def _make_instanced_trio(self):
+        """master + two instances sharing one shape; return (master, i1, i2)."""
+        master = cmds.polyCube(n="inst_master")[0]
+        i1 = cmds.instance(master, n="inst_a")[0]
+        cmds.move(3, 0, 0, i1)
+        i2 = cmds.instance(master, n="inst_b")[0]
+        cmds.move(6, 0, 0, i2)
+        return master, i1, i2
+
+    def test_combine_uninstance_preserves_sibling(self):
+        """Combining a subset of instances with ``uninstance=True`` must leave
+        sibling instances outside the selection intact.
+
+        ``polyUnite`` on instanced geometry silently deletes siblings that
+        share the shape (verified in Maya 2025). Forking the inputs to unique
+        shapes first isolates them.
+        """
+        master, i1, _i2 = self._make_instanced_trio()
+
+        EditUtils.combine_objects([master, i1], uninstance=True)
+
+        self.assertTrue(
+            cmds.objExists("inst_b"),
+            "uninstance=True must preserve the unselected sibling instance",
+        )
+
+    def test_combine_without_uninstance_destroys_sibling(self):
+        """Characterization: combining instanced geometry without the guard
+        destroys a sibling instance — this is the hazard ``uninstance`` fixes.
+        """
+        master, i1, _i2 = self._make_instanced_trio()
+
+        EditUtils.combine_objects([master, i1], uninstance=False)
+
+        self.assertFalse(
+            cmds.objExists("inst_b"),
+            "documents that combine without uninstance deletes the sibling; "
+            "if this ever passes, Maya's polyUnite behavior changed and the "
+            "guard may no longer be required",
+        )
+
+    def test_combine_uninstance_noop_on_non_instanced(self):
+        """``uninstance=True`` (the tentacle default) must be a no-op on plain,
+        non-instanced geometry: combine still yields the single named mesh.
+        """
+        combined = EditUtils.combine_objects(
+            [self.cube1, self.cube2], uninstance=True
+        )
+        self.assertTrue(cmds.objExists(combined))
+        self.assertTrue(cmds.objExists("cube1"))
+        self.assertFalse(cmds.objExists("cube2"))
+
     def test_materials_by_object_matches_get_mats(self):
         """Batched material resolver must agree with per-object get_mats.
 

@@ -42,6 +42,7 @@ Constraints on ``perform_operation`` authors:
 Verification: see ``test/temp_tests/verify_preview_*.py`` for the 60+
 empirical tests this design passes.
 """
+
 import logging
 import weakref
 from pathlib import Path
@@ -71,37 +72,6 @@ class OperationError(Exception):
         self.user_message = message
         self.causes = list(causes) if causes else []
         self.title = title
-
-
-def _format_op_error(err: Exception) -> str:
-    """Build a clean, readable message-box string from an exception.
-
-    The full traceback is logged to the console separately; this is only the
-    popup text. :class:`OperationError` contributes its curated message and
-    bullet causes; any other exception is reduced to its first non-empty line
-    so multi-line driver errors don't leak into the popup. Falls back to plain
-    text if the ``uitk`` rich-text helper is unavailable.
-    """
-    if isinstance(err, OperationError):
-        # Author-controlled text -- inline HTML (e.g. <b>) is intentional.
-        title, body, bullets = err.title, err.user_message, (err.causes or None)
-    else:
-        from html import escape
-
-        title = "Operation failed"
-        lines = [ln.strip() for ln in str(err).splitlines() if ln.strip()]
-        # Untrusted text -> escape so a stray '<' (e.g. "'<' not supported")
-        # renders literally instead of being swallowed as an HTML tag.
-        body = escape(lines[0]) if lines else type(err).__name__
-        bullets = None
-
-    try:
-        from uitk.widgets.mixins.tooltip_mixin import fmt
-
-        return fmt(title=title, body=body, bullets=bullets)
-    except Exception:  # uitk unavailable -- degrade to plain text
-        tail = (" " + " ".join(bullets)) if bullets else ""
-        return f"{title}: {body}{tail}"
 
 
 class CleanupContract:
@@ -169,7 +139,7 @@ class CleanupContract:
                 )
                 uuid_map = {}
                 for d in descendants:
-                    rel = d[len(orig_long):]  # "" for root
+                    rel = d[len(orig_long) :]  # "" for root
                     d_uuid = cmds.ls(d, uuid=True) or [None]
                     if d_uuid[0]:
                         uuid_map[rel] = d_uuid[0]
@@ -212,9 +182,7 @@ class CleanupContract:
         try:
             dag_after = frozenset(cmds.ls(long=True, allPaths=True) or [])
             dg_after = frozenset(cmds.ls() or [])
-            self.created = (dag_after - self._before[0]) | (
-                dg_after - self._before[1]
-            )
+            self.created = (dag_after - self._before[0]) | (dg_after - self._before[1])
         finally:
             cmds.undoInfo(stateWithoutFlush=self._prev_undo_state)
         return False  # don't suppress exceptions
@@ -441,9 +409,9 @@ class CleanupContract:
                         # reverted, e.g. geometry WITH upstream history), skip the
                         # restore so legitimate construction history is kept.
                         try:
-                            orig_path = (
-                                cmds.ls(p["orig_uuid"], long=True) or [None]
-                            )[0]
+                            orig_path = (cmds.ls(p["orig_uuid"], long=True) or [None])[
+                                0
+                            ]
                             if orig_path and self._geo_diverged(orig_path, p["dup"]):
                                 self._restore_geo_in_place(orig_path, p["dup"])
                         finally:
@@ -463,33 +431,68 @@ class CleanupContract:
             cmds.undoInfo(stateWithoutFlush=prev)
 
 
-def _safe(func):
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
+class _PreviewInternal(object):
+    """Internal helpers for Preview."""
+
+    @staticmethod
+    def _format_op_error(err: Exception) -> str:
+        """Build a clean, readable message-box string from an exception.
+
+        The full traceback is logged to the console separately; this is only the
+        popup text. :class:`OperationError` contributes its curated message and
+        bullet causes; any other exception is reduced to its first non-empty line
+        so multi-line driver errors don't leak into the popup. Falls back to plain
+        text if the ``uitk`` rich-text helper is unavailable.
+        """
+        if isinstance(err, OperationError):
+            # Author-controlled text -- inline HTML (e.g. <b>) is intentional.
+            title, body, bullets = err.title, err.user_message, (err.causes or None)
+        else:
+            from html import escape
+
+            title = "Operation failed"
+            lines = [ln.strip() for ln in str(err).splitlines() if ln.strip()]
+            # Untrusted text -> escape so a stray '<' (e.g. "'<' not supported")
+            # renders literally instead of being swallowed as an HTML tag.
+            body = escape(lines[0]) if lines else type(err).__name__
+            bullets = None
+
         try:
-            return func(self, *args, **kwargs)
-        except Exception as e:
-            self.logger.exception(f"Error in {func.__name__}: {e}")
-            if self.message_func:
-                self.message_func(_format_op_error(e))
-            # Reentry guard: if disable() itself raises, _safe(disable) would
-            # otherwise call self.disable() again -> infinite recursion.
-            if not getattr(self, "_in_recovery", False):
-                self._in_recovery = True
-                try:
-                    self.disable()
-                except Exception as inner:
-                    self.logger.exception(
-                        f"disable() during recovery raised: {inner}"
-                    )
-                finally:
-                    self._in_recovery = False
-            raise
+            from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
-    return wrapper
+            return TooltipFormat.fmt(title=title, body=body, bullets=bullets)
+        except Exception:  # uitk unavailable -- degrade to plain text
+            tail = (" " + " ".join(bullets)) if bullets else ""
+            return f"{title}: {body}{tail}"
+
+    @staticmethod
+    def _safe(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            try:
+                return func(self, *args, **kwargs)
+            except Exception as e:
+                self.logger.exception(f"Error in {func.__name__}: {e}")
+                if self.message_func:
+                    self.message_func(_PreviewInternal._format_op_error(e))
+                # Reentry guard: if disable() itself raises, _safe(disable) would
+                # otherwise call self.disable() again -> infinite recursion.
+                if not getattr(self, "_in_recovery", False):
+                    self._in_recovery = True
+                    try:
+                        self.disable()
+                    except Exception as inner:
+                        self.logger.exception(
+                            f"disable() during recovery raised: {inner}"
+                        )
+                    finally:
+                        self._in_recovery = False
+                raise
+
+        return wrapper
 
 
-class Preview:
+class Preview(_PreviewInternal):
     """Hermetic preview orchestrator (H1).
 
     ``perform_operation`` on the operation instance must accept
@@ -501,6 +504,10 @@ class Preview:
     the result on every preview build and on commit per the toggle, and wiring
     the toggle live -- so a panel gets it for free, like the Preview/Create
     buttons, instead of hand-wiring :func:`apply_result_selection`.
+
+    Canceling (unchecking) re-selects the enable-time selection by default --
+    components included, since most ops clear it -- without touching the undo
+    queue; opt out per-panel with ``reselect_on_disable=False``.
     """
 
     _instances: Set["Preview"] = set()
@@ -527,6 +534,7 @@ class Preview:
         progress_callback: Optional[Callable] = None,
         select_result_checkbox=None,
         result_provider: Optional[Callable] = None,
+        reselect_on_disable: bool = True,
     ):
         if not hasattr(operation_instance, "perform_operation"):
             raise ValueError(
@@ -554,6 +562,10 @@ class Preview:
         # See _apply_select_result.
         self.select_result_checkbox = select_result_checkbox
         self.result_provider = result_provider
+        # Unchecking Preview returns the user to their enable-time selection
+        # (components included) so a cancel lands them exactly where they
+        # started. Opt out per-panel with reselect_on_disable=False.
+        self.reselect_on_disable = reselect_on_disable
 
         self.operated_objects: Set[str] = set()
         self.operation_instance.operated_objects = self.operated_objects
@@ -697,7 +709,7 @@ class Preview:
                 return False
         return True
 
-    @_safe
+    @_PreviewInternal._safe
     def enable(self) -> None:
         # Idempotent guard: if a previous enable already built a contract,
         # calling again would overwrite self._contract and orphan the old
@@ -820,9 +832,9 @@ class Preview:
             self._apply_select_result(defer=False)
         except Exception as e:
             self.logger.exception(f"perform_operation raised: {e}")
-            self.message_func(_format_op_error(e))
+            self.message_func(_PreviewInternal._format_op_error(e))
 
-    @_safe
+    @_PreviewInternal._safe
     def refresh(self, *args) -> None:
         """Roll back the previous preview and re-run perform_operation.
 
@@ -847,7 +859,7 @@ class Preview:
         finally:
             self._refresh_in_progress = False
 
-    @_safe
+    @_PreviewInternal._safe
     def disable(self) -> None:
         """Roll back the preview without committing.
 
@@ -859,6 +871,7 @@ class Preview:
             return
         self._refresh_in_progress = True
         try:
+            had_preview = self.is_enabled and self._contract is not None
             if self._contract is not None:
                 self._contract.rollback()
                 self._contract = None
@@ -867,6 +880,14 @@ class Preview:
             # user is left looking at; it renders correctly even though a future
             # op could collapse it -- acceptable for a cancelled preview.
             self._reassert_shading_snapshot()
+            # Return the user to their enable-time selection (components
+            # included) -- most ops (e.g. polyBevel3) clear it, and a cancel
+            # should land the user exactly where they started so they can
+            # re-enable or continue. Suppressed from the undo queue: that
+            # selection already sits at the top of the user's history, so
+            # recording the re-select would add a redundant entry.
+            if had_preview and self.reselect_on_disable:
+                self._reselect_captured()
             self.operated_objects.clear()
             self._set_checkbox(False)
             self.create_button.setEnabled(False)
@@ -874,7 +895,7 @@ class Preview:
         finally:
             self._refresh_in_progress = False
 
-    @_safe
+    @_PreviewInternal._safe
     def finalize_changes(self) -> None:
         """Commit: rollback the hermetic version, then replay under undo.
 
@@ -895,9 +916,7 @@ class Preview:
             cmds.undoInfo(openChunk=True, chunkName=chunk_name)
             try:
                 # Pass None as contract; replay shouldn't record (no rollback path).
-                self.operation_instance.perform_operation(
-                    self._captured_objects, None
-                )
+                self.operation_instance.perform_operation(self._captured_objects, None)
                 # Reassert per-face material on the freshly-replayed (clean) mesh
                 # so the COMMITTED result keeps every material -- inside the chunk
                 # so it commits/undoes atomically with the operation.
@@ -923,6 +942,20 @@ class Preview:
         # Deferred so a post-commit selection restore can't clobber it.
         self._apply_select_result(defer=True)
 
+    def _reselect_captured(self) -> None:
+        """Re-select the enable-time selection after a cancel (see disable)."""
+        alive = [o for o in self._captured_objects if cmds.objExists(o)]
+        if not alive:
+            return
+        prev = cmds.undoInfo(q=True, state=True)
+        cmds.undoInfo(stateWithoutFlush=False)
+        try:
+            cmds.select(alive, replace=True)
+        except Exception:
+            self.logger.debug("reselect on disable failed", exc_info=True)
+        finally:
+            cmds.undoInfo(stateWithoutFlush=prev)
+
     # --------------------------------------------------------- select result
     def _on_select_result_toggled(self, *args) -> None:
         """Slot for the Select Result checkbox: (de)select the current result
@@ -943,7 +976,7 @@ class Preview:
         if self.select_result_checkbox is None or self.result_provider is None:
             return
         try:
-            apply_result_selection(
+            Preview.apply_result_selection(
                 self.select_result_checkbox,
                 self.result_provider(),
                 object_mode=True,
@@ -986,68 +1019,70 @@ class Preview:
     def get_operated_objects(self) -> List[str]:
         return list(self.operated_objects)
 
+    @staticmethod
+    def cleanup_all_previews() -> None:
+        Preview.cleanup_all_instances()
 
-def cleanup_all_previews() -> None:
-    Preview.cleanup_all_instances()
+    @staticmethod
+    def apply_result_selection(
+        widget, results, *, object_mode: bool = False, defer: bool = False
+    ) -> None:
+        """Select the operation's result(s) — or explicitly deselect them — per a
+        "Select Result" checkbox, the way a Preview panel wants it on preview/commit.
 
+        With *widget* checked the results are selected so the user can see them; with
+        it unchecked they are explicitly **deselected** (an op can leave its result
+        selected, so "off" must actively clear it). The widget read is defensive: a
+        missing/dead checkbox falls back to selecting (the prior behavior). The
+        checked state is re-read on each (immediate and deferred) pass so the settled
+        UI value wins — interactive state-restore can settle the toggle just after a
+        commit returns.
 
-def apply_result_selection(widget, results, *, object_mode: bool = False, defer: bool = False) -> None:
-    """Select the operation's result(s) — or explicitly deselect them — per a
-    "Select Result" checkbox, the way a Preview panel wants it on preview/commit.
+        Parameters:
+            widget: the "Select Result" QCheckBox (queried for its checked state).
+            results (str | Iterable[str]): the result node name(s).
+            object_mode (bool): for ops that can leave the result in a component
+                selection (e.g. a UV cut's map components, polySoftEdge's edges)
+                that a transform-only deselect can't clear — switches to object
+                mode and collapses any such selection onto the objects (replace)
+                before (de)selecting.
+            defer (bool): also re-assert the choice on idle (``evalDeferred``,
+                lowest priority). Only the commit path needs it — committing can
+                leave Maya restoring the pre-op selection (or settling the toggle)
+                *after* this returns; the idle re-read then wins. A live toggle is a
+                direct user action with nothing to clobber it, so it passes False.
+        """
+        nodes = [results] if isinstance(results, str) else list(results or [])
 
-    With *widget* checked the results are selected so the user can see them; with
-    it unchecked they are explicitly **deselected** (an op can leave its result
-    selected, so "off" must actively clear it). The widget read is defensive: a
-    missing/dead checkbox falls back to selecting (the prior behavior). The
-    checked state is re-read on each (immediate and deferred) pass so the settled
-    UI value wins — interactive state-restore can settle the toggle just after a
-    commit returns.
-
-    Parameters:
-        widget: the "Select Result" QCheckBox (queried for its checked state).
-        results (str | Iterable[str]): the result node name(s).
-        object_mode (bool): for ops that can leave the result in a component
-            selection (e.g. a UV cut's map components, polySoftEdge's edges)
-            that a transform-only deselect can't clear — switches to object
-            mode and collapses any such selection onto the objects (replace)
-            before (de)selecting.
-        defer (bool): also re-assert the choice on idle (``evalDeferred``,
-            lowest priority). Only the commit path needs it — committing can
-            leave Maya restoring the pre-op selection (or settling the toggle)
-            *after* this returns; the idle re-read then wins. A live toggle is a
-            direct user action with nothing to clobber it, so it passes False.
-    """
-    nodes = [results] if isinstance(results, str) else list(results or [])
-
-    def _apply():
-        alive = [n for n in nodes if n and cmds.objExists(n)]
-        if not alive:
-            return
-        try:
-            select = widget.isChecked()
-        except Exception:
-            select = True
-        if object_mode:
+        def _apply():
+            alive = [n for n in nodes if n and cmds.objExists(n)]
+            if not alive:
+                return
             try:
-                cmds.selectMode(object=True)
+                select = widget.isChecked()
+            except Exception:
+                select = True
+            if object_mode:
+                try:
+                    cmds.selectMode(object=True)
+                except Exception:
+                    pass
+            if select:
+                cmds.select(alive, replace=True)
+            else:
+                # An op can leave the result in COMPONENT selection (e.g.
+                # polySoftEdge leaves the mesh's edges selected, a UV cut its map
+                # components); a transform-only deselect won't clear those, so under
+                # object_mode collapse any such selection onto the objects (replace)
+                # before deselecting. (selectMode alone doesn't collapse an existing
+                # component selection.)
+                if object_mode:
+                    cmds.select(alive, replace=True)
+                cmds.select(alive, deselect=True)
+
+        _apply()  # immediate
+        if defer:
+            try:
+                cmds.evalDeferred(_apply, lowestPriority=True)
             except Exception:
                 pass
-        if select:
-            cmds.select(alive, replace=True)
-        else:
-            # An op can leave the result in COMPONENT selection (e.g.
-            # polySoftEdge leaves the mesh's edges selected, a UV cut its map
-            # components); a transform-only deselect won't clear those, so under
-            # object_mode collapse any such selection onto the objects (replace)
-            # before deselecting. (selectMode alone doesn't collapse an existing
-            # component selection.)
-            if object_mode:
-                cmds.select(alive, replace=True)
-            cmds.select(alive, deselect=True)
-
-    _apply()  # immediate
-    if defer:
-        try:
-            cmds.evalDeferred(_apply, lowestPriority=True)
-        except Exception:
-            pass

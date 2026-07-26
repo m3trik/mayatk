@@ -59,10 +59,10 @@ class MayaUiHandler(UiHandler):
         # here (a runtime init point, not on module import) per the no-import-
         # side-effects rule; idempotent, so repeated handler construction is safe.
         try:
-            from uitk.bridge.slots import register_log_link_handler
+            from uitk.bridge.slots import BridgeSlotsBase
             from mayatk.ui_utils._ui_utils import UiUtils
 
-            register_log_link_handler(UiUtils.dispatch_log_link)
+            BridgeSlotsBase.register_log_link_handler(UiUtils.dispatch_log_link)
         except Exception:  # never let a wiring hiccup block UI-handler startup
             pass
 

@@ -6,6 +6,7 @@ Maya Connection Module
 Provides utilities to connect to Maya either via command port or standalone mode.
 Supports both interactive Maya sessions and batch testing.
 """
+
 import os
 import socket
 import sys
@@ -248,9 +249,15 @@ class MayaConnection:
                 "to prevent name collisions on next launch."
             )
 
-        mel_p, py_p = MayaConnection._find_port_pair(mel_start, python_start, max_offset)
+        mel_p, py_p = MayaConnection._find_port_pair(
+            mel_start, python_start, max_offset
+        )
         MayaConnection.open_command_ports(mel=mel_p, python=py_p)
-        opened = {p: s for p, s in MayaConnection._open_command_ports.items() if p in (mel_p, py_p)}
+        opened = {
+            p: s
+            for p, s in MayaConnection._open_command_ports.items()
+            if p in (mel_p, py_p)
+        }
 
         if tag_window:
             try:
@@ -267,9 +274,7 @@ class MayaConnection:
         # Silent on the happy path (default ports were free). Only announce
         # when auto-negotiation kicked in — that's the interesting case.
         if (mel_p, py_p) != (f":{mel_start}", f":{python_start}"):
-            print(
-                f"# Info: Command ports auto-negotiated - mel{mel_p}, python{py_p}"
-            )
+            print(f"# Info: Command ports auto-negotiated - mel{mel_p}, python{py_p}")
         return opened
 
     @staticmethod
@@ -513,7 +518,6 @@ class MayaConnection:
     ) -> bool:
         """Launch Maya GUI with command port enabled."""
         from pythontk import AppLauncher
-        import time
 
         # Command to open port on startup and configure UI
         # 1. Open TCP port for external connection (check if not already open to avoid "Name in use" error)
@@ -1227,26 +1231,14 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
         print("[OK] Disconnected from Maya")
 
 
-# Module-level aliases for backward compatibility and ease of use
-def open_command_ports(**kwargs):
-    """Wrapper for MayaConnection.open_command_ports."""
-    MayaConnection.open_command_ports(**kwargs)
-
-
-def toggle_command_ports(mel_port=7001, python_port=7002):
-    """Wrapper for MayaConnection.toggle_command_ports."""
-    return MayaConnection.toggle_command_ports(mel_port, python_port)
-
-
-def open_available_command_ports(mel_start=7001, python_start=7002, max_offset=50, tag_window=True):
-    """Wrapper for MayaConnection.open_available_command_ports."""
-    return MayaConnection.open_available_command_ports(
-        mel_start, python_start, max_offset, tag_window
-    )
+# The port helpers are the canonical ``MayaConnection.open_command_ports`` /
+# ``toggle_command_ports`` / ``open_available_command_ports`` staticmethods
+# defined in the class body above. No module-level aliases or self-named
+# in-class wrappers — those recurse (a wrapper calling the same qualified
+# name it is bound to). Consumers call ``MayaConnection.<name>()`` directly.
 
 
 if __name__ == "__main__":
-
     MayaConnection.reload_modules(["mayatk"], include_submodules=True, verbose=True)
     # Example usage
     conn = MayaConnection.get_instance()

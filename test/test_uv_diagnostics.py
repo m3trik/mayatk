@@ -431,6 +431,68 @@ class TestLightmapProtection(MayaTkTestCase):
         self.assertNotIn("extra1", remaining)
 
 
+class TestNonManifoldUvs(MayaTkTestCase):
+    """find/repair non-manifold UVs (issue: Unfold's Repair + Retry couldn't fix
+    a mesh whose 'non-manifold' rejection came from UV topology, not geometry —
+    polyCleanup's nonmanifold flag only repairs geometry)."""
+
+    def _make_corrupt_strip(self):
+        """Two quads sharing an edge, with the shared UV edge wound the same way
+        in both faces — clean geometry, non-manifold UVs. Only constructible via
+        the API; Maya's own tools refuse to author it (imports/legacy files do)."""
+        import maya.api.OpenMaya as om
+
+        pts = [
+            om.MPoint(0, 0, 0), om.MPoint(1, 0, 0), om.MPoint(2, 0, 0),
+            om.MPoint(0, 0, 1), om.MPoint(1, 0, 1), om.MPoint(2, 0, 1),
+        ]
+        fn = om.MFnMesh()
+        mesh = fn.create(pts, [4, 4], [0, 1, 4, 3, 1, 2, 5, 4])
+        fn.setUVs([0.0, 0.5, 1.0, 0.0, 0.5, 1.0], [0.0, 0.0, 0.0, 1.0, 1.0, 1.0])
+        fn.assignUVs([4, 4], [0, 1, 4, 3, 1, 4, 5, 2])
+        xform = om.MFnDagNode(mesh).fullPathName()
+        shape = cmds.listRelatives(xform, shapes=True, fullPath=True)[0]
+        cmds.sets(shape, e=True, forceElement="initialShadingGroup")
+        return xform, shape
+
+    def test_find_non_manifold_uvs(self):
+        xform, shape = self._make_corrupt_strip()
+        found = UvDiagnostics.find_non_manifold_uvs([xform])
+        self.assertEqual(len(found), 1, "Should flag the one corrupt mesh")
+        uvs = next(iter(found.values()))
+        self.assertTrue(uvs, "Should return the offending map components")
+
+    def test_find_clean_mesh_returns_empty(self):
+        cube = cmds.polyCube(ch=False)[0]
+        self.assertEqual(UvDiagnostics.find_non_manifold_uvs([cube]), {})
+
+    def test_repair_non_manifold_uvs(self):
+        xform, shape = self._make_corrupt_strip()
+        summary = UvDiagnostics.repair_non_manifold_uvs([xform])
+        self.assertGreater(summary["total"], 0, "Should have found UVs to repair")
+        self.assertEqual(summary["remaining"], 0, "Repair should clear all nm UVs")
+        self.assertEqual(
+            UvDiagnostics.find_non_manifold_uvs([xform]),
+            {},
+            "polyInfo should agree the mesh is clean",
+        )
+
+    def test_repaired_mesh_unfolds(self):
+        from mayatk import load_plugin
+
+        try:
+            load_plugin("Unfold3D.mll")
+        except Exception:
+            self.skipTest("Unfold3D plugin unavailable")
+        xform, shape = self._make_corrupt_strip()
+        cmds.select(xform)
+        with self.assertRaises(RuntimeError):
+            cmds.u3dUnfold(iterations=1, pack=0, mapsize=1024)
+        UvDiagnostics.repair_non_manifold_uvs([xform])
+        cmds.select(xform)
+        cmds.u3dUnfold(iterations=1, pack=0, mapsize=1024)  # must not raise
+
+
 def run_tests():
     """Run all tests and print results."""
     loader = unittest.TestLoader()

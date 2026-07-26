@@ -10,7 +10,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils._core_utils import CoreUtils, as_strings
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 
 
@@ -90,11 +90,11 @@ class DisplayUtils(ptk.HelpMixin):
                     except Exception:
                         pass
 
-        elements = as_strings(elements)
+        elements = CoreUtils.as_strings(elements)
         if set(elements).intersection(cls.NODES_WITH_VISIBILITY):
-            scene_elements = cmds.ls(type=elements) or []
+            scene_elements = cmds.ls(type=elements, long=True) or []
         else:
-            scene_elements = cmds.ls(*elements) if elements else []
+            scene_elements = cmds.ls(*elements, long=True) if elements else []
 
         for element in scene_elements:
             if include_ancestors:
@@ -170,9 +170,9 @@ class DisplayUtils(ptk.HelpMixin):
             # queryable ls type (it silently returns []), which is why the
             # shapes branch always came back empty. Intermediate (Orig)
             # shapes are construction data, never visible geometry.
-            nodes = cmds.ls(type=_RENDERABLE, noIntermediate=True) or []
+            nodes = cmds.ls(type=_RENDERABLE, noIntermediate=True, long=True) or []
         else:
-            nodes = cmds.ls(type="transform") or []
+            nodes = cmds.ls(type="transform", long=True) or []
 
         for node in nodes:
             if not consider_templated_visible and cls.is_templated(node):
@@ -202,8 +202,8 @@ class DisplayUtils(ptk.HelpMixin):
         # ``TypeError`` when passed a node that wraps a deleted MObject
         # (common when callers mirror/delete then forward the originals).
 
-        names = [n for n in as_strings(objects) if cmds.objExists(n)]
-        objects = cmds.ls(*names, type="transform") if names else []
+        names = [n for n in CoreUtils.as_strings(objects) if cmds.objExists(n)]
+        objects = cmds.ls(*names, type="transform", long=True) if names else []
 
         currentPanel = cmds.paneLayout("viewPanes", q=True, pane1=True)
 

@@ -12,20 +12,15 @@ script -- so the panel shows every param (no per-template visibility gating).
 Mirrors :mod:`mayatk.env_utils.blender_bridge.parameters` in shape; the blendertk
 ``unity_bridge`` counterpart mirrors this file.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
-from uitk.bridge import (
-    AttributeSpec,
-    python_literal,
-    referenced_keys as _refkeys,
-    defaults as _defaults,
-    render_context as _render_context,
-)
+from uitk.bridge import AttributeSpec, Formatters, Parameters as _BridgeParams
 
 
-_FORMATTER = python_literal
+_FORMATTER = Formatters.python_literal
 
 
 # Display order is iteration order over this dict.
@@ -139,16 +134,25 @@ PARAMS: "dict[str, AttributeSpec]" = {
 }
 
 
-def referenced_keys(script_text: str) -> "set[str]":
-    """Registered keys present in *script_text* (delegates to uitk.bridge)."""
-    return _refkeys(script_text, PARAMS)
+class Parameters:
+    """Parameters — module namespace."""
 
+    #: The parameter registry, exposed on the class so a bridge slot can hand
+    #: this class to the shared base as its ``params_module`` (the base reads
+    #: ``params_module.PARAMS`` and ``.referenced_keys``) — no module-level shim.
+    PARAMS = PARAMS
 
-def defaults() -> "dict[str, Any]":
-    """Return ``{key: default}`` for every registered parameter."""
-    return _defaults(PARAMS)
+    @staticmethod
+    def referenced_keys(script_text: str) -> "set[str]":
+        """Registered keys present in *script_text* (delegates to uitk.bridge)."""
+        return _BridgeParams.referenced_keys(script_text, PARAMS)
 
+    @staticmethod
+    def defaults() -> "dict[str, Any]":
+        """Return ``{key: default}`` for every registered parameter."""
+        return _BridgeParams.defaults(PARAMS)
 
-def render_context(values: "dict[str, Any]") -> "dict[str, str]":
-    """Format *values* for substitution (kept for API parity; Unity renders no script)."""
-    return _render_context(values, PARAMS, formatter=_FORMATTER)
+    @staticmethod
+    def render_context(values: "dict[str, Any]") -> "dict[str, str]":
+        """Format *values* for substitution (kept for API parity; Unity renders no script)."""
+        return _BridgeParams.render_context(values, PARAMS, formatter=_FORMATTER)

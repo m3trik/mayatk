@@ -6,6 +6,7 @@
 inspecting, editing, locking, and managing Maya node attributes.
 Delegates all non-UI logic to :class:`Channels`.
 """
+
 import maya.cmds as cmds
 import maya.mel as mel
 
@@ -18,7 +19,7 @@ from mayatk.node_utils.attributes.channels._channels import (
 )
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt, kbd
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 
 class ChannelsSlots:
@@ -321,44 +322,59 @@ class ChannelsSlots:
             lambda: mel.eval("ConnectionEditor")
         )
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Channels",
                 body="Inspect, edit, and manage Maya node attributes in a "
                 "spreadsheet-style table with bulk operations and wheel-scrub "
                 "editing.",
                 sections=[
-                    ("Table", [
-                        "Each row is one attribute on the active selection.",
-                        "Edit values directly, or wheel-scrub on a value cell.",
-                        "Right-click rows for lock/unlock, keyable toggles, "
-                        "and selection-set actions.",
-                    ]),
-                    ("Wheel-scrub modifiers", [
-                        f"plain &mdash; ×1",
-                        f"{kbd('Ctrl')} &mdash; ×10 (coarse)",
-                        f"{kbd('Ctrl', 'Shift')} &mdash; ×100 (very coarse)",
-                        f"{kbd('Alt')} &mdash; ÷10 (fine)",
-                        f"{kbd('Ctrl', 'Alt')} &mdash; smallest representable step",
-                    ]),
-                    ("Filter (header menu)", [
-                        "Filter by attribute type: <b>Custom</b>, "
-                        "<b>Keyable</b>, <b>Locked</b>, <b>Connected</b>, etc.",
-                        "<b>Compact View</b> — collapse rows to essential columns.",
-                        "<b>Auto-fit Window</b> — resize columns and grow/shrink "
-                        "the window to match contents on every refresh.",
-                    ]),
-                    ("Selection helpers (footer)", [
-                        "<b>Shape</b> (cube icon) — select the shape node(s) "
-                        "of the current selection.",
-                        "<b>History</b> (history icon) — select the "
-                        "construction-history node(s).",
-                    ]),
-                    ("Maya editors (header menu)", [
-                        "<b>Channel Control…</b> — open the native Channel "
-                        "Control editor.",
-                        "<b>Connection Editor…</b> — open the native "
-                        "Connection Editor.",
-                    ]),
+                    (
+                        "Table",
+                        [
+                            "Each row is one attribute on the active selection.",
+                            "Edit values directly, or wheel-scrub on a value cell.",
+                            "Right-click rows for lock/unlock, keyable toggles, "
+                            "and selection-set actions.",
+                        ],
+                    ),
+                    (
+                        "Wheel-scrub modifiers",
+                        [
+                            "plain &mdash; ×1",
+                            f"{TooltipFormat.kbd('Ctrl')} &mdash; ×10 (coarse)",
+                            f"{TooltipFormat.kbd('Ctrl', 'Shift')} &mdash; ×100 (very coarse)",
+                            f"{TooltipFormat.kbd('Alt')} &mdash; ÷10 (fine)",
+                            f"{TooltipFormat.kbd('Ctrl', 'Alt')} &mdash; smallest representable step",
+                        ],
+                    ),
+                    (
+                        "Filter (header menu)",
+                        [
+                            "Filter by attribute type: <b>Custom</b>, "
+                            "<b>Keyable</b>, <b>Locked</b>, <b>Connected</b>, etc.",
+                            "<b>Compact View</b> — collapse rows to essential columns.",
+                            "<b>Auto-fit Window</b> — resize columns and grow/shrink "
+                            "the window to match contents on every refresh.",
+                        ],
+                    ),
+                    (
+                        "Selection helpers (footer)",
+                        [
+                            "<b>Shape</b> (cube icon) — select the shape node(s) "
+                            "of the current selection.",
+                            "<b>History</b> (history icon) — select the "
+                            "construction-history node(s).",
+                        ],
+                    ),
+                    (
+                        "Maya editors (header menu)",
+                        [
+                            "<b>Channel Control…</b> — open the native Channel "
+                            "Control editor.",
+                            "<b>Connection Editor…</b> — open the native "
+                            "Connection Editor.",
+                        ],
+                    ),
                 ],
             )
         )
@@ -616,9 +632,7 @@ class ChannelsSlots:
 
                 # Width
                 vbar = widget.verticalScrollBar()
-                vsb_w = (
-                    vbar.sizeHint().width() if vbar and vbar.isVisible() else 0
-                )
+                vsb_w = vbar.sizeHint().width() if vbar and vbar.isVisible() else 0
                 fr_w = widget.frameWidth() * 2
                 chrome_w = max(win.width() - widget.viewport().width(), 0)
                 target_w = header_len + fr_w + vsb_w + chrome_w
@@ -633,9 +647,7 @@ class ChannelsSlots:
                 hhdr = widget.horizontalHeader()
                 hhdr_h = hhdr.height() if hhdr.isVisible() else 0
                 hbar = widget.horizontalScrollBar()
-                hsb_h = (
-                    hbar.sizeHint().height() if hbar and hbar.isVisible() else 0
-                )
+                hsb_h = hbar.sizeHint().height() if hbar and hbar.isVisible() else 0
                 fr_h = widget.frameWidth() * 2
                 chrome_h = max(win.height() - widget.viewport().height(), 0)
                 target_h = rows_h + hhdr_h + fr_h + hsb_h + chrome_h
@@ -646,9 +658,7 @@ class ChannelsSlots:
             except RuntimeError:
                 pass
 
-        QtCore.QTimer.singleShot(
-            0, lambda: QtCore.QTimer.singleShot(0, _do_fit)
-        )
+        QtCore.QTimer.singleShot(0, lambda: QtCore.QTimer.singleShot(0, _do_fit))
 
     def _on_toggle_compact_view(self, enabled):
         """Toggle compact view: shorter rows, hide table header, swap txt001↔footer name."""
@@ -1210,9 +1220,7 @@ class ChannelsSlots:
 
         unfreeze_btn = getattr(menu, "ctx_unfreeze_transforms", None)
         if unfreeze_btn is not None:
-            has_stored = bool(nodes) and self.controller.has_unfreeze_info(
-                nodes
-            )
+            has_stored = bool(nodes) and self.controller.has_unfreeze_info(nodes)
             can_unfreeze = group_level_ok and has_stored
             unfreeze_btn.setEnabled(can_unfreeze)
             if can_unfreeze:
@@ -1319,9 +1327,7 @@ class ChannelsSlots:
                         names, inc=text, ignore_case=True
                     )
                     keep = set(filtered)
-                    zipped = [
-                        (r, s) for r, s in zip(rows, attr_states) if r[0] in keep
-                    ]
+                    zipped = [(r, s) for r, s in zip(rows, attr_states) if r[0] in keep]
                     if zipped:
                         rows, attr_states = zip(*zipped)
                         rows, attr_states = list(rows), list(attr_states)
@@ -1369,9 +1375,7 @@ class ChannelsSlots:
             # continue so the next refresh has a chance to recover.
             import logging
 
-            logging.getLogger(__name__).debug(
-                "channels refresh failed", exc_info=True
-            )
+            logging.getLogger(__name__).debug("channels refresh failed", exc_info=True)
         finally:
             try:
                 widget.blockSignals(False)
@@ -1671,14 +1675,14 @@ class ChannelsSlots:
             # --- persistent action items via actions namespace ---
             actions = combo.actions.add(
                 {
-                    self._ENUM_ACTION_RENAME: lambda checked=False, c=combo: self._on_enum_action_rename(
-                        c
+                    self._ENUM_ACTION_RENAME: lambda checked=False, c=combo: (
+                        self._on_enum_action_rename(c)
                     ),
-                    self._ENUM_ACTION_ADD: lambda checked=False, c=combo: self._on_enum_action_add(
-                        c
+                    self._ENUM_ACTION_ADD: lambda checked=False, c=combo: (
+                        self._on_enum_action_add(c)
                     ),
-                    self._ENUM_ACTION_DELETE: lambda checked=False, c=combo: self._on_enum_action_delete(
-                        c
+                    self._ENUM_ACTION_DELETE: lambda checked=False, c=combo: (
+                        self._on_enum_action_delete(c)
                     ),
                 }
             )
@@ -2093,9 +2097,7 @@ class ChannelsSlots:
             return
 
         attr_names = [s["name"] for s in (selection or []) if s.get("name")]
-        restored = self.controller.unfreeze_transforms(
-            nodes, attrs=attr_names or None
-        )
+        restored = self.controller.unfreeze_transforms(nodes, attrs=attr_names or None)
         if not restored:
             self.sb.message_box(
                 "Warning: No stored unfreeze data on the selected node(s)."
@@ -2144,11 +2146,19 @@ class ChannelsSlots:
     # Attribute storage types that accept numeric input (scrub or wheel).
     # Includes both the user-facing "float"/"int" aliases and the raw
     # Maya types returned by ``cmds.getAttr(plug, type=True)``.
-    _SCRUBBABLE_TYPES = frozenset({
-        "float", "int",
-        "double", "doubleAngle", "doubleLinear", "time",
-        "long", "short", "byte",
-    })
+    _SCRUBBABLE_TYPES = frozenset(
+        {
+            "float",
+            "int",
+            "double",
+            "doubleAngle",
+            "doubleLinear",
+            "time",
+            "long",
+            "short",
+            "byte",
+        }
+    )
 
     # Pixels per unit for the default (unmodified) scrub.  Modifiers
     # multiply: Ctrl=0.1 (fine), Shift=10 (coarse).
@@ -2161,17 +2171,17 @@ class ChannelsSlots:
     # ``_WHEEL_FLOAT_SMALLEST`` matches the controller's display
     # precision so the user can step the *visible* last decimal place --
     # currently 4 decimals (``Channels._fmt_float`` default), so ``1e-4``.
-    _WHEEL_FLOAT_STEP = 0.1          # default (no modifier)
-    _WHEEL_FLOAT_COARSE = 1.0        # Ctrl         (×10)
+    _WHEEL_FLOAT_STEP = 0.1  # default (no modifier)
+    _WHEEL_FLOAT_COARSE = 1.0  # Ctrl         (×10)
     _WHEEL_FLOAT_VERY_COARSE = 10.0  # Ctrl+Shift   (×100)
-    _WHEEL_FLOAT_FINE = 0.01         # Alt          (÷10)
-    _WHEEL_FLOAT_SMALLEST = 0.0001   # Ctrl+Alt     (smallest representable)
-    _WHEEL_INT_COARSE = 10           # Ctrl on int  (×10)
-    _WHEEL_INT_VERY_COARSE = 100     # Ctrl+Shift on int  (×100)
-    _WHEEL_INT_SMALLEST = 1          # Ctrl+Alt on int -- smallest int step
-    _WHEEL_INT_FINE = 0              # Alt on int -- no sub-1 step exists,
-                                     # so honestly do nothing (the wheel
-                                     # event is consumed silently).
+    _WHEEL_FLOAT_FINE = 0.01  # Alt          (÷10)
+    _WHEEL_FLOAT_SMALLEST = 0.0001  # Ctrl+Alt     (smallest representable)
+    _WHEEL_INT_COARSE = 10  # Ctrl on int  (×10)
+    _WHEEL_INT_VERY_COARSE = 100  # Ctrl+Shift on int  (×100)
+    _WHEEL_INT_SMALLEST = 1  # Ctrl+Alt on int -- smallest int step
+    _WHEEL_INT_FINE = 0  # Alt on int -- no sub-1 step exists,
+    # so honestly do nothing (the wheel
+    # event is consumed silently).
 
     def _setup_value_input(self, widget):
         """Enable MMB-drag scrub, wheel-scroll, and click-to-edit on the
@@ -2306,7 +2316,9 @@ class ChannelsSlots:
         if ctrl and alt:
             return self._WHEEL_INT_SMALLEST if is_int else self._WHEEL_FLOAT_SMALLEST
         if ctrl and shift:
-            return self._WHEEL_INT_VERY_COARSE if is_int else self._WHEEL_FLOAT_VERY_COARSE
+            return (
+                self._WHEEL_INT_VERY_COARSE if is_int else self._WHEEL_FLOAT_VERY_COARSE
+            )
         if ctrl:
             return self._WHEEL_INT_COARSE if is_int else self._WHEEL_FLOAT_COARSE
         if alt:
@@ -3080,7 +3092,6 @@ class ChannelsSlots:
 
         # -- Double-click on footer label enters rename mode ------------------
         try:
-
             _orig_lbl_dbl = footer._status_label.mouseDoubleClickEvent
 
             def _footer_label_dbl_click(event, _orig=_orig_lbl_dbl):

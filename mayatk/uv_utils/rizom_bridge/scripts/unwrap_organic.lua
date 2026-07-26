@@ -36,7 +36,7 @@ ZomSelect({
         QuasiDevelopable={
             Developability=__DEVELOPABILITY__,
             IslandPolyNBMin=1,
-            FitCones=false,
+            FitCones=__FIT_CONES__,
             Straighten=true,
         },
         PipesCutter=true,
@@ -44,6 +44,10 @@ ZomSelect({
         QuadLoopCutter=false,
         StretchLimiter=true,
         Quality=0.5,
+        -- Add cuts until no shells overlap (skeleton-guided). Probed safe
+        -- on 2020.1; a no-op when there are no overlaps, a fix when there
+        -- are (Smithsonian's production organic recipe).
+        SkeletonUnoverlap={SegLevel=1, FromRoot=true, Smooth=2},
         StoreCoordsUVW=true,
         FlatteningMode=0,
         FlatteningUnfoldParams={
@@ -87,22 +91,5 @@ ZomOptimize({
     PinMapName="Pin",
 })
 
-ZomIslandGroups({
-    Mode="DistributeInTilesEvenly",
-    MergingPolicy=8322,
-    GroupPath="RootGroup",
-})
-ZomPack({
-    ProcessTileSelection=false,
-    RecursionDepth=__RECURSION_DEPTH__,
-    RootGroup="RootGroup",
-    Scaling={Mode=__SCALING_MODE__, Mix=__SCALING_MIX__},
-    Rotate={
-        Step=__ROTATE_STEP__,
-        Enable=__PACK_ROTATE_ENABLE__,
-    },
-    Translate=__PACK_TRANSLATE__,
-    LayoutScalingMode=__LAYOUT_SCALING_MODE__,
-    MaxMutations=__PACK_MAX_MUTATIONS__,
-    Resolution=__PACK_RESOLUTION__,
-})
+-- Group + pack + placement (shared recipe -- see templates/pack_block.lua).
+__PACK_BLOCK__

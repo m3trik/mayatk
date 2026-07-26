@@ -6,23 +6,19 @@
 # this template purely orchestrates a Painter-side operation.
 #
 # ============================================================================
-# STATUS: BLOCKED on Painter-side plugin (same wall as reimport.py)
+# STATUS: transport OK (substance_rpc plugin); JS body unverified
 # ============================================================================
-# Stock Substance 3D Painter does not auto-bind a JSON-RPC port on launch
-# (verified empirically 2026-05-18). Until a Painter Python plugin under
-# ``%USERPROFILE%\Documents\Adobe\Adobe Substance 3D Painter\python\plugins``
-# stands up an HTTP JSON-RPC server, sending this template will hang on
-# ``PainterRpcClient.wait_until_ready`` and then surface a "Painter RPC
-# didn't respond" error.
-#
-# Once the plugin exists, the RPC_SCRIPT below dispatches Painter's
-# ``alg.imageExporter.exportRenderImage`` (canonical JS API for an
-# Iray-quality viewport render). API surface details (exact field
-# names, return shape) are documented best-effort and may need to be
-# adjusted against the plugin's real JS shim.
+# The bridge now ships a Painter-side ``substance_rpc`` plugin
+# (auto-installed on send) whose ``js.evaluate`` op routes this
+# RPC_SCRIPT through :func:`substance_painter.js.evaluate` -- so the
+# script actually reaches Painter's JS engine. The
+# ``alg.imageExporter.exportRenderImage`` symbol + field names below are
+# still best-effort against Painter's published legacy-JS surface and
+# need verification against a live Painter; adjust here if the call
+# errors (the RPC response will carry Painter's exception text).
 # ============================================================================
 
-"""Render the current Painter project via Iray (BLOCKED -- needs Painter plugin)."""
+"""Render the current Painter project via Iray (JS body unverified)."""
 
 # One-way send to the existing instance; nothing comes back to Maya
 # beyond the RPC return value (the saved image path on success).

@@ -99,7 +99,15 @@ class MayaExportMixin:
                             dup = cmds.duplicate(
                                 orig, returnRootsOnly=True, inputConnections=False
                             )[0]
-                            duplicates.append(cmds.ls(dup, long=True)[0])
+                            # Resolve the new node's unambiguous full path from its
+                            # known parent (duplicate places the copy as a sibling of
+                            # orig). The bare dup name could otherwise re-resolve to a
+                            # same-named node elsewhere and get deleted below; the
+                            # selection isn't reliable here either (shader/set ops can
+                            # leave an unrelated node selected).
+                            parents = cmds.listRelatives(orig, parent=True, fullPath=True)
+                            prefix = parents[0] if parents else ""
+                            duplicates.append(cmds.ls(f"{prefix}|{dup}", long=True)[0])
                         cmds.sets(
                             duplicates, edit=True, forceElement="initialShadingGroup"
                         )

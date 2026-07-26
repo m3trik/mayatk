@@ -8,22 +8,15 @@ from typing import Optional, Dict, List, Any
 import maya.cmds as cmds
 from qtpy import QtCore, QtWidgets, QtGui
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # From this package
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.namespace_sandbox import NamespaceSandbox
-from mayatk.env_utils.hierarchy_sync._hierarchy_sync import (
-    HierarchySync,
-    ObjectSwapper,
-    get_clean_node_name_from_string,
-    is_default_maya_camera,
-    select_objects_in_maya,
-)
+from mayatk.env_utils.hierarchy_sync._hierarchy_sync import HierarchySync, ObjectSwapper
 import mayatk.env_utils.hierarchy_sync.tree_utils as tree_utils
 from mayatk.env_utils.hierarchy_sync.tree_renderer import HierarchyTreeRenderer
-from mayatk.ui_utils.node_icons import NodeIcons
 
 
 class HierarchySyncController(ptk.LoggingMixin):
@@ -46,9 +39,7 @@ class HierarchySyncController(ptk.LoggingMixin):
         self._importing_reference = (
             False  # Flag to prevent current scene refresh during reference import
         )
-        self._reference_namespaces = (
-            []
-        )  # Track current reference namespaces for filtering
+        self._reference_namespaces = []  # Track current reference namespaces for filtering
 
         # Per-tree ignored path sets
         self._ignored_ref_paths = set()  # Ignored paths in reference tree (tree000)
@@ -552,8 +543,8 @@ class HierarchySyncController(ptk.LoggingMixin):
     def _is_default_maya_camera(self, transform):
         """Check if a transform is a Maya default camera that should be excluded."""
         try:
-            node_name = str(transform).split('|')[-1]
-            return is_default_maya_camera(node_name, transform)
+            node_name = str(transform).split("|")[-1]
+            return HierarchySync.is_default_maya_camera(node_name, transform)
         except Exception:
             return False
 
@@ -670,7 +661,11 @@ class HierarchySyncController(ptk.LoggingMixin):
 
         # Extract reference namespaces for UI filtering.
         self._reference_namespaces = sorted(
-            {str(t).split('|')[-1].split(":")[0] for t in all_transforms if ":" in str(t).split('|')[-1]}
+            {
+                str(t).split("|")[-1].split(":")[0]
+                for t in all_transforms
+                if ":" in str(t).split("|")[-1]
+            }
         )
         if self._reference_namespaces:
             self.logger.debug(
@@ -682,7 +677,7 @@ class HierarchySyncController(ptk.LoggingMixin):
 
     def select_objects_in_maya(self, object_names: List[str]) -> int:
         """Select objects in Maya scene by name."""
-        return select_objects_in_maya(object_names)
+        return HierarchySync.select_objects_in_maya(object_names)
 
     # ----------------------------- Tree orchestration ----------------------------- #
 
@@ -1299,7 +1294,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
         widget.menu.chk_hide_ignored.toggled.connect(self._on_hide_ignored_toggled)
 
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Hierarchy Sync",
                 body="Compare, diff, and synchronise scene hierarchies "
                 "against a reference file.",
@@ -1314,14 +1309,16 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                     "Press <b>Pull</b> to import the selected objects.",
                 ],
                 sections=[
-                    ("Header menu", [
-                        "<b>Dry Run</b> — preview changes without modifying "
-                        "the scene.",
-                        "<b>Log Level</b> — control verbosity of the output "
-                        "panel.",
-                        "<b>Hide Ignored</b> — hide ignored items from the "
-                        "trees instead of dimming them.",
-                    ]),
+                    (
+                        "Header menu",
+                        [
+                            "<b>Dry Run</b> — preview changes without modifying "
+                            "the scene.",
+                            "<b>Log Level</b> — control verbosity of the output panel.",
+                            "<b>Hide Ignored</b> — hide ignored items from the "
+                            "trees instead of dimming them.",
+                        ],
+                    ),
                 ],
                 notes=[
                     "<b>Right-click</b> either tree for additional actions: "
@@ -1472,12 +1469,12 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                 return
 
             try:
-                old_name = node.split('|')[-1].split(':')[-1]
+                old_name = node.split("|")[-1].split(":")[-1]
                 if new_name == old_name:
                     return
 
                 new_path = cmds.rename(node, new_name)
-                actual_name = new_path.split('|')[-1].split(':')[-1]
+                actual_name = new_path.split("|")[-1].split(":")[-1]
                 # Persist the post-rename DAG path so subsequent ops on this
                 # item resolve correctly (descendants included).
                 item.setData(0, self.sb.QtCore.Qt.UserRole, new_path)
@@ -1494,7 +1491,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
             except Exception as e:
                 # Revert the tree item text on failure
                 try:
-                    item.setText(0, node.split('|')[-1].split(':')[-1])
+                    item.setText(0, node.split("|")[-1].split(":")[-1])
                 except Exception:
                     pass
                 self.controller.logger.error(f"Rename failed: {e}")
@@ -2064,7 +2061,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
             item_path = self.controller.tree.build_item_path(item)
             if self.controller.is_path_ignored(tree, item_path):
                 continue
-            name = tree_utils._extract_object_name_from_item(item)
+            name = tree_utils.TreePathMatcher._extract_object_name_from_item(item)
             if name:
                 object_names.append(name)
         if not object_names:
@@ -2122,7 +2119,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                 root_objects_found = set()
 
                 for obj_name in object_names:
-                    clean_name = get_clean_node_name_from_string(obj_name)
+                    clean_name = HierarchySync.get_clean_node_name_from_string(obj_name)
 
                     if cmds.objExists(clean_name):
                         successfully_pulled += 1
@@ -2144,7 +2141,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                 # When pull_children is disabled, verify all selected objects individually
                 verify_rows = []
                 for obj_name in object_names:
-                    clean_name = get_clean_node_name_from_string(obj_name)
+                    clean_name = HierarchySync.get_clean_node_name_from_string(obj_name)
 
                     if cmds.objExists(clean_name):
                         children = (
@@ -2155,9 +2152,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                         )
                         verify_rows.append([clean_name, "OK", str(len(children))])
                         if children:
-                            child_names = [
-                                c.split("|")[-1] for c in children[:3]
-                            ]
+                            child_names = [c.split("|")[-1] for c in children[:3]]
                             self.logger.debug(
                                 f"   Children of {clean_name}: {child_names}{'...' if len(children) > 3 else ''}"
                             )
@@ -2170,9 +2165,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                         )
                         verify_rows.append([obj_name, "OK", str(len(children))])
                         if children:
-                            child_names = [
-                                c.split("|")[-1] for c in children[:3]
-                            ]
+                            child_names = [c.split("|")[-1] for c in children[:3]]
                             self.logger.debug(
                                 f"   Children of {obj_name}: {child_names}{'...' if len(children) > 3 else ''}"
                             )
@@ -2582,12 +2575,12 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                 continue
 
             try:
-                old_name = node.split('|')[-1].split(':')[-1]
+                old_name = node.split("|")[-1].split(":")[-1]
                 if new_name == old_name:
                     continue
 
                 new_path = cmds.rename(node, new_name)
-                actual_name = new_path.split('|')[-1].split(':')[-1]
+                actual_name = new_path.split("|")[-1].split(":")[-1]
                 cur_item.setData(0, self.sb.QtCore.Qt.UserRole, new_path)
                 cur_item._raw_name = actual_name
                 self._patch_descendant_item_paths(cur_item, node, new_path)
@@ -2630,7 +2623,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
             child = stack.pop()
             data = child.data(0, role)
             if isinstance(data, str) and data.startswith(old_prefix):
-                child.setData(0, role, str(new_path) + data[len(str(old_path)):])
+                child.setData(0, role, str(new_path) + data[len(str(old_path)) :])
             stack.extend(child.child(i) for i in range(child.childCount()))
 
     def _auto_ignore_quarantine_group(self):
@@ -2779,9 +2772,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                 paths = self._condense_to_roots(paths)
             elif select_leaves_only and paths:
                 paths = self._filter_to_leaves(paths)
-            return [
-                p for p in paths if not self.controller.is_path_ignored(tree, p)
-            ]
+            return [p for p in paths if not self.controller.is_path_ignored(tree, p)]
 
         if auto_select:
             tree001.clearSelection()
@@ -2879,7 +2870,9 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                 if not candidates:
                     unresolved_extra.append(extra_path)
                     continue
-                tree_matcher.log_matching_debug(extra_path, candidates, strategy, "Extra")
+                tree_matcher.log_matching_debug(
+                    extra_path, candidates, strategy, "Extra"
+                )
                 selected_count += self._select_and_reveal(candidates)
 
             # ---- reparented + fuzzy → both trees ----
@@ -2994,7 +2987,9 @@ class HierarchySyncSlots(ptk.LoggingMixin):
                                     expanded_count += 1
                                 parent = parent.parent()
             if expanded_count > 0:
-                self.logger.debug(f"Expanded {expanded_count} nodes showing differences")
+                self.logger.debug(
+                    f"Expanded {expanded_count} nodes showing differences"
+                )
 
         # ---- final summary ----
         if auto_select:

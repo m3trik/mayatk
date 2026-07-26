@@ -30,6 +30,7 @@ per cap) and shaded smooth with hard cap rims; both reuse
 :class:`~mayatk.uv_utils._uv_utils.UvUtils` cylinder-seam detection, which also
 backs the standalone *Unwrap Cylinder* UV tool.
 """
+
 from __future__ import annotations
 
 from typing import List, Optional
@@ -43,7 +44,7 @@ except ImportError as error:
     print(__file__, error)
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # from this package:
 from mayatk.core_utils.preview import Preview, OperationError
@@ -61,8 +62,8 @@ class CurveToTube(ptk.LoggingMixin):
     # (label, value) pairs for the UI combo and for input validation.
     OUTPUT_TYPES = (("NURBS Tube", "nurbs"), ("Polygon Tube", "polygon"))
 
-    # Polygon ring placement (RDP): how many points to sample the curve into
-    # before simplifying, and the deviation tolerance as a fraction of arc
+    # Polygon ring placement (RDP): how many arc-length-uniform points to
+    # sample the curve into before simplifying, and the tolerance as a fraction of arc
     # length at path_divisions=1 (rings land at the kept points — dense on
     # bends, sparse on straight runs). Path Res tightens it (divides the tol).
     _DENSE_SAMPLES = 200
@@ -192,7 +193,10 @@ class CurveToTube(ptk.LoggingMixin):
             else:
                 found = (
                     cmds.listRelatives(
-                        node, shapes=True, fullPath=True, type="nurbsCurve",
+                        node,
+                        shapes=True,
+                        fullPath=True,
+                        type="nurbsCurve",
                         noIntermediate=True,
                     )
                     or []
@@ -375,7 +379,9 @@ class CurveToTube(ptk.LoggingMixin):
             throwaway = []
         else:
             # Baked: a throwaway path through the points; source curve untouched.
-            path = cmds.rename(cmds.curve(degree=degree, point=rdp_pts), f"{name}_path#")
+            path = cmds.rename(
+                cmds.curve(degree=degree, point=rdp_pts), f"{name}_path#"
+            )
             throwaway = [path]
         if closed:
             cmds.closeCurve(
@@ -514,10 +520,16 @@ class CurveToTube(ptk.LoggingMixin):
         )
         base_shape = cmds.listRelatives(base_path, shapes=True)[0]
 
-        mesh, surface, profile = cls._extrude_poly_mesh(base_shape, radius, sections, name)
+        mesh, surface, profile = cls._extrude_poly_mesh(
+            base_shape, radius, sections, name
+        )
         cls._finish_poly_tube(
-            mesh, sections, caps, quads,
-            cls._sample_centerline(base_shape, cls._DENSE_SAMPLES), closed=False,
+            mesh,
+            sections,
+            caps,
+            quads,
+            cls._sample_centerline(base_shape, cls._DENSE_SAMPLES),
+            closed=False,
         )
 
         # Bake the straight base, drop the build inputs, then let ONLY the
@@ -551,11 +563,25 @@ class CurveToTube(ptk.LoggingMixin):
 
     @staticmethod
     def _sample_centerline(curve_shape, n=24):
-        """Sample ``n`` points along the curve (for the outward-normal check)."""
-        mn = cmds.getAttr(f"{curve_shape}.minValue")
-        mx = cmds.getAttr(f"{curve_shape}.maxValue")
+        """Sample ``n`` world-space points spaced uniformly by ARC LENGTH.
+
+        This feeds both the RDP simplification and the outward-normal check,
+        so the spacing must be even along the *geometry* regardless of the
+        curve's parameterization. Uniform-parameter stepping bunches samples
+        on curves with a skewed knot vector (attach/detach, imported CAD,
+        knot edits) — starving RDP of whole regions and producing twisted,
+        corner-cutting tubes.
+        """
+        sel = om.MSelectionList()
+        sel.add(curve_shape)
+        fn = om.MFnNurbsCurve(sel.getDagPath(0))
+        total = fn.length()
         return [
-            cmds.pointOnCurve(curve_shape, pr=mn + (mx - mn) * i / (n - 1), position=True)
+            tuple(
+                fn.getPointAtParam(
+                    fn.findParamFromLength(total * i / (n - 1)), om.MSpace.kWorld
+                )
+            )[:3]
             for i in range(n)
         ]
 
@@ -730,7 +756,7 @@ class CurveToTubeSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Curve to Tube",
                 body="Sweep a circular profile along selected NURBS curves to "
                 "build a tube, output as a NURBS surface or a polygon mesh.",
@@ -740,8 +766,7 @@ class CurveToTubeSlots(ptk.LoggingMixin):
                     "Set <b>Radius</b> and <b>Sections</b> (sides around).",
                     "For polygon, set <b>Path Res</b> (ring density along the "
                     "curve) and toggle <b>Caps</b> / <b>Quads</b>.",
-                    "Toggle <b>Preview</b> to iterate, then <b>Create</b> to "
-                    "commit.",
+                    "Toggle <b>Preview</b> to iterate, then <b>Create</b> to commit.",
                 ],
                 notes=[
                     "<b>Sections</b> sets the profile smoothness for NURBS and "
@@ -820,7 +845,9 @@ class CurveToTubeSlots(ptk.LoggingMixin):
         else:
             spans = []
             for t in tubes:
-                shp = (cmds.listRelatives(t, shapes=True, type="nurbsSurface") or [None])[0]
+                shp = (
+                    cmds.listRelatives(t, shapes=True, type="nurbsSurface") or [None]
+                )[0]
                 if shp:
                     spans.append(
                         f"{cmds.getAttr(shp + '.spansU')}×{cmds.getAttr(shp + '.spansV')}"

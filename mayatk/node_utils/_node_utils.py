@@ -12,7 +12,7 @@ except Exception as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils._core_utils import CoreUtils, as_strings, short_name
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 
 
@@ -49,7 +49,7 @@ class NodeUtils(ptk.HelpMixin):
         from mayatk import Components
 
         types = []
-        for obj in cmds.ls(as_strings(objects)) or []:
+        for obj in cmds.ls(CoreUtils.as_strings(objects)) or []:
             if cls.is_group(obj):
                 typ = "group"
             elif cls.is_locator(obj):
@@ -81,13 +81,11 @@ class NodeUtils(ptk.HelpMixin):
             (bool/list) A list of booleans indicating whether each object is a mesh.
             If 'filter' is True, returns a list of objects that are meshes.
         """
-        objs = cmds.ls(as_strings(objects), transforms=True) or []
+        objs = cmds.ls(CoreUtils.as_strings(objects), transforms=True) or []
         result = []
         for obj in objs:
             shapes = cls.get_shapes(obj, no_intermediate=True)
-            is_mesh = bool(shapes) and any(
-                cmds.objectType(s) == "mesh" for s in shapes
-            )
+            is_mesh = bool(shapes) and any(cmds.objectType(s) == "mesh" for s in shapes)
             result.append(is_mesh)
         if filter:
             return [obj for obj, is_mesh in zip(objs, result) if is_mesh]
@@ -96,7 +94,7 @@ class NodeUtils(ptk.HelpMixin):
     @staticmethod
     def is_locator(objects, filter: bool = False):
         """Determine if each of the given object(s) is a locator."""
-        objs = cmds.ls(as_strings(objects), transforms=True) or []
+        objs = cmds.ls(CoreUtils.as_strings(objects), transforms=True) or []
         locator_shapes = cmds.ls(type="locator") or []
         locator_transforms = set(
             cmds.listRelatives(locator_shapes, parent=True, path=True) or []
@@ -112,16 +110,14 @@ class NodeUtils(ptk.HelpMixin):
 
         A "group" is a transform with no shape children.
         """
-        objs = cmds.ls(as_strings(objects)) or []
+        objs = cmds.ls(CoreUtils.as_strings(objects)) or []
         result = []
         for n in objs:
             try:
                 is_transform = cmds.objectType(n) == "transform"
                 # NOTE: ``noIntermediate=True`` so that orig (intermediate)
                 # shapes don't make a group look like geometry.
-                shapes = cmds.listRelatives(
-                    n, shapes=True, noIntermediate=True
-                ) or []
+                shapes = cmds.listRelatives(n, shapes=True, noIntermediate=True) or []
                 q = is_transform and not shapes
             except Exception:
                 q = False
@@ -133,7 +129,7 @@ class NodeUtils(ptk.HelpMixin):
     @classmethod
     def is_geometry(cls, objects, filter: bool = False):
         """Return True for each object that has a shape node and is not a group."""
-        objs = cmds.ls(as_strings(objects), transforms=True) or []
+        objs = cmds.ls(CoreUtils.as_strings(objects), transforms=True) or []
         result = []
         for obj in objs:
             shapes = cls.get_shapes(obj, no_intermediate=True)
@@ -146,9 +142,9 @@ class NodeUtils(ptk.HelpMixin):
     def is_constraint(objects, filter: bool = False):
         """Determine if each object inherits from Maya's constraint base type."""
         objs = (
-            cmds.ls(as_strings(objects), flatten=True) or []
+            cmds.ls(CoreUtils.as_strings(objects), flatten=True) or []
             if not isinstance(objects, list)
-            else as_strings(objects)
+            else CoreUtils.as_strings(objects)
         )
         single = not isinstance(objects, (list, tuple))
         result = []
@@ -167,9 +163,9 @@ class NodeUtils(ptk.HelpMixin):
     def is_expression(objects, filter: bool = False):
         """Determine if each object is a Maya expression node."""
         objs = (
-            cmds.ls(as_strings(objects), flatten=True) or []
+            cmds.ls(CoreUtils.as_strings(objects), flatten=True) or []
             if not isinstance(objects, list)
-            else as_strings(objects)
+            else CoreUtils.as_strings(objects)
         )
         single = not isinstance(objects, (list, tuple))
         result = []
@@ -187,9 +183,9 @@ class NodeUtils(ptk.HelpMixin):
     def is_ik_effector(objects, filter: bool = False):
         """Determine if each object is an IK effector node."""
         objs = (
-            cmds.ls(as_strings(objects), flatten=True) or []
+            cmds.ls(CoreUtils.as_strings(objects), flatten=True) or []
             if not isinstance(objects, list)
-            else as_strings(objects)
+            else CoreUtils.as_strings(objects)
         )
         single = not isinstance(objects, (list, tuple))
         result = []
@@ -207,9 +203,9 @@ class NodeUtils(ptk.HelpMixin):
     def is_driven_key_curve(objects, filter: bool = False):
         """Determine if each animCurve is a driven key (has input connection)."""
         objs = (
-            cmds.ls(as_strings(objects), flatten=True) or []
+            cmds.ls(CoreUtils.as_strings(objects), flatten=True) or []
             if not isinstance(objects, list)
-            else as_strings(objects)
+            else CoreUtils.as_strings(objects)
         )
         single = not isinstance(objects, (list, tuple))
         result = []
@@ -230,9 +226,9 @@ class NodeUtils(ptk.HelpMixin):
     def is_muted(objects, filter: bool = False):
         """Determine if each node is muted/disabled via nodeState attribute."""
         objs = (
-            cmds.ls(as_strings(objects), flatten=True) or []
+            cmds.ls(CoreUtils.as_strings(objects), flatten=True) or []
             if not isinstance(objects, list)
-            else as_strings(objects)
+            else CoreUtils.as_strings(objects)
         )
         single = not isinstance(objects, (list, tuple))
         result = []
@@ -254,9 +250,9 @@ class NodeUtils(ptk.HelpMixin):
     def is_motion_path(objects, filter: bool = False):
         """Determine if each object is a motionPath node."""
         objs = (
-            cmds.ls(as_strings(objects), flatten=True) or []
+            cmds.ls(CoreUtils.as_strings(objects), flatten=True) or []
             if not isinstance(objects, list)
-            else as_strings(objects)
+            else CoreUtils.as_strings(objects)
         )
         single = not isinstance(objects, (list, tuple))
         result = []
@@ -274,9 +270,9 @@ class NodeUtils(ptk.HelpMixin):
     def is_ik_handle(objects, filter: bool = False):
         """Determine if each object is an ikHandle node."""
         objs = (
-            cmds.ls(as_strings(objects), flatten=True) or []
+            cmds.ls(CoreUtils.as_strings(objects), flatten=True) or []
             if not isinstance(objects, list)
-            else as_strings(objects)
+            else CoreUtils.as_strings(objects)
         )
         single = not isinstance(objects, (list, tuple))
         result = []
@@ -385,13 +381,16 @@ class NodeUtils(ptk.HelpMixin):
         Always returns a list (never ``None``).
         """
         node = str(node).split(".")[0]  # tolerate a component/attribute suffix
-        shapes = cmds.listRelatives(
-            node,
-            shapes=True,
-            noIntermediate=no_intermediate,
-            fullPath=full_path,
-            path=not full_path,
-        ) or []
+        shapes = (
+            cmds.listRelatives(
+                node,
+                shapes=True,
+                noIntermediate=no_intermediate,
+                fullPath=full_path,
+                path=not full_path,
+            )
+            or []
+        )
         if shapes:
             return shapes
         # listRelatives finds nothing when *node* is already a shape -- return it.
@@ -430,7 +429,9 @@ class NodeUtils(ptk.HelpMixin):
         de-duplicating while preserving order.
         """
         nodes = (
-            cmds.ls(objects, **ls_kwargs) if objects is not None else cmds.ls(**ls_kwargs)
+            cmds.ls(objects, **ls_kwargs)
+            if objects is not None
+            else cmds.ls(**ls_kwargs)
         ) or []
         seen = set()
         transforms = []
@@ -448,7 +449,7 @@ class NodeUtils(ptk.HelpMixin):
     @classmethod
     def get_unique_children(cls, objects):
         """Retrieves a unique list of objects' children (if any) in the scene, excluding the groups themselves."""
-        objects = cmds.ls(as_strings(objects), long=True, flatten=True) or []
+        objects = cmds.ls(CoreUtils.as_strings(objects), long=True, flatten=True) or []
 
         def recurse_children(obj, final_set):
             if cls.is_group(obj):
@@ -479,7 +480,7 @@ class NodeUtils(ptk.HelpMixin):
             (str/list) Transform node(s) or node attributes.
         """
         result = []
-        for node in cmds.ls(as_strings(nodes), long=True, flatten=True) or []:
+        for node in cmds.ls(CoreUtils.as_strings(nodes), long=True, flatten=True) or []:
             try:
                 # Strip component suffix (e.g. ".vtx[0]") to query the node.
                 base = node.split(".")[0]
@@ -495,9 +496,12 @@ class NodeUtils(ptk.HelpMixin):
                         result.extend(parent)
                 else:
                     history = cmds.listHistory(base, future=True) or []
-                    connected_transforms = cmds.listRelatives(
-                        history, parent=True, type="transform", fullPath=True
-                    ) or []
+                    connected_transforms = (
+                        cmds.listRelatives(
+                            history, parent=True, type="transform", fullPath=True
+                        )
+                        or []
+                    )
                     if connected_transforms:
                         result.extend(connected_transforms)
             except Exception as e:
@@ -521,15 +525,15 @@ class NodeUtils(ptk.HelpMixin):
         return ptk.format_return(result, nodes)
 
     @classmethod
-    def get_shape_node(
-        cls, nodes, returned_type="obj", attributes=False, inc=[], exc=[]
-    ):
+    def get_shape_node(cls, nodes, returned_type="obj", attributes=False, inc=[], exc=[]):
         """Get shape node(s) or node attributes."""
         result = []
-        for node in cmds.ls(as_strings(nodes), long=True, flatten=True) or []:
-            shapes = cmds.listRelatives(node, children=True, shapes=True) or []
+        for node in cmds.ls(CoreUtils.as_strings(nodes), long=True, flatten=True) or []:
+            shapes = (
+                cmds.listRelatives(node, children=True, shapes=True, fullPath=True) or []
+            )
             if not shapes:
-                shapes = cmds.ls(node, type="shape") or []
+                shapes = cmds.ls(node, type="shape", long=True) or []
                 if not shapes:
                     try:
                         history = cmds.listHistory(node, future=True) or []
@@ -557,8 +561,10 @@ class NodeUtils(ptk.HelpMixin):
     def get_history_node(nodes, returned_type="obj", attributes=False, inc=[], exc=[]):
         """Get history node(s) or node attributes."""
         result = []
-        for node in cmds.ls(as_strings(nodes), long=True, flatten=True) or []:
-            shapes = cmds.listRelatives(node, children=True, shapes=True) or []
+        for node in cmds.ls(CoreUtils.as_strings(nodes), long=True, flatten=True) or []:
+            shapes = (
+                cmds.listRelatives(node, children=True, shapes=True, fullPath=True) or []
+            )
             history = []
             try:
                 conns = (
@@ -682,7 +688,9 @@ class NodeUtils(ptk.HelpMixin):
 
         original_shading_group = cmds.optionVar(query="createMaterialsWithShadingGroup")
         original_placement = cmds.optionVar(query="createTexturesWithPlacement")
-        cmds.optionVar(intValue=("createMaterialsWithShadingGroup", create_shading_group))
+        cmds.optionVar(
+            intValue=("createMaterialsWithShadingGroup", create_shading_group)
+        )
         cmds.optionVar(intValue=("createTexturesWithPlacement", create_placement_nodes))
 
         try:
@@ -728,9 +736,10 @@ class NodeUtils(ptk.HelpMixin):
             current_node = stack.pop()
             visited.add(current_node)
 
-            connected_nodes = cmds.listConnections(
-                current_node, s=source, d=dest, exactType=exact
-            ) or []
+            connected_nodes = (
+                cmds.listConnections(current_node, s=source, d=dest, exactType=exact)
+                or []
+            )
 
             for n in connected_nodes:
                 if n in visited:
@@ -780,11 +789,9 @@ class NodeUtils(ptk.HelpMixin):
                     instances.append(iterDag.fullPathName())
                 iterDag.next()
         else:
-            objects = cmds.ls(as_strings(objects), long=True) or []
+            objects = cmds.ls(CoreUtils.as_strings(objects), long=True) or []
             shapes = cmds.listRelatives(objects, shapes=True, fullPath=True) or []
-            instances = (
-                cmds.listRelatives(shapes, allParents=True, fullPath=True) or []
-            )
+            instances = cmds.listRelatives(shapes, allParents=True, fullPath=True) or []
             if not return_parent_objects:
                 obj_set = set(objects)
                 instances = [i for i in instances if i not in obj_set]
@@ -803,15 +810,26 @@ class NodeUtils(ptk.HelpMixin):
     ):
         """Replace target objects with instances of the source object.
 
+        Parameters:
+            objects (list): Source first, then targets (selection order
+                when None).
+            freeze_transforms (bool): Freeze TRANSLATION only before
+                instancing.  Rotation and scale are deliberately left
+                unfrozen — each instance matches its target's orientation
+                and size via ``matchTransform``, so freezing them would
+                bake the source's pose into the shared shape.
+            center_pivot (bool): Center pivots before instancing.
+            delete_history (bool): Delete history before instancing.
+
         Returns:
             list: The newly created instance objects.
         """
         from mayatk import XformUtils
 
         if objects is None:
-            objects = cmds.ls(orderedSelection=True) or []
+            objects = cmds.ls(orderedSelection=True, long=True) or []
         else:
-            objects = cmds.ls(as_strings(objects)) or []
+            objects = cmds.ls(CoreUtils.as_strings(objects), long=True) or []
         try:
             source, targets = objects[0], objects[1:]
         except IndexError:
@@ -829,8 +847,8 @@ class NodeUtils(ptk.HelpMixin):
 
         new_instances = []
         for target in targets:
-            name = short_name(target)
-            objParent = cmds.listRelatives(target, parent=True) or []
+            name = CoreUtils.short_name(target)
+            objParent = cmds.listRelatives(target, parent=True, fullPath=True) or []
             instance = cmds.instance(source)[0]
             cmds.matchTransform(
                 instance, target, position=True, rotation=True, scale=True, pivots=True
@@ -878,7 +896,7 @@ class NodeUtils(ptk.HelpMixin):
             objects = cls.get_instances()
 
         results = []
-        for obj in cmds.ls(as_strings(objects)) or []:
+        for obj in cmds.ls(CoreUtils.as_strings(objects)) or []:
             obj_long = (cmds.ls(obj, long=True) or [obj])[0]
             shapes = (
                 cmds.listRelatives(

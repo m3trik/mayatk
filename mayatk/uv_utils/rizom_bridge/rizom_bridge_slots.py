@@ -24,6 +24,7 @@ comment block), so the leading comment of each ``scripts/*.lua`` is
 automatically logged when the user switches scripts -- no override
 needed here.
 """
+
 import traceback
 from pathlib import Path
 
@@ -67,11 +68,23 @@ class _VersionedParamsProxy:
 
     def referenced_keys(self, script_text: str):
         version = self._slot.bridge.rizom_version
-        return self._mod.referenced_keys(
-            self._mod.strip_unsupported(script_text, version)
+        # Expand includes BEFORE stripping: version-gated tokens that live only
+        # inside an include (e.g. __PACK_BLOCK__) aren't in the raw preset text,
+        # so stripping first would leave them for referenced_keys to re-surface
+        # and the panel would show knobs the send path silently drops below the
+        # installed Rizom version. referenced_keys re-expands idempotently.
+        return self._mod.Parameters.referenced_keys(
+            self._mod.Parameters.strip_unsupported(
+                self._mod.Parameters.expand_includes(script_text), version
+            )
         )
 
     def __getattr__(self, name):
+        # The parameter helpers live on ``Parameters`` now; module-level names
+        # (``PARAMS``) still come off the module. Route each to its home.
+        params_cls = getattr(self._mod, "Parameters", None)
+        if params_cls is not None and hasattr(params_cls, name):
+            return getattr(params_cls, name)
         return getattr(self._mod, name)
 
 
@@ -110,16 +123,20 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
     # open_uv_editor + the base's open_templates_folder / refresh_templates).
     HEADER_MENU_ITEMS = (
         (
-            "Open UV Editor", "btn_open_uv_editor",
-            "Open Maya's UV Editor for inspecting the result.", "open_uv_editor",
+            "Open UV Editor",
+            "btn_open_uv_editor",
+            "Open Maya's UV Editor for inspecting the result.",
+            "open_uv_editor",
         ),
         (
-            "Open Scripts Folder", "btn_open_scripts",
+            "Open Scripts Folder",
+            "btn_open_scripts",
             "Reveal the bundled Lua preset folder in Explorer.",
             "open_templates_folder",
         ),
         (
-            "Refresh Scripts", "btn_refresh_scripts",
+            "Refresh Scripts",
+            "btn_refresh_scripts",
             "Re-scan the scripts folder and rebuild the script combo.",
             "refresh_templates",
         ),
@@ -137,25 +154,37 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
             "Click <b>Process Selected</b>.",
         ],
         "sections": [
-            ("Presets", [
-                "<b>pack / unwrap_hard / unwrap_organic / optimize</b> "
-                "— round-trip: Maya exports duplicates with "
-                "<code>__RZTMP</code> suffix, RizomUV runs the script "
-                "headlessly, UVs are transferred back onto originals.",
-                "<b>send</b> — one-way: exports the selection directly "
-                "(no rename), optionally collects diffuse textures "
-                "from the shading networks, then launches RizomUV "
-                "detached. Save manually inside RizomUV when done.",
-            ]),
-            ("Header menu", [
-                "<b>Open UV Editor</b> — open Maya's UV Editor to "
-                "inspect the result.",
-                "<b>Open Scripts Folder</b> — reveal the bundled "
-                "Lua preset folder in Explorer.",
-                "<b>Refresh Scripts</b> — re-scan the scripts folder "
-                "and rebuild the script combo.",
-                "<b>Clear Log</b> — clear the log panel below.",
-            ]),
+            (
+                "Presets",
+                [
+                    "<b>pack / unwrap_hard / unwrap_organic / unwrap_hybrid "
+                    "/ optimize</b> — round-trip: Maya exports duplicates "
+                    "with <code>__RZTMP</code> suffix, RizomUV runs the "
+                    "script headlessly, UVs are transferred back onto "
+                    "originals. (unwrap_hybrid needs RizomUV 2022+.)",
+                    "<b>send</b> — one-way: exports the selection directly "
+                    "(no rename), optionally collects diffuse textures "
+                    "from the shading networks, then launches RizomUV "
+                    "detached. Save manually inside RizomUV when done.",
+                    "<b>pack_into_existing</b> — packs the selection's "
+                    "shells into the empty space of the layout shared by "
+                    "every mesh using the selection's material(s); the "
+                    "existing shells don't move. Requires RizomUV 2022.2+ "
+                    "(hidden from the dropdown on older installs).",
+                ],
+            ),
+            (
+                "Header menu",
+                [
+                    "<b>Open UV Editor</b> — open Maya's UV Editor to "
+                    "inspect the result.",
+                    "<b>Open Scripts Folder</b> — reveal the bundled "
+                    "Lua preset folder in Explorer.",
+                    "<b>Refresh Scripts</b> — re-scan the scripts folder "
+                    "and rebuild the script combo.",
+                    "<b>Clear Log</b> — clear the log panel below.",
+                ],
+            ),
         ],
         "notes": [
             "Add custom presets by dropping new <code>.lua</code> "
@@ -187,11 +216,22 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
         marmoset's ``send_to`` / ``roundtrip``) -- every script is just
         a recipe the bridge runs end-to-end. We emit ``mode=""`` so the
         base class's :meth:`_format_combo_label` elides the parens.
+
+        Presets carrying an ``@min_rizom`` header marker above the
+        installed Rizom version are omitted entirely (mirrors the
+        bridge-side gate in ``process_with_rizomuv``) -- e.g.
+        ``pack_into_existing`` needs the >= 2022.2 pack API.
         """
-        return [
-            (p.stem, "")
-            for p in sorted(_SCRIPT_DIR.glob("*.lua"))
-        ]
+        version = self.bridge.rizom_version
+        pairs = []
+        for path in sorted(_SCRIPT_DIR.glob("*.lua")):
+            required = _params.Parameters.preset_min_version(
+                path.read_text(encoding="utf-8")
+            )
+            if required and version < required:
+                continue
+            pairs.append((path.stem, ""))
+        return pairs
 
     # ------------------------------------------------------------------
     # b000 -- the per-bridge send action
@@ -202,6 +242,13 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
     # the panel to reveal the load-option widgets (LOAD_UVS, IMPORT_GROUPS,
     # ...) via the existing placeholder-discovery scan over send.lua.
     SEND_PRESET = "send"
+
+    # Preset that packs the SELECTION's islands into the empty space of
+    # the existing layout: the processed object set expands to every mesh
+    # sharing the selection's materials (the material defines "the map"),
+    # and the selection itself becomes select_objects= so only its
+    # islands move. Version-gated >= 2022.2 via its @min_rizom header.
+    PACK_INTO_EXISTING_PRESET = "pack_into_existing"
 
     def b000(self):
         """Run the chosen preset: round-trip, or one-way send when ``send`` is picked."""
@@ -236,9 +283,7 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
             )
             return
 
-        self.bridge.logger.info(
-            f"--- {preset} on {len(selection)} object(s) ---"
-        )
+        self.bridge.logger.info(f"--- {preset} on {len(selection)} object(s) ---")
 
         try:
             with self.sb.progress(text=f"Working: RizomUV {preset}"):
@@ -249,6 +294,28 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
                         selection,
                         params=self.collect_param_values(),
                     )
+                elif preset == self.PACK_INTO_EXISTING_PRESET:
+                    all_objs, new_objs = RizomUVBridge.expand_by_materials(
+                        selection
+                    )
+                    if len(all_objs) <= len(new_objs):
+                        self.bridge.logger.warning(
+                            "No other meshes share the selection's "
+                            "material(s) -- there is no existing layout to "
+                            "pack into. Use the 'pack' preset instead."
+                        )
+                        return
+                    self.bridge.logger.info(
+                        f"Packing {len(new_objs)} object(s) into the layout "
+                        f"of {len(all_objs) - len(new_objs)} other mesh(es) "
+                        "sharing their material(s)."
+                    )
+                    self.bridge.process_with_rizomuv(
+                        all_objs,
+                        preset=preset,
+                        params=self.collect_param_values(),
+                        select_objects=new_objs,
+                    )
                 else:
                     self.bridge.process_with_rizomuv(
                         selection,
@@ -256,9 +323,7 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
                         params=self.collect_param_values(),
                     )
         except Exception:
-            self.bridge.logger.error(
-                "Bridge raised:\n" + traceback.format_exc()
-            )
+            self.bridge.logger.error("Bridge raised:\n" + traceback.format_exc())
             return
 
     # ------------------------------------------------------------------

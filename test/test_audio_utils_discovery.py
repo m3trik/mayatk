@@ -5,6 +5,7 @@
 Validates that the per-track canonical store produces correct
 :class:`AudioSegment` lists for consumers (sequencer + manifest).
 """
+
 import os
 import struct
 import sys
@@ -26,11 +27,7 @@ from base_test import MayaTkTestCase
 from mayatk.audio_utils._audio_utils import AudioUtils
 
 _events = _file_map = AudioUtils
-from mayatk.audio_utils.segments import (
-    AudioSegment,
-    collect_all_segments,
-    collect_segments_for_track,
-)
+from mayatk.audio_utils.segments import AudioSegment
 
 
 _TEMP_DIR = os.path.join(scripts_dir, "mayatk", "test", "temp_tests")
@@ -52,14 +49,14 @@ def _make_wav(name: str, duration_sec: float = 0.5) -> str:
 
 class TestCollectAllSegments(MayaTkTestCase):
     def test_empty_scene_returns_empty(self):
-        self.assertEqual(collect_all_segments(), [])
+        self.assertEqual(AudioSegment.collect_all_segments(), [])
 
     def test_single_track_single_start_key(self):
         wav = _make_wav("disc_single")
         _events.write_key("disc_single", frame=20)
         _file_map.set_path("disc_single", wav)
 
-        segs = collect_all_segments(include_waveform=False)
+        segs = AudioSegment.collect_all_segments(include_waveform=False)
         self.assertEqual(len(segs), 1)
         seg = segs[0]
         self.assertIsInstance(seg, AudioSegment)
@@ -75,7 +72,7 @@ class TestCollectAllSegments(MayaTkTestCase):
         _events.write_key("disc_stop", frame=25, value=0)
         _file_map.set_path("disc_stop", wav)
 
-        segs = collect_all_segments(include_waveform=False)
+        segs = AudioSegment.collect_all_segments(include_waveform=False)
         self.assertEqual(len(segs), 1)
         self.assertEqual(segs[0].start, 10.0)
         self.assertEqual(segs[0].end, 25.0)
@@ -88,7 +85,7 @@ class TestCollectAllSegments(MayaTkTestCase):
         _events.write_key("disc_multi", frame=50, value=1)
         _file_map.set_path("disc_multi", wav)
 
-        segs = collect_all_segments(include_waveform=False)
+        segs = AudioSegment.collect_all_segments(include_waveform=False)
         self.assertEqual(len(segs), 2)
         self.assertEqual(segs[0].start, 10.0)
         self.assertEqual(segs[0].end, 20.0)
@@ -102,7 +99,7 @@ class TestCollectAllSegments(MayaTkTestCase):
         _file_map.set_path("disc_sort_a", wav_a)
         _file_map.set_path("disc_sort_b", wav_b)
 
-        segs = collect_all_segments(include_waveform=False)
+        segs = AudioSegment.collect_all_segments(include_waveform=False)
         starts = [s.start for s in segs]
         self.assertEqual(starts, sorted(starts))
 
@@ -112,7 +109,7 @@ class TestCollectAllSegments(MayaTkTestCase):
         _file_map.set_path("disc_range", wav)
 
         # Clip ends around frame 5 + duration; force it out of window.
-        segs = collect_all_segments(
+        segs = AudioSegment.collect_all_segments(
             scene_start=1000, scene_end=2000, include_waveform=False
         )
         self.assertEqual(segs, [])
@@ -122,7 +119,7 @@ class TestCollectAllSegments(MayaTkTestCase):
         _events.write_key("disc_keep", frame=100)
         _file_map.set_path("disc_keep", wav)
 
-        segs = collect_all_segments(
+        segs = AudioSegment.collect_all_segments(
             scene_start=50, scene_end=500, include_waveform=False
         )
         self.assertEqual(len(segs), 1)
@@ -130,14 +127,14 @@ class TestCollectAllSegments(MayaTkTestCase):
     def test_track_without_file_map_skipped(self):
         _events.write_key("disc_no_path", frame=10)
         # No set_path call.
-        self.assertEqual(collect_all_segments(), [])
+        self.assertEqual(AudioSegment.collect_all_segments(), [])
 
     def test_waveform_attached_when_requested(self):
         wav = _make_wav("disc_wf")
         _events.write_key("disc_wf", frame=0)
         _file_map.set_path("disc_wf", wav)
 
-        segs = collect_all_segments(include_waveform=True)
+        segs = AudioSegment.collect_all_segments(include_waveform=True)
         self.assertEqual(len(segs), 1)
         # Envelope should be non-empty for a valid WAV.
         self.assertTrue(len(segs[0].waveform) > 0)
@@ -147,7 +144,7 @@ class TestCollectAllSegments(MayaTkTestCase):
         _events.write_key("disc_nowf", frame=0)
         _file_map.set_path("disc_nowf", wav)
 
-        segs = collect_all_segments(include_waveform=False)
+        segs = AudioSegment.collect_all_segments(include_waveform=False)
         self.assertEqual(segs[0].waveform, [])
 
 
@@ -160,12 +157,12 @@ class TestCollectSegmentsForTrack(MayaTkTestCase):
         _file_map.set_path("only_a", wav_a)
         _file_map.set_path("only_b", wav_b)
 
-        segs = collect_segments_for_track("only_a", include_waveform=False)
+        segs = AudioSegment.collect_segments_for_track("only_a", include_waveform=False)
         self.assertEqual(len(segs), 1)
         self.assertEqual(segs[0].track_id, "only_a")
 
     def test_unknown_track_returns_empty(self):
-        self.assertEqual(collect_segments_for_track("nonexistent"), [])
+        self.assertEqual(AudioSegment.collect_segments_for_track("nonexistent"), [])
 
 
 if __name__ == "__main__":

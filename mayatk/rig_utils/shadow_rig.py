@@ -11,11 +11,11 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # From this package:
 from mayatk import NodeUtils
-from mayatk.core_utils._core_utils import leaf_name, short_name
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.core_utils.preview import Preview
 
@@ -65,7 +65,14 @@ class ShadowRig(ptk.LoggingMixin):
     # Lift above the ground plane to avoid z-fighting (build + expression).
     GROUND_OFFSET = 0.01
     # Channels the mode expressions drive (and bake() keys).
-    BAKE_CHANNELS = ("translateX", "translateY", "translateZ", "rotateY", "scaleX", "scaleZ")
+    BAKE_CHANNELS = (
+        "translateX",
+        "translateY",
+        "translateZ",
+        "rotateY",
+        "scaleX",
+        "scaleZ",
+    )
     # data_export carrier channel (see refresh_export_metadata).
     SHADOW_METADATA = "shadow_metadata"
     # Multi message attr on the plane linking every support node this rig
@@ -101,7 +108,11 @@ class ShadowRig(ptk.LoggingMixin):
         # short_name strips DAG path + namespace: '|' is illegal in the name
         # flag (duplicate leaf names force path-qualified targets) and ':' in
         # the texture filename silently writes an NTFS alternate data stream.
-        base = short_name(self.targets[0]) if len(self.targets) == 1 else "combined"
+        base = (
+            CoreUtils.short_name(self.targets[0])
+            if len(self.targets) == 1
+            else "combined"
+        )
         i, unique = 0, base
         while cmds.objExists(f"{unique}_shadow_grp"):
             i += 1
@@ -119,9 +130,7 @@ class ShadowRig(ptk.LoggingMixin):
         shapes = []
         for t in self.targets:
             shapes += cmds.ls(t, type="mesh") or []  # target may BE a shape
-            shapes += (
-                cmds.listRelatives(t, ad=True, type="mesh", fullPath=True) or []
-            )
+            shapes += cmds.listRelatives(t, ad=True, type="mesh", fullPath=True) or []
         # Intermediate (Orig) shapes hold pre-deformation geometry — a skinned
         # target posed away from bind pose would union its bind pose into the
         # measurement, skewing objectHeight / plane size / center.
@@ -138,9 +147,9 @@ class ShadowRig(ptk.LoggingMixin):
         min_y = bbox[1]
         center_z = (bbox[2] + bbox[5]) / 2.0
 
-        self.contact_locator = cmds.spaceLocator(
-            name=f"{self._name_base}_contact_loc"
-        )[0]
+        self.contact_locator = cmds.spaceLocator(name=f"{self._name_base}_contact_loc")[
+            0
+        ]
         cmds.setAttr(
             f"{self.contact_locator}.translate",
             center_x,
@@ -169,11 +178,16 @@ class ShadowRig(ptk.LoggingMixin):
         if cmds.objExists(source_name):
             # The rig reads the source's worldMatrix — a DG node (shader,
             # set, …) squatting the name would fail deep in the build.
-            existing = cmds.ls(source_name, transforms=True)
+            existing = cmds.ls(source_name, transforms=True, long=True)
             if not existing:
                 raise ValueError(
                     f"Existing node '{source_name}' is not a transform — "
                     "choose a different shadow-source name."
+                )
+            if len(existing) > 1:
+                self.logger.warning(
+                    f"Ambiguous shadow source '{source_name}' matched "
+                    f"{len(existing)} transforms; using {existing[0]}."
                 )
             self.light = existing[0]
             self.logger.info(f"Using existing shadow source: {self.light}")
@@ -268,9 +282,7 @@ class ShadowRig(ptk.LoggingMixin):
         for target in self.targets:
             if recursive:
                 transforms = [target] + (
-                    cmds.listRelatives(
-                        target, ad=True, type="transform", fullPath=True
-                    )
+                    cmds.listRelatives(target, ad=True, type="transform", fullPath=True)
                     or []
                 )
             else:
@@ -283,7 +295,10 @@ class ShadowRig(ptk.LoggingMixin):
                 # a posed/skinned target (mirrors _world_bbox's filter).
                 tx_shapes = (
                     cmds.listRelatives(
-                        tx, shapes=True, type="mesh", fullPath=True,
+                        tx,
+                        shapes=True,
+                        type="mesh",
+                        fullPath=True,
                         noIntermediate=True,
                     )
                     or []
@@ -426,7 +441,9 @@ class ShadowRig(ptk.LoggingMixin):
         )
         return self.texture_path
 
-    def create_material(self, shader_type="stingray", stingray_opacity_mode="transparent"):
+    def create_material(
+        self, shader_type="stingray", stingray_opacity_mode="transparent"
+    ):
         """Create material with the silhouette texture.
 
         Parameters:
@@ -628,7 +645,9 @@ float $opacity = clamp(0.0, 1.0, $distOpacity * $heightFade * $riseFade);
         contact_dm = self._make_world_decompose(contact, "contact")
         light_dm = self._make_world_decompose(self.light, "light")
 
-        expr_code = self._expr_common(light_dm, contact_dm) + f"""
+        expr_code = (
+            self._expr_common(light_dm, contact_dm)
+            + f"""
 // 5. Rotation (plane faces away from light)
 float $angleDeg = rad_to_deg(atan2($dx, $dz));
 
@@ -647,7 +666,9 @@ float $normZ = ($dist2D > 0.001) ? ($dz / $dist2D) : 1;
 {self.shadow_plane}.rotateY = $angleDeg;
 {self.shadow_plane}.scaleX = 1.0;
 {self.shadow_plane}.scaleZ = $sz;
-""" + self._expr_opacity("$sz")
+"""
+            + self._expr_opacity("$sz")
+        )
         self._build_expression(expr_code)
 
     def _expr_stretch(self):
@@ -661,7 +682,9 @@ float $normZ = ($dist2D > 0.001) ? ($dz / $dist2D) : 1;
         contact_dm = self._make_world_decompose(contact, "contact")
         light_dm = self._make_world_decompose(self.light, "light")
 
-        expr_code = self._expr_common(light_dm, contact_dm) + f"""
+        expr_code = (
+            self._expr_common(light_dm, contact_dm)
+            + f"""
 // 5. Axis Stretch (shadow length ~ objectHeight x horizontal-offset/light-height)
 float $rx = abs($dx) / $relHeight;
 float $rz = abs($dz) / $relHeight;
@@ -678,7 +701,9 @@ float $pz = ($dz > 0) ? -$radius : $radius;
 {self.shadow_plane}.rotateY = 0;
 {self.shadow_plane}.scaleX = $sx;
 {self.shadow_plane}.scaleZ = $sz;
-""" + self._expr_opacity("max($sx, $sz)")
+"""
+            + self._expr_opacity("max($sx, $sz)")
+        )
         self._build_expression(expr_code)
 
     # ------------------------------------------------------------------ bake
@@ -726,9 +751,7 @@ float $pz = ($dz > 0) ? -$radius : $radius;
         shapes = cmds.listRelatives(plane, shapes=True, fullPath=True) or []
         for shape in shapes:
             for sg in cmds.listConnections(shape, type="shadingEngine") or []:
-                shaders = (
-                    cmds.listConnections(f"{sg}.surfaceShader", source=True) or []
-                )
+                shaders = cmds.listConnections(f"{sg}.surfaceShader", source=True) or []
                 for shader in shaders:
                     queue = [
                         src
@@ -797,7 +820,7 @@ float $pz = ($dz > 0) ? -$radius : $radius;
             )
             records.append(
                 {
-                    "name": leaf_name(plane),
+                    "name": CoreUtils.leaf_name(plane),
                     "texture": os.path.basename(tex) if tex else "",
                     "intensity": round(float(intensity), 4),
                 }
@@ -820,9 +843,7 @@ float $pz = ($dz > 0) ? -$radius : $radius;
                 # transform names and crash attributeQuery; ls() normalizes
                 # back to shortest-unique (matching the scene-scan branch).
                 kids = (
-                    cmds.listRelatives(
-                        pool, ad=True, type="transform", fullPath=True
-                    )
+                    cmds.listRelatives(pool, ad=True, type="transform", fullPath=True)
                     or []
                 )
                 pool = cmds.ls(pool + kids) or []
@@ -894,9 +915,7 @@ float $pz = ($dz > 0) ? -$radius : $radius;
     # ------------------------------------------------------------------ delete
     def delete(self, delete_textures=False):
         """Delete this rig completely. See :meth:`delete_rigs`."""
-        return self.delete_rigs(
-            [self.shadow_plane], delete_textures=delete_textures
-        )
+        return self.delete_rigs([self.shadow_plane], delete_textures=delete_textures)
 
     @classmethod
     def delete_rigs(cls, planes=None, delete_textures=False):
@@ -957,7 +976,7 @@ float $pz = ($dz > 0) ? -$radius : $radius;
             # nothing but this plane (never a user's own parent group).
             root = plane
             parent = cmds.listRelatives(plane, parent=True, fullPath=True)
-            if parent and leaf_name(parent[0]).endswith("_shadow_grp"):
+            if parent and CoreUtils.leaf_name(parent[0]).endswith("_shadow_grp"):
                 kids = cmds.listRelatives(parent[0], children=True, fullPath=True)
                 if len(kids or []) == 1:
                     root = parent[0]
@@ -1135,7 +1154,7 @@ class ShadowRigSlots:
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Shadow Rig",
                 body="Create a projected-shadow plane rig that exports cleanly "
                 "for game engines (Unity, etc.). The plane carries a baked "
@@ -1158,23 +1177,29 @@ class ShadowRigSlots:
                     "automatically.",
                 ],
                 sections=[
-                    ("Modes", [
-                        "<b>Orbit</b> — Plane rotates around the target to face "
-                        "away from the light. Correct for animated/orbiting "
-                        "lights.",
-                        "<b>Stretch</b> — Plane stays axis-aligned; uses scale "
-                        "and compensatory translation to warp the shadow. Bake-"
-                        "friendly, but the silhouette mirrors if the light "
-                        "crosses to the target's opposite side.",
-                    ]),
-                    ("Plane attributes", [
-                        "<b>shadowIntensity</b> / <b>falloffPower</b> — overall "
-                        "strength and distance falloff.",
-                        "<b>maxStretch</b> — clamp on shadow elongation.",
-                        "<b>fadeHeight</b> — rise off the ground at which the "
-                        "shadow has fully faded.",
-                        "<b>scaleInfluence</b> — art-directed extra grow.",
-                    ]),
+                    (
+                        "Modes",
+                        [
+                            "<b>Orbit</b> — Plane rotates around the target to face "
+                            "away from the light. Correct for animated/orbiting "
+                            "lights.",
+                            "<b>Stretch</b> — Plane stays axis-aligned; uses scale "
+                            "and compensatory translation to warp the shadow. Bake-"
+                            "friendly, but the silhouette mirrors if the light "
+                            "crosses to the target's opposite side.",
+                        ],
+                    ),
+                    (
+                        "Plane attributes",
+                        [
+                            "<b>shadowIntensity</b> / <b>falloffPower</b> — overall "
+                            "strength and distance falloff.",
+                            "<b>maxStretch</b> — clamp on shadow elongation.",
+                            "<b>fadeHeight</b> — rise off the ground at which the "
+                            "shadow has fully faded.",
+                            "<b>scaleInfluence</b> — art-directed extra grow.",
+                        ],
+                    ),
                 ],
                 notes=[
                     "Unity plug-and-play: deploy unitytk's C# templates once "
@@ -1195,7 +1220,7 @@ class ShadowRigSlots:
         ui = self.ui
 
         ui.cmb_mode.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Rig Mode",
                 body="How the shadow plane reacts to the light's position.",
                 sections=[
@@ -1221,23 +1246,20 @@ class ShadowRigSlots:
             )
         )
         ui.chk_combine.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Include Children",
                 body="Include the selected objects' descendant meshes in the "
                 "baked silhouette.",
                 notes=[
-                    "The selection always shares a single combined shadow "
-                    "plane.",
-                    "Off — only the selected meshes themselves are "
-                    "rasterized.",
+                    "The selection always shares a single combined shadow plane.",
+                    "Off — only the selected meshes themselves are rasterized.",
                 ],
             )
         )
         ui.txt_source.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Source Name",
-                body="Name for the shadow-source locator that anchors the "
-                "projection.",
+                body="Name for the shadow-source locator that anchors the projection.",
                 notes=[
                     "Reuse a name to share one source; use distinct names for "
                     "separate shadow sources.",
@@ -1245,7 +1267,7 @@ class ShadowRigSlots:
             )
         )
         ui.s000.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Texture Resolution",
                 body="Pixel resolution of the baked silhouette PNG carried by "
                 "the shadow plane.",
@@ -1255,7 +1277,7 @@ class ShadowRigSlots:
             )
         )
         ui.cmb000.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Projection Axis",
                 body="Viewing axis the silhouette is rendered along.",
                 rows=[
@@ -1265,22 +1287,20 @@ class ShadowRigSlots:
             )
         )
         ui.chk_preview.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Preview",
                 body="Builds the shadow rig live so you can judge it before "
                 "committing.",
                 notes=[
                     "Tweaking any option refreshes the preview.",
-                    "<b>Create Shadow</b> commits it; disabling Preview "
-                    "discards it.",
+                    "<b>Create Shadow</b> commits it; disabling Preview discards it.",
                 ],
             )
         )
         ui.b000.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Create Shadow",
-                body="Commits the previewed shadow rig for the selected "
-                "target(s).",
+                body="Commits the previewed shadow rig for the selected target(s).",
                 steps=[
                     "Select one or more target objects.",
                     "Enable <b>Preview</b> and dial in the options.",
@@ -1293,13 +1313,13 @@ class ShadowRigSlots:
             )
         )
         ui.b001.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Reset to Defaults",
                 body="Restores every option on this panel to its default value.",
             )
         )
         ui.b002.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Bake to Keyframes",
                 body="Bakes the shadow plane's driven motion to keyframes over "
                 "the playback range and removes the live rig — leaving an "

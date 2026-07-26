@@ -7,10 +7,10 @@ except ImportError:
     cmds = None
     om = None
 
-from typing import List, Tuple, Optional, Union
+from typing import List, Tuple, Optional
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt, kbd
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # from this package:
 from mayatk.core_utils.script_job_manager import ScriptJobManager
@@ -79,9 +79,7 @@ class WheelRig(ptk.LoggingMixin):
         self._rig_name = name
         self.logger.debug(f"Rig name set to: {self._rig_name}")
 
-    def get_expressions(
-        self, filter_by_rig: bool = False
-    ) -> List[object]:
+    def get_expressions(self, filter_by_rig: bool = False) -> List[object]:
         """Return all expression nodes connected to the control.
 
         Parameters:
@@ -95,7 +93,9 @@ class WheelRig(ptk.LoggingMixin):
         exprs = list(set(exprs))
 
         if filter_by_rig:
-            exprs = [e for e in exprs if self.rig_name in e.split('|')[-1].split(':')[-1]]
+            exprs = [
+                e for e in exprs if self.rig_name in e.split("|")[-1].split(":")[-1]
+            ]
         return exprs
 
     def delete_expressions(self, filter_by_rig: bool = True) -> None:
@@ -186,7 +186,13 @@ class WheelRig(ptk.LoggingMixin):
 
             if not cmds.attributeQuery(candidate, node=str(self.control), exists=True):
                 # Found a free slot, create it
-                cmds.addAttr(str(self.control), longName=candidate, k=True, dv=wheel_height, min=0.001)
+                cmds.addAttr(
+                    str(self.control),
+                    longName=candidate,
+                    k=True,
+                    dv=wheel_height,
+                    min=0.001,
+                )
                 height_attr_name = candidate
                 break
 
@@ -203,9 +209,20 @@ class WheelRig(ptk.LoggingMixin):
             suffix_idx += 1
 
         # Global control attributes (shared across all wheel groups)
-        if not cmds.attributeQuery("enableRotation", node=str(self.control), exists=True):
-            cmds.addAttr(str(self.control), longName="enableRotation", k=True, dv=1.0, min=0.0, max=1.0)
-        if not cmds.attributeQuery("spinDirection", node=str(self.control), exists=True):
+        if not cmds.attributeQuery(
+            "enableRotation", node=str(self.control), exists=True
+        ):
+            cmds.addAttr(
+                str(self.control),
+                longName="enableRotation",
+                k=True,
+                dv=1.0,
+                min=0.0,
+                max=1.0,
+            )
+        if not cmds.attributeQuery(
+            "spinDirection", node=str(self.control), exists=True
+        ):
             cmds.addAttr(str(self.control), longName="spinDirection", k=True, dv=1.0)
 
         # Ensure attributes are exposed in the Channel Box
@@ -344,7 +361,7 @@ class WheelRigSlots:
         cmb_space = widget.menu.add(
             "QComboBox",
             setObjectName="cmb_space",
-            setToolTip=fmt(
+            setToolTip=TooltipFormat.fmt(
                 title="Space",
                 bullets=[
                     "<b>Local</b> (default) \u2014 reads the driver's local "
@@ -357,43 +374,57 @@ class WheelRigSlots:
             ),
         )
         cmb_space.addItems(["Local", "World Space"])
-        cmb_space.setCurrentText("Local")  # preserve prior default (checkbox off = local)
+        cmb_space.setCurrentText(
+            "Local"
+        )  # preserve prior default (checkbox off = local)
         cmb_space.currentTextChanged.connect(self._on_space_changed)
 
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Wheel Rig",
                 body="Drive wheel rotation from a control's linear movement. "
                 "Wheel diameter (Wheel Height) and travel axis determine the "
                 "rotation speed.",
                 sections=[
-                    ("Selection order", [
-                        "Select one or more <b>wheel</b> objects "
-                        "(or locators driving them).",
-                        f"{kbd('Shift')}-select the <b>driver / control</b> "
-                        "object last.",
-                        "Click <b>Rig Rotation</b>.",
-                    ]),
-                    ("Settings", [
-                        "<b>Axis</b> \u2014 which translation axis drives which "
-                        "rotation axis. e.g. <i>Move Z \u2192 Rotate X</i> means "
-                        "forward Z movement produces pitch on X.",
-                        "<b>Wheel Height</b> \u2014 diameter used to compute "
-                        "rotation speed. Use <b>Get Wheel Size</b> (slider "
-                        "option box) to auto-detect from the bounding box.",
-                    ]),
-                    ("Modes", [
-                        "<b>Local</b> (default) \u2014 reads the driver's local "
-                        "translate. Best when the driver itself is animated.",
-                        "<b>World Space</b> \u2014 uses a decomposeMatrix node so "
-                        "parent transform movement is captured. Toggle via "
-                        "the header menu.",
-                    ]),
-                    ("Driver attributes added", [
-                        "<b>wheelHeight</b> \u2014 animation-friendly diameter control.",
-                        "<b>enableRotation</b> \u2014 on/off toggle (0..1).",
-                        "<b>spinDirection</b> \u2014 flip direction (+1 / -1).",
-                    ]),
+                    (
+                        "Selection order",
+                        [
+                            "Select one or more <b>wheel</b> objects "
+                            "(or locators driving them).",
+                            f"{TooltipFormat.kbd('Shift')}-select the <b>driver / control</b> "
+                            "object last.",
+                            "Click <b>Rig Rotation</b>.",
+                        ],
+                    ),
+                    (
+                        "Settings",
+                        [
+                            "<b>Axis</b> \u2014 which translation axis drives which "
+                            "rotation axis. e.g. <i>Move Z \u2192 Rotate X</i> means "
+                            "forward Z movement produces pitch on X.",
+                            "<b>Wheel Height</b> \u2014 diameter used to compute "
+                            "rotation speed. Use <b>Get Wheel Size</b> (slider "
+                            "option box) to auto-detect from the bounding box.",
+                        ],
+                    ),
+                    (
+                        "Modes",
+                        [
+                            "<b>Local</b> (default) \u2014 reads the driver's local "
+                            "translate. Best when the driver itself is animated.",
+                            "<b>World Space</b> \u2014 uses a decomposeMatrix node so "
+                            "parent transform movement is captured. Toggle via "
+                            "the header menu.",
+                        ],
+                    ),
+                    (
+                        "Driver attributes added",
+                        [
+                            "<b>wheelHeight</b> \u2014 animation-friendly diameter control.",
+                            "<b>enableRotation</b> \u2014 on/off toggle (0..1).",
+                            "<b>spinDirection</b> \u2014 flip direction (+1 / -1).",
+                        ],
+                    ),
                 ],
                 notes=[
                     "Re-running on the same driver updates the existing "
@@ -508,7 +539,7 @@ class WheelRigSlots:
         ui = self.ui
 
         ui.txt000.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Rig Name",
                 body="Base name for the expression (and its decomposeMatrix "
                 "node, in World Space mode) that this rig creates.",
@@ -516,7 +547,7 @@ class WheelRigSlots:
             )
         )
         ui.s000.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Wheel Height",
                 body="Wheel diameter, used to convert the driver's travel into "
                 "rotation — a larger wheel turns slower over the same distance.",
@@ -527,7 +558,7 @@ class WheelRigSlots:
             )
         )
         ui.cmb000.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Movement → Rotation Axis",
                 body="Which translation axis drives which rotation axis.",
                 rows=[
@@ -538,18 +569,17 @@ class WheelRigSlots:
             )
         )
         ui.chk010.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Freeze Transforms",
                 body="Freezes <b>translation</b> on the driver and wheel(s) "
                 "before rigging, so travel is measured from a clean zero.",
                 notes=[
-                    "Rotation is preserved (needed for mirrored-wheel "
-                    "auto-flip).",
+                    "Rotation is preserved (needed for mirrored-wheel auto-flip).",
                 ],
             )
         )
         ui.b000.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Rig Rotation",
                 body="Creates (or updates) the expression that spins the "
                 "wheel(s) from the driver's movement.",
@@ -573,7 +603,7 @@ class WheelRigSlots:
             "QPushButton",
             setText="Get Wheel Size",
             setObjectName="b010",
-            setToolTip=fmt(
+            setToolTip=TooltipFormat.fmt(
                 title="Get Wheel Size",
                 body="Sets <b>Wheel Height</b> from the selected object's "
                 "bounding box, based on the current movement axis.",
@@ -629,7 +659,10 @@ class WheelRigSlots:
                 rig_name = cmds.getAttr(f"{control}.wheelRigId")
                 self.rig_name = rig_name  # Sync UI
             else:
-                rig_name = self.rig_name or f"{control.split('|')[-1].split(':')[-1]}_wheel_rig"
+                rig_name = (
+                    self.rig_name
+                    or f"{control.split('|')[-1].split(':')[-1]}_wheel_rig"
+                )
 
             self._wheel_rig = WheelRig(
                 control,

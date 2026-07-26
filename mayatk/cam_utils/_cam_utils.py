@@ -10,7 +10,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils._core_utils import CoreUtils, short_name, as_strings
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.ui_utils._ui_utils import UiUtils
 
@@ -58,7 +58,7 @@ class CamUtils(ptk.HelpMixin):
         group = cmds.group(empty=True, name=name)
         cmds.setAttr(f"{group}.visibility", not hide_group)
 
-        all_cameras = cmds.ls(type="camera") or []
+        all_cameras = cmds.ls(type="camera", long=True) or []
         all_camera_transforms = []
         for cam in all_cameras:
             parent = NodeUtils.get_parent(cam)
@@ -67,13 +67,15 @@ class CamUtils(ptk.HelpMixin):
 
         if root_only:
             all_camera_transforms = [
-                cam for cam in all_camera_transforms if NodeUtils.get_parent(cam) is None
+                cam
+                for cam in all_camera_transforms
+                if NodeUtils.get_parent(cam) is None
             ]
 
         # Parent cameras to the group based on the non_default flag
         for cam in all_camera_transforms:
             if non_default:
-                cam_short = short_name(cam)
+                cam_short = CoreUtils.short_name(cam)
                 if cam_short not in CamUtils.DEFAULT_CAMERAS:
                     cmds.parent(cam, group)
             else:
@@ -153,8 +155,7 @@ class CamUtils(ptk.HelpMixin):
         # Resolve camera shapes
         target_cameras = []
         if camera:
-
-            raw_cameras = cmds.ls(*as_strings(camera)) or []
+            raw_cameras = cmds.ls(*CoreUtils.as_strings(camera), long=True) or []
             for cam in raw_cameras:
                 node_type = cmds.nodeType(cam)
                 if node_type == "transform":

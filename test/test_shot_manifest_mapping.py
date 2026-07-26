@@ -6,6 +6,7 @@ module load (via ``_shots``), though none of these tests need a live scene.
 
     & $MAYAPY mayatk\\test\\test_shot_manifest_mapping.py
 """
+
 import json
 import tempfile
 import unittest
@@ -17,7 +18,10 @@ from mayatk.anim_utils.shots.shot_manifest.mapping._mapping import (
     _AUDIO_BUILDERS,
     DEFAULT_DIR,
 )
-from mayatk.anim_utils.shots.shot_manifest._shot_manifest import ColumnMap, parse_csv
+from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
+    ColumnMap,
+    ManifestModel,
+)
 from pythontk.core_utils.schema_spec import SchemaError
 
 
@@ -32,7 +36,9 @@ class MappingSpecTest(unittest.TestCase):
 
     def test_shipped_mappings_validate_clean(self):
         for name in ("default", "speedrun"):
-            data = json.loads((DEFAULT_DIR / f"{name}.json").read_text(encoding="utf-8"))
+            data = json.loads(
+                (DEFAULT_DIR / f"{name}.json").read_text(encoding="utf-8")
+            )
             res = M.MappingSpec.validate(data)
             self.assertTrue(res.ok, f"{name}: errors={res.errors}")
 
@@ -54,12 +60,14 @@ class MappingSpecTest(unittest.TestCase):
     def test_load_mapping_raises_schema_error_on_bad_method(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "bad.json"
-            p.write_text(json.dumps({"audio_resolve": {"method": "nope"}}), encoding="utf-8")
+            p.write_text(
+                json.dumps({"audio_resolve": {"method": "nope"}}), encoding="utf-8"
+            )
             with self.assertRaises(SchemaError):
-                M.load_mapping(str(p))
+                M.Mapping.load_mapping(str(p))
 
     def test_discover_includes_shipped_builtins(self):
-        names = M.discover()
+        names = M.Mapping.discover()
         self.assertIn("default", names)
         self.assertIn("speedrun", names)
 
@@ -83,9 +91,11 @@ class MappingResolveRoundTripTest(unittest.TestCase):
     def test_resolve_matches_direct_columnmap_path(self):
         with tempfile.TemporaryDirectory() as d:
             csv = self._csv(d)
-            data = M.load_mapping("default")
-            via_resolve = M.resolve(csv, mapping=data)
-            via_direct = parse_csv(csv, columns=ColumnMap.from_dict(data["columns"]))
+            data = M.Mapping.load_mapping("default")
+            via_resolve = M.Mapping.resolve(csv, mapping=data)
+            via_direct = ManifestModel.parse_csv(
+                csv, columns=ColumnMap.from_dict(data["columns"])
+            )
             self.assertTrue(via_resolve)  # non-empty
             self.assertEqual(
                 [s.step_id for s in via_resolve],
@@ -99,7 +109,7 @@ class MappingResolveRoundTripTest(unittest.TestCase):
     def test_speedrun_mapping_resolves(self):
         with tempfile.TemporaryDirectory() as d:
             csv = self._csv(d)
-            steps = M.resolve(csv, name="speedrun", directory=str(DEFAULT_DIR))
+            steps = M.Mapping.resolve(csv, name="speedrun", directory=str(DEFAULT_DIR))
             self.assertTrue(steps)
 
 

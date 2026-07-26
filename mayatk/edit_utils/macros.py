@@ -17,7 +17,6 @@ import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.edit_utils._edit_utils import EditUtils
-from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.ui_utils._ui_utils import UiUtils
 from mayatk.node_utils.attributes._attributes import Attributes
@@ -165,9 +164,9 @@ class MacroManager(ptk.HelpMixin):
         # Editor prompts to do. Best-effort: headless has no hotkey-set
         # registry (hotkeySet raises), where the hotkey call below is inert.
         try:
-            from mayatk.ui_utils.hotkey_collisions import ensure_editable_hotkey_set
+            from mayatk.ui_utils.hotkey_collisions import HotkeyCollisions
 
-            ensure_editable_hotkey_set()
+            HotkeyCollisions.ensure_editable_hotkey_set()
         except Exception:
             pass
         ctl, alt, sht, key = cls._parse_key(key)
@@ -228,9 +227,7 @@ class MacroManager(ptk.HelpMixin):
             except AttributeError:
                 continue
             func = (
-                attr.__func__
-                if isinstance(attr, (staticmethod, classmethod))
-                else attr
+                attr.__func__ if isinstance(attr, (staticmethod, classmethod)) else attr
             )
             if not callable(func):
                 continue
@@ -242,7 +239,9 @@ class MacroManager(ptk.HelpMixin):
     def macro_label(cls, name: str) -> str:
         """Humanize a macro name for display, e.g. ``m_back_face_culling`` ->
         "Back Face Culling" (acronyms like ``UV`` / ``ID`` are preserved)."""
-        base = name[len(cls.MACRO_PREFIX):] if name.startswith(cls.MACRO_PREFIX) else name
+        base = (
+            name[len(cls.MACRO_PREFIX) :] if name.startswith(cls.MACRO_PREFIX) else name
+        )
         words = []
         for word in base.split("_"):
             if not word:
@@ -293,11 +292,7 @@ class MacroManager(ptk.HelpMixin):
             attr = inspect.getattr_static(cls, name)
         except AttributeError:
             return ""
-        func = (
-            attr.__func__
-            if isinstance(attr, (staticmethod, classmethod))
-            else attr
-        )
+        func = attr.__func__ if isinstance(attr, (staticmethod, classmethod)) else attr
         return (inspect.getdoc(func) or "").strip()
 
     @classmethod
@@ -319,9 +314,9 @@ class MacroManager(ptk.HelpMixin):
         live: Dict[str, str] = {}
         if cmds is not None:
             try:
-                from mayatk.ui_utils.hotkey_collisions import live_hotkey_map
+                from mayatk.ui_utils.hotkey_collisions import HotkeyCollisions
 
-                live = live_hotkey_map()
+                live = HotkeyCollisions.live_hotkey_map()
             except Exception:
                 live = {}
 
@@ -475,9 +470,9 @@ class MacroManager(ptk.HelpMixin):
             return
         if key is None:  # resolve the live key Maya currently has bound
             try:
-                from mayatk.ui_utils.hotkey_collisions import live_hotkey_map
+                from mayatk.ui_utils.hotkey_collisions import HotkeyCollisions
 
-                key = live_hotkey_map().get(name)
+                key = HotkeyCollisions.live_hotkey_map().get(name)
             except Exception:
                 key = None
         if not key:
@@ -623,9 +618,7 @@ class MacroManager(ptk.HelpMixin):
         return {k: v for k, v in data.items() if k != "_meta"}
 
     @classmethod
-    def save_preset(
-        cls, name: str, bindings: Optional[Dict[str, dict]] = None
-    ) -> str:
+    def save_preset(cls, name: str, bindings: Optional[Dict[str, dict]] = None) -> str:
         """Save *bindings* (default: the current bindings) as user preset *name*.
 
         Sets *name* as the active preset and returns the written path (as str).
@@ -770,8 +763,7 @@ class MacroManager(ptk.HelpMixin):
         current = cls.get_current_bindings().get(name, {})
         old_key = current.get("key", "")
         if old_key and (
-            not new_key
-            or cls._normalize_key(old_key) != cls._normalize_key(new_key)
+            not new_key or cls._normalize_key(old_key) != cls._normalize_key(new_key)
         ):
             cls.clear_hotkey(name, key=old_key)
         if new_key:
@@ -864,12 +856,14 @@ class MacroManager(ptk.HelpMixin):
         # render as all-inert badges, so drop the column outright.
         editor.set_columns_hidden(editor.COL_SCOPE)
         editor.add_collision_checker(
-            lambda seq, scope, ui, method: hotkey_collisions.maya_collision_checker(
-                seq,
-                scope,
-                ui,
-                method,
-                ignore=lambda cmd: cmd.startswith(cls.MACRO_PREFIX),
+            lambda seq, scope, ui, method: (
+                hotkey_collisions.HotkeyCollisions.maya_collision_checker(
+                    seq,
+                    scope,
+                    ui,
+                    method,
+                    ignore=lambda cmd: cmd.startswith(cls.MACRO_PREFIX),
+                )
             )
         )
         cls._editor = editor
@@ -887,9 +881,7 @@ class DisplayMacros:
         # polyOptions returns None when no polygon mesh is in the selection.
         state = cmds.polyOptions(q=True, displayItemNumbers=True)
         if not state:
-            cmds.inViewMessage(
-                amg="Select a polygon mesh.", pos="topCenter", fade=True
-            )
+            cmds.inViewMessage(amg="Select a polygon mesh.", pos="topCenter", fade=True)
             return
         current_state = state[:4]
 
@@ -929,9 +921,7 @@ class DisplayMacros:
         # polyOptions returns None when no polygon mesh is in the selection.
         tangent_state = cmds.polyOptions(q=True, displayTangent=True)
         if not tangent_state:
-            cmds.inViewMessage(
-                amg="Select a polygon mesh.", pos="topCenter", fade=True
-            )
+            cmds.inViewMessage(amg="Select a polygon mesh.", pos="topCenter", fade=True)
             return
 
         current_tangent = tangent_state[0]
@@ -992,9 +982,7 @@ class DisplayMacros:
         # polyOptions returns None when no polygon mesh is in the selection.
         res = cmds.polyOptions(q=True, ae=True)
         if not res:
-            cmds.inViewMessage(
-                amg="Select a polygon mesh.", pos="topCenter", fade=True
-            )
+            cmds.inViewMessage(amg="Select a polygon mesh.", pos="topCenter", fade=True)
             return
         all_edges_visible = res[0]
 
@@ -1045,7 +1033,7 @@ class DisplayMacros:
             else:  # If not displaying UV borders, turn it on
                 cmds.polyOptions(obj, displayMapBorder=True)
                 cmds.inViewMessage(
-                    statusMessage=f"UV Border Edges <hl>Shown</hl>.",
+                    statusMessage="UV Border Edges <hl>Shown</hl>.",
                     pos="topCenter",
                     fade=True,
                 )
@@ -1214,7 +1202,9 @@ class DisplayMacros:
         active component mask (vertex / edge / face) for component framing.
         """
         # Initialise the MEL global variable used to track the toggle state.
-        mel.eval('global int $toggleFrame_; if (!`exists "toggleFrame_"`) {$toggleFrame_=0;}')
+        mel.eval(
+            'global int $toggleFrame_; if (!`exists "toggleFrame_"`) {$toggleFrame_=0;}'
+        )
         mode = cmds.selectMode(q=True, component=True)
         maskVertex = cmds.selectType(q=True, vertex=True)
         maskEdge = cmds.selectType(q=True, edge=True)

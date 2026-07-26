@@ -4,16 +4,47 @@
 
 Separated from _hierarchy_sync.py to keep Qt imports out of the core module.
 """
+
 from typing import Dict, List, Tuple, Any
 
 from qtpy import QtCore, QtWidgets
 import pythontk as ptk
 from pythontk.core_utils.hierarchy_utils.hierarchy_path import HierarchyPath
 
-from mayatk.env_utils.hierarchy_sync._hierarchy_sync import clean_hierarchy_path
+from mayatk.env_utils.hierarchy_sync._hierarchy_sync import HierarchySync
 
 
-class TreePathMatcher(ptk.LoggingMixin):
+class _TreePathMatcherInternal(object):
+    """Internal helpers for TreePathMatcher."""
+
+    @staticmethod
+    def _extract_object_name_from_item(item) -> str:
+        """Extract the Maya object name from a tree widget item.
+
+        Prefers the stored UserRole DAG path — leaf names (``_raw_name``) are
+        ambiguous when duplicate names exist in the scene.
+        """
+        try:
+            data = item.data(0, QtCore.Qt.UserRole)
+        except Exception:
+            data = None
+        if isinstance(data, str) and data and data not in _PLACEHOLDER_USER_DATA:
+            return data
+
+        raw_name = getattr(item, "_raw_name", None)
+        if raw_name:
+            return raw_name
+
+        parts = []
+        current = item
+        while current:
+            parts.insert(0, current.text(0))
+            current = current.parent()
+
+        return "|".join(parts) if len(parts) > 1 else parts[0] if parts else ""
+
+
+class TreePathMatcher(ptk.LoggingMixin, _TreePathMatcherInternal):
     """Tree path matching functionality for UI tree widgets."""
 
     def build_tree_index(self, widget):
@@ -38,7 +69,7 @@ class TreePathMatcher(ptk.LoggingMixin):
         for item in items:
             raw_path = self._get_item_raw_path(item)
             if raw_path:
-                cleaned_path = clean_hierarchy_path(raw_path)
+                cleaned_path = HierarchySync.clean_hierarchy_path(raw_path)
                 existing = by_clean_full.get(cleaned_path)
                 if existing is None:
                     by_clean_full[cleaned_path] = item
@@ -67,7 +98,7 @@ class TreePathMatcher(ptk.LoggingMixin):
         strict: bool = False,
     ):
         """Find tree items matching a target path using multiple strategies."""
-        cleaned_path = clean_hierarchy_path(target_path)
+        cleaned_path = HierarchySync.clean_hierarchy_path(target_path)
         last_clean = HierarchyPath.clean_namespace(HierarchyPath.leaf(target_path))
 
         candidates = []
@@ -157,102 +188,79 @@ class TreePathMatcher(ptk.LoggingMixin):
             f"{len(by_clean_full)} clean, {len(by_last)} last"
         )
 
+    @staticmethod
+    def get_selected_object_names(tree_widget) -> List[str]:
+        """Extract object names from selected tree widget items."""
+        selected_objects = []
+        for item in TreePathMatcher.get_selected_tree_items(tree_widget):
+            object_name = _TreePathMatcherInternal._extract_object_name_from_item(item)
+            if object_name:
+                selected_objects.append(object_name)
+        return selected_objects
 
-def get_selected_object_names(tree_widget) -> List[str]:
-    """Extract object names from selected tree widget items."""
-    selected_objects = []
-    for item in get_selected_tree_items(tree_widget):
-        object_name = _extract_object_name_from_item(item)
-        if object_name:
-            selected_objects.append(object_name)
-    return selected_objects
+    @staticmethod
+    def get_selected_tree_items(tree_widget) -> list:
+        """Get all selected items from tree widget."""
+        selected_items = []
+        iterator = QtWidgets.QTreeWidgetItemIterator(tree_widget)
+        while iterator.value():
+            item = iterator.value()
+            if item.isSelected():
+                selected_items.append(item)
+            iterator += 1
+        return selected_items
 
+    @staticmethod
+    def find_tree_item_by_name(tree_widget, object_name: str):
+        """Find tree widget item by object name."""
+        iterator = QtWidgets.QTreeWidgetItemIterator(tree_widget)
+        while iterator.value():
+            item = iterator.value()
+            if (
+                _TreePathMatcherInternal._extract_object_name_from_item(item)
+                == object_name
+            ):
+                return item
+            iterator += 1
+        return None
 
-def get_selected_tree_items(tree_widget) -> list:
-    """Get all selected items from tree widget."""
-    selected_items = []
-    iterator = QtWidgets.QTreeWidgetItemIterator(tree_widget)
-    while iterator.value():
-        item = iterator.value()
-        if item.isSelected():
-            selected_items.append(item)
-        iterator += 1
-    return selected_items
+    @staticmethod
+    def build_hierarchy_structure(objects: list) -> Tuple[Dict[str, Dict], List[str]]:
+        """Build hierarchical structure from Maya transform objects.
+
+        Keys are the full DAG pipe-path (``|GRP|child``) so duplicate short
+        names under different parents are preserved.
+
+        Returns:
+            Tuple of (object_items_dict, root_objects_list)
+        """
+        import maya.cmds as cmds
+
+        object_items: Dict[str, dict] = {}
+        root_objects: List[str] = []
+
+        for obj in objects:
+            try:
+                obj_key = cmds.ls(str(obj), l=True)[0]  # unique DAG path
+                obj_name = obj_key.rsplit("|", 1)[-1]  # short name from string
+                obj_type = cmds.nodeType(obj_key)
+                parent = cmds.listRelatives(obj_key, parent=True, fullPath=True)
+
+                object_items[obj_key] = {
+                    "object": obj,
+                    "short_name": obj_name,
+                    "type": obj_type,
+                    "parent": parent[0] if parent else None,
+                    "item": None,
+                }
+
+                if not parent:
+                    root_objects.append(obj_key)
+            except Exception:
+                continue
+
+        return object_items, root_objects
 
 
 #: UserRole payloads that are UI placeholders, not Maya nodes.
 _PLACEHOLDER_USER_DATA = {"browse_placeholder", "open_scene_placeholder"}
-
-
-def _extract_object_name_from_item(item) -> str:
-    """Extract the Maya object name from a tree widget item.
-
-    Prefers the stored UserRole DAG path — leaf names (``_raw_name``) are
-    ambiguous when duplicate names exist in the scene.
-    """
-    try:
-        data = item.data(0, QtCore.Qt.UserRole)
-    except Exception:
-        data = None
-    if isinstance(data, str) and data and data not in _PLACEHOLDER_USER_DATA:
-        return data
-
-    raw_name = getattr(item, "_raw_name", None)
-    if raw_name:
-        return raw_name
-
-    parts = []
-    current = item
-    while current:
-        parts.insert(0, current.text(0))
-        current = current.parent()
-
-    return "|".join(parts) if len(parts) > 1 else parts[0] if parts else ""
-
-
-def find_tree_item_by_name(tree_widget, object_name: str):
-    """Find tree widget item by object name."""
-    iterator = QtWidgets.QTreeWidgetItemIterator(tree_widget)
-    while iterator.value():
-        item = iterator.value()
-        if _extract_object_name_from_item(item) == object_name:
-            return item
-        iterator += 1
-    return None
-
-
-def build_hierarchy_structure(objects: list) -> Tuple[Dict[str, Dict], List[str]]:
-    """Build hierarchical structure from Maya transform objects.
-
-    Keys are the full DAG pipe-path (``|GRP|child``) so duplicate short
-    names under different parents are preserved.
-
-    Returns:
-        Tuple of (object_items_dict, root_objects_list)
-    """
-    import maya.cmds as cmds
-
-    object_items: Dict[str, dict] = {}
-    root_objects: List[str] = []
-
-    for obj in objects:
-        try:
-            obj_key = cmds.ls(str(obj), l=True)[0]  # unique DAG path
-            obj_name = obj_key.rsplit("|", 1)[-1]  # short name from string
-            obj_type = cmds.nodeType(obj_key)
-            parent = cmds.listRelatives(obj_key, parent=True, fullPath=True)
-
-            object_items[obj_key] = {
-                "object": obj,
-                "short_name": obj_name,
-                "type": obj_type,
-                "parent": parent[0] if parent else None,
-                "item": None,
-            }
-
-            if not parent:
-                root_objects.append(obj_key)
-        except Exception:
-            continue
-
-    return object_items, root_objects

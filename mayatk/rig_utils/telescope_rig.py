@@ -10,8 +10,8 @@ except ImportError as error:
     print(__file__, error)
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
-from mayatk.core_utils._core_utils import CoreUtils, as_strings
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.edit_utils.naming._naming import Naming
 
 
@@ -92,11 +92,16 @@ class TelescopeRig(ptk.LoggingMixin):
 
     def _resolve_node(self, node, role: str) -> str:
         """Resolve a single node input (str/object/one-element list) or raise."""
-        resolved = cmds.ls(as_strings(node), flatten=True) or []
+        resolved = cmds.ls(CoreUtils.as_strings(node), flatten=True, long=True) or []
         if not resolved:
             msg = f"At least one valid {role} must be provided."
             self.logger.error(msg)
             raise ValueError(msg)
+        if len(resolved) > 1:
+            self.logger.warning(
+                f"Ambiguous {role} {node!r} matched {len(resolved)} nodes; "
+                f"using {resolved[0]}."
+            )
         return str(resolved[0])
 
     def _unsettable_plugs(self, node: str, attrs: List[str]) -> List[str]:
@@ -176,7 +181,7 @@ class TelescopeRig(ptk.LoggingMixin):
         # entries together before the duplicate check below sees them, and a
         # nonexistent entry raises instead of silently building a shorter rig.
         resolved_segments: List[str] = []
-        for entry in as_strings(segments):
+        for entry in CoreUtils.as_strings(segments):
             matches = cmds.ls(entry, flatten=True) or []
             if not matches:
                 msg = f"Segment not found: {entry!r}."
@@ -191,9 +196,7 @@ class TelescopeRig(ptk.LoggingMixin):
         # Role integrity: distinct locators, unique segments, no overlap.
         base_long = str((cmds.ls(base_locator, long=True) or [base_locator])[0])
         end_long = str((cmds.ls(end_locator, long=True) or [end_locator])[0])
-        segment_longs = [
-            str((cmds.ls(s, long=True) or [s])[0]) for s in segments
-        ]
+        segment_longs = [str((cmds.ls(s, long=True) or [s])[0]) for s in segments]
         if base_long == end_long:
             raise ValueError("Base and end locators must be different nodes.")
         if len(set(segment_longs)) != len(segment_longs):
@@ -247,12 +250,20 @@ class TelescopeRig(ptk.LoggingMixin):
         )
 
         try:
-            self._build(bundle, aim_vector, up_vector,
-                        world_up_type, off_axis_attrs, lock_attributes)
+            self._build(
+                bundle,
+                aim_vector,
+                up_vector,
+                world_up_type,
+                off_axis_attrs,
+                lock_attributes,
+            )
         except Exception:
             # A validated build can still die on exotic scene state — never
             # leave a half-wired rig behind.
-            self.logger.error("Build failed — rolling back partially created rig nodes.")
+            self.logger.error(
+                "Build failed — rolling back partially created rig nodes."
+            )
             self._delete_bundle_nodes(bundle, restore=True)
             raise
 
@@ -491,7 +502,7 @@ class TelescopeRigSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Telescope Rig",
                 body="Build a telescoping segment rig where nested segments "
                 "extend and retract between a base and end locator, driven by "
@@ -507,8 +518,7 @@ class TelescopeRigSlots(ptk.LoggingMixin):
                     ),
                 ],
                 steps=[
-                    "Select the base, the segments, and the end locator in "
-                    "that order.",
+                    "Select the base, the segments, and the end locator in that order.",
                     "Set <b>Aim Axis</b> to the segments' long axis.",
                     "Set <b>Collapsed Distance</b> — the base-to-end distance "
                     "at which the segments are fully retracted.",
@@ -528,7 +538,7 @@ class TelescopeRigSlots(ptk.LoggingMixin):
         ui = self.ui
 
         ui.cmb_axis.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Aim Axis",
                 body="The segments' long axis — the local axis that points "
                 "from the base toward the end locator. The rig aims every "
@@ -540,7 +550,7 @@ class TelescopeRigSlots(ptk.LoggingMixin):
             )
         )
         ui.spin_collapsed.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Collapsed Distance",
                 body="Base-to-end distance at which the segments are fully "
                 "retracted (nested). As the end locator pulls farther than "
@@ -556,7 +566,7 @@ class TelescopeRigSlots(ptk.LoggingMixin):
             )
         )
         ui.btn_build.setToolTip(
-            fmt(
+            TooltipFormat.fmt(
                 title="Build Telescope Rig",
                 body="Wires distance-driven keys onto each segment so they "
                 "extend and retract as the gap between the base and end "

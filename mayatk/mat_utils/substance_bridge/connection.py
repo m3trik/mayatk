@@ -25,6 +25,7 @@ Consumers can react to output with either:
 Session safety: :class:`SubstanceConnection` always launches a NEW Painter
 process. Connecting to an existing session is intentionally not supported.
 """
+
 import os
 import subprocess
 from typing import Optional, Tuple, List
@@ -52,33 +53,6 @@ PAINTER_APP_NAMES: Tuple[str, ...] = (
 )
 
 
-def find_painter_exe() -> Optional[str]:
-    """Single source of truth for Painter executable discovery.
-
-    Walks :data:`PAINTER_APP_NAMES` against :class:`AppLauncher`.
-    Both :class:`SubstanceBridge` and :class:`SubstanceConnection` delegate
-    here so a future name/discovery change only happens in one place.
-    """
-    for name in PAINTER_APP_NAMES:
-        found = AppLauncher.find_app(name)
-        if found:
-            return found
-    return None
-
-
-def default_log_path() -> Optional[str]:
-    """Return the standard Substance Painter log path, or None if absent.
-
-    Painter writes to ``%LOCALAPPDATA%\\Adobe\\Adobe Substance 3D Painter\\log.txt``
-    on Windows.
-    """
-    local = os.environ.get("LOCALAPPDATA")
-    if not local:
-        return None
-    path = os.path.join(local, "Adobe", "Adobe Substance 3D Painter", "log.txt")
-    return path if os.path.exists(path) else None
-
-
 class SubstanceConnection(ptk.LoggingMixin):
     """Launch Painter and expose its stdio, log, and RPC under one object.
 
@@ -101,7 +75,9 @@ class SubstanceConnection(ptk.LoggingMixin):
         self.exe = exe
         self.rpc_port = rpc_port
         self.enable_remote = enable_remote
-        self.log_path = log_path if log_path is not None else default_log_path()
+        self.log_path = (
+            log_path if log_path is not None else SubstanceConnection.default_log_path()
+        )
         self.capture_stdio = capture_stdio
         self.tail_log_from_start = tail_log_from_start
         self.extra_args = list(extra_args) if extra_args else []
@@ -130,7 +106,7 @@ class SubstanceConnection(ptk.LoggingMixin):
                     "Trying canonical names.",
                     self.exe,
                 )
-        found = find_painter_exe()
+        found = SubstanceConnection.find_painter_exe()
         if found:
             return found
         raise FileNotFoundError(
@@ -182,8 +158,12 @@ class SubstanceConnection(ptk.LoggingMixin):
             )
             self._tailer.start()
 
-        if self.enable_remote:
-            self.rpc = PainterRpcClient(port=self.rpc_port)
+        # Always wire the RPC client: the substance_rpc plugin (installed
+        # by the bridge) binds its port on Painter startup regardless of
+        # launch flags, so any owned instance is potentially reachable.
+        # ``ping`` decides liveness; ``enable_remote`` only controls the
+        # (historically inert) --enable-remote-scripting CLI flag above.
+        self.rpc = PainterRpcClient(port=self.rpc_port)
 
         return self
 
@@ -227,9 +207,9 @@ class SubstanceConnection(ptk.LoggingMixin):
     ) -> "SubstanceConnection":
         """Bind to a running Painter on *port* without launching anything.
 
-        Use this when a Painter instance was launched elsewhere (e.g. an
-        earlier :meth:`open` call or, in theory, by the user) with
-        ``--enable-remote-scripting`` exposed on *port*.
+        Use this when a Painter instance was launched elsewhere (an
+        earlier :meth:`open` call, or by the user) with the
+        ``substance_rpc`` plugin serving on *port*.
 
         The connection wires up:
           - :class:`PainterRpcClient` for JS dispatch.
@@ -286,3 +266,30 @@ class SubstanceConnection(ptk.LoggingMixin):
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
+
+    @staticmethod
+    def find_painter_exe() -> Optional[str]:
+        """Single source of truth for Painter executable discovery.
+
+        Walks :data:`PAINTER_APP_NAMES` against :class:`AppLauncher`.
+        Both :class:`SubstanceBridge` and :class:`SubstanceConnection` delegate
+        here so a future name/discovery change only happens in one place.
+        """
+        for name in PAINTER_APP_NAMES:
+            found = AppLauncher.find_app(name)
+            if found:
+                return found
+        return None
+
+    @staticmethod
+    def default_log_path() -> Optional[str]:
+        """Return the standard Substance Painter log path, or None if absent.
+
+        Painter writes to ``%LOCALAPPDATA%\\Adobe\\Adobe Substance 3D Painter\\log.txt``
+        on Windows.
+        """
+        local = os.environ.get("LOCALAPPDATA")
+        if not local:
+            return None
+        path = os.path.join(local, "Adobe", "Adobe Substance 3D Painter", "log.txt")
+        return path if os.path.exists(path) else None

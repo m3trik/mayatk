@@ -17,6 +17,7 @@ exposes it via a ``More..`` button). Blender ships the mirror panel in
 Orient / Gather / Randomize are realized via native ``bpy.ops.uv`` operators
 and bmesh helpers (see ``tentacle/docs/parity_map.py``).
 """
+
 try:
     import maya.cmds as cmds
     import maya.mel as mel
@@ -27,7 +28,7 @@ except ImportError as error:
 
 import pythontk as ptk
 from uitk import IconManager
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
@@ -85,7 +86,7 @@ class ShellXformSlots(ptk.LoggingMixin):
         )
         widget.menu.open_uv_editor.clicked.connect(self.open_uv_editor)
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Shell Xform",
                 body="Move, flip, rotate, align, orient, and distribute the "
                 "selected UV shells.",
@@ -98,12 +99,15 @@ class ShellXformSlots(ptk.LoggingMixin):
                     "own options in the option box (▸).",
                 ],
                 sections=[
-                    ("Align / Orient", [
-                        "<b>Align</b> snaps the selection's U or V to its min / "
-                        "center / max, or spreads them along a line.",
-                        "<b>Orient Shells</b> squares each shell to the nearest "
-                        "axis; <b>To Edges</b> orients to a selected edge.",
-                    ]),
+                    (
+                        "Align / Orient",
+                        [
+                            "<b>Align</b> snaps the selection's U or V to its min / "
+                            "center / max, or spreads them along a line.",
+                            "<b>Orient Shells</b> squares each shell to the nearest "
+                            "axis; <b>To Edges</b> orients to a selected edge.",
+                        ],
+                    ),
                 ],
             )
         )
@@ -319,7 +323,9 @@ class ShellXformSlots(ptk.LoggingMixin):
             setToolTip="Preserve Footprint: keeps the exact UV point set via one-to-one reassignment.\nGeometric Mirror: reflects the UVs around the pivot.",
         )
         mode.addItems(["Preserve Footprint", "Geometric Mirror"])
-        mode.setCurrentText("Preserve Footprint")  # preserve prior default (checkbox on)
+        mode.setCurrentText(
+            "Preserve Footprint"
+        )  # preserve prior default (checkbox on)
 
     @CoreUtils.undoable
     def tb008(self, widget):

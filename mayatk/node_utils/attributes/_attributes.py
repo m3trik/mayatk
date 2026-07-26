@@ -6,6 +6,7 @@ Provides ``Attributes`` — a single authoritative class for creating,
 querying, setting, connecting, locking, and filtering Maya node attributes.
 Includes a YAML-based preset system for templated attribute bundles.
 """
+
 import contextlib
 import fnmatch
 from pathlib import Path
@@ -20,7 +21,7 @@ except ImportError:
 
 import pythontk as ptk
 
-from mayatk.core_utils._core_utils import as_strings, leaf_name
+from mayatk.core_utils._core_utils import CoreUtils
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +290,9 @@ class Attributes(ptk.HelpMixin):
             for obj in cmds.ls(objects) or []:
                 if not cmds.attributeQuery(attr_name, node=str(obj), exists=True):
                     continue
-                curves = cmds.listConnections(f"{obj}.{attr_name}", type="animCurve") or []
+                curves = (
+                    cmds.listConnections(f"{obj}.{attr_name}", type="animCurve") or []
+                )
                 if curves:
                     cmds.delete(curves)
                 cmds.deleteAttr(f"{obj}.{attr_name}")
@@ -412,7 +415,10 @@ class Attributes(ptk.HelpMixin):
         if exc_defaults:
             for attr_name in all_attr_names:
                 try:
-                    defaults = cmds.attributeQuery(attr_name, node=str(node), listDefault=True) or []
+                    defaults = (
+                        cmds.attributeQuery(attr_name, node=str(node), listDefault=True)
+                        or []
+                    )
                     if defaults:
                         default_value = defaults[0]
                         current_value = cmds.getAttr(f"{node}.{attr_name}")
@@ -896,7 +902,9 @@ class Attributes(ptk.HelpMixin):
         shape = shapes[0] if shapes else None
         if shape and cmds.nodeType(shape) == "locator":
             children = (
-                cmds.listRelatives(str(obj), children=True, type="transform", fullPath=True)
+                cmds.listRelatives(
+                    str(obj), children=True, type="transform", fullPath=True
+                )
                 or []
             )
             return children[0] if children else None
@@ -916,7 +924,9 @@ class Attributes(ptk.HelpMixin):
             ``scale``) summaries.
         """
 
-        objects = cmds.ls(as_strings(objects), transforms=True, long=True) or []
+        objects = (
+            cmds.ls(CoreUtils.as_strings(objects), transforms=True, long=True) or []
+        )
         attr_groups = {
             "translate": ("tx", "ty", "tz"),
             "rotate": ("rx", "ry", "rz"),
@@ -956,7 +966,7 @@ class Attributes(ptk.HelpMixin):
             # across references/namespaces while keeping lookups natural
             # for callers that pass plain node names. Symmetric with
             # ``set_lock_state``.
-            result[leaf_name(obj)] = obj_state
+            result[CoreUtils.leaf_name(obj)] = obj_state
 
         return result
 
@@ -979,14 +989,16 @@ class Attributes(ptk.HelpMixin):
             **kwargs: Individual attribute locks (e.g. ``tx=True``).
         """
 
-        objects = cmds.ls(as_strings(objects), transforms=True, long=True) or []
+        objects = (
+            cmds.ls(CoreUtils.as_strings(objects), transforms=True, long=True) or []
+        )
 
         for obj in objects:
             obj = cls._resolve_lock_target(obj)
             if obj is None:
                 continue
 
-            key = leaf_name(obj)
+            key = CoreUtils.leaf_name(obj)
             if lock_state and key in lock_state:
                 state = lock_state[key]
                 for attr in ("tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz"):
@@ -1039,7 +1051,7 @@ class Attributes(ptk.HelpMixin):
                 cls.set_lock_state(objects, lock_state=lock_state)
             return
 
-        nodes = cmds.ls(as_strings(objects), long=True) or []
+        nodes = cmds.ls(CoreUtils.as_strings(objects), long=True) or []
         plugs = [
             f"{node}.{attr}"
             for node in nodes
@@ -1131,7 +1143,10 @@ class Attributes(ptk.HelpMixin):
         for node in cmds.ls(objects) or []:
             for attr_name in attributes:
                 try:
-                    defaults = cmds.attributeQuery(attr_name, node=str(node), listDefault=True) or []
+                    defaults = (
+                        cmds.attributeQuery(attr_name, node=str(node), listDefault=True)
+                        or []
+                    )
                     if defaults:
                         cmds.setAttr(f"{node}.{attr_name}", defaults[0])
                 except Exception:
@@ -1249,12 +1264,16 @@ class Attributes(ptk.HelpMixin):
         exclude_patterns = (
             []
             if exclude is None
-            else [exclude] if isinstance(exclude, str) else list(exclude)
+            else [exclude]
+            if isinstance(exclude, str)
+            else list(exclude)
         )
         include_patterns = (
             []
             if include is None
-            else [include] if isinstance(include, str) else list(include)
+            else [include]
+            if isinstance(include, str)
+            else list(include)
         )
 
         def _matches(attr_name: str, pattern: str) -> bool:
@@ -1508,7 +1527,7 @@ class Attributes(ptk.HelpMixin):
                     continue  # label not found
                 if not new_pairs:
                     cmds.warning(
-                        f"Cannot delete the last enum field on " f"{node}.{attr_name}"
+                        f"Cannot delete the last enum field on {node}.{attr_name}"
                     )
                     continue
                 # If current value pointed to the deleted label, clamp

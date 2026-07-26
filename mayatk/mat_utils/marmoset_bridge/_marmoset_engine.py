@@ -10,6 +10,7 @@ already-exported model path, an optional materials-manifest path, and a
 plain params dict -- so any host can compose it (the Maya bridge in
 mayatk, the standalone Switchboard panel in extapps, a CLI, a test).
 """
+
 from __future__ import annotations
 
 import os
@@ -24,15 +25,12 @@ from pythontk.core_utils import script_template
 from pythontk.str_utils._str_utils import StrUtils
 
 from . import template_params
-from .toolbag_log import (
-    resolve_toolbag_log_path,
-    dispatch_log_lines,
-    start_toolbag_log_tail,
-)
+from .toolbag_log import ToolbagLog
+
 # Per-run log path derivation lives in _toolbag_helpers so the helper
 # (which writes the file) and this module (which surfaces it as a link)
 # share one source of truth and can't drift.
-from ._toolbag_helpers import derive_per_run_log_path
+from ._toolbag_helpers import ToolbagHelpers
 
 
 _PKG_DIR = Path(__file__).resolve().parent
@@ -55,29 +53,6 @@ _MODES = (SEND_TO, ROUNDTRIP)
 # live engine instance). Thin wrappers over the shared
 # :mod:`pythontk.core_utils.script_template` helpers (``_MODES`` allowed).
 # ---------------------------------------------------------------------------
-
-def list_templates() -> List[Path]:
-    """Return user-visible templates in ``templates/`` (skips underscore-prefixed)."""
-    return script_template.list_templates(_TEMPLATE_DIR, ".py")
-
-
-def template_modes(template_path: Path) -> Tuple[str, ...]:
-    """Return the modes declared by *template_path*'s ``BRIDGE_MODES`` constant.
-
-    Falls back to ``("send_to",)`` if the constant is absent so legacy templates
-    keep working.
-    """
-    return script_template.template_modes(template_path, _MODES)
-
-
-def list_template_modes() -> List[Tuple[str, str]]:
-    """Return ``[(stem, mode), ...]`` for every (template, mode) pairing.
-
-    A dual-mode template appears twice -- once per mode -- so a UI can show
-    one combo entry per (template, mode) pair without baking mode-awareness
-    into the combo itself.
-    """
-    return script_template.list_template_modes(_TEMPLATE_DIR, ".py", _MODES)
 
 
 class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
@@ -149,14 +124,18 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         without hardcoding "Marmoset Toolbag 5"; see
         :func:`.toolbag_log.resolve_toolbag_log_path`.
         """
-        return resolve_toolbag_log_path(self.toolbag_path)
+        return ToolbagLog.resolve_toolbag_log_path(self.toolbag_path)
 
     # -- Deliverer Strategy hooks ------------------------------------------
 
     def preflight(self, bridge, request) -> bool:
         """Validate the (template, mode) before the bridge produces its payload."""
         template_path = _TEMPLATE_DIR / f"{request.template}.py"
-        allowed = template_modes(template_path) if template_path.is_file() else ()
+        allowed = (
+            MarmosetEngine.template_modes(template_path)
+            if template_path.is_file()
+            else ()
+        )
         if request.mode not in allowed:
             bridge.logger.error(
                 f"Template '{request.template}' does not support mode "
@@ -226,7 +205,11 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             failure.
         """
         template_path = _TEMPLATE_DIR / f"{template}.py"
-        allowed_modes = template_modes(template_path) if template_path.is_file() else ()
+        allowed_modes = (
+            MarmosetEngine.template_modes(template_path)
+            if template_path.is_file()
+            else ()
+        )
         if mode not in allowed_modes:
             self.logger.error(
                 f"Template '{template}' does not support mode '{mode}'. "
@@ -260,7 +243,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         with open(script_path, "w", encoding="utf-8") as fh:
             fh.write(script)
         self.logger.info(
-            f'Toolbag script written: '
+            f"Toolbag script written: "
             f'<a href="action://open?path={script_path}">{script_path}</a>'
         )
 
@@ -302,25 +285,26 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
                 )
                 return None
             self.logger.info(
-                f'Toolbag launched. Output folder: '
+                f"Toolbag launched. Output folder: "
                 f'<a href="action://open?path={output_dir}">{output_dir}</a>'
             )
 
             # Stream Toolbag's log into the caller's logger as it's written.
             if tb_log:
-                start_toolbag_log_tail(tb_log, tb_log_offset, proc, self.logger)
+                ToolbagLog.start_toolbag_log_tail(
+                    tb_log, tb_log_offset, proc, self.logger
+                )
                 self.logger.info(
-                    f'Streaming Toolbag log: '
+                    f"Streaming Toolbag log: "
                     f'<a href="action://open?path={tb_log}">{tb_log}</a>'
                 )
 
             # The per-run <base>.toolbag.log captures only the helper's own
             # prints (deterministic). Surface it as a fallback link.
             if manifest_path:
-                per_run = derive_per_run_log_path(manifest_path)
+                per_run = ToolbagHelpers.derive_per_run_log_path(manifest_path)
                 self.logger.info(
-                    f'Per-run log: '
-                    f'<a href="action://open?path={per_run}">{per_run}</a>'
+                    f'Per-run log: <a href="action://open?path={per_run}">{per_run}</a>'
                 )
 
         return result
@@ -350,7 +334,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         """
         template_path = _TEMPLATE_DIR / f"{template}.py"
         if not template_path.is_file():
-            available = sorted(p.stem for p in list_templates())
+            available = sorted(p.stem for p in MarmosetEngine.list_templates())
             self.logger.error(
                 f"Template '{template}' not found at {template_path}. "
                 f"Available: {available}"
@@ -359,9 +343,9 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
 
         body = template_path.read_text(encoding="utf-8")
 
-        merged = template_params.defaults()
+        merged = template_params.TemplateParams.defaults()
         merged.update(params or {})
-        param_ctx = template_params.to_context(merged)
+        param_ctx = template_params.TemplateParams.to_context(merged)
 
         if headless is None:
             headless = mode == ROUNDTRIP
@@ -419,7 +403,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         # caller's logger instead of being dropped on the floor.
         stdout = getattr(result, "stdout", "") or ""
         if stdout:
-            dispatch_log_lines(stdout.splitlines(), self.logger)
+            ToolbagLog.dispatch_log_lines(stdout.splitlines(), self.logger)
 
         if getattr(result, "returncode", 0) != 0:
             self.logger.error(
@@ -429,9 +413,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         return sorted(self._snapshot_outputs(output_dir, since=mtime_floor))
 
     @staticmethod
-    def _snapshot_outputs(
-        output_dir: str, since: Optional[float] = None
-    ) -> "set[str]":
+    def _snapshot_outputs(output_dir: str, since: Optional[float] = None) -> "set[str]":
         """Return the set of map-like files under *output_dir*.
 
         When *since* is given, restrict to files whose mtime is at or
@@ -457,9 +439,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
                 snap.append(full)
         return set(snap)
 
-    def _announce_outputs(
-        self, template: str, outputs, output_dir: str
-    ) -> None:
+    def _announce_outputs(self, template: str, outputs, output_dir: str) -> None:
         """Log roundtrip outputs as clickable ``action://`` URIs for a UI panel."""
         if not outputs:
             self.logger.warning(
@@ -471,7 +451,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         for path in outputs:
             self.logger.info(f'  <a href="action://open?path={path}">{path}</a>')
         self.logger.info(
-            f'Open output folder: '
+            f"Open output folder: "
             f'<a href="action://open?path={output_dir}">{output_dir}</a>'
         )
 
@@ -506,6 +486,32 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             if proc:
                 return proc
         return None
+
+    @staticmethod
+    def list_templates() -> List[Path]:
+        """Return user-visible templates in ``templates/`` (skips underscore-prefixed)."""
+        return script_template.ScriptTemplate.list_templates(_TEMPLATE_DIR, ".py")
+
+    @staticmethod
+    def template_modes(template_path: Path) -> Tuple[str, ...]:
+        """Return the modes declared by *template_path*'s ``BRIDGE_MODES`` constant.
+
+        Falls back to ``("send_to",)`` if the constant is absent so legacy templates
+        keep working.
+        """
+        return script_template.ScriptTemplate.template_modes(template_path, _MODES)
+
+    @staticmethod
+    def list_template_modes() -> List[Tuple[str, str]]:
+        """Return ``[(stem, mode), ...]`` for every (template, mode) pairing.
+
+        A dual-mode template appears twice -- once per mode -- so a UI can show
+        one combo entry per (template, mode) pair without baking mode-awareness
+        into the combo itself.
+        """
+        return script_template.ScriptTemplate.list_template_modes(
+            _TEMPLATE_DIR, ".py", _MODES
+        )
 
 
 # -----------------------------------------------------------------------------

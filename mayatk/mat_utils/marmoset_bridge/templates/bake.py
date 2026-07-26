@@ -30,7 +30,7 @@ SHOULD_QUIT = __SHOULD_QUIT__
 
 # Pick up shared Toolbag-side helpers from the engine package dir.
 sys.path.insert(0, r"__TOOLBAG_HELPERS_DIR__")
-from _toolbag_helpers import split_high_low, collect_mesh_objects
+from _toolbag_helpers import ToolbagHelpers
 
 # Bake output (parameters.py).
 BAKE_SIZE = __BAKE_SIZE__
@@ -130,7 +130,7 @@ def main():
         print("ERROR: importModel returned None.")
         return
 
-    meshes = collect_mesh_objects(imported)
+    meshes = ToolbagHelpers.collect_mesh_objects(imported)
     print(f"[bake] Imported {len(meshes)} mesh transform(s).")
 
     # Diagnostic: show the parent chain of the first mesh so a mismatch
@@ -210,7 +210,7 @@ def main():
         except Exception as exc:
             print(f"[bake] Failed to read pairs sidecar: {exc}")
 
-    highs, lows, others = split_high_low(
+    highs, lows, others = ToolbagHelpers.split_high_low(
         meshes, HIGH_SUFFIX, LOW_SUFFIX, pre_classified=pre_classified
     )
     print(f"[bake] high={len(highs)} low={len(lows)} other={len(others)}")

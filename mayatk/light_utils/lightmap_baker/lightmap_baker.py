@@ -37,6 +37,7 @@ Quality tiers come from :meth:`from_preset` (pythontk ``PresetStore``). HDR EXR
 throughout; 8-bit/encoded targets are a later (mostly engine-side) stage. For the
 bake primitive alone (no lightmap workflow), use :class:`TextureBaker` directly.
 """
+
 import json
 import os
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -50,9 +51,9 @@ except ImportError as error:
 import pythontk as ptk
 
 try:  # UI-only helper; keep the headless workflow import clean if uitk is absent
-    from uitk.widgets.mixins.tooltip_mixin import fmt
+    from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 except ImportError:
-    fmt = None
+    TooltipFormat = None
 
 from mayatk.mat_utils.texture_baker import TextureBaker
 from mayatk.uv_utils._uv_utils import UvUtils
@@ -448,7 +449,9 @@ class LightmapBaker(ptk.LoggingMixin):
             # Promote the lightmap unwrap to UV0 (texture UVs slide to UV1).
             lm = UvDiagnostics.find_lightmap_uv_set(shape)
             if lm and lm in prev_order and prev_order[0] != lm:
-                UvUtils.reorder_uv_sets(shape, [lm] + [s for s in prev_order if s != lm])
+                UvUtils.reorder_uv_sets(
+                    shape, [lm] + [s for s in prev_order if s != lm]
+                )
             elif not lm:
                 self.logger.warning(
                     "No lightmap UV set on %s; leaving UV order as-is.", obj
@@ -604,7 +607,9 @@ class LightmapBaker(ptk.LoggingMixin):
             if sid and sid in by_shape:
                 self.logger.warning(
                     "Atlas: %s instances the same mesh as %s; instances share "
-                    "one lightmap UV set and atlas rect.", obj, by_shape[sid],
+                    "one lightmap UV set and atlas rect.",
+                    obj,
+                    by_shape[sid],
                 )
                 continue
             if sid:
@@ -628,8 +633,15 @@ class LightmapBaker(ptk.LoggingMixin):
         for key, objs in groups.items():
             try:
                 self._pack_group(
-                    key, objs, mapping, all_sources, output_dir,
-                    prefix, suffix, out, used,
+                    key,
+                    objs,
+                    mapping,
+                    all_sources,
+                    output_dir,
+                    prefix,
+                    suffix,
+                    out,
+                    used,
                 )
             except Exception as e:
                 # Never lose a bake or leave a half-consumed group: a source
@@ -641,7 +653,9 @@ class LightmapBaker(ptk.LoggingMixin):
                 # unaffected.
                 self.logger.warning(
                     "Atlas: packing group %r failed (%s); keeping per-object "
-                    "maps for its unfinished objects.", key, e,
+                    "maps for its unfinished objects.",
+                    key,
+                    e,
                 )
                 for o in objs:
                     if o not in out and os.path.exists(mapping[o]):
@@ -673,9 +687,9 @@ class LightmapBaker(ptk.LoggingMixin):
         import numpy as np
 
         foreign = all_sources - {os.path.abspath(mapping[o]) for o in objs}
-        base = self._texture_set_stem(objs[0]) or key.rsplit("|", 1)[-1].rsplit(
-            ":", 1
-        )[-1]
+        base = (
+            self._texture_set_stem(objs[0]) or key.rsplit("|", 1)[-1].rsplit(":", 1)[-1]
+        )
         name = ptk.StrUtils.apply_affix(base, prefix, suffix)
         atlas_path = self._unique_atlas_path(output_dir, name, used, foreign)
 
@@ -700,13 +714,9 @@ class LightmapBaker(ptk.LoggingMixin):
         images: List[Any] = []
         placed: List[Tuple[str, List[float]]] = []
         for obj, rect in zip(objs, rects):
-            img = cv2.imread(
-                mapping[obj], cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH
-            )
+            img = cv2.imread(mapping[obj], cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
             if img is None:
-                self.logger.warning(
-                    "Atlas: unreadable map for %s; skipping.", obj
-                )
+                self.logger.warning("Atlas: unreadable map for %s; skipping.", obj)
                 continue
             if img.ndim == 3 and img.shape[2] == 4:
                 img = img[..., :3]  # lightmaps are opaque RGB; drop any alpha
@@ -725,7 +735,7 @@ class LightmapBaker(ptk.LoggingMixin):
         for row0, row1, col0, col1 in ptk.ImgUtils.atlas_pixel_rects(
             [so for _, so in placed], self.resolution
         ):
-            mask[max(row0, 0):max(row1, 0), max(col0, 0):max(col1, 0)] = True
+            mask[max(row0, 0) : max(row1, 0), max(col0, 0) : max(col1, 0)] = True
         atlas = ptk.ImgUtils.dilate_image(atlas, mask=mask, iterations=gutter + 1)
         self._write_lightmap_exr(atlas_path, atlas)
 
@@ -739,9 +749,7 @@ class LightmapBaker(ptk.LoggingMixin):
             # per-object map (identity rect, source not deleted): degraded
             # but never engine-wrong.
             shape = NodeUtils.get_shape(obj)
-            lm_set = (
-                UvDiagnostics.find_lightmap_uv_set(shape) if shape else None
-            )
+            lm_set = UvDiagnostics.find_lightmap_uv_set(shape) if shape else None
             try:
                 if not lm_set:
                     raise RuntimeError("no lightmap UV set on the shape")
@@ -749,7 +757,9 @@ class LightmapBaker(ptk.LoggingMixin):
             except Exception as e:
                 self.logger.warning(
                     "Atlas: lightmap UVs for %s could not be repacked (%s); "
-                    "keeping its per-object map.", obj, e,
+                    "keeping its per-object map.",
+                    obj,
+                    e,
                 )
                 out[obj] = (mapping[obj], list(self._IDENTITY_SCALE_OFFSET))
                 continue
@@ -831,8 +841,12 @@ class LightmapBaker(ptk.LoggingMixin):
             if invert:
                 cmds.polyEditUV(uvs, uValue=-ox, vValue=-oy, relative=True)
                 cmds.polyEditUV(
-                    uvs, pivotU=0.0, pivotV=0.0,
-                    scaleU=1.0 / sx, scaleV=1.0 / sy, scale=True,
+                    uvs,
+                    pivotU=0.0,
+                    pivotV=0.0,
+                    scaleU=1.0 / sx,
+                    scaleV=1.0 / sy,
+                    scale=True,
                 )
             else:
                 cmds.polyEditUV(
@@ -869,9 +883,7 @@ class LightmapBaker(ptk.LoggingMixin):
         """The shape's :attr:`LIGHTMAP_INFO_ATTR` marker as a dict ({} if
         absent/unparsable)."""
         try:
-            if cmds.attributeQuery(
-                self.LIGHTMAP_INFO_ATTR, node=shape, exists=True
-            ):
+            if cmds.attributeQuery(self.LIGHTMAP_INFO_ATTR, node=shape, exists=True):
                 return json.loads(
                     cmds.getAttr(f"{shape}.{self.LIGHTMAP_INFO_ATTR}") or "{}"
                 )
@@ -916,9 +928,7 @@ class LightmapBaker(ptk.LoggingMixin):
                 continue
             if self._restore_lightmap_uvs(shape, info):
                 info.pop("uvRect", None)
-                self._set_string_attr(
-                    shape, self.LIGHTMAP_INFO_ATTR, json.dumps(info)
-                )
+                self._set_string_attr(shape, self.LIGHTMAP_INFO_ATTR, json.dumps(info))
 
     def commit_lightmap(
         self,
@@ -1000,9 +1010,7 @@ class LightmapBaker(ptk.LoggingMixin):
                 # rewritten marker without it would make the remap invisible
                 # to revert_lightmap and the pre-bake guard.
                 rect = self._marker_info(shape).get("uvRect")
-            if rect and [float(v) for v in rect] != list(
-                self._IDENTITY_SCALE_OFFSET
-            ):
+            if rect and [float(v) for v in rect] != list(self._IDENTITY_SCALE_OFFSET):
                 info["uvRect"] = [float(v) for v in rect]
             self._set_string_attr(shape, self.LIGHTMAP_INFO_ATTR, json.dumps(info))
             recorded[obj] = path
@@ -1043,7 +1051,9 @@ class LightmapBaker(ptk.LoggingMixin):
             except Exception as e:
                 self.logger.warning(
                     "Intensity %.3f NOT applied to %s: %s",
-                    intensity, os.path.basename(path), e,
+                    intensity,
+                    os.path.basename(path),
+                    e,
                 )
 
     def _publish_lightmap_metadata(self) -> Optional[str]:
@@ -1084,9 +1094,7 @@ class LightmapBaker(ptk.LoggingMixin):
             # of shipping a hardcoded 1 that hides the problem.
             uv_set = info.get("uv_set")
             sets = list(
-                dict.fromkeys(
-                    cmds.polyUVSet(shape, query=True, allUVSets=True) or []
-                )
+                dict.fromkeys(cmds.polyUVSet(shape, query=True, allUVSets=True) or [])
             )
             uv_index = sets.index(uv_set) if uv_set in sets else 1
             if uv_set and uv_set not in sets:
@@ -1094,14 +1102,17 @@ class LightmapBaker(ptk.LoggingMixin):
                     "%s: committed lightmap set %r no longer exists; "
                     "publishing uvIndex 1 on faith. Re-run create_lightmap_uvs "
                     "if the set was renamed or removed.",
-                    name, uv_set,
+                    name,
+                    uv_set,
                 )
             if uv_index != 1:
                 self.logger.warning(
                     "%s: lightmap set %r sits at UV index %d, but Unity samples "
                     "uv2 (index 1). Re-run create_lightmap_uvs (it reorders to "
                     "index 1) before exporting.",
-                    name, uv_set, uv_index,
+                    name,
+                    uv_set,
+                    uv_index,
                 )
             objects.append(
                 {
@@ -1217,7 +1228,8 @@ class LightmapBaker(ptk.LoggingMixin):
         """
         if objects is None:
             return [
-                s for s in (cmds.ls(type="mesh", long=True) or [])
+                s
+                for s in (cmds.ls(type="mesh", long=True) or [])
                 if cmds.attributeQuery(attr, node=s, exists=True)
             ]
         return [NodeUtils.get_shape(o) for o in objects]
@@ -1289,7 +1301,8 @@ class LightmapBaker(ptk.LoggingMixin):
             bad = int((~np.isfinite(bgr)).sum())
             cls.logger.warning(
                 "%s: %d non-finite texel value(s) sanitized.",
-                os.path.basename(path), bad,
+                os.path.basename(path),
+                bad,
             )
             bgr = np.nan_to_num(bgr, nan=0.0, posinf=cls._HALF_MAX, neginf=0.0)
         np.clip(bgr, 0.0, cls._HALF_MAX, out=bgr)
@@ -1301,7 +1314,9 @@ class LightmapBaker(ptk.LoggingMixin):
             raise RuntimeError(f"failed to write EXR: {path}")
 
     @classmethod
-    def _dilate_lightmap(cls, path: str, alpha_threshold: float, iterations: int) -> bool:
+    def _dilate_lightmap(
+        cls, path: str, alpha_threshold: float, iterations: int
+    ) -> bool:
         """Edge-pad one baked EXR in place using its alpha coverage channel.
 
         The alpha channel from ``arnoldRenderToTexture`` is the only reliable
@@ -1386,7 +1401,9 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
 
     # Footer tail for a plain (non-atlas) lighting-only commit. Shared by b000's
     # per-object branch and _commit_atlas's fallback so the two can't drift.
-    _LIGHTING_ONLY_TAIL = "Maps kept; lightmap + Unity metadata stamped. Export the FBX."
+    _LIGHTING_ONLY_TAIL = (
+        "Maps kept; lightmap + Unity metadata stamped. Export the FBX."
+    )
 
     def __init__(self, switchboard, log_level: str = "WARNING"):
         super().__init__()
@@ -1441,9 +1458,9 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             setToolTip="Open the project's sourceimages folder (where bakes are "
             "written) in Explorer.",
         )
-        if fmt is not None:
+        if TooltipFormat is not None:
             widget.set_help_text(
-                fmt(
+                TooltipFormat.fmt(
                     title="Lightmap Baker",
                     body="Bake Maya scene lighting into a texture per object for "
                     "game engines (Unity-first; the fallback when Bakery isn't an "
@@ -1462,61 +1479,70 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                         "of just the meshes omits it and the Unity wiring won't ship.",
                     ],
                     sections=[
-                        ("Mode: Lighting Only — real lightmapping (default)", [
-                            "This is how you normally light-map. Bakes <i>lighting "
-                            "only</i> (white-card irradiance) onto a second UV "
-                            "channel; your full PBR material — albedo, normal, "
-                            "metallic/roughness — is <b>kept untouched</b>.",
-                            "The lightmap is a <b>separate texture asset</b> (written "
-                            "to the project's <i>sourceimages</i>, alongside your "
-                            "other maps) — the engine multiplies albedo × lightmap "
-                            "at runtime and your normal map still lights normally. "
-                            "Exactly how Unity's own lightmaps work.",
-                            "The export is <b>self-contained</b>: the mesh's UV2 "
-                            "samples the map directly, so it works in any engine "
-                            "(or any shader that reads a lightmap on UV2) with no "
-                            "extra setup. Import <i>sourceimages</i> as usual so "
-                            "the lightmap is in the project.",
-                            "To bind Unity's <b>native</b> lightmap slots "
-                            "(standard Lit shaders, no custom work), drop unitytk's "
-                            "<i>LightmapMetadataController.cs</i> into the project "
-                            "once — it reads the FBX wiring and assigns "
-                            "everything on import. Optional: without it you wire "
-                            "the map by hand or sample UV2 in your shader.",
-                            "Use this for normal game assets — nothing is thrown "
-                            "away.",
-                            "<b>Packing</b>: <i>Per-Object</i> (default) gives each "
-                            "object its own full-resolution lightmap. For many small "
-                            "objects, <i>Atlas by Material</i> consolidates everything "
-                            "sharing a material into <b>one shared map</b> — each "
-                            "object's lightmap UVs are repacked into its atlas rect "
-                            "(area-weighted, so bigger objects get more texels), so "
-                            "the atlas needs <b>no engine-side binding at all</b>. "
-                            "Fewer textures, no naming collisions. The bake itself "
-                            "is unchanged either way, and Revert restores the UVs.",
-                        ]),
-                        ("Mode: Fused Unlit — flatten to one texture (NOT lightmapping)", [
-                            "<b>Not</b> a lightmap. Bakes albedo × lighting into one "
-                            "HDR texture and assigns an <i>unlit</i> material, so the "
-                            "surface becomes a single flat painted image — normal, "
-                            "metallic and roughness are <b>discarded</b> and it can "
-                            "never be re-lit.",
-                            "Only for things you intend to flatten forever: a skybox, "
-                            "a far LOD, or a lowest-end / mobile prop where one "
-                            "texture lookup is the whole budget. It exports to a "
-                            "stock <i>Unlit/Texture</i> shader with zero setup.",
-                            "If your asset has a normal map you want to keep, this is "
-                            "the wrong mode — use <b>Lighting Only</b>.",
-                        ]),
-                        ("Non-destructive", [
-                            "Nothing is deleted — the source material and UVs stay "
-                            "in the scene and the restore data is stamped on the "
-                            "mesh.",
-                            "<b>Revert to Source</b> (header menu) undoes the wiring "
-                            "on the selected, or all baked, objects.",
-                            "Re-baking auto-reverts first, so it always bakes the "
-                            "real material.",
-                        ]),
+                        (
+                            "Mode: Lighting Only — real lightmapping (default)",
+                            [
+                                "This is how you normally light-map. Bakes <i>lighting "
+                                "only</i> (white-card irradiance) onto a second UV "
+                                "channel; your full PBR material — albedo, normal, "
+                                "metallic/roughness — is <b>kept untouched</b>.",
+                                "The lightmap is a <b>separate texture asset</b> (written "
+                                "to the project's <i>sourceimages</i>, alongside your "
+                                "other maps) — the engine multiplies albedo × lightmap "
+                                "at runtime and your normal map still lights normally. "
+                                "Exactly how Unity's own lightmaps work.",
+                                "The export is <b>self-contained</b>: the mesh's UV2 "
+                                "samples the map directly, so it works in any engine "
+                                "(or any shader that reads a lightmap on UV2) with no "
+                                "extra setup. Import <i>sourceimages</i> as usual so "
+                                "the lightmap is in the project.",
+                                "To bind Unity's <b>native</b> lightmap slots "
+                                "(standard Lit shaders, no custom work), drop unitytk's "
+                                "<i>LightmapMetadataController.cs</i> into the project "
+                                "once — it reads the FBX wiring and assigns "
+                                "everything on import. Optional: without it you wire "
+                                "the map by hand or sample UV2 in your shader.",
+                                "Use this for normal game assets — nothing is thrown "
+                                "away.",
+                                "<b>Packing</b>: <i>Per-Object</i> (default) gives each "
+                                "object its own full-resolution lightmap. For many small "
+                                "objects, <i>Atlas by Material</i> consolidates everything "
+                                "sharing a material into <b>one shared map</b> — each "
+                                "object's lightmap UVs are repacked into its atlas rect "
+                                "(area-weighted, so bigger objects get more texels), so "
+                                "the atlas needs <b>no engine-side binding at all</b>. "
+                                "Fewer textures, no naming collisions. The bake itself "
+                                "is unchanged either way, and Revert restores the UVs.",
+                            ],
+                        ),
+                        (
+                            "Mode: Fused Unlit — flatten to one texture (NOT lightmapping)",
+                            [
+                                "<b>Not</b> a lightmap. Bakes albedo × lighting into one "
+                                "HDR texture and assigns an <i>unlit</i> material, so the "
+                                "surface becomes a single flat painted image — normal, "
+                                "metallic and roughness are <b>discarded</b> and it can "
+                                "never be re-lit.",
+                                "Only for things you intend to flatten forever: a skybox, "
+                                "a far LOD, or a lowest-end / mobile prop where one "
+                                "texture lookup is the whole budget. It exports to a "
+                                "stock <i>Unlit/Texture</i> shader with zero setup.",
+                                "If your asset has a normal map you want to keep, this is "
+                                "the wrong mode — use <b>Lighting Only</b>.",
+                            ],
+                        ),
+                        (
+                            "Non-destructive",
+                            [
+                                "Nothing is deleted — the source material and UVs stay "
+                                "in the scene and the restore data is stamped on the "
+                                "mesh.",
+                                "<b>Revert to Source</b> (header menu) undoes the wiring "
+                                "on the selected, or all baked, objects.",
+                                "Re-baking auto-reverts first, so it always bakes the "
+                                "real material.",
+                            ],
+                        ),
                     ],
                     notes=[
                         "The lightmap texture (in <i>sourceimages</i>) and its UV "
@@ -1595,7 +1621,9 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         if scope == "visible":
             from mayatk.display_utils._display_utils import DisplayUtils
 
-            return DisplayUtils.get_visible_geometry(inherit_parent_visibility=True) or []
+            return (
+                DisplayUtils.get_visible_geometry(inherit_parent_visibility=True) or []
+            )
         if scope == "scene":
             meshes = cmds.ls(type="mesh", noIntermediate=True, long=True) or []
             xforms = (
@@ -1734,7 +1762,11 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         )
 
     def _commit_atlas(
-        self, result: Dict[str, str], output_dir: Optional[str], prefix: str, suffix: str
+        self,
+        result: Dict[str, str],
+        output_dir: Optional[str],
+        prefix: str,
+        suffix: str,
     ) -> Tuple[Dict[str, str], str]:
         """Consolidate a lighting-only bake into per-material atlases, then commit.
 
