@@ -59,7 +59,7 @@ def skipUnlessExtended(func):
     )(func)
 
 
-from mayatk import AutoInstancer, auto_instance
+from mayatk import AutoInstancer
 
 
 class TestAutoInstancerHierarchy(MayaTkTestCase):
@@ -1820,7 +1820,7 @@ class TestCombineNonInstanced(MayaTkTestCase):
             n: cmds.polyEvaluate(n, face=True) for n in (sphere, cone, torus, pyramid)
         }
 
-        auto_instance([cube1, cube2, sphere, cone, torus, pyramid])
+        AutoInstancer.run_once([cube1, cube2, sphere, cone, torus, pyramid])
 
         # The identical cubes must be instances sharing one shape.
         shape = cmds.listRelatives("dupA", shapes=True, ni=True, fullPath=True)[0]
@@ -1849,7 +1849,7 @@ class TestCombineNonInstanced(MayaTkTestCase):
             cmds.setAttr(f"{c}.translateX", x)
             names.append(c)
 
-        result = auto_instance(
+        result = AutoInstancer.run_once(
             names,
             combine_by_material=False,
             combine_by_distance=True,
@@ -1865,7 +1865,7 @@ class TestCombineNonInstanced(MayaTkTestCase):
         a = cmds.polyCube(name="ni1", w=1, h=1, d=1)[0]
         b = cmds.polySphere(name="ni2", r=1)[0]
         cmds.setAttr(f"{b}.translateX", 4)
-        auto_instance([a, b], needs_individual=True)
+        AutoInstancer.run_once([a, b], needs_individual=True)
         self.assertTrue(cmds.objExists(a))
         self.assertTrue(cmds.objExists(b))
 
@@ -1880,7 +1880,7 @@ class TestCombineNonInstanced(MayaTkTestCase):
         cmds.setAttr(f"{b}.translate", 5, 1, 2)
         bb_before = cmds.exactWorldBoundingBox(b)
 
-        auto_instance([a, b], scale_tolerance=1.0, combine_non_instanced=False)
+        AutoInstancer.run_once([a, b], scale_tolerance=1.0, combine_non_instanced=False)
 
         shape = cmds.listRelatives(
             "scaledCopyX", shapes=True, ni=True, fullPath=True
@@ -1918,7 +1918,7 @@ class TestAutoInstancerCombineDefaults(MayaTkTestCase):
         copy2 = cmds.duplicate(combined, name="acCopy2")[0]
         cmds.setAttr(f"{copy2}.translateX", 10)
 
-        created = auto_instance(
+        created = AutoInstancer.run_once(
             [combined, copy2], separate_combined=True, verbose=True
         )
 
@@ -1945,7 +1945,7 @@ class TestAutoInstancerRunSummary(MayaTkTestCase):
         a = cmds.polySphere(name="sumDense0")[0]
         b = cmds.polySphere(name="sumDense1")[0]
         cmds.setAttr(f"{b}.translateX", 5)
-        created, summary = auto_instance(
+        created, summary = AutoInstancer.run_once(
             [a, b], combine_non_instanced=False, return_summary=True
         )
         self.assertEqual(summary["matched_groups"], 1)
@@ -1957,7 +1957,7 @@ class TestAutoInstancerRunSummary(MayaTkTestCase):
         a = cmds.polyCube(name="sumTiny0")[0]
         b = cmds.polyCube(name="sumTiny1")[0]
         cmds.setAttr(f"{b}.translateX", 3)
-        created, summary = auto_instance(
+        created, summary = AutoInstancer.run_once(
             [a, b], combine_non_instanced=True, return_summary=True
         )
         self.assertEqual(summary["matched_groups"], 1)
@@ -1973,7 +1973,7 @@ class TestAutoInstancerRunSummary(MayaTkTestCase):
         a = cmds.polyCube(name="sumUq0")[0]
         b = cmds.polySphere(name="sumUq1")[0]
         cmds.setAttr(f"{b}.translateX", 3)
-        _, summary = auto_instance(
+        _, summary = AutoInstancer.run_once(
             [a, b], combine_non_instanced=False, return_summary=True
         )
         self.assertEqual(summary["matched_groups"], 0)
@@ -1986,7 +1986,7 @@ class TestAutoInstancerRunSummary(MayaTkTestCase):
         """Backward compatible: without ``return_summary`` the wrapper still
         returns just the created-node list."""
         a = cmds.polyCube(name="sumSolo")[0]
-        result = auto_instance([a])
+        result = AutoInstancer.run_once([a])
         self.assertIsInstance(result, list)
 
     def test_format_summary_output_is_ascii(self):

@@ -2,7 +2,7 @@
 
 """Open a .blend headlessly (blender --background) and export it as FBX for a Maya import.
 
-The Blender half of ``mtk.import_blender_scene`` -- the mirror of blendertk's
+The Blender half of ``mtk.BlenderSceneImport.import_scene`` -- the mirror of blendertk's
 ``templates/_import_scene.py`` (Maya -> Blender pull). Runs under
 ``blender --background --factory-startup`` via ``pythontk.run_script_to_artifact``,
 which judges success by the exported FBX's existence, NOT the exit code (a

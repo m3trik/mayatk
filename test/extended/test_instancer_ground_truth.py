@@ -184,7 +184,7 @@ class TestScene1GroundTruth(MayaTkTestCase):
 
         import mayatk as mtk
 
-        mtk.auto_instance(["|original_combined_mesh"], separate_combined=True)
+        mtk.AutoInstancer.run_once(["|original_combined_mesh"], separate_combined=True)
 
         produced = []
         for t in cmds.ls(type="transform", long=True):

@@ -4610,17 +4610,7 @@
     {
       "relpath": "core_utils/auto_instancer/_auto_instancer.py",
       "summary": "Scene auto-instancer: convert geometrically identical meshes to instances.",
-      "functions": [
-        {
-          "name": "auto_instance",
-          "qualname": "auto_instance",
-          "kind": "function",
-          "signature": "(nodes: Optional[Sequence[object]] = None, tolerance: float = 0.001, scale_tolerance: Optional[float] = None, require_same_material: Union[bool, int] = True, check_uvs: bool = False, check_hierarchy: bool = False, separate_combined: bool = False, combine_assemblies: bool = True, combine_non_instanced: bool = True, combine_by_material: bool = True, combine_by_distance: bool = True, combine_distance_threshold: float = 10000.0, search_radius_mult: float = 1.5, is_static: bool = True, needs_individual: bool = False, will_be_lightmapped: bool = False, can_gpu_instance: bool = True, verbose: bool = True, log_level: str = 'WARNING', return_summary: bool = False) -> Union[List[str], Tuple[List[str], Dict[str, object]]]",
-          "summary": "Find and convert geometrically identical meshes into instances.",
-          "line": 1168,
-          "deprecated": false
-        }
-      ],
+      "functions": [],
       "classes": [
         {
           "name": "InstanceCandidate",
@@ -4761,6 +4751,15 @@
               "signature": "(self, nodes: Optional[Sequence[object]] = None, check_hierarchy: Optional[bool] = None) -> List[InstanceGroup]",
               "summary": "Find groups of identical objects.",
               "line": 671,
+              "deprecated": false
+            },
+            {
+              "name": "run_once",
+              "qualname": "AutoInstancer.run_once",
+              "kind": "classmethod",
+              "signature": "(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]",
+              "summary": "One-shot: build an ``AutoInstancer`` from ``config`` and run it.",
+              "line": 1168,
               "deprecated": false
             }
           ]
@@ -9177,26 +9176,7 @@
     {
       "relpath": "env_utils/blender_bridge/_scene_import.py",
       "summary": "Import a Blender scene (.blend) into Maya via a headless-Blender FBX round-trip.",
-      "functions": [
-        {
-          "name": "import_blender_scene",
-          "qualname": "import_blender_scene",
-          "kind": "function",
-          "signature": "(src_path: str, **kwargs: Any) -> List[str]",
-          "summary": "Import a Blender scene (.blend) into the current Maya scene.",
-          "line": 868,
-          "deprecated": false
-        },
-        {
-          "name": "bake_blender_scene",
-          "qualname": "bake_blender_scene",
-          "kind": "function",
-          "signature": "(src_path: str, **kwargs: Any) -> str",
-          "summary": "Bake a foreign scene (.blend/.fbx) to a cached .ma and return its path.",
-          "line": 879,
-          "deprecated": false
-        }
-      ],
+      "functions": [],
       "classes": [
         {
           "name": "BlenderSceneImport",
@@ -11795,7 +11775,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the containing folder of the right-clicked scene file in the file explorer.",
-              "line": 3184,
+              "line": 3185,
               "deprecated": false
             },
             {
@@ -11804,7 +11784,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the text input for the current working directory with pin values.",
-              "line": 3213,
+              "line": 3214,
               "deprecated": false
             },
             {
@@ -11813,7 +11793,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the filter text input with filtering options.",
-              "line": 3281,
+              "line": 3282,
               "deprecated": false
             },
             {
@@ -11822,7 +11802,7 @@
               "kind": "method",
               "signature": "(self, text)",
               "summary": "Handle the filter text input.",
-              "line": 3327,
+              "line": 3328,
               "deprecated": false
             },
             {
@@ -11831,7 +11811,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "",
-              "line": 3333,
+              "line": 3334,
               "deprecated": false
             },
             {
@@ -11840,7 +11820,7 @@
               "kind": "method",
               "signature": "(self, index, widget)",
               "summary": "Handle workspace selection changes.",
-              "line": 3337,
+              "line": 3338,
               "deprecated": false
             },
             {
@@ -11849,7 +11829,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the recursive search toggle.",
-              "line": 3360,
+              "line": 3361,
               "deprecated": false
             },
             {
@@ -11858,7 +11838,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the ignore empty workspaces toggle.",
-              "line": 3399,
+              "line": 3400,
               "deprecated": false
             },
             {
@@ -11867,7 +11847,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the ignore case checkbox.",
-              "line": 3448,
+              "line": 3449,
               "deprecated": false
             },
             {
@@ -11876,7 +11856,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the filter by suffix checkbox.",
-              "line": 3453,
+              "line": 3454,
               "deprecated": false
             },
             {
@@ -11885,7 +11865,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide suffix checkbox.",
-              "line": 3458,
+              "line": 3459,
               "deprecated": false
             },
             {
@@ -11894,7 +11874,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide extension checkbox.",
-              "line": 3463,
+              "line": 3464,
               "deprecated": false
             },
             {
@@ -11903,7 +11883,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Toggle visibility of the Notes (metadata) column.",
-              "line": 3468,
+              "line": 3469,
               "deprecated": false
             },
             {
@@ -11912,7 +11892,7 @@
               "kind": "method",
               "signature": "(self, text)",
               "summary": "Handle suffix text changes.",
-              "line": 3485,
+              "line": 3486,
               "deprecated": false
             },
             {
@@ -11921,7 +11901,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the filter by folder structure checkbox.",
-              "line": 3501,
+              "line": 3502,
               "deprecated": false
             },
             {
@@ -11930,7 +11910,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Browse for a root directory.",
-              "line": 3506,
+              "line": 3507,
               "deprecated": false
             },
             {
@@ -11939,7 +11919,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the current directory in the file explorer.",
-              "line": 3523,
+              "line": 3524,
               "deprecated": false
             },
             {
@@ -11948,7 +11928,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Set dir to current workspace.",
-              "line": 3528,
+              "line": 3529,
               "deprecated": false
             },
             {
@@ -11957,7 +11937,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the scene file at the right-clicked row.",
-              "line": 3533,
+              "line": 3534,
               "deprecated": false
             },
             {
@@ -11966,7 +11946,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Toggle reference state for the right-clicked row.",
-              "line": 3547,
+              "line": 3548,
               "deprecated": false
             },
             {
@@ -11975,7 +11955,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unlink and import at the right-clicked row — covers both cases (mirror of Blender).",
-              "line": 3554,
+              "line": 3555,
               "deprecated": false
             },
             {
@@ -11984,7 +11964,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Save the current scene to the workspace.",
-              "line": 3592,
+              "line": 3593,
               "deprecated": false
             },
             {
@@ -11993,7 +11973,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Refresh the file list.",
-              "line": 3596,
+              "line": 3597,
               "deprecated": false
             },
             {
@@ -12002,7 +11982,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Convert all references to assemblies.",
-              "line": 3600,
+              "line": 3601,
               "deprecated": false
             },
             {
@@ -12011,7 +11991,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unlink and import all references.",
-              "line": 3604,
+              "line": 3605,
               "deprecated": false
             },
             {
@@ -12020,7 +12000,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Remove all references from the scene.",
-              "line": 3608,
+              "line": 3609,
               "deprecated": false
             }
           ]

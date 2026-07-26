@@ -1164,64 +1164,28 @@ class AutoInstancer(ptk.LoggingMixin, _AutoInstancerInternal):
                 " - %s → %s instances", entry["prototype"], entry["instance_count"]
             )
 
+    @classmethod
+    def run_once(
+        cls,
+        nodes: Optional[Sequence[object]] = None,
+        *,
+        return_summary: bool = False,
+        **config,
+    ) -> Union[List[str], Tuple[List[str], Dict[str, object]]]:
+        """One-shot: build an ``AutoInstancer`` from ``config`` and run it.
 
-def auto_instance(
-    nodes: Optional[Sequence[object]] = None,
-    tolerance: float = 0.001,
-    scale_tolerance: Optional[float] = None,
-    require_same_material: Union[bool, int] = True,
-    check_uvs: bool = False,
-    check_hierarchy: bool = False,
-    separate_combined: bool = False,
-    combine_assemblies: bool = True,
-    combine_non_instanced: bool = True,
-    combine_by_material: bool = True,
-    combine_by_distance: bool = True,
-    combine_distance_threshold: float = 10000.0,
-    search_radius_mult: float = 1.5,
-    is_static: bool = True,
-    needs_individual: bool = False,
-    will_be_lightmapped: bool = False,
-    can_gpu_instance: bool = True,
-    verbose: bool = True,
-    log_level: str = "WARNING",
-    return_summary: bool = False,
-) -> Union[List[str], Tuple[List[str], Dict[str, object]]]:
-    """Find and convert geometrically identical meshes into instances.
-
-    One-shot convenience wrapper around :class:`AutoInstancer` — mirrors
-    ``replace_with_instances``/``get_instances``/``uninstance``. See
-    ``AutoInstancer.__init__``/``run`` for parameter details.
-
-    With ``return_summary=True`` returns ``(created, summary)`` where
-    ``summary`` is the run's :meth:`AutoInstancer.default_summary`-shaped
-    diagnostics (see :attr:`AutoInstancer.last_run_summary`); otherwise
-    returns just ``created`` (backward compatible).
-    """
-    instancer = AutoInstancer(
-        tolerance=tolerance,
-        scale_tolerance=scale_tolerance,
-        require_same_material=require_same_material,
-        check_uvs=check_uvs,
-        check_hierarchy=check_hierarchy,
-        separate_combined=separate_combined,
-        combine_assemblies=combine_assemblies,
-        combine_non_instanced=combine_non_instanced,
-        combine_by_material=combine_by_material,
-        combine_by_distance=combine_by_distance,
-        combine_distance_threshold=combine_distance_threshold,
-        search_radius_mult=search_radius_mult,
-        is_static=is_static,
-        needs_individual=needs_individual,
-        will_be_lightmapped=will_be_lightmapped,
-        can_gpu_instance=can_gpu_instance,
-        verbose=verbose,
-        log_level=log_level,
-    )
-    created = instancer.run(nodes)
-    if return_summary:
-        return created, instancer.last_run_summary
-    return created
+        The class-namespaced replacement for the former ``auto_instance`` module
+        function (mirrors ``replace_with_instances``/``get_instances``/``uninstance``).
+        ``config`` maps to :meth:`__init__` (``tolerance``, ``combine_*``, ``is_static``,
+        …); ``nodes`` and ``return_summary`` are the :meth:`run` arguments. With
+        ``return_summary=True`` returns ``(created, summary)`` — the run's
+        :attr:`last_run_summary` — otherwise just ``created``.
+        """
+        instancer = cls(**config)
+        created = instancer.run(nodes)
+        if return_summary:
+            return created, instancer.last_run_summary
+        return created
 
 
 if __name__ == "__main__":

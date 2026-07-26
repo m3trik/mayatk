@@ -2991,12 +2991,12 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         cached, so re-referencing an unchanged scene is instant; the first run costs a
         headless Blender + mayapy start, hence the wait cursor.
         """
-        from mayatk.env_utils.blender_bridge._scene_import import bake_blender_scene
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
 
         app = self.sb.QtWidgets.QApplication
         app.setOverrideCursor(self.sb.QtGui.QCursor(self.sb.QtCore.Qt.WaitCursor))
         try:
-            return bake_blender_scene(path)
+            return BlenderSceneImport().bake_scene(path)
         except FileNotFoundError as e:
             self.sb.message_box(f"Can't reference — Blender not found:<br>{e}")
         except Exception as e:  # noqa: BLE001 — surface the bake error to the user
@@ -3147,7 +3147,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def _import_foreign_paths(self, paths):
         """Convert + import each Blender scene in *paths* via the headless-Blender bridge (blocking).
 
-        Delegates to ``mtk.import_blender_scene`` — a fresh headless Blender converts the scene to
+        Delegates to ``mtk.BlenderSceneImport().import_scene`` — a fresh headless Blender converts the scene to
         FBX, which is imported (materials rebuilt from the manifest) and cleaned up (the same bridge
         the Scene menu's 'Import Blender Scene' uses). A conversion takes seconds; a wait cursor
         covers it, and a missing Blender install surfaces as a clear message, not a raw traceback.
@@ -3156,15 +3156,16 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         if not paths:
             self.sb.message_box("Select a Blender scene (.blend) row to import.")
             return
-        from mayatk.env_utils.blender_bridge._scene_import import import_blender_scene
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
 
         app = self.sb.QtWidgets.QApplication
         app.setOverrideCursor(self.sb.QtGui.QCursor(self.sb.QtCore.Qt.WaitCursor))
         total, failed = 0, 0
+        importer = BlenderSceneImport()
         try:
             for path in paths:
                 try:
-                    total += len(import_blender_scene(path))
+                    total += len(importer.import_scene(path))
                 except FileNotFoundError as e:
                     self.sb.message_box(f"Can't import — Blender not found:<br>{e}")
                     return

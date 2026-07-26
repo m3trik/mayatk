@@ -41,7 +41,7 @@ mayatk also ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-pack
 | `nurbs_utils` | NURBS surfaces, `ImageTracer` |
 | `rig_utils` | `Controls`, `ShadowRig` |
 | `ui_utils` | `MayaUiHandler`, channel box, native menus, hotkey collision check, node icons |
-| `uv_utils` | UV utilities, Rizom bridge ([upgrade plan](rizom_bridge_upgrade_plan.md)) |
+| `uv_utils` | UV utilities, Rizom bridge |
 | `xform_utils` | Transforms, matrices, pivot watcher |
 
 Classes and module-level functions are exposed at the package root via the lazy-loading resolver. Both bare and class-qualified forms work:
