@@ -198,6 +198,168 @@ class TestEditUtils(MayaTkTestCase):
         result = EditUtils.mirror(self.cube, axis="x", pivot=(0, 0, 0), mergeMode=1)
         self.assertTrue(result)
 
+    def test_mirror_merge_centers_pivot(self):
+        """Merge welds both halves into the same transform, so the pre-mirror pivot ends
+        up off to one side of the combined result. It should re-center on the merged
+        bounding box (the mirror plane along the axis).
+
+        Feature: 2026-07-25 - "center the pivot when the operation calls for it".
+        """
+        cube = cmds.polyCube(name="merge_piv", w=10, h=10, d=10)[0]
+        cmds.move(10, 0, 0, cube)  # spans x 5..15, pivot at x=10
+        EditUtils.mirror(cube, axis="x", pivot="world", mergeMode=1)  # -> spans -15..15
+        rp = cmds.xform(cube, q=True, ws=True, rp=True)
+        self.assertAlmostEqual(rp[0], 0.0, places=3)  # centered on the world mirror plane
+
+    def test_mirror_merge_center_pivot_off_preserves(self):
+        """center_pivot=False opts out — the pre-mirror pivot is left in place."""
+        cube = cmds.polyCube(name="merge_piv_off", w=10, h=10, d=10)[0]
+        cmds.move(10, 0, 0, cube)
+        EditUtils.mirror(cube, axis="x", pivot="world", mergeMode=1, center_pivot=False)
+        rp = cmds.xform(cube, q=True, ws=True, rp=True)
+        self.assertAlmostEqual(rp[0], 10.0, places=3)  # unchanged
+
+    def _mesh_halves(self, prefix):
+        """Mesh transforms whose name starts with ``prefix``, sorted by world bbox min-X
+        (so [0] is the -X half, [-1] the +X half). Used after a separate-mode mirror,
+        which yields two fresh transforms (polySeparate consumes + renames the source).
+        Filtering by prefix skips the setUp cube/sphere sharing the scene."""
+        halves = [
+            t
+            for t in cmds.ls(type="transform")
+            if t.split("|")[-1].startswith(prefix)
+            and cmds.listRelatives(t, shapes=True, type="mesh", ni=True)
+        ]
+        return sorted(halves, key=lambda o: cmds.exactWorldBoundingBox(o)[0])
+
+    def test_mirror_separate_centers_new_half(self):
+        """Separate mode: the NEW mirrored half gets a pivot on its own bounding-box center
+        instead of floating over on top of the other object.
+
+        Feature: 2026-07-25 - "center the pivot when the operation calls for it".
+        (polySeparate itself centers the surviving original half; our code only touches
+        the mirrored half, so the source's pivot is not changed by us.)
+        """
+        cube = cmds.polyCube(name="sep_piv", w=10, h=10, d=10)[0]
+        cmds.move(10, 0, 0, cube)  # geometry spans 5..15
+        EditUtils.mirror(cube, axis="x", pivot="world", mergeMode=-1)  # mirror half -> -15..-5
+
+        halves = self._mesh_halves("sep_piv")
+        self.assertEqual(len(halves), 2)
+        new_half = halves[0]  # -X geometry (spans -15..-5)
+        new_rp = cmds.xform(new_half, q=True, ws=True, rp=True)
+        self.assertAlmostEqual(new_rp[0], -10.0, places=2)  # on its own center, not +10
+
+    def test_mirror_separate_center_pivot_off_is_legacy(self):
+        """center_pivot=False reproduces the old 'nowhere useful' pivot — the mirrored
+        half's pivot lands over on the other object (x=10) instead of on its own
+        geometry (x=-10)."""
+        cube = cmds.polyCube(name="sep_piv_off", w=10, h=10, d=10)[0]
+        cmds.move(10, 0, 0, cube)
+        EditUtils.mirror(
+            cube, axis="x", pivot="world", mergeMode=-1, center_pivot=False
+        )
+        halves = self._mesh_halves("sep_piv_off")
+        self.assertEqual(len(halves), 2)
+        new_half = halves[0]  # still the -X geometry (identified by bbox, not pivot)
+        new_rp = cmds.xform(new_half, q=True, ws=True, rp=True)
+        self.assertAlmostEqual(new_rp[0], 10.0, places=2)  # floats over the +X original
+
+    def test_mirror_symmetrize_centers_pivot(self):
+        """The Mirror panel's Bounding Box (center) pivot routes through
+        cut_along_axis(delete=True, mirror=True) -> mirror(mergeMode=1). The symmetrized
+        result is one combined object, so its pivot re-centers on the result even when it
+        started off-center."""
+        cube = cmds.polyCube(name="sym_piv", w=10, h=10, d=10)[0]
+        cmds.move(10, 0, 0, cube)  # geometry spans 5..15
+        cmds.xform(cube, ws=True, piv=(5, 0, 0))  # pivot off its own center
+        EditUtils.cut_along_axis(
+            cube,
+            axis="x",
+            invert=True,
+            pivot="center",
+            amount=1,
+            delete=True,
+            mirror=True,
+            use_object_axes=True,
+        )
+        self.assertTrue(cmds.objExists(cube))  # symmetrize works in place (no separate)
+        bb = cmds.exactWorldBoundingBox(cube)
+        center_x = (bb[0] + bb[3]) / 2.0
+        rp = cmds.xform(cube, q=True, ws=True, rp=True)
+        self.assertAlmostEqual(rp[0], center_x, places=2)  # on the result's own center
+        self.assertGreater(rp[0], 6.0)  # and moved off the starting off-center pivot (5)
+
+    def _bbox_center(self, obj):
+        bb = cmds.exactWorldBoundingBox(obj)
+        return [(bb[0] + bb[3]) / 2.0, (bb[1] + bb[4]) / 2.0, (bb[2] + bb[5]) / 2.0]
+
+    def _pivot_offset(self, obj):
+        """Distance of ``obj``'s pivot from its own bounding-box center (0 == centered)."""
+        rp = cmds.xform(obj, q=True, ws=True, rp=True)
+        center = self._bbox_center(obj)
+        return sum((a - b) ** 2 for a, b in zip(rp, center)) ** 0.5
+
+    def _detach_one_face(self, name, center_pivot=True, duplicate=False):
+        """Detach face [0] of a fresh cube whose pivot sits at (20, 5, 0) — far from the
+        extracted face's own center. Returns (results, extracted_piece). The extracted piece
+        is the single planar face: identify it as the result whose geometry center is farthest
+        from the source pivot (unaffected by where the pivot lands, so it works either way).
+        """
+        cube = cmds.polyCube(name=name, w=10, h=10, d=10)[0]
+        cmds.move(20, 5, 0, cube)  # geom spans x15..25; +X face center is at x=25
+        cmds.selectMode(component=True)
+        cmds.selectType(facet=True)
+        cmds.select(f"{cube}.f[0]")
+        result = EditUtils.detach_components(
+            duplicate=duplicate,
+            separate=True,
+            keep_faces_together=True,
+            center_pivot=center_pivot,
+        )
+        cmds.selectMode(object=True)
+        src = (20.0, 5.0, 0.0)
+        extracted = max(
+            result,
+            key=lambda o: sum(
+                (a - b) ** 2 for a, b in zip(self._bbox_center(o), src)
+            ),
+        )
+        return result, extracted
+
+    def test_detach_faces_centers_each_pivot(self):
+        """Detach with separate: every resulting object gets a pivot on its OWN bounding-box
+        center — split geo / multiple objects are centered separately. polySeparate leaves the
+        source pivot on each piece, so the extracted face would otherwise float off-center.
+
+        Feature: 2026-07-25 - "center the pivot on the detached mesh(es)".
+        """
+        result, extracted = self._detach_one_face("det_piv")
+        self.assertTrue(result)
+        for obj in result:
+            self.assertTrue(cmds.objExists(obj))
+            self.assertLess(self._pivot_offset(obj), 0.01)  # each on its own center
+        # And specifically the extracted planar face (the one polySeparate leaves off-center).
+        self.assertLess(self._pivot_offset(extracted), 0.01)
+
+    def test_detach_faces_center_pivot_off_keeps_source_pivot(self):
+        """center_pivot=False opts out — the extracted piece keeps polySeparate's default pivot
+        (the source's, at (20, 5, 0)) instead of re-centering on its own single-face geometry
+        (center at (20, 5, 5), i.e. ~5 units off)."""
+        result, extracted = self._detach_one_face("det_piv_off", center_pivot=False)
+        self.assertTrue(result)
+        self.assertGreater(self._pivot_offset(extracted), 1.0)  # NOT on its own center
+
+    def test_detach_faces_duplicate_default_centers_pivot(self):
+        """The button's production default (duplicate=True) leaves the body intact and extracts a
+        COPY. That copy is a separate shell after polySeparate, so it too must get a centered
+        pivot rather than the source's."""
+        result, extracted = self._detach_one_face("det_piv_dup", duplicate=True)
+        self.assertTrue(result)
+        for obj in result:
+            self.assertLess(self._pivot_offset(obj), 0.01)  # each on its own center
+        self.assertLess(self._pivot_offset(extracted), 0.01)
+
     def test_separate_mirrored_mesh(self):
         """Test separating a mirrored mesh using the polyMirrorFace history node."""
         cmds.move(5, 0, 0, self.cube)
@@ -376,6 +538,36 @@ class TestEditUtils(MayaTkTestCase):
         cmds.move(10, 0, 0, dup)
         similar = EditUtils.get_similar_mesh(self.cube)
         self.assertIn(dup, similar)
+
+    def test_get_similar_mesh_tolerance_and_unchecked_flags(self):
+        """Regression: flags passed as False made polyEvaluate return the full
+        stats dict (flag=False == flag absent), which then hit exact
+        dict-equality inside are_similar — every unchecked metric silently
+        required an exact all-stats match, so tolerance did nothing. Also,
+        filterExpand's short names never compared equal to the long-name query
+        object, so the original always self-matched despite inc_orig=False.
+        """
+        # Slot-style call: unchecked metrics arrive as False, not omitted.
+        slot_kwargs = dict(
+            vertex=True, edge=True, face=True, uvcoord=False, triangle=False,
+            shell=False, boundingBox=False, area=False, worldArea=True,
+        )
+        twin = cmds.duplicate(self.cube)[0]
+        # Same size as self.cube (10^3) so worldArea matches; only the
+        # topological counts differ (sx=2 adds an edge loop).
+        subdivided = cmds.polyCube(sx=2, w=10, h=10, d=10, name="subdivCube")[0]
+
+        exact = cmds.ls(
+            EditUtils.get_similar_mesh(self.cube, tolerance=0.0, **slot_kwargs)
+        )
+        self.assertIn(twin, exact)  # identical twin matches exactly
+        self.assertNotIn("subdivCube", exact)  # different counts excluded
+        self.assertNotIn(str(self.cube), exact)  # inc_orig=False honored
+
+        loose = cmds.ls(
+            EditUtils.get_similar_mesh(self.cube, tolerance=100.0, **slot_kwargs)
+        )
+        self.assertIn("subdivCube", loose)  # tolerance widens the match
 
     def test_get_similar_topo(self):
         """Test finding similar topology."""

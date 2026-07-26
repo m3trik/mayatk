@@ -11,6 +11,7 @@ Runs WITHOUT Maya: maya.cmds is mocked by conftest, and ``_load_csv`` is
 exercised as an unbound method against a stub ``self`` so no Qt window /
 switchboard construction is required.
 """
+
 import os
 import sys
 import types
@@ -72,10 +73,13 @@ class LoadCsvFailureTest(unittest.TestCase):
     def test_unreadable_oserror_enables_widgets(self):
         """An OSError on read (e.g. errno 22) enables the field, not load."""
         ctrl = _make_stub_controller()
-        with patch("os.path.isfile", return_value=True), patch(
-            "pythontk.FileUtils.free_space", return_value=None
-        ), patch(
-            f"{_SLOTS}.parse_csv", side_effect=OSError(22, "Invalid argument")
+        with (
+            patch("os.path.isfile", return_value=True),
+            patch("pythontk.FileUtils.free_space", return_value=None),
+            patch(
+                f"{_SLOTS}.ManifestModel.parse_csv",
+                side_effect=OSError(22, "Invalid argument"),
+            ),
         ):
             ShotManifestController._load_csv(ctrl, "X:/cloud/only.csv")
 
@@ -86,8 +90,12 @@ class LoadCsvFailureTest(unittest.TestCase):
     def test_malformed_csv_still_enables_widgets(self):
         """A non-OSError parse failure also enables the field and reports it."""
         ctrl = _make_stub_controller()
-        with patch("os.path.isfile", return_value=True), patch(
-            f"{_SLOTS}.parse_csv", side_effect=ValueError("bad header")
+        with (
+            patch("os.path.isfile", return_value=True),
+            patch(
+                f"{_SLOTS}.ManifestModel.parse_csv",
+                side_effect=ValueError("bad header"),
+            ),
         ):
             ShotManifestController._load_csv(ctrl, "X:/data/bad.csv")
 
@@ -106,8 +114,9 @@ class DescribeReadFailureTest(unittest.TestCase):
     @staticmethod
     def _describe(path, *, free, placeholder):
         exc = OSError(22, "Invalid argument")
-        with patch("pythontk.FileUtils.free_space", return_value=free), patch(
-            "pythontk.FileUtils.is_cloud_placeholder", return_value=placeholder
+        with (
+            patch("pythontk.FileUtils.free_space", return_value=free),
+            patch("pythontk.FileUtils.is_cloud_placeholder", return_value=placeholder),
         ):
             return ShotManifestController._describe_read_failure(path, exc).lower()
 
@@ -190,6 +199,7 @@ class CsvPathEditingTest(unittest.TestCase):
         ctrl = self._ctrl(text="X:/recent.csv", csv_path="")
         ShotManifestController._on_csv_recent_selected(ctrl, "X:/recent.csv")
         ctrl._on_csv_browsed.assert_called_once_with("X:/recent.csv")
+
 
 if __name__ == "__main__":
     unittest.main(exit=False)

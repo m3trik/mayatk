@@ -473,6 +473,37 @@ class TestNodeUtils(MayaTkTestCase):
             parents = cmds.listRelatives(shp, allParents=True, fullPath=True) or []
             self.assertEqual(len(parents), 1, f"{t} shape still instanced")
 
+    def test_replace_with_instances_duplicate_parent_names(self):
+        """Regression: targets whose parents share a non-unique short name must
+        not raise 'More than one object matches name'. The op must resolve
+        parents by full path, not the ambiguous short name.
+        """
+        src = cmds.polyCube(name="src")[0]
+
+        # Two sibling-group hierarchies whose inner parent transforms collide
+        # on short name 'dup' (distinct only by full path). Each holds a target.
+        top1 = cmds.group(empty=True, name="top1")
+        top2 = cmds.group(empty=True, name="top2")
+        dupA = cmds.ls(cmds.parent(cmds.group(empty=True, name="dup"), top1), long=True)[0]
+        dupB = cmds.ls(cmds.parent(cmds.group(empty=True, name="dup"), top2), long=True)[0]
+        # Sanity: the short name really is ambiguous scene-wide.
+        self.assertEqual(len(cmds.ls("dup")), 2)
+
+        tA_long = cmds.ls(cmds.parent(cmds.polyCube(name="tgtA")[0], dupA), long=True)[0]
+        tB_long = cmds.ls(cmds.parent(cmds.polyCube(name="tgtB")[0], dupB), long=True)[0]
+
+        # Pre-fix this raised ValueError: More than one object matches name: dup
+        instances = NodeUtils.replace_with_instances([src, tA_long, tB_long])
+
+        self.assertEqual(len(instances), 2)
+        # Each instance must land under its target's OWN 'dup' parent (resolved
+        # by full path), not an arbitrary same-named one. Instance order follows
+        # target order, so instances[0] -> dupA, instances[1] -> dupB.
+        parents = [
+            cmds.listRelatives(i, parent=True, fullPath=True)[0] for i in instances
+        ]
+        self.assertEqual(parents, [dupA, dupB])
+
     # -------------------------------------------------------------------------
     # Assembly Tests
     # -------------------------------------------------------------------------

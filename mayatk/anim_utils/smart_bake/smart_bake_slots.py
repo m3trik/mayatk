@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Slots for the Smart Bake tool panel (smart_bake.ui)."""
+
 from typing import List, Optional
 
 try:
@@ -9,7 +10,7 @@ except ImportError:
     cmds = None
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 from uitk.switchboard.slots import Cancelable
 
 from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
@@ -56,7 +57,9 @@ class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self.sb.add_reset_buttons(self.ui)
         # Bake target is a choice between two named layers, not a modifier.
         self.ui.cmb_bake_layer.add(["Override Layer", "Base Layer"])
-        self.ui.cmb_bake_layer.setAsCurrent("Override Layer")  # prior default (checkbox on)
+        self.ui.cmb_bake_layer.setAsCurrent(
+            "Override Layer"
+        )  # prior default (checkbox on)
         self.ui.cmb_bake_layer.currentTextChanged.connect(self._on_bake_layer_changed)
         self._on_bake_layer_changed(self.ui.cmb_bake_layer.currentText())
         self._log_getting_started()
@@ -123,7 +126,7 @@ class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin):
             setToolTip="Reset every field in this panel to its default value.",
         )
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Smart Bake",
                 body="Analyzes the scene for constraints, driven keys, expressions, "
                 "IK, motion paths, and blend shapes, then bakes only the channels "
@@ -180,8 +183,7 @@ class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin):
             # Selected scope with nothing selected must NOT silently
             # escalate to a whole-scene bake (objects=None would).
             self._warn(
-                "Nothing selected — select objects, or set Scope to "
-                "Auto (Whole Scene)."
+                "Nothing selected — select objects, or set Scope to Auto (Whole Scene)."
             )
             return
 
@@ -257,7 +259,9 @@ class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self._log_run_header("Unbake")
         restore = SmartBake.restore()
         if not restore.success:
-            self._warn(restore.warnings[0] if restore.warnings else "Nothing to restore.")
+            self._warn(
+                restore.warnings[0] if restore.warnings else "Nothing to restore."
+            )
         else:
             summary = f"Restored session '{restore.session_id}'."
             self._succeed(

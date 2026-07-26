@@ -8,12 +8,14 @@ painting, assessment colouring, and behavior-label widgets.
 
 Mixed into :class:`ShotManifestController` via MRO.
 """
+
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     BuilderStep,
     BuilderObject,
 )
 from mayatk.anim_utils.shots.shot_manifest.behaviors import list_behaviors
 from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
+    ManifestData,
     BEHAVIOR_STATUS_COLORS,
     ERROR_COLOR,
     HEADERS,
@@ -24,11 +26,8 @@ from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
     COL_BEHAVIORS,
     COL_START,
     COL_END,
-    fmt_behavior,
-    format_behavior_html,
-    try_load_maya_icons,
 )
-from mayatk.core_utils._core_utils import leaf_name
+from mayatk.core_utils._core_utils import CoreUtils
 
 
 class ManifestTableMixin:
@@ -56,7 +55,7 @@ class ManifestTableMixin:
         even when the DG node hasn't been created yet.  Scene rows go
         through the standard :class:`NodeIcons` scene-node lookup.
         """
-        node_icons_cls = try_load_maya_icons()
+        node_icons_cls = ManifestData.try_load_maya_icons()
         if node_icons_cls is None:
             return None
         if isinstance(obj_data, BuilderObject) and obj_data.kind == "audio":
@@ -132,7 +131,7 @@ class ManifestTableMixin:
                     broken = list(obj_st.broken_behaviors or [])
                 break
         label.setText(
-            format_behavior_html(
+            ManifestData.format_behavior_html(
                 obj.behaviors, broken=broken, status_color=status_color
             )
         )
@@ -141,7 +140,7 @@ class ManifestTableMixin:
             broken_set = set(obj_st.broken_behaviors or [])
             lines = []
             for b in obj.behaviors:
-                display = fmt_behavior(b)
+                display = ManifestData.fmt_behavior(b)
                 if obj_st.status == "missing_object":
                     lines.append(f"\u2716 {display}  (object missing)")
                 elif b in broken_set:
@@ -150,7 +149,9 @@ class ManifestTableMixin:
                     lines.append(f"\u2714 {display}")
             label.setToolTip("\n".join(lines))
         elif obj.behaviors:
-            label.setToolTip("\n".join(fmt_behavior(b) for b in obj.behaviors))
+            label.setToolTip(
+                "\n".join(ManifestData.fmt_behavior(b) for b in obj.behaviors)
+            )
         else:
             label.setToolTip("")
 
@@ -193,7 +194,7 @@ class ManifestTableMixin:
             for raw_name in merged:
                 if not raw_name:
                     continue
-                display = fmt_behavior(raw_name)
+                display = ManifestData.fmt_behavior(raw_name)
                 chk = menu.add("QCheckBox", setText=display)
                 chk.setChecked(raw_name in obj.behaviors)
                 chk.setProperty("behavior_raw", raw_name)
@@ -219,7 +220,7 @@ class ManifestTableMixin:
         """Re-apply all behaviors for a single object on its built shot."""
         try:
             from mayatk.anim_utils.shots._shots import ShotStore
-            from mayatk.anim_utils.shots.shot_manifest.behaviors import apply_behavior
+            from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
             shot = next(
                 (s for s in ShotStore.active().shots if s.name == step_id), None
@@ -242,7 +243,9 @@ class ManifestTableMixin:
                     kwargs = {"source_path": obj.source_path}
                     if total > 1:
                         kwargs["anchor_override"] = idx / max(total - 1, 1)
-                    apply_behavior(obj.name, b, shot.start, shot.end, **kwargs)
+                    Behaviors.apply_behavior(
+                        obj.name, b, shot.start, shot.end, **kwargs
+                    )
             finally:
                 cmds.undoInfo(closeChunk=True)
 
@@ -278,7 +281,9 @@ class ManifestTableMixin:
             )
             # Child rows: object name in Description column, behavior label
             for obj in step.objects:
-                display = leaf_name(obj.name) if self._use_short_names else obj.name
+                display = (
+                    CoreUtils.leaf_name(obj.name) if self._use_short_names else obj.name
+                )
                 child = tree.create_item(
                     ["", "", display, "", "", ""],
                     data=obj,
@@ -579,7 +584,8 @@ class ManifestTableMixin:
                     if o.status != "missing_behavior":
                         continue
                     broken = ", ".join(
-                        fmt_behavior(b) for b in (o.broken_behaviors or o.behaviors)
+                        ManifestData.fmt_behavior(b)
+                        for b in (o.broken_behaviors or o.behaviors)
                     )
                     lines.append(f"{o.name}: {broken}")
                 parent.setToolTip(0, "Unverified behaviors:\n" + "\n".join(lines))
@@ -615,7 +621,7 @@ class ManifestTableMixin:
                     f"{len(beh_issues)} missing",
                 )
                 lines = [
-                    f"{o.name}  \u2192  {', '.join(fmt_behavior(b) for b in (o.broken_behaviors or o.behaviors))}"
+                    f"{o.name}  \u2192  {', '.join(ManifestData.fmt_behavior(b) for b in (o.broken_behaviors or o.behaviors))}"
                     for o in beh_issues
                 ]
                 parent.setToolTip(beh_col, "\n".join(lines))
@@ -674,7 +680,7 @@ class ManifestTableMixin:
                             desc = load_behavior(b).get("description", "")
                         except Exception:
                             pass
-                        entry = fmt_behavior(b)
+                        entry = ManifestData.fmt_behavior(b)
                         if desc:
                             entry += f" \u2014 {desc}"
                         lines.append(entry)
@@ -688,10 +694,12 @@ class ManifestTableMixin:
             # Additional objects (in shot but not in CSV)
             if step_status.additional_objects:
                 a_fg, a_bg = PASTEL_STATUS.get("additional", (None, None))
-                node_icons_cls = try_load_maya_icons()
+                node_icons_cls = ManifestData.try_load_maya_icons()
                 for extra_name in step_status.additional_objects:
                     display = (
-                        leaf_name(extra_name) if self._use_short_names else extra_name
+                        CoreUtils.leaf_name(extra_name)
+                        if self._use_short_names
+                        else extra_name
                     )
                     extra_item = tree.create_item(
                         ["", "", display, "", "", ""],
@@ -753,9 +761,7 @@ class ManifestTableMixin:
             self._set_footer("No issues found.")
             return
 
-        self.logger.info(
-            "Expand Missing (%d steps):\n%s", len(lines), "\n".join(lines)
-        )
+        self.logger.info("Expand Missing (%d steps):\n%s", len(lines), "\n".join(lines))
         self._set_footer(f"{len(problem_ids)} step(s) with issues expanded.")
 
         tree = self.ui.tbl_steps

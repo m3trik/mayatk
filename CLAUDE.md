@@ -35,11 +35,13 @@ import maya.api.OpenMaya as om    # API 2.0 over 1.0; use for object refs and ma
 ```
 
 - Use `cmds.*` directly. A few cmds names don't exist — use `om.MGlobal.displayInfo` (no `cmds.displayInfo`) and `cmds.file(query=True, sceneName=True)` (no `cmds.sceneName`).
-- Common node-handling helpers live on canonical classes/modules:
-  - Names / coercion: `short_name`, `leaf_name`, `as_strings` — module-level in `mayatk/core_utils/_core_utils.py`. `BoundingBox` + `get_bounding_box` also live there.
+- Common node-handling helpers live on canonical classes (also flat via `mtk.<name>` — the
+  `_*_utils` roots are wildcard-exposed, so `mtk.short_name` and `mtk.CoreUtils.short_name` are the
+  same object):
+  - Names / coercion: `CoreUtils.short_name` / `.leaf_name` / `.as_strings` (in `core_utils/_core_utils.py`; `BoundingBox` + `CoreUtils.get_bounding_box` also there).
   - Hierarchy / type checks: `NodeUtils.get_parent`, `get_children`, `get_shapes`, `get_shape`, `is_intermediate`, `list_transforms`, `node_is`.
   - Attributes: `Attributes.has_attr`, `Attributes.set_plug`.
-  - Matrices: `get_matrix` / `set_matrix` in `xform_utils/matrices.py`; `get_translation` / `get_object_matrix` / `set_object_matrix` in `xform_utils/_xform_utils.py`.
+  - Matrices: `get_matrix` / `set_matrix` in `xform_utils/matrices.py`; `XformUtils.get_translation` / `.get_object_matrix` / `.set_object_matrix` (in `xform_utils/_xform_utils.py`).
 - Coerce inputs to strings at production entry points: `cmds.X(str(node), ...)` — Maya 2025 cmds reject some non-string node args.
 - Use type hints (essential for OpenMaya interop).
 

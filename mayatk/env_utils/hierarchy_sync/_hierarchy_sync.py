@@ -15,40 +15,6 @@ import pythontk as ptk
 # ---------------------------------------------------------------------------
 
 
-def _full_path(node) -> str:
-    """Longest DAG path for *node* (falls back to ``str(node)`` if gone)."""
-    if node is None:
-        return ""
-    s = str(node)
-    long_paths = cmds.ls(s, long=True) or [s]
-    return long_paths[0]
-
-
-def _node_name(node) -> str:
-    """Leaf name (namespace kept) of a node string."""
-    if node is None:
-        return ""
-    return str(node).split("|")[-1]
-
-
-def _rename(node, new_name) -> str:
-    """Rename a node string; returns the resulting name."""
-    return cmds.rename(str(node), new_name)
-
-
-def _uuid_of(node) -> Optional[str]:
-    """UUID of *node*, or None if it doesn't resolve to exactly one node."""
-    found = cmds.ls(str(node), uuid=True) or []
-    return found[0] if len(found) == 1 else None
-
-
-def _node_from_uuid(uuid: Optional[str]) -> Optional[str]:
-    """Current long path of the node with *uuid*, or None."""
-    if not uuid:
-        return None
-    found = cmds.ls(uuid, long=True) or []
-    return found[0] if found else None
-
 # From mayatk package
 from mayatk.env_utils.namespace_sandbox import NamespaceSandbox
 from mayatk.cam_utils._cam_utils import CamUtils
@@ -64,151 +30,14 @@ from mayatk.node_utils._node_utils import NodeUtils
 MAYA_DEFAULT_CAMERAS = CamUtils.DEFAULT_CAMERAS
 
 
-def get_clean_node_name(node) -> str:
-    """Get a consistent clean node name for matching (strips namespace)."""
-    try:
-        node_name = str(node).split('|')[-1]
-        if node_name:
-            return node_name.split(":")[-1] if ":" in node_name else node_name
-        full_path = cmds.ls(str(node), l=True)[0]
-        last_component = full_path.split("|")[-1] if "|" in full_path else str(node)
-        return (
-            last_component.split(":")[-1] if ":" in last_component else last_component
-        )
-    except Exception:
-        s = str(node)
-        return s.split(":")[-1] if ":" in s else s
-
-
-def get_clean_node_name_from_string(node_name: str) -> str:
-    """Get a clean node name from a string path (removes namespace prefix)."""
-    return ptk.HierarchyPath.clean_namespace(ptk.HierarchyPath.leaf(node_name))
-
-
-def clean_hierarchy_path(path: str) -> str:
-    """Clean namespace prefixes from all components of a hierarchical path."""
-    return ptk.HierarchyPath.strip_namespaces(path)
-
-
-def format_component(name: str, strip_namespaces: bool = False) -> str:
-    """Format a single component name with optional namespace stripping."""
-    return ptk.HierarchyPath.clean_namespace(name) if strip_namespaces else name
-
-
 # ---------------------------------------------------------------------------
 # Node filtering utilities (module-level functions)
 # ---------------------------------------------------------------------------
 
 
-def is_default_maya_camera(path: str, node) -> bool:
-    """Check if *node* represents a Maya default camera."""
-    try:
-        base_name = path.split("|")[-1].split(":")[-1]
-        if base_name not in MAYA_DEFAULT_CAMERAS:
-            return False
-        shapes = cmds.listRelatives(_full_path(node), shapes=True, fullPath=True) or []
-        for shape in shapes:
-            if cmds.nodeType(shape) == "camera":
-                return True
-        return False
-    except (RuntimeError, AttributeError):
-        return False
-
-
-def should_keep_node_by_type(node, node_types: List[str], exclude: bool = True) -> bool:
-    """Filter nodes by shape types.
-
-    Matching uses each shape's *inherited* node types, so a base class such as
-    ``"light"`` matches concrete shapes (``pointLight``, ``directionalLight``,
-    ``spotLight``, …) which ``cmds.nodeType`` never reports as a bare
-    ``"light"``.  Exact leaf types (``"mesh"``, ``"camera"``) still match since
-    a type is a member of its own inherited chain.
-    """
-    try:
-        shapes = cmds.listRelatives(_full_path(node), shapes=True, fullPath=True) or []
-        if not shapes:
-            return True  # Keep transform-only nodes
-        shape_types = set()
-        for s in shapes:
-            shape_types.update(cmds.nodeType(s, inherited=True) or [cmds.nodeType(s)])
-        has_filtered_type = any(t in shape_types for t in node_types)
-        return not has_filtered_type if exclude else has_filtered_type
-    except (RuntimeError, AttributeError):
-        return True
-
-
-def filter_path_map_by_cameras(path_map: Dict[str, Any]) -> Dict[str, Any]:
-    """Remove Maya default cameras from *path_map*."""
-    return {
-        path: node
-        for path, node in path_map.items()
-        if not is_default_maya_camera(path, node)
-    }
-
-
-def filter_path_map_by_types(
-    path_map: Dict[str, Any], node_types: List[str], exclude: bool = True
-) -> Dict[str, Any]:
-    """Filter *path_map* by shape node types."""
-    return {
-        path: node
-        for path, node in path_map.items()
-        if should_keep_node_by_type(node, node_types, exclude)
-    }
-
-
-def select_objects_in_maya(object_names: List[str]) -> int:
-    """Select objects in Maya scene by name. Returns count of selected."""
-    if not object_names:
-        return 0
-    valid = [n for n in object_names if cmds.objExists(n)]
-    if valid:
-        cmds.select(valid, replace=True)
-    return len(valid)
-
-
 # ---------------------------------------------------------------------------
 # Shared rename helper (used by ObjectSwapper methods)
 # ---------------------------------------------------------------------------
-
-
-def _rename_node_removing_namespace(
-    node, allow_maya_auto_rename: bool = False, logger=None
-):
-    """Rename a single *node* by stripping its namespace prefix.
-
-    If *allow_maya_auto_rename* is True Maya will resolve conflicts automatically.
-    Otherwise a ``_1``, ``_2`` … suffix is appended manually.
-    """
-    try:
-        current_name = str(node).split('|')[-1]
-        if ":" not in current_name:
-            return  # nothing to strip
-        clean_name = current_name.split(":")[-1]
-
-        if allow_maya_auto_rename:
-            try:
-                final_name = _rename(node, clean_name)
-                if logger and final_name != clean_name:
-                    logger.debug(f"Maya auto-renamed {current_name} -> {final_name}")
-            except RuntimeError as e:
-                if logger:
-                    logger.debug(f"Maya auto-rename failed for {current_name}: {e}")
-        else:
-            if not cmds.objExists(clean_name) or _full_path(clean_name) == _full_path(node):
-                _rename(node, clean_name)
-            else:
-                counter = 1
-                unique_name = f"{clean_name}_{counter}"
-                while cmds.objExists(unique_name):
-                    counter += 1
-                    unique_name = f"{clean_name}_{counter}"
-                _rename(node, unique_name)
-                if logger:
-                    logger.debug(f"Renamed {current_name} -> {unique_name} (conflict)")
-    except RuntimeError as e:
-        if logger:
-            logger.debug(f"Could not rename {node}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +86,7 @@ class HierarchyMapBuilder:
                 short_name = long_path.rsplit("|", 1)[-1]
                 if _should_exclude(short_name):
                     continue
-                comp = format_component(short_name, strip_namespaces)
+                comp = HierarchySync.format_component(short_name, strip_namespaces)
                 current_key = f"{parent_key}|{comp}" if parent_key else comp
                 key_to_long[current_key] = long_path
                 children = cmds.listRelatives(
@@ -273,7 +102,7 @@ class HierarchyMapBuilder:
                 if cmds.nodeType(asm) == "transform":
                     _traverse(asm)
         else:
-            _traverse(_full_path(root))
+            _traverse(_HierarchySyncInternal._full_path(root))
 
         # Second pass: validate long paths still exist; values are now strings.
         if not key_to_long:
@@ -299,7 +128,10 @@ class HierarchyMapBuilder:
         """
         path_map: Dict[str, Any] = {}
         # Map long paths → node strings for fast lookup
-        node_paths = {_full_path(n): _full_path(n) for n in nodes}
+        node_paths = {
+            _HierarchySyncInternal._full_path(n): _HierarchySyncInternal._full_path(n)
+            for n in nodes
+        }
         long_path_set = set(node_paths)
 
         def _is_root(long_path: str) -> bool:
@@ -311,7 +143,7 @@ class HierarchyMapBuilder:
             while stack:
                 long_path, path = stack.pop()
                 short_name = long_path.rsplit("|", 1)[-1]
-                comp = format_component(short_name, strip_namespaces)
+                comp = HierarchySync.format_component(short_name, strip_namespaces)
                 current_path = f"{path}|{comp}" if path else comp
                 path_map[current_path] = node_paths[long_path]
                 children = cmds.listRelatives(
@@ -352,7 +184,7 @@ class MayaObjectMatcher(ptk.LoggingMixin):
         # Pre-build name → node index for O(1) exact lookups.
         name_to_nodes: Dict[str, List[Any]] = {}
         for node in imported_transforms:
-            clean = get_clean_node_name(node)
+            clean = HierarchySync.get_clean_node_name(node)
             name_to_nodes.setdefault(clean, []).append(node)
 
         for target_name in target_objects:
@@ -426,7 +258,91 @@ class MayaObjectMatcher(ptk.LoggingMixin):
         )
 
 
-class HierarchySync(ptk.LoggingMixin):
+class _HierarchySyncInternal(object):
+    """Internal helpers for HierarchySync."""
+
+    @staticmethod
+    def _full_path(node) -> str:
+        """Longest DAG path for *node* (falls back to ``str(node)`` if gone)."""
+        if node is None:
+            return ""
+        s = str(node)
+        long_paths = cmds.ls(s, long=True) or [s]
+        return long_paths[0]
+
+    @staticmethod
+    def _node_name(node) -> str:
+        """Leaf name (namespace kept) of a node string."""
+        if node is None:
+            return ""
+        return str(node).split("|")[-1]
+
+    @staticmethod
+    def _rename(node, new_name) -> str:
+        """Rename a node string; returns the resulting name."""
+        return cmds.rename(str(node), new_name)
+
+    @staticmethod
+    def _uuid_of(node) -> Optional[str]:
+        """UUID of *node*, or None if it doesn't resolve to exactly one node."""
+        found = cmds.ls(str(node), uuid=True) or []
+        return found[0] if len(found) == 1 else None
+
+    @staticmethod
+    def _node_from_uuid(uuid: Optional[str]) -> Optional[str]:
+        """Current long path of the node with *uuid*, or None."""
+        if not uuid:
+            return None
+        found = cmds.ls(uuid, long=True) or []
+        return found[0] if found else None
+
+    @staticmethod
+    def _rename_node_removing_namespace(
+        node, allow_maya_auto_rename: bool = False, logger=None
+    ):
+        """Rename a single *node* by stripping its namespace prefix.
+
+        If *allow_maya_auto_rename* is True Maya will resolve conflicts automatically.
+        Otherwise a ``_1``, ``_2`` … suffix is appended manually.
+        """
+        try:
+            current_name = str(node).split("|")[-1]
+            if ":" not in current_name:
+                return  # nothing to strip
+            clean_name = current_name.split(":")[-1]
+
+            if allow_maya_auto_rename:
+                try:
+                    final_name = _HierarchySyncInternal._rename(node, clean_name)
+                    if logger and final_name != clean_name:
+                        logger.debug(
+                            f"Maya auto-renamed {current_name} -> {final_name}"
+                        )
+                except RuntimeError as e:
+                    if logger:
+                        logger.debug(f"Maya auto-rename failed for {current_name}: {e}")
+            else:
+                if not cmds.objExists(clean_name) or _HierarchySyncInternal._full_path(
+                    clean_name
+                ) == _HierarchySyncInternal._full_path(node):
+                    _HierarchySyncInternal._rename(node, clean_name)
+                else:
+                    counter = 1
+                    unique_name = f"{clean_name}_{counter}"
+                    while cmds.objExists(unique_name):
+                        counter += 1
+                        unique_name = f"{clean_name}_{counter}"
+                    _HierarchySyncInternal._rename(node, unique_name)
+                    if logger:
+                        logger.debug(
+                            f"Renamed {current_name} -> {unique_name} (conflict)"
+                        )
+        except RuntimeError as e:
+            if logger:
+                logger.debug(f"Could not rename {node}: {e}")
+
+
+class HierarchySync(ptk.LoggingMixin, _HierarchySyncInternal):
     """Core hierarchy analysis and repair manager."""
 
     def __init__(
@@ -477,9 +393,9 @@ class HierarchySync(ptk.LoggingMixin):
                 # Derive namespaces from imported reference objects
                 ref_namespaces = sorted(
                     {
-                        str(n).split('|')[-1].split(":")[0]
+                        str(n).split("|")[-1].split(":")[0]
                         for n in reference_objects
-                        if ":" in str(n).split('|')[-1]
+                        if ":" in str(n).split("|")[-1]
                     }
                 )
                 if ref_namespaces:
@@ -529,10 +445,10 @@ class HierarchySync(ptk.LoggingMixin):
                 pmap = getattr(self, attr)
                 filtered: Dict[str, Any] = {}
                 for path, node in pmap.items():
-                    if is_default_maya_camera(path, node):
+                    if HierarchySync.is_default_maya_camera(path, node):
                         continue
                     if exclude_types:
-                        if not should_keep_node_by_type(
+                        if not HierarchySync.should_keep_node_by_type(
                             node, exclude_types, exclude=True
                         ):
                             continue
@@ -548,9 +464,11 @@ class HierarchySync(ptk.LoggingMixin):
             current_paths_raw = set(self.current_scene_path_map.keys())
             reference_paths_raw = set(self.reference_scene_path_map.keys())
 
-            cleaned_current_paths = {clean_hierarchy_path(p) for p in current_paths_raw}
+            cleaned_current_paths = {
+                HierarchySync.clean_hierarchy_path(p) for p in current_paths_raw
+            }
             cleaned_reference_paths = {
-                clean_hierarchy_path(p) for p in reference_paths_raw
+                HierarchySync.clean_hierarchy_path(p) for p in reference_paths_raw
             }
 
             # Differences
@@ -594,11 +512,11 @@ class HierarchySync(ptk.LoggingMixin):
                         def build_type_map(path_map):
                             result = {}
                             for raw_path, node in path_map.items():
-                                cleaned = clean_hierarchy_path(raw_path)
+                                cleaned = HierarchySync.clean_hierarchy_path(raw_path)
                                 try:
                                     shapes = (
                                         cmds.listRelatives(
-                                            _full_path(node),
+                                            _HierarchySyncInternal._full_path(node),
                                             shapes=True,
                                             fullPath=True,
                                         )
@@ -678,7 +596,7 @@ class HierarchySync(ptk.LoggingMixin):
             self.clean_to_raw_current = {}
             self._ambiguous_clean_current = set()
             for raw_path in current_paths_raw:
-                cleaned = clean_hierarchy_path(raw_path)
+                cleaned = HierarchySync.clean_hierarchy_path(raw_path)
                 if cleaned in self.clean_to_raw_current:
                     self._ambiguous_clean_current.add(cleaned)
                 else:
@@ -693,7 +611,7 @@ class HierarchySync(ptk.LoggingMixin):
             self.clean_to_raw_reference = {}
             self._ambiguous_clean_reference = set()
             for raw_path in reference_paths_raw:
-                cleaned = clean_hierarchy_path(raw_path)
+                cleaned = HierarchySync.clean_hierarchy_path(raw_path)
                 if cleaned in self.clean_to_raw_reference:
                     self._ambiguous_clean_reference.add(cleaned)
                 else:
@@ -840,7 +758,11 @@ class HierarchySync(ptk.LoggingMixin):
 
             def _shape_types(node) -> List[str]:
                 shapes = (
-                    cmds.listRelatives(_full_path(node), shapes=True, fullPath=True)
+                    cmds.listRelatives(
+                        _HierarchySyncInternal._full_path(node),
+                        shapes=True,
+                        fullPath=True,
+                    )
                     or []
                 )
                 return sorted({cmds.nodeType(s) for s in shapes})
@@ -1055,13 +977,11 @@ class HierarchySync(ptk.LoggingMixin):
         try:
             leaf = cleaned_path.rsplit("|", 1)[-1]
             candidates = list(cmds.ls(leaf, long=True, type="transform") or [])
-            candidates += list(
-                cmds.ls(f"*:{leaf}", long=True, type="transform") or []
-            )
+            candidates += list(cmds.ls(f"*:{leaf}", long=True, type="transform") or [])
             matches = [
                 c
                 for c in dict.fromkeys(candidates)
-                if clean_hierarchy_path(c.lstrip("|")) == cleaned_path
+                if HierarchySync.clean_hierarchy_path(c.lstrip("|")) == cleaned_path
             ]
             return matches[0] if len(matches) == 1 else None
         except Exception:
@@ -1199,8 +1119,10 @@ class HierarchySync(ptk.LoggingMixin):
                         continue
                     stub = cmds.createNode("transform", name=leaf)
                 self._finalize_stub_node(stub)
-                created.append(_node_name(stub))
-                self.logger.debug(f"Created stub: {_full_path(stub)}")
+                created.append(_HierarchySyncInternal._node_name(stub))
+                self.logger.debug(
+                    f"Created stub: {_HierarchySyncInternal._full_path(stub)}"
+                )
             except Exception as e:
                 self.logger.warning(f"Failed to create stub for {cleaned_path}: {e}")
 
@@ -1267,9 +1189,7 @@ class HierarchySync(ptk.LoggingMixin):
         name = str(node)
         try:
             # Tag ----------------------------------------------------------
-            if not cmds.attributeQuery(
-                HierarchySync.STUB_ATTR, node=name, exists=True
-            ):
+            if not cmds.attributeQuery(HierarchySync.STUB_ATTR, node=name, exists=True):
                 cmds.addAttr(name, ln=HierarchySync.STUB_ATTR, at="bool", dv=True)
                 cmds.setAttr(f"{name}.{HierarchySync.STUB_ATTR}", True)
 
@@ -1362,7 +1282,7 @@ class HierarchySync(ptk.LoggingMixin):
         parent (the subtree would be destroyed too).
         """
         try:
-            name = _full_path(node)
+            name = _HierarchySyncInternal._full_path(node)
             if not cmds.objExists(name):
                 return False
 
@@ -1374,8 +1294,7 @@ class HierarchySync(ptk.LoggingMixin):
 
             if check_descendants:
                 descendants = (
-                    cmds.listRelatives(name, allDescendents=True, fullPath=True)
-                    or []
+                    cmds.listRelatives(name, allDescendents=True, fullPath=True) or []
                 )
                 for desc in descendants:
                     if HierarchySync._node_has_animation_connections(desc):
@@ -1393,7 +1312,9 @@ class HierarchySync(ptk.LoggingMixin):
         from that motion.
         """
         try:
-            parent = cmds.listRelatives(_full_path(node), parent=True, fullPath=True)
+            parent = cmds.listRelatives(
+                _HierarchySyncInternal._full_path(node), parent=True, fullPath=True
+            )
             while parent:
                 if HierarchySync._has_animation_data(parent[0]):
                     return True
@@ -1414,8 +1335,7 @@ class HierarchySync(ptk.LoggingMixin):
         try:
             root_long = cmds.ls(name, long=True)[0]
             subtree = set(
-                cmds.listRelatives(root_long, allDescendents=True, fullPath=True)
-                or []
+                cmds.listRelatives(root_long, allDescendents=True, fullPath=True) or []
             )
             subtree.add(root_long)
             subtree_leaves = {p.rsplit("|", 1)[-1] for p in subtree}
@@ -1444,7 +1364,7 @@ class HierarchySync(ptk.LoggingMixin):
         try:
             # Use the full path to avoid ambiguity with duplicate short
             # names at different hierarchy levels.
-            name = _full_path(node)
+            name = _HierarchySyncInternal._full_path(node)
             if not cmds.objExists(name):
                 return False
             shapes = cmds.listRelatives(name, shapes=True, fullPath=True) or []
@@ -1485,7 +1405,9 @@ class HierarchySync(ptk.LoggingMixin):
                     break
                 if HierarchySync._is_locator_transform(parent):
                     # Parent is a locator — the GRP above it is the root
-                    grandparent = NodeUtils.get_parent(parent, type=None, full_path=True)
+                    grandparent = NodeUtils.get_parent(
+                        parent, type=None, full_path=True
+                    )
                     if grandparent is not None:
                         root = grandparent
                         current = grandparent
@@ -1544,7 +1466,7 @@ class HierarchySync(ptk.LoggingMixin):
                         break
                 if root_cleaned is None:
                     # Build cleaned path from full path components
-                    root_cleaned = clean_hierarchy_path(root_full)
+                    root_cleaned = HierarchySync.clean_hierarchy_path(root_full)
 
                 # Only promote when the root is itself extra.  If the root
                 # is a matched/expected node we must not quarantine it.
@@ -1625,7 +1547,9 @@ class HierarchySync(ptk.LoggingMixin):
                 set(cmds.listConnections(name, type="expression") or [])
             )
             result["motion_paths"] = list(
-                set(cmds.listConnections(name, type="motionPath", s=True, d=False) or [])
+                set(
+                    cmds.listConnections(name, type="motionPath", s=True, d=False) or []
+                )
             )
             try:
                 result["is_referenced"] = cmds.referenceQuery(
@@ -1721,9 +1645,7 @@ class HierarchySync(ptk.LoggingMixin):
         # ── Match rotate order when rotation curves are moving ──
         # Raw rotate curves evaluate differently under a different order.
         rotate_attrs = {"rotateX", "rotateY", "rotateZ", "rx", "ry", "rz"}
-        if any(
-            d.split(".")[-1] in rotate_attrs for _s, d in classification["curves"]
-        ):
+        if any(d.split(".")[-1] in rotate_attrs for _s, d in classification["curves"]):
             try:
                 old_ro = cmds.getAttr(f"{old_name}.rotateOrder")
                 ro_plug = f"{new_name}.rotateOrder"
@@ -1962,8 +1884,10 @@ class HierarchySync(ptk.LoggingMixin):
                 self._unlock_if_stub(node)
                 new_path = (cmds.parent(str(node), quarantine_grp) or [None])[0]
                 self._relock_if_stub(new_path or node)
-                moved.append(_node_name(new_path or node))
-                self.logger.debug(f"Quarantined: {_full_path(new_path or node)}")
+                moved.append(_HierarchySyncInternal._node_name(new_path or node))
+                self.logger.debug(
+                    f"Quarantined: {_HierarchySyncInternal._full_path(new_path or node)}"
+                )
             except Exception as e:
                 self.logger.warning(f"Failed to quarantine {cleaned_path}: {e}")
 
@@ -2031,10 +1955,10 @@ class HierarchySync(ptk.LoggingMixin):
                     continue
 
             try:
-                old_name = str(node).split('|')[-1]
+                old_name = str(node).split("|")[-1]
                 # Use _rename helper \u2014 handles both node (in-place mutation)
                 # and string (cmds.rename) inputs.
-                actual_name = _rename(node, ref_leaf)
+                actual_name = _HierarchySyncInternal._rename(node, ref_leaf)
                 renamed.append(actual_name)
                 self.logger.debug(f"Renamed: '{old_name}' \u2192 '{actual_name}'")
             except Exception as e:
@@ -2136,9 +2060,9 @@ class HierarchySync(ptk.LoggingMixin):
                     new_path = (cmds.parent(str(node), world=True) or [None])[0]
                     self._relock_if_stub(new_path or node)
                 moved_node = new_path or node
-                fixed.append(_node_name(moved_node))
+                fixed.append(_HierarchySyncInternal._node_name(moved_node))
                 self.logger.debug(
-                    f"Reparented: {_node_name(moved_node)} -> {_full_path(moved_node)}"
+                    f"Reparented: {_HierarchySyncInternal._node_name(moved_node)} -> {_HierarchySyncInternal._full_path(moved_node)}"
                 )
             except Exception as e:
                 self.logger.warning(f"Failed to reparent {current_path}: {e}")
@@ -2187,8 +2111,10 @@ class HierarchySync(ptk.LoggingMixin):
         if children or shapes:
             return
 
-        old_name = _node_name(old_parent)
-        old_clean = clean_hierarchy_path(_full_path(old_parent).lstrip("|"))
+        old_name = _HierarchySyncInternal._node_name(old_parent)
+        old_clean = HierarchySync.clean_hierarchy_path(
+            _HierarchySyncInternal._full_path(old_parent).lstrip("|")
+        )
         if old_clean in self.clean_to_raw_reference:
             self.logger.debug(
                 f"Preserved empty parent '{old_name}' (exists in reference)"
@@ -2203,6 +2129,131 @@ class HierarchySync(ptk.LoggingMixin):
         HierarchySync._unlock_if_stub(old_parent)
         cmds.delete(str(old_parent))
         self.logger.debug(f"Deleted empty source parent: {old_name}")
+
+    @staticmethod
+    def get_clean_node_name(node) -> str:
+        """Get a consistent clean node name for matching (strips namespace)."""
+        try:
+            node_name = str(node).split("|")[-1]
+            if node_name:
+                return node_name.split(":")[-1] if ":" in node_name else node_name
+            full_path = cmds.ls(str(node), l=True)[0]
+            last_component = full_path.split("|")[-1] if "|" in full_path else str(node)
+            return (
+                last_component.split(":")[-1]
+                if ":" in last_component
+                else last_component
+            )
+        except Exception:
+            s = str(node)
+            return s.split(":")[-1] if ":" in s else s
+
+    @staticmethod
+    def get_clean_node_name_from_string(node_name: str) -> str:
+        """Get a clean node name from a string path (removes namespace prefix)."""
+        return ptk.HierarchyPath.clean_namespace(ptk.HierarchyPath.leaf(node_name))
+
+    @staticmethod
+    def clean_hierarchy_path(path: str) -> str:
+        """Clean namespace prefixes from all components of a hierarchical path."""
+        return ptk.HierarchyPath.strip_namespaces(path)
+
+    @staticmethod
+    def format_component(name: str, strip_namespaces: bool = False) -> str:
+        """Format a single component name with optional namespace stripping."""
+        return ptk.HierarchyPath.clean_namespace(name) if strip_namespaces else name
+
+    @staticmethod
+    def is_default_maya_camera(path: str, node) -> bool:
+        """Check if *node* represents a Maya default camera."""
+        try:
+            base_name = path.split("|")[-1].split(":")[-1]
+            if base_name not in MAYA_DEFAULT_CAMERAS:
+                return False
+            shapes = (
+                cmds.listRelatives(
+                    _HierarchySyncInternal._full_path(node), shapes=True, fullPath=True
+                )
+                or []
+            )
+            for shape in shapes:
+                if cmds.nodeType(shape) == "camera":
+                    return True
+            return False
+        except (RuntimeError, AttributeError):
+            return False
+
+    @staticmethod
+    def should_keep_node_by_type(
+        node, node_types: List[str], exclude: bool = True
+    ) -> bool:
+        """Filter nodes by shape types.
+
+        Matching uses each shape's *inherited* node types, so a base class such as
+        ``"light"`` matches concrete shapes (``pointLight``, ``directionalLight``,
+        ``spotLight``, …) which ``cmds.nodeType`` never reports as a bare
+        ``"light"``.  Exact leaf types (``"mesh"``, ``"camera"``) still match since
+        a type is a member of its own inherited chain.
+        """
+        try:
+            shapes = (
+                cmds.listRelatives(
+                    _HierarchySyncInternal._full_path(node), shapes=True, fullPath=True
+                )
+                or []
+            )
+            if not shapes:
+                return True  # Keep transform-only nodes
+            shape_types = set()
+            for s in shapes:
+                shape_types.update(
+                    cmds.nodeType(s, inherited=True) or [cmds.nodeType(s)]
+                )
+            has_filtered_type = any(t in shape_types for t in node_types)
+            return not has_filtered_type if exclude else has_filtered_type
+        except (RuntimeError, AttributeError):
+            return True
+
+    @staticmethod
+    def filter_path_map_by_cameras(path_map: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove Maya default cameras from *path_map*."""
+        return {
+            path: node
+            for path, node in path_map.items()
+            if not HierarchySync.is_default_maya_camera(path, node)
+        }
+
+    @staticmethod
+    def filter_path_map_by_types(
+        path_map: Dict[str, Any], node_types: List[str], exclude: bool = True
+    ) -> Dict[str, Any]:
+        """Filter *path_map* by shape node types."""
+        return {
+            path: node
+            for path, node in path_map.items()
+            if HierarchySync.should_keep_node_by_type(node, node_types, exclude)
+        }
+
+    @staticmethod
+    def select_objects_in_maya(object_names: List[str]) -> int:
+        """Select objects in Maya scene by name. Returns count of selected."""
+        if not object_names:
+            return 0
+        valid = []
+        for n in object_names:
+            if not cmds.objExists(n):
+                continue
+            # Skip ambiguous short names that resolve to more than one node;
+            # feeding them to cmds.select would grab the wrong object.
+            if len(cmds.ls(n)) != 1:
+                cmds.warning(
+                    f"Skipping ambiguous object name (resolves to multiple nodes): {n}"
+                )
+                continue
+            valid.append(n)
+        if valid:
+            cmds.select(valid, replace=True)
+        return len(valid)
 
 
 class ObjectSwapper(ptk.LoggingMixin):
@@ -2255,7 +2306,8 @@ class ObjectSwapper(ptk.LoggingMixin):
 
             # Clean namespace from target object names to match against cleaned imported names
             cleaned_target_objects = [
-                get_clean_node_name_from_string(obj) for obj in target_objects
+                HierarchySync.get_clean_node_name_from_string(obj)
+                for obj in target_objects
             ]
 
             # Find matching objects
@@ -2305,7 +2357,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                     self.logger.warning(f"Object {obj} no longer exists, skipping")
                     continue
 
-                clean_name = get_clean_node_name(obj)
+                clean_name = HierarchySync.get_clean_node_name(obj)
                 self.logger.debug(
                     f"Processing [{i}]: {clean_name} (merge={merge}, children={self.pull_children})"
                 )
@@ -2331,7 +2383,6 @@ class ObjectSwapper(ptk.LoggingMixin):
         # Check each object to see if it's a root (no parent in the selected set)
         for obj in objects:
             try:
-                obj_path = cmds.ls(str(obj), l=True)[0]
                 is_root = True
 
                 # Check if any parent of this object is also in the selected set
@@ -2439,7 +2490,9 @@ class ObjectSwapper(ptk.LoggingMixin):
         external = HierarchySync._external_animation_dependents(name)
         if external:
             sample = ", ".join(sorted(external)[:5])
-            self.logger.info(f"Preserved '{name}' (drives animation elsewhere: {sample})")
+            self.logger.info(
+                f"Preserved '{name}' (drives animation elsewhere: {sample})"
+            )
             return False
 
         if not HierarchySync._has_animation_data(existing, check_descendants=True):
@@ -2502,8 +2555,7 @@ class ObjectSwapper(ptk.LoggingMixin):
         if transfer_result["skipped"]:
             skipped_reasons = [s["reason"] for s in transfer_result["skipped"]]
             self.logger.info(
-                f"Preserved '{name}' (could not transfer: "
-                f"{', '.join(skipped_reasons)})"
+                f"Preserved '{name}' (could not transfer: {', '.join(skipped_reasons)})"
             )
             return False
 
@@ -2525,7 +2577,7 @@ class ObjectSwapper(ptk.LoggingMixin):
         The node is tracked by UUID — every rename/reparent below
         invalidates the *obj* name string.
         """
-        uuid = _uuid_of(obj)
+        uuid = _HierarchySyncInternal._uuid_of(obj)
         try:
             # In merge mode, delete any pre-existing object with the same
             # name so the pulled version can take its place.
@@ -2542,7 +2594,7 @@ class ObjectSwapper(ptk.LoggingMixin):
             self._build_parent_chain_and_reparent(obj)
 
             # Strip temp namespace from the whole subtree + connected materials.
-            node = _node_from_uuid(uuid) or str(obj)
+            node = _HierarchySyncInternal._node_from_uuid(uuid) or str(obj)
             self._cleanup_namespaces(node, allow_auto_rename=allow_auto_rename)
 
             # Guard: no pulled node may stay in the import namespace — the
@@ -2553,12 +2605,12 @@ class ObjectSwapper(ptk.LoggingMixin):
 
             # Final rename of the root if needed (merge mode only — add-to-
             # scene keeps Maya's auto-suffix on conflicts).
-            node = _node_from_uuid(uuid)
+            node = _HierarchySyncInternal._node_from_uuid(uuid)
             if (
                 node
                 and not allow_auto_rename
-                and _node_name(node) != clean_name
-                and ":" not in _node_name(node)
+                and _HierarchySyncInternal._node_name(node) != clean_name
+                and ":" not in _HierarchySyncInternal._node_name(node)
             ):
                 try:
                     cmds.rename(node, clean_name)
@@ -2569,7 +2621,9 @@ class ObjectSwapper(ptk.LoggingMixin):
             self.logger.warning(f"Hierarchy integration failed for {clean_name}: {e}")
             self.logger.debug(f"Full traceback: {traceback.format_exc()}")
             # Fallback: treat as single-object at scene root.
-            self._place_at_root(_node_from_uuid(uuid) or obj, clean_name)
+            self._place_at_root(
+                _HierarchySyncInternal._node_from_uuid(uuid) or obj, clean_name
+            )
 
     # -- single object (pull_children=False) ---------------------------
 
@@ -2577,7 +2631,7 @@ class ObjectSwapper(ptk.LoggingMixin):
         self, obj, clean_name: str, *, merge: bool, allow_auto_rename: bool
     ):
         """Pull a single object (no children) into the scene."""
-        uuid = _uuid_of(obj)
+        uuid = _HierarchySyncInternal._uuid_of(obj)
         try:
             if merge and cmds.objExists(clean_name):
                 self.logger.debug(f"Replacing existing object: {clean_name}")
@@ -2592,18 +2646,24 @@ class ObjectSwapper(ptk.LoggingMixin):
 
             # Single objects don't carry a subtree, but may still have a
             # namespace prefix that needs stripping.
-            node = _node_from_uuid(uuid) or str(obj)
-            if ":" in _node_name(node):
+            node = _HierarchySyncInternal._node_from_uuid(uuid) or str(obj)
+            if ":" in _HierarchySyncInternal._node_name(node):
                 self._force_rename_out_of_namespace(
                     node, allow_auto_rename=allow_auto_rename
                 )
 
-            node = _node_from_uuid(uuid)
-            if node and not allow_auto_rename and _node_name(node) != clean_name:
+            node = _HierarchySyncInternal._node_from_uuid(uuid)
+            if (
+                node
+                and not allow_auto_rename
+                and _HierarchySyncInternal._node_name(node) != clean_name
+            ):
                 try:
                     actual = cmds.rename(node, clean_name)
-                    if _node_name(actual) != clean_name:
-                        self.logger.debug(f"Maya auto-renamed to: {_node_name(actual)}")
+                    if _HierarchySyncInternal._node_name(actual) != clean_name:
+                        self.logger.debug(
+                            f"Maya auto-renamed to: {_HierarchySyncInternal._node_name(actual)}"
+                        )
                 except RuntimeError:
                     pass
 
@@ -2611,7 +2671,9 @@ class ObjectSwapper(ptk.LoggingMixin):
             self.logger.warning(
                 f"Single-object integration failed for {clean_name}: {e}"
             )
-            self._place_at_root(_node_from_uuid(uuid) or obj, clean_name)
+            self._place_at_root(
+                _HierarchySyncInternal._node_from_uuid(uuid) or obj, clean_name
+            )
 
     # -- namespace guards ----------------------------------------------
 
@@ -2626,24 +2688,24 @@ class ObjectSwapper(ptk.LoggingMixin):
         """
         if not cmds.objExists(node_path):
             return None
-        uuid = _uuid_of(node_path)
-        if ":" not in _node_name(node_path):
-            return _node_from_uuid(uuid) or node_path
+        uuid = _HierarchySyncInternal._uuid_of(node_path)
+        if ":" not in _HierarchySyncInternal._node_name(node_path):
+            return _HierarchySyncInternal._node_from_uuid(uuid) or node_path
 
         locked = (cmds.lockNode(node_path, query=True, lock=True) or [False])[0]
         if locked:
             cmds.lockNode(node_path, lock=False)
         try:
-            _rename_node_removing_namespace(
+            _HierarchySyncInternal._rename_node_removing_namespace(
                 node_path, allow_maya_auto_rename=allow_auto_rename, logger=self.logger
             )
         finally:
-            node = _node_from_uuid(uuid)
+            node = _HierarchySyncInternal._node_from_uuid(uuid)
             if locked and node:
                 cmds.lockNode(node, lock=True)
 
-        node = _node_from_uuid(uuid)
-        if node and ":" in _node_name(node):
+        node = _HierarchySyncInternal._node_from_uuid(uuid)
+        if node and ":" in _HierarchySyncInternal._node_name(node):
             self.logger.warning(
                 f"Pulled node is still in an import namespace — namespace "
                 f"cleanup may delete it: {node}"
@@ -2655,7 +2717,7 @@ class ObjectSwapper(ptk.LoggingMixin):
     ) -> Optional[str]:
         """Force the node with *uuid* AND its descendants out of any import
         namespace (deepest-first so parent paths stay valid)."""
-        node = _node_from_uuid(uuid)
+        node = _HierarchySyncInternal._node_from_uuid(uuid)
         if not node:
             return None
         stuck = [
@@ -2666,8 +2728,10 @@ class ObjectSwapper(ptk.LoggingMixin):
             if ":" in d.rsplit("|", 1)[-1]
         ]
         for path in sorted(stuck, key=lambda p: p.count("|"), reverse=True):
-            self._force_rename_out_of_namespace(path, allow_auto_rename=allow_auto_rename)
-        node = _node_from_uuid(uuid)
+            self._force_rename_out_of_namespace(
+                path, allow_auto_rename=allow_auto_rename
+            )
+        node = _HierarchySyncInternal._node_from_uuid(uuid)
         if not node:
             return None
         return self._force_rename_out_of_namespace(
@@ -2687,7 +2751,7 @@ class ObjectSwapper(ptk.LoggingMixin):
         parents *obj* under the deepest ancestor (or at world).
         """
         original_path = cmds.ls(str(obj), l=True)[0]
-        cleaned = clean_hierarchy_path(original_path.lstrip("|"))
+        cleaned = HierarchySync.clean_hierarchy_path(original_path.lstrip("|"))
 
         if "|" not in cleaned:
             # Root-level object — just parent to world.
@@ -2708,9 +2772,11 @@ class ObjectSwapper(ptk.LoggingMixin):
 
     def _cleanup_namespaces(self, obj, *, allow_auto_rename: bool):
         """Strip temp-import namespaces from *obj*'s hierarchy and materials."""
-        if ":" not in str(obj).split('|')[-1]:
+        if ":" not in str(obj).split("|")[-1]:
             return
-        self.logger.debug(f"Removing namespace from hierarchy under {str(obj).split('|')[-1]}")
+        self.logger.debug(
+            f"Removing namespace from hierarchy under {str(obj).split('|')[-1]}"
+        )
         self._remove_namespace_from_hierarchy(
             obj, allow_maya_auto_rename=allow_auto_rename
         )
@@ -2728,8 +2794,8 @@ class ObjectSwapper(ptk.LoggingMixin):
         except RuntimeError:
             # Already at world.
             pass
-        if str(obj).split('|')[-1] != clean_name:
-            _rename(obj, clean_name)
+        if str(obj).split("|")[-1] != clean_name:
+            _HierarchySyncInternal._rename(obj, clean_name)
 
     def _remove_namespace_from_hierarchy(self, root_obj, allow_maya_auto_rename=False):
         """Remove namespace from an entire hierarchy of objects.
@@ -2753,7 +2819,7 @@ class ObjectSwapper(ptk.LoggingMixin):
 
             for obj in all_objects:
                 try:
-                    current_name = str(obj).split('|')[-1]
+                    current_name = str(obj).split("|")[-1]
                     if ":" in current_name:
                         # Remove namespace prefix
                         clean_name = current_name.split(":")[-1]
@@ -2762,7 +2828,9 @@ class ObjectSwapper(ptk.LoggingMixin):
                             # For "Add to Scene" mode: Let Maya handle naming automatically
                             # Maya will automatically add suffixes like INTERACTIVE1, INTERACTIVE2, etc.
                             try:
-                                final_path = _rename(obj, clean_name)
+                                final_path = _HierarchySyncInternal._rename(
+                                    obj, clean_name
+                                )
                                 final_name = str(final_path).split("|")[-1]
                                 if final_name != clean_name:
                                     self.logger.debug(
@@ -2779,11 +2847,12 @@ class ObjectSwapper(ptk.LoggingMixin):
                         else:
                             # For "Merge Hierarchies" mode: Use manual conflict resolution
                             # Only rename if the clean name doesn't already exist
-                            if (
-                                not cmds.objExists(clean_name)
-                                or _full_path(clean_name) == _full_path(obj)
-                            ):
-                                _rename(obj, clean_name)
+                            if not cmds.objExists(
+                                clean_name
+                            ) or _HierarchySyncInternal._full_path(
+                                clean_name
+                            ) == _HierarchySyncInternal._full_path(obj):
+                                _HierarchySyncInternal._rename(obj, clean_name)
                                 self.logger.debug(
                                     f"Renamed {current_name} to {clean_name}"
                                 )
@@ -2794,7 +2863,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                                 while cmds.objExists(unique_name):
                                     counter += 1
                                     unique_name = f"{clean_name}_{counter}"
-                                _rename(obj, unique_name)
+                                _HierarchySyncInternal._rename(obj, unique_name)
                                 self.logger.debug(
                                     f"Renamed {current_name} to {unique_name} (conflict resolved)"
                                 )
@@ -2838,8 +2907,7 @@ class ObjectSwapper(ptk.LoggingMixin):
                         try:
                             # Get shading engines connected to this shape
                             shading_groups = (
-                                cmds.listConnections(shape, type="shadingEngine")
-                                or []
+                                cmds.listConnections(shape, type="shadingEngine") or []
                             )
                             for sg in shading_groups:
                                 sg_name = str(sg).split("|")[-1]
@@ -2998,15 +3066,6 @@ __all__ = [
     "MayaObjectMatcher",
     "HierarchyMapBuilder",
     "MAYA_DEFAULT_CAMERAS",
-    "get_clean_node_name",
-    "get_clean_node_name_from_string",
-    "clean_hierarchy_path",
-    "format_component",
-    "is_default_maya_camera",
-    "should_keep_node_by_type",
-    "filter_path_map_by_cameras",
-    "filter_path_map_by_types",
-    "select_objects_in_maya",
 ]
 # --------------------------------------------------------------------------------------------
 

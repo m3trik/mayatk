@@ -25,12 +25,14 @@ engine -> temp payload removed on success, kept + logged on failure
 resolves without a running Maya. Requires a local Blender install (no license --
 unlike the reverse direction, the conversion is free and fast).
 """
+
 from __future__ import annotations
 
-import hashlib
 import os
 import re
-from typing import Any, Dict, List, Optional
+import shutil
+import sys
+from typing import Any, Dict, List, Optional, Sequence
 
 import pythontk as ptk
 from pythontk.core_utils import script_template as _templates
@@ -39,6 +41,7 @@ from mayatk.env_utils.blender_bridge._blender_bridge import _SPEC, _TEMPLATE_DIR
 
 _IMPORT_TEMPLATE = _TEMPLATE_DIR / "_import_scene.py"
 _IMPORT_TEMPLATE_USD = _TEMPLATE_DIR / "_import_scene_usd.py"
+_BAKE_TEMPLATE = _TEMPLATE_DIR / "_bake_scene.py"
 
 # Conversion intermediates by route: "fbx" = classic material model + texture-
 # manifest sidecar rebuilt via the GameShader engine; "usd" = native materials /
@@ -49,6 +52,16 @@ _TEMPLATES = {"fbx": _IMPORT_TEMPLATE, "usd": _IMPORT_TEMPLATE_USD}
 # Blender scene format bpy.ops.wm.open_mainfile accepts; FBX would be imported directly.
 SUPPORTED_EXTENSIONS = (".blend",)
 
+# Sources bake_scene turns into a referenceable .ma. A .blend needs the headless-Blender
+# conversion first; an .fbx is already the bake's own input, so it skips that hop.
+BAKE_SOURCE_EXTENSIONS = (".blend", ".fbx")
+
+# Sidecar written beside every bake naming the scene it came from. The Reference Manager
+# lists SOURCE rows but references the BAKED file, so "is this row referenced?" can only
+# be answered by walking back from a reference to its origin. On disk rather than in panel
+# settings so the mapping survives a session change and is shared by every panel.
+BAKE_SOURCE_SUFFIX = ".source.json"
+
 # USD sources short-circuit the whole pipeline: both DCCs speak USD natively,
 # so there is no conversion (and no Blender install) involved at all.
 USD_EXTENSIONS = ptk.USD_EXTENSIONS
@@ -58,51 +71,77 @@ USD_EXTENSIONS = ptk.USD_EXTENSIONS
 # Blender autoloads), then our rendered script.
 _LAUNCH_ARGS = ("--background", "--factory-startup", "--python")
 
-
-def _fbx_safe_name(name: str) -> str:
-    """*name* as Maya's FBX importer will spell it (illegal chars -> ``FBXASC###``).
-
-    Blender allows ``.`` / spaces / leading digits in datablock names
-    ("Material.001"); Maya's FBX plugin encodes each illegal character as
-    ``FBXASC`` + its 3-digit ASCII code, a leading digit included (verified
-    live against Maya 2025: ``dotted.001`` -> ``dottedFBXASC046001``,
-    ``1digit`` -> ``FBXASC049digit``).
-    """
-    out = []
-    for i, ch in enumerate(name):
-        legal = ("a" <= ch <= "z" or "A" <= ch <= "Z" or ch == "_"
-                 or (ch.isdigit() and i > 0))
-        out.append(ch if legal else "FBXASC%03d" % ord(ch))
-    return "".join(out)
+# Child-process env for the bake mayapy: skip the startup baggage a headless one-shot
+# baker never needs. userSetup.py is the big one on pipeline machines (it can bootstrap a
+# whole toolkit); the CIP/CER/CLIC analytics trio adds network round-trips. Mirror of the
+# blendertk side's conversion env.
+_FAST_MAYA_ENV = {
+    "MAYA_SKIP_USERSETUP_PY": "1",
+    "MAYA_DISABLE_CIP": "1",
+    "MAYA_DISABLE_CER": "1",
+    "MAYA_DISABLE_CLIC_IPM": "1",
+}
 
 
-def _maya_safe_name(name: str) -> str:
-    """A readable legal Maya node name for a REBUILT network (illegal -> ``_``).
+class _BlenderSceneImportInternal(object):
+    """Internal helpers for BlenderSceneImport."""
 
-    Distinct from :func:`_fbx_safe_name`: that models the importer for
-    *matching*; this is the cosmetic spelling for nodes we create ourselves.
-    """
-    safe = re.sub(r"[^0-9A-Za-z_]", "_", name) or "rebuilt_material"
-    return ("_" + safe) if safe[0].isdigit() else safe
+    @staticmethod
+    def _fbx_safe_name(name: str) -> str:
+        """*name* as Maya's FBX importer will spell it (illegal chars -> ``FBXASC###``).
+
+        Blender allows ``.`` / spaces / leading digits in datablock names
+        ("Material.001"); Maya's FBX plugin encodes each illegal character as
+        ``FBXASC`` + its 3-digit ASCII code, a leading digit included (verified
+        live against Maya 2025: ``dotted.001`` -> ``dottedFBXASC046001``,
+        ``1digit`` -> ``FBXASC049digit``).
+        """
+        out = []
+        for i, ch in enumerate(name):
+            legal = (
+                "a" <= ch <= "z"
+                or "A" <= ch <= "Z"
+                or ch == "_"
+                or (ch.isdigit() and i > 0)
+            )
+            out.append(ch if legal else "FBXASC%03d" % ord(ch))
+        return "".join(out)
+
+    @staticmethod
+    def _maya_safe_name(name: str) -> str:
+        """A readable legal Maya node name for a REBUILT network (illegal -> ``_``).
+
+        Distinct from :func:`_fbx_safe_name`: that models the importer for
+        *matching*; this is the cosmetic spelling for nodes we create ourselves.
+        """
+        safe = re.sub(r"[^0-9A-Za-z_]", "_", name) or "rebuilt_material"
+        return ("_" + safe) if safe[0].isdigit() else safe
+
+    @staticmethod
+    def _matches_fbx_name(candidate: str, want: str) -> bool:
+        """True when *candidate* is *want* modulo Maya's clash-rename digit suffix."""
+        if candidate == want:
+            return True
+        return candidate.startswith(want) and candidate[len(want) :].isdigit()
 
 
-def _matches_fbx_name(candidate: str, want: str) -> bool:
-    """True when *candidate* is *want* modulo Maya's clash-rename digit suffix."""
-    if candidate == want:
-        return True
-    return candidate.startswith(want) and candidate[len(want):].isdigit()
-
-
-class BlenderSceneImport(ptk.LoggingMixin):
+class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
     """Engine: convert a .blend to FBX via headless Blender, then import it.
 
     Scriptable and synchronous; async affordances belong to the calling UI layer.
     """
 
-    def __init__(self, blender_path: Optional[str] = None, log_level: str = "INFO"):
+    def __init__(
+        self,
+        blender_path: Optional[str] = None,
+        log_level: str = "INFO",
+        mayapy_path: Optional[str] = None,
+    ):
         super().__init__()
         self.logger.setLevel(log_level)
         self._blender_path = blender_path
+        # Host interpreter for the FBX -> .ma bake (see the mayapy_path property).
+        self._mayapy_path = mayapy_path
 
     # ------------------------------------------------------------------ discovery
     @property
@@ -123,6 +162,32 @@ class BlenderSceneImport(ptk.LoggingMixin):
             raise FileNotFoundError(_SPEC.app.not_found_message)
         return blender_exe
 
+    # ------------------------------------------------------------------ discovery (browser API)
+    @staticmethod
+    def find_scenes(
+        root_dir: str,
+        recursive: bool = False,
+        extensions: Optional[Sequence[str]] = None,
+    ) -> List[str]:
+        """Every importable Blender scene (``.blend``) under *root_dir* — sorted abs paths.
+
+        The discovery half of the import: pairs with :meth:`import_scene` so a browser can
+        list convertible Blender scenes with one call, using the SAME extension set the
+        importer accepts. USD sources are import-capable too but are not *Blender scenes*, so
+        they are intentionally excluded here. ``.blend1`` backups never match ``*.blend``.
+
+        *extensions* narrows or widens that default — a browser listing *bakeable* rows
+        passes :data:`BAKE_SOURCE_EXTENSIONS` (which adds ``.fbx``), or the subset the
+        user has enabled.
+        """
+        if not (root_dir and os.path.isdir(root_dir)):
+            return []
+        inc = [f"*{ext}" for ext in (extensions or SUPPORTED_EXTENSIONS)]
+        found = ptk.FileUtils.get_dir_contents(
+            root_dir, content="filepath", recursive=recursive, inc_files=inc
+        )
+        return sorted(os.path.normpath(p) for p in found)
+
     # ------------------------------------------------------------------ conversion
     @staticmethod
     def _template(via: str):
@@ -135,8 +200,13 @@ class BlenderSceneImport(ptk.LoggingMixin):
             ) from None
 
     def render_script(
-        self, src_path: str, out_path: str, *, via: str = "fbx",
-        embed_textures: bool = False, include_animation: bool = True,
+        self,
+        src_path: str,
+        out_path: str,
+        *,
+        via: str = "fbx",
+        embed_textures: bool = False,
+        include_animation: bool = True,
     ) -> str:
         """Render the Blender-side conversion script (exposed for tests/preview)."""
         context = {
@@ -153,11 +223,16 @@ class BlenderSceneImport(ptk.LoggingMixin):
         else:
             context["OUT_FBX"] = str(out_path).replace("\\", "/")
             context["EMBED_TEXTURES"] = repr(bool(embed_textures))
-        return _templates.render_template(self._template(via), context)
+        return _templates.ScriptTemplate.render_template(self._template(via), context)
 
     def convert(
-        self, src_path: str, out_path: str, *, via: str = "fbx",
-        timeout: float = 600, **script_opts: Any
+        self,
+        src_path: str,
+        out_path: str,
+        *,
+        via: str = "fbx",
+        timeout: float = 600,
+        **script_opts: Any,
     ) -> "ptk.ScriptRunResult":
         """Convert *src_path* to *out_path* in a fresh headless Blender (blocking)."""
         src = os.path.abspath(os.path.expandvars(str(src_path)))
@@ -184,7 +259,7 @@ class BlenderSceneImport(ptk.LoggingMixin):
     # Seam for tests (stub the Blender run without patching pythontk internals).
     @staticmethod
     def _run_script(app_exe, script_text, *, artifact, timeout, env=None):
-        return ptk.run_script_to_artifact(
+        return ptk.ScriptRunner.run_script_to_artifact(
             app_exe,
             script_text,
             artifact=artifact,
@@ -200,13 +275,33 @@ class BlenderSceneImport(ptk.LoggingMixin):
         the conversion template's own identity (per *via*) -- a template fix
         must invalidate stale cached payloads, or a retry after an upgrade
         replays the old bug."""
-        stat = os.stat(src)
-        tpl = os.stat(cls._template(via))
-        blob = (
-            f"{src}|{stat.st_mtime_ns}|{stat.st_size}|{sorted(script_opts.items())}"
-            f"|{tpl.st_mtime_ns}|{tpl.st_size}"
+        return ptk.CachedArtifact.key(
+            sorted(script_opts.items()), files=[src, cls._template(via)]
         )
-        return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
+
+    def _cached_conversion(
+        self,
+        src: str,
+        *,
+        via: str,
+        use_cache: bool,
+        timeout: float,
+        script_opts: Dict[str, Any],
+    ) -> "ptk.CachedArtifact.Result":
+        """The cached FBX/USD conversion of *src*, produced on a miss.
+
+        Shared by :meth:`import_scene` and :meth:`bake_scene`: both need the SAME
+        intermediate, so a scene that was already imported bakes without a second
+        Blender launch.
+        """
+        ext = ".usd" if via == "usd" else ".fbx"
+        self._template(via)  # validate the route before any work
+        return ptk.CachedArtifact("blender_to_mtk", extension=ext).get(
+            self._cache_key(src, script_opts, via),
+            lambda out: self.convert(src, out, via=via, timeout=timeout, **script_opts),
+            sidecars=(".manifest.json",),
+            use_cache=use_cache and os.path.isfile(src),
+        )
 
     # ------------------------------------------------------------------ import
     def import_scene(
@@ -268,48 +363,10 @@ class BlenderSceneImport(ptk.LoggingMixin):
             self.logger.info(f"Imported {len(imported)} object(s) from {src_path}.")
             return imported
 
-        ext = ".usd" if via == "usd" else ".fbx"
-        self._template(via)  # validate the route before any work
-        use_cache = use_cache and os.path.isfile(src)
-        cache_path = None
-        if use_cache:
-            store = ptk.TempArtifacts("blender_to_mtk_cache", policy="detached")
-            cache_path = store.path(
-                extension=ext, name=self._cache_key(src, script_opts, via)
-            )
-
-        tmp = None
-        if cache_path and os.path.isfile(cache_path) and os.path.getsize(cache_path) > 0:
-            out_path = cache_path
-            self.logger.info(
-                f"Conversion cache hit ({os.path.basename(cache_path)}) -- "
-                "skipping the Blender launch."
-            )
-        else:
-            # Conversion always targets scoped SCRATCH; a completed conversion
-            # is then atomically promoted into the cache slot. A timeout-killed
-            # partial write can therefore never poison the cache (the failure
-            # stays in scratch, kept + logged for debugging), and concurrent
-            # imports of the same scene can't interleave into one file.
-            tmp = ptk.TempArtifacts("blender_to_mtk", policy="scoped")
-            out_path = tmp.path(extension=ext)
-            tmp.register(out_path + ".manifest.json")
-            try:
-                self.convert(src, out_path, via=via, timeout=timeout, **script_opts)
-            except Exception:
-                if os.path.isfile(out_path):
-                    self.logger.warning(
-                        f"Keeping intermediate {via.upper()} for debugging: {out_path}"
-                    )
-                raise
-            if cache_path:
-                os.replace(out_path, cache_path)
-                if os.path.isfile(out_path + ".manifest.json"):
-                    os.replace(out_path + ".manifest.json",
-                               cache_path + ".manifest.json")
-                elif os.path.isfile(cache_path + ".manifest.json"):
-                    os.remove(cache_path + ".manifest.json")  # stale partial promote
-                out_path = cache_path
+        got = self._cached_conversion(
+            src, via=via, use_cache=use_cache, timeout=timeout, script_opts=script_opts
+        )
+        out_path, tmp = got.path, got.scratch
 
         # Sidecar the FBX template writes for the textures FBX cannot carry
         # (metallic/roughness/ao and the packed game-engine maps). The USD
@@ -342,6 +399,184 @@ class BlenderSceneImport(ptk.LoggingMixin):
         imported = self._transforms(new_nodes)
         self.logger.info(f"Imported {len(imported)} object(s) from {src_path}.")
         return imported
+
+    # ------------------------------------------------------------------ bake (FBX -> .ma)
+    @property
+    def mayapy_path(self) -> Optional[str]:
+        """The headless ``mayapy`` used for the bake — this host's own interpreter.
+
+        Unlike :attr:`blender_path` (a foreign app, discovered through an ``AppSpec``),
+        the bake runs the SAME Maya the panel runs in, so the interpreter ships beside
+        the running binary: ``sys.executable``'s ``bin`` dir, else ``MAYA_LOCATION/bin``.
+        """
+        if not self._mayapy_path:
+            candidates = []
+            if sys.executable:
+                candidates.append(os.path.dirname(sys.executable))
+            location = os.environ.get("MAYA_LOCATION")
+            if location:
+                candidates.append(os.path.join(location, "bin"))
+            name = "mayapy.exe" if os.name == "nt" else "mayapy"
+            for directory in candidates:
+                candidate = os.path.join(directory, name)
+                if os.path.isfile(candidate):
+                    self._mayapy_path = candidate
+                    break
+            else:
+                self._mayapy_path = shutil.which("mayapy")
+        return self._mayapy_path
+
+    @mayapy_path.setter
+    def mayapy_path(self, value: Optional[str]) -> None:
+        self._mayapy_path = value
+
+    def require_mayapy(self) -> str:
+        """Return :attr:`mayapy_path` or raise an error naming what's missing."""
+        mayapy = self.mayapy_path
+        if not mayapy:
+            raise FileNotFoundError(
+                "No mayapy interpreter found for the bake (not beside sys.executable, "
+                "not under MAYA_LOCATION/bin, not on PATH). Set "
+                "BlenderSceneImport.mayapy_path."
+            )
+        return mayapy
+
+    def render_bake_script(self, fbx_path: str, out_path: str) -> str:
+        """Render the Maya-side FBX->.ma bake script (exposed for tests/preview)."""
+        return _templates.ScriptTemplate.render_template(
+            _BAKE_TEMPLATE,
+            {
+                "SRC_FBX": str(fbx_path).replace("\\", "/"),
+                "OUT_MA": str(out_path).replace("\\", "/"),
+                # The child is the same Maya version, so the parent's sys.path entries
+                # are valid there -- this is what makes the shared manifest replay
+                # (mayatk in the child) reliable rather than best-effort.
+                "EXTRA_SYS_PATH": repr(list(sys.path)),
+            },
+        )
+
+    def bake(self, fbx_path: str, out_path: str, *, timeout: float = 600) -> Any:
+        """Bake *fbx_path* into the .ma at *out_path* in a fresh ``mayapy`` (blocking)."""
+        fbx = os.path.abspath(os.path.expandvars(str(fbx_path)))
+        if not os.path.isfile(fbx):
+            raise FileNotFoundError(f"FBX not found: {fbx}")
+        mayapy = self.require_mayapy()
+        self.logger.info(f"Baking {os.path.basename(fbx)} to .ma via {mayapy} ...")
+        env = dict(os.environ)
+        env.update(_FAST_MAYA_ENV)
+        result = self._run_bake_script(
+            mayapy,
+            self.render_bake_script(fbx, out_path),
+            artifact=out_path,
+            timeout=timeout,
+            env=env,
+        )
+        self.logger.info(
+            f"Baked to .ma in {result.duration:.1f}s "
+            f"({os.path.getsize(result.artifact) // 1024} KB)."
+        )
+        return result
+
+    # Seam for tests (stub the mayapy run without patching pythontk internals).
+    @staticmethod
+    def _run_bake_script(app_exe, script_text, *, artifact, timeout, env=None):
+        return ptk.ScriptRunner.run_script_to_artifact(
+            app_exe, script_text, artifact=artifact, timeout=timeout, env=env
+        )
+
+    def bake_scene(
+        self,
+        src_path: str,
+        *,
+        use_cache: bool = True,
+        timeout: float = 600,
+        **script_opts: Any,
+    ) -> str:
+        """Bake *src_path* to a cached ``.ma`` and return its path — the reference path.
+
+        Maya references FBX natively, so this is not a capability gap the way the
+        Blender side's is; it is deliberate **symmetry**. Both panels reference a cached
+        *native* scene, so the referenced-file surface (edits, namespaces, reload,
+        relocate, display overrides) behaves identically no matter which DCC the row came
+        from. A ``.blend`` is converted to FBX in a headless Blender (the cached
+        intermediate :meth:`import_scene` already uses), then baked to a ``.ma`` in a
+        headless ``mayapy``; an ``.fbx`` source skips straight to the bake.
+
+        Both stages are cached independently, and the bake's key includes the FBX's
+        identity **and the bake template's**, so a template fix invalidates stale bakes
+        (a retry after an upgrade must not replay the old bug).
+
+        Parameters:
+            src_path: A ``.blend`` / ``.fbx`` file.
+            use_cache: Reuse a prior conversion + bake of the identical source.
+            timeout: Max seconds for EACH headless stage.
+            **script_opts: Blender-side conversion knobs (``embed_textures`` /
+                ``include_animation``); inert for an ``.fbx`` source.
+
+        Returns:
+            str: Path to the cached ``.ma`` — pass it to ``cmds.file(reference=True)``.
+        """
+        src = os.path.abspath(os.path.expandvars(str(src_path)))
+        ext = os.path.splitext(src)[1].lower()
+        if ext not in BAKE_SOURCE_EXTENSIONS:
+            raise ValueError(
+                f"Unsupported bake source: {src} (expected {BAKE_SOURCE_EXTENSIONS})"
+            )
+        if not os.path.isfile(src):
+            raise FileNotFoundError(f"Scene not found: {src}")
+
+        if ext == ".fbx":
+            fbx_path, conversion = src, None
+        else:
+            conversion = self._cached_conversion(
+                src,
+                via="fbx",
+                use_cache=use_cache,
+                timeout=timeout,
+                script_opts=script_opts,
+            )
+            fbx_path = conversion.path
+
+        got = ptk.CachedArtifact("blender_bake_mtk", extension=".ma").get(
+            ptk.CachedArtifact.key(files=[fbx_path, _BAKE_TEMPLATE]),
+            lambda out: self.bake(fbx_path, out, timeout=timeout),
+            use_cache=use_cache,
+        )
+        # The FBX scratch is consumed once the bake has read it; the .ma scratch is NOT
+        # cleaned up -- the caller references that file, so it must outlive this call
+        # (an uncached bake therefore lives under the scoped store's stale sweep).
+        if conversion is not None and conversion.scratch is not None:
+            conversion.scratch.cleanup()
+        # Rewritten on a cache hit too: cheap, and it self-heals a sidecar lost to a
+        # partial sweep (without it the panel silently forgets the row is referenced).
+        self._write_bake_source(got.path, src)
+        self.logger.info(f"Baked {src_path} -> {got.path}")
+        return got.path
+
+    def _write_bake_source(self, baked_path: str, src: str) -> None:
+        """Record beside *baked_path* which foreign scene it was baked from."""
+        import json
+
+        try:
+            with open(baked_path + BAKE_SOURCE_SUFFIX, "w", encoding="utf-8") as fh:
+                json.dump({"source": os.path.abspath(src)}, fh)
+        except OSError as e:  # cosmetic bookkeeping — never fail a completed bake
+            self.logger.debug(f"Could not write the bake source sidecar: {e}")
+
+    @staticmethod
+    def bake_source(baked_path: str) -> Optional[str]:
+        """The foreign scene *baked_path* was baked from, or None if it is not a bake.
+
+        The inverse of :meth:`bake_scene` — lets a browser map a reference back to the
+        source row the user actually sees.
+        """
+        import json
+
+        try:
+            with open(baked_path + BAKE_SOURCE_SUFFIX, "r", encoding="utf-8") as fh:
+                return json.load(fh).get("source") or None
+        except (OSError, ValueError):
+            return None
 
     # ------------------------------------------------------------------ Maya side
     @staticmethod
@@ -391,7 +626,9 @@ class BlenderSceneImport(ptk.LoggingMixin):
             with open(manifest_path, "r", encoding="utf-8") as fh:
                 manifest = json.load(fh)
         except Exception as e:
-            self.logger.warning(f"Texture manifest unreadable ({e}); keeping FBX materials.")
+            self.logger.warning(
+                f"Texture manifest unreadable ({e}); keeping FBX materials."
+            )
             return
         if not isinstance(manifest, dict):
             self.logger.warning("Texture manifest malformed; keeping FBX materials.")
@@ -413,14 +650,19 @@ class BlenderSceneImport(ptk.LoggingMixin):
         by_short: Dict[str, List[str]] = {}
         for node in cmds.ls(new_nodes, type="transform") or []:
             short = node.split("|")[-1].split(":")[-1]
-            by_short.setdefault(_fbx_safe_name(short), []).append(node)
+            by_short.setdefault(
+                _BlenderSceneImportInternal._fbx_safe_name(short), []
+            ).append(node)
 
         entries = manifest.get("materials", [])
         # Every entry's exact FBX-spelled target. The clash-rename suffix match
         # below must never claim a name that is ANOTHER entry's exact target --
         # "M_test" (renamed by the importer) must not steal "M_test2"'s SGs.
-        wants = {_fbx_safe_name(e.get("fbx_material") or "") for e in entries
-                 if isinstance(e, dict)}
+        wants = {
+            _BlenderSceneImportInternal._fbx_safe_name(e.get("fbx_material") or "")
+            for e in entries
+            if isinstance(e, dict)
+        }
         # Nor a name that truly exists in the .blend at all: the importer only
         # renames on CLASH, so an exact .blend spelling seen among the imported
         # SGs is its own material -- an UNTEXTURED "Mat2" beside textured "Mat"
@@ -428,7 +670,7 @@ class BlenderSceneImport(ptk.LoggingMixin):
         # to Mat2" and get repainted with Mat's rebuilt textures. Older
         # manifests lack the key; the entries-only guard above still applies.
         wants |= {
-            _fbx_safe_name(n)
+            _BlenderSceneImportInternal._fbx_safe_name(n)
             for n in manifest.get("scene_materials", [])
             if isinstance(n, str)
         }
@@ -439,8 +681,10 @@ class BlenderSceneImport(ptk.LoggingMixin):
             if want in sgs_by_material:
                 return {want: sgs_by_material[want]}
             return {
-                short: sgs for short, sgs in sgs_by_material.items()
-                if _matches_fbx_name(short, want) and short not in wants
+                short: sgs
+                for short, sgs in sgs_by_material.items()
+                if _BlenderSceneImportInternal._matches_fbx_name(short, want)
+                and short not in wants
             }
 
         for entry in entries:
@@ -477,7 +721,9 @@ class BlenderSceneImport(ptk.LoggingMixin):
                 # with a digit suffix). Renderable sets are exclusive, so
                 # forceElement moves per-face assignments intact -- the Maya
                 # analogue of blendertk's slot-level swap.
-                want = _fbx_safe_name(entry.get("fbx_material") or "")
+                want = _BlenderSceneImportInternal._fbx_safe_name(
+                    entry.get("fbx_material") or ""
+                )
                 replaced, swapped = [], 0
                 if want:
                     for short, sgs in target_sgs(want).items():
@@ -486,10 +732,14 @@ class BlenderSceneImport(ptk.LoggingMixin):
                             if members:
                                 cmds.sets(members, forceElement=new_sg)
                                 swapped += 1
-                            old_mats = cmds.listConnections(
-                                f"{old_sg}.surfaceShader", source=True,
-                                destination=False,
-                            ) or []
+                            old_mats = (
+                                cmds.listConnections(
+                                    f"{old_sg}.surfaceShader",
+                                    source=True,
+                                    destination=False,
+                                )
+                                or []
+                            )
                             for old in old_mats:
                                 if old not in replaced:
                                     replaced.append(old)
@@ -503,12 +753,17 @@ class BlenderSceneImport(ptk.LoggingMixin):
 
                 # Fallback (importer renamed the material): whole-object assign.
                 targets = [
-                    node for member in entry.get("objects", [])
-                    for node in by_short.get(_fbx_safe_name(member), [])
+                    node
+                    for member in entry.get("objects", [])
+                    for node in by_short.get(
+                        _BlenderSceneImportInternal._fbx_safe_name(member), []
+                    )
                 ]
                 if not targets:
                     self._purge_rebuilt(new_sg)  # nothing to attach it to
-                    self.logger.warning(f"{name}: no matching shading group or object found.")
+                    self.logger.warning(
+                        f"{name}: no matching shading group or object found."
+                    )
                     continue
                 cmds.sets(targets, forceElement=new_sg)
                 self.logger.info(
@@ -551,7 +806,7 @@ class BlenderSceneImport(ptk.LoggingMixin):
         # names -- sanitize for the created network (matching elsewhere uses
         # the manifest strings, so this is cosmetic only).
         node = GameShader(log_level="WARNING").create_network(
-            files, name=_maya_safe_name(name), **kwargs
+            files, name=_BlenderSceneImportInternal._maya_safe_name(name), **kwargs
         )
         if not node:
             return None
@@ -578,7 +833,8 @@ class BlenderSceneImport(ptk.LoggingMixin):
                 if any(cmds.sets(sg, query=True) for sg in sgs):
                     continue  # still assigned somewhere -- keep it
                 textures = [
-                    n for n in (cmds.listHistory(mat) or [])
+                    n
+                    for n in (cmds.listHistory(mat) or [])
                     if n != mat
                     and cmds.nodeType(n) in ("file", "place2dTexture", "bump2d")
                 ]
@@ -596,9 +852,12 @@ class BlenderSceneImport(ptk.LoggingMixin):
         import maya.cmds as cmds
 
         try:
-            mats = cmds.listConnections(
-                f"{sg}.surfaceShader", source=True, destination=False
-            ) or []
+            mats = (
+                cmds.listConnections(
+                    f"{sg}.surfaceShader", source=True, destination=False
+                )
+                or []
+            )
             self._purge_orphans(mats)
             if cmds.objExists(sg):
                 cmds.delete(sg)
@@ -617,6 +876,16 @@ def import_blender_scene(src_path: str, **kwargs: Any) -> List[str]:
     return BlenderSceneImport().import_scene(src_path, **kwargs)
 
 
-__all__ = ["BlenderSceneImport", "import_blender_scene"]
+def bake_blender_scene(src_path: str, **kwargs: Any) -> str:
+    """Bake a foreign scene (.blend/.fbx) to a cached .ma and return its path.
+
+    Convenience wrapper over :meth:`BlenderSceneImport.bake_scene` -- the referenceable
+    counterpart of :func:`import_blender_scene`: pass the result to
+    ``cmds.file(..., reference=True)`` (or ``ReferenceManager.add_reference``) to
+    REFERENCE a foreign scene instead of importing it. A ``.blend`` source requires a
+    local Blender install; an ``.fbx`` does not.
+    """
+    return BlenderSceneImport().bake_scene(src_path, **kwargs)
 
 
+__all__ = ["BlenderSceneImport", "import_blender_scene", "bake_blender_scene"]

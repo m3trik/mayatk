@@ -10,11 +10,15 @@ Architecturally mirrors :mod:`mayatk.mat_utils.marmoset_bridge`:
 * :mod:`connection` -- live process I/O (stdout / log tail / RPC).
 
 Marmoset's templates are Python scripts executed by Toolbag's ``-run`` flag.
-Painter has no analogous CLI; its automation surface is ``--mesh`` + the
-``--enable-remote-scripting`` JSON-RPC port. So Substance templates are
-*descriptive* (metadata constants parsed via :mod:`ast`, not executed) and
-the bridge translates them into a launch + optional RPC dispatch.
+Painter has no analogous CLI; its automation surface is ``--mesh`` at launch
+plus the HTTP endpoint served by our Painter-side ``substance_rpc`` plugin
+(see :mod:`substance_bridge.substance_rpc`; installed automatically on send).
+So Substance templates are *descriptive* (metadata constants parsed via
+:mod:`ast`, not executed) and the bridge translates them into a launch +
+optional RPC dispatch (structured ``RPC_OPS`` and/or a legacy-JS
+``RPC_SCRIPT`` routed through ``substance_painter.js.evaluate``).
 """
+
 import ast
 import json
 import logging
@@ -33,11 +37,8 @@ from pythontk.str_utils._str_utils import StrUtils
 
 from mayatk.env_utils.fbx_utils import FbxUtils
 from mayatk.mat_utils.mat_manifest import MatManifest
-from mayatk.mat_utils.substance_bridge.connection import (
-    default_log_path,
-    find_painter_exe,
-    SubstanceConnection,
-)
+from mayatk.mat_utils.substance_bridge.connection import SubstanceConnection
+from mayatk.mat_utils.substance_bridge.substance_rpc import DEFAULT_RPC_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -103,15 +104,25 @@ _TEMPLATE_FIELDS = (
     "BRIDGE_MODES",
     "LAUNCH_ARGS",
     "RPC_SCRIPT",
+    "RPC_OPS",
     "BUILD_MANIFEST",
     "TARGET_INSTANCE",
     "FBX_OPTIONS",
     "EXPORT_FBX",
+    "REUSE_RECORDED_EXPORT",
+    "NO_CONNECTION_HINT",
 )
 _TEMPLATE_DEFAULTS: Dict[str, Any] = {
     "BRIDGE_MODES": (SEND_TO,),
     "LAUNCH_ARGS": [],
+    # Legacy-JS body dispatched via the plugin's ``js.evaluate`` op
+    # (Painter's ``substance_painter.js.evaluate`` -- the ``alg.*`` API).
     "RPC_SCRIPT": "",
+    # Structured RPC calls: ``[("op.name", {"kwarg": value}), ...]``.
+    # Dispatched (in order, before RPC_SCRIPT) via the substance_rpc
+    # plugin's ``{op, kwargs}`` wire. String kwarg values get the same
+    # ``__KEY__`` substitution as LAUNCH_ARGS (raw, unquoted).
+    "RPC_OPS": [],
     "BUILD_MANIFEST": False,
     "TARGET_INSTANCE": TARGET_AUTO,
     "FBX_OPTIONS": {},
@@ -120,113 +131,33 @@ _TEMPLATE_DEFAULTS: Dict[str, Any] = {
     # about the Maya selection. The slot also relaxes its "nothing selected"
     # guard in that case.
     "EXPORT_FBX": True,
+    # When True, the export overwrites the FBX path recorded (in the Maya
+    # scene's fileInfo) by the previous send instead of re-deriving it --
+    # so a reimport hits the exact file the open Painter project points
+    # at, surviving Maya restarts and Output Dir drift.
+    "REUSE_RECORDED_EXPORT": False,
+    # Logged (after __KEY__ substitution) when the template needs a live
+    # Painter connection and none is reachable. Turns a dead-end error
+    # into user instructions -- e.g. "reload the mesh manually".
+    "NO_CONNECTION_HINT": "",
 }
-
-
-def list_templates() -> List[Path]:
-    """Return user-visible templates in ``templates/`` (skips underscore-prefixed)."""
-    return sorted(
-        p for p in _TEMPLATE_DIR.glob("*.py") if not p.stem.startswith("_")
-    )
 
 
 _TEMPLATE_TYPES: Dict[str, type] = {
     "BRIDGE_MODES": (tuple, list),  # normalized to tuple below
     "LAUNCH_ARGS": list,
     "RPC_SCRIPT": str,
+    "RPC_OPS": list,
     "BUILD_MANIFEST": bool,
     "TARGET_INSTANCE": str,
     "FBX_OPTIONS": dict,
     "EXPORT_FBX": bool,
+    "REUSE_RECORDED_EXPORT": bool,
+    "NO_CONNECTION_HINT": str,
 }
 
 
-def parse_template(template_path: Path) -> Dict[str, Any]:
-    """Read a template's metadata constants without executing the file.
-
-    Returns a dict with ``BRIDGE_MODES`` / ``LAUNCH_ARGS`` / ``RPC_SCRIPT`` /
-    ``BUILD_MANIFEST`` keys, falling back to :data:`_TEMPLATE_DEFAULTS`
-    for any constant the template omits or sets to a wrong type.
-
-    Parsing uses :func:`ast.literal_eval` so malformed templates can't
-    import-crash other templates. Each parsed value is type-checked against
-    :data:`_TEMPLATE_TYPES`; mismatches are logged and the default is used,
-    so a single bad template never silently produces a broken launch line.
-    """
-    out: Dict[str, Any] = dict(_TEMPLATE_DEFAULTS)
-    try:
-        tree = ast.parse(template_path.read_text(encoding="utf-8"))
-    except (OSError, SyntaxError) as e:
-        logger.warning("Could not parse template %s: %s", template_path, e)
-        return out
-    for node in tree.body:
-        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
-            continue
-        target = node.targets[0]
-        if not isinstance(target, ast.Name) or target.id not in _TEMPLATE_FIELDS:
-            continue
-        try:
-            value = ast.literal_eval(node.value)
-        except (ValueError, SyntaxError):
-            logger.warning(
-                "Template %s: %s is not a literal; using default.",
-                template_path.name, target.id,
-            )
-            continue
-        expected = _TEMPLATE_TYPES.get(target.id)
-        if expected is not None and not isinstance(value, expected):
-            logger.warning(
-                "Template %s: %s has type %s, expected %s; using default.",
-                template_path.name, target.id, type(value).__name__, expected,
-            )
-            continue
-        out[target.id] = value
-    # Normalize BRIDGE_MODES to a tuple of valid mode strings.
-    modes = tuple(
-        m for m in out.get("BRIDGE_MODES", ()) if isinstance(m, str) and m in _MODES
-    )
-    out["BRIDGE_MODES"] = modes or (SEND_TO,)
-    # LAUNCH_ARGS must be a list of strings -- coerce non-strings or fall back.
-    if not all(isinstance(a, str) for a in out["LAUNCH_ARGS"]):
-        logger.warning(
-            "Template %s: LAUNCH_ARGS contains non-string entries; using default.",
-            template_path.name,
-        )
-        out["LAUNCH_ARGS"] = list(_TEMPLATE_DEFAULTS["LAUNCH_ARGS"])
-    # Normalize TARGET_INSTANCE to a known mode; fall back to default.
-    if out["TARGET_INSTANCE"] not in _TARGETS:
-        logger.warning(
-            "Template %s: TARGET_INSTANCE=%r is not one of %s; using default.",
-            template_path.name, out["TARGET_INSTANCE"], _TARGETS,
-        )
-        out["TARGET_INSTANCE"] = _TEMPLATE_DEFAULTS["TARGET_INSTANCE"]
-    return out
-
-
-def list_template_modes() -> List[Tuple[str, str]]:
-    """Return ``[(stem, mode), ...]`` for every (template, mode) pairing."""
-    out: List[Tuple[str, str]] = []
-    for path in list_templates():
-        for mode in parse_template(path)["BRIDGE_MODES"]:
-            out.append((path.stem, mode))
-    return out
-
-
 # -- Painter log resolution (mirror of marmoset's version-aware resolver) --
-
-
-def resolve_painter_log_path(painter_exe: Optional[str] = None) -> Optional[str]:
-    """Return the path to Painter's application log.
-
-    Painter (unlike Toolbag) doesn't version its install directory name, so
-    the log path is just ``%LOCALAPPDATA%\\Adobe\\Adobe Substance 3D Painter\\log.txt``.
-    *painter_exe* is accepted for shape-parity with marmoset's resolver and
-    as an extension point if Adobe ever ships versioned install dirs.
-
-    Implementation delegates to :func:`connection.default_log_path` -- single
-    source of truth for the log file location.
-    """
-    return default_log_path()
 
 
 # -- Bridge ----------------------------------------------------------------
@@ -279,7 +210,7 @@ class SubstanceBridge(ptk.HandoffBridge):
         """Resolve the Painter executable path via :func:`find_painter_exe`."""
         if self._painter_path:
             return self._painter_path
-        found = find_painter_exe()
+        found = SubstanceConnection.find_painter_exe()
         if found:
             self._painter_path = found
         return found
@@ -291,7 +222,7 @@ class SubstanceBridge(ptk.HandoffBridge):
     @property
     def painter_log_path(self) -> Optional[str]:
         """Path to Painter's application ``log.txt``, or *None* if absent."""
-        return resolve_painter_log_path(self.painter_path)
+        return SubstanceBridge.resolve_painter_log_path(self.painter_path)
 
     # -- Managed-instance registry ----------------------------------------
 
@@ -384,14 +315,32 @@ class SubstanceBridge(ptk.HandoffBridge):
             )
             return live
 
+        # Registry miss: probe the default RPC port. A Painter with the
+        # substance_rpc plugin answers here even when this bridge (or this
+        # Maya session) didn't launch it -- the discovery that makes
+        # "current" work across Maya restarts and user-launched Painters.
+        try:
+            conn = SubstanceConnection.attach(
+                port=DEFAULT_RPC_PORT, verify_timeout=1.0
+            )
+        except ConnectionRefusedError:
+            conn = None
+        if conn is not None:
+            self.logger.info(
+                "Attached to running Painter on port %d.", DEFAULT_RPC_PORT
+            )
+            self._instances.append(conn)
+            return conn
+
         if target == TARGET_CURRENT:
             self.logger.error(
-                "No live managed Painter instance to target. Launch one first "
-                "(e.g. send the 'import' template) or pass target='new'."
+                "No running Painter with the substance_rpc plugin is "
+                "reachable. Launch one first (e.g. send the 'import' "
+                "template) or pass target='new'."
             )
             return None
 
-        # target == auto, registry empty: launch.
+        # target == auto, nothing reachable: launch.
         return self._launch_new(launch_args, wants_rpc, painter_exe)
 
     def _launch_new(
@@ -465,14 +414,21 @@ class SubstanceBridge(ptk.HandoffBridge):
 
         Returns:
             A result dict with ``fbx``, ``mode``, ``connection`` (the
-            :class:`SubstanceConnection`), and -- for roundtrip --
-            ``rpc_result`` (parsed JSON-RPC response). *None* on failure.
+            :class:`SubstanceConnection`, or *None* on a hint-declaring
+            template's graceful fallback), ``output_dir``, ``delivered``
+            (False when the RPC leg was skipped or failed on a
+            ``send_to`` template), and -- for RPC templates --
+            ``rpc_results`` (one value per ``RPC_OPS`` entry) and/or
+            ``rpc_result`` (the ``RPC_SCRIPT`` return). *None* on
+            failure.
         """
         # Swallow legacy kwargs without surprises.
         legacy_kwargs.pop("headless", None)
         legacy_kwargs.pop("enable_remote", None)
         if legacy_kwargs:
-            self.logger.warning("Unknown send() kwargs ignored: %s", list(legacy_kwargs))
+            self.logger.warning(
+                "Unknown send() kwargs ignored: %s", list(legacy_kwargs)
+            )
 
         # Pack the Painter-specific knobs into the request extras and run the
         # shared skeleton (resolve -> preflight -> produce -> deliver).
@@ -501,14 +457,14 @@ class SubstanceBridge(ptk.HandoffBridge):
         """Validate the template / mode / target before exporting."""
         template_path = _TEMPLATE_DIR / f"{request.template}.py"
         if not template_path.is_file():
-            available = sorted(p.stem for p in list_templates())
+            available = sorted(p.stem for p in SubstanceBridge.list_templates())
             self.logger.error(
                 f"Template '{request.template}' not found at {template_path}. "
                 f"Available: {available}"
             )
             return False
 
-        meta = parse_template(template_path)
+        meta = SubstanceBridge.parse_template(template_path)
         if request.mode not in meta["BRIDGE_MODES"]:
             self.logger.error(
                 f"Template '{request.template}' does not support mode "
@@ -521,6 +477,16 @@ class SubstanceBridge(ptk.HandoffBridge):
         except ValueError as e:
             self.logger.error(str(e))
             return False
+
+        # Narrow the default "auto" to the template's declared target so a
+        # 'current'-only template (e.g. reimport) never silently launches a
+        # fresh Painter, and a 'new'-only template never grabs a stale one.
+        # An explicit user choice (validated compatible above) still wins.
+        if request.get("target") == TARGET_AUTO and meta["TARGET_INSTANCE"] in (
+            TARGET_NEW,
+            TARGET_CURRENT,
+        ):
+            request.extras["target"] = meta["TARGET_INSTANCE"]
 
         # Carry the parsed metadata + path forward (parsed once).
         request.extras["_meta"] = meta
@@ -535,11 +501,38 @@ class SubstanceBridge(ptk.HandoffBridge):
         output_dir = request.get("output_dir") or os.path.join(
             tempfile.gettempdir(), "maya_substance_bridge"
         )
-        os.makedirs(output_dir, exist_ok=True)
 
-        base = request.get("output_name") or self._scene_base_name()
-        base = StrUtils.sanitize(base, preserve_case=True)
-        fbx_path = os.path.join(output_dir, f"{base}.fbx")
+        # Reimport-style templates overwrite the exact file the open Painter
+        # project was created from -- the path recorded in the scene's
+        # fileInfo by the previous send -- rather than re-deriving it (which
+        # would drift if the Output Dir resolves differently this session).
+        recorded_fbx = (
+            self._recorded_export_path()
+            if meta.get("REUSE_RECORDED_EXPORT")
+            else None
+        )
+        if recorded_fbx:
+            fbx_path = recorded_fbx
+            recorded_dir = os.path.dirname(recorded_fbx)
+            if recorded_dir:
+                output_dir = recorded_dir
+            base = os.path.splitext(os.path.basename(recorded_fbx))[0]
+            self.logger.info(
+                "Overwriting the previously sent mesh (recorded in scene "
+                "fileInfo): %s",
+                fbx_path,
+            )
+        else:
+            if meta.get("REUSE_RECORDED_EXPORT"):
+                self.logger.info(
+                    "No previously recorded export for this scene; deriving "
+                    "the path from the scene name. Painter's project must "
+                    "point at the same file for the reload to apply."
+                )
+            base = request.get("output_name") or self._scene_base_name()
+            base = StrUtils.sanitize(base, preserve_case=True)
+            fbx_path = os.path.join(output_dir, f"{base}.fbx")
+        os.makedirs(output_dir, exist_ok=True)
         manifest_path = os.path.join(output_dir, f"{base}.materials.json")
 
         # -- FBX export ----------------------------------------------------
@@ -569,6 +562,9 @@ class SubstanceBridge(ptk.HandoffBridge):
             self.logger.info(
                 f'FBX written: <a href="action://open?path={fbx_path}">{fbx_path}</a>'
             )
+            # Remember where this scene's mesh went so a later reimport --
+            # even from a fresh Maya session -- overwrites the same file.
+            self._record_export_path(fbx_path)
         else:
             self.logger.info(
                 "Template declares EXPORT_FBX=False; skipping Maya FBX export."
@@ -579,14 +575,14 @@ class SubstanceBridge(ptk.HandoffBridge):
         # widget AND the user left it on -- otherwise a stale value in the
         # panel doesn't pollute an unrelated template (e.g. ``render.py``).
         from mayatk.mat_utils.substance_bridge import parameters as _params
-        referenced = _params.referenced_keys(
+
+        referenced = _params.Parameters.referenced_keys(
             template_path.read_text(encoding="utf-8")
         )
-        merged_params = _params.defaults()
+        merged_params = _params.Parameters.defaults()
         merged_params.update(request.params or {})
-        include_textures = (
-            "PAINTER_INCLUDE_TEXTURES" in referenced
-            and bool(merged_params.get("PAINTER_INCLUDE_TEXTURES", True))
+        include_textures = "PAINTER_INCLUDE_TEXTURES" in referenced and bool(
+            merged_params.get("PAINTER_INCLUDE_TEXTURES", True)
         )
         # Resolve scope once -- shared by texture staging and manifest build.
         # Skipped entirely when neither needs it so render.py-style templates
@@ -611,7 +607,7 @@ class SubstanceBridge(ptk.HandoffBridge):
             with open(manifest_path, "w", encoding="utf-8") as fh:
                 json.dump(manifest, fh, indent=2)
             self.logger.info(
-                f'Manifest written: '
+                f"Manifest written: "
                 f'<a href="action://open?path={manifest_path}">{manifest_path}</a>'
             )
 
@@ -652,14 +648,23 @@ class SubstanceBridge(ptk.HandoffBridge):
         if "--mesh" in launch_args:
             for tex_path in staged_textures:
                 launch_args.extend(["--mesh-map", tex_path])
-            merged_params = _params.defaults()
+            merged_params = _params.Parameters.defaults()
             merged_params.update(request.params or {})
-            if (
-                "PAINTER_SPLIT_BY_UDIM" in referenced
-                and bool(merged_params.get("PAINTER_SPLIT_BY_UDIM", False))
+            if "PAINTER_SPLIT_BY_UDIM" in referenced and bool(
+                merged_params.get("PAINTER_SPLIT_BY_UDIM", False)
             ):
                 launch_args.append("--split-by-udim")
         rpc_script = StrUtils.replace_delimited(meta["RPC_SCRIPT"], js_ctx)
+        rpc_ops = self._render_rpc_ops(meta["RPC_OPS"], cli_ctx)
+        no_connection_hint = StrUtils.replace_delimited(
+            meta.get("NO_CONNECTION_HINT", ""), cli_ctx
+        ).strip()
+
+        # RPC needs the Painter-side substance_rpc plugin. Install (or
+        # refresh) it now so any Painter launched below -- and every future
+        # launch -- serves the endpoint. Idempotent and cheap when present.
+        wants_rpc = mode == ROUNDTRIP or bool(rpc_script.strip()) or bool(rpc_ops)
+        self.ensure_rpc_plugin()
 
         # -- Resolve target connection ------------------------------------
         # The template's LAUNCH_ARGS is authoritative for any fresh launch.
@@ -668,12 +673,27 @@ class SubstanceBridge(ptk.HandoffBridge):
         # already validated in preflight). The per-call ``painter_exe``
         # overrides the bridge default only for fresh launches; reused/attached
         # instances use whatever Painter is already running.
-        wants_rpc = mode == ROUNDTRIP or bool(rpc_script.strip())
         connection = self._resolve_connection(
-            request.get("target"), launch_args, wants_rpc,
+            request.get("target"),
+            launch_args,
+            wants_rpc,
             painter_exe=request.get("painter_exe"),
         )
         if connection is None:
+            # A template that declares a fallback hint degrades gracefully:
+            # the produce phase already did its useful work (e.g. reimport's
+            # FBX overwrite), so surface the manual next step instead of
+            # discarding the run.
+            if no_connection_hint:
+                self.logger.warning(no_connection_hint)
+                self._announce_handoff(request.template, mode, fbx_path, output_dir)
+                return {
+                    "fbx": fbx_path,
+                    "mode": mode,
+                    "connection": None,
+                    "output_dir": output_dir,
+                    "delivered": False,
+                }
             return None
 
         result: Dict[str, Any] = {
@@ -681,25 +701,42 @@ class SubstanceBridge(ptk.HandoffBridge):
             "mode": mode,
             "connection": connection,
             "output_dir": output_dir,
+            "delivered": True,
         }
         if meta["BUILD_MANIFEST"]:
             result["manifest"] = manifest_path
 
         # -- Optional RPC dispatch ----------------------------------------
-        if rpc_script.strip() and connection.rpc is not None:
+        # RPC_OPS first (structured {op, kwargs} calls), then RPC_SCRIPT
+        # (legacy-JS body via the plugin's js.evaluate shim).
+        if (rpc_ops or rpc_script.strip()) and connection.rpc is not None:
             self.logger.info("Waiting for Painter RPC to become ready ...")
             if not connection.rpc.wait_until_ready(timeout=60):
-                self.logger.error("Painter RPC port never came up.")
+                self.logger.error(
+                    "Painter RPC never came up. The substance_rpc plugin is "
+                    "installed but not active in this Painter: tick it once "
+                    "in Painter's Python menu (use Python > Reload Plugins "
+                    "Folder if it isn't listed yet) -- Painter remembers it."
+                )
+                if no_connection_hint:
+                    self.logger.warning(no_connection_hint)
+                result["delivered"] = False
                 if mode == ROUNDTRIP:
                     connection.close()
                     return None
             else:
-                self.logger.info("Sending template RPC script ...")
                 try:
-                    rpc_result = connection.rpc.eval_js(rpc_script)
-                    result["rpc_result"] = rpc_result
+                    for op_name, op_kwargs in rpc_ops:
+                        self.logger.info(f"RPC: {op_name} ...")
+                        result.setdefault("rpc_results", []).append(
+                            connection.rpc.invoke(op_name, **op_kwargs)
+                        )
+                    if rpc_script.strip():
+                        self.logger.info("Sending template RPC script ...")
+                        result["rpc_result"] = connection.rpc.eval_js(rpc_script)
                 except Exception as e:
                     self.logger.error(f"RPC dispatch failed: {e}")
+                    result["delivered"] = False
                     if mode == ROUNDTRIP:
                         connection.close()
                         return None
@@ -708,6 +745,84 @@ class SubstanceBridge(ptk.HandoffBridge):
         return result
 
     # -- Helpers ----------------------------------------------------------
+
+    #: Scene fileInfo key holding the last exported FBX path (saved with the
+    #: scene, so a reimport from a later Maya session still finds it).
+    EXPORT_RECORD_KEY = "substance_bridge_last_fbx"
+
+    def ensure_rpc_plugin(self) -> None:
+        """Install the Painter-side substance_rpc plugin if it isn't already.
+
+        Idempotent (symlink-first via :class:`pythontk` PluginInstaller).
+        Failure is non-fatal -- the send continues and RPC-dependent steps
+        fall back to their hints -- but is logged so the user knows why a
+        one-click reimport didn't happen.
+        """
+        try:
+            from mayatk.mat_utils.substance_bridge.substance_rpc import Installer
+
+            if Installer.is_installed():
+                return
+            dest = Installer.install()
+            if dest is None:
+                self.logger.warning(
+                    "Could not resolve Painter's plugins folder; install the "
+                    "substance_rpc plugin manually (see substance_rpc/installer.py)."
+                )
+                return
+            self.logger.info(
+                f"Installed Painter RPC plugin: {dest}. To activate it: in "
+                "Painter, use Python > Reload Plugins Folder (or relaunch "
+                "Painter), then ensure 'substance_rpc' is ticked in the "
+                "Python menu -- Painter remembers it after the first time."
+            )
+        except Exception as e:  # noqa: BLE001 -- never block the handoff
+            self.logger.warning(f"substance_rpc plugin install failed: {e}")
+
+    @classmethod
+    def _recorded_export_path(cls) -> Optional[str]:
+        """Return the FBX path recorded by the last export, or ``None``."""
+        try:
+            values = cmds.fileInfo(cls.EXPORT_RECORD_KEY, query=True)
+        except Exception:  # noqa: BLE001 -- no Maya / no scene
+            return None
+        if not values or not values[0]:
+            return None
+        return values[0].replace("\\", "/")
+
+    @classmethod
+    def _record_export_path(cls, fbx_path: str) -> None:
+        """Persist *fbx_path* in the scene's fileInfo (forward slashes)."""
+        try:
+            cmds.fileInfo(cls.EXPORT_RECORD_KEY, fbx_path.replace("\\", "/"))
+        except Exception as e:  # noqa: BLE001 -- recording is best-effort
+            logger.debug("Could not record export path in fileInfo: %s", e)
+
+    @staticmethod
+    def _render_rpc_ops(
+        rpc_ops: List[Tuple[str, Dict[str, Any]]], context: Dict[str, str]
+    ) -> List[Tuple[str, Dict[str, Any]]]:
+        """Render ``__KEY__`` placeholders inside each op's string kwargs.
+
+        Non-string kwarg values (bools, numbers, lists) pass through
+        untouched -- they're already typed JSON values on the wire.
+        """
+        rendered: List[Tuple[str, Dict[str, Any]]] = []
+        for op_name, op_kwargs in rpc_ops:
+            rendered.append(
+                (
+                    op_name,
+                    {
+                        k: (
+                            StrUtils.replace_delimited(v, context)
+                            if isinstance(v, str)
+                            else v
+                        )
+                        for k, v in op_kwargs.items()
+                    },
+                )
+            )
+        return rendered
 
     @staticmethod
     def _scene_base_name() -> str:
@@ -734,7 +849,7 @@ class SubstanceBridge(ptk.HandoffBridge):
         """
         from mayatk.mat_utils.substance_bridge import parameters as _params
 
-        merged = _params.defaults()
+        merged = _params.Parameters.defaults()
         merged.update(params or {})
 
         internal: Dict[str, str] = {
@@ -745,10 +860,10 @@ class SubstanceBridge(ptk.HandoffBridge):
         }
 
         cli_ctx = dict(internal)
-        cli_ctx.update(_params.render_cli_context(merged))
+        cli_ctx.update(_params.Parameters.render_cli_context(merged))
 
         js_ctx = dict(internal)
-        js_ctx.update(_params.render_js_context(merged))
+        js_ctx.update(_params.Parameters.render_js_context(merged))
         return cli_ctx, js_ctx
 
     @staticmethod
@@ -829,7 +944,7 @@ class SubstanceBridge(ptk.HandoffBridge):
                 continue
             base = os.path.basename(src)
             if prefix and base.startswith(prefix):
-                base = base[len(prefix):]
+                base = base[len(prefix) :]
             dst = os.path.join(output_dir, f"{prefix}{base}")
             try:
                 if os.path.abspath(src) != os.path.abspath(dst):
@@ -852,20 +967,139 @@ class SubstanceBridge(ptk.HandoffBridge):
         """
         if os.path.isfile(fbx_path):
             self.logger.info(
-                f'[{template}/{mode}] FBX: '
+                f"[{template}/{mode}] FBX: "
                 f'<a href="action://open?path={fbx_path}">{fbx_path}</a>'
             )
         else:
-            self.logger.info(f'[{template}/{mode}] (no FBX export)')
+            self.logger.info(f"[{template}/{mode}] (no FBX export)")
         self.logger.info(
-            f'Output folder: '
-            f'<a href="action://open?path={output_dir}">{output_dir}</a>'
+            f'Output folder: <a href="action://open?path={output_dir}">{output_dir}</a>'
         )
         log = self.painter_log_path
         if log:
             self.logger.info(
                 f'Painter log: <a href="action://open?path={log}">{log}</a>'
             )
+
+    @staticmethod
+    def list_templates() -> List[Path]:
+        """Return user-visible templates in ``templates/`` (skips underscore-prefixed)."""
+        return sorted(
+            p for p in _TEMPLATE_DIR.glob("*.py") if not p.stem.startswith("_")
+        )
+
+    @staticmethod
+    def parse_template(template_path: Path) -> Dict[str, Any]:
+        """Read a template's metadata constants without executing the file.
+
+        Returns a dict with ``BRIDGE_MODES`` / ``LAUNCH_ARGS`` / ``RPC_SCRIPT`` /
+        ``BUILD_MANIFEST`` keys, falling back to :data:`_TEMPLATE_DEFAULTS`
+        for any constant the template omits or sets to a wrong type.
+
+        Parsing uses :func:`ast.literal_eval` so malformed templates can't
+        import-crash other templates. Each parsed value is type-checked against
+        :data:`_TEMPLATE_TYPES`; mismatches are logged and the default is used,
+        so a single bad template never silently produces a broken launch line.
+        """
+        out: Dict[str, Any] = dict(_TEMPLATE_DEFAULTS)
+        try:
+            tree = ast.parse(template_path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError) as e:
+            logger.warning("Could not parse template %s: %s", template_path, e)
+            return out
+        for node in tree.body:
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            if not isinstance(target, ast.Name) or target.id not in _TEMPLATE_FIELDS:
+                continue
+            try:
+                value = ast.literal_eval(node.value)
+            except (ValueError, SyntaxError):
+                logger.warning(
+                    "Template %s: %s is not a literal; using default.",
+                    template_path.name,
+                    target.id,
+                )
+                continue
+            expected = _TEMPLATE_TYPES.get(target.id)
+            if expected is not None and not isinstance(value, expected):
+                logger.warning(
+                    "Template %s: %s has type %s, expected %s; using default.",
+                    template_path.name,
+                    target.id,
+                    type(value).__name__,
+                    expected,
+                )
+                continue
+            out[target.id] = value
+        # Normalize BRIDGE_MODES to a tuple of valid mode strings.
+        modes = tuple(
+            m for m in out.get("BRIDGE_MODES", ()) if isinstance(m, str) and m in _MODES
+        )
+        out["BRIDGE_MODES"] = modes or (SEND_TO,)
+        # LAUNCH_ARGS must be a list of strings -- coerce non-strings or fall back.
+        if not all(isinstance(a, str) for a in out["LAUNCH_ARGS"]):
+            logger.warning(
+                "Template %s: LAUNCH_ARGS contains non-string entries; using default.",
+                template_path.name,
+            )
+            out["LAUNCH_ARGS"] = list(_TEMPLATE_DEFAULTS["LAUNCH_ARGS"])
+        # RPC_OPS must be a list of (op_name, kwargs_dict) pairs -- normalize
+        # list-shaped pairs to tuples; any malformed entry voids the field so
+        # a half-broken template can't dispatch a partial op sequence.
+        ops_norm: List[Tuple[str, Dict[str, Any]]] = []
+        for entry in out["RPC_OPS"]:
+            if (
+                isinstance(entry, (tuple, list))
+                and len(entry) == 2
+                and isinstance(entry[0], str)
+                and isinstance(entry[1], dict)
+            ):
+                ops_norm.append((entry[0], dict(entry[1])))
+            else:
+                logger.warning(
+                    "Template %s: RPC_OPS entry %r is not an "
+                    "(op_name, kwargs_dict) pair; ignoring RPC_OPS.",
+                    template_path.name,
+                    entry,
+                )
+                ops_norm = []
+                break
+        out["RPC_OPS"] = ops_norm
+        # Normalize TARGET_INSTANCE to a known mode; fall back to default.
+        if out["TARGET_INSTANCE"] not in _TARGETS:
+            logger.warning(
+                "Template %s: TARGET_INSTANCE=%r is not one of %s; using default.",
+                template_path.name,
+                out["TARGET_INSTANCE"],
+                _TARGETS,
+            )
+            out["TARGET_INSTANCE"] = _TEMPLATE_DEFAULTS["TARGET_INSTANCE"]
+        return out
+
+    @staticmethod
+    def list_template_modes() -> List[Tuple[str, str]]:
+        """Return ``[(stem, mode), ...]`` for every (template, mode) pairing."""
+        out: List[Tuple[str, str]] = []
+        for path in SubstanceBridge.list_templates():
+            for mode in SubstanceBridge.parse_template(path)["BRIDGE_MODES"]:
+                out.append((path.stem, mode))
+        return out
+
+    @staticmethod
+    def resolve_painter_log_path(painter_exe: Optional[str] = None) -> Optional[str]:
+        """Return the path to Painter's application log.
+
+        Painter (unlike Toolbag) doesn't version its install directory name, so
+        the log path is just ``%LOCALAPPDATA%\\Adobe\\Adobe Substance 3D Painter\\log.txt``.
+        *painter_exe* is accepted for shape-parity with marmoset's resolver and
+        as an extension point if Adobe ever ships versioned install dirs.
+
+        Implementation delegates to :func:`connection.default_log_path` -- single
+        source of truth for the log file location.
+        """
+        return SubstanceConnection.default_log_path()
 
 
 # -----------------------------------------------------------------------------

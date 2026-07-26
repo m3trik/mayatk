@@ -5,10 +5,9 @@ try:
 except ImportError:
     cmds = None
 
-from typing import List, Union, Optional
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
@@ -180,7 +179,10 @@ class Snap(ptk.HelpMixin):
                 # Get the transform node for vertex access
                 transform = source
                 if cmds.objectType(transform) == "mesh":
-                    transform = (cmds.listRelatives(transform, parent=True, fullPath=True) or [None])[0]
+                    transform = (
+                        cmds.listRelatives(transform, parent=True, fullPath=True)
+                        or [None]
+                    )[0]
 
                 for i in range(len(new_points)):
                     old_pt = points[i]
@@ -217,9 +219,9 @@ class Snap(ptk.HelpMixin):
             int: Number of items that were snapped.
         """
         if objects is None:
-            objects = cmds.ls(sl=True, flatten=True)
+            objects = cmds.ls(sl=True, flatten=True, long=True)
         else:
-            objects = cmds.ls(objects, flatten=True)
+            objects = cmds.ls(objects, flatten=True, long=True)
 
         if not objects:
             cmds.warning("No objects selected for grid snapping.")
@@ -259,7 +261,9 @@ class Snap(ptk.HelpMixin):
                         new_pos[i] = round(pos[i] / grid_size) * grid_size
                 # Calculate the delta and move
                 delta = [new_pos[i] - pos[i] for i in range(3)]
-                cmds.move(delta[0], delta[1], delta[2], obj, relative=True, worldSpace=True)
+                cmds.move(
+                    delta[0], delta[1], delta[2], obj, relative=True, worldSpace=True
+                )
                 snap_count += 1
 
         return snap_count
@@ -275,26 +279,35 @@ class SnapSlots:
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Snap",
                 body="Snap vertices to other vertices, surfaces, or world grid. "
                 "Each button has an option box (▸) for its per-tool parameters.",
                 sections=[
-                    ("Snap to Surface", [
-                        "Select source mesh(es) first, then the target mesh last.",
-                        "Source verts are projected onto the target surface.",
-                        "Option box: <b>Offset</b>, <b>Threshold</b>, <b>Invert</b>.",
-                    ]),
-                    ("Snap to Closest Vertex", [
-                        "Select exactly two meshes: source first, target last.",
-                        "Source verts within <b>Tolerance</b> snap to the "
-                        "closest target vert.",
-                    ]),
-                    ("Snap to Grid", [
-                        "Select transforms or components.",
-                        "Option box: <b>Grid Size</b> + per-axis filter (X/Y/Z).",
-                        "Components snap their positions; transforms snap their pivots.",
-                    ]),
+                    (
+                        "Snap to Surface",
+                        [
+                            "Select source mesh(es) first, then the target mesh last.",
+                            "Source verts are projected onto the target surface.",
+                            "Option box: <b>Offset</b>, <b>Threshold</b>, <b>Invert</b>.",
+                        ],
+                    ),
+                    (
+                        "Snap to Closest Vertex",
+                        [
+                            "Select exactly two meshes: source first, target last.",
+                            "Source verts within <b>Tolerance</b> snap to the "
+                            "closest target vert.",
+                        ],
+                    ),
+                    (
+                        "Snap to Grid",
+                        [
+                            "Select transforms or components.",
+                            "Option box: <b>Grid Size</b> + per-axis filter (X/Y/Z).",
+                            "Components snap their positions; transforms snap their pivots.",
+                        ],
+                    ),
                 ],
             )
         )

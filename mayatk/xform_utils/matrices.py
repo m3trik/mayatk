@@ -64,84 +64,6 @@ _SINGULAR_MATRIX_ATTRS = frozenset(
 )
 
 
-def get_matrix(node: str, attr: str = "worldMatrix", index: int = 0) -> List[float]:
-    """Return a 16-element flat list for a matrix attribute on *node*.
-
-    Multi-instance matrix attrs (``worldMatrix``, ``parentInverseMatrix``,
-    etc.) are indexed with ``[index]`` automatically — calling
-    ``cmds.getAttr("node.worldMatrix")`` without an index is ambiguous and
-    warns/errors in modern Maya. Singular plugs (``matrix``,
-    ``offsetParentMatrix``) are read directly.
-    """
-    if attr in _SINGULAR_MATRIX_ATTRS:
-        plug = f"{node}.{attr}"
-    else:
-        plug = f"{node}.{attr}[{index}]"
-    return cmds.getAttr(plug)
-
-
-def set_matrix(node: str, attr: str, value, index: int = 0) -> None:
-    """Set a matrix attribute on *node* from an MMatrix or 16-element iterable.
-
-    *value* may be:
-
-    * an ``MMatrix`` (anything exposing ``getElement(r, c)``), or
-    * any iterable of 16 floats (``list``, ``tuple``,
-      ``MTransformationMatrix.asMatrix()`` flattened upstream, …).
-
-    Multi-instance attrs are indexed via *index* (default 0); singular
-    attrs ignore the index.
-    """
-    if attr in _SINGULAR_MATRIX_ATTRS:
-        plug = f"{node}.{attr}"
-    else:
-        plug = f"{node}.{attr}[{index}]"
-    if hasattr(value, "getElement"):
-        flat = [value.getElement(r, c) for r in range(4) for c in range(4)]
-    else:
-        flat = list(value)
-    if len(flat) != 16:
-        raise ValueError(
-            f"set_matrix expected 16 elements, got {len(flat)} for {plug}"
-        )
-    cmds.setAttr(plug, *flat, type="matrix")
-
-
-def _quat_to_euler_xyz_deg(quat: "MQuaternion") -> Tuple[float, float, float]:
-    """Convert an MQuaternion into XYZ Euler angles in degrees."""
-
-    if quat is None:
-        return 0.0, 0.0, 0.0
-
-    x = quat.x
-    y = quat.y
-    z = quat.z
-    w = quat.w
-
-    # Roll (X-axis rotation)
-    sinr_cosp = 2.0 * (w * x + y * z)
-    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
-
-    # Pitch (Y-axis rotation)
-    sinp = 2.0 * (w * y - z * x)
-    if abs(sinp) >= 1.0:
-        pitch = math.copysign(math.pi / 2.0, sinp)
-    else:
-        pitch = math.asin(sinp)
-
-    # Yaw (Z-axis rotation)
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    yaw = math.atan2(siny_cosp, cosy_cosp)
-
-    return (
-        math.degrees(roll),
-        math.degrees(pitch),
-        math.degrees(yaw),
-    )
-
-
 # --------------------------------------------------------------------------------------------
 # Exceptions
 # --------------------------------------------------------------------------------------------
@@ -195,7 +117,7 @@ class _MatrixMath:
             return matrix_like
         # Node name string — get world matrix via cmds
         if isinstance(matrix_like, str):
-            return MMatrix(get_matrix(matrix_like, "worldMatrix"))
+            return MMatrix(Matrices.get_matrix(matrix_like, "worldMatrix"))
         # List/tuple of 16 values
         if hasattr(matrix_like, "__len__") and len(matrix_like) == 16:
             return MMatrix(matrix_like)
@@ -217,7 +139,7 @@ class _MatrixMath:
         Example:
             >>> local_mx = Matrices.local_matrix("pCube1")
         """
-        return MMatrix(get_matrix(node, "matrix"))
+        return MMatrix(Matrices.get_matrix(node, "matrix"))
 
     @staticmethod
     def from_srt(
@@ -298,14 +220,14 @@ class _MatrixMath:
                 # Fallback to quaternion conversion
                 try:
                     quat = tm.rotation(asQuaternion=True)
-                    rotation_deg = _quat_to_euler_xyz_deg(quat)
+                    rotation_deg = _MatricesInternal._quat_to_euler_xyz_deg(quat)
                 except Exception:
                     rotation_deg = (0.0, 0.0, 0.0)
         else:
             # MEulerRotation not available - use quaternion fallback
             try:
                 quat = tm.rotation(asQuaternion=True)
-                rotation_deg = _quat_to_euler_xyz_deg(quat)
+                rotation_deg = _MatricesInternal._quat_to_euler_xyz_deg(quat)
             except Exception:
                 rotation_deg = (0.0, 0.0, 0.0)
 
@@ -462,7 +384,7 @@ class _DagTransforms:
             >>> world_mx = Matrices.to_mmatrix("driver")
             >>> Matrices.set_offset_parent_matrix("arm_CTL", world_mx)
         """
-        set_matrix(node, "offsetParentMatrix", m)
+        Matrices.set_matrix(node, "offsetParentMatrix", m)
 
     @staticmethod
     def bake_world_matrix_to_transform(
@@ -487,15 +409,18 @@ class _DagTransforms:
 
         # Reset offsetParentMatrix if requested
         if reset_offset_parent_matrix:
-            set_matrix(node, "offsetParentMatrix", MMatrix())
+            Matrices.set_matrix(node, "offsetParentMatrix", MMatrix())
 
         # Localize the world-space target into the node's parent (and any existing
         # offsetParentMatrix) space so the resulting worldMatrix matches ``m``.
         # Maya evaluates worldMatrix = local * offsetParentMatrix * parentWorld,
         # so local = m * parentInverse [* offsetParentMatrix.inverse()].
-        local = m * MMatrix(get_matrix(node, "parentInverseMatrix"))
+        local = m * MMatrix(Matrices.get_matrix(node, "parentInverseMatrix"))
         if not reset_offset_parent_matrix:
-            local = local * MMatrix(get_matrix(node, "offsetParentMatrix")).inverse()
+            local = (
+                local
+                * MMatrix(Matrices.get_matrix(node, "offsetParentMatrix")).inverse()
+            )
 
         tm = MTransformationMatrix(local)
         t = tm.translation(SPACE_WORLD)
@@ -513,13 +438,13 @@ class _DagTransforms:
             except Exception:
                 try:
                     quat = tm.rotation(asQuaternion=True)
-                    rotation_deg = _quat_to_euler_xyz_deg(quat)
+                    rotation_deg = _MatricesInternal._quat_to_euler_xyz_deg(quat)
                 except Exception:
                     rotation_deg = (0.0, 0.0, 0.0)
         else:
             try:
                 quat = tm.rotation(asQuaternion=True)
-                rotation_deg = _quat_to_euler_xyz_deg(quat)
+                rotation_deg = _MatricesInternal._quat_to_euler_xyz_deg(quat)
             except Exception:
                 rotation_deg = (0.0, 0.0, 0.0)
 
@@ -540,8 +465,8 @@ class _DagTransforms:
             >>> Matrices.freeze_to_offset_parent_matrix("offset_CTL")
             >>> # Now translate/rotate/scale are zero but world position unchanged
         """
-        wm = MMatrix(get_matrix(node, "worldMatrix"))
-        parent_inv = MMatrix(get_matrix(node, "parentInverseMatrix"))
+        wm = MMatrix(Matrices.get_matrix(node, "worldMatrix"))
+        parent_inv = MMatrix(Matrices.get_matrix(node, "parentInverseMatrix"))
 
         # Compute local matrix: local = world * parent_inverse
         local_m = wm * parent_inv
@@ -552,7 +477,7 @@ class _DagTransforms:
         cmds.setAttr(f"{node}.scale", 1.0, 1.0, 1.0, type="double3")
 
         # Bake into offsetParentMatrix
-        set_matrix(node, "offsetParentMatrix", local_m)
+        Matrices.set_matrix(node, "offsetParentMatrix", local_m)
 
 
 class _NodeBuilders:
@@ -572,7 +497,11 @@ class _NodeBuilders:
         Example:
             >>> mmx = Matrices.ensure_node("multMatrix", name="arm_MMX")
         """
-        return cmds.createNode(node_type, name=name) if name else cmds.createNode(node_type)
+        return (
+            cmds.createNode(node_type, name=name)
+            if name
+            else cmds.createNode(node_type)
+        )
 
     @staticmethod
     def build_mult_matrix_chain(
@@ -630,9 +559,15 @@ class _NodeBuilders:
             >>> Matrices.drive_with_offset_parent_matrix("driver_GRP", "arm_CTL", name="arm_drive")
         """
         mmx = _NodeBuilders.ensure_node("multMatrix", name=f"{name}_MMX")
-        cmds.connectAttr(f"{driver_world}.worldMatrix[0]", f"{mmx}.matrixIn[0]", force=True)
-        cmds.connectAttr(f"{driven_ctl}.parentInverseMatrix[0]", f"{mmx}.matrixIn[1]", force=True)
-        cmds.connectAttr(f"{mmx}.matrixSum", f"{driven_ctl}.offsetParentMatrix", force=True)
+        cmds.connectAttr(
+            f"{driver_world}.worldMatrix[0]", f"{mmx}.matrixIn[0]", force=True
+        )
+        cmds.connectAttr(
+            f"{driven_ctl}.parentInverseMatrix[0]", f"{mmx}.matrixIn[1]", force=True
+        )
+        cmds.connectAttr(
+            f"{mmx}.matrixSum", f"{driven_ctl}.offsetParentMatrix", force=True
+        )
 
         return mmx
 
@@ -684,14 +619,20 @@ class _NodeBuilders:
             # Convert space to local: space_world * control_parent_inverse
             mmx = _NodeBuilders.ensure_node("multMatrix", name=f"{name}_{i:02d}_MMX")
             cmds.connectAttr(f"{sp}.worldMatrix[0]", f"{mmx}.matrixIn[0]", force=True)
-            cmds.connectAttr(f"{control}.parentInverseMatrix[0]", f"{mmx}.matrixIn[1]", force=True)
-            cmds.connectAttr(f"{mmx}.matrixSum", f"{blnd}.target[{i}].targetMatrix", force=True)
+            cmds.connectAttr(
+                f"{control}.parentInverseMatrix[0]", f"{mmx}.matrixIn[1]", force=True
+            )
+            cmds.connectAttr(
+                f"{mmx}.matrixSum", f"{blnd}.target[{i}].targetMatrix", force=True
+            )
 
             # First space is active by default
             cmds.setAttr(f"{blnd}.target[{i}].weight", 1.0 if i == 0 else 0.0)
 
         # Connect blendMatrix output to control
-        cmds.connectAttr(f"{blnd}.outputMatrix", f"{control}.offsetParentMatrix", force=True)
+        cmds.connectAttr(
+            f"{blnd}.outputMatrix", f"{control}.offsetParentMatrix", force=True
+        )
 
         # Create condition nodes to drive blend weights based on enum selection
         for i in range(len(space_parents)):
@@ -701,7 +642,9 @@ class _NodeBuilders:
             cmds.setAttr(f"{cond}.operation", 0)  # equal
             cmds.setAttr(f"{cond}.colorIfTrueR", 1.0)
             cmds.setAttr(f"{cond}.colorIfFalseR", 0.0)
-            cmds.connectAttr(f"{cond}.outColorR", f"{blnd}.target[{i}].weight", force=True)
+            cmds.connectAttr(
+                f"{cond}.outColorR", f"{blnd}.target[{i}].weight", force=True
+            )
 
         return blnd
 
@@ -746,7 +689,9 @@ class _NodeBuilders:
 
         # Connect inputs
         cmds.connectAttr(f"{source}.worldMatrix[0]", f"{aim}.inputMatrix", force=True)
-        cmds.connectAttr(f"{target}.worldMatrix[0]", f"{aim}.primaryTargetMatrix", force=True)
+        cmds.connectAttr(
+            f"{target}.worldMatrix[0]", f"{aim}.primaryTargetMatrix", force=True
+        )
         cmds.setAttr(f"{aim}.primaryInputAxis", *primary_axis, type="double3")
 
         # Secondary axis setup. aimMatrix.secondaryMode enum: 0=None, 1=Aim, 2=Align.
@@ -757,7 +702,11 @@ class _NodeBuilders:
         cmds.setAttr(f"{aim}.secondaryInputAxis", *secondary_axis, type="double3")
 
         if up_object:
-            cmds.connectAttr(f"{up_object}.worldMatrix[0]", f"{aim}.secondaryTargetMatrix", force=True)
+            cmds.connectAttr(
+                f"{up_object}.worldMatrix[0]",
+                f"{aim}.secondaryTargetMatrix",
+                force=True,
+            )
 
         return aim
 
@@ -822,15 +771,21 @@ class _NodeBuilders:
 
         # Set up IK as blend target
         cmds.connectAttr(ik_mx_attr, f"{blnd}.target[1].targetMatrix", force=True)
-        cmds.connectAttr(f"{switch_attr_owner}.{switch_attr}", f"{blnd}.target[1].weight", force=True)
+        cmds.connectAttr(
+            f"{switch_attr_owner}.{switch_attr}", f"{blnd}.target[1].weight", force=True
+        )
 
         # Inverse weight for FK (when IK increases, FK decreases)
         rev = _NodeBuilders.ensure_node("reverse", name=f"{name}_REV")
-        cmds.connectAttr(f"{switch_attr_owner}.{switch_attr}", f"{rev}.inputX", force=True)
+        cmds.connectAttr(
+            f"{switch_attr_owner}.{switch_attr}", f"{rev}.inputX", force=True
+        )
         cmds.connectAttr(f"{rev}.outputX", f"{blnd}.target[0].weight", force=True)
 
         # Drive control
-        cmds.connectAttr(f"{mmx}.matrixSum", f"{out_target_ctl}.offsetParentMatrix", force=True)
+        cmds.connectAttr(
+            f"{mmx}.matrixSum", f"{out_target_ctl}.offsetParentMatrix", force=True
+        )
 
         return blnd
 
@@ -840,7 +795,48 @@ class _NodeBuilders:
 # --------------------------------------------------------------------------------------------
 
 
-class Matrices(_MatrixMath, _DagTransforms, _NodeBuilders, ptk.HelpMixin):
+class _MatricesInternal(object):
+    """Internal helpers for Matrices."""
+
+    @staticmethod
+    def _quat_to_euler_xyz_deg(quat: "MQuaternion") -> Tuple[float, float, float]:
+        """Convert an MQuaternion into XYZ Euler angles in degrees."""
+
+        if quat is None:
+            return 0.0, 0.0, 0.0
+
+        x = quat.x
+        y = quat.y
+        z = quat.z
+        w = quat.w
+
+        # Roll (X-axis rotation)
+        sinr_cosp = 2.0 * (w * x + y * z)
+        cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+        roll = math.atan2(sinr_cosp, cosr_cosp)
+
+        # Pitch (Y-axis rotation)
+        sinp = 2.0 * (w * y - z * x)
+        if abs(sinp) >= 1.0:
+            pitch = math.copysign(math.pi / 2.0, sinp)
+        else:
+            pitch = math.asin(sinp)
+
+        # Yaw (Z-axis rotation)
+        siny_cosp = 2.0 * (w * z + x * y)
+        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+
+        return (
+            math.degrees(roll),
+            math.degrees(pitch),
+            math.degrees(yaw),
+        )
+
+
+class Matrices(
+    _MatrixMath, _DagTransforms, _NodeBuilders, ptk.HelpMixin, _MatricesInternal
+):
     """Matrix utilities for Maya rigging and animation.
 
     Provides pure math operations (using Maya API) and node graph builders
@@ -853,6 +849,49 @@ class Matrices(_MatrixMath, _DagTransforms, _NodeBuilders, ptk.HelpMixin):
     """
 
     pass
+
+    @staticmethod
+    def get_matrix(node: str, attr: str = "worldMatrix", index: int = 0) -> List[float]:
+        """Return a 16-element flat list for a matrix attribute on *node*.
+
+        Multi-instance matrix attrs (``worldMatrix``, ``parentInverseMatrix``,
+        etc.) are indexed with ``[index]`` automatically — calling
+        ``cmds.getAttr("node.worldMatrix")`` without an index is ambiguous and
+        warns/errors in modern Maya. Singular plugs (``matrix``,
+        ``offsetParentMatrix``) are read directly.
+        """
+        if attr in _SINGULAR_MATRIX_ATTRS:
+            plug = f"{node}.{attr}"
+        else:
+            plug = f"{node}.{attr}[{index}]"
+        return cmds.getAttr(plug)
+
+    @staticmethod
+    def set_matrix(node: str, attr: str, value, index: int = 0) -> None:
+        """Set a matrix attribute on *node* from an MMatrix or 16-element iterable.
+
+        *value* may be:
+
+        * an ``MMatrix`` (anything exposing ``getElement(r, c)``), or
+        * any iterable of 16 floats (``list``, ``tuple``,
+          ``MTransformationMatrix.asMatrix()`` flattened upstream, …).
+
+        Multi-instance attrs are indexed via *index* (default 0); singular
+        attrs ignore the index.
+        """
+        if attr in _SINGULAR_MATRIX_ATTRS:
+            plug = f"{node}.{attr}"
+        else:
+            plug = f"{node}.{attr}[{index}]"
+        if hasattr(value, "getElement"):
+            flat = [value.getElement(r, c) for r in range(4) for c in range(4)]
+        else:
+            flat = list(value)
+        if len(flat) != 16:
+            raise ValueError(
+                f"set_matrix expected 16 elements, got {len(flat)} for {plug}"
+            )
+        cmds.setAttr(plug, *flat, type="matrix")
 
 
 # --------------------------------------------------------------------------------------------

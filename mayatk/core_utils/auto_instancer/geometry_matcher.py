@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Geometry analysis and matching logic for AutoInstancer."""
+
 from __future__ import annotations
 
 import logging
@@ -15,92 +16,11 @@ except ImportError:
     pass
 
 import pythontk as ptk
-from mayatk.core_utils._core_utils import CoreUtils, leaf_name, get_bounding_box
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.xform_utils._xform_utils import get_translation, get_object_matrix
+from mayatk.xform_utils._xform_utils import XformUtils
 
 logger = logging.getLogger(__name__)
-
-
-def _mfn(shape):
-    """Return an ``MFnMesh`` for *shape* via the canonical CoreUtils helper."""
-    return CoreUtils.get_mfn_mesh(shape, api_version=2)
-
-
-def mesh_points(shape, world: bool = False):
-    """``MPointArray`` for *shape*. Object space by default."""
-    space = om.MSpace.kWorld if world else om.MSpace.kObject
-    return _mfn(shape).getPoints(space)
-
-
-def mesh_triangles(shape):
-    """``(counts, indices)`` from ``MFnMesh.getTriangles``, as plain lists."""
-    counts, indices = _mfn(shape).getTriangles()
-    return list(counts), list(indices)
-
-
-def mesh_uv_set_names(shape):
-    return list(_mfn(shape).getUVSetNames())
-
-
-def mesh_get_uvs(shape, uv_set=None):
-    fn = _mfn(shape)
-    return fn.getUVs(uv_set) if uv_set is not None else fn.getUVs()
-
-
-def mesh_num_uvs(shape, uv_set=None):
-    fn = _mfn(shape)
-    return fn.numUVs(uv_set) if uv_set is not None else fn.numUVs()
-
-
-def _np_to_mmatrix(m: np.ndarray) -> "om.MMatrix":
-    """Build an ``om.MMatrix`` from a 4x4 numpy array.
-
-    Maya stores matrices in row-major order with translation in row 3,
-    matching Maya's native layout. ``om.MMatrix(iterable)`` consumes 16
-    floats in the same order, so ``ndarray.flatten()`` is a direct mapping.
-    """
-    return om.MMatrix(m.flatten().tolist())
-
-
-def _is_mesh_shape(shape: Optional[str]) -> bool:
-    if not shape:
-        return False
-    try:
-        return cmds.objectType(shape) == "mesh"
-    except Exception:
-        return False
-
-
-def calculate_mesh_volume(node: str) -> float:
-    """Calculate mesh volume using the divergence theorem (numpy)."""
-    try:
-        if cmds.objectType(node) == "transform":
-            shape = NodeUtils.get_shape(node)
-        else:
-            shape = node
-
-        if not _is_mesh_shape(shape):
-            return 0.0
-
-        # MFnMesh.getTriangles -> (counts, indices). Indices are flat triplets.
-        _, indices = mesh_triangles(shape)
-        pts = mesh_points(shape, world=True)
-        points = np.array([(p.x, p.y, p.z) for p in pts])
-
-        if not indices or len(indices) % 3 != 0:
-            return 0.0
-
-        tris = np.array(indices).reshape(-1, 3)
-        v1 = points[tris[:, 0]]
-        v2 = points[tris[:, 1]]
-        v3 = points[tris[:, 2]]
-
-        cross = np.cross(v2, v3)
-        dot = np.sum(v1 * cross, axis=1)
-        return float(np.abs(np.sum(dot)) / 6.0)
-    except Exception:
-        return 0.0
 
 
 class ShellInfo:
@@ -108,17 +28,17 @@ class ShellInfo:
 
     def __init__(self, node: str):
         self.node = node
-        self.name = leaf_name(node)
+        self.name = CoreUtils.leaf_name(node)
 
         shape = NodeUtils.get_shape(node)
-        if shape and _is_mesh_shape(shape):
+        if shape and _GeometryMatcherInternal._is_mesh_shape(shape):
             self.num_verts = cmds.polyEvaluate(shape, vertex=True) or 0
             self.num_faces = cmds.polyEvaluate(shape, face=True) or 0
         else:
             self.num_verts = 0
             self.num_faces = 0
 
-        self.bbox = get_bounding_box(node, world=True)
+        self.bbox = CoreUtils.get_bounding_box(node, world=True)
         self.min_pt = self.bbox.min
         self.max_pt = self.bbox.max
         self.centroid = self.bbox.center
@@ -127,7 +47,7 @@ class ShellInfo:
         self.diagonal = self.bbox.diagonal
 
         # Accurate Volume (Rotation Invariant)
-        self.mesh_volume = calculate_mesh_volume(node)
+        self.mesh_volume = GeometryMatcher.calculate_mesh_volume(node)
 
         # Surface Area (Rotation Invariant, fallback for open meshes)
         try:
@@ -142,7 +62,35 @@ class ShellInfo:
         return f"<Shell {self.name} v={self.num_verts} vol={self.volume:.2f}>"
 
 
-class GeometryMatcher:
+class _GeometryMatcherInternal(object):
+    """Internal helpers for GeometryMatcher."""
+
+    @staticmethod
+    def _mfn(shape):
+        """Return an ``MFnMesh`` for *shape* via the canonical CoreUtils helper."""
+        return CoreUtils.get_mfn_mesh(shape, api_version=2)
+
+    @staticmethod
+    def _np_to_mmatrix(m: np.ndarray) -> "om.MMatrix":
+        """Build an ``om.MMatrix`` from a 4x4 numpy array.
+
+        Maya stores matrices in row-major order with translation in row 3,
+        matching Maya's native layout. ``om.MMatrix(iterable)`` consumes 16
+        floats in the same order, so ``ndarray.flatten()`` is a direct mapping.
+        """
+        return om.MMatrix(m.flatten().tolist())
+
+    @staticmethod
+    def _is_mesh_shape(shape: Optional[str]) -> bool:
+        if not shape:
+            return False
+        try:
+            return cmds.objectType(shape) == "mesh"
+        except Exception:
+            return False
+
+
+class GeometryMatcher(_GeometryMatcherInternal):
     """Handles geometric analysis and comparison."""
 
     def __init__(
@@ -182,7 +130,7 @@ class GeometryMatcher:
         """Cached object-space points for *shape* as an (N, 3) array."""
         pts = self._points_cache.get(shape)
         if pts is None:
-            mpts = mesh_points(shape, world=False)
+            mpts = GeometryMatcher.mesh_points(shape, world=False)
             pts = np.array([(p.x, p.y, p.z) for p in mpts])
             self._points_cache[shape] = pts
         return pts
@@ -208,9 +156,7 @@ class GeometryMatcher:
             # shading normals per vertex.
             _, norm_ids = fn.getNormalIds()
             _, verts = fn.getVertices()
-            arr = np.array(
-                [(n.x, n.y, n.z) for n in fn.getNormals(om.MSpace.kObject)]
-            )
+            arr = np.array([(n.x, n.y, n.z) for n in fn.getNormals(om.MSpace.kObject)])
             acc = np.zeros((fn.numVertices, 3))
             np.add.at(acc, np.array(list(verts)), arr[np.array(list(norm_ids))])
             lengths = np.linalg.norm(acc, axis=1)
@@ -238,16 +184,18 @@ class GeometryMatcher:
         to different local point sets and never match cheaply.
         """
         shape = NodeUtils.get_shape(node)
-        if not _is_mesh_shape(shape):
+        if not _GeometryMatcherInternal._is_mesh_shape(shape):
             return None
 
         try:
-            pts = mesh_points(shape, world=True)
+            pts = GeometryMatcher.mesh_points(shape, world=True)
             points = np.array([(p.x, p.y, p.z) for p in pts])
             flat = ptk.PointCloud.pca_basis(points)
             if flat is None:
                 return None
-            return _np_to_mmatrix(np.array(flat, dtype=float).reshape(4, 4))
+            return _GeometryMatcherInternal._np_to_mmatrix(
+                np.array(flat, dtype=float).reshape(4, 4)
+            )
         except Exception:
             return None
 
@@ -273,7 +221,7 @@ class GeometryMatcher:
         # We rely on topological counts and the detailed check in are_meshes_identical.
         if self.scale_tolerance <= 0:
             try:
-                pts = mesh_points(mesh, world=False)
+                pts = GeometryMatcher.mesh_points(mesh, world=False)
                 points = np.array([(p.x, p.y, p.z) for p in pts])
                 pca_sig = ptk.PointCloud.pca_eigenvalue_signature(points, 3)
             except Exception as e:
@@ -283,17 +231,17 @@ class GeometryMatcher:
         materials = ()
         if self.require_same_material:
             sgs = cmds.listConnections(mesh, type="shadingEngine") or []
-            materials = tuple(sorted(set(leaf_name(sg) for sg in sgs)))
+            materials = tuple(sorted(set(CoreUtils.leaf_name(sg) for sg in sgs)))
 
         uv_signature = ()
         if self.check_uvs:
-            uv_sets = mesh_uv_set_names(mesh)
+            uv_sets = GeometryMatcher.mesh_uv_set_names(mesh)
             uv_counts = []
             for uv_set in uv_sets:
                 try:
-                    uv_counts.append(mesh_num_uvs(mesh, uv_set))
+                    uv_counts.append(GeometryMatcher.mesh_num_uvs(mesh, uv_set))
                 except TypeError:
-                    uv_counts.append(mesh_num_uvs(mesh))
+                    uv_counts.append(GeometryMatcher.mesh_num_uvs(mesh))
             uv_signature = (tuple(uv_sets), tuple(uv_counts))
 
         return (
@@ -368,19 +316,21 @@ class GeometryMatcher:
             return False, None
         if matrix_list is None:
             return True, None
-        return True, _np_to_mmatrix(np.array(matrix_list, dtype=float).reshape(4, 4))
+        return True, _GeometryMatcherInternal._np_to_mmatrix(
+            np.array(matrix_list, dtype=float).reshape(4, 4)
+        )
 
     def _are_uvs_identical(self, m1: str, m2: str) -> bool:
         """Compare UVs of two meshes (assumes identical vertex order)."""
-        sets1 = mesh_uv_set_names(m1)
-        sets2 = mesh_uv_set_names(m2)
+        sets1 = GeometryMatcher.mesh_uv_set_names(m1)
+        sets2 = GeometryMatcher.mesh_uv_set_names(m2)
 
         if set(sets1) != set(sets2):
             return False
 
         for uv_set in sets1:
-            u1, v1 = mesh_get_uvs(m1, uv_set)
-            u2, v2 = mesh_get_uvs(m2, uv_set)
+            u1, v1 = GeometryMatcher.mesh_get_uvs(m1, uv_set)
+            u2, v2 = GeometryMatcher.mesh_get_uvs(m2, uv_set)
 
             if len(u1) != len(u2):
                 return False
@@ -397,7 +347,11 @@ class GeometryMatcher:
         # 1. Geometry signature (if a mesh shape is present)
         shape = NodeUtils.get_shape(node)
         geo_sig = None
-        if shape and _is_mesh_shape(shape) and not NodeUtils.is_intermediate(shape):
+        if (
+            shape
+            and _GeometryMatcherInternal._is_mesh_shape(shape)
+            and not NodeUtils.is_intermediate(shape)
+        ):
             geo_sig = self.get_mesh_signature(node)
 
         # 2. Children
@@ -408,7 +362,7 @@ class GeometryMatcher:
             c_sig = self.get_hierarchy_signature(child)
 
             # Use distance for rotation invariance
-            dist = get_translation(child, world=False).length()
+            dist = XformUtils.get_translation(child, world=False).length()
             dist_sig = self.quantize(dist, 2)
 
             if self.scale_tolerance > 0:
@@ -460,14 +414,10 @@ class GeometryMatcher:
             )
 
         # Local matrices to transform points to parent space
-        m1_om = get_object_matrix(t1, world=False)
-        m2_om = get_object_matrix(t2, world=False)
-        mat1 = np.array(
-            [[m1_om.getElement(r, c) for c in range(4)] for r in range(4)]
-        )
-        mat2 = np.array(
-            [[m2_om.getElement(r, c) for c in range(4)] for r in range(4)]
-        )
+        m1_om = XformUtils.get_object_matrix(t1, world=False)
+        m2_om = XformUtils.get_object_matrix(t2, world=False)
+        mat1 = np.array([[m1_om.getElement(r, c) for c in range(4)] for r in range(4)])
+        mat2 = np.array([[m2_om.getElement(r, c) for c in range(4)] for r in range(4)])
 
         ones = np.ones((len(pts1), 1))
         pts1_h = np.hstack([pts1, ones])
@@ -496,8 +446,16 @@ class GeometryMatcher:
         s1 = NodeUtils.get_shape(t1)
         s2 = NodeUtils.get_shape(t2)
 
-        has_mesh1 = s1 and _is_mesh_shape(s1) and not NodeUtils.is_intermediate(s1)
-        has_mesh2 = s2 and _is_mesh_shape(s2) and not NodeUtils.is_intermediate(s2)
+        has_mesh1 = (
+            s1
+            and _GeometryMatcherInternal._is_mesh_shape(s1)
+            and not NodeUtils.is_intermediate(s1)
+        )
+        has_mesh2 = (
+            s2
+            and _GeometryMatcherInternal._is_mesh_shape(s2)
+            and not NodeUtils.is_intermediate(s2)
+        )
 
         if has_mesh1 != has_mesh2:
             return False, None
@@ -545,10 +503,10 @@ class GeometryMatcher:
 
         # Sort children by distance from parent and mesh complexity
         def get_sort_key(node: str):
-            dist = get_translation(node, world=False).length()
+            dist = XformUtils.get_translation(node, world=False).length()
             mesh_sig = (0, 0, 0)
             shape = NodeUtils.get_shape(node)
-            if shape and _is_mesh_shape(shape):
+            if shape and _GeometryMatcherInternal._is_mesh_shape(shape):
                 mesh_sig = (
                     cmds.polyEvaluate(shape, vertex=True) or 0,
                     cmds.polyEvaluate(shape, edge=True) or 0,
@@ -566,8 +524,8 @@ class GeometryMatcher:
         for c1, c2 in zip(children1, children2):
             # Distance to parent
             if self.scale_tolerance <= 0:
-                d1 = get_translation(c1, world=False).length()
-                d2 = get_translation(c2, world=False).length()
+                d1 = XformUtils.get_translation(c1, world=False).length()
+                d2 = XformUtils.get_translation(c2, world=False).length()
                 if abs(d1 - d2) > self.tolerance:
                     return False, None
 
@@ -642,15 +600,72 @@ class GeometryMatcher:
         if self.scale_tolerance <= 0 and len(children1) > 1:
             for i in range(len(children1)):
                 for j in range(i + 1, len(children1)):
-                    p1_i = get_translation(children1[i], world=False)
-                    p1_j = get_translation(children1[j], world=False)
+                    p1_i = XformUtils.get_translation(children1[i], world=False)
+                    p1_j = XformUtils.get_translation(children1[j], world=False)
                     dist1 = (p1_i - p1_j).length()
 
-                    p2_i = get_translation(children2[i], world=False)
-                    p2_j = get_translation(children2[j], world=False)
+                    p2_i = XformUtils.get_translation(children2[i], world=False)
+                    p2_j = XformUtils.get_translation(children2[j], world=False)
                     dist2 = (p2_i - p2_j).length()
 
                     if abs(dist1 - dist2) > self.tolerance:
                         return False, None
 
         return True, relative_transform
+
+    @staticmethod
+    def mesh_points(shape, world: bool = False):
+        """``MPointArray`` for *shape*. Object space by default."""
+        space = om.MSpace.kWorld if world else om.MSpace.kObject
+        return _GeometryMatcherInternal._mfn(shape).getPoints(space)
+
+    @staticmethod
+    def mesh_triangles(shape):
+        """``(counts, indices)`` from ``MFnMesh.getTriangles``, as plain lists."""
+        counts, indices = _GeometryMatcherInternal._mfn(shape).getTriangles()
+        return list(counts), list(indices)
+
+    @staticmethod
+    def mesh_uv_set_names(shape):
+        return list(_GeometryMatcherInternal._mfn(shape).getUVSetNames())
+
+    @staticmethod
+    def mesh_get_uvs(shape, uv_set=None):
+        fn = _GeometryMatcherInternal._mfn(shape)
+        return fn.getUVs(uv_set) if uv_set is not None else fn.getUVs()
+
+    @staticmethod
+    def mesh_num_uvs(shape, uv_set=None):
+        fn = _GeometryMatcherInternal._mfn(shape)
+        return fn.numUVs(uv_set) if uv_set is not None else fn.numUVs()
+
+    @staticmethod
+    def calculate_mesh_volume(node: str) -> float:
+        """Calculate mesh volume using the divergence theorem (numpy)."""
+        try:
+            if cmds.objectType(node) == "transform":
+                shape = NodeUtils.get_shape(node)
+            else:
+                shape = node
+
+            if not _GeometryMatcherInternal._is_mesh_shape(shape):
+                return 0.0
+
+            # MFnMesh.getTriangles -> (counts, indices). Indices are flat triplets.
+            _, indices = GeometryMatcher.mesh_triangles(shape)
+            pts = GeometryMatcher.mesh_points(shape, world=True)
+            points = np.array([(p.x, p.y, p.z) for p in pts])
+
+            if not indices or len(indices) % 3 != 0:
+                return 0.0
+
+            tris = np.array(indices).reshape(-1, 3)
+            v1 = points[tris[:, 0]]
+            v2 = points[tris[:, 1]]
+            v3 = points[tris[:, 2]]
+
+            cross = np.cross(v2, v3)
+            dot = np.sum(v1 * cross, axis=1)
+            return float(np.abs(np.sum(dot)) / 6.0)
+        except Exception:
+            return 0.0

@@ -16,62 +16,7 @@ except Exception as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils._core_utils import CoreUtils, as_strings, short_name
-
-
-def _split_component(comp: str) -> Tuple[str, Optional[str], Optional[int]]:
-    """Split ``"obj.vtx[5]"`` into ``("obj", "vtx", 5)``.
-
-    Returns ``(node, comp_type, index)``. Whichever parts are absent yield
-    ``None``. Used everywhere we need to query a component string without
-    relying on object wrappers.
-    """
-    s = str(comp)
-    if "." not in s:
-        return s, None, None
-    node, rest = s.split(".", 1)
-    if "[" in rest and rest.endswith("]"):
-        ctype = rest.split("[", 1)[0]
-        idx_str = rest[rest.index("[") + 1 : -1]
-        try:
-            return node, ctype, int(idx_str)
-        except ValueError:
-            return node, ctype, None
-    return node, rest, None
-
-
-def _connected_components(comp: str, to_kw: str) -> List[str]:
-    """Wrapper around ``cmds.polyListComponentConversion`` + flatten."""
-    res = cmds.polyListComponentConversion(comp, **{to_kw: True}) or []
-    return cmds.ls(res, flatten=True) or []
-
-
-def _components_by_node(
-    components: List[str], comp_type: str
-) -> Dict[str, List[Tuple[str, int]]]:
-    """Group flattened component names by their owning node.
-
-    Returns ``{node: [(name, index), ...], ...}``. Entries whose component
-    type doesn't match ``comp_type``, or that don't carry a single index
-    (i.e. unflattened ranges), are dropped — callers pre-flatten via
-    ``cmds.ls(..., flatten=True)``.
-    """
-    grouped = defaultdict(list)
-    for name in components:
-        node, ctype, idx = _split_component(name)
-        if ctype == comp_type and idx is not None:
-            grouped[node].append((name, idx))
-    return dict(grouped)
-
-
-def _mesh_dag_path(node: str):
-    """Return the mesh-shape ``MDagPath`` for a transform or shape name."""
-    sel = om.MSelectionList()
-    sel.add(str(node))
-    dag = sel.getDagPath(0)
-    if dag.apiType() == om.MFn.kTransform:
-        dag.extendToShape()
-    return dag
+from mayatk.core_utils._core_utils import CoreUtils
 
 
 class GetComponentsMixin:
@@ -87,22 +32,57 @@ class GetComponentsMixin:
         (None, "edit point", "edit points", "Edit Point", 30, None),
         (None, "handle", "handles", "Handle", 0, None),
         (None, "nurbs surface", "nurbs surfaces", "Nurbs Curves On Surface", 11, None),
-        (None, "subd mesh point", "subd mesh points", "Subdivision Mesh Point", 36, None),
+        (
+            None,
+            "subd mesh point",
+            "subd mesh points",
+            "Subdivision Mesh Point",
+            36,
+            None,
+        ),
         (None, "subd mesh edge", "subd mesh edges", "Subdivision Mesh Edge", 37, None),
         (None, "subd mesh face", "subd mesh faces", "Subdivision Mesh Face", 38, None),
-        (None, "curve parameter point", "curve parameter points", "Curve Parameter Point", 39, None),
+        (
+            None,
+            "curve parameter point",
+            "curve parameter points",
+            "Curve Parameter Point",
+            39,
+            None,
+        ),
         (None, "curve knot", "curve knots", "Curve Knot", 40, None),
-        (None, "surface parameter point", "surface parameter points", "Surface Parameter Point", 41, None),
+        (
+            None,
+            "surface parameter point",
+            "surface parameter points",
+            "Surface Parameter Point",
+            41,
+            None,
+        ),
         (None, "surface knot", "surface knots", "Surface Knot", 42, None),
         (None, "surface range", "surface ranges", "Surface Range", 43, None),
-        (None, "trim surface edge", "trim surface edges", "Trim Surface Edge", 44, None),
+        (
+            None,
+            "trim surface edge",
+            "trim surface edges",
+            "Trim Surface Edge",
+            44,
+            None,
+        ),
         (None, "surface isoparm", "surface isoparms", "Surface Isoparm", 45, None),
         (None, "lattice point", "lattice points", "Lattice Point", 46, None),
         (None, "particle", "particles", "Particle", 47, None),
         (None, "scale pivot", "scale pivots", "Scale Pivot", 49, None),
         (None, "rotate pivot", "rotate pivots", "Rotate Pivot", 50, None),
         (None, "select handle", "select handles", "Select Handle", 51, None),
-        (None, "nurbs surface face", "nurbs surface faces", "NURBS Surface Face", 72, None),
+        (
+            None,
+            "nurbs surface face",
+            "nurbs surface faces",
+            "NURBS Surface Face",
+            72,
+            None,
+        ),
         (None, "subd mesh UV", "subd mesh UVs", "Subdivision Mesh UV", 73, None),
     ]
 
@@ -163,7 +143,7 @@ class GetComponentsMixin:
         if typ not in d:
             return components
         components = cmds.polyListComponentConversion(
-            as_strings(components), **{d[typ.lower()]: True}
+            CoreUtils.as_strings(components), **{d[typ.lower()]: True}
         )
         return CoreUtils.convert_array_type(
             components, returned_type=returned_type, flatten=flatten
@@ -173,10 +153,10 @@ class GetComponentsMixin:
     def get_component_index(components):
         """Extract the numerical index or indices of a component or components from their descriptor strings."""
         try:
-            flattened = cmds.ls(as_strings(components), flatten=True) or []
+            flattened = cmds.ls(CoreUtils.as_strings(components), flatten=True) or []
             result = []
             for c in flattened:
-                _, _, idx = _split_component(c)
+                _, _, idx = _ComponentsInternal._split_component(c)
                 if idx is None:
                     raise ValueError(f"Cannot extract index from {c!r}")
                 result.append(idx)
@@ -190,10 +170,10 @@ class GetComponentsMixin:
         cls, obj, integers, component_type, returned_type="str", flatten=False
     ):
         """Convert the given integers to components of the given object."""
-        candidates = cmds.ls(as_strings(obj), objectsOnly=True) or []
+        candidates = cmds.ls(CoreUtils.as_strings(obj), objectsOnly=True) or []
         if not candidates:
             return []
-        objName = str(candidates[0]).split("|")[-1].split(":")[-1]
+        objName = str(candidates[0])
 
         def n(c):
             return "{}:{}".format(c[0], c[-1]) if len(c) > 1 else str(c[0])
@@ -222,7 +202,10 @@ class GetComponentsMixin:
 
         if etyp_inc == "int" or etyp_exc == "int":
             try:
-                obj = (cmds.ls(as_strings(components), objectsOnly=True) or [None])[0]
+                obj = (
+                    cmds.ls(CoreUtils.as_strings(components), objectsOnly=True)
+                    or [None]
+                )[0]
                 if obj is None:
                     raise IndexError
             except IndexError as e:
@@ -233,13 +216,13 @@ class GetComponentsMixin:
 
         if etyp_inc == "int":
             inc = cls.convert_int_to_component(obj, inc, typ)
-        inc = cmds.ls(as_strings(inc), flatten=True) or []
+        inc = cmds.ls(CoreUtils.as_strings(inc), flatten=True) or []
 
         if etyp_exc == "int":
             exc = cls.convert_int_to_component(obj, exc, typ)
-        exc = cmds.ls(as_strings(exc), flatten=True) or []
+        exc = cmds.ls(CoreUtils.as_strings(exc), flatten=True) or []
 
-        components = cmds.ls(as_strings(components), flatten=True) or []
+        components = cmds.ls(CoreUtils.as_strings(components), flatten=True) or []
 
         # Component strings contain '[' and ']' which fnmatch treats as
         # character classes — direct set membership avoids that pitfall.
@@ -277,7 +260,7 @@ class GetComponentsMixin:
             components = cls.filter_components(components, inc=inc, exc=exc)
 
         if randomize:
-            flat = cmds.ls(as_strings(components), flatten=True) or []
+            flat = cmds.ls(CoreUtils.as_strings(components), flatten=True) or []
             count = max(1, int(len(flat) * float(randomize)))
             components = random.sample(flat, min(count, len(flat)))
 
@@ -287,7 +270,66 @@ class GetComponentsMixin:
         return result
 
 
-class Components(GetComponentsMixin, ptk.HelpMixin):
+class _ComponentsInternal(object):
+    """Internal helpers for Components."""
+
+    @staticmethod
+    def _split_component(comp: str) -> Tuple[str, Optional[str], Optional[int]]:
+        """Split ``"obj.vtx[5]"`` into ``("obj", "vtx", 5)``.
+
+        Returns ``(node, comp_type, index)``. Whichever parts are absent yield
+        ``None``. Used everywhere we need to query a component string without
+        relying on object wrappers.
+        """
+        s = str(comp)
+        if "." not in s:
+            return s, None, None
+        node, rest = s.split(".", 1)
+        if "[" in rest and rest.endswith("]"):
+            ctype = rest.split("[", 1)[0]
+            idx_str = rest[rest.index("[") + 1 : -1]
+            try:
+                return node, ctype, int(idx_str)
+            except ValueError:
+                return node, ctype, None
+        return node, rest, None
+
+    @staticmethod
+    def _connected_components(comp: str, to_kw: str) -> List[str]:
+        """Wrapper around ``cmds.polyListComponentConversion`` + flatten."""
+        res = cmds.polyListComponentConversion(comp, **{to_kw: True}) or []
+        return cmds.ls(res, flatten=True) or []
+
+    @staticmethod
+    def _components_by_node(
+        components: List[str], comp_type: str
+    ) -> Dict[str, List[Tuple[str, int]]]:
+        """Group flattened component names by their owning node.
+
+        Returns ``{node: [(name, index), ...], ...}``. Entries whose component
+        type doesn't match ``comp_type``, or that don't carry a single index
+        (i.e. unflattened ranges), are dropped — callers pre-flatten via
+        ``cmds.ls(..., flatten=True)``.
+        """
+        grouped = defaultdict(list)
+        for name in components:
+            node, ctype, idx = _ComponentsInternal._split_component(name)
+            if ctype == comp_type and idx is not None:
+                grouped[node].append((name, idx))
+        return dict(grouped)
+
+    @staticmethod
+    def _mesh_dag_path(node: str):
+        """Return the mesh-shape ``MDagPath`` for a transform or shape name."""
+        sel = om.MSelectionList()
+        sel.add(str(node))
+        dag = sel.getDagPath(0)
+        if dag.apiType() == om.MFn.kTransform:
+            dag.extendToShape()
+        return dag
+
+
+class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
     """ """
 
     # Tolerance (degrees) for classifying an edge's normal angle against a
@@ -304,16 +346,22 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         """Map a list of components to their respective objects.
 
         Returns:
-            dict: ``{node_name: [component, ...], ...}`` keyed by the node
-            name (leaf, namespace stripped) and component-strings as values.
+            dict: ``{node: [component, ...], ...}`` keyed by the component's
+            node string exactly as ``cmds.ls`` disambiguates it (path-qualified
+            when leaf names collide, namespace preserved) — one key per real
+            object, safe to pass straight to Maya cmds. Leaf-name keys were
+            dropped deliberately: they merged same-named objects into one group,
+            which broke every per-object consumer (``polyBevel3`` refuses
+            multi-object component lists outright).
         """
         result = defaultdict(list)
-        for component in cmds.ls(as_strings(components_list), flatten=True) or []:
-            node, _, _ = _split_component(component)
+        for component in (
+            cmds.ls(CoreUtils.as_strings(components_list), flatten=True) or []
+        ):
+            node, _, _ = _ComponentsInternal._split_component(component)
             if not node:
                 continue
-            key = node.split("|")[-1].split(":")[-1]
-            result[key].append(component)
+            result[node].append(component)
         return dict(result)
 
     @staticmethod
@@ -363,7 +411,9 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         """
         edges = (
             cmds.ls(
-                cmds.polyListComponentConversion(as_strings(components), toEdge=True)
+                cmds.polyListComponentConversion(
+                    CoreUtils.as_strings(components), toEdge=True
+                )
                 or [],
                 flatten=True,
             )
@@ -371,8 +421,10 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         )
 
         items = []
-        for node, indexed in _components_by_node(edges, "e").items():
-            edge_it = om.MItMeshEdge(_mesh_dag_path(node))
+        for node, indexed in _ComponentsInternal._components_by_node(
+            edges, "e"
+        ).items():
+            edge_it = om.MItMeshEdge(_ComponentsInternal._mesh_dag_path(node))
             for name, idx in indexed:
                 edge_it.setIndex(idx)
                 items.append(
@@ -387,11 +439,13 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         Faces group transitively by shared edge (corner-touching faces stay
         separate), matching Maya's shell semantics for a face subset.
         """
-        faces = cmds.ls(as_strings(faces), flatten=True) or []
+        faces = cmds.ls(CoreUtils.as_strings(faces), flatten=True) or []
 
         items = []
-        for node, indexed in _components_by_node(faces, "f").items():
-            face_it = om.MItMeshPolygon(_mesh_dag_path(node))
+        for node, indexed in _ComponentsInternal._components_by_node(
+            faces, "f"
+        ).items():
+            face_it = om.MItMeshPolygon(_ComponentsInternal._mesh_dag_path(node))
             for name, idx in indexed:
                 face_it.setIndex(idx)
                 items.append((name, [(node, e) for e in face_it.getEdges()]))
@@ -400,7 +454,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
     @staticmethod
     def get_islands(obj, returned_type="str", flatten=False):
         """Get the group of components in each separate island of a combined mesh."""
-        candidates = cmds.ls(as_strings(obj)) or []
+        candidates = cmds.ls(CoreUtils.as_strings(obj)) or []
         if not candidates:
             raise ValueError(f"Object not found: {obj}")
         obj_name = candidates[0]
@@ -415,7 +469,9 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
 
         while unprocessed:
             index = next(iter(unprocessed))
-            faces = cmds.polySelect(obj_name, extendToShell=index, noSelection=True) or []
+            faces = (
+                cmds.polySelect(obj_name, extendToShell=index, noSelection=True) or []
+            )
 
             if returned_type == "str":
                 yield ["{}.f[{}]".format(obj_name, i) for i in faces]
@@ -439,7 +495,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         component_border=False,
     ):
         """Get border components from given component(s) or a polygon object based on connectivity."""
-        components = cmds.ls(as_strings(components), flatten=True) or []
+        components = cmds.ls(CoreUtils.as_strings(components), flatten=True) or []
         if not components:
             raise ValueError("No valid components given.")
 
@@ -451,13 +507,13 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
 
         # Helpers (string-based) ----------------------------------------------
         def edge_face_count(edge):
-            return len(_connected_components(edge, "toFace"))
+            return len(_ComponentsInternal._connected_components(edge, "toFace"))
 
         def vertex_connected_edges(vtx):
-            return _connected_components(vtx, "toEdge")
+            return _ComponentsInternal._connected_components(vtx, "toEdge")
 
         def vertex_connected_vertices(vtx):
-            edges = _connected_components(vtx, "toEdge")
+            edges = _ComponentsInternal._connected_components(vtx, "toEdge")
             verts = (
                 cmds.ls(
                     cmds.polyListComponentConversion(
@@ -471,39 +527,42 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             return [v for v in verts if v != vtx]
 
         def face_connected_edges(face):
-            return _connected_components(face, "toEdge")
+            return _ComponentsInternal._connected_components(face, "toEdge")
 
         # ---------------------------------------------------------------------
 
         if component_border:
-            vertex_components = cls.convert_component_type(
-                components, "vtx", "str", flatten=True
-            ) or []
+            vertex_components = (
+                cls.convert_component_type(components, "vtx", "str", flatten=True) or []
+            )
             vertex_components_set = set(vertex_components)
 
             def is_border_vertex(comp):
                 connected_v = vertex_connected_vertices(comp)
                 connected_e = vertex_connected_edges(comp)
-                return any(cc not in vertex_components_set for cc in connected_v) or any(
-                    edge_face_count(e) == 1 for e in connected_e
-                )
+                return any(
+                    cc not in vertex_components_set for cc in connected_v
+                ) or any(edge_face_count(e) == 1 for e in connected_e)
 
             border_components = [
                 comp for comp in vertex_components if is_border_vertex(comp)
             ]
 
             if component_type == "e":
-                original_edges = cls.convert_component_type(
-                    components, "e", "str", flatten=True
-                ) or []
+                original_edges = (
+                    cls.convert_component_type(components, "e", "str", flatten=True)
+                    or []
+                )
                 # Count how many of the original edges each connected face has.
                 face_edge_count = {}
                 for edge in original_edges:
-                    for face in _connected_components(edge, "toFace"):
+                    for face in _ComponentsInternal._connected_components(
+                        edge, "toFace"
+                    ):
                         face_edge_count[face] = face_edge_count.get(face, 0) + 1
 
                 def is_border_edge(edge):
-                    faces = _connected_components(edge, "toFace")
+                    faces = _ComponentsInternal._connected_components(edge, "toFace")
                     return (
                         any(face_edge_count.get(f, 0) == 1 for f in faces)
                         or len(faces) == 1
@@ -513,13 +572,14 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
                     edge for edge in original_edges if is_border_edge(edge)
                 ]
             elif component_type == "f":
-                border_faces = cls.convert_component_type(
-                    border_components, "f", "str", flatten=True
-                ) or []
+                border_faces = (
+                    cls.convert_component_type(
+                        border_components, "f", "str", flatten=True
+                    )
+                    or []
+                )
                 comp_set = set(components)
-                border_components = [
-                    comp for comp in border_faces if comp in comp_set
-                ]
+                border_components = [comp for comp in border_faces if comp in comp_set]
         else:
             if component_type == "e":
                 border_components = [
@@ -529,14 +589,13 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
                 border_components = [
                     vtx
                     for vtx in components
-                    if any(
-                        edge_face_count(e) == 1 for e in vertex_connected_edges(vtx)
-                    )
+                    if any(edge_face_count(e) == 1 for e in vertex_connected_edges(vtx))
                 ]
             elif component_type == "f":
-                border_faces = cls.convert_component_type(
-                    components, "f", "str", flatten=True
-                ) or []
+                border_faces = (
+                    cls.convert_component_type(components, "f", "str", flatten=True)
+                    or []
+                )
                 border_components = [
                     face
                     for face in border_faces
@@ -553,8 +612,8 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
     @staticmethod
     def get_furthest_vertices(vertices_a, vertices_b):
         """Determine the two furthest apart vertices, one from each of the two provided lists."""
-        list_a = cmds.ls(as_strings(vertices_a), flatten=True) or []
-        list_b = cmds.ls(as_strings(vertices_b), flatten=True) or []
+        list_a = cmds.ls(CoreUtils.as_strings(vertices_a), flatten=True) or []
+        list_b = cmds.ls(CoreUtils.as_strings(vertices_b), flatten=True) or []
 
         # Query each position once — not once per pair.
         positions_a = [
@@ -667,12 +726,16 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
     @staticmethod
     def get_vertices_within_threshold(reference_vertices, max_distance):
         """Categorizes vertices of a mesh based on their distance from the first reference vertex."""
-        reference_vertices = cmds.ls(as_strings(reference_vertices), flatten=True) or []
+        reference_vertices = (
+            cmds.ls(CoreUtils.as_strings(reference_vertices), flatten=True) or []
+        )
         if not reference_vertices:
             return ([], [])
 
-        reference_point = om.MVector(*cmds.pointPosition(reference_vertices[0], world=True))
-        node, _, _ = _split_component(reference_vertices[0])
+        reference_point = om.MVector(
+            *cmds.pointPosition(reference_vertices[0], world=True)
+        )
+        node, _, _ = _ComponentsInternal._split_component(reference_vertices[0])
 
         # Use the shape if the descriptor is on a transform
         shapes = cmds.listRelatives(node, shapes=True, noIntermediate=True) or []
@@ -680,7 +743,9 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
 
         # One world-space query for every point instead of a pointPosition
         # command per vertex.
-        points = om.MFnMesh(_mesh_dag_path(mesh)).getPoints(om.MSpace.kWorld)
+        points = om.MFnMesh(_ComponentsInternal._mesh_dag_path(mesh)).getPoints(
+            om.MSpace.kWorld
+        )
 
         inside = []
         outside = []
@@ -725,8 +790,8 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             )
 
         # Vertices of each edge
-        verts_a = set(_connected_components(edges[0], "toVertex"))
-        verts_b = set(_connected_components(edges[1], "toVertex"))
+        verts_a = set(_ComponentsInternal._connected_components(edges[0], "toVertex"))
+        verts_b = set(_ComponentsInternal._connected_components(edges[1], "toVertex"))
 
         common = list(verts_a & verts_b)
         if not common:
@@ -739,9 +804,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         cmds.refresh()
 
         new_vertices = (
-            cmds.ls(
-                cmds.polyListComponentConversion(toVertex=True) or [], flatten=True
-            )
+            cmds.ls(cmds.polyListComponentConversion(toVertex=True) or [], flatten=True)
             or []
         )
         new_vertex_set = set(new_vertices)
@@ -803,7 +866,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         cls, components, path="edgeLoop", returned_type="str", flatten=False
     ):
         """Query the polySelect command for the components along different edge paths."""
-        objs = cmds.ls(as_strings(components), objectsOnly=True) or []
+        objs = cmds.ls(CoreUtils.as_strings(components), objectsOnly=True) or []
         if not objs:
             return []
         obj = objs[0]
@@ -822,9 +885,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             edgesLong = cmds.polySelect(obj, q=True, edgeRing=cnums)
 
         elif path == "edgeRingPath":
-            edgesLong = cmds.polySelect(
-                obj, q=True, edgeRingPath=(cnums[0], cnums[1])
-            )
+            edgesLong = cmds.polySelect(obj, q=True, edgeRingPath=(cnums[0], cnums[1]))
             if not edgesLong:
                 print(
                     f'File "{__file__}" in get_edge_path\n# Error: get_edge_path: Operation requires two edges that are on the same edge ring.\n\tEdges given: {cnums[0]}, {cnums[1]}',
@@ -832,9 +893,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
                 return []
 
         elif path == "edgeLoopPath":
-            edgesLong = cmds.polySelect(
-                obj, q=True, edgeLoopPath=(cnums[0], cnums[1])
-            )
+            edgesLong = cmds.polySelect(obj, q=True, edgeLoopPath=(cnums[0], cnums[1]))
             if not edgesLong:
                 print(
                     f'File "{__file__}" in get_edge_path\n# Error: get_edge_path: Operation requires two edges that are on the same edge loop.\n\tEdges given: {cnums[0]}, {cnums[1]}',
@@ -843,7 +902,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         else:  # EdgeLoop
             edgesLong = cmds.polySelect(obj, q=True, edgeLoop=cnums)
 
-        objName = obj.split("|")[-1].split(":")[-1]
+        objName = obj
         result = ptk.remove_duplicates(
             ["{}.e[{}]".format(objName, e) for e in (edgesLong or [])]
         )
@@ -854,13 +913,13 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
     @classmethod
     def get_shortest_path(cls, components, flatten=False):
         """Calculate the shortest path between two specified edge or vertex components within the same 3D object."""
-        components = cmds.ls(as_strings(components), flatten=True) or []
+        components = cmds.ls(CoreUtils.as_strings(components), flatten=True) or []
         if len(components) != 2:
             raise ValueError(f"Exactly two components are required. Got: {components}")
         a, b = components
 
-        node_a, _, _ = _split_component(a)
-        node_b, _, _ = _split_component(b)
+        node_a, _, _ = _ComponentsInternal._split_component(a)
+        node_b, _, _ = _ComponentsInternal._split_component(b)
         if node_a != node_b:
             raise ValueError("Components must belong to the same object")
 
@@ -870,8 +929,8 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             raise ValueError("Both components must be of the same type")
 
         if a_type == "e":
-            a_vertices = _connected_components(a, "toVertex")
-            b_vertices = _connected_components(b, "toVertex")
+            a_vertices = _ComponentsInternal._connected_components(a, "toVertex")
+            b_vertices = _ComponentsInternal._connected_components(b, "toVertex")
 
             selected_a, selected_b = cls.get_furthest_vertices(a_vertices, b_vertices)
             a_index = cls.get_component_index(selected_a)
@@ -883,19 +942,22 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         else:
             raise ValueError("Unsupported component type for path calculation")
 
-        path_indices = cmds.polySelect(node_a, q=True, shortestEdgePath=[a_index, b_index]) or []
+        path_indices = (
+            cmds.polySelect(node_a, q=True, shortestEdgePath=[a_index, b_index]) or []
+        )
 
         if a_type == "e":
-            objName = node_a.split("|")[-1].split(":")[-1]
+            objName = node_a
             result = [a] + [f"{objName}.e[{idx}]" for idx in path_indices] + [b]
         elif a_type == "vtx":
             result = []
-            objName = node_a.split("|")[-1].split(":")[-1]
+            objName = node_a
             for idx in path_indices:
                 edge = f"{objName}.e[{idx}]"
-                vertices = cmds.polyListComponentConversion(
-                    edge, fromEdge=True, toVertex=True
-                ) or []
+                vertices = (
+                    cmds.polyListComponentConversion(edge, fromEdge=True, toVertex=True)
+                    or []
+                )
                 result.extend(cmds.ls(vertices, flatten=True) or [])
         else:
             result = list(path_indices)
@@ -910,7 +972,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             om.MVector: The normal of the face in world space.
         """
         face = str(face)
-        node, ctype, idx = _split_component(face)
+        node, ctype, idx = _ComponentsInternal._split_component(face)
         if ctype != "f" or idx is None:
             raise TypeError(f"Input must be a face component descriptor, got {face!r}.")
 
@@ -933,7 +995,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             dict: ``{face_index: [x, y, z], ...}`` parsed from polyInfo lines
             of the form ``"FACE_NORMAL   12: 0.000000 1.000000 0.000000"``.
         """
-        objs = cmds.ls(as_strings(x)) or []
+        objs = cmds.ls(CoreUtils.as_strings(x)) or []
         normals = cmds.polyInfo(objs, faceNormals=True) or []
 
         dct = {}
@@ -956,8 +1018,10 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         skipped and simply absent from the result.
         """
         result: Dict[str, float] = {}
-        for node, indexed in _components_by_node(edges, "e").items():
-            dag = _mesh_dag_path(node)
+        for node, indexed in _ComponentsInternal._components_by_node(
+            edges, "e"
+        ).items():
+            dag = _ComponentsInternal._mesh_dag_path(node)
             mesh_fn = om.MFnMesh(dag)
             edge_it = om.MItMeshEdge(dag)
             face_normals: Dict[int, "om.MVector"] = {}
@@ -980,7 +1044,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
     @classmethod
     def get_normal_angle(cls, edges) -> Union[float, List[float]]:
         """Get the angle between the normals of the faces connected by one or more edges."""
-        edges_list = cmds.ls(as_strings(edges), flatten=True) or []
+        edges_list = cmds.ls(CoreUtils.as_strings(edges), flatten=True) or []
         angles = cls._edge_normal_angles(edges_list)
         result = [angles[e] for e in edges_list if e in angles]
         return ptk.format_return(result, edges)
@@ -1001,13 +1065,16 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         sub-ulp float drift world-space face normals carry after a
         transform+freeze — otherwise those edges would silently fall outside.
         """
-        edges = cmds.ls(
-            cls.convert_component_type(
-                objects, "edge", returned_type="str", flatten=True
+        edges = (
+            cmds.ls(
+                cls.convert_component_type(
+                    objects, "edge", returned_type="str", flatten=True
+                )
+                or [],
+                flatten=True,
             )
-            or [],
-            flatten=True,
-        ) or []
+            or []
+        )
 
         low = low_angle - cls._ANGLE_MATCH_EPS
         high = high_angle + cls._ANGLE_MATCH_EPS
@@ -1072,11 +1139,9 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
 
         object_to_edges = cls.map_components_to_objects(all_edges)
 
-        # Resolve every unambiguous DAG path spanned by the selection up front.
-        # A map_components_to_objects key is a leaf name that can collide across
-        # the scene (two `pCube1`s under different parents merge into one key),
-        # so derive the full path set from the path-qualified edge strings — a
-        # single key can front more than one real object.
+        # Resolve each group's unambiguous LONG path(s) up front for the
+        # locked-normals guard/report (keys are cmds-safe node strings, one
+        # per real object, but not necessarily long-form).
         object_to_paths = {}
         for obj, edges in object_to_edges.items():
             nodes = {e.split(".")[0] for e in edges} or {obj}
@@ -1095,14 +1160,16 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
                 for paths in object_to_paths.values()
                 for path in paths
                 if any(
-                    cmds.polyNormalPerVertex(f"{path}.vtx[*]", q=True, freezeNormal=True)
+                    cmds.polyNormalPerVertex(
+                        f"{path}.vtx[*]", q=True, freezeNormal=True
+                    )
                     or []
                 )
             ]
             if locked_objects:
                 cmds.warning(
                     "set_edge_hardness: aborted — locked vertex normals on "
-                    f"{', '.join(short_name(o) for o in locked_objects)}. "
+                    f"{', '.join(CoreUtils.short_name(o) for o in locked_objects)}. "
                     "Enable 'Unlock Normals' to release them before applying "
                     "hardness."
                 )
@@ -1165,7 +1232,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         if provided), so multi-object selections are honored. Each matching
         face appears at most once in the returned list.
         """
-        faces = cmds.ls(as_strings(faces), flatten=True) or []
+        faces = cmds.ls(CoreUtils.as_strings(faces), flatten=True) or []
         similar_faces = list(similar_faces) if similar_faces else []
         if not faces:
             return similar_faces
@@ -1246,7 +1313,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             raise ValueError(f"space parameter must be one of: {valid_spaces}")
 
         objs: List[str] = []
-        for obj in cmds.ls(as_strings(objects)) or []:
+        for obj in cmds.ls(CoreUtils.as_strings(objects)) or []:
             ntype = cmds.objectType(obj)
             if ntype == "mesh":
                 parents = cmds.listRelatives(obj, parent=True, fullPath=True) or []
@@ -1305,7 +1372,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
             ctype = typ
 
         result = []
-        for c in cmds.ls(as_strings(components), flatten=True) or []:
+        for c in cmds.ls(CoreUtils.as_strings(components), flatten=True) or []:
             attached = cls.convert_component_type(c, ctype, flatten=True) or []
             n = len(attached)
             if n >= lowRange and n <= highRange:
@@ -1316,7 +1383,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
     @classmethod
     def get_vertex_normal(cls, vertex, angle_weighted=False):
         """Return the normal at the given vertex."""
-        candidates = cmds.ls(as_strings(vertex), objectsOnly=True) or []
+        candidates = cmds.ls(CoreUtils.as_strings(vertex), objectsOnly=True) or []
         if not candidates:
             return None
         node = candidates[0]
@@ -1355,7 +1422,10 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
         if edges is None:
             if cmds.selectMode(q=True, object=True):
                 selected_objects = cmds.ls(sl=True, o=True) or []
-                edges = cmds.polyListComponentConversion(selected_objects, toEdge=True) or []
+                edges = (
+                    cmds.polyListComponentConversion(selected_objects, toEdge=True)
+                    or []
+                )
             else:
                 edges = cmds.ls(sl=True, fl=True) or []
 
@@ -1374,7 +1444,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
     def get_creased_edges(edges):
         """Return any creased edges from a list of edges."""
         creased_edges = []
-        for e in cmds.ls(as_strings(edges), flatten=True) or []:
+        for e in cmds.ls(CoreUtils.as_strings(edges), flatten=True) or []:
             try:
                 value = cmds.polyCrease(e, query=True, value=True)
                 if value and value[0] > 0:
@@ -1386,17 +1456,15 @@ class Components(GetComponentsMixin, ptk.HelpMixin):
     @staticmethod
     def transfer_creased_edges(frm, to):
         """Transfer creased edges from the 'frm' object to the 'to' objects."""
-        source = cmds.ls(as_strings(frm), objectsOnly=True) or []
-        targets = cmds.ls(as_strings(to), objectsOnly=True) or []
+        source = cmds.ls(CoreUtils.as_strings(frm), objectsOnly=True) or []
+        targets = cmds.ls(CoreUtils.as_strings(to), objectsOnly=True) or []
 
         if not (source and targets):
             raise ValueError("Both source and target objects must exist.")
 
         src = source[0]
         try:
-            crease_values = (
-                cmds.polyCrease(f"{src}.e[*]", query=True, value=True) or []
-            )
+            crease_values = cmds.polyCrease(f"{src}.e[*]", query=True, value=True) or []
         except RuntimeError:
             crease_values = []
 

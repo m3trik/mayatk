@@ -19,6 +19,7 @@ the same way. Co-located with its panel
 discovered by :class:`mayatk.ui_utils.MayaUiHandler`. ``import maya.cmds`` is deferred so resolving
 the package surface never needs a running Maya.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -60,19 +61,6 @@ _SPEC = ptk.ScriptLaunchSpec(
 
 # Module-level template discovery -- kept so the slots (and tests) can list templates without a
 # live engine. Thin wrappers over the shared :mod:`pythontk.core_utils.script_template` helpers.
-def list_templates() -> List[Path]:
-    """User-visible templates in ``templates/`` (skips underscore-prefixed)."""
-    return _templates.list_templates(_TEMPLATE_DIR, ".py")
-
-
-def template_modes(template_path: Path) -> Tuple[str, ...]:
-    """Modes a template declares via ``BRIDGE_MODES``; ``("send_to",)`` fallback."""
-    return _templates.template_modes(template_path, (SEND_TO,))
-
-
-def list_template_modes() -> List[Tuple[str, str]]:
-    """``[(stem, mode), ...]`` for every (template, mode) pairing."""
-    return _templates.list_template_modes(_TEMPLATE_DIR, ".py", (SEND_TO,))
 
 
 class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
@@ -101,12 +89,29 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
     def params_defaults(self) -> Dict[str, Any]:
         from mayatk.env_utils.blender_bridge import parameters as _params
 
-        return _params.defaults()
+        return _params.Parameters.defaults()
 
     def render_context(self, params: Dict[str, Any]) -> Dict[str, str]:
         from mayatk.env_utils.blender_bridge import parameters as _params
 
-        return _params.render_context(params)
+        return _params.Parameters.render_context(params)
+
+    @staticmethod
+    def list_templates() -> List[Path]:
+        """User-visible templates in ``templates/`` (skips underscore-prefixed)."""
+        return _templates.ScriptTemplate.list_templates(_TEMPLATE_DIR, ".py")
+
+    @staticmethod
+    def template_modes(template_path: Path) -> Tuple[str, ...]:
+        """Modes a template declares via ``BRIDGE_MODES``; ``("send_to",)`` fallback."""
+        return _templates.ScriptTemplate.template_modes(template_path, (SEND_TO,))
+
+    @staticmethod
+    def list_template_modes() -> List[Tuple[str, str]]:
+        """``[(stem, mode), ...]`` for every (template, mode) pairing."""
+        return _templates.ScriptTemplate.list_template_modes(
+            _TEMPLATE_DIR, ".py", (SEND_TO,)
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -116,7 +121,7 @@ if __name__ == "__main__":
     try:
         import maya.cmds as cmds
 
-        sel = cmds.ls(selection=True) or []
+        sel = cmds.ls(selection=True, long=True) or []
     except ModuleNotFoundError:
         sel = []
     # bridge.send(sel)                                       # additive import

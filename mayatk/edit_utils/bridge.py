@@ -6,7 +6,7 @@ try:
 except ImportError:
     cmds = None
 
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 from mayatk.core_utils.preview import Preview, OperationError
 from mayatk.core_utils.components import Components
 
@@ -119,12 +119,14 @@ class Bridge:
         child_curves = []
         for node in mesh_nodes:
             # Get all children of the mesh node
-            children = cmds.listRelatives(node, children=True, allDescendents=True, type="nurbsCurve"
+            children = cmds.listRelatives(
+                node, children=True, allDescendents=True, type="nurbsCurve", fullPath=True
             )
             if children:
                 # Get the transform nodes of the curve shapes
                 curve_transforms = [
-                    cmds.listRelatives(curve, parent=True)[0] for curve in children
+                    cmds.listRelatives(curve, parent=True, fullPath=True)[0]
+                    for curve in children
                 ]
                 child_curves.extend(curve_transforms)
         return child_curves
@@ -200,7 +202,7 @@ class BridgeSlots:
         # Gesture-scoped window: pin button + auto-hide on key_show release.
         widget.config_buttons("menu", "collapse", "pin")
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Bridge",
                 body="Connect two open edge loops with new polygon faces.",
                 steps=[
@@ -238,7 +240,12 @@ class BridgeSlots:
             selected_edges = cmds.ls(sl=True, flatten=True)
             if selected_edges:
                 # Strip component suffix ("pCube1.e[12]" -> "pCube1")
-                mesh_nodes = list({edge.split(".")[0] for edge in selected_edges})
+                mesh_nodes = list(
+                    {
+                        cmds.ls(edge.split(".")[0], long=True)[0]
+                        for edge in selected_edges
+                    }
+                )
 
         # Perform the bridge operation
         Bridge.bridge(objects, **kwargs)

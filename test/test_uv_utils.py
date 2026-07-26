@@ -14,6 +14,7 @@ Tests for UvUtils class functionality including:
 import unittest
 import mayatk as mtk
 from mayatk.uv_utils._uv_utils import UvUtils
+from mayatk.core_utils._core_utils import CoreUtils
 
 from base_test import MayaTkTestCase
 import maya.cmds as cmds
@@ -230,6 +231,106 @@ class TestUvUtils(MayaTkTestCase):
 
         self.assertAlmostEqual(c1[0], c2[0], places=3)
         self.assertAlmostEqual(c1[1], c2[1], places=3)
+
+    def test_transfer_uvs_match_by_similarity_false_uses_exact_pairs(self):
+        """Regression: a caller with an already-verified (source, target)
+        correspondence -- e.g. the RizomUV bridge's name-based export/import
+        mapping -- must be able to transfer directly without the similarity
+        search silently rejecting the pair. A tolerance above the maximum
+        possible similarity score (1.0) proves similarity-matching would
+        reject this exact pair regardless of how close the geometry is;
+        match_by_similarity=False must still transfer it correctly."""
+        cmds.polyEditUV(f"{self.cube2}.map[*]", u=0.5, v=0.5)
+
+        # Similarity-matched transfer has nothing to work with at this tolerance.
+        mapping = CoreUtils.build_mesh_similarity_mapping(
+            source=self.cube2, target=self.cube, tolerance=1.5
+        )
+        self.assertEqual(mapping, {})
+
+        # Exact pairing transfers regardless -- it never consults tolerance.
+        UvUtils.transfer_uvs(
+            source=self.cube2, target=self.cube, match_by_similarity=False
+        )
+        uvs1 = cmds.polyEvaluate(f"{self.cube}.map[*]", bc2=True)
+        uvs2 = cmds.polyEvaluate(f"{self.cube2}.map[*]", bc2=True)
+        c1 = ((uvs1[0][0] + uvs1[1][0]) / 2, (uvs1[0][1] + uvs1[1][1]) / 2)
+        c2 = ((uvs2[0][0] + uvs2[1][0]) / 2, (uvs2[0][1] + uvs2[1][1]) / 2)
+        self.assertAlmostEqual(c1[0], c2[0], places=3)
+        self.assertAlmostEqual(c1[1], c2[1], places=3)
+
+    @staticmethod
+    def _uv_center(obj):
+        bc = cmds.polyEvaluate(f"{obj}.map[*]", bc2=True)
+        return ((bc[0][0] + bc[1][0]) / 2, (bc[0][1] + bc[1][1]) / 2)
+
+    def test_transfer_uvs_to_similar_scene_scope(self):
+        """Fan-out transfer reaches every similar mesh in the scene, but skips
+        dissimilar geometry and true instances of the source (shared shape --
+        their UVs already match)."""
+        cmds.polyEditUV(f"{self.cube}.map[*]", u=0.5, v=0.5)
+        big = cmds.polyCube(name="test_uv_big", width=10, height=10, depth=10)[0]
+        instance = cmds.instance(self.cube, name="test_uv_cube_inst")[0]
+        try:
+            targets = UvUtils.transfer_uvs_to_similar(self.cube)
+            leafs = {t.split("|")[-1] for t in targets}
+            self.assertEqual(leafs, {"test_uv_cube2"})
+
+            src_center = self._uv_center(self.cube)
+            dst_center = self._uv_center(self.cube2)
+            self.assertAlmostEqual(src_center[0], dst_center[0], places=3)
+            self.assertAlmostEqual(src_center[1], dst_center[1], places=3)
+
+            # Dissimilar mesh untouched.
+            big_center = self._uv_center(big)
+            self.assertNotAlmostEqual(src_center[0], big_center[0], places=3)
+        finally:
+            for obj in (big, instance):
+                if cmds.objExists(obj):
+                    cmds.delete(obj)
+
+    def test_transfer_uvs_to_similar_candidate_pool(self):
+        """An explicit candidate pool restricts the search; similar meshes
+        outside the pool are untouched."""
+        cmds.polyEditUV(f"{self.cube}.map[*]", u=0.5, v=0.5)
+        cube3 = cmds.polyCube(name="test_uv_cube3")[0]
+        try:
+            targets = UvUtils.transfer_uvs_to_similar(self.cube, [cube3])
+            leafs = {t.split("|")[-1] for t in targets}
+            self.assertEqual(leafs, {"test_uv_cube3"})
+
+            src_center = self._uv_center(self.cube)
+            # cube2 is just as similar but outside the pool -- must be untouched.
+            cube2_center = self._uv_center(self.cube2)
+            self.assertNotAlmostEqual(src_center[0], cube2_center[0], places=3)
+        finally:
+            if cmds.objExists(cube3):
+                cmds.delete(cube3)
+
+    def test_transfer_uvs_to_similar_invalid_source_raises(self):
+        """Source must resolve to exactly one polygon mesh."""
+        group = cmds.group(self.cube, self.cube2, name="test_uv_group")
+        try:
+            with self.assertRaises(ValueError):
+                UvUtils.transfer_uvs_to_similar(group)  # two meshes
+        finally:
+            cmds.ungroup(group)
+        locator = cmds.spaceLocator(name="test_uv_locator")[0]
+        try:
+            with self.assertRaises(ValueError):
+                UvUtils.transfer_uvs_to_similar(locator)  # not a mesh
+        finally:
+            if cmds.objExists(locator):
+                cmds.delete(locator)
+
+    def test_transfer_uvs_match_by_similarity_false_length_mismatch_raises(self):
+        """Exact-pairing mode requires source/target to already be paired 1:1."""
+        with self.assertRaises(ValueError):
+            UvUtils.transfer_uvs(
+                source=[self.cube, self.cube2],
+                target=[self.cube],
+                match_by_similarity=False,
+            )
 
     def test_reorder_uv_sets(self):
         """Test reordering UV sets."""

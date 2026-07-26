@@ -11,6 +11,7 @@ selection/viewport driven — these tests cover the testable surface:
     - Macros class composition / inheritance
     - Headless-safe macros: m_group, m_combine, m_*_selection (selection masks)
 """
+
 import unittest
 from unittest.mock import patch
 
@@ -126,7 +127,9 @@ class TestSetMacro(MayaTkTestCase):
         # Clean up any runtime command we might have created
         try:
             if cmds.runTimeCommand(self.TEST_MACRO_NAME, exists=True):
-                if not cmds.runTimeCommand(self.TEST_MACRO_NAME, query=True, default=True):
+                if not cmds.runTimeCommand(
+                    self.TEST_MACRO_NAME, query=True, default=True
+                ):
                     cmds.runTimeCommand(self.TEST_MACRO_NAME, edit=True, delete=True)
         except Exception:
             pass
@@ -227,9 +230,13 @@ class TestGridMacros(MayaTkTestCase):
     def test_m_grid_toggles_off_then_back_on(self):
         cmds.grid(toggle=True)
         Macros.m_grid()
-        self.assertFalse(cmds.grid(query=True, toggle=True), "m_grid did not turn the grid OFF")
+        self.assertFalse(
+            cmds.grid(query=True, toggle=True), "m_grid did not turn the grid OFF"
+        )
         Macros.m_grid()
-        self.assertTrue(cmds.grid(query=True, toggle=True), "m_grid did not turn the grid back ON")
+        self.assertTrue(
+            cmds.grid(query=True, toggle=True), "m_grid did not turn the grid back ON"
+        )
 
     def test_m_grid_returns_the_applied_state(self):
         # The return value is what lets m_grid_and_image_planes follow it (DRY).
@@ -241,7 +248,11 @@ class TestGridMacros(MayaTkTestCase):
         # REGRESSION: cmds.grid(toggle=...) used to sit INSIDE `for obj in image_plane:`,
         # so an empty scene (no image planes — i.e. most scenes) left the grid untouched
         # and the macro silently did nothing at all.
-        self.assertEqual(cmds.ls(exactType="imagePlane"), [], "fixture must start with no image planes")
+        self.assertEqual(
+            cmds.ls(exactType="imagePlane"),
+            [],
+            "fixture must start with no image planes",
+        )
         cmds.grid(toggle=True)
         Macros.m_grid_and_image_planes()
         self.assertFalse(
@@ -313,8 +324,8 @@ class TestMacroSmokeInvocation(MayaTkTestCase):
     # discovered/required to exist by TestMacroDiscovery.
     SKIP_INVOCATION = {
         "m_paste_and_rename",  # depends on the cut/copy buffer
-        "m_boolean",           # needs >=2 specific meshes
-        "m_toggle_panels",     # needs main Maya window (Qt) — None in mayapy
+        "m_boolean",  # needs >=2 specific meshes
+        "m_toggle_panels",  # needs main Maya window (Qt) — None in mayapy
     }
 
     def _selected_cube(self, name="smoke_cube"):
@@ -504,7 +515,8 @@ class TestMacroPresentation(QuickTestCase):
 
     def test_list_categories_matches_derived_set(self):
         self.assertEqual(
-            Macros.list_categories(), ["Animation", "Display", "Edit", "Selection", "UI"]
+            Macros.list_categories(),
+            ["Animation", "Display", "Edit", "Selection", "UI"],
         )
 
     def test_default_preset_categories_match_mixin(self):
@@ -571,7 +583,9 @@ class TestPresetRoundTrip(_TempPresetRoot, QuickTestCase):
         self.assertFalse(Macros.delete_preset(Macros.DEFAULT_PRESET))
 
     def test_load_preset_strips_meta(self):
-        Macros.save_preset("unittest_meta", {"m_wireframe": {"key": "3", "cat": "Display"}})
+        Macros.save_preset(
+            "unittest_meta", {"m_wireframe": {"key": "3", "cat": "Display"}}
+        )
         try:
             data = Macros.load_preset("unittest_meta")
             self.assertNotIn("_meta", data)
@@ -643,30 +657,39 @@ class TestLiveHotkeyIntrospection(QuickTestCase):
     """assignCommand keyString -> Maya token conversion (live map is GUI-only)."""
 
     def test_keystring_to_token_modifiers(self):
-        from mayatk.ui_utils.hotkey_collisions import keystring_to_token
+        from mayatk.ui_utils.hotkey_collisions import HotkeyCollisions
 
         # Maya 2025 7-element keyString: [key, alt, ctrl, ?, shift, ?, ?]
-        self.assertEqual(keystring_to_token(["i", "0", "1", "0", "0", "0", "0"]), "ctl+i")
         self.assertEqual(
-            keystring_to_token(["g", "0", "1", "0", "0", "0", "0"]), "ctl+g"
+            HotkeyCollisions.keystring_to_token(["i", "0", "1", "0", "0", "0", "0"]),
+            "ctl+i",
+        )
+        self.assertEqual(
+            HotkeyCollisions.keystring_to_token(["g", "0", "1", "0", "0", "0", "0"]),
+            "ctl+g",
         )
 
     def test_keystring_uppercase_letter_implies_shift(self):
-        from mayatk.ui_utils.hotkey_collisions import keystring_to_token
+        from mayatk.ui_utils.hotkey_collisions import HotkeyCollisions
 
         # Upper-case glyph with ctrl flag -> ctl+sht+i (canonical token form).
-        token = keystring_to_token(["I", "0", "1", "0", "0", "0", "0"])
-        self.assertEqual(Macros._normalize_key(token), Macros._normalize_key("ctl+sht+i"))
+        token = HotkeyCollisions.keystring_to_token(["I", "0", "1", "0", "0", "0", "0"])
+        self.assertEqual(
+            Macros._normalize_key(token), Macros._normalize_key("ctl+sht+i")
+        )
 
     def test_keystring_function_key_passthrough(self):
-        from mayatk.ui_utils.hotkey_collisions import keystring_to_token
+        from mayatk.ui_utils.hotkey_collisions import HotkeyCollisions
 
-        self.assertEqual(keystring_to_token(["F3", "0", "0", "0", "0", "0", "0"]), "F3")
+        self.assertEqual(
+            HotkeyCollisions.keystring_to_token(["F3", "0", "0", "0", "0", "0", "0"]),
+            "F3",
+        )
 
     def test_empty_keystring(self):
-        from mayatk.ui_utils.hotkey_collisions import keystring_to_token
+        from mayatk.ui_utils.hotkey_collisions import HotkeyCollisions
 
-        self.assertEqual(keystring_to_token([]), "")
+        self.assertEqual(HotkeyCollisions.keystring_to_token([]), "")
 
     def test_live_map_empty_when_registry_unavailable(self):
         # When assignCommand reports no elements (None in mayapy standalone),
@@ -679,7 +702,7 @@ class TestLiveHotkeyIntrospection(QuickTestCase):
         with mock.patch.object(
             hotkey_collisions.cmds, "assignCommand", return_value=None
         ):
-            self.assertEqual(hotkey_collisions.live_hotkey_map(), {})
+            self.assertEqual(hotkey_collisions.HotkeyCollisions.live_hotkey_map(), {})
 
 
 class TestEnsureEditableHotkeySet(QuickTestCase):
@@ -722,7 +745,7 @@ class TestEnsureEditableHotkeySet(QuickTestCase):
 
         fake, state = self._fake_hotkeySet("Maya_Default", ["Maya_Default"])
         with mock.patch.object(hc.cmds, "hotkeySet", side_effect=fake):
-            name = hc.ensure_editable_hotkey_set()
+            name = hc.HotkeyCollisions.ensure_editable_hotkey_set()
         self.assertEqual(name, hc.MACRO_HOTKEY_SET)
         self.assertEqual(state["current"], hc.MACRO_HOTKEY_SET)
         self.assertIn(hc.MACRO_HOTKEY_SET, state["sets"])
@@ -735,7 +758,7 @@ class TestEnsureEditableHotkeySet(QuickTestCase):
             "Maya_Default", ["Maya_Default", hc.MACRO_HOTKEY_SET]
         )
         with mock.patch.object(hc.cmds, "hotkeySet", side_effect=fake):
-            name = hc.ensure_editable_hotkey_set()
+            name = hc.HotkeyCollisions.ensure_editable_hotkey_set()
         self.assertEqual(name, hc.MACRO_HOTKEY_SET)
         self.assertEqual(state["current"], hc.MACRO_HOTKEY_SET)
         self.assertEqual(state["sets"].count(hc.MACRO_HOTKEY_SET), 1)
@@ -746,7 +769,7 @@ class TestEnsureEditableHotkeySet(QuickTestCase):
 
         fake, state = self._fake_hotkeySet("MySet", ["Maya_Default", "MySet"])
         with mock.patch.object(hc.cmds, "hotkeySet", side_effect=fake):
-            name = hc.ensure_editable_hotkey_set()
+            name = hc.HotkeyCollisions.ensure_editable_hotkey_set()
         self.assertEqual(name, "MySet")
         self.assertEqual(state["current"], "MySet")
         self.assertNotIn(hc.MACRO_HOTKEY_SET, state["sets"])
@@ -773,16 +796,16 @@ class TestApplyBindingsResilience(QuickTestCase):
         # (forcing clear_hotkey). The bad entry must still not abort the rest.
         # savePrefs is mocked so this unit test never flushes the real prefs.
         live = {"m_unbind": {"key": "F4", "cat": "Edit"}}
-        with mock.patch.object(
-            Macros, "get_current_bindings", return_value=live
-        ), mock.patch.object(
-            Macros, "_key_bound_to", return_value=False  # targets not yet live
-        ), mock.patch.object(
-            Macros, "set_macro", side_effect=fake_set_macro
-        ), mock.patch.object(
-            Macros, "clear_hotkey"
-        ) as clear, mock.patch.object(
-            macros.cmds, "savePrefs", create=True
+        with (
+            mock.patch.object(Macros, "get_current_bindings", return_value=live),
+            mock.patch.object(
+                Macros,
+                "_key_bound_to",
+                return_value=False,  # targets not yet live
+            ),
+            mock.patch.object(Macros, "set_macro", side_effect=fake_set_macro),
+            mock.patch.object(Macros, "clear_hotkey") as clear,
+            mock.patch.object(macros.cmds, "savePrefs", create=True),
         ):
             Macros.apply_bindings(
                 {
@@ -812,19 +835,25 @@ class TestApplyBindingsIdempotent(QuickTestCase):
             "m_wireframe": {"key": "ctl+i", "cat": "Display"},
             "m_group": {"key": "", "cat": "Edit"},
         }
-        with mock.patch.object(
-            Macros, "get_current_bindings", return_value=live
-        ), mock.patch.object(
-            Macros, "_key_bound_to", return_value=True  # target chord already live
-        ), mock.patch.object(
-            # A converged macro has its runTimeCommand too — the no-op check
-            # requires both (a bound chord whose command is gone must re-apply).
-            macros.cmds, "runTimeCommand", return_value=True, create=True
-        ), mock.patch.object(Macros, "set_macro") as set_macro, mock.patch.object(
-            Macros, "clear_hotkey"
-        ) as clear, mock.patch.object(
-            macros.cmds, "savePrefs", create=True
-        ) as save:
+        with (
+            mock.patch.object(Macros, "get_current_bindings", return_value=live),
+            mock.patch.object(
+                Macros,
+                "_key_bound_to",
+                return_value=True,  # target chord already live
+            ),
+            mock.patch.object(
+                # A converged macro has its runTimeCommand too — the no-op check
+                # requires both (a bound chord whose command is gone must re-apply).
+                macros.cmds,
+                "runTimeCommand",
+                return_value=True,
+                create=True,
+            ),
+            mock.patch.object(Macros, "set_macro") as set_macro,
+            mock.patch.object(Macros, "clear_hotkey") as clear,
+            mock.patch.object(macros.cmds, "savePrefs", create=True) as save,
+        ):
             Macros.apply_bindings(
                 {
                     "m_wireframe": {"key": "ctl+i", "cat": "Display"},
@@ -847,20 +876,24 @@ class TestApplyBindingsIdempotent(QuickTestCase):
 
         # live_hotkey_map returned an extra chord, not the preset's sht+q...
         live = {"m_object_selection": {"key": "sht+g", "cat": "Edit"}}
-        with mock.patch.object(
-            Macros, "get_current_bindings", return_value=live
-        ), mock.patch.object(
-            Macros, "_key_bound_to", return_value=True  # ...but sht+q IS bound
-        ) as kb, mock.patch.object(
-            # Converged state includes the runTimeCommand (see the sibling test).
-            macros.cmds, "runTimeCommand", return_value=True, create=True
-        ), mock.patch.object(
-            Macros, "set_macro"
-        ) as set_macro, mock.patch.object(
-            Macros, "clear_hotkey"
-        ) as clear, mock.patch.object(
-            macros.cmds, "savePrefs", create=True
-        ) as save:
+        with (
+            mock.patch.object(Macros, "get_current_bindings", return_value=live),
+            mock.patch.object(
+                Macros,
+                "_key_bound_to",
+                return_value=True,  # ...but sht+q IS bound
+            ) as kb,
+            mock.patch.object(
+                # Converged state includes the runTimeCommand (see the sibling test).
+                macros.cmds,
+                "runTimeCommand",
+                return_value=True,
+                create=True,
+            ),
+            mock.patch.object(Macros, "set_macro") as set_macro,
+            mock.patch.object(Macros, "clear_hotkey") as clear,
+            mock.patch.object(macros.cmds, "savePrefs", create=True) as save,
+        ):
             Macros.apply_bindings(
                 {"m_object_selection": {"key": "sht+q", "cat": "Edit"}}
             )
@@ -874,15 +907,17 @@ class TestApplyBindingsIdempotent(QuickTestCase):
         from mayatk.edit_utils import macros
 
         live = {"m_wireframe": {"key": "F1", "cat": "Display"}}
-        with mock.patch.object(
-            Macros, "get_current_bindings", return_value=live
-        ), mock.patch.object(
-            Macros, "_key_bound_to", return_value=False  # target F2 not yet live
-        ), mock.patch.object(Macros, "set_macro") as set_macro, mock.patch.object(
-            Macros, "clear_hotkey"
-        ) as clear, mock.patch.object(
-            macros.cmds, "savePrefs", create=True
-        ) as save:
+        with (
+            mock.patch.object(Macros, "get_current_bindings", return_value=live),
+            mock.patch.object(
+                Macros,
+                "_key_bound_to",
+                return_value=False,  # target F2 not yet live
+            ),
+            mock.patch.object(Macros, "set_macro") as set_macro,
+            mock.patch.object(Macros, "clear_hotkey") as clear,
+            mock.patch.object(macros.cmds, "savePrefs", create=True) as save,
+        ):
             Macros.apply_bindings({"m_wireframe": {"key": "F2", "cat": "Display"}})
         # Rebinding must release the stale live chord first: set_macro only
         # ADDS a binding, so without the clear the command stays multi-bound,
@@ -898,14 +933,12 @@ class TestApplyBindingsIdempotent(QuickTestCase):
 
         # No live key -> nothing to release; just bind.
         live = {"m_wireframe": {"key": "", "cat": "Display"}}
-        with mock.patch.object(
-            Macros, "get_current_bindings", return_value=live
-        ), mock.patch.object(
-            Macros, "_key_bound_to", return_value=False
-        ), mock.patch.object(Macros, "set_macro") as set_macro, mock.patch.object(
-            Macros, "clear_hotkey"
-        ) as clear, mock.patch.object(
-            macros.cmds, "savePrefs", create=True
+        with (
+            mock.patch.object(Macros, "get_current_bindings", return_value=live),
+            mock.patch.object(Macros, "_key_bound_to", return_value=False),
+            mock.patch.object(Macros, "set_macro") as set_macro,
+            mock.patch.object(Macros, "clear_hotkey") as clear,
+            mock.patch.object(macros.cmds, "savePrefs", create=True),
         ):
             Macros.apply_bindings({"m_wireframe": {"key": "F2", "cat": "Display"}})
         clear.assert_not_called()
@@ -922,14 +955,16 @@ class TestApplyBindingsIdempotent(QuickTestCase):
             "m_wireframe": {"key": "F1", "cat": "Display"},
             "m_group": {"key": "F2", "cat": "Edit"},
         }
-        with mock.patch.object(
-            Macros, "get_current_bindings", return_value=live
-        ), mock.patch.object(
-            Macros, "_key_bound_to", return_value=False  # neither target live yet
-        ), mock.patch.object(Macros, "set_macro") as set_macro, mock.patch.object(
-            Macros, "clear_hotkey"
-        ) as clear, mock.patch.object(
-            macros.cmds, "savePrefs", create=True
+        with (
+            mock.patch.object(Macros, "get_current_bindings", return_value=live),
+            mock.patch.object(
+                Macros,
+                "_key_bound_to",
+                return_value=False,  # neither target live yet
+            ),
+            mock.patch.object(Macros, "set_macro") as set_macro,
+            mock.patch.object(Macros, "clear_hotkey") as clear,
+            mock.patch.object(macros.cmds, "savePrefs", create=True),
         ):
             Macros.apply_bindings(
                 {
@@ -1031,9 +1066,12 @@ class TestEditorGlue(QuickTestCase):
         return live
 
     def test_registry_entries_are_editor_shaped_and_category_filtered(self):
-        with patch.object(
-            Macros, "get_current_bindings", side_effect=self._patched_live
-        ), patch.object(Macros, "_default_bindings", return_value={}):
+        with (
+            patch.object(
+                Macros, "get_current_bindings", side_effect=self._patched_live
+            ),
+            patch.object(Macros, "_default_bindings", return_value={}),
+        ):
             entries = {e["method"]: e for e in Macros.get_editor_registry("Display")}
         self.assertIn("m_grid", entries)
         self.assertNotIn("m_group", entries)  # Edit category
@@ -1043,14 +1081,24 @@ class TestEditorGlue(QuickTestCase):
         self.assertEqual(entry["current"], "Ctrl+G")  # converted to Qt form
         self.assertEqual(entry["current_scope"], "application")
         self.assertFalse(entry["scope_editable"])  # native keys are DCC-global
-        for field in ("method", "name", "doc", "current", "default",
-                      "current_scope", "default_scope"):
+        for field in (
+            "method",
+            "name",
+            "doc",
+            "current",
+            "default",
+            "current_scope",
+            "default_scope",
+        ):
             self.assertIn(field, entry)
 
     def test_custom_category_becomes_a_group(self):
-        with patch.object(
-            Macros, "get_current_bindings", side_effect=self._patched_live
-        ), patch.object(Macros, "_default_bindings", return_value={}):
+        with (
+            patch.object(
+                Macros, "get_current_bindings", side_effect=self._patched_live
+            ),
+            patch.object(Macros, "_default_bindings", return_value={}),
+        ):
             cats = Macros.editor_categories()
             customs = [e["method"] for e in Macros.get_editor_registry("Custom")]
         self.assertIn("Custom", cats)
@@ -1072,12 +1120,18 @@ class TestEditorGlue(QuickTestCase):
 
     def test_import_bindings_releases_uncovered_keys_then_applies(self):
         cleared, applied = [], []
-        with patch.object(
-            Macros, "get_current_bindings", side_effect=self._patched_live
-        ), patch.object(
-            Macros, "clear_hotkey", side_effect=lambda n, key=None: cleared.append((n, key))
-        ), patch.object(
-            Macros, "apply_bindings", side_effect=lambda d: applied.append(d)
+        with (
+            patch.object(
+                Macros, "get_current_bindings", side_effect=self._patched_live
+            ),
+            patch.object(
+                Macros,
+                "clear_hotkey",
+                side_effect=lambda n, key=None: cleared.append((n, key)),
+            ),
+            patch.object(
+                Macros, "apply_bindings", side_effect=lambda d: applied.append(d)
+            ),
         ):
             count = Macros.import_bindings({"m_group": {"key": "g", "cat": "Edit"}})
         self.assertEqual(count, 1)
@@ -1086,13 +1140,22 @@ class TestEditorGlue(QuickTestCase):
 
     def test_apply_editor_binding_rebinds_clears_and_sets(self):
         calls = []
-        with patch.object(
-            Macros, "get_current_bindings", side_effect=self._patched_live
-        ), patch.object(
-            Macros, "clear_hotkey", side_effect=lambda n, key=None: calls.append(("clear", n, key))
-        ), patch.object(
-            Macros, "set_macro",
-            side_effect=lambda n, key=None, cat=None: calls.append(("set", n, key, cat)),
+        with (
+            patch.object(
+                Macros, "get_current_bindings", side_effect=self._patched_live
+            ),
+            patch.object(
+                Macros,
+                "clear_hotkey",
+                side_effect=lambda n, key=None: calls.append(("clear", n, key)),
+            ),
+            patch.object(
+                Macros,
+                "set_macro",
+                side_effect=lambda n, key=None, cat=None: calls.append(
+                    ("set", n, key, cat)
+                ),
+            ),
         ):
             Macros.apply_editor_binding("m_grid", "Ctrl+J")  # rebind
             Macros.apply_editor_binding("m_grid", "")  # clear
@@ -1109,13 +1172,22 @@ class TestEditorGlue(QuickTestCase):
 
     def test_apply_editor_binding_same_key_is_not_cleared(self):
         calls = []
-        with patch.object(
-            Macros, "get_current_bindings", side_effect=self._patched_live
-        ), patch.object(
-            Macros, "clear_hotkey", side_effect=lambda n, key=None: calls.append(("clear", n, key))
-        ), patch.object(
-            Macros, "set_macro",
-            side_effect=lambda n, key=None, cat=None: calls.append(("set", n, key, cat)),
+        with (
+            patch.object(
+                Macros, "get_current_bindings", side_effect=self._patched_live
+            ),
+            patch.object(
+                Macros,
+                "clear_hotkey",
+                side_effect=lambda n, key=None: calls.append(("clear", n, key)),
+            ),
+            patch.object(
+                Macros,
+                "set_macro",
+                side_effect=lambda n, key=None, cat=None: calls.append(
+                    ("set", n, key, cat)
+                ),
+            ),
         ):
             Macros.apply_editor_binding("m_grid", "Ctrl+G")  # unchanged chord
         self.assertNotIn(("clear", "m_grid", "ctl+g"), calls)

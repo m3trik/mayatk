@@ -23,6 +23,7 @@ general primitives it composes — ``RailSurface``/``Polyline``/``MathUtils``/
 ``BandLimitedNoise`` — not this curtain-specific remainder). Mirror any change
 into both copies; drift fails ``extapps/test/test_vendor_sync.py``.
 """
+
 from __future__ import annotations
 
 import bisect
@@ -34,24 +35,8 @@ import pythontk as ptk
 
 Vec = Tuple[float, float, float]
 
-_smoothstep = ptk.MathUtils.smoothstep    # clamped Hermite ease
+_smoothstep = ptk.MathUtils.smoothstep  # clamped Hermite ease
 _sag_profile = ptk.MathUtils.catenary_sag
-
-
-def _v_arms(u: float, u0: float, spread: float, depth: float, half_width: float) -> float:
-    """Sum of the two **mean-preserving** arms of a downward **V** apexed at ``u0``.
-
-    Each arm is a Ricker wavelet (:meth:`MathUtils.ricker` — a ridge with
-    flanking troughs), so a fold reads as in/out undulation rather than a
-    one-sided bulge. The arms coincide at the apex (``depth == 0``) and fan
-    symmetrically to ``u0 ± spread·depth`` as the V runs down (``depth`` =
-    distance below the apex); ``half_width`` sets each arm's width. Shared by the
-    surface creases and the mid-fold forks.
-    """
-    ricker = ptk.MathUtils.ricker
-    return ricker((u - (u0 - spread * depth)) / half_width) + ricker(
-        (u - (u0 + spread * depth)) / half_width
-    )
 
 
 # ----------------------------------------------------------------------------
@@ -59,7 +44,29 @@ def _v_arms(u: float, u0: float, spread: float, depth: float, half_width: float)
 # ----------------------------------------------------------------------------
 
 
-class CurtainDrape:
+class _CurtainDrapeInternal(object):
+    """Internal helpers for CurtainDrape."""
+
+    @staticmethod
+    def _v_arms(
+        u: float, u0: float, spread: float, depth: float, half_width: float
+    ) -> float:
+        """Sum of the two **mean-preserving** arms of a downward **V** apexed at ``u0``.
+
+        Each arm is a Ricker wavelet (:meth:`MathUtils.ricker` — a ridge with
+        flanking troughs), so a fold reads as in/out undulation rather than a
+        one-sided bulge. The arms coincide at the apex (``depth == 0``) and fan
+        symmetrically to ``u0 ± spread·depth`` as the V runs down (``depth`` =
+        distance below the apex); ``half_width`` sets each arm's width. Shared by the
+        surface creases and the mid-fold forks.
+        """
+        ricker = ptk.MathUtils.ricker
+        return ricker((u - (u0 - spread * depth)) / half_width) + ricker(
+            (u - (u0 + spread * depth)) / half_width
+        )
+
+
+class CurtainDrape(_CurtainDrapeInternal):
     """Drape a grid into a pleated, gravity-sagged curtain — pure math.
 
     Consumes plain rail points (see :class:`ptk.Polyline`) and emits draped
@@ -259,8 +266,8 @@ class CurtainDrape:
         a catenary under gravity. ``sway`` additionally leans a fold sideways
         along ``tan`` (the in-plane rail tangent).
         """
-        k, t = self._span_at(u)             # span index + local 0..1
-        phase = k + t                       # integers = hang points
+        k, t = self._span_at(u)  # span index + local 0..1
+        phase = k + t  # integers = hang points
 
         # Fold belly: ``_BELLY_HUMPS_PER_SPAN`` half-sine humps per pleat-span (2
         # = one out-bulge + one in-recess = a full fold), zero at every hang
@@ -312,8 +319,12 @@ class CurtainDrape:
             * self._total_length
             / self._BELLY_HUMPS_PER_SPAN
         )
-        sag = self.gravity * sag_width * _sag_profile(
-            2.0 * t - 1.0, self.tension, self.round_points, self.round_gather * 0.5
+        sag = (
+            self.gravity
+            * sag_width
+            * _sag_profile(
+                2.0 * t - 1.0, self.tension, self.round_points, self.round_gather * 0.5
+            )
         )
         y = pos[1] - sag - (1.0 - v) * self.height
         return (x, y, z)
@@ -355,10 +366,11 @@ class CurtainDrape:
         n = max(3, round(self.spans * 2.5))
         return [
             (
-                rng.uniform(0.04, 0.96),                          # u0 — apex position
-                rng.uniform(0.3, 1.0),                            # length — fraction of the drop
-                rng.choice((-1.0, 1.0)) * rng.uniform(0.4, 1.0),  # amp — signed ridge/valley
-                rng.uniform(0.02, 0.10),                          # spread — V arm divergence
+                rng.uniform(0.04, 0.96),  # u0 — apex position
+                rng.uniform(0.3, 1.0),  # length — fraction of the drop
+                rng.choice((-1.0, 1.0))
+                * rng.uniform(0.4, 1.0),  # amp — signed ridge/valley
+                rng.uniform(0.02, 0.10),  # spread — V arm divergence
             )
             for _ in range(n)
         ]
@@ -382,9 +394,13 @@ class CurtainDrape:
             # and tapers to nothing at the tip. ``> length`` guard above keeps
             # ``1 - x`` non-negative for the fractional power.
             x = depth_from_top / length
-            fall = (x ** 0.6) * ((1.0 - x) ** 1.3) / self._CREASE_PEAK
-            total += amp * fall * _v_arms(
-                u, u0, spread, depth_from_top, self._CREASE_WIDTH
+            fall = (x**0.6) * ((1.0 - x) ** 1.3) / self._CREASE_PEAK
+            total += (
+                amp
+                * fall
+                * _CurtainDrapeInternal._v_arms(
+                    u, u0, spread, depth_from_top, self._CREASE_WIDTH
+                )
             )
         return self.creases * 0.15 * total
 
@@ -410,9 +426,7 @@ class CurtainDrape:
             return []
         # A fork at the very end would be half-clipped, so anchor only on
         # interior hang points; a closed loop wraps, so every point is interior.
-        points = (
-            list(range(self.spans)) if self.closed else list(range(1, self.spans))
-        )
+        points = list(range(self.spans)) if self.closed else list(range(1, self.spans))
         if not points:
             return []
         # Arm spread and fold width are stored in global u but authored as
@@ -425,15 +439,15 @@ class CurtainDrape:
         chosen = rng.sample(points, max(1, round(len(points) * frac)))
         folds = []
         for i in chosen:
-            if rng.random() < 0.5:                  # long, narrow-ish, deep
+            if rng.random() < 0.5:  # long, narrow-ish, deep
                 length = rng.uniform(0.7, 1.0)
                 width_frac = rng.uniform(0.18, 0.42)
                 amp = rng.uniform(0.7, 1.1)
-            else:                                   # short, wide, shallow
+            else:  # short, wide, shallow
                 length = rng.uniform(0.3, 0.6)
                 width_frac = rng.uniform(0.45, 0.85)
                 amp = rng.uniform(0.4, 0.7)
-            spread_frac = rng.uniform(0.25, 0.6)    # arms fan this much of a span
+            spread_frac = rng.uniform(0.25, 0.6)  # arms fan this much of a span
             # Anchor on the hang point's *actual* (possibly jittered) u-position;
             # arm spread / width stay relative to the average span so the fork
             # shape is invariant to hang-point count.
@@ -464,7 +478,13 @@ class CurtainDrape:
             v_prof = _smoothstep(depth_from_top / self._MIDFOLD_TOP_FADE) * _smoothstep(
                 (length - depth_from_top) / self._MIDFOLD_FADE
             )
-            total += amp * v_prof * _v_arms(u, u0, spread, depth_from_top, half_width)
+            total += (
+                amp
+                * v_prof
+                * _CurtainDrapeInternal._v_arms(
+                    u, u0, spread, depth_from_top, half_width
+                )
+            )
         return self.mid_folds * 0.15 * total
 
     def _make_sway(self):
@@ -503,7 +523,7 @@ class CurtainDrape:
         # Track the belly: zero at the pinned hang points (and the in/out
         # crossover), peak where the fabric bellies most.
         env = abs(math.sin(math.pi * self._BELLY_HUMPS_PER_SPAN * phase))
-        hem = 0.3 + 0.7 * (1.0 - v)           # more sway toward the free hem
+        hem = 0.3 + 0.7 * (1.0 - v)  # more sway toward the free hem
         return self.sway * 0.2 * lean * env * hem
 
     def _end_bend_offset(self, u: float) -> float:
@@ -511,8 +531,8 @@ class CurtainDrape:
         if self.end_bend_left == 0.0 and self.end_bend_right == 0.0:
             return 0.0
         fo = self.end_bend_falloff
-        wl = _smoothstep((fo - u) / fo)            # 1 at u=0 -> 0 at u=fo
-        wr = _smoothstep((u - (1.0 - fo)) / fo)    # 0 -> 1 at u=1
+        wl = _smoothstep((fo - u) / fo)  # 1 at u=0 -> 0 at u=fo
+        wr = _smoothstep((u - (1.0 - fo)) / fo)  # 0 -> 1 at u=1
         return self.end_bend_left * wl + self.end_bend_right * wr
 
     # Band-limited surface grain: a handful of smooth wave octaves read as soft

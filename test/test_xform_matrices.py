@@ -5,22 +5,34 @@
 Covers Matrices public surface — pure-math helpers, DAG transform helpers,
 and node-graph builders for matrix-based rigging.
 """
+
 import unittest
 
 import maya.cmds as cmds
 from maya.api.OpenMaya import MMatrix
 
-from mayatk.xform_utils import matrices as mx
-from mayatk.xform_utils.matrices import Matrices, get_matrix, set_matrix
+from mayatk.xform_utils.matrices import Matrices
 
 from base_test import MayaTkTestCase
 
 
 IDENTITY_FLAT = [
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 1.0, 0.0,
-    0.0, 0.0, 0.0, 1.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
 ]
 
 
@@ -38,7 +50,7 @@ class TestMatrixModuleHelpers(MayaTkTestCase):
     def test_get_matrix_singular_attr_no_index(self):
         """``matrix`` and ``offsetParentMatrix`` are singular plugs — read without [index]."""
         cmds.move(2, 3, 4, self.cube)
-        flat = get_matrix(self.cube, "matrix")
+        flat = Matrices.get_matrix(self.cube, "matrix")
         self.assertEqual(len(flat), 16)
         # translation lives in the last row (Maya is row-major)
         self.assertAlmostEqual(flat[12], 2.0, places=4)
@@ -53,7 +65,7 @@ class TestMatrixModuleHelpers(MayaTkTestCase):
         length-only assertion missed the case where get_matrix returned a
         zero matrix from a misindexed plug).
         """
-        flat = get_matrix(self.cube, "worldMatrix", index=0)
+        flat = Matrices.get_matrix(self.cube, "worldMatrix", index=0)
         self.assertEqual(len(flat), 16)
         for a, b in zip(flat, IDENTITY_FLAT):
             self.assertAlmostEqual(a, b, places=5)
@@ -62,22 +74,22 @@ class TestMatrixModuleHelpers(MayaTkTestCase):
         """Round-trip a flat list through set_matrix / get_matrix."""
         target = list(IDENTITY_FLAT)
         target[12], target[13], target[14] = 7.0, 8.0, 9.0
-        set_matrix(self.cube, "offsetParentMatrix", target)
-        got = get_matrix(self.cube, "offsetParentMatrix")
+        Matrices.set_matrix(self.cube, "offsetParentMatrix", target)
+        got = Matrices.get_matrix(self.cube, "offsetParentMatrix")
         for a, b in zip(got, target):
             self.assertAlmostEqual(a, b, places=4)
 
     def test_set_matrix_from_mmatrix(self):
         """MMatrix inputs are flattened automatically."""
         m = MMatrix(IDENTITY_FLAT)
-        set_matrix(self.cube, "offsetParentMatrix", m)
-        got = get_matrix(self.cube, "offsetParentMatrix")
+        Matrices.set_matrix(self.cube, "offsetParentMatrix", m)
+        got = Matrices.get_matrix(self.cube, "offsetParentMatrix")
         for a, b in zip(got, IDENTITY_FLAT):
             self.assertAlmostEqual(a, b, places=6)
 
     def test_set_matrix_wrong_length_raises(self):
         with self.assertRaises(ValueError):
-            set_matrix(self.cube, "offsetParentMatrix", [1, 2, 3])
+            Matrices.set_matrix(self.cube, "offsetParentMatrix", [1, 2, 3])
 
 
 class TestMatrixMath(MayaTkTestCase):
@@ -201,7 +213,7 @@ class TestDagTransforms(MayaTkTestCase):
     def test_set_offset_parent_matrix(self):
         m = Matrices.from_srt(translate=(4.0, 0.0, 0.0))
         Matrices.set_offset_parent_matrix(self.cube, m)
-        got = get_matrix(self.cube, "offsetParentMatrix")
+        got = Matrices.get_matrix(self.cube, "offsetParentMatrix")
         # translation row stores it in elements 12..14
         self.assertAlmostEqual(got[12], 4.0, places=4)
 
@@ -259,7 +271,9 @@ class TestNodeBuilders(MayaTkTestCase):
         self.assertNodeType(dcmp, "decomposeMatrix")
 
         # matrixSum should be feeding the decomposeMatrix
-        connections = cmds.listConnections(f"{dcmp}.inputMatrix", source=True, plugs=True) or []
+        connections = (
+            cmds.listConnections(f"{dcmp}.inputMatrix", source=True, plugs=True) or []
+        )
         self.assertTrue(any(f"{mmx}.matrixSum" == c for c in connections))
 
     def test_drive_with_offset_parent_matrix(self):
@@ -269,9 +283,10 @@ class TestNodeBuilders(MayaTkTestCase):
         self.assertNodeType(mmx, "multMatrix")
 
         # offsetParentMatrix should be driven by mmx.matrixSum
-        connections = cmds.listConnections(
-            f"{ctl}.offsetParentMatrix", source=True, plugs=True
-        ) or []
+        connections = (
+            cmds.listConnections(f"{ctl}.offsetParentMatrix", source=True, plugs=True)
+            or []
+        )
         self.assertTrue(any(f"{mmx}.matrixSum" == c for c in connections))
 
     def test_build_space_switch_creates_attribute_and_blend(self):
@@ -286,9 +301,10 @@ class TestNodeBuilders(MayaTkTestCase):
         self.assertTrue(cmds.attributeQuery("space", node=ctl, exists=True))
 
         # offsetParentMatrix should be driven by blendMatrix output
-        connections = cmds.listConnections(
-            f"{ctl}.offsetParentMatrix", source=True, plugs=True
-        ) or []
+        connections = (
+            cmds.listConnections(f"{ctl}.offsetParentMatrix", source=True, plugs=True)
+            or []
+        )
         self.assertTrue(any(f"{blnd}.outputMatrix" == c for c in connections))
 
     def test_build_aim_matrix(self):

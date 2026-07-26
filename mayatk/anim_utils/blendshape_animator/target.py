@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Tween mesh wrappers and registry for blendShape in-between targets."""
+
 from typing import Dict, List, Optional
 
 import pythontk as ptk
@@ -10,7 +11,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 
-from mayatk.core_utils._core_utils import leaf_name
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 
 from pythontk import Weights
@@ -89,7 +90,8 @@ class Targets(ptk.LoggingMixin):
         for group_name in cls.DEFAULT_GROUPS:
             if cmds.objExists(group_name):
                 children = (
-                    cmds.listRelatives(group_name, children=True, type="transform") or []
+                    cmds.listRelatives(group_name, children=True, type="transform")
+                    or []
                 )
                 for child in children:
                     if child not in seen:
@@ -116,11 +118,15 @@ class Targets(ptk.LoggingMixin):
                 continue
 
         if blendshape is not None:
-            want = leaf_name(blendshape)
-            tweens = [t for t in tweens if leaf_name(t.blendshape_name) == want]
+            want = CoreUtils.leaf_name(blendshape)
+            tweens = [
+                t for t in tweens if CoreUtils.leaf_name(t.blendshape_name) == want
+            ]
         if base_mesh is not None:
-            want = leaf_name(base_mesh)
-            tweens = [t for t in tweens if leaf_name(t.base_mesh_name) == want]
+            want = CoreUtils.leaf_name(base_mesh)
+            tweens = [
+                t for t in tweens if CoreUtils.leaf_name(t.base_mesh_name) == want
+            ]
 
         return sorted(tweens, key=lambda t: t.weight)
 
@@ -133,9 +139,7 @@ class Targets(ptk.LoggingMixin):
         return weight_groups
 
     @classmethod
-    def update_all_references(
-        cls, new_blendshape: str, new_base_mesh: str
-    ) -> int:
+    def update_all_references(cls, new_blendshape: str, new_base_mesh: str) -> int:
         """Rebind tween references after a blendShape rebuild.
 
         Scoped to tweens tagged for ``new_base_mesh`` (the mesh name survives

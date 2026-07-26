@@ -15,23 +15,20 @@ The registry is intentionally non-exhaustive -- it covers the params real
 RizomUV bridge implementations actually expose (SideFX Labs, the C4D
 bridge, the 3ds Max bridge), not every flag in the Lua API.
 """
+
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
-from uitk.bridge import (
-    AttributeSpec,
-    lua_literal,
-    referenced_keys as _refkeys,
-    defaults as _defaults,
-    render_context as _render_context,
-)
+from uitk.bridge import AttributeSpec, Formatters, Parameters as _BridgeParams
 
 
 # Targets Lua scripts -- ``lua_literal`` produces lowercase ``true`` /
 # ``false`` and bare numeric / string literals suitable for inlining
 # into ``scripts/*.lua`` preset bodies.
-_FORMATTER = lua_literal
+_FORMATTER = Formatters.lua_literal
 
 
 # Display order is iteration order over this dict.
@@ -64,11 +61,18 @@ PARAMS: "dict[str, AttributeSpec]" = {
         kind="choice",
         default=2,
         choices=[
-            ("0  None", 0),
-            ("1  Uniform", 1),
-            ("2  Non-uniform", 2),
+            ("0  Keep current scale", 0),
+            ("1  Uniform (3D area)", 1),
+            ("2  Avg texel density", 2),
         ],
-        tooltip="How shells are pre-scaled before packing.",
+        tooltip=(
+            "ZomPack Scaling.Mode -- how shells are scaled before packing.\n"
+            "Keep current scale (0): leave incoming UV scale untouched.\n"
+            "Uniform 3D area (1): size each shell by its 3D surface area.\n"
+            "Avg texel density (2, default): equalize texel density.\n"
+            "To MAINTAIN the existing scale between objects, set this to\n"
+            "'Keep current scale' AND Layout Scale to 'Keep positions'."
+        ),
     ),
     "LAYOUT_SCALING_MODE": AttributeSpec(
         key="LAYOUT_SCALING_MODE",
@@ -76,11 +80,18 @@ PARAMS: "dict[str, AttributeSpec]" = {
         kind="choice",
         default=2,
         choices=[
-            ("0  None", 0),
-            ("1  Uniform", 1),
-            ("2  Non-uniform", 2),
+            ("0  Keep positions", 0),
+            ("1  Translate only", 1),
+            ("2  Best fit (uniform)", 2),
+            ("3  Force fit (non-uniform)", 3),
         ],
-        tooltip="How the final packed layout is scaled to fit 0-1.",
+        tooltip=(
+            "ZomPack LayoutScalingMode -- how the packed layout is fit to the tile.\n"
+            "Keep positions (0): don't rescale/reposition (required for the\n"
+            "'maintain scale between objects' workflow -- any other value\n"
+            "rescales even locked islands).\n"
+            "Translate only (1) / Best fit uniform (2, default) / Force fit (3)."
+        ),
     ),
     "ROTATE_STEP": AttributeSpec(
         key="ROTATE_STEP",
@@ -91,8 +102,7 @@ PARAMS: "dict[str, AttributeSpec]" = {
         maximum=360,
         step=1,
         tooltip=(
-            "Rotation step in degrees.\n"
-            "90 = axis-aligned, 1 = free rotation (slowest)."
+            "Rotation step in degrees.\n90 = axis-aligned, 1 = free rotation (slowest)."
         ),
     ),
     "PACK_ROTATE_ENABLE": AttributeSpec(
@@ -143,8 +153,7 @@ PARAMS: "dict[str, AttributeSpec]" = {
         maximum=10000,
         step=1,
         tooltip=(
-            "Packer solver iterations.\n"
-            "Higher = tighter packing, slower convergence."
+            "Packer solver iterations.\nHigher = tighter packing, slower convergence."
         ),
     ),
     "SCALING_MIX": AttributeSpec(
@@ -156,6 +165,77 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "Mix incoming UV scale with the packer's computed scale.\n"
             "Useful when repacking an existing layout you want to mostly\n"
             "preserve; off = fully recompute scale from scratch."
+        ),
+    ),
+    # Island-to-island spacing and tile-border margin (UV units). Both
+    # probe-verified safe on 2020.1 (MarginSize + SpacingSize); the newer
+    # PaddingSize field-name for spacing access-violates 2020.1 and is
+    # emitted only on >= 2022 via an inline @min/@max_rizom_line split in
+    # templates/pack_block.lua (SpacingSize <= 2021, PaddingSize >= 2022).
+    "PACK_SPACING": AttributeSpec(
+        key="PACK_SPACING",
+        label="Edge Spacing",
+        kind="float",
+        default=0.004,
+        minimum=0.0,
+        maximum=0.1,
+        step=0.001,
+        decimals=4,
+        tooltip=(
+            "Gap between packed islands, in UV units (fraction of the tile).\n"
+            "0.004 at a 1024 map ~= 4 px. Bigger = more bleed protection,\n"
+            "less usable area."
+        ),
+    ),
+    "PACK_MARGIN": AttributeSpec(
+        key="PACK_MARGIN",
+        label="Tile Margin",
+        kind="float",
+        default=0.002,
+        minimum=0.0,
+        maximum=0.1,
+        step=0.001,
+        decimals=4,
+        tooltip=(
+            "Empty border kept inside the tile edge, in UV units.\n"
+            "0.002 at a 1024 map ~= 2 px. Prevents islands touching the\n"
+            "tile boundary."
+        ),
+    ),
+    # Post-pack placement (ZomDeform). Both probe-verified on 2020.1:
+    # ZomDeform accepts a row-major 3x3 UV-space Transform, so target-UDIM
+    # translation and fractional-tile compression need no version gate.
+    "TARGET_UDIM": AttributeSpec(
+        key="TARGET_UDIM",
+        label="Target UDIM",
+        kind="int",
+        default=1001,
+        minimum=1001,
+        maximum=1100,
+        step=1,
+        tooltip=(
+            "UDIM tile the packed layout lands in (1001-1100).\n"
+            "1001 = the 0-1 tile, 1002 = one tile right (u 1-2),\n"
+            "1011 = one tile up (v 1-2). Applied as a whole-layout\n"
+            "translate after packing."
+        ),
+    ),
+    "UV_AREA": AttributeSpec(
+        key="UV_AREA",
+        label="Tile Coverage",
+        kind="choice",
+        default=0,
+        choices=[
+            ("Full tile", 0),
+            ("Half (U 0-0.5)", 1),
+            ("Half (V 0-0.5)", 2),
+            ("Quarter (bottom-left)", 3),
+        ],
+        tooltip=(
+            "Fraction of the target tile the packed layout occupies.\n"
+            "The layout is packed for the full tile, then compressed into\n"
+            "the chosen region (anchored bottom-left); island spacing\n"
+            "compresses proportionally."
         ),
     ),
     # ------------------------------------------------------------------
@@ -266,6 +346,17 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "higher = more, flatter islands with more seams."
         ),
     ),
+    "FIT_CONES": AttributeSpec(
+        key="FIT_CONES",
+        label="Fit Cones",
+        kind="bool",
+        default=False,
+        tooltip=(
+            "Mosaic QuasiDevelopable.FitCones (organic unwrap).\n"
+            "On = fit cones / cylinders (fewer, cleaner seams on tubular\n"
+            "shapes) at a solve-time cost; off (default) = planes only."
+        ),
+    ),
     # ------------------------------------------------------------------
     # One-way send load options (ZomLoad File={...} fields)
     # ------------------------------------------------------------------
@@ -318,19 +409,140 @@ PARAMS: "dict[str, AttributeSpec]" = {
 }
 
 
-def referenced_keys(script_text: str) -> "set[str]":
-    """Registered keys present in *script_text* (delegates to uitk.bridge)."""
-    return _refkeys(script_text, PARAMS)
+# Preset-level version gate: a ``-- @min_rizom: X.Y`` marker in a preset's
+# leading comment hides the WHOLE preset (combo entry + execution) below
+# that Rizom version. Token-level ``MIN_VERSIONS`` gating strips single
+# lines, which can't express a preset whose core mechanism (e.g. the
+# ZomPack ``WorkingSet`` field in pack_into_existing) doesn't exist on
+# older Rizom -- stripping the line would silently change semantics
+# instead of failing loudly.
+_PRESET_MIN_VERSION_RE = re.compile(
+    r"^--\s*@min_rizom:\s*(\d+(?:\.\d+)*)\s*$", re.MULTILINE
+)
+
+# Inline per-LINE version range: ``... , -- @min_rizom_line: 2022.0`` keeps
+# the line only on Rizom >= that version; ``-- @max_rizom_line: 2021.9999``
+# keeps it only <= that version. Unlike ``MIN_VERSIONS`` (keyed on the param
+# token) this is keyed on the line itself, so two lines can render the SAME
+# param token under different field names for different Rizom versions -- e.g.
+# ``SpacingSize=__PACK_SPACING__`` (<= 2021) vs ``PaddingSize=__PACK_SPACING__``
+# (>= 2022), the probed rename (2020.1: SpacingSize/MarginSize safe,
+# PaddingSize access-violates). See docs/rizom_bridge_upgrade_plan.md.
+_INLINE_MIN_LINE_RE = re.compile(r"--\s*@min_rizom_line:\s*(\d+(?:\.\d+)*)")
+_INLINE_MAX_LINE_RE = re.compile(r"--\s*@max_rizom_line:\s*(\d+(?:\.\d+)*)")
+
+# Include directives expanded before version-stripping + substitution. Keeps
+# the shared group/pack/placement recipe in ONE file (templates/pack_block.lua)
+# instead of duplicated across pack.lua + the unwrap_*.lua presets.
+_INCLUDE_TOKENS = {"PACK_BLOCK": "pack_block.lua"}
+_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
 
-def defaults() -> "dict[str, Any]":
-    """Return ``{key: default}`` for every registered parameter."""
-    return _defaults(PARAMS)
+def _parse_version_literal(text: str) -> "tuple[int, ...]":
+    """``"2022.0"`` -> ``(2022, 0)``; padded to length 2 for tuple compare."""
+    parsed = tuple(int(p) for p in text.split("."))
+    return parsed if len(parsed) >= 2 else parsed + (0,) * (2 - len(parsed))
 
 
-def render_context(values: "dict[str, Any]") -> "dict[str, str]":
-    """Format *values* for ``StrUtils.replace_delimited`` using Lua literals."""
-    return _render_context(values, PARAMS, formatter=_FORMATTER)
+class Parameters:
+    """Parameters — module namespace."""
+
+    @staticmethod
+    def expand_includes(script_text: str) -> str:
+        """Expand ``__PACK_BLOCK__``-style include tokens to their partial's text.
+
+        Runs before :meth:`strip_unsupported` and param substitution so the
+        included lines participate in both (version-gating + ``__KEY__``
+        replacement). Idempotent -- once expanded the token is gone.
+
+        Only a line whose sole non-whitespace content is the token is
+        expanded -- an in-comment mention of the token is left untouched.
+        (The bridge's ``StrUtils.replace_delimited`` param substitution is a
+        blind replace that WOULD clobber comments; the include expander must
+        not share that footgun, since the whole point is a multi-line block.)
+        """
+        markers = {f"__{token}__": filename for token, filename in _INCLUDE_TOKENS.items()}
+        out = []
+        for line in script_text.splitlines(keepends=True):
+            filename = markers.get(line.strip())
+            if filename:
+                out.append((_TEMPLATE_DIR / filename).read_text(encoding="utf-8"))
+            else:
+                out.append(line)
+        return "".join(out)
+
+    @staticmethod
+    def preset_min_version(script_text: str) -> "tuple[int, ...] | None":
+        """Minimum Rizom version a preset declares, or ``None`` if ungated.
+
+        Parses the ``@min_rizom`` marker (see :data:`_PRESET_MIN_VERSION_RE`).
+        The result is padded to length 2 so single-segment versions compare
+        correctly against ``(year, minor)`` tuples (same convention as
+        ``RizomUVBridge.rizom_version``).
+        """
+        match = _PRESET_MIN_VERSION_RE.search(script_text or "")
+        return _parse_version_literal(match.group(1)) if match else None
+
+    @staticmethod
+    def referenced_keys(script_text: str) -> "set[str]":
+        """Registered keys present in *script_text* (delegates to uitk.bridge).
+
+        Includes are expanded first so tokens living only inside a shared
+        partial (``templates/pack_block.lua``) are still discovered for panel
+        visibility.
+        """
+        return _BridgeParams.referenced_keys(
+            Parameters.expand_includes(script_text), PARAMS
+        )
+
+    @staticmethod
+    def defaults() -> "dict[str, Any]":
+        """Return ``{key: default}`` for every registered parameter."""
+        return _BridgeParams.defaults(PARAMS)
+
+    @staticmethod
+    def render_context(values: "dict[str, Any]") -> "dict[str, str]":
+        """Format *values* for ``StrUtils.replace_delimited`` using Lua literals."""
+        return _BridgeParams.render_context(values, PARAMS, formatter=_FORMATTER)
+
+    @staticmethod
+    def strip_unsupported(script_text: str, version: "tuple[int, ...]") -> str:
+        """Drop every line that references a placeholder requiring a newer Rizom.
+
+        The substitution is line-level: each ``__KEY__`` token in :data:`MIN_VERSIONS`
+        whose required version exceeds *version* causes the entire containing
+        line to disappear. Lua's trailing-comma tolerance in tables means
+        removing the last entry before ``})`` stays parse-valid.
+
+        Pre-existing constraint: every gated placeholder must live on its own
+        line in the source ``.lua`` -- otherwise dropping the line also drops
+        sibling 2020.1-compatible keys on the same line.
+
+        Also honors inline per-line markers ``-- @min_rizom_line: X.Y`` /
+        ``-- @max_rizom_line: X.Y`` (see :data:`_INLINE_MIN_LINE_RE`) for
+        lines gated independently of any param token -- e.g. the
+        SpacingSize/PaddingSize field-name split.
+        """
+        if not version:
+            return script_text
+        out_lines = []
+        for line in script_text.splitlines(keepends=True):
+            keep = True
+            for key, min_ver in MIN_VERSIONS.items():
+                if f"__{key}__" in line and version < min_ver:
+                    keep = False
+                    break
+            if keep:
+                m = _INLINE_MIN_LINE_RE.search(line)
+                if m and version < _parse_version_literal(m.group(1)):
+                    keep = False
+            if keep:
+                m = _INLINE_MAX_LINE_RE.search(line)
+                if m and version > _parse_version_literal(m.group(1)):
+                    keep = False
+            if keep:
+                out_lines.append(line)
+        return "".join(out_lines)
 
 
 # ---------------------------------------------------------------------------
@@ -371,29 +583,3 @@ MIN_VERSIONS: "dict[str, tuple[int, ...]]" = {
 # inline in ``_construct_full_script``) so the gate threshold lives next
 # to its peers and stays in sync if ``MIN_VERSIONS`` shifts.
 FBX_USE_UV_SET_NAMES_MIN_VERSION: "tuple[int, ...]" = (2022, 0)
-
-
-def strip_unsupported(script_text: str, version: "tuple[int, ...]") -> str:
-    """Drop every line that references a placeholder requiring a newer Rizom.
-
-    The substitution is line-level: each ``__KEY__`` token in :data:`MIN_VERSIONS`
-    whose required version exceeds *version* causes the entire containing
-    line to disappear. Lua's trailing-comma tolerance in tables means
-    removing the last entry before ``})`` stays parse-valid.
-
-    Pre-existing constraint: every gated placeholder must live on its own
-    line in the source ``.lua`` -- otherwise dropping the line also drops
-    sibling 2020.1-compatible keys on the same line.
-    """
-    if not version:
-        return script_text
-    out_lines = []
-    for line in script_text.splitlines(keepends=True):
-        keep = True
-        for key, min_ver in MIN_VERSIONS.items():
-            if f"__{key}__" in line and version < min_ver:
-                keep = False
-                break
-        if keep:
-            out_lines.append(line)
-    return "".join(out_lines)

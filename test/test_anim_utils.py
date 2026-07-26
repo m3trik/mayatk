@@ -13,6 +13,7 @@ Tests for AnimUtils class functionality including:
 Note: scale_keys tests are in test_scale_keys.py
 Note: stagger_keys tests are in test_stagger_keys.py
 """
+
 import unittest
 import math
 import os
@@ -210,9 +211,7 @@ class TestAnimUtils(MayaTkTestCase):
 
         redundant = AnimUtils.get_redundant_flat_keys([self.cube], remove=True)
 
-        tx_redundant = [
-            sorted(times) for c, times in redundant if "translateX" in c
-        ]
+        tx_redundant = [sorted(times) for c, times in redundant if "translateX" in c]
         self.assertEqual(tx_redundant, [[5.0]])
 
         keys = cmds.keyframe(curve, query=True, timeChange=True) or []
@@ -331,13 +330,16 @@ class TestAnimUtils(MayaTkTestCase):
         cmds.select(self.cube)
         cmds.currentTime(1)
         result = AnimUtils.copy_keys(mode="current_frame")
-        self.assertIn(str(self.cube), result)
-        obj_data = result[str(self.cube)]
+        # copy_keys keys the snapshot by full DAG path (unambiguous under
+        # duplicate leaf names); paste_keys matches it back by leaf name.
+        key = cmds.ls(self.cube, long=True)[0]
+        self.assertIn(key, result)
+        obj_data = result[key]
         self.assertAlmostEqual(obj_data["translateX"], 0.0, places=3)
 
         cmds.currentTime(10)
         result = AnimUtils.copy_keys(mode="current_frame")
-        obj_data = result[str(self.cube)]
+        obj_data = result[cmds.ls(self.cube, long=True)[0]]
         self.assertAlmostEqual(obj_data["translateX"], 10.0, places=3)
 
     def test_paste_keys_basic(self):
@@ -417,7 +419,7 @@ class TestAnimUtils(MayaTkTestCase):
         cmds.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
 
         # Store using short name
-        copied = {self.sphere.split('|')[-1].split(':')[-1]: {"translateX": 33.0}}
+        copied = {self.sphere.split("|")[-1].split(":")[-1]: {"translateX": 33.0}}
         cmds.currentTime(1)
         count = AnimUtils.paste_keys(objects=[self.sphere], copied_data=copied)
         self.assertEqual(count, 1)
@@ -480,7 +482,7 @@ class TestAnimUtils(MayaTkTestCase):
         cmds.select(self.cube)
         cmds.currentTime(1)
         result = AnimUtils.copy_keys(mode="current_frame")
-        obj_data = result[str(self.cube)]
+        obj_data = result[cmds.ls(self.cube, long=True)[0]]
         self.assertIn("translateX", obj_data)
         self.assertIn("translateY", obj_data)
         self.assertAlmostEqual(obj_data["translateX"], 0.0, places=3)
@@ -807,7 +809,10 @@ class TestAnimUtils(MayaTkTestCase):
         # Original key should be gone
         self.assertEqual(
             len(
-                cmds.keyframe(self.cube, attribute="translateX", query=True, time=(1, 1)) or []
+                cmds.keyframe(
+                    self.cube, attribute="translateX", query=True, time=(1, 1)
+                )
+                or []
             ),
             0,
         )
@@ -996,9 +1001,7 @@ class TestAnimUtils(MayaTkTestCase):
     def test_adjust_key_spacing(self):
         """Test adjusting key spacing."""
         # Keys at 1 and 10. Add spacing of 5.
-        AnimUtils.adjust_key_spacing(
-            [self.cube], spacing=5, time=5, relative=False
-        )
+        AnimUtils.adjust_key_spacing([self.cube], spacing=5, time=5, relative=False)
         # Key at 10 should move to 15
         keys = cmds.keyframe(self.cube, attribute="translateX", query=True)
         self.assertIn(15.0, keys)
@@ -1166,9 +1169,7 @@ class TestAnimUtils(MayaTkTestCase):
     def test_invert_keys_explicit_objects_argument(self):
         """Objects can be passed explicitly instead of relying on the selection."""
         cmds.select(clear=True)
-        AnimUtils.invert_keys(
-            self.cube, time=20, relative=False, mode="horizontal"
-        )
+        AnimUtils.invert_keys(self.cube, time=20, relative=False, mode="horizontal")
         self.assertEqual(
             self._tx_key_pairs(),
             [(1.0, 0.0), (10.0, 10.0), (20.0, 10.0), (29.0, 0.0)],
@@ -1179,9 +1180,7 @@ class TestAnimUtils(MayaTkTestCase):
 
         cmds.select(str(self.cube))
         cmds.selectKey(str(self.cube), attribute="translateX", time=(1, 1))
-        cmds.selectKey(
-            str(self.cube), attribute="translateY", time=(10, 10), add=True
-        )
+        cmds.selectKey(str(self.cube), attribute="translateY", time=(10, 10), add=True)
         sel = cmds.keyframe(q=True, selected=True) or []
         self.assertTrue(
             sel,
@@ -1513,12 +1512,12 @@ class TestAnimUtils(MayaTkTestCase):
         the tangent.
         Fixed: 2026-03-25
         """
-        from mayatk.anim_utils.shots.shot_manifest.behaviors import apply_behavior
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
         # Add opacity attribute to trigger the visibility mirror path
         cmds.addAttr(self.cube, ln="opacity", at="float", min=0, max=1, dv=1, k=True)
 
-        apply_behavior(str(self.cube), "fade_in", start=1, end=30)
+        Behaviors.apply_behavior(str(self.cube), "fade_in", start=1, end=30)
 
         vis_keys = cmds.keyframe(f"{self.cube}.visibility", q=True, timeChange=True)
         self.assertTrue(vis_keys, "Visibility should have keys from mirror")
@@ -1593,9 +1592,7 @@ class TestAnimUtils(MayaTkTestCase):
         AnimUtils.untie_keyframes([self.cube])
 
         keys = cmds.keyframe(self.cube, attribute="translateX", query=True) or []
-        self.assertIn(
-            10.0, keys, "untie_keyframes removed a genuine shaped end key"
-        )
+        self.assertIn(10.0, keys, "untie_keyframes removed a genuine shaped end key")
 
     def test_untie_does_not_wipe_two_key_flat_curve(self):
         """A deliberate 2-key hold (both keys the same value) must survive
@@ -1625,9 +1622,7 @@ class TestAnimUtils(MayaTkTestCase):
         cmds.cutKey(self.cube, attribute="translateX", clear=True)
         for t, v in [(1, 0), (10, 10), (20, 0)]:
             cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=v)
-        original = sorted(
-            cmds.keyframe(self.cube, attribute="translateX", query=True)
-        )
+        original = sorted(cmds.keyframe(self.cube, attribute="translateX", query=True))
 
         AnimUtils.tie_keyframes([self.cube], custom_range=(5, 15))
         keys_after_tie = cmds.keyframe(self.cube, attribute="translateX", query=True)
@@ -2009,7 +2004,7 @@ class TestAnimUtils(MayaTkTestCase):
 
         # Verify baseline: first and last are step, middle are not
         out_before = cmds.keyTangent(curve, q=True, outTangentType=True)
-        times_before = cmds.keyframe(curve, q=True, timeChange=True)
+        cmds.keyframe(curve, q=True, timeChange=True)
         self.assertEqual(out_before[0], "step", "First key should be step")
         self.assertEqual(out_before[-1], "step", "Last key should be step")
         self.assertNotEqual(out_before[1], "step", "Interior key should not be step")
@@ -2083,9 +2078,7 @@ class TestAnimUtils(MayaTkTestCase):
         before_values = {
             f: cmds.getAttr(f"{self.cube}.translateX", time=f) for f in sample_frames
         }
-        before_out_angle = cmds.keyTangent(
-            curve, q=True, time=(120, 120), outAngle=True
-        )[0]
+        cmds.keyTangent(curve, q=True, time=(120, 120), outAngle=True)[0]
 
         # Tie keyframes with bookend OUTSIDE the range
         cmds.playbackOptions(minTime=0, maxTime=600)
@@ -2310,7 +2303,9 @@ class TestAnimUtils(MayaTkTestCase):
         )
 
         # The snap must be skipped — the target frame is already occupied.
-        self.assertEqual(count, 0, "Snap should be skipped when target frame is occupied")
+        self.assertEqual(
+            count, 0, "Snap should be skipped when target frame is occupied"
+        )
 
         # The unselected whole-frame key must survive unchanged.
         val_at_10 = cmds.keyframe(
@@ -2507,7 +2502,7 @@ class TestAnimUtils(MayaTkTestCase):
             "SmartBake should detect the constraint as requiring bake",
         )
 
-        result = baker.bake(analysis)
+        baker.bake(analysis)
 
         # Constraint should be deleted
         self.assertFalse(
@@ -2547,7 +2542,7 @@ class TestAnimUtils(MayaTkTestCase):
 
     def test_set_current_frame(self):
         """Test setting current timeline frame."""
-        frame = AnimUtils.set_current_frame(5.0)
+        AnimUtils.set_current_frame(5.0)
         current = cmds.currentTime(query=True)
         self.assertEqual(current, 5.0)
 
@@ -2615,7 +2610,7 @@ class TestAnimUtils(MayaTkTestCase):
             use_override_layer=False,
             backup_file=False,
         )
-        result = baker.execute()
+        baker.execute()
 
         # Baked curve should still exist
         curves_after = (
@@ -2885,13 +2880,11 @@ class TestAnimUtils(MayaTkTestCase):
 
         # No value should drift
         max_diff = 0
-        worst_frame = 0
         for f in sample_frames:
             val = cmds.getAttr(f"{self.cube}.translateX", time=f)
             diff = abs(val - before[f])
             if diff > max_diff:
                 max_diff = diff
-                worst_frame = f
             self.assertAlmostEqual(
                 val,
                 before[f],
@@ -3804,7 +3797,7 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
 
         # Import FBX once and cache as temp .ma
         print(
-            f"[realworld] Importing FBX ({os.path.getsize(cls.fbx_path) // (1024*1024)} MB)..."
+            f"[realworld] Importing FBX ({os.path.getsize(cls.fbx_path) // (1024 * 1024)} MB)..."
         )
         cmds.file(new=True, force=True)
         cmds.file(
@@ -4108,9 +4101,9 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
         for curve in all_curves:
             total_keys += cmds.keyframe(curve, q=True, keyframeCount=True) or 0
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Real-World FBX Stats: {os.path.basename(self.fbx_path)}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print(f"  Transforms:    {len(all_transforms)}")
         print(f"  Joints:        {len(all_joints)}")
         print(f"  Animated objs: {len(animated)}")
@@ -4118,7 +4111,7 @@ class TestAnimUtilsRealWorld(MayaTkTestCase):
         print(f"  Total keys:    {total_keys}")
         print(f"  Constraints:   {len(constraints)}")
         print(f"  Frame range:   {start} - {end}")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
 
 class TestSceneHasAnimation(MayaTkTestCase):
@@ -4167,7 +4160,9 @@ class TestSceneHasAnimation(MayaTkTestCase):
             value=10,
         )
         # No time-input curves exist — only animCurveU* driven curves.
-        self.assertFalse(cmds.ls(type=["animCurveTL", "animCurveTA", "animCurveTU", "animCurveTT"]))
+        self.assertFalse(
+            cmds.ls(type=["animCurveTL", "animCurveTA", "animCurveTU", "animCurveTT"])
+        )
         self.assertFalse(AnimUtils.scene_has_animation())
 
 
@@ -4191,9 +4186,7 @@ class TestAuditRegressionFixes(MayaTkTestCase):
         for f in (1.0, 10.5, 20.0):
             cmds.setKeyframe(cube, attribute="translateX", t=f, v=f)
         AnimUtils.delete_keys([cube], "translateX", time=10.5)
-        remaining = cmds.keyframe(
-            f"{cube}.translateX", query=True, timeChange=True
-        )
+        remaining = cmds.keyframe(f"{cube}.translateX", query=True, timeChange=True)
         self.assertEqual(remaining, [1.0, 20.0])
 
     # ---- get_frame_ranges ------------------------------------------------
@@ -4284,9 +4277,7 @@ class TestAuditRegressionFixes(MayaTkTestCase):
         cmds.setAttr(plug, lock=True)
         try:
             AnimUtils.get_redundant_flat_keys([cube], remove=True)
-            self.assertEqual(
-                cmds.keyframe(curve, query=True, keyframeCount=True), 2
-            )
+            self.assertEqual(cmds.keyframe(curve, query=True, keyframeCount=True), 2)
             self.assertTrue(cmds.getAttr(plug, lock=True), "lock must be restored")
         finally:
             cmds.setAttr(plug, lock=False)

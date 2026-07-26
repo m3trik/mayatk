@@ -6,6 +6,7 @@ Provides ``ShotSequencerSlots`` — bridges the generic
 :class:`~uitk.widgets.sequencer._sequencer.SequencerWidget` to the
 Maya-specific :class:`~mayatk.anim_utils.shots.shot_sequencer._shot_sequencer.ShotSequencer`.
 """
+
 from collections import defaultdict
 from typing import Optional, List
 
@@ -29,32 +30,27 @@ from uitk.widgets.sequencer._sequencer import (
     _COMMON_ATTRIBUTES,
     _DEFAULT_ATTRIBUTE_COLORS,
 )
-from uitk.widgets.mixins.tooltip_mixin import fmt, kbd
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # Arrow-key labels used in keyboard-shortcut help. Defined as module
 # constants so the help builder can pass them into kbd() without
 # triggering Python 3.11's "backslash inside f-string expression" error
 # (the source file's text auto-escapes non-ASCII as ``\uXXXX``).
-_KB_LEFT = "←"   # ←
+_KB_LEFT = "←"  # ←
 _KB_RIGHT = "→"  # →
 from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
     ShotSequencer,
     ShotBlock,
 )
 from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
-from mayatk.audio_utils.segments import collect_all_segments
+from mayatk.audio_utils.segments import AudioSegment
 from mayatk.anim_utils.shots.shot_sequencer.gap_manager import GapManagerMixin
 from mayatk.anim_utils.shots.shot_sequencer.clip_motion import ClipMotionMixin
-from mayatk.anim_utils.shots.shot_sequencer.segment_collector import (
-    collect_segments,
-    active_object_set,
-    extract_attributes,
-    build_curve_preview,
-)
+from mayatk.anim_utils.shots.shot_sequencer.segment_collector import SegmentCollector
 from mayatk.anim_utils.shots.shot_sequencer.shot_nav import ShotNavMixin
 from mayatk.anim_utils.shots.shot_sequencer.marker_manager import MarkerManagerMixin
 from mayatk.anim_utils.shots._shots import StoreEvent
-from mayatk.core_utils._core_utils import leaf_name
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 
 
@@ -588,9 +584,9 @@ class ShotSequencerController(
         while f"Shot {idx}" in existing_names:
             idx += 1
         name = f"Shot {idx}"
-        from mayatk.anim_utils.shots.shot_manifest.behaviors import compute_duration
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
-        duration = compute_duration([], fallback=100.0)
+        duration = Behaviors.compute_duration([], fallback=100.0)
         shot = store.append_shot(name=name, duration=duration, gap=gap)
         self._sync_combobox()
         # Select the new shot in the combobox
@@ -665,11 +661,7 @@ class ShotSequencerController(
         # (floats), not shot ids — reading it would return a bogus id
         # and silently break shot resolution downstream.
         cmb = getattr(self.ui, "cmb_shot", None)
-        if (
-            self._cmb_mode != "markers"
-            and cmb is not None
-            and cmb.currentIndex() >= 0
-        ):
+        if self._cmb_mode != "markers" and cmb is not None and cmb.currentIndex() >= 0:
             sid = cmb.itemData(cmb.currentIndex())
             if sid is not None:
                 return sid
@@ -790,9 +782,7 @@ class ShotSequencerController(
             shots = self.sequencer.sorted_shots()
             if seqs and len(shots) > 1:
                 menu.addSeparator()
-                move_label = (
-                    f"Move to Shot ({len(seqs)})" if multi else "Move to Shot"
-                )
+                move_label = f"Move to Shot ({len(seqs)})" if multi else "Move to Shot"
                 move_menu = menu.addMenu(move_label)
                 # Exclude shots whose id matches every sequence's source.
                 source_ids = {self.sequencer._source_shot_id_for(s) for s in seqs}
@@ -800,11 +790,11 @@ class ShotSequencerController(
                     if len(source_ids) == 1 and sh.shot_id in source_ids:
                         continue  # all sequences already live here
                     act = move_menu.addAction(
-                        f'{sh.name}  [{sh.start:.0f}\u2013{sh.end:.0f}]'
+                        f"{sh.name}  [{sh.start:.0f}\u2013{sh.end:.0f}]"
                     )
                     act.triggered.connect(
-                        lambda _checked=False, sid=sh.shot_id: (
-                            self._move_clips_to_shot(seqs, sid)
+                        lambda _checked=False, sid=sh.shot_id: self._move_clips_to_shot(
+                            seqs, sid
                         )
                     )
 
@@ -918,6 +908,7 @@ class ShotSequencerController(
             return cls._node_icons_cls_cache
         try:
             from mayatk.ui_utils.node_icons import NodeIcons
+
             cls._node_icons_cls_cache = NodeIcons
         except ImportError:
             cls._node_icons_cls_cache = None
@@ -1118,7 +1109,7 @@ class ShotSequencerController(
                     self._segment_cache.clear()
                 self._reconcile_needed = False
 
-            segments_by_shot, all_objects = collect_segments(
+            segments_by_shot, all_objects = SegmentCollector.collect_segments(
                 self.sequencer,
                 shot,
                 visible_shots,
@@ -1133,7 +1124,7 @@ class ShotSequencerController(
                 for s in self.sequencer.sorted_shots():
                     all_objects.update(s.objects)
 
-            active_objects = active_object_set(shot, segments_by_shot)
+            active_objects = SegmentCollector.active_object_set(shot, segments_by_shot)
             track_ids = self._build_tracks(
                 widget, all_objects, active_objects, active_shot=shot
             )
@@ -1232,7 +1223,9 @@ class ShotSequencerController(
         if self._color_map_cache is None:
             from uitk.managers.settings_manager import SettingsManager
 
-            color_settings = SettingsManager(namespace=AttributeColorDialog._SETTINGS_NS)
+            color_settings = SettingsManager(
+                namespace=AttributeColorDialog._SETTINGS_NS
+            )
             color_map = dict(_DEFAULT_ATTRIBUTE_COLORS)
             for key in color_settings.keys():
                 val = color_settings.value(key)
@@ -1334,7 +1327,7 @@ class ShotSequencerController(
                     if fg:
                         color_kw["text_color"] = fg
             tid = widget.add_track(
-                leaf_name(obj_name),
+                CoreUtils.leaf_name(obj_name),
                 icon=icon,
                 dimmed=not in_active or not exists,
                 italic=not in_active and exists,
@@ -1415,7 +1408,7 @@ class ShotSequencerController(
                 for m in merged:
                     s = m["start"]
                     e = m["end"]
-                    attrs = extract_attributes(m["segs"])
+                    attrs = SegmentCollector.extract_attributes(m["segs"])
                     clip_extra = dict(extra)
                     if is_active and attrs:
                         clip_extra["label_center"] = Attributes.abbreviate_attrs(attrs)
@@ -1476,7 +1469,7 @@ class ShotSequencerController(
         if cached is not None and cached[0] == cache_key:
             segs = cached[1]
         else:
-            segs = collect_all_segments(
+            segs = AudioSegment.collect_all_segments(
                 scene_start=scene_start,
                 scene_end=scene_end,
                 include_waveform=True,
@@ -1954,7 +1947,7 @@ class ShotSequencerController(
         # Check shot objects
         for shot in self.sequencer.shots:
             for obj in shot.objects:
-                if leaf_name(obj) == short_name:
+                if CoreUtils.leaf_name(obj) == short_name:
                     return obj
         # Check audio source nodes
         if cmds is not None:
@@ -2103,7 +2096,7 @@ class ShotSequencerController(
                 # Build curve preview from the segment's own curves
                 preview = None
                 for crv in seg.get("curves", []):
-                    preview = build_curve_preview(crv, s, e)
+                    preview = SegmentCollector.build_curve_preview(crv, s, e)
                     if preview:
                         break
                 extra = {
@@ -2130,7 +2123,7 @@ class ShotSequencerController(
                 crv = attr_to_curve.get(attr_name)
                 if crv is None:
                     continue
-                bg_preview = build_curve_preview(
+                bg_preview = SegmentCollector.build_curve_preview(
                     crv, curve_range_start, curve_range_end
                 )
                 hex_color = color_map.get(attr_name, "#CCCCCC")
@@ -2206,6 +2199,7 @@ class ShotSequencerController(
         DG node, else empty string."""
         try:
             from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
+
             comp = AudioClips._find_composite_node()
             if comp and cmds.objExists(comp):
                 return comp
@@ -2261,9 +2255,12 @@ class ShotSequencerController(
             interrupt_mode=TransportControls.INTERRUPT_STOP,
             range_fn=self._playback_range,
             button_names=(
-                "go_to_start", "prev_key",
-                "play_back", "play_forward",
-                "next_key", "go_to_end",
+                "go_to_start",
+                "prev_key",
+                "play_back",
+                "play_forward",
+                "next_key",
+                "go_to_end",
             ),
         )
         transport.attach_to_footer(footer, side="right")
@@ -2654,16 +2651,12 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             {
                 "icon": "eye_off",
                 "tooltip": "Show Internal Holds (off)\nClick to reveal flat-key spans in sub-rows",
-                "callback": lambda: cmb._nav_controller._set_show_internal_holds(
-                    True
-                ),
+                "callback": lambda: cmb._nav_controller._set_show_internal_holds(True),
             },
             {
                 "icon": "eye",
                 "tooltip": "Show Internal Holds (on)\nClick to hide flat-key spans in sub-rows",
-                "callback": lambda: cmb._nav_controller._set_show_internal_holds(
-                    False
-                ),
+                "callback": lambda: cmb._nav_controller._set_show_internal_holds(False),
             },
         ]
         holds_opt = ActionOption(
@@ -2859,7 +2852,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         cmb_scope = widget.menu.add(
             _WCB2,
             setObjectName="cmb_track_order",
-            setToolTip=fmt(
+            setToolTip=TooltipFormat.fmt(
                 title="Track Order",
                 bullets=[
                     "<b>Visible:</b> Show objects from visible shots only.",
@@ -2923,58 +2916,88 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             setToolTip="Open shared shot generation, gap, and editing settings.",
         )
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Shot Sequencer",
                 body="Visual timeline editor for per-shot animation with ripple editing, gap management, markers, and audio tracks.",
                 sections=[
-                    ("Quick Start", [
-                        "Click <b>+</b> to create a shot (or use the Manifest).",
-                        "Select a shot from the dropdown to load its clips.",
-                        "Drag clips to adjust timing; drag edges to resize.",
-                        "Use <b>View Mode</b> to see adjacent or all shots.",
-                    ]),
-                    ("Shot Navigation", [
-                        "<b>Dropdown</b> \u2014 Select shot (sets playback range, selects objects, reframes the timeline). Right-click for New Shot, Generate Next Shot, Edit Shot, Delete Shot.",
-                        "<b>\u25c4 / \u25ba</b> \u2014 Previous / next shot. &nbsp; <b>+</b> \u2014 Append new shot.",
-                        "<b>View Mode</b> (cycles): Current \u2192 Adjacent \u2192 All.",
-                        "<b>Refresh</b> \u2014 Rebuild from Maya.",
-                    ]),
-                    ("Clips", [
-                        "<b>Drag body</b> \u2014 Move in time (ripple editing).",
-                        "<b>Drag edge</b> \u2014 Resize (scales keyframes).",
-                        "<b>Shift+drag</b> \u2014 Move boundaries only; keyframes stay in place.",
-                        "<b>Ctrl+drag</b> \u2014 Per-frame snap override.",
-                        "<b>Right-click</b> \u2014 Lock/Unlock, Rename, Delete Key. All edits undoable (Ctrl+Z).",
-                    ]),
-                    ("Ruler / Tracks / Gaps / Markers", [
-                        "<b>Ruler:</b> Click/drag to move playhead, double-click to add a marker, scroll to zoom, middle-drag to pan.",
-                        "<b>Shot Lane:</b> Right-click a shot block on the ruler to select, edit, or trim that shot.",
-                        "<b>Tracks:</b> Double-click header to expand per-attribute sub-rows. Right-click to hide, delete, or reveal in Outliner.",
-                        "<b>Gaps:</b> Drag body to slide adjacent shots, drag edge to resize. Right-click to lock.",
-                        "<b>Markers:</b> M or double-click ruler to add. Drag to move. Right-click to edit note, color, or style.",
-                        "<b>Audio:</b> Auto-discovered from Maya audio nodes. Read-only.",
-                    ]),
-                    ("Keyboard", [
-                        # NOTE: \u2190/\u2192 keys + Shift+\u2190/\u2192 \u2014 kbd() args are pulled
-                        # out of the expression because Python 3.11 forbids
-                        # backslashes (and thus ``\uXXXX`` escapes) inside
-                        # f-string ``{}`` expressions. Using module-level
-                        # constants keeps the surface text readable in tools
-                        # that auto-escape non-ASCII on save.
-                        (kbd(_KB_LEFT) + " / " + kbd(_KB_RIGHT)
-                         + " \u2014 prev / next key &nbsp;\u00b7&nbsp; "
-                         + kbd("Shift", _KB_LEFT) + " / "
-                         + kbd("Shift", _KB_RIGHT)
-                         + " \u2014 step \u00b11 frame"),
-                        (kbd("Home") + " / " + kbd("End")
-                         + " \u2014 start / end &nbsp;\u00b7&nbsp; "
-                         + kbd("F") + " \u2014 frame shot &nbsp;\u00b7&nbsp; "
-                         + kbd("M") + " \u2014 add marker"),
-                        (kbd("Ctrl", "Z") + " \u2014 undo &nbsp;\u00b7&nbsp; "
-                         + kbd("Ctrl", "Shift", "Z")
-                         + " \u2014 redo &nbsp;\u00b7&nbsp; "
-                         + kbd("Del") + " \u2014 delete keys"),
-                    ]),
+                    (
+                        "Quick Start",
+                        [
+                            "Click <b>+</b> to create a shot (or use the Manifest).",
+                            "Select a shot from the dropdown to load its clips.",
+                            "Drag clips to adjust timing; drag edges to resize.",
+                            "Use <b>View Mode</b> to see adjacent or all shots.",
+                        ],
+                    ),
+                    (
+                        "Shot Navigation",
+                        [
+                            "<b>Dropdown</b> \u2014 Select shot (sets playback range, selects objects, reframes the timeline). Right-click for New Shot, Generate Next Shot, Edit Shot, Delete Shot.",
+                            "<b>\u25c4 / \u25ba</b> \u2014 Previous / next shot. &nbsp; <b>+</b> \u2014 Append new shot.",
+                            "<b>View Mode</b> (cycles): Current \u2192 Adjacent \u2192 All.",
+                            "<b>Refresh</b> \u2014 Rebuild from Maya.",
+                        ],
+                    ),
+                    (
+                        "Clips",
+                        [
+                            "<b>Drag body</b> \u2014 Move in time (ripple editing).",
+                            "<b>Drag edge</b> \u2014 Resize (scales keyframes).",
+                            "<b>Shift+drag</b> \u2014 Move boundaries only; keyframes stay in place.",
+                            "<b>Ctrl+drag</b> \u2014 Per-frame snap override.",
+                            "<b>Right-click</b> \u2014 Lock/Unlock, Rename, Delete Key. All edits undoable (Ctrl+Z).",
+                        ],
+                    ),
+                    (
+                        "Ruler / Tracks / Gaps / Markers",
+                        [
+                            "<b>Ruler:</b> Click/drag to move playhead, double-click to add a marker, scroll to zoom, middle-drag to pan.",
+                            "<b>Shot Lane:</b> Right-click a shot block on the ruler to select, edit, or trim that shot.",
+                            "<b>Tracks:</b> Double-click header to expand per-attribute sub-rows. Right-click to hide, delete, or reveal in Outliner.",
+                            "<b>Gaps:</b> Drag body to slide adjacent shots, drag edge to resize. Right-click to lock.",
+                            "<b>Markers:</b> M or double-click ruler to add. Drag to move. Right-click to edit note, color, or style.",
+                            "<b>Audio:</b> Auto-discovered from Maya audio nodes. Read-only.",
+                        ],
+                    ),
+                    (
+                        "Keyboard",
+                        [
+                            # NOTE: \u2190/\u2192 keys + Shift+\u2190/\u2192 \u2014 kbd() args are pulled
+                            # out of the expression because Python 3.11 forbids
+                            # backslashes (and thus ``\uXXXX`` escapes) inside
+                            # f-string ``{}`` expressions. Using module-level
+                            # constants keeps the surface text readable in tools
+                            # that auto-escape non-ASCII on save.
+                            (
+                                TooltipFormat.kbd(_KB_LEFT)
+                                + " / "
+                                + TooltipFormat.kbd(_KB_RIGHT)
+                                + " \u2014 prev / next key &nbsp;\u00b7&nbsp; "
+                                + TooltipFormat.kbd("Shift", _KB_LEFT)
+                                + " / "
+                                + TooltipFormat.kbd("Shift", _KB_RIGHT)
+                                + " \u2014 step \u00b11 frame"
+                            ),
+                            (
+                                TooltipFormat.kbd("Home")
+                                + " / "
+                                + TooltipFormat.kbd("End")
+                                + " \u2014 start / end &nbsp;\u00b7&nbsp; "
+                                + TooltipFormat.kbd("F")
+                                + " \u2014 frame shot &nbsp;\u00b7&nbsp; "
+                                + TooltipFormat.kbd("M")
+                                + " \u2014 add marker"
+                            ),
+                            (
+                                TooltipFormat.kbd("Ctrl", "Z")
+                                + " \u2014 undo &nbsp;\u00b7&nbsp; "
+                                + TooltipFormat.kbd("Ctrl", "Shift", "Z")
+                                + " \u2014 redo &nbsp;\u00b7&nbsp; "
+                                + TooltipFormat.kbd("Del")
+                                + " \u2014 delete keys"
+                            ),
+                        ],
+                    ),
                 ],
             )
         )

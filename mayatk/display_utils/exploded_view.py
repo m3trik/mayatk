@@ -4,7 +4,7 @@ import numpy as np
 import functools
 from typing import Optional
 
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 try:
     import maya.cmds as cmds
@@ -28,7 +28,7 @@ class ExplodedView:
     @property
     def objects(self) -> list:
         """Return assigned objects or fallback to current selection."""
-        return self._objects if self._objects is not None else cmds.ls(sl=True)
+        return self._objects if self._objects is not None else cmds.ls(sl=True, long=True)
 
     @objects.setter
     def objects(self, value: list):
@@ -251,23 +251,26 @@ class ExplodedViewSlots(ExplodedView):
         # Gesture-scoped window: pin button + auto-hide on key_show release.
         widget.config_buttons("menu", "collapse", "pin")
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Exploded View",
                 body="Spread selected objects outward from their shared "
                 "center to inspect interior parts. Original world positions "
                 "are stored on each object via an <i>original_position</i> "
                 "attribute, so the explode is fully reversible.",
                 sections=[
-                    ("Actions", [
-                        "<b>Explode</b> — push selected objects away from the "
-                        "group's centroid by the configured factor.",
-                        "<b>Un-Explode</b> — return selected objects to their "
-                        "stored positions.",
-                        "<b>Un-Explode All</b> — reset every exploded object "
-                        "in the scene (regardless of selection).",
-                        "<b>Toggle Explode</b> — alternate between exploded "
-                        "and original views on the current selection.",
-                    ]),
+                    (
+                        "Actions",
+                        [
+                            "<b>Explode</b> — push selected objects away from the "
+                            "group's centroid by the configured factor.",
+                            "<b>Un-Explode</b> — return selected objects to their "
+                            "stored positions.",
+                            "<b>Un-Explode All</b> — reset every exploded object "
+                            "in the scene (regardless of selection).",
+                            "<b>Toggle Explode</b> — alternate between exploded "
+                            "and original views on the current selection.",
+                        ],
+                    ),
                 ],
             )
         )

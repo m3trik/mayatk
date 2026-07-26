@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Scene auto-instancer: convert geometrically identical meshes to instances."""
+
 from __future__ import annotations
 
 import re
@@ -26,9 +27,9 @@ from mayatk.core_utils.auto_instancer.instancing_strategy import (
     StrategyConfig,
     StrategyType,
 )
-from mayatk.core_utils._core_utils import short_name
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.xform_utils._xform_utils import get_object_matrix, set_object_matrix
+from mayatk.xform_utils._xform_utils import XformUtils
 
 # Default cameras cannot be deleted; skip them regardless of other filters.
 _DEFAULT_CAMERAS = frozenset(("persp", "top", "front", "side"))
@@ -44,51 +45,6 @@ _DEFAULT_CAMERAS = frozenset(("persp", "top", "front", "side"))
 _CONVERTIBLE_STRATEGIES = (StrategyType.GPU_INSTANCE, StrategyType.COMBINE)
 
 
-def _natural_key(name: str) -> Tuple:
-    """Sort key ordering embedded integers numerically (``Cube2`` < ``Cube10``)."""
-    return tuple(
-        int(token) if token.isdigit() else token
-        for token in re.split(r"(\d+)", name)
-    )
-
-
-def _long_path(node: str) -> str:
-    """Best-effort full DAG path for *node* (falls back to the input string)."""
-    resolved = cmds.ls(str(node), long=True) or []
-    return resolved[0] if resolved else str(node)
-
-
-def _mesh_shape(transform: str) -> Optional[str]:
-    """The transform's first non-intermediate MESH shape, or ``None``."""
-    shape = NodeUtils.get_shape(transform)
-    if shape and cmds.objectType(shape) == "mesh":
-        return shape
-    return None
-
-
-def _is_instanced(transform_path: str) -> bool:
-    """True if the transform's shape has more than one parent transform."""
-    shape = NodeUtils.get_shape(transform_path)
-    if not shape:
-        return False
-    parents = cmds.listRelatives(shape, allParents=True) or []
-    return len(parents) > 1
-
-
-def _prototype_preference_key(candidate: "InstanceCandidate") -> Tuple:
-    """Sort key for prototype selection within a group.
-
-    Already-instanced first (extends the existing instance set), then
-    natural name order, then full path — deterministic across runs.
-    """
-    transform = candidate.transform
-    return (
-        not _is_instanced(transform),
-        _natural_key(short_name(transform)),
-        transform,
-    )
-
-
 class InstanceCandidate:
     """Holds information about a transform candidate for instancing.
 
@@ -98,7 +54,7 @@ class InstanceCandidate:
     """
 
     def __init__(self, transform):
-        path = _long_path(transform)
+        path = _AutoInstancerInternal._long_path(transform)
         uuids = cmds.ls(path, uuid=True) or []
         self.uuid: Optional[str] = uuids[0] if uuids else None
         self._path: str = path  # fallback if uuid lookup fails
@@ -133,7 +89,56 @@ class InstanceGroup:
         return f"<InstanceGroup prototype={self.prototype.transform} members={len(self.members)}>"
 
 
-class AutoInstancer(ptk.LoggingMixin):
+class _AutoInstancerInternal(object):
+    """Internal helpers for AutoInstancer."""
+
+    @staticmethod
+    def _natural_key(name: str) -> Tuple:
+        """Sort key ordering embedded integers numerically (``Cube2`` < ``Cube10``)."""
+        return tuple(
+            int(token) if token.isdigit() else token
+            for token in re.split(r"(\d+)", name)
+        )
+
+    @staticmethod
+    def _long_path(node: str) -> str:
+        """Best-effort full DAG path for *node* (falls back to the input string)."""
+        resolved = cmds.ls(str(node), long=True) or []
+        return resolved[0] if resolved else str(node)
+
+    @staticmethod
+    def _mesh_shape(transform: str) -> Optional[str]:
+        """The transform's first non-intermediate MESH shape, or ``None``."""
+        shape = NodeUtils.get_shape(transform)
+        if shape and cmds.objectType(shape) == "mesh":
+            return shape
+        return None
+
+    @staticmethod
+    def _is_instanced(transform_path: str) -> bool:
+        """True if the transform's shape has more than one parent transform."""
+        shape = NodeUtils.get_shape(transform_path)
+        if not shape:
+            return False
+        parents = cmds.listRelatives(shape, allParents=True) or []
+        return len(parents) > 1
+
+    @staticmethod
+    def _prototype_preference_key(candidate: "InstanceCandidate") -> Tuple:
+        """Sort key for prototype selection within a group.
+
+        Already-instanced first (extends the existing instance set), then
+        natural name order, then full path — deterministic across runs.
+        """
+        transform = candidate.transform
+        return (
+            not _AutoInstancerInternal._is_instanced(transform),
+            _AutoInstancerInternal._natural_key(CoreUtils.short_name(transform)),
+            transform,
+        )
+
+
+class AutoInstancer(ptk.LoggingMixin, _AutoInstancerInternal):
     """Convert matching meshes into instances.
 
     Destructive operations (deleting originals) only happen after the
@@ -431,7 +436,7 @@ class AutoInstancer(ptk.LoggingMixin):
         for node in nodes:
             if not cmds.objExists(node):
                 continue
-            root = _long_path(node)
+            root = _AutoInstancerInternal._long_path(node)
             descendants = (
                 cmds.listRelatives(
                     root, allDescendents=True, type="transform", fullPath=True
@@ -493,7 +498,9 @@ class AutoInstancer(ptk.LoggingMixin):
         groups.sort(
             key=lambda g: (
                 _group_depth(g),
-                _natural_key(short_name(g.prototype.transform)),
+                _AutoInstancerInternal._natural_key(
+                    CoreUtils.short_name(g.prototype.transform)
+                ),
                 g.prototype.transform,
             )
         )
@@ -584,7 +591,7 @@ class AutoInstancer(ptk.LoggingMixin):
         candidates = [
             t
             for t in self._collect_leaf_candidates(nodes, [])
-            if not _is_instanced(t)
+            if not _AutoInstancerInternal._is_instanced(t)
             and t not in protected
             and not under_assembly(t)
         ]
@@ -605,7 +612,9 @@ class AutoInstancer(ptk.LoggingMixin):
         )
         if not result:
             return []
-        combined = [_long_path(m) for m in ptk.make_iterable(result)]
+        combined = [
+            _AutoInstancerInternal._long_path(m) for m in ptk.make_iterable(result)
+        ]
         self.logger.info(
             "Combined %s non-instanced meshes into %s", len(candidates), len(combined)
         )
@@ -641,7 +650,7 @@ class AutoInstancer(ptk.LoggingMixin):
         for node in nodes:
             if not cmds.objExists(node):
                 continue
-            root = _long_path(node)
+            root = _AutoInstancerInternal._long_path(node)
             descendants = (
                 cmds.listRelatives(
                     root, allDescendents=True, type="transform", fullPath=True
@@ -652,7 +661,7 @@ class AutoInstancer(ptk.LoggingMixin):
                 if transform in seen or transform in processed_paths:
                     continue
                 seen.add(transform)
-                if _mesh_shape(transform):
+                if _AutoInstancerInternal._mesh_shape(transform):
                     candidates.append(transform)
         return candidates
 
@@ -702,13 +711,13 @@ class AutoInstancer(ptk.LoggingMixin):
             seen_paths.add(node_str)
 
             if check_hierarchy:
-                if short_name(node_str) in _DEFAULT_CAMERAS:
+                if CoreUtils.short_name(node_str) in _DEFAULT_CAMERAS:
                     continue
                 if not self._hierarchy_contains_mesh(node_str):
                     continue
                 candidates.append(InstanceCandidate(node_str))
             else:
-                if _mesh_shape(node_str):
+                if _AutoInstancerInternal._mesh_shape(node_str):
                     candidates.append(InstanceCandidate(node_str))
 
         # Group by signature
@@ -727,9 +736,7 @@ class AutoInstancer(ptk.LoggingMixin):
             signature_map = self._merge_similar_signatures(signature_map)
 
         if self.verbose:
-            self.logger.debug(
-                "Signature map: %s unique signatures", len(signature_map)
-            )
+            self.logger.debug("Signature map: %s unique signatures", len(signature_map))
             for sig, items in signature_map.items():
                 self.logger.debug("  Sig %s: %s items", sig, len(items))
 
@@ -744,7 +751,7 @@ class AutoInstancer(ptk.LoggingMixin):
         groups = []
 
         for sig, potential_matches in signature_map.items():
-            potential_matches.sort(key=_prototype_preference_key)
+            potential_matches.sort(key=_AutoInstancerInternal._prototype_preference_key)
 
             while potential_matches:
                 prototype = potential_matches.pop(0)
@@ -888,9 +895,7 @@ class AutoInstancer(ptk.LoggingMixin):
                 # the rest rather than losing the group.
                 if len(survivors) < 2:
                     continue
-                group = self._rebuild_group_from_survivors(
-                    survivors, check_hierarchy
-                )
+                group = self._rebuild_group_from_survivors(survivors, check_hierarchy)
             if not group.members:
                 continue
 
@@ -901,7 +906,7 @@ class AutoInstancer(ptk.LoggingMixin):
             # strategy gate so the summary can explain matches that were found
             # but not instanced (too simple / count).
             self.last_run_summary["matched_groups"] += 1
-            proto_name = short_name(group.prototype.transform)
+            proto_name = CoreUtils.short_name(group.prototype.transform)
 
             if strategy not in allowed_strategies:
                 self.last_run_summary["kept_separate_groups"] += 1
@@ -973,12 +978,12 @@ class AutoInstancer(ptk.LoggingMixin):
         promoted prototype (mutual identity is expected but re-verified;
         tolerance is not exactly transitive).
         """
-        survivors = sorted(survivors, key=_prototype_preference_key)
+        survivors = sorted(
+            survivors, key=_AutoInstancerInternal._prototype_preference_key
+        )
         prototype = survivors[0]
         group = InstanceGroup(prototype)
-        self.logger.debug(
-            "Prototype gone; promoted survivor %s", prototype.transform
-        )
+        self.logger.debug("Prototype gone; promoted survivor %s", prototype.transform)
         for candidate in survivors[1:]:
             if self._match_pair(prototype, candidate, check_hierarchy):
                 group.members.append(candidate)
@@ -989,7 +994,7 @@ class AutoInstancer(ptk.LoggingMixin):
     ) -> Tuple[StrategyType, int]:
         """Strategy + triangle count for a group's prototype."""
         prototype_transform = group.prototype.transform
-        prototype_mesh = _mesh_shape(prototype_transform)
+        prototype_mesh = _AutoInstancerInternal._mesh_shape(prototype_transform)
 
         tri_count = 0
         if prototype_mesh:
@@ -1068,7 +1073,7 @@ class AutoInstancer(ptk.LoggingMixin):
 
         target = member.transform
         proto_path = prototype.transform
-        target_name = short_name(target)
+        target_name = CoreUtils.short_name(target)
 
         # Refuse overlapping hierarchies — instancing a node into its own
         # ancestor/descendant chain creates DAG cycles.
@@ -1086,17 +1091,23 @@ class AutoInstancer(ptk.LoggingMixin):
         temp_instance = None
         try:
             # 1. Duplicate the target transform (world placement carrier).
-            new_instance = _long_path(cmds.duplicate(target, parentOnly=True)[0])
+            new_instance = _AutoInstancerInternal._long_path(
+                cmds.duplicate(target, parentOnly=True)[0]
+            )
 
             # Apply the shape-correction transform found by the matcher.
             rel_mtx = member.relative_transform
             if rel_mtx is not None:
                 # Order: rel_mtx (shape correction) * target_matrix (placement)
-                target_matrix = get_object_matrix(new_instance, world=True)
-                set_object_matrix(new_instance, rel_mtx * target_matrix, world=True)
+                target_matrix = XformUtils.get_object_matrix(new_instance, world=True)
+                XformUtils.set_object_matrix(
+                    new_instance, rel_mtx * target_matrix, world=True
+                )
 
             # 2. Instance the prototype and move its contents across.
-            temp_instance = _long_path(cmds.instance(proto_path, leaf=True)[0])
+            temp_instance = _AutoInstancerInternal._long_path(
+                cmds.instance(proto_path, leaf=True)[0]
+            )
             children = (
                 cmds.listRelatives(temp_instance, children=True, fullPath=True) or []
             )

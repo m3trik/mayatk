@@ -517,9 +517,11 @@ class TestRigUtils(MayaTkTestCase):
         j2 = cmds.joint(p=(0, 1, 0), n="j2")
         j3 = cmds.joint(p=(0, 2, 0), n="j3")
 
-        # Test Get Chain
+        # Test Get Chain. get_joint_chain_from_root returns full DAG paths so the
+        # chain stays unambiguous when joint leaf names collide (e.g. mirrored
+        # rigs); compare by leaf name since j1/j2/j3 are uniquely named here.
         chain = RigUtils.get_joint_chain_from_root(j1)
-        self.assertEqual(chain, [j1, j2, j3])
+        self.assertEqual([c.split("|")[-1] for c in chain], [j1, j2, j3])
 
         # Test Invert Chain
         inv_chain = RigUtils.invert_joint_chain(j1, keep_original=True)

@@ -7,16 +7,17 @@ pythontk engine's store, shared with blendertk).
 
     & $MAYAPY mayatk\\test\\test_shot_manifest_behaviors.py
 """
+
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from mayatk.anim_utils.shots.shot_manifest.behaviors import (
+    Behaviors,
     BehaviorSpec,
     load_behavior,
     list_behaviors,
-    apply_to_shots,
 )
 from mayatk.anim_utils.shots._shots import ShotBlock
 
@@ -86,7 +87,7 @@ class ApplyToShotsDispatchTest(unittest.TestCase):
         def apply_fn(obj, behavior, start, end):
             calls.append((obj, behavior, start, end))
 
-        result = apply_to_shots(
+        result = Behaviors.apply_to_shots(
             [self._shot([{"name": "cube", "behavior": "fade_in"}])],
             apply_fn,
             exists_fn=lambda name: True,
@@ -103,7 +104,7 @@ class ApplyToShotsDispatchTest(unittest.TestCase):
             calls.append(obj)
             raise TypeError("boom from inside the applier")
 
-        result = apply_to_shots(
+        result = Behaviors.apply_to_shots(
             [
                 self._shot(
                     [
@@ -135,7 +136,7 @@ class ApplyToShotsDispatchTest(unittest.TestCase):
         def apply_fn(obj, behavior, start, end, source_path=""):
             calls.append(source_path)
 
-        result = apply_to_shots(
+        result = Behaviors.apply_to_shots(
             [
                 self._shot(
                     [
@@ -161,7 +162,7 @@ class ApplyToShotsDispatchTest(unittest.TestCase):
             raise TypeError("real bug in exists_fn")
 
         with self.assertRaises(TypeError) as ctx:
-            apply_to_shots(
+            Behaviors.apply_to_shots(
                 [self._shot([{"name": "cube", "behavior": "fade_in"}])],
                 lambda o, b, s, e: None,
                 exists_fn=exists_fn,

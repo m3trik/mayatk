@@ -12,6 +12,7 @@ upstream. This file owns only Marmoset-specific bits:
 * The ``(template, mode)`` listing and preferred initial selection.
 * The ``b000`` send action.
 """
+
 import traceback
 from pathlib import Path
 
@@ -24,11 +25,11 @@ from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
 
 # From this package:
 from mayatk.mat_utils.marmoset_bridge._marmoset_bridge import (
+    MarmosetEngine,
     MarmosetBridge,
     SEND_TO,
     ROUNDTRIP,
     _TEMPLATE_DIR,
-    list_template_modes,
 )
 from mayatk.mat_utils.marmoset_bridge import parameters as _params
 
@@ -70,12 +71,15 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
             "Click <b>Send to Marmoset</b>.",
         ],
         "sections": [
-            ("Modes", [
-                "<b>send_to</b> — opens Toolbag for interactive work.",
-                "<b>roundtrip</b> — runs Toolbag headless, then "
-                "re-surfaces generated maps as clickable links in the "
-                "log panel below. Maya scene is left untouched.",
-            ]),
+            (
+                "Modes",
+                [
+                    "<b>send_to</b> — opens Toolbag for interactive work.",
+                    "<b>roundtrip</b> — runs Toolbag headless, then "
+                    "re-surfaces generated maps as clickable links in the "
+                    "log panel below. Maya scene is left untouched.",
+                ],
+            ),
         ],
         "notes": [
             "Add custom templates by dropping new files into the "
@@ -91,7 +95,7 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
 
     @property
     def params_module(self):
-        return _params
+        return _params.Parameters
 
     @property
     def template_dir(self) -> Path:
@@ -101,7 +105,7 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
         return MarmosetBridge()
 
     def list_template_modes(self):
-        return list_template_modes()
+        return MarmosetEngine.list_template_modes()
 
     def select_initial_template_index(self, pairs):
         """Prefer 'bake (roundtrip)' then 'bake (send_to)', else first entry."""
@@ -160,9 +164,7 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
         )
 
         try:
-            with self.sb.progress(
-                text=f"Working: Marmoset {template} ({mode})"
-            ):
+            with self.sb.progress(text=f"Working: Marmoset {template} ({mode})"):
                 result = self.bridge.send(
                     objects=selection,
                     template=template,
@@ -173,9 +175,7 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
         except Exception:
             # Surface the whole traceback in the log panel so the user
             # doesn't have to flip to the Script Editor to diagnose.
-            self.bridge.logger.error(
-                "Bridge raised:\n" + traceback.format_exc()
-            )
+            self.bridge.logger.error("Bridge raised:\n" + traceback.format_exc())
             return
 
         if result is None:

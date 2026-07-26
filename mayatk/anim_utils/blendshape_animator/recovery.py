@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 """Recovery utilities for corrupted blendShape setups."""
+
 import pythontk as ptk
 
 try:
@@ -9,7 +10,7 @@ except ImportError as error:
     print(__file__, error)
 
 from mayatk.anim_utils.blendshape_animator.applicator import Applicator, ApplyStatus
-from mayatk.anim_utils.blendshape_animator.helpers import list_history
+from mayatk.anim_utils.blendshape_animator.helpers import BlendshapeHelpers
 from mayatk.anim_utils.blendshape_animator.keyframes import Keyframes
 from mayatk.anim_utils.blendshape_animator.target import Targets
 
@@ -22,7 +23,7 @@ class Recovery(ptk.LoggingMixin):
         """Rebuild corrupted blendShape animation."""
         cls.logger.info("=== RECOVERY: Fixing corrupted animation ===")
 
-        history = list_history(base_mesh, type_filter="blendShape")
+        history = BlendshapeHelpers.list_history(base_mesh, type_filter="blendShape")
         if not history:
             cls.logger.error("No blendShape found to fix")
             return False
@@ -73,9 +74,7 @@ class Recovery(ptk.LoggingMixin):
                 outTangentType="linear",
             )
 
-            cls.logger.info(
-                f"Restored {len(keyframes)} keyframes with linear tangents"
-            )
+            cls.logger.info(f"Restored {len(keyframes)} keyframes with linear tangents")
 
         cls.logger.info("Animation fixed! Test by scrubbing timeline.")
         return True
@@ -88,7 +87,7 @@ class Recovery(ptk.LoggingMixin):
         if not cls.fix_corrupted_animation(base_mesh, target_mesh):
             return False
 
-        history = list_history(base_mesh, type_filter="blendShape")
+        history = BlendshapeHelpers.list_history(base_mesh, type_filter="blendShape")
         if history:
             new_blendshape = history[0]
             count = Targets.update_all_references(new_blendshape, base_mesh)

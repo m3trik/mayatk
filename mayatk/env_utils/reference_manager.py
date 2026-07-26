@@ -2,9 +2,7 @@
 # coding=utf-8
 import os
 import re
-import time
-from functools import partial, wraps
-from pathlib import Path
+from functools import wraps
 from typing import Optional
 
 try:
@@ -12,7 +10,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.core_utils._core_utils import CoreUtils
@@ -37,7 +35,9 @@ class _FileRef:
 
     @property
     def path(self) -> str:
-        return cmds.referenceQuery(self._ref_node, filename=True, withoutCopyNumber=True)
+        return cmds.referenceQuery(
+            self._ref_node, filename=True, withoutCopyNumber=True
+        )
 
     def remove(self):
         cmds.file(removeReference=True, referenceNode=self._ref_node)
@@ -55,19 +55,6 @@ class _FileRef:
             cmds.namespace(removeNamespace=ns, mergeNamespaceWithRoot=True)
 
 
-def _list_file_refs():
-    """Return _FileRef objects for all top-level references in the scene."""
-    result = []
-    for rn in (cmds.ls(type="reference") or []):
-        if rn == "sharedReferenceNode":
-            continue
-        try:
-            result.append(_FileRef(rn))
-        except RuntimeError:
-            pass
-    return result
-
-
 class AssemblyManager:
     @classmethod
     def current_references(cls):
@@ -76,7 +63,7 @@ class AssemblyManager:
         Returns:
             list: A list of _FileRef objects representing the current scene references.
         """
-        return _list_file_refs()
+        return _ReferenceManagerInternal._list_file_refs()
 
     @classmethod
     def create_assembly_definition(cls, namespace: str, file_path: str) -> str:
@@ -104,7 +91,7 @@ class AssemblyManager:
                 assembly_node, query=True, listRepresentations=True
             )
             return representations[0] if representations else None
-        except Exception as e:
+        except Exception:
             cmds.warning(f"Failed to create assembly definition for {file_path}")
             return None
 
@@ -124,7 +111,7 @@ class AssemblyManager:
         try:
             cmds.assembly(assembly_node, edit=True, active=representation_name)
             return True
-        except Exception as e:
+        except Exception:
             cmds.warning(f"Failed to set active representation for {assembly_node}")
             return False
 
@@ -150,12 +137,29 @@ class AssemblyManager:
                         f"Failed to set active representation for {assembly_name}"
                     )
             else:
-                cmds.warning(
-                    f"Failed to create assembly definition for {file_path}"
-                )
+                cmds.warning(f"Failed to create assembly definition for {file_path}")
 
 
-class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
+class _ReferenceManagerInternal(object):
+    """Internal helpers for ReferenceManager."""
+
+    @staticmethod
+    def _list_file_refs():
+        """Return _FileRef objects for all top-level references in the scene."""
+        result = []
+        for rn in cmds.ls(type="reference") or []:
+            if rn == "sharedReferenceNode":
+                continue
+            try:
+                result.append(_FileRef(rn))
+            except RuntimeError:
+                pass
+        return result
+
+
+class ReferenceManager(
+    WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin, _ReferenceManagerInternal
+):
     """Core Maya scene reference management functionality.
 
     Features:
@@ -167,6 +171,10 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
     This class provides the core Maya reference functionality without any UI dependencies.
     For UI integration, use ReferenceManagerController and ReferenceManagerSlots.
     """
+
+    # Widen the workspace-file scan to every natively referenceable type. The panel's
+    # Include Types row filters this cached superset, so toggling a type never re-scans disk.
+    SCENE_FILE_TYPES = ("*.ma", "*.mb", "*.fbx")
 
     def __init__(self, log_level="WARNING"):
         super().__init__()
@@ -180,7 +188,7 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
         """Get the current scene references.
         Returns a list of _FileRef objects.
         """
-        return _list_file_refs()
+        return _ReferenceManagerInternal._list_file_refs()
 
     def _matches_prefilter_regex(self, filename):
         """Check if a file is an auto-save file based on its name."""
@@ -440,9 +448,7 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
                 pass
             if ns:
                 try:
-                    candidates = cmds.ls(
-                        f"{ns}:*", long=True, type="transform"
-                    ) or []
+                    candidates = cmds.ls(f"{ns}:*", long=True, type="transform") or []
                 except Exception as e:
                     self.logger.debug(f"namespace transform lookup failed: {e}")
 
@@ -512,9 +518,7 @@ class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin):
                     cmds.setAttr(f"{t}.overrideDisplayType", dt)
                     success += 1
                 except Exception as e:
-                    self.logger.warning(
-                        f"Failed to set display override on {t}: {e}"
-                    )
+                    self.logger.warning(f"Failed to set display override on {t}: {e}")
         try:
             cmds.refresh()
         except Exception:
@@ -577,7 +581,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         self._last_dir_valid = None
         self._updating_directory = False  # Flag to prevent cascading UI events
         self._editing_item = None  # Track which item is being edited
-        self._context_menu_row = None  # Row index captured at right-click for row-scoped context actions
+        self._context_menu_row = (
+            None  # Row index captured at right-click for row-scoped context actions
+        )
         self._warned_scene_placeholder_typo = False
         self._workspace_history_max = (
             50  # Max entries in per-directory workspace memory
@@ -641,6 +647,97 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 self.logger.warning(msg)
             pattern = pattern.replace("{scene}", "{scenes}")
         return pattern
+
+    def _scenes_folder(self) -> str:
+        """The workspace's ``scene`` file-rule folder — the ``{scenes}`` placeholder
+        value. Falls back to the literal ``"scenes"`` off a marked workspace or on
+        error. Shared by Save, the folder-structure filter, and the live preview."""
+        try:
+            return cmds.workspace(fileRuleEntry="scene") or "scenes"
+        except Exception:
+            return "scenes"
+
+    def _folder_structure_preview(self) -> str:
+        """Live tooltip for ``txt_subfolder_structure`` — resolve the placeholders
+        against the current workspace + scene so the hover shows the real Save dir.
+
+        Side-effect-free (unlike :meth:`_normalize_subfolder_structure_pattern`,
+        which warns): the ``{scene}`` typo is corrected locally and surfaced as a
+        note instead of logging on every hover."""
+        header_menu = self.slot.ui.header.menu
+        txt = getattr(header_menu, "txt_subfolder_structure", None)
+        pattern = txt.text().strip() if txt is not None else ""
+
+        workspace = self.current_working_dir or ""
+        workspace_name = os.path.basename(workspace) if workspace else "<workspace>"
+        suffix_w = getattr(header_menu, "txt_suffix", None)
+        suffix = (suffix_w.text() if suffix_w is not None else "") or ""
+        case_w = getattr(header_menu, "cmb_case_style", None)
+        case_style = case_w.currentText() if case_w is not None else "None"
+
+        # {name} = the current scene's base (what Save would prepopulate), formatted
+        # the same way — so the preview reflects the real Save output.
+        current_scene = cmds.file(q=True, sceneName=True) or ""
+        if current_scene:
+            base = os.path.basename(current_scene).split(".")[0]
+            if suffix and base.lower().endswith(suffix.lower()):
+                base = base[: -len(suffix)]
+            name_val = self._format_name(base, case_style, suffix="")
+        else:
+            name_val = "<scene name>"
+
+        notes = ["e.g. {scenes} · {scenes}/{name} · {scenes}/{name}/versions"]
+        if "{scene}" in pattern:
+            notes.append("<b>{scene}</b> is not valid — did you mean <b>{scenes}</b>?")
+        resolve_pattern = pattern.replace("{scene}", "{scenes}")
+
+        context = {
+            "scenes": self._scenes_folder(),
+            "name": name_val,
+            "workspace": workspace_name,
+            "suffix": suffix,
+        }
+        # Final absolute save dir, mirroring save_scene's os.path.join(workspace, …).
+        try:
+            rel = ptk.StrUtils.replace_placeholders(resolve_pattern, **context)
+            final = os.path.join(workspace, rel) if workspace else rel
+        except ValueError:
+            final = None
+
+        # Fold the field's help text into the live tooltip (binding replaces the
+        # static setToolTip): purpose + what each placeholder means + its value.
+        return TooltipFormat.placeholder_preview(
+            resolve_pattern,
+            context,
+            title="Folder Structure",
+            body="Subfolder pattern for <b>Save To Workspace</b> — also drives the "
+            "<b>Filter by Folder Structure</b> option.",
+            descriptions={
+                "scenes": "workspace scenes folder (workspace.mel)",
+                "name": "scene name — excludes the suffix",
+                "workspace": "workspace folder name",
+                "suffix": "the Suffix field above",
+            },
+            final=final,
+            final_label="save dir →",
+            notes=notes,
+        )
+
+    def _wire_structure_tooltip(self, menu) -> None:
+        """Bind the live folder-structure preview once the menu widget's ``.tooltip``
+        proxy is stamped. Menu registration is deferred (coalesced next-tick drain),
+        so we bind on the following tick, with a small bounded retry as insurance."""
+        from qtpy import QtCore
+
+        def _bind(attempts_left=5):
+            txt = getattr(menu, "txt_subfolder_structure", None)
+            proxy = getattr(txt, "tooltip", None) if txt is not None else None
+            if proxy is not None:
+                proxy.bind(self._folder_structure_preview)
+            elif attempts_left > 0:
+                QtCore.QTimer.singleShot(0, lambda: _bind(attempts_left - 1))
+
+        QtCore.QTimer.singleShot(0, _bind)
 
     @property
     def current_working_dir(self):
@@ -760,6 +857,33 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 self.ui.tbl000.format_item(item, key="reset", italic=False)
                 item.setData(self.sb.QtCore.Qt.UserRole + 10, False)  # Clear the marker
 
+    @staticmethod
+    def _is_foreign(path):
+        """True if *path* is a foreign (Blender) scene — a cross-DCC row that must be baked
+        through the blender_bridge before it can be referenced."""
+        return (
+            bool(path)
+            and os.path.splitext(path)[1].lower()
+            in ReferenceManagerSlots.FOREIGN_EXTENSIONS
+        )
+
+    @staticmethod
+    def _bake_source_key(referenced_path):
+        """Normalized path of the foreign scene *referenced_path* was baked from, or None.
+
+        A foreign row references a cached ``.ma`` bake, so mapping a live reference back
+        to the source row the user sees is the only way that row can read as referenced
+        (and be un-referenced by a second click).
+        """
+        if not referenced_path:
+            return None
+        try:
+            from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+        except ImportError:  # bridge unavailable — no row can be bake-backed
+            return None
+        source = BlenderSceneImport.bake_source(referenced_path)
+        return os.path.normcase(os.path.normpath(source)) if source else None
+
     def handle_item_selection(self):
         t = self.ui.tbl000
         selected_items = [
@@ -818,7 +942,15 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         }
 
         paths_to_add = set(selected_by_path) - set(current_refs_by_path)
-        paths_to_remove = set(current_refs_by_path) - set(selected_by_path)
+        # A foreign row references its BAKE (a cached .ma) and is intentionally
+        # non-selectable, so its reference can never appear in the selection. Excluding
+        # bake-backed references here keeps an unrelated selection change from silently
+        # un-referencing every foreign row — those are toggled by their own icon.
+        paths_to_remove = {
+            p
+            for p in set(current_refs_by_path) - set(selected_by_path)
+            if not self._bake_source_key(current_refs_by_path[p].path)
+        }
 
         self.logger.debug(
             f"Selected paths to add: {paths_to_add}, to remove: {paths_to_remove}"
@@ -859,9 +991,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             t.clearSelection()
             current_references = self.current_references
             _scene = cmds.file(q=True, sceneName=True) or ""
-            current_scene = (
-                os.path.normcase(os.path.normpath(_scene)) if _scene else ""
-            )
+            current_scene = os.path.normcase(os.path.normpath(_scene)) if _scene else ""
 
             # Create a mapping from file paths to namespaces for current references
             ref_path_to_namespace = {
@@ -1141,11 +1271,14 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         file_list = self.workspace_files.get(workspace_path, [])
 
-        # Check for hide binary setting
+        # Include Types — the native scan caches every NATIVE_EXTENSIONS type, so a toggle
+        # only re-filters (no cache invalidation). Unchecking .mb replaces the old
+        # "Hide Binary Files" checkbox; .fbx is native (referenced via the FBX plugin).
         header_menu = self.slot.ui.header.menu
-        hide_binary = getattr(header_menu, "chk_hide_binary", None)
-        if hide_binary and hide_binary.isChecked():
-            file_list = [f for f in file_list if not f.lower().endswith(".mb")]
+        included = self.slot._included_extensions()
+        file_list = [
+            f for f in file_list if os.path.splitext(f)[1].lower() in included
+        ]
 
         # Check for filter by suffix setting
         filter_suffix = getattr(header_menu, "chk_filter_suffix", None)
@@ -1173,10 +1306,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
             if pattern:
                 # Resolve the {scenes} placeholder to the workspace's scenes folder
-                try:
-                    scenes_folder = cmds.workspace(fileRuleEntry="scene") or "scenes"
-                except Exception:
-                    scenes_folder = "scenes"
+                scenes_folder = self._scenes_folder()
 
                 filtered_list = []
                 # Create a copy of file_list to iterate over
@@ -1300,7 +1430,27 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         hide_extension = getattr(header_menu, "chk_hide_extension", None)
         hide_extension_enabled = hide_extension.isChecked() if hide_extension else False
 
-        # Generate file names, marking external references
+        # Cross-DCC: also list the workspace's foreign scenes for each checked foreign type
+        # (.blend). A foreign row's reference icon bakes it through the blender_bridge (headless
+        # convert -> cached .ma) and references the result. Discovery uses the importer's own
+        # scan, filtered to the checked extensions (mirror of the Blender panel's .ma/.mb listing).
+        foreign_ext = {e for e in self.slot.FOREIGN_EXTENSIONS if e in included}
+        if foreign_ext:
+            from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+            existing = {os.path.normcase(os.path.normpath(p)) for p in file_list}
+            for p in BlenderSceneImport.find_scenes(
+                workspace_path, recursive=self.recursive_search
+            ):
+                if (
+                    os.path.splitext(p)[1].lower() in foreign_ext
+                    and os.path.normcase(os.path.normpath(p)) not in existing
+                ):
+                    file_list.append(p)
+
+        # Generate file names, marking external references (a foreign-DCC origin is NOT tagged —
+        # the user can reveal the extension to spot a .blend row, so a redundant "(Blender)" suffix
+        # is omitted; the Blender panel likewise drops its "(Maya)" tag).
         file_names = []
         for f in file_list:
             name = os.path.basename(f)
@@ -1341,9 +1491,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             t.setRowCount(len(file_names))
 
             _scene = cmds.file(q=True, sceneName=True) or ""
-            current_scene = (
-                os.path.normcase(os.path.normpath(_scene)) if _scene else ""
-            )
+            current_scene = os.path.normcase(os.path.normpath(_scene)) if _scene else ""
 
             # Build a set of referenced file paths for fast lookup, plus a
             # mapping of paths to active display mode (off/reference/template).
@@ -1354,11 +1502,14 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                     norm = os.path.normcase(os.path.normpath(ref.path))
                 except Exception:
                     continue
-                ref_path_set.add(norm)
                 mode = self.get_reference_display_mode(ref)
-                # If multiple refs share a path, prefer any non-off mode
-                if mode != "off" or norm not in display_mode_by_path:
-                    display_mode_by_path[norm] = mode
+                # A foreign row references its BAKE, so key the reference by the source
+                # scene the user sees too — otherwise the row reads as unreferenced.
+                for key in filter(None, (norm, self._bake_source_key(ref.path))):
+                    ref_path_set.add(key)
+                    # If multiple refs share a path, prefer any non-off mode
+                    if mode != "off" or key not in display_mode_by_path:
+                        display_mode_by_path[key] = mode
 
             for row, (scene_name, file_path) in enumerate(zip(file_names, file_list)):
                 item = t.item(row, 0)  # Files column is at index 0
@@ -1388,11 +1539,35 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 )
                 item.setData(self.sb.QtCore.Qt.UserRole + 2, scene_name)
 
-                self._format_table_item(item, file_path)
+                is_foreign = self._is_foreign(file_path)
+                if is_foreign:
+                    # A foreign (Blender) row references through a BAKE, so it carries the
+                    # same reference-toggle states as a native row. It must still stay out
+                    # of the selection->reference sync (that path references the row's own
+                    # path, which Maya cannot open), so the name stays non-selectable and
+                    # non-editable — renaming the source would orphan its bake sidecar.
+                    item.setFlags(
+                        (item.flags() | self.sb.QtCore.Qt.ItemIsEnabled)
+                        & ~self.sb.QtCore.Qt.ItemIsSelectable
+                        & ~self.sb.QtCore.Qt.ItemIsEditable
+                    )
+                else:
+                    self._format_table_item(item, file_path)
+                    # Items are reused across refreshes; a row that previously held a
+                    # non-editable foreign (.blend) file can be repurposed for a native
+                    # scene after the toggle is turned off, so re-assert editability here
+                    # (natives are renameable — only the foreign branch clears it).
+                    item.setFlags(item.flags() | self.sb.QtCore.Qt.ItemIsEditable)
 
-                # Set action column states
+                # Set action column states. Currentness matches the Open toggle exactly (native
+                # file, or a foreign row's open scratch bake) — reuse the single `current_scene`
+                # snapshot via the slot's _is_current (single source of truth for currentness).
+                # Short-circuit when nothing is open: no row is current, and it keeps the pure-Qt
+                # update_table unit tests (which mock cmds.file -> "") off the live slot method.
                 norm_fp = os.path.normcase(os.path.normpath(file_path))
-                is_current = norm_fp == current_scene
+                is_current = bool(current_scene) and self.slot._is_current(
+                    file_path, current_scene
+                )
                 is_referenced = norm_fp in ref_path_set
 
                 # Reference action column (index 1)
@@ -1401,7 +1576,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 else:
                     t.actions.set(row, 1, "unreferenced")
 
-                # Open action column (index 2)
+                # Open action column (index 2) — a foreign row bakes + opens as a new scene
+                # (see open_scene), so it carries the same visible/clickable Open states as a
+                # native row (is_current is always False for a foreign row).
                 t.actions.set(row, 2, "current" if is_current else "default")
 
                 # Display mode action column (index 3): off/reference/template/unavailable
@@ -1448,7 +1625,6 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                     f"Post-filter: applying '{filter_text}' to {t.rowCount()} rows"
                     f" (include_files={include_files}, include_notes={include_notes})"
                 )
-                from fnmatch import fnmatchcase
 
                 # Split filter into individual patterns
                 filter_patterns = [filter_text]
@@ -1504,7 +1680,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 key = os.path.normcase(os.path.normpath(ref.path))
             except Exception:
                 continue
-            path_to_refs.setdefault(key, []).append(ref)
+            # Also key by the bake's source so a foreign row tracks its own reference.
+            for k in filter(None, (key, self._bake_source_key(ref.path))):
+                path_to_refs.setdefault(k, []).append(ref)
 
         for row in range(t.rowCount()):
             item = t.item(row, 0)
@@ -1539,6 +1717,26 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         """
         self.logger.debug(f"Opening scene: {file_path}")
 
+        # A foreign (Blender) scene has no Maya file to open, so bake it to a .ma (headless
+        # Blender + mayapy) and open a throwaway copy as a new scene — the 'open' counterpart of
+        # the link icon's bake-and-reference, and the mirror of blendertk's _open_foreign_as_new.
+        # The scratch copy keeps the cached bake (reused for referencing) unedited.
+        if self._is_foreign(file_path):
+            baked = self.slot._bake_foreign_path(file_path)  # cached .ma (or None + its own error)
+            if not baked:
+                return False
+            import shutil
+
+            # Deterministic scratch path so a second Open click resolves this row as 'current'
+            # and closes it (see the slot's _is_current / _foreign_scratch_path).
+            scratch = self.slot._foreign_scratch_path(file_path)
+            try:
+                shutil.copyfile(baked, scratch)
+            except OSError:
+                scratch = baked  # fall back to the cache if the scratch copy can't be written
+            file_path = scratch
+            set_workspace = False  # a scratch temp scene has no workspace to sync
+
         if not os.path.exists(file_path):
             self.slot.logger.error(f"Scene file not found: {file_path}")
             self.sb.message_box(f"Scene file not found:<br>{file_path}")
@@ -1546,6 +1744,15 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         try:
             cmds.file(file_path, open=True, force=True)
+            # Loading a scene that carries references resolves/applies reference edits during
+            # the open, which leaves Maya's scene 'modified' flag set even though the user made
+            # no edits. That stale flag makes an immediate close/reference toggle falsely prompt
+            # "unsaved changes — close anyway?" (via _confirm_discard_unsaved). We just loaded a
+            # pristine file, so clear the load-time dirt now; interactive Maya applies some
+            # reference edits deferred (after file() returns), so a second clear is scheduled on
+            # idle at end-of-open — see the evalDeferred below. A genuine user edit re-sets the
+            # flag and the discard guard still fires for real work.
+            cmds.file(modified=False)
             self.logger.info(f"Opened scene: {file_path}")
         except Exception as e:
             self.logger.error(f"Failed to open scene: {e}")
@@ -1572,7 +1779,37 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             except Exception as e:
                 self.logger.error(f"Failed to set workspace: {e}")
 
+        # Second, deferred clear: interactive Maya applies deferred reference edits (and fires the
+        # panel's own SceneOpened scriptJob refresh) AFTER this method returns, both of which re-set
+        # the 'modified' flag on the just-loaded pristine scene. Re-clearing on the next idle — at
+        # lowest priority so it runs after those callbacks — stops the discard guard from falsely
+        # prompting on the following close/reference toggle. No-op in batch/standalone (no idle
+        # loop), where the synchronous clear above already suffices.
+        try:
+            cmds.evalDeferred(
+                lambda: cmds.file(modified=False), lowestPriority=True
+            )
+        except Exception as e:  # noqa: BLE001 — deferring is best-effort; the sync clear stands
+            self.logger.debug(f"Deferred modified-clear could not be scheduled: {e}")
+
         return True
+
+    def new_scene(self):
+        """Discard the current file and start an empty scene (Maya's ``file -new``).
+
+        The 'close' counterpart of :meth:`open_scene` — Maya has no null document, so closing a
+        scene means replacing it with a fresh empty one. Callers guard unsaved changes first
+        (the slot's ``_confirm_discard_unsaved``); ``force=True`` here then skips Maya's own
+        prompt. True on success. Mirror of blendertk's ``EnvUtils.new_scene``.
+        """
+        try:
+            cmds.file(new=True, force=True)
+            self.logger.info("Started a new (empty) scene.")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to start a new scene: {e}")
+            self.sb.message_box(f"Failed to close the scene:<br>{e}")
+            return False
 
     @block_table_selection_method
     def unreference_all(self):
@@ -1592,7 +1829,6 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             )
             != "Yes"
         ):
-            self.sb.message_box("<b>Unlink operation cancelled.</b>")
             self.logger.debug("Unlink operation cancelled by user.")
             return
 
@@ -1628,7 +1864,6 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.logger.info("Converting references to assemblies.")
             AssemblyManager.convert_references_to_assemblies()
         else:
-            self.sb.message_box("<b>Convert to assembly operation cancelled.</b>")
             self.logger.debug("Convert to assembly operation cancelled by user.")
 
     def _format_name(self, name, case_style="None", suffix=""):
@@ -1690,10 +1925,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         if subfolder_structure_text:
             # Resolve the {scenes} placeholder to the workspace's scenes folder
-            try:
-                scenes_folder = cmds.workspace(fileRuleEntry="scene") or "scenes"
-            except Exception:
-                scenes_folder = "scenes"
+            scenes_folder = self._scenes_folder()
 
             # Use custom structure with all placeholders
             base_name_formatted = self._format_name(name, case_style, suffix="")
@@ -1900,9 +2132,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                     # Case-insensitive: Windows filenames — "Env_v1.ma" in
                     # folder "env" is scene-owned.
                     file_base = os.path.splitext(os.path.basename(path))[0].lower()
-                    parent_name = os.path.basename(
-                        os.path.normpath(parent_dir)
-                    ).lower()
+                    parent_name = os.path.basename(os.path.normpath(parent_dir)).lower()
                     owns_folder = bool(parent_name) and file_base.startswith(
                         parent_name
                     )
@@ -1919,8 +2149,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                         # coincidence, e.g. "scenes_final.ma" loose in a root
                         # named "scenes") — leave it alone.
                         has_subdirs = any(
-                            os.path.isdir(os.path.join(parent_dir, e))
-                            for e in entries
+                            os.path.isdir(os.path.join(parent_dir, e)) for e in entries
                         )
                     except OSError:
                         remaining = None  # cannot inspect: leave the folder alone
@@ -1973,6 +2202,17 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     The slots class maintains no business logic - it purely routes UI events
     to the appropriate controller methods.
     """
+
+    # File-type classification for this panel (mirror of blendertk, inverted). NATIVE types
+    # list + reference directly (Maya references .ma/.mb/.fbx natively); FOREIGN types are
+    # cross-DCC rows baked through the blender_bridge before they can be referenced. The
+    # header's Include Types row toggles each extension; _INCLUDE_TYPES is the column order
+    # (shared across both panels).
+    _INCLUDE_TYPES = ("ma", "mb", "fbx", "blend")
+    NATIVE_EXTENSIONS = (".ma", ".mb", ".fbx")
+    FOREIGN_EXTENSIONS = (".blend",)
+    # Default-checked include types for this panel — its own native scene types.
+    _INCLUDE_DEFAULTS = (".ma", ".mb")
 
     def __init__(self, switchboard, log_level="WARNING"):
         super().__init__()
@@ -2029,108 +2269,135 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
     def header_init(self, widget):
         """Initialize the header for the reference manager."""
-        # Gesture-scoped window: pin button + auto-hide on key_show release.
+        # Gesture-scoped window: pin button + auto-hide on key_show release. Runs on every call
+        # (declarative, cheap) and the signal is re-wired idempotently (disconnect-then-connect)
+        # because the header QWidget can outlive this slots instance — a bare .connect() on a
+        # second call would leave a stale connection bound to a dead ``self`` alongside the live
+        # one. Mirror of channels' _wire_table_signals (blendertk).
         widget.config_buttons("refresh", "menu", "collapse", "pin")
+        try:
+            widget.refresh_requested.disconnect()
+        except (RuntimeError, TypeError):
+            pass
         widget.refresh_requested.connect(self.btn_refresh)
+
+        # One-time menu build: a repeat call (e.g. the offscreen test harness's documented
+        # "drive *_init explicitly" pattern) must not re-append every Naming / Filter /
+        # Include-Types control — duplicate header controls. Only the widget CONSTRUCTION is
+        # guarded; config_buttons + the signal above stay outside so a reload still re-targets
+        # them at the current ``self``.
+        if widget.is_initialized:
+            return
+        # Save / load the header menu's naming + filter settings as named presets.
         widget.menu.add_presets = True
         widget.menu.presets.preset_dir = "mayatk/reference_manager"
+
+        # --- Naming: conventions applied by Save To Workspace ----------------
         widget.menu.add("Separator", setTitle="Naming:")
         widget.menu.add(
-            "QPushButton",
-            setText="Save To Workspace",
-            setObjectName="btn_save_scene",
-            setToolTip="Save the current scene to the workspace with naming and folder structure based on settings.",
+            "QComboBox",
+            setObjectName="cmb_case_style",
+            setToolTip="Case convention applied to the file name on Save.",
+            addItems=[
+                "None",
+                "camel",
+                "pascal",
+                "title",
+                "upper",
+                "lower",
+                "capitalize",
+            ],
+        )
+        widget.menu.add(
+            "QLineEdit",
+            setObjectName="txt_suffix",
+            setPlaceholderText="Suffix (e.g. _v01)…",
+            setToolTip="Suffix appended to the file name on Save (excluded from case formatting).",
         )
         widget.menu.add(
             "QLineEdit",
             setObjectName="txt_subfolder_structure",
             setText="{scenes}",
-            setPlaceholderText="Folder Structure (e.g. {scenes}/{name})",
-            setToolTip="Folder structure for saving/organizing scene files.\n\n"
-            "Supports placeholders:\n"
-            "  {scenes} - Workspace scenes folder (from workspace.mel)\n"
-            "  {name} - Scene name (excludes suffix if defined)\n"
-            "  {workspace} - Workspace folder name\n"
-            "  {suffix} - The defined suffix\n\n"
+            setPlaceholderText="Folder Structure (e.g. {scenes}/{name})…",
+            setToolTip="Folder structure for Save — also drives the Folder-Structure filter.\n\n"
+            "Placeholders:\n"
+            "  {scenes} — workspace scenes folder (from workspace.mel)\n"
+            "  {name} — scene name (excludes the suffix)\n"
+            "  {workspace} — workspace folder name\n"
+            "  {suffix} — the suffix above\n\n"
             "Examples:\n"
-            "  {scenes} - Save directly in scenes folder\n"
-            "  {scenes}/{name} - Each scene in its own subfolder\n"
-            "  {scenes}/{name}/versions - Nested versions folder",
+            "  {scenes} — save directly in the scenes folder\n"
+            "  {scenes}/{name} — each scene in its own subfolder\n"
+            "  {scenes}/{name}/versions — a nested versions folder",
         )
         widget.menu.add(
-            "QLineEdit",
-            setObjectName="txt_suffix",
-            setPlaceholderText="Suffix",
-            setToolTip="Optional suffix to append to filenames (excluded from case formatting).",
+            "QPushButton",
+            setText="Save To Workspace",
+            setObjectName="btn_save_scene",
+            setToolTip="Save the current scene into the workspace using the naming conventions above.",
         )
+        # Live tooltip: hovering the Folder Structure field shows the placeholders
+        # resolved against the current workspace + scene, plus the real save dir.
+        # (Wiring + preview live on the controller, which owns the UI-state reads.)
+        self.controller._wire_structure_tooltip(widget.menu)
+
+        # --- Filter / Display: narrow the list + shorten displayed names -----
+        widget.menu.add("Separator", setTitle="Filter / Display:")
         widget.menu.add(
-            "QComboBox",
-            setObjectName="cmb_case_style",
-            setToolTip="Enforce a specific case style for new filenames.",
-            addItems=[
-                "Case: None",
-                "Case: lower",
-                "Case: upper",
-                "Case: title",
-                "Case: camel",
-                "Case: pascal",
-            ],
+            "QCheckBox",
+            setText="Filter by Suffix",
+            setObjectName="chk_filter_suffix",
+            setChecked=False,
+            setToolTip="Show only files whose name ends with the Suffix above.",
         )
         widget.menu.add(
             "QCheckBox",
             setText="Filter by Folder Structure",
             setObjectName="chk_filter_folder_structure",
             setChecked=False,
-            setToolTip="If checked, only show files that match the folder structure pattern.",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setText="Filter by Suffix",
-            setObjectName="chk_filter_suffix",
-            setChecked=False,
-            setToolTip="If checked, only show files that end with the specified suffix.",
+            setToolTip="Show only files whose location matches the Folder Structure above.",
         )
         widget.menu.add(
             "QCheckBox",
             setText="Hide Suffix",
             setObjectName="chk_hide_suffix",
             setChecked=False,
-            setToolTip="Hide the suffix from the file list display.",
+            setToolTip="Hide the suffix from the displayed file name.",
         )
         widget.menu.add(
             "QCheckBox",
             setText="Hide Extension",
             setObjectName="chk_hide_extension",
             setChecked=False,
-            setToolTip="Hide the file extension from the file list display.",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setText="Hide Binary Files (.mb)",
-            setObjectName="chk_hide_binary",
-            setChecked=False,
-            setToolTip="If checked, hide Maya Binary (.mb) files.",
+            setToolTip="Hide the file extension from the displayed file name.",
         )
         widget.menu.add(
             "QCheckBox",
             setText="Show Notes Column",
             setObjectName="chk_show_notes_column",
             setChecked=False,
-            setToolTip="Show the Notes column (per-file comments / metadata).\n"
-            "Hidden by default.",
+            setToolTip="Show the Notes column (per-file comments / metadata). Hidden by default.",
         )
+
+        # Include Types — a single horizontal row of per-extension toggles (mirror across both
+        # panels). Replaces the old "Hide Binary Files" + "Include Blender Scenes" checkboxes:
+        # .ma/.mb/.fbx list + reference natively; .blend lists as a foreign row baked through
+        # the blender_bridge before it can be referenced.
+        self._add_include_types_row(widget.menu)
+
+        # --- Operations: bulk reference actions ------------------------------
         widget.menu.add("Separator", setTitle="Operations:")
         widget.menu.add(
             "QPushButton",
             setText="Convert to Assembly",
             setObjectName="btn_convert_assembly",
-            setToolTip="Convert all references to assemblies.",
+            setToolTip="Replace every reference with an assembly-definition representation.",
         )
         widget.menu.add(
             "QPushButton",
             setText="Unlink and Import All",
             setObjectName="btn_unlink_import_all",
-            setToolTip="Unlink and import all references.",
+            setToolTip="Import every reference's contents as native nodes (removes the reference links).",
         )
         widget.menu.add(
             "QPushButton",
@@ -2139,134 +2406,145 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             setToolTip="Remove all references from the scene.",
         )
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Reference Manager",
-                body="Manage scene references, workspace files, and naming "
-                "conventions from a single interface.",
+                body="A workspace scene-file manager: browse a project's scene files, open / save / "
+                "rename / delete them, and reference them into the current scene.",
+                steps=[
+                    "Set a <b>Root Directory</b> (▸ to browse / recent); pick a <b>Workspace</b>.",
+                    "Click the row's <b>reference</b> icon to reference / un-reference, the <b>open</b> "
+                    "icon to open the scene, the <b>display</b> icon to cycle Normal → Reference → Template.",
+                    "<b>Double-click</b> the name to rename; right-click for the full action menu.",
+                    "<b>Double-click</b> the <b>Notes</b> column to annotate a file (saved as sidecar metadata).",
+                ],
                 sections=[
-                    ("File discovery", [
-                        "Workspace files are discovered and filtered by "
-                        "folder structure, file suffix, and extension.",
-                        "The optional <b>Notes</b> column shows per-file "
-                        "comments / metadata (toggle it from the header menu).",
-                    ]),
-                    ("Save & naming", [
-                        "<b>Save</b> uses configurable naming conventions: "
-                        "case style, suffix, and folder structure.",
-                    ]),
-                    ("Bulk reference operations (header menu)", [
-                        "<b>Convert to Assembly</b> — replace references with "
-                        "assembly representations.",
-                        "<b>Unlink &amp; Import</b> — import referenced "
-                        "content as native nodes.",
-                        "<b>Un-Reference All</b> — strip all references from "
-                        "the scene.",
-                    ]),
+                    (
+                        "Header menu",
+                        [
+                            "<b>Naming</b> (case / suffix / folder structure) drives "
+                            "<b>Save To Workspace</b>.",
+                            "<b>Filter by Suffix / Folder Structure</b> narrow the list; "
+                            "<b>Hide Suffix / Extension</b> shorten the displayed name; "
+                            "<b>Show Notes Column</b> reveals Notes.",
+                            "<b>Include Types</b> (ma / mb / fbx / blend) picks which file types "
+                            "list; .ma/.mb/.fbx reference natively, a foreign (Blender) row's "
+                            "reference icon bakes it to a cached .ma and references that — "
+                            "right-click <b>Import Scene</b> for a local copy instead.",
+                            "<b>Operations</b>: <b>Convert to Assembly</b>, <b>Unlink and Import "
+                            "All</b>, <b>Un-Reference All</b>.",
+                        ],
+                    ),
+                    (
+                        "Filter field (▸ option box)",
+                        [
+                            "Toggle the filter on/off; <b>Ignore Case</b>; choose what it matches — "
+                            "<b>Files</b>, <b>Notes</b>, or both.",
+                        ],
+                    ),
                 ],
                 notes=[
                     "<b>Right-click</b> a file row for per-reference actions "
-                    "(open, edit note, repath, etc.).",
+                    "(open, rename, delete, reveal, …).",
                 ],
             )
         )
 
+    def _add_include_types_row(self, menu):
+        """Add the Include Types row — one checkbox per file type, side-by-side under a titled
+        separator (mirror across both panels). Uses ``Menu.add_row`` so the single-column menu is
+        not reflowed; each checkbox is exposed as ``menu.chk_include_<type>`` and re-filters on toggle.
+
+        This panel's native scene types (.ma/.mb) default on; .fbx is native but off by default
+        (a workspace's FBX exports are usually noise in a scene list), and the foreign .blend
+        type is off.
+        """
+        tooltip = {
+            "ma": "List the workspace's Maya ASCII scenes (.ma) — referenced natively.",
+            "mb": "List the workspace's Maya binary scenes (.mb) — referenced natively.",
+            "fbx": "List the workspace's FBX files (.fbx) — referenced natively via the FBX plugin.",
+            "blend": "List the workspace's Blender scenes (.blend) — foreign rows bake via a headless Blender.",
+        }
+        items = [
+            (
+                "QCheckBox",
+                {
+                    "setObjectName": f"chk_include_{t}",
+                    "setText": t,
+                    "setChecked": f".{t}" in self._INCLUDE_DEFAULTS,
+                    "setToolTip": tooltip[t],
+                },
+            )
+            for t in self._INCLUDE_TYPES
+        ]
+        for cb in menu.add_row(items, title="Include Types:", justify="expand"):
+            cb.toggled.connect(lambda *_: self.controller.refresh_file_list())
+
+    def _included_extensions(self):
+        """The set of extensions (``.ma`` … ``.blend``) whose Include Types checkbox is checked.
+
+        Defensive: the header menu may not be built yet during a sibling ``*_init``; falls back to
+        the panel defaults so an early refresh still lists this panel's native scenes.
+        """
+        header = getattr(self.ui, "header", None)
+        menu = getattr(header, "menu", None) if header else None
+        if menu is None:
+            return set(self._INCLUDE_DEFAULTS)
+        included = set()
+        for t in self._INCLUDE_TYPES:
+            chk = getattr(menu, f"chk_include_{t}", None)
+            if chk is not None and chk.isChecked():
+                included.add(f".{t}")
+        return included
+
     def tbl000_init(self, widget):
+        """Table setup: (re)wire signals every show, one-time context-menu build, then populate.
+
+        ``_wire_table_signals`` runs unconditionally because the ``tbl000`` QWidget can outlive
+        this slots instance — a reload builds a NEW ``ReferenceManagerSlots`` (and a fresh
+        ``self.controller``, see ``__init__``) on the SAME persisted widget, which already
+        carries ``is_initialized`` from the earlier session. Without the re-wire, the row
+        action-column handlers / ``itemDoubleClicked`` / ``itemSelectionChanged`` / context-menu
+        actions stay bound to the OLD, now-orphaned ``self``/``self.controller`` and silently
+        no-op. The context menu's ITEMS (the ``QPushButton`` widgets) stay in the one-time block
+        since they mutate the widget, which persists — building them twice is the user-reported
+        duplicate context-menu entries. Mirror of blendertk's ``tbl000_init`` / channels'
+        ``_wire_table_signals``.
+
+        Order matters: the one-time construction (``setColumnCount``) MUST precede
+        ``_wire_table_signals`` — ``actions.add`` sizes its column, and Qt 6.5's
+        ``QHeaderView.setSectionResizeMode`` on a not-yet-existing section is a native
+        access violation (hard-crashed Maya 2025 at panel launch).
+        """
         if not widget.is_initialized:
+            widget.is_initialized = True
             widget.setColumnCount(5)
             widget.setHorizontalHeaderLabels(["FILES:", "", "", "", "NOTES:"])
+
+            # Column layout: FILES on the left, NOTES in the middle, the three
+            # icon action columns (Reference / Open / Display) pinned to the
+            # right. FILES stretches to fill (and NOTES shares the free space
+            # when shown), so resizing the window grows a real column instead of
+            # leaving dead space beside the fixed-width icon columns.
+            #
+            # ``moveSection`` is VISUAL-only: it shifts NOTES (logical col 4) to
+            # visual position 1 without changing any logical index, so every
+            # column reference in this module (actions on 1/2/3, NOTES on 4)
+            # stays valid. The icon columns keep their Fixed square sizing
+            # (applied by ``TableActions``); a hidden NOTES contributes no width,
+            # so FILES simply takes the whole remainder.
+            header = widget.horizontalHeader()
+            QHeaderView = self.sb.QtWidgets.QHeaderView
+            header.setStretchLastSection(False)
+            header.setSectionResizeMode(0, QHeaderView.Stretch)
+            header.setSectionResizeMode(4, QHeaderView.Stretch)
+            header.moveSection(header.visualIndex(4), 1)
+
             # Use NoEditTriggers and handle editing manually to prevent conflicts with double-click
             widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.NoEditTriggers)
             widget.setSelectionBehavior(self.sb.QtWidgets.QAbstractItemView.SelectRows)
             widget.setSelectionMode(self.sb.QtWidgets.QAbstractItemView.MultiSelection)
             widget.setSortingEnabled(True)
             widget.verticalHeader().setVisible(False)
-
-            # Single source of truth for the "current scene" highlight colour
-            current_clr = widget.ACTION_COLOR_MAP["current"][0]
-
-            # Action column (index 1) — "Reference" icon
-            widget.actions.add(
-                1,
-                states={
-                    "unreferenced": {
-                        "icon": "link",
-                        "color": "#555555",
-                        "tooltip": "Not referenced \u2014 click to add reference",
-                        "action": self._toggle_reference_at_row,
-                    },
-                    "referenced": {
-                        "icon": "link",
-                        "color": "#6b8fa3",
-                        "tooltip": "Referenced \u2014 click to remove reference",
-                        "action": self._toggle_reference_at_row,
-                    },
-                },
-            )
-
-            # Action column (index 2) — "Open" icon
-            widget.actions.add(
-                2,
-                states={
-                    "default": {
-                        "icon": "open_external",
-                        "color": "#555555",
-                        "tooltip": "Open Scene",
-                        "action": self._open_scene_at_row,
-                    },
-                    "current": {
-                        "icon": "open_external",
-                        "color": current_clr,
-                        "tooltip": "Current Scene",
-                        "action": self._open_scene_at_row,
-                    },
-                },
-            )
-
-            # Action column (index 3) — tri-state display-mode icon
-            widget.actions.add(
-                3,
-                states={
-                    "off": {
-                        "icon": "grid",
-                        "color": "#555555",
-                        "tooltip": "Display: Normal — click to lock (Reference)",
-                        "action": self._cycle_display_mode_at_row,
-                    },
-                    "reference": {
-                        "icon": "lock",
-                        "color": "#d4a84a",
-                        "tooltip": "Display: Reference (locked, normal shading) — click for Template (wireframe + locked)",
-                        "action": self._cycle_display_mode_at_row,
-                    },
-                    "template": {
-                        "icon": "grid",
-                        "color": "#6b8fa3",
-                        "tooltip": "Display: Template (wireframe + locked) — click to restore Normal",
-                        "action": self._cycle_display_mode_at_row,
-                    },
-                    "unavailable": {
-                        "icon": "grid",
-                        "color": "#3a3a3a",
-                        "tooltip": "Display overrides are only available for active references",
-                    },
-                },
-            )
-
-            # Make the Notes column (index 4) non-selecting so clicking it doesn't trigger reference logic
-            widget.set_column_selectable(4, False)
-            widget.setAlternatingRowColors(False)
-            widget.setWordWrap(False)
-            widget.set_stretch_column(0)
-
-            # Connect double-click FIRST to ensure it gets priority
-            widget.itemDoubleClicked.connect(self.tbl000_item_double_clicked)
-
-            # Then connect other signals
-            widget.itemSelectionChanged.connect(self.controller.handle_item_selection)
-
-            # Capture which row was right-clicked so row context-menu actions
-            # operate only on that row (independent of multi-selection).
-            widget.customContextMenuRequested.connect(self._capture_context_row)
 
             # Add context menu
             widget.menu.add(
@@ -2301,7 +2579,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 "QPushButton",
                 setText="Unlink and Import",
                 setObjectName="btn_unlink_import",
-                setToolTip="Unlink and import this reference into the scene.",
+                setToolTip="Make an active reference's data local, or, for a foreign (Blender)\n"
+                "row, convert + import its contents via a headless-Blender FBX conversion.",
             )
 
             widget.menu.add(
@@ -2311,24 +2590,134 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 setToolTip="Open the containing folder in the file explorer.",
             )
 
-            # Switchboard auto-wires `clicked` for any QPushButton whose
-            # objectName matches a Slots method, so only register handlers
-            # for items mapping to non-slot callables — registering both
-            # causes the handler to fire twice.
-            widget.register_menu_action(
-                "btn_rename_scene", self.controller.rename_scene
-            )
-            widget.register_menu_action(
-                "btn_delete_scene", self.controller.delete_scene
-            )
-
-            # Connect item delegate signals for rename functionality
-            widget.itemChanged.connect(self.tbl000_item_changed)
-            widget.itemDelegate().closeEditor.connect(self.tbl000_editor_closed)
-
             self.logger.debug(
                 "tbl000 table widget initialized with context menu and rename functionality."
             )
+        self._wire_table_signals(widget)
+
+    @staticmethod
+    def _rewire_signal(widget, signal, slot, key):
+        """Connect *signal* to *slot*, first dropping ONLY this panel's prior connection for *key*.
+
+        A blanket ``signal.disconnect()`` (no args) would also strip the widget's OWN internal
+        connections — e.g. the table wires ``customContextMenuRequested`` → ``_show_context_menu``
+        in its ``__init__`` (right-click menu), and Qt wires the item delegate's ``closeEditor``
+        for the edit lifecycle; nuking those broke the context menu and left a dangling editor on
+        the next ``clear()`` (a live-Maya crash). Storing the ``QMetaObject.Connection`` per
+        (widget, key) lets a fresh slots instance drop exactly the dead connection — the QWidget
+        can outlive the instance across a reload — without touching anything else.
+        """
+        conns = getattr(widget, "_rm_signal_conns", None)
+        if conns is None:
+            conns = {}
+            widget._rm_signal_conns = conns
+        old = conns.get(key)
+        if old is not None:
+            try:
+                signal.disconnect(old)
+            except (RuntimeError, TypeError):
+                pass
+        conns[key] = signal.connect(slot)
+
+    def _wire_table_signals(self, widget):
+        """(Re)wire tbl000's action columns + Qt signals + context-menu handlers to this instance.
+
+        Idempotent and safe to call on every ``tbl000_init`` (the QWidget can outlive the slots
+        instance, and ``__init__`` builds a fresh ``self.controller`` every time).
+        ``TableActions.add`` / ``register_menu_action`` are themselves idempotent (dict-keyed —
+        each call overwrites the prior entry, no accumulation); the raw Qt signals re-wire through
+        ``_rewire_signal`` (precise per-connection disconnect — a blanket disconnect would strip the
+        table's own internal handlers). Mirror of blendertk's ``_wire_table_signals``.
+        """
+        # Single source of truth for the "current scene" highlight colour
+        current_clr = widget.ACTION_COLOR_MAP["current"][0]
+
+        # Action column (index 1) — "Reference" icon
+        widget.actions.add(
+            1,
+            states={
+                "unreferenced": {
+                    "icon": "link",
+                    "color": "#555555",
+                    "tooltip": "Not referenced — click to add reference",
+                    "action": self._toggle_reference_at_row,
+                },
+                "referenced": {
+                    "icon": "link",
+                    "color": "#6b8fa3",
+                    "tooltip": "Referenced — click to remove reference",
+                    "action": self._toggle_reference_at_row,
+                },
+            },
+        )
+
+        # Action column (index 2) — "Open" icon
+        widget.actions.add(
+            2,
+            states={
+                "default": {
+                    "icon": "open_external",
+                    "color": "#555555",
+                    "tooltip": "Open Scene",
+                    "action": self._open_scene_at_row,
+                },
+                "current": {
+                    "icon": "open_external",
+                    "color": current_clr,
+                    "tooltip": "Current Scene",
+                    "action": self._open_scene_at_row,
+                },
+            },
+        )
+
+        # Action column (index 3) — tri-state display-mode icon
+        widget.actions.add(
+            3,
+            states={
+                "off": {
+                    "icon": "grid",
+                    "color": "#555555",
+                    "tooltip": "Display: Normal — click to lock (Reference)",
+                    "action": self._cycle_display_mode_at_row,
+                },
+                "reference": {
+                    "icon": "lock",
+                    "color": "#d4a84a",
+                    "tooltip": "Display: Reference (locked, normal shading) — click for Template (wireframe + locked)",
+                    "action": self._cycle_display_mode_at_row,
+                },
+                "template": {
+                    "icon": "grid",
+                    "color": "#6b8fa3",
+                    "tooltip": "Display: Template (wireframe + locked) — click to restore Normal",
+                    "action": self._cycle_display_mode_at_row,
+                },
+                "unavailable": {
+                    "icon": "grid",
+                    "color": "#3a3a3a",
+                    "tooltip": "Display overrides are only available for active references",
+                },
+            },
+        )
+
+        for key, sig, slot in (
+            # Double-click FIRST to ensure it gets priority.
+            ("dbl", widget.itemDoubleClicked, self.tbl000_item_double_clicked),
+            ("sel", widget.itemSelectionChanged, self.controller.handle_item_selection),
+            # Capture which row was right-clicked so row context-menu actions operate only on
+            # that row (independent of multi-selection).
+            ("ctx", widget.customContextMenuRequested, self._capture_context_row),
+            ("chg", widget.itemChanged, self.tbl000_item_changed),
+            ("editor", widget.itemDelegate().closeEditor, self.tbl000_editor_closed),
+        ):
+            self._rewire_signal(widget, sig, slot, key)
+
+        # Switchboard auto-wires `clicked` for any QPushButton whose
+        # objectName matches a Slots method, so only register handlers
+        # for items mapping to non-slot callables — registering both
+        # causes the handler to fire twice.
+        widget.register_menu_action("btn_rename_scene", self.controller.rename_scene)
+        widget.register_menu_action("btn_delete_scene", self.controller.delete_scene)
 
     def tbl000_item_double_clicked(self, item):
         """Handle double-click to prepare item for editing."""
@@ -2336,7 +2725,14 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             f"Double-click detected on item: {item.text() if item else 'None'}"
         )
 
-        if item and item.column() == 0:  # Only handle the filename column (at index 0)
+        # Only handle the filename column (index 0), and only for editable rows.
+        # A foreign (.blend) row is a cross-DCC import target, not a local scene to rename
+        # on disk, so its name cell is intentionally non-editable — skip it here.
+        if (
+            item
+            and item.column() == 0
+            and (item.flags() & self.sb.QtCore.Qt.ItemIsEditable)
+        ):
             self.logger.debug(f"Starting edit for item: {item.text()}")
 
             # Prepare the item for editing (show full filename)
@@ -2423,7 +2819,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 ptk.Metadata.sidecar_only = True
                 ptk.Metadata.set(file_path, Comments=new_comments)
                 self.logger.info(f"Updated comments for {file_path}")
-            except PermissionError as e:
+            except PermissionError:
                 sidecar = file_path + ".metadata.json"
                 msg = (
                     f"Cannot save notes — permission denied:\n{sidecar}\n\n"
@@ -2480,8 +2876,43 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 continue
         return namespaces
 
+    def _find_reference_for_path(self, file_path):
+        """The active reference whose file is *file_path* (directly or through its bake), or None."""
+        norm_fp = os.path.normcase(os.path.normpath(file_path))
+        for ref in self.controller.current_references:
+            if norm_fp in (
+                os.path.normcase(os.path.normpath(ref.path)),
+                self.controller._bake_source_key(ref.path),
+            ):
+                return ref
+        return None
+
+    def _select_item_silently(self, item, selected: bool) -> None:
+        """Set *item*'s selection without firing ``itemSelectionChanged``.
+
+        A programmatic selection change must not trigger ``handle_item_selection``
+        (the selection->reference sync), which would fight an explicit toggle — e.g.
+        removing a just-added reference whose row is still non-selectable. Restores
+        the table's prior blocked state so it is safe under nesting.
+        """
+        t = self.ui.tbl000
+        blocked = t.blockSignals(True)
+        try:
+            item.setSelected(selected)
+        finally:
+            t.blockSignals(blocked)
+
     def _toggle_reference_at_row(self, row, col):
-        """Toggle reference state for the scene at the given row."""
+        """Toggle reference state for the scene at the given row.
+
+        A file is either **open** or **referenced**, never both: referencing the currently-open
+        scene first closes it (a new empty scene), since a scene can't be referenced into itself.
+
+        Foreign rows toggle identically (parity rule): the click bakes the source to a
+        cached ``.ma`` and references THAT, and a second click removes the same reference
+        — the bake's source sidecar resolves a row back to its reference, so the round
+        trip works even in a session that did not perform the bake.
+        """
         t = self.ui.tbl000
         item = t.item(row, 0)
         if not item:
@@ -2491,41 +2922,91 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         if not file_path:
             return
 
-        # Check if this file is already referenced
-        norm_fp = os.path.normcase(os.path.normpath(file_path))
-        current_refs = self.controller.current_references
-        ref_match = None
-        for ref in current_refs:
-            if os.path.normcase(os.path.normpath(ref.path)) == norm_fp:
-                ref_match = ref
-                break
+        ref_match = self._find_reference_for_path(file_path)
 
         if ref_match:
             # Currently referenced — remove it
             self.controller.remove_references(ref_match.namespace)
             t.actions.set(row, 1, "unreferenced")
             t.actions.set(row, 3, "unavailable")
-            item.setSelected(False)
+            self._select_item_silently(item, False)
             self.logger.debug(f"Unreferenced: {file_path}")
         else:
-            # Not referenced — add it
+            # Referencing the open scene into itself is invalid — close it first (guarded).
+            closed_current = self._is_current(file_path)
+            if closed_current and not self._close_scene():
+                return  # user declined discarding unsaved changes
+            # Not referenced — add it. A foreign row references its bake, not its own path.
             namespace = item.text()
-            success = self.controller.add_reference(namespace, file_path)
+            ref_path = file_path
+            if self.controller._is_foreign(file_path):
+                # The bake's file name is a cache hash (and the display text may be
+                # suffix/extension-stripped) — neither makes a sane namespace, so use the
+                # source scene's own stem.
+                namespace = os.path.splitext(os.path.basename(file_path))[0]
+                ref_path = self._bake_foreign_path(file_path)
+                if not ref_path:
+                    return
+            success = self.controller.add_reference(namespace, ref_path)
             if success:
                 t.actions.set(row, 1, "referenced")
                 # Reflect any display-override state baked into the source file
                 disp_mode = "off"
+                norm_ref = os.path.normcase(os.path.normpath(ref_path))
                 for ref in self.controller.current_references:
                     try:
-                        if os.path.normcase(os.path.normpath(ref.path)) == norm_fp:
+                        if os.path.normcase(os.path.normpath(ref.path)) == norm_ref:
                             disp_mode = self.controller.get_reference_display_mode(ref)
                             if disp_mode != "off":
                                 break
                     except Exception:
                         continue
                 t.actions.set(row, 3, disp_mode)
-                item.setSelected(True)
-                self.logger.debug(f"Referenced: {file_path}")
+                if not self.controller._is_foreign(file_path):
+                    # A foreign row's name cell is intentionally non-selectable (it must
+                    # stay out of the selection->reference sync).
+                    #
+                    # Select silently: when this row was the just-closed current scene,
+                    # its name item is still flagged non-selectable (the table hasn't
+                    # refreshed yet). An unblocked setSelected fires
+                    # handle_item_selection, which drops the non-selectable item from
+                    # its "selected" set and then removes the reference we just added as
+                    # a stale-selection diff — the bug that made referencing an open
+                    # scene take two clicks (close, then reference). The trailing
+                    # refresh_file_list re-syncs the real selection.
+                    self._select_item_silently(item, True)
+                self.logger.debug(f"Referenced: {file_path} (as {ref_path})")
+                if closed_current:
+                    # Closing the scene changed this row's Open column too (no longer current);
+                    # the inline sets above only touch the ref/display columns, so resync. Safe
+                    # here at the end — the row/item refs are already consumed.
+                    self.controller.refresh_file_list()
+
+    def _bake_foreign_path(self, path):
+        """Bake the foreign scene at *path* to a cached .ma; return its path or None.
+
+        Maya references FBX natively, so this bake is symmetry rather than necessity:
+        both panels reference a cached NATIVE scene, so the referenced-file surface
+        behaves identically no matter which DCC the row came from. Both stages are
+        cached, so re-referencing an unchanged scene is instant; the first run costs a
+        headless Blender + mayapy start, hence the wait cursor.
+        """
+        from mayatk.env_utils.blender_bridge._scene_import import bake_blender_scene
+
+        app = self.sb.QtWidgets.QApplication
+        app.setOverrideCursor(self.sb.QtGui.QCursor(self.sb.QtCore.Qt.WaitCursor))
+        try:
+            return bake_blender_scene(path)
+        except FileNotFoundError as e:
+            self.sb.message_box(f"Can't reference — Blender not found:<br>{e}")
+        except Exception as e:  # noqa: BLE001 — surface the bake error to the user
+            self.logger.warning(f"Foreign scene bake failed for {path}: {e}")
+            self.sb.message_box(
+                f"Reference failed for <hl>{os.path.basename(path)}</hl>:<br>{e}"
+            )
+        finally:
+            app.restoreOverrideCursor()
+        return None
 
     # off -> reference -> template -> off
     _DISPLAY_MODE_CYCLE = {
@@ -2577,19 +3058,128 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             )
             return
         t.actions.set(row, 3, new_mode)
-        self.logger.debug(
-            f"Display mode {current!r} -> {new_mode!r}: {file_path}"
-        )
+        self.logger.debug(f"Display mode {current!r} -> {new_mode!r}: {file_path}")
 
     def _open_scene_at_row(self, row, col):
-        """Open the scene file associated with the given table row."""
+        """Toggle Open at ``row``: open the scene, or **close** it (new empty scene) if it is
+        already the current scene — a second click on the open row's Open icon closes it, the
+        mirror of the reference icon's toggle.
+
+        Open and Reference are mutually exclusive, but opening enforces that for free: loading a
+        file replaces the whole session, so a reference to it (a reference node in the *previous*
+        scene) is discarded and the file becomes the open scene — no explicit un-reference needed.
+        """
         t = self.ui.tbl000
         item = t.item(row, 0)
         if not item:
             return
         file_path = item.data(self.sb.QtCore.Qt.UserRole)
-        if file_path:
+        if not file_path:
+            return
+        if self._is_current(file_path):
+            if self._close_scene():
+                self.logger.info("Closed the scene (new empty scene).")
+                # file-new fires NewSceneOpened, not the subscribed SceneOpened, so nothing
+                # auto-refreshes — resync the table so this row drops its 'current' state.
+                self.controller.refresh_file_list()
+        else:
+            # open_scene fires SceneOpened -> the scriptJob refreshes the table.
             self.controller.open_scene(file_path)
+
+    # ------------------------------------------------------------------ open / close helpers
+    def _current_scene_path(self):
+        """Normalized path of the currently-open scene (or '')."""
+        scene = cmds.file(q=True, sceneName=True) or ""
+        return os.path.normcase(os.path.normpath(scene)) if scene else ""
+
+    @staticmethod
+    def _foreign_scratch_path(path):
+        """Deterministic scratch .ma a foreign row is baked+opened into (see open_scene).
+
+        Mirror of blendertk's ``_foreign_scratch_path`` (``.blend`` there).
+        """
+        import tempfile
+
+        stem = os.path.splitext(os.path.basename(path))[0]
+        return os.path.join(tempfile.gettempdir(), f"{stem}_opened.ma")
+
+    def _is_current(self, path, current=None):
+        """True if *path*'s scene is the one currently open (filepath-authoritative).
+
+        A native row matches when the open scene IS that file; a foreign row matches when the open
+        scene is that row's deterministic 'opened as new' scratch bake — so a second Open click on
+        either closes it. Pass a pre-computed *current* (normalized, from
+        :meth:`_current_scene_path`) to reuse one query across a whole table rebuild. Mirror of
+        blendertk.
+        """
+        if not path:
+            return False
+        cur = current if current is not None else self._current_scene_path()
+        if not cur:
+            return False
+        target = (
+            self._foreign_scratch_path(path)
+            if self.controller._is_foreign(path)
+            else path
+        )
+        return os.path.normcase(os.path.normpath(target)) == cur
+
+    def _confirm_discard_unsaved(self, verb="open"):
+        """True if it's OK to replace the current scene — no unsaved changes, or the user
+        confirmed discarding them."""
+        if not cmds.file(q=True, modified=True):
+            return True
+        return (
+            self.sb.message_box(
+                f"The current scene has unsaved changes — {verb} anyway?", "Yes", "No"
+            )
+            == "Yes"
+        )
+
+    def _close_scene(self):
+        """Close the current scene (a new empty scene — Maya's file-new), guarding unsaved
+        changes. Returns True if the scene was closed, False if the user declined."""
+        if not self._confirm_discard_unsaved("close"):
+            return False
+        return self.controller.new_scene()
+
+    # ------------------------------------------------------------------ cross-DCC import
+    def _import_foreign_paths(self, paths):
+        """Convert + import each Blender scene in *paths* via the headless-Blender bridge (blocking).
+
+        Delegates to ``mtk.import_blender_scene`` — a fresh headless Blender converts the scene to
+        FBX, which is imported (materials rebuilt from the manifest) and cleaned up (the same bridge
+        the Scene menu's 'Import Blender Scene' uses). A conversion takes seconds; a wait cursor
+        covers it, and a missing Blender install surfaces as a clear message, not a raw traceback.
+        """
+        paths = [p for p in (paths or []) if p and self.controller._is_foreign(p)]
+        if not paths:
+            self.sb.message_box("Select a Blender scene (.blend) row to import.")
+            return
+        from mayatk.env_utils.blender_bridge._scene_import import import_blender_scene
+
+        app = self.sb.QtWidgets.QApplication
+        app.setOverrideCursor(self.sb.QtGui.QCursor(self.sb.QtCore.Qt.WaitCursor))
+        total, failed = 0, 0
+        try:
+            for path in paths:
+                try:
+                    total += len(import_blender_scene(path))
+                except FileNotFoundError as e:
+                    self.sb.message_box(f"Can't import — Blender not found:<br>{e}")
+                    return
+                except Exception as e:  # noqa: BLE001 — surface the conversion error to the user
+                    failed += 1
+                    self.logger.warning(f"Blender scene import failed for {path}: {e}")
+                    self.sb.message_box(
+                        f"Import failed for <hl>{os.path.basename(path)}</hl>:<br>{e}"
+                    )
+        finally:
+            app.restoreOverrideCursor()
+        self.logger.info(
+            f"Imported {total} object(s) from {len(paths) - failed} Blender scene(s)."
+        )
+        self.controller.refresh_file_list(invalidate=False)
 
     def btn_open_file_location(self):
         """Open the containing folder of the right-clicked scene file in the file explorer."""
@@ -2633,14 +3223,21 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
             from uitk.widgets.optionBox.options.browse import BrowseOption
 
+            # Directory picker — folded into the option menu as "Set Directory…"
+            # (fired via the b000 slot) rather than a standalone folder icon.
             self._browse_option = BrowseOption(
                 wrapped_widget=widget,
                 mode="directory",
                 title="Select a root directory",
                 start_dir=lambda: self.controller.current_workspace,
             )
-            widget.option_box.add_option(self._browse_option)
 
+            widget.option_box.menu.add(
+                "QPushButton",
+                setText="Set Directory…",
+                setObjectName="b000",
+                setToolTip="Browse for a root directory.",
+            )
             widget.option_box.menu.add(
                 "QPushButton",
                 setText="Open Directory",
@@ -2853,11 +3450,6 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.logger.debug(f"chk_ignore_case changed: {checked}")
         self.controller.refresh_file_list(invalidate=False)
 
-    def chk_hide_binary(self, checked):
-        """Handle the hide binary checkbox."""
-        self.logger.debug(f"chk_hide_binary changed: {checked}")
-        self.controller.refresh_file_list(invalidate=False)
-
     def chk_filter_suffix(self, checked):
         """Handle the filter by suffix checkbox."""
         self.logger.debug(f"chk_filter_suffix changed: {checked}")
@@ -2960,16 +3552,42 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self._toggle_reference_at_row(row, 1)
 
     def btn_unlink_import(self):
-        """Unlink and import the reference at the right-clicked row."""
+        """Unlink and import at the right-clicked row — covers both cases (mirror of Blender).
+
+        An active reference has its data made local (unlink + import); a foreign (Blender) row
+        with no active reference is converted and its contents imported via the headless-Blender
+        bridge (the old 'Import (convert)' behaviour, folded in here).
+        """
         row = self._context_row()
         if row is None:
-            self.sb.message_box("No active reference selected.")
+            self.sb.message_box("No scene selected.")
             return
         namespaces = self._get_row_reference_namespaces(row)
-        if not namespaces:
+        if namespaces:
+            self.controller.unlink_references(namespaces)
+            return
+        # No DIRECT reference. A foreign (Blender) row references its BAKE, so its namespace
+        # isn't found by a path match — resolve it through the bake source (same as the toggle
+        # path). If it IS referenced, make that reference local; otherwise convert + import fresh.
+        item = self.ui.tbl000.item(row, 0)
+        path = item.data(self.sb.QtCore.Qt.UserRole) if item else None
+        if not (path and self.controller._is_foreign(path)):
             self.sb.message_box("No active reference selected.")
             return
-        self.controller.unlink_references(namespaces)
+        norm_fp = os.path.normcase(os.path.normpath(path))
+        bake_ns = [
+            ref.namespace
+            for ref in self.controller.current_references
+            if norm_fp
+            in (
+                os.path.normcase(os.path.normpath(ref.path)),
+                self.controller._bake_source_key(ref.path),
+            )
+        ]
+        if bake_ns:
+            self.controller.unlink_references(bake_ns)
+        else:
+            self._import_foreign_paths([path])
 
     def btn_save_scene(self):
         """Save the current scene to the workspace."""

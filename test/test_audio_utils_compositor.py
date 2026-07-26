@@ -5,6 +5,7 @@
 Covers create / update / delete diff, marker-based matching
 (rename-safe), idempotence, and orphan cleanup.
 """
+
 import os
 import struct
 import sys
@@ -52,7 +53,7 @@ class TestSyncCreate(MayaTkTestCase):
         _events.write_key("comp_create", frame=15)
         _file_map.set_path("comp_create", wav)
 
-        result = _compositor.sync()
+        result = _compositor.Compositor.sync()
         self.assertEqual(len(result["created"]), 1)
         node = result["created"][0]
         self.assertTrue(cmds.objExists(str(node)))
@@ -62,23 +63,23 @@ class TestSyncCreate(MayaTkTestCase):
         wav = _make_wav("comp_marker")
         _events.write_key("comp_marker", frame=0)
         _file_map.set_path("comp_marker", wav)
-        _compositor.sync()
-        node = _compositor.find_dg_node_for_track("comp_marker")
+        _compositor.Compositor.sync()
+        node = _compositor.Compositor.find_dg_node_for_track("comp_marker")
         self.assertIsNotNone(node)
-        self.assertTrue(_compositor.is_managed_dg(node))
+        self.assertTrue(_compositor.Compositor.is_managed_dg(node))
         self.assertEqual(cmds.getAttr(f"{node}.{_schema.MARKER_ATTR}"), "comp_marker")
 
     def test_offset_matches_first_start_key(self):
         wav = _make_wav("comp_offset")
         _events.write_key("comp_offset", frame=42, value=1)
         _file_map.set_path("comp_offset", wav)
-        _compositor.sync()
-        node = _compositor.find_dg_node_for_track("comp_offset")
+        _compositor.Compositor.sync()
+        node = _compositor.Compositor.find_dg_node_for_track("comp_offset")
         self.assertAlmostEqual(cmds.getAttr(f"{node}.offset"), 42.0)
 
     def test_skips_track_without_file_map(self):
         _events.write_key("no_file", frame=10)
-        result = _compositor.sync()
+        result = _compositor.Compositor.sync()
         self.assertEqual(result["created"], [])
 
 
@@ -88,9 +89,9 @@ class TestSyncIdempotence(MayaTkTestCase):
         _events.write_key("idem", frame=10)
         _file_map.set_path("idem", wav)
 
-        _compositor.sync()
+        _compositor.Compositor.sync()
         before = cmds.ls(type="audio")
-        r2 = _compositor.sync()
+        r2 = _compositor.Compositor.sync()
         after = cmds.ls(type="audio")
 
         self.assertEqual(sorted(before), sorted(after))
@@ -103,34 +104,41 @@ class TestSyncUpdate(MayaTkTestCase):
         wav = _make_wav("upd_offset")
         _events.write_key("upd_offset", frame=10)
         _file_map.set_path("upd_offset", wav)
-        _compositor.sync()
+        _compositor.Compositor.sync()
 
         # Shift the key to frame 100.
         _events.shift_keys_in_range(0, 20, delta=90)
-        result = _compositor.sync()
+        result = _compositor.Compositor.sync()
         self.assertIn(
-            _compositor.find_dg_node_for_track("upd_offset"), result["updated"]
+            _compositor.Compositor.find_dg_node_for_track("upd_offset"),
+            result["updated"],
         )
-        node = _compositor.find_dg_node_for_track("upd_offset")
+        node = _compositor.Compositor.find_dg_node_for_track("upd_offset")
         self.assertAlmostEqual(cmds.getAttr(f"{node}.offset"), 100.0)
 
     def test_rename_safe_via_marker(self):
         wav = _make_wav("rename_safe")
         _events.write_key("rename_safe", frame=10)
         _file_map.set_path("rename_safe", wav)
-        _compositor.sync()
+        _compositor.Compositor.sync()
 
-        node = _compositor.find_dg_node_for_track("rename_safe")
+        node = _compositor.Compositor.find_dg_node_for_track("rename_safe")
         cmds.rename(node, "user_renamed_this")
         # Sync should find it via marker and not create a duplicate.
         _events.shift_keys_in_range(0, 20, delta=5)
-        _compositor.sync()
+        _compositor.Compositor.sync()
         self.assertEqual(
-            len([n for n in cmds.ls(type="audio") if _compositor.is_managed_dg(n)]),
+            len(
+                [
+                    n
+                    for n in cmds.ls(type="audio")
+                    if _compositor.Compositor.is_managed_dg(n)
+                ]
+            ),
             1,
         )
         self.assertEqual(
-            _compositor.find_dg_node_for_track("rename_safe"),
+            _compositor.Compositor.find_dg_node_for_track("rename_safe"),
             "user_renamed_this",
         )
 
@@ -140,12 +148,12 @@ class TestSyncDelete(MayaTkTestCase):
         wav = _make_wav("del_track")
         _events.write_key("del_track", frame=10)
         _file_map.set_path("del_track", wav)
-        _compositor.sync()
-        node = _compositor.find_dg_node_for_track("del_track")
+        _compositor.Compositor.sync()
+        node = _compositor.Compositor.find_dg_node_for_track("del_track")
         self.assertTrue(cmds.objExists(str(node)))
 
         _events.delete_track("del_track")
-        result = _compositor.sync()
+        result = _compositor.Compositor.sync()
         self.assertIn(node, result["deleted"])
         self.assertFalse(cmds.objExists(str(node)))
 
@@ -153,11 +161,11 @@ class TestSyncDelete(MayaTkTestCase):
         wav = _make_wav("del_keys")
         _events.write_key("del_keys", frame=10)
         _file_map.set_path("del_keys", wav)
-        _compositor.sync()
-        node = _compositor.find_dg_node_for_track("del_keys")
+        _compositor.Compositor.sync()
+        node = _compositor.Compositor.find_dg_node_for_track("del_keys")
 
         _events.remove_key("del_keys", frame=10)
-        _compositor.sync()
+        _compositor.Compositor.sync()
         self.assertFalse(cmds.objExists(str(node)))
 
 
@@ -170,7 +178,7 @@ class TestUnmanagedNodesIgnored(MayaTkTestCase):
         cmds.setAttr(f"{user_node}.offset", 77.0)
 
         # Compositor sync with no tracks defined — must not delete it.
-        _compositor.sync()
+        _compositor.Compositor.sync()
         self.assertTrue(cmds.objExists(str(user_node)))
         self.assertAlmostEqual(cmds.getAttr(f"{user_node}.offset"), 77.0)
 
@@ -183,10 +191,10 @@ class TestTargetedSync(MayaTkTestCase):
         _events.write_key("target_b", frame=20)
         _file_map.set_path("target_b", wav)
 
-        result = _compositor.sync(tracks=["target_a"])
+        result = _compositor.Compositor.sync(tracks=["target_a"])
         self.assertEqual(len(result["created"]), 1)
-        self.assertIsNotNone(_compositor.find_dg_node_for_track("target_a"))
-        self.assertIsNone(_compositor.find_dg_node_for_track("target_b"))
+        self.assertIsNotNone(_compositor.Compositor.find_dg_node_for_track("target_a"))
+        self.assertIsNone(_compositor.Compositor.find_dg_node_for_track("target_b"))
 
 
 if __name__ == "__main__":

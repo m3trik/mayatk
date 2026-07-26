@@ -9,45 +9,6 @@ import maya.cmds as cmds
 from mayatk.env_utils.fbx_utils import FbxUtils
 
 
-def _node_name(node) -> str:
-    """Leaf name (with namespace prefix preserved) for node or string."""
-    if node is None:
-        return ""
-    if hasattr(node, "nodeName"):
-        try:
-            return node.nodeName()
-        except Exception:
-            pass
-    return str(node).split("|")[-1]
-
-
-def _get_parent(node):
-    """Single immediate parent — works for node or string."""
-    if hasattr(node, "getParent"):
-        try:
-            return node.getParent()
-        except Exception:
-            pass
-    parents = cmds.listRelatives(str(node), parent=True, fullPath=True) or []
-    return parents[0] if parents else None
-
-
-def _get_children(node, **kwargs):
-    """Children — works for node or string."""
-    if hasattr(node, "getChildren"):
-        try:
-            return node.getChildren(**kwargs) or []
-        except Exception:
-            pass
-    cmds_kwargs = {"children": True, "fullPath": True}
-    if "type" in kwargs:
-        cmds_kwargs["type"] = kwargs["type"]
-    if kwargs.get("allDescendents"):
-        cmds_kwargs.pop("children", None)
-        cmds_kwargs["allDescendents"] = True
-    return cmds.listRelatives(str(node), **cmds_kwargs) or []
-
-
 class FBXImporter:
     """Handles FBX-specific import operations (.fbx files).
 
@@ -181,7 +142,7 @@ class MayaImporter:
             namespaces_before = set(cmds.namespaceInfo(listOnlyNamespaces=True))
 
             # Get list of transform nodes before import
-            transforms_before = set(cmds.ls(type="transform"))
+            transforms_before = set(cmds.ls(type="transform", long=True))
 
             # Import the file into the namespace to avoid name clashes
             # Use options to reduce warnings and conflicts
@@ -199,7 +160,7 @@ class MayaImporter:
                 return None
 
             # Find newly imported transform nodes
-            transforms_after = set(cmds.ls(type="transform"))
+            transforms_after = set(cmds.ls(type="transform", long=True))
             new_transforms = list(transforms_after - transforms_before)
 
             # Get list of namespaces after import to detect what Maya actually created
@@ -245,7 +206,9 @@ class MayaImporter:
             # Method 2: Double-check with transform namespace detection
             if new_transforms:
                 # Check the namespace of the first transform to verify
-                first_transform_name = _node_name(new_transforms[0])
+                first_transform_name = _NamespaceSandboxInternal._node_name(
+                    new_transforms[0]
+                )
                 if ":" in first_transform_name:
                     transform_namespace = first_transform_name.split(":")[0]
                     if transform_namespace != actual_namespace:
@@ -259,7 +222,7 @@ class MayaImporter:
                 # Debug: Check all transforms to see their namespaces
                 namespaces_found = set()
                 for transform in new_transforms[:5]:  # Check first 5
-                    transform_name = _node_name(transform)
+                    transform_name = _NamespaceSandboxInternal._node_name(transform)
                     if ":" in transform_name:
                         ns = transform_name.split(":")[0]
                         namespaces_found.add(ns)
@@ -421,12 +384,14 @@ class CameraTracker(ptk.LoggingMixin):
             camera_transforms = []
             for cam in cameras:
                 try:
-                    transform = _get_parent(cam)
+                    transform = _NamespaceSandboxInternal._get_parent(cam)
                     if transform:
-                        camera_transforms.append(_node_name(transform))
+                        camera_transforms.append(
+                            _NamespaceSandboxInternal._node_name(transform)
+                        )
                 except Exception:
                     # If we can't get the parent, use the camera name directly
-                    camera_transforms.append(_node_name(cam))
+                    camera_transforms.append(_NamespaceSandboxInternal._node_name(cam))
             return set(camera_transforms)
         except Exception as e:
             self.logger.error(f"Failed to get scene cameras: {e}")
@@ -439,7 +404,50 @@ class CameraTracker(ptk.LoggingMixin):
         self.new_cameras = set()
 
 
-class NamespaceSandbox(ptk.LoggingMixin):
+class _NamespaceSandboxInternal(object):
+    """Internal helpers for NamespaceSandbox."""
+
+    @staticmethod
+    def _node_name(node) -> str:
+        """Leaf name (with namespace prefix preserved) for node or string."""
+        if node is None:
+            return ""
+        if hasattr(node, "nodeName"):
+            try:
+                return node.nodeName()
+            except Exception:
+                pass
+        return str(node).split("|")[-1]
+
+    @staticmethod
+    def _get_parent(node):
+        """Single immediate parent — works for node or string."""
+        if hasattr(node, "getParent"):
+            try:
+                return node.getParent()
+            except Exception:
+                pass
+        parents = cmds.listRelatives(str(node), parent=True, fullPath=True) or []
+        return parents[0] if parents else None
+
+    @staticmethod
+    def _get_children(node, **kwargs):
+        """Children — works for node or string."""
+        if hasattr(node, "getChildren"):
+            try:
+                return node.getChildren(**kwargs) or []
+            except Exception:
+                pass
+        cmds_kwargs = {"children": True, "fullPath": True}
+        if "type" in kwargs:
+            cmds_kwargs["type"] = kwargs["type"]
+        if kwargs.get("allDescendents"):
+            cmds_kwargs.pop("children", None)
+            cmds_kwargs["allDescendents"] = True
+        return cmds.listRelatives(str(node), **cmds_kwargs) or []
+
+
+class NamespaceSandbox(ptk.LoggingMixin, _NamespaceSandboxInternal):
     """Handles temporary importing and namespace management for Maya scenes.
 
     Manages temporary imports with namespace isolation for safe cleanup.
@@ -621,14 +629,18 @@ class NamespaceSandbox(ptk.LoggingMixin):
         try:
             # Get all transform nodes in the namespace
             if namespace:
-                nodes = cmds.ls(f"{namespace}:*", type="transform")
+                nodes = cmds.ls(f"{namespace}:*", type="transform", long=True)
             else:
-                nodes = cmds.ls(type="transform")
+                nodes = cmds.ls(type="transform", long=True)
 
-            available_transforms = {}
+            # Map cleaned base name -> list of long paths, so two objects that
+            # clean to the same base name both survive (long paths are unique).
+            available_transforms: Dict[str, List] = {}
             for node in nodes:
-                base_name = self._clean_namespace_name(_node_name(node))
-                available_transforms[base_name] = node
+                base_name = self._clean_namespace_name(
+                    _NamespaceSandboxInternal._node_name(node)
+                )
+                available_transforms.setdefault(base_name, []).append(node)
 
             found_objects = []
             target_set = set(target_objects)
@@ -636,12 +648,15 @@ class NamespaceSandbox(ptk.LoggingMixin):
             # First pass: exact matches only
             for target_name in target_objects:
                 if target_name in available_transforms:
-                    found_objects.append(available_transforms[target_name])
+                    found_objects.extend(available_transforms[target_name])
 
             # Second pass: fuzzy matching (only if enabled)
             if self.fuzzy_matching:
                 found_names = [
-                    self._clean_namespace_name(_node_name(obj)) for obj in found_objects
+                    self._clean_namespace_name(
+                        _NamespaceSandboxInternal._node_name(obj)
+                    )
+                    for obj in found_objects
                 ]
                 unmatched_targets = target_set - set(found_names)
 
@@ -654,7 +669,7 @@ class NamespaceSandbox(ptk.LoggingMixin):
                     )
 
                     for target_name, (matched_name, score) in matches.items():
-                        found_objects.append(available_transforms[matched_name])
+                        found_objects.extend(available_transforms[matched_name])
                         self.logger.info(
                             f"Fuzzy match: '{target_name}' -> '{matched_name}' (score: {score:.2f})"
                         )
@@ -728,12 +743,16 @@ class NamespaceSandbox(ptk.LoggingMixin):
 
             for node in nodes:
                 node_obj = node
-                clean_name = self._clean_namespace_name(_node_name(node_obj))
+                clean_name = self._clean_namespace_name(
+                    _NamespaceSandboxInternal._node_name(node_obj)
+                )
 
                 hierarchy_data[clean_name] = {
                     "node": node_obj,
-                    "parent": _get_parent(node_obj),
-                    "children": _get_children(node_obj, type="transform"),
+                    "parent": _NamespaceSandboxInternal._get_parent(node_obj),
+                    "children": _NamespaceSandboxInternal._get_children(
+                        node_obj, type="transform"
+                    ),
                     "world_matrix": cmds.xform(
                         node_obj, query=True, matrix=True, worldSpace=True
                     ),
@@ -978,7 +997,9 @@ class NamespaceSandbox(ptk.LoggingMixin):
                     self.logger.debug(
                         f"Force removing namespace {namespace} with {len(objects)} objects"
                     )
-                    cmds.namespace(removeNamespace=namespace, deleteNamespaceContent=True)
+                    cmds.namespace(
+                        removeNamespace=namespace, deleteNamespaceContent=True
+                    )
                     cleaned_count += 1
                     self.logger.debug(f"Force removed namespace: {namespace}")
             except Exception as e:

@@ -36,6 +36,11 @@ ZomSelect({
         QuadLoopCutter=true,
         StretchLimiter=true,
         Quality=0.25,
+        -- ReWeld merges over-cut micro-islands (bevel confetti); Boolean-
+        -- Unoverlap adds cuts until no shells overlap. Both access-violate
+        -- 2020.1 (probed) -- emitted only on >= 2022.
+        ReWeld={Threshold=0.5, PolyMax=20, LENGTHMax=0.1}, -- @min_rizom_line: 2022.0
+        BooleanUnoverlap=true, -- @min_rizom_line: 2022.0
         StoreCoordsUVW=true,
         FlatteningMode=0,
         FlatteningUnfoldParams={
@@ -82,23 +87,5 @@ ZomOptimize({
     PinMapName="Pin",
 })
 
--- 5. Group + pack. Keep the recipe in sync with pack.lua.
-ZomIslandGroups({
-    Mode="DistributeInTilesEvenly",
-    MergingPolicy=8322,
-    GroupPath="RootGroup",
-})
-ZomPack({
-    ProcessTileSelection=false,
-    RecursionDepth=__RECURSION_DEPTH__,
-    RootGroup="RootGroup",
-    Scaling={Mode=__SCALING_MODE__, Mix=__SCALING_MIX__},
-    Rotate={
-        Step=__ROTATE_STEP__,
-        Enable=__PACK_ROTATE_ENABLE__,
-    },
-    Translate=__PACK_TRANSLATE__,
-    LayoutScalingMode=__LAYOUT_SCALING_MODE__,
-    MaxMutations=__PACK_MAX_MUTATIONS__,
-    Resolution=__PACK_RESOLUTION__,
-})
+-- 5. Group + pack + placement (shared recipe -- see templates/pack_block.lua).
+__PACK_BLOCK__

@@ -71,7 +71,9 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
 
         def on_toggled(checked):
             try:
-                mel.eval("commandEcho -state on" if checked else "commandEcho -state off")
+                mel.eval(
+                    "commandEcho -state on" if checked else "commandEcho -state off"
+                )
                 print(f"Echo All Commands: {'ON' if checked else 'OFF'}")
                 actual_state = bool(mel.eval("commandEcho -query -state"))
                 if actual_state != checked:
@@ -163,6 +165,31 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
             "ScriptConsole.show_console(restore=True)"
         )
 
+    # NOTE — deliberately NO ``show`` / ``hide`` / ``close`` classmethod here.
+    # ``ScriptConsole`` is a ``MayaQWidgetDockableMixin`` QWidget, and the mixin's
+    # ``setVisible()`` calls ``self.show()`` INTERNALLY (maya .../mayaMixin.py); the
+    # virtual ``setVisible`` is invoked by C++ (e.g. via ``addWidgetToMayaLayout``
+    # during a ``uiScript`` restore) and dispatched back to Python by shiboken. A
+    # classmethod named ``show`` shadows the mixin's instance ``show``, so ``self.show()``
+    # then re-enters ``show_console`` instead of running the real ``QWidget.setVisible``
+    # — the widget's own visibility path is silently replaced by a workspace-control
+    # facade. The procedural entry points are the collision-free ``show_console`` and
+    # ``toggle`` (``toggle`` is not a QWidget method, so it is safe as a classmethod).
+    @classmethod
+    def toggle(cls, *args, **kwargs):
+        """Toggle the Script Output panel.
+
+        - If the workspace control is already visible, hide it.
+        - If it exists but is hidden, show it.
+        - Otherwise create it (forwarding any *args / **kwargs to :meth:`show_console`).
+        """
+        ws = cls.WORKSPACE_CONTROL_NAME
+        if cmds.workspaceControl(ws, exists=True):
+            visible = cmds.workspaceControl(ws, query=True, visible=True)
+            cmds.workspaceControl(ws, edit=True, visible=not visible)
+            return
+        return cls.show_console(*args, **kwargs)
+
     @classmethod
     def show_console(
         cls,
@@ -197,7 +224,9 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
         if restore:
             restored_control = MQtUtil.findControl(ws_name)
             if not restored_control:
-                print(f"[ScriptConsole] No workspace control found for restore: {ws_name}")
+                print(
+                    f"[ScriptConsole] No workspace control found for restore: {ws_name}"
+                )
                 return
             cls._instance = cls()
             mixin_ptr = MQtUtil.findControl(cls._instance.objectName())
@@ -219,7 +248,12 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
                 pass
 
         cls._instance = cls()
-        cls._instance.show(
+        # Call the dockable-mixin ``show`` EXPLICITLY (rather than
+        # ``cls._instance.show(...)``) so this creation path stays correct even if a
+        # ``show`` override is ever re-added to the class — see the class-level NOTE
+        # above on why ``show`` must never be shadowed on a dockable-mixin QWidget.
+        MayaQWidgetDockableMixin.show(
+            cls._instance,
             dockable=True,
             workspaceControlName=ws_name,
             uiScript=cls._build_ui_script(),
@@ -288,28 +322,13 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
 # -----------------------------------------------------------------------------
 
 
-def show(*args, **kwargs):
-    ScriptConsole.show_console(*args, **kwargs)
-
-
-def toggle(*args, **kwargs):
-    """Toggle the Script Output panel.
-
-    - If the workspace control is already visible, hide it.
-    - If it exists but is hidden, show it.
-    - Otherwise create it (forwarding any *args / **kwargs to ``show``).
-    """
-    ws = ScriptConsole.WORKSPACE_CONTROL_NAME
-    if cmds.workspaceControl(ws, exists=True):
-        visible = cmds.workspaceControl(ws, query=True, visible=True)
-        cmds.workspaceControl(ws, edit=True, visible=not visible)
-        return
-    show(*args, **kwargs)
-
+# The procedural entry points are ``ScriptConsole.show_console()`` and
+# ``ScriptConsole.toggle()`` (classmethods on the class above). No module-level
+# functions, and deliberately no ``show`` classmethod — see the class-level NOTE.
 
 # Usage: Call this in Maya's script editor or shelf button to show the window
 if __name__ == "__main__":
-    show()
+    ScriptConsole.show_console()
 
 
 # -----------------------------------------------------------------------------

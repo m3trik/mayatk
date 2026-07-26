@@ -26,22 +26,22 @@ SHOULD_QUIT = __SHOULD_QUIT__
 
 # Pick up shared Toolbag-side helpers from the engine package dir.
 sys.path.insert(0, r"__TOOLBAG_HELPERS_DIR__")
-from _toolbag_helpers import wire_materials_from_manifest, begin_log, log
+from _toolbag_helpers import ToolbagHelpers
 
 
 def main():
-    log_path = begin_log(MANIFEST_FILE)
-    log(f"[->Toolbag] Model:    {MODEL_FILE}")
-    log(f"[->Toolbag] Manifest: {MANIFEST_FILE}")
+    log_path = ToolbagHelpers.begin_log(MANIFEST_FILE)
+    ToolbagHelpers.log(f"[->Toolbag] Model:    {MODEL_FILE}")
+    ToolbagHelpers.log(f"[->Toolbag] Manifest: {MANIFEST_FILE}")
     if log_path:
-        log(f"[->Toolbag] Log:      {log_path}")
+        ToolbagHelpers.log(f"[->Toolbag] Log:      {log_path}")
 
     if not os.path.isfile(MODEL_FILE):
-        log("ERROR: Model file not found.")
+        ToolbagHelpers.log("ERROR: Model file not found.")
         return
 
     mset.importModel(MODEL_FILE)
-    wire_materials_from_manifest(MANIFEST_FILE, verbose=True)
+    ToolbagHelpers.wire_materials_from_manifest(MANIFEST_FILE, verbose=True)
 
     if SAVE_PATH:
         print(f"Saving scene: {SAVE_PATH}")

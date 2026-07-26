@@ -1,52 +1,44 @@
 # !/usr/bin/python
 # coding=utf-8
-"""JSON-RPC 2.0 client for a Painter-side Python plugin.
+"""HTTP RPC client for the Painter-side ``substance_rpc`` plugin.
+
+Speaks :class:`pythontk.net_utils.rpc.RpcClient`'s ``{op, kwargs}`` wire
+format against the HTTP server the plugin stands up inside Painter
+(see ``plugin_src/substance_rpc``; installed via :mod:`.installer`).
 
 Kept separate from the bridge's stdio/log machinery (see the parent
 ``substance_bridge/connection.py``) so the RPC concern can evolve
-independently. Today this client speaks the JSON-RPC 2.0 envelope; the
-plan is to switch it to :class:`pythontk.RpcClient`'s ``{op, kwargs}``
-shape once the Painter plugin lands.
+independently.
+
+Painter-specific conveniences layered on the generic client:
+
+* :meth:`wait_until_ready` -- poll until the plugin's server answers.
+* :meth:`eval_js` -- run legacy-JS (``alg.*``) template bodies via the
+  plugin's ``js.evaluate`` op (:func:`substance_painter.js.evaluate`).
+* :meth:`eval_py` -- exec Python source inside Painter (``system.eval``).
+* :meth:`reload_mesh` -- the reimport primitive (``mesh.reload``).
 """
-import itertools
-import json
-import socket
+import os
 import time
-import urllib.error
-import urllib.request
-from typing import Optional
+from typing import Any, Optional
+
+from pythontk.net_utils.rpc.client import RpcClient
 
 
-# Painter's pythonjsonserver default; override via constructor.
-DEFAULT_RPC_PORT = 8090
+# Default port the substance_rpc plugin binds. Both sides resolve the
+# same SUBSTANCE_RPC_PORT env var (the plugin at server start, this
+# client at import), so a machine-wide override keeps them in agreement.
+DEFAULT_RPC_PORT = int(os.environ.get("SUBSTANCE_RPC_PORT", "8090"))
 
 
-class PainterRpcClient:
-    """JSON-RPC 2.0 client for a Painter-side JSON server.
+class PainterRpcClient(RpcClient):
+    """RPC client bound to the substance_rpc plugin's defaults.
 
-    .. warning::
-
-       Stock Adobe Substance 3D Painter (10.x) does **not** auto-bind a
-       JSON-RPC port on launch. The bundled ``qrc:/plugins/pythonjsonserver.qml``
-       plugin loads but does not open a TCP listener, even with the
-       ``--enable-remote-scripting`` CLI flag (verified empirically on
-       2026-05-18: scanning the common port range during a 75s startup
-       window returned zero listeners).
-
-       To use this client against Painter you must first stand up a
-       Painter Python plugin that exposes an HTTP JSON-RPC endpoint on a
-       known port. Painter Python plugins live in
-       ``%USERPROFILE%\\Documents\\Adobe\\Adobe Substance 3D Painter\\python\\plugins``;
-       the plugin can use ``substance_painter.*`` APIs and any standard
-       Python HTTP server to surface them.
-
-       The client itself is correct (verified against an HTTP stub server
-       in :mod:`test.test_substance_connection`); it just needs a real
-       endpoint to talk to.
-
-    Wire format: POST a JSON-RPC envelope to ``http://<host>:<port>/``.
-    If a plugin uses a different shape, subclass and override
-    :meth:`_build_envelope` / :meth:`_parse_response`.
+    Requires the ``substance_rpc`` plugin to be installed and enabled in
+    the target Painter (see :class:`.installer.Installer`; the bridge
+    installs it automatically on send). Without the plugin nothing
+    listens -- stock Painter binds no RPC port and its
+    ``--enable-remote-scripting`` flag is a no-op (verified 2026-05-18).
     """
 
     def __init__(
@@ -55,29 +47,14 @@ class PainterRpcClient:
         port: int = DEFAULT_RPC_PORT,
         timeout: float = 30.0,
     ):
-        self.host = host
-        self.port = port
+        super().__init__(host=host, port=port, app_label="Substance Painter")
+        #: Default per-call timeout for :meth:`invoke` and the eval helpers.
         self.timeout = timeout
-        # itertools.count is atomic at the C level on CPython -- safe to share
-        # across threads without an explicit lock.
-        self._id_counter = itertools.count(1)
-
-    @property
-    def url(self) -> str:
-        return f"http://{self.host}:{self.port}/"
-
-    def ping(self, timeout: float = 1.0) -> bool:
-        """Return True if a TCP connection succeeds."""
-        try:
-            with socket.create_connection((self.host, self.port), timeout=timeout):
-                return True
-        except OSError:
-            return False
 
     def wait_until_ready(
         self, timeout: float = 60.0, poll_interval: float = 0.5
     ) -> bool:
-        """Poll the port until it accepts connections, or *timeout* expires."""
+        """Poll ``/health`` until the plugin answers, or *timeout* expires."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.ping(timeout=0.5):
@@ -85,37 +62,44 @@ class PainterRpcClient:
             time.sleep(poll_interval)
         return False
 
-    def _build_envelope(self, method: str, params: Optional[dict]) -> dict:
-        return {
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params or {},
-            "id": next(self._id_counter),
-        }
-
-    def _parse_response(self, raw: bytes) -> dict:
-        return json.loads(raw.decode("utf-8"))
-
-    def call(self, method: str, params: Optional[dict] = None) -> dict:
-        """Send a JSON-RPC method call. Returns the parsed response dict."""
-        envelope = self._build_envelope(method, params)
-        body = json.dumps(envelope).encode("utf-8")
-        req = urllib.request.Request(
-            self.url,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+    def invoke(self, op: str, timeout: Optional[float] = None, **kwargs: Any) -> Any:
+        """:meth:`RpcClient.invoke` with this client's default timeout."""
+        return super().invoke(
+            op, timeout=self.timeout if timeout is None else timeout, **kwargs
         )
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read()
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"RPC call to {self.url} failed: {e}") from e
-        try:
-            return self._parse_response(raw)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Invalid JSON response: {raw[:200]!r}") from e
 
-    def eval_js(self, script: str) -> dict:
-        """Convenience: execute a JavaScript snippet via ``eval``."""
-        return self.call("eval", {"script": script})
+    # -- Painter conveniences ---------------------------------------------
+
+    def eval_js(self, script: str) -> Any:
+        """Evaluate *script* in Painter's JS engine (``alg.*`` API surface)."""
+        return self.invoke("js.evaluate", script=script)
+
+    def eval_py(self, script: str) -> Any:
+        """Exec *script* (Python) inside Painter; returns its ``result`` var."""
+        return self.invoke("system.eval", script=script)
+
+    def reload_mesh(
+        self,
+        mesh_path: str,
+        preserve_strokes: bool = True,
+        import_cameras: bool = False,
+    ) -> Any:
+        """Ask Painter to reload the open project's mesh from *mesh_path*.
+
+        Async on the Painter side -- returns ``{"started": True, ...}``;
+        poll :meth:`reload_status` for the outcome.
+        """
+        return self.invoke(
+            "mesh.reload",
+            mesh_path=mesh_path,
+            preserve_strokes=preserve_strokes,
+            import_cameras=import_cameras,
+        )
+
+    def reload_status(self) -> Any:
+        """Outcome of the last reload: ``{"status": ..., "mesh_path": ...}``."""
+        return self.invoke("mesh.reload_status")
+
+    def project_info(self) -> Any:
+        """``{is_open, file_path, mesh_path, needs_saving}`` for the open project."""
+        return self.invoke("project.info")

@@ -174,7 +174,7 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         """
         result = set()
         for obj in objects:
-            children = cmds.listRelatives(obj, children=True, type="transform")
+            children = cmds.listRelatives(obj, children=True, type="transform", path=True)
             if children:
                 result.update(children)
         return result
@@ -193,7 +193,7 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         for obj in objects:
             current = obj
             while current:
-                parent = cmds.listRelatives(current, parent=True, type="transform")
+                parent = cmds.listRelatives(current, parent=True, type="transform", path=True)
                 if parent:
                     parent = parent[0]
                     result.add(parent)
@@ -214,7 +214,7 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         """
         result = set()
         for obj in objects:
-            children = cmds.listRelatives(obj, allDescendents=True, type="transform")
+            children = cmds.listRelatives(obj, allDescendents=True, type="transform", path=True)
             if children:
                 result.update(children)
         return result

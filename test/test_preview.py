@@ -15,6 +15,7 @@ Selection-change / external-undo "auto-disable" and scriptJobs were removed
 when Preview moved to the hermetic snapshot/diff design, so those tests are
 gone (see the module docstring of ``core_utils/preview.py``).
 """
+
 import unittest
 
 try:
@@ -23,11 +24,7 @@ except ImportError:
     QtWidgets = None
 
 from base_test import MayaTkTestCase
-from mayatk.core_utils.preview import (
-    CleanupContract,
-    Preview,
-    apply_result_selection,
-)
+from mayatk.core_utils.preview import CleanupContract, Preview
 import maya.cmds as cmds
 
 
@@ -163,6 +160,73 @@ class TestPreview(MayaTkTestCase):
             self.assertTrue(self.chk.isChecked())
         finally:
             self.op.perform_operation = original
+
+    def test_disable_reselects_original_selection(self):
+        """Unchecking Preview must land the user back on their enable-time
+        selection (most ops — e.g. polyBevel3 — clear it mid-preview), so a
+        cancel returns them exactly where they started."""
+        cmds.select(self.cube)
+        original = self.op.perform_operation
+
+        def clears_selection(objects, contract):
+            original(objects, contract)
+            cmds.select(clear=True)
+
+        self.op.perform_operation = clears_selection
+        try:
+            self.preview.enable()
+            self.assertEqual(cmds.ls(selection=True) or [], [])
+            self.preview.disable()
+            self.assertEqual(cmds.ls(selection=True) or [], [self.cube])
+        finally:
+            self.op.perform_operation = original
+
+    def test_disable_reselect_component_selection(self):
+        """A captured COMPONENT selection (bevel's edges) is restored too."""
+        edge = f"{self.cube}.e[0]"
+        cmds.select(edge)
+        self.preview.enable()
+        cmds.select(clear=True)
+        self.preview.disable()
+        self.assertEqual(cmds.ls(selection=True) or [], [edge])
+
+    def test_disable_reselect_opt_out(self):
+        """reselect_on_disable=False leaves the op's final selection alone."""
+        preview = Preview(
+            MockOperation(),
+            QtWidgets.QCheckBox(),
+            QtWidgets.QPushButton(),
+            message_func=lambda m: None,
+            reselect_on_disable=False,
+        )
+        self.addCleanup(preview.cleanup)
+        cmds.select(self.cube)
+        preview.enable()
+        cmds.select(clear=True)
+        preview.disable()
+        self.assertEqual(cmds.ls(selection=True) or [], [])
+
+    def test_disable_reselect_not_recorded_on_undo_queue(self):
+        """The cancel re-select must not leak an entry onto the user's undo
+        queue (hermetic principle: cancel leaves no trace)."""
+        cmds.select(self.sphere)
+        cmds.move(10, 0, 0, self.sphere)  # sentinel
+
+        cmds.select(self.cube)
+        self.preview.enable()
+        cmds.select(clear=True)
+        self.preview.disable()
+        self.assertEqual(cmds.ls(selection=True) or [], [self.cube])
+
+        cmds.undo()  # clear-selection (user action, recorded)
+        cmds.undo()  # select cube
+        cmds.undo()  # sentinel move
+        self.assertAlmostEqual(
+            cmds.xform(self.sphere, q=True, ws=True, t=True)[0],
+            0,
+            places=4,
+            msg="reselect-on-disable leaked an undo entry",
+        )
 
     # --------------------------------------------------- node-diff rollback
     def test_created_nodes_rolled_back_then_kept_on_finalize(self):
@@ -524,7 +588,9 @@ class TestPreviewSelectResult(MayaTkTestCase):
         preview.enable()
         # OFF on the live preview -> result not selected, no leftover components.
         self.assertNotIn(op.result, cmds.ls(selection=True) or [])
-        self.assertFalse(cmds.filterExpand(cmds.ls(selection=True), sm=(31, 32, 34)) or [])
+        self.assertFalse(
+            cmds.filterExpand(cmds.ls(selection=True), sm=(31, 32, 34)) or []
+        )
 
         # Turn ON, commit -> the committed result is selected.
         chk.setChecked(True)
@@ -538,7 +604,7 @@ class TestPreviewSelectResult(MayaTkTestCase):
         # A None/dead checkbox falls back to selecting (the documented default).
         mesh = cmds.polyPlane(name="sr_prim")[0]
         cmds.select(clear=True)
-        apply_result_selection(None, mesh, object_mode=True)
+        Preview.apply_result_selection(None, mesh, object_mode=True)
         self.assertIn(mesh, cmds.ls(selection=True) or [])
 
     def test_primitive_deferred_reassert_rereads_settled_toggle(self):
@@ -562,7 +628,9 @@ class TestPreviewSelectResult(MayaTkTestCase):
         cmds.evalDeferred = lambda fn, **kw: captured.append(fn)
         try:
             cmds.select(clear=True)
-            apply_result_selection(_SettlingCheck(), mesh, object_mode=True, defer=True)
+            Preview.apply_result_selection(
+                _SettlingCheck(), mesh, object_mode=True, defer=True
+            )
         finally:
             cmds.evalDeferred = orig
 

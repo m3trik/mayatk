@@ -1,28 +1,12 @@
--- Repack existing UV islands into the 0-1 tile.
+-- Repack existing UV islands into the target tile.
 -- Use when seams are already cut and unfolded; this only redistributes shells.
+--
+-- The group + pack + UDIM/coverage placement recipe lives in the shared
+-- templates/pack_block.lua partial (see there), so the pack knobs are
+-- defined once and reused by the unwrap_*.lua presets too. NOTE: the
+-- include token below must NOT be named in any comment -- the expander is
+-- a blind string replace and would inject the block into the comment too.
 
 ZomSelect({PrimType="Island", Select=true, ResetBefore=true})
 
--- Group every island under RootGroup and distribute across tiles.
--- MergingPolicy=8322 is the canonical bitmask used by RizomUV's reference
--- bridges (e.g. Cinema4D plugin) to auto-merge mirrored / stacked islands.
-ZomIslandGroups({
-    Mode="DistributeInTilesEvenly",
-    MergingPolicy=8322,
-    GroupPath="RootGroup",
-})
-
-ZomPack({
-    ProcessTileSelection=false,
-    RecursionDepth=__RECURSION_DEPTH__,
-    RootGroup="RootGroup",
-    Scaling={Mode=__SCALING_MODE__, Mix=__SCALING_MIX__},
-    Rotate={
-        Step=__ROTATE_STEP__,
-        Enable=__PACK_ROTATE_ENABLE__,
-    },
-    Translate=__PACK_TRANSLATE__,
-    LayoutScalingMode=__LAYOUT_SCALING_MODE__,
-    MaxMutations=__PACK_MAX_MUTATIONS__,
-    Resolution=__PACK_RESOLUTION__,
-})
+__PACK_BLOCK__

@@ -29,24 +29,18 @@ FRAME_SELECTION = __FRAME_SELECTION__
 
 # Pick up shared Toolbag-side helpers from the engine package dir.
 sys.path.insert(0, r"__TOOLBAG_HELPERS_DIR__")
-from _toolbag_helpers import (
-    wire_materials_from_manifest,
-    apply_sky_preset,
-    frame_in_viewport,
-    begin_log,
-    log,
-)
+from _toolbag_helpers import ToolbagHelpers
 
 
 def main():
-    log_path = begin_log(MANIFEST_FILE)
-    log(f"[->Toolbag] Model:    {MODEL_FILE}")
-    log(f"[->Toolbag] Manifest: {MANIFEST_FILE}")
+    log_path = ToolbagHelpers.begin_log(MANIFEST_FILE)
+    ToolbagHelpers.log(f"[->Toolbag] Model:    {MODEL_FILE}")
+    ToolbagHelpers.log(f"[->Toolbag] Manifest: {MANIFEST_FILE}")
     if log_path:
-        log(f"[->Toolbag] Log:      {log_path}")
+        ToolbagHelpers.log(f"[->Toolbag] Log:      {log_path}")
 
     if not os.path.isfile(MODEL_FILE):
-        log("ERROR: Model file not found.")
+        ToolbagHelpers.log("ERROR: Model file not found.")
         return
 
     mset.importModel(MODEL_FILE)
@@ -56,12 +50,12 @@ def main():
     # begin_log() now records exactly what happened so the next run is
     # debuggable even though send_to mode has no stdout the user can see.
     if SKY_PRESET:
-        apply_sky_preset(SKY_PRESET)
+        ToolbagHelpers.apply_sky_preset(SKY_PRESET)
 
-    wire_materials_from_manifest(MANIFEST_FILE, verbose=True)
+    ToolbagHelpers.wire_materials_from_manifest(MANIFEST_FILE, verbose=True)
 
     if FRAME_SELECTION:
-        frame_in_viewport()
+        ToolbagHelpers.frame_in_viewport()
 
     if SAVE_PATH:
         print(f"Saving lookdev scene: {SAVE_PATH}")

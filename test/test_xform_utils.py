@@ -288,7 +288,7 @@ class TestXformUtils(MayaTkTestCase):
     def test_restore_transforms_preserves_nurbs_curve_world_position(self):
         """Verify the vectorized NURBS curve path through a freeze-restore cycle.
 
-        Exercises ``_shift_shape_points``' MFnNurbsCurve branch via the canonical
+        Exercises the shape-point snapshot/write helpers' MFnNurbsCurve branch via the canonical
         store -> freeze -> restore workflow that this function is designed for.
         """
         curve = cmds.circle(
@@ -356,7 +356,9 @@ class TestXformUtils(MayaTkTestCase):
 
         cleared = XformUtils.clear_stored_transforms(self.cube1, prefix="test")
 
-        self.assertIn(str(self.cube1), cleared)
+        # clear_stored_transforms reports cleared objects as full DAG paths
+        # (unambiguous for the attr ops it performs); compare by leaf name.
+        self.assertIn(str(self.cube1), [c.split("|")[-1] for c in cleared])
         for attr in ("test_T_bake", "test_R_bake", "test_S_bake"):
             self.assertFalse(
                 cmds.attributeQuery(attr, node=str(self.cube1), exists=True),
@@ -429,6 +431,10 @@ class TestXformUtils(MayaTkTestCase):
         a node's LOCAL channels.  Restoring a child without its ancestors
         only recovers the child's local TRS, so the chain has to be
         restored top-down for the original world positions to come back.
+        (Transform channels only: GEOMETRY compensation is snapshot-based
+        per call, so hierarchies should be restored in ONE call — a list
+        or ``traverse=True`` — for vertices to land back exactly; see
+        ``test_restore_transforms_traverse_rotated_hierarchy_geometry``.)
 
         Reproduces the original user-reported regression: with
         traverse=True at store time every node has its bake attrs and
@@ -487,6 +493,176 @@ class TestXformUtils(MayaTkTestCase):
             )
             self.assertTrue(
                 cmds.attributeQuery("test_T_bake", node=loc, exists=True),
+            )
+        finally:
+            for n in (grp, loc):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+    def test_restore_transforms_preserves_world_pivot(self):
+        """Un-freeze must keep the object's pivot at its world position.
+
+        A freeze keeps the world pivot in place (via the pivot-translate
+        compensation makeIdentity writes). Restore must not discard it —
+        the pivot has to land back at the same world position after the
+        channels are recovered.
+        """
+        cmds.rotate(30, 45, 0, self.cube1)
+        cmds.xform(self.cube1, ws=True, rotatePivot=(6, 1, 2))
+        cmds.xform(self.cube1, ws=True, scalePivot=(6, 1, 2))
+
+        XformUtils.store_transforms(self.cube1, prefix="test")
+        XformUtils.freeze_transforms(self.cube1, translate=True, rotate=True, scale=True)
+
+        rp_frozen = cmds.xform(self.cube1, q=True, ws=True, rotatePivot=True)
+        vert_before = cmds.pointPosition(f"{self.cube1}.vtx[0]", world=True)
+
+        XformUtils.restore_transforms(self.cube1, prefix="test")
+
+        rp_after = cmds.xform(self.cube1, q=True, ws=True, rotatePivot=True)
+        sp_after = cmds.xform(self.cube1, q=True, ws=True, scalePivot=True)
+        for expected, actual in zip(rp_frozen, rp_after):
+            self.assertAlmostEqual(expected, actual, delta=1e-3)
+        for expected, actual in zip(rp_frozen, sp_after):
+            self.assertAlmostEqual(expected, actual, delta=1e-3)
+
+        # Pivot restoration must not displace the object.
+        vert_after = cmds.pointPosition(f"{self.cube1}.vtx[0]", world=True)
+        for expected, actual in zip(vert_before, vert_after):
+            self.assertAlmostEqual(expected, actual, delta=1e-3)
+
+        # Channels must still round-trip.
+        pos = cmds.xform(self.cube1, q=True, ws=True, t=True)
+        self.assertAlmostEqual(pos[0], 5.0, delta=1e-3)
+        rot = cmds.getAttr(f"{self.cube1}.rotate")[0]
+        self.assertAlmostEqual(rot[0], 30.0, delta=1e-3)
+        self.assertAlmostEqual(rot[1], 45.0, delta=1e-3)
+
+    def test_restore_transforms_traverse_restores_descendants(self):
+        """traverse=True restores a whole hierarchy from one root call, top-down.
+
+        Mirrors ``store_transforms(traverse=True)`` / ``freeze_transforms
+        (freeze_children=True)`` so the UI's Unfreeze Children option is a
+        single call instead of a manual top-down walk.
+        """
+        grp = cmds.group(empty=True, name="rig_GRP")
+        loc = cmds.spaceLocator(name="rig_LOC")[0]
+        geo = cmds.polyCube(name="rig_GEO")[0]
+        cmds.parent(loc, grp)
+        cmds.parent(geo, loc)
+        cmds.move(4, 0, 0, grp, absolute=True)
+        cmds.move(0, 2, 0, loc, relative=True)
+        cmds.move(0, 0, 1, geo, relative=True)
+
+        loc_world_before = cmds.xform(loc, q=True, ws=True, t=True)
+        geo_world_before = cmds.xform(geo, q=True, ws=True, t=True)
+
+        try:
+            XformUtils.store_transforms(grp, prefix="test", traverse=True)
+            XformUtils.freeze_transforms(grp, freeze_children=True)
+
+            # One call on the root; traverse handles the descendants.
+            XformUtils.restore_transforms(grp, prefix="test", traverse=True)
+
+            loc_world_after = cmds.xform(loc, q=True, ws=True, t=True)
+            geo_world_after = cmds.xform(geo, q=True, ws=True, t=True)
+            for a, b in zip(loc_world_before, loc_world_after):
+                self.assertAlmostEqual(a, b, delta=1e-3)
+            for a, b in zip(geo_world_before, geo_world_after):
+                self.assertAlmostEqual(a, b, delta=1e-3)
+
+            # Local channels came back on every node in the chain.
+            self.assertAlmostEqual(
+                cmds.getAttr(f"{grp}.translateX"), 4.0, delta=1e-3
+            )
+            self.assertAlmostEqual(
+                cmds.getAttr(f"{loc}.translateY"), 2.0, delta=1e-3
+            )
+            self.assertAlmostEqual(
+                cmds.getAttr(f"{geo}.translateZ"), 1.0, delta=1e-3
+            )
+
+            # Bake attrs consumed on the whole chain.
+            for node in (grp, loc, geo):
+                self.assertFalse(
+                    cmds.attributeQuery("test_T_bake", node=node, exists=True),
+                    f"{node} bake attrs should be consumed by traverse restore",
+                )
+        finally:
+            for n in (grp, loc, geo):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+    def test_restore_transforms_traverse_rotated_hierarchy_geometry(self):
+        """Traverse restore must not drift child geometry under rotated ancestors.
+
+        The old single-pass restore read each object's world points AFTER its
+        ancestors had already been restored, so child vertices (and pivots)
+        re-absorbed the ancestors' restored transforms — ~4.8 units of drift
+        on this scene. The restore must snapshot all world points and pivots
+        before any transform is written (two-phase apply).
+        """
+        grp = cmds.group(empty=True, name="rig_GRP")
+        loc = cmds.spaceLocator(name="rig_LOC")[0]
+        geo = cmds.polyCube(name="rig_GEO")[0]
+        cmds.parent(loc, grp)
+        cmds.parent(geo, loc)
+        cmds.move(4, 0, 0, grp, absolute=True)
+        cmds.rotate(0, 0, 45, grp)
+        cmds.move(0, 2, 0, loc, relative=True)
+        cmds.rotate(0, 30, 0, loc)
+        cmds.move(0, 0, 1, geo, relative=True)
+        cmds.rotate(15, 0, 0, geo)
+        cmds.scale(2, 1, 1, geo)
+
+        n_verts = cmds.polyEvaluate(geo, vertex=True)
+        verts_before = [
+            cmds.pointPosition(f"{geo}.vtx[{i}]", world=True) for i in range(n_verts)
+        ]
+        rp_before = cmds.xform(geo, q=True, ws=True, rotatePivot=True)
+
+        try:
+            XformUtils.store_transforms(grp, prefix="test", traverse=True)
+            XformUtils.freeze_transforms(grp, freeze_children=True)
+
+            XformUtils.restore_transforms(grp, prefix="test", traverse=True)
+
+            verts_after = [
+                cmds.pointPosition(f"{geo}.vtx[{i}]", world=True)
+                for i in range(n_verts)
+            ]
+            for before, after in zip(verts_before, verts_after):
+                for a, b in zip(before, after):
+                    self.assertAlmostEqual(a, b, delta=1e-3)
+
+            rp_after = cmds.xform(geo, q=True, ws=True, rotatePivot=True)
+            for a, b in zip(rp_before, rp_after):
+                self.assertAlmostEqual(a, b, delta=1e-3)
+
+            self.assertAlmostEqual(
+                cmds.getAttr(f"{grp}.rotateZ"), 45.0, delta=1e-3
+            )
+        finally:
+            for n in (grp, loc, geo):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+    def test_restore_transforms_traverse_false_skips_descendants(self):
+        """Default traverse=False must not consume descendant bake history."""
+        grp = cmds.group(empty=True, name="rig_GRP")
+        loc = cmds.spaceLocator(name="rig_LOC")[0]
+        cmds.parent(loc, grp)
+        cmds.move(1, 2, 3, grp, absolute=True)
+        cmds.move(0, 1, 0, loc, relative=True)
+        try:
+            XformUtils.store_transforms(grp, prefix="test", traverse=True)
+            XformUtils.freeze_transforms(grp, freeze_children=True)
+
+            XformUtils.restore_transforms(grp, prefix="test")  # default
+
+            self.assertTrue(
+                cmds.attributeQuery("test_T_bake", node=loc, exists=True),
+                "Descendant bake history must survive a traverse=False restore",
             )
         finally:
             for n in (grp, loc):

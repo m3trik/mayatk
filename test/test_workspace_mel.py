@@ -17,6 +17,7 @@ The codec's pure-disk behavior (merge/preserve semantics, discovery, model) is
 covered upstream in ``pythontk/test/test_workspace.py``; only the pieces that
 need a live Maya live here.
 """
+
 import os
 import shutil
 import unittest
@@ -56,11 +57,13 @@ class WorkspaceMelContractTest(MayaTkTestCase):
         """Maya opens a codec-written project and resolves its rules (foreign one included)."""
         ws = ptk.Workspace.create(self._tmp)
         # a Blender-side rule Maya has no notion of, merged in by the codec
-        ptk.write_workspace_mel(ws.marker_path, {"blenderScene": "scenes"})
+        ptk.Workspace.write_workspace_mel(ws.marker_path, {"blenderScene": "scenes"})
 
         cmds.workspace(self._tmp, openWorkspace=True)
 
-        self.assertEqual(_norm(cmds.workspace(q=True, rootDirectory=True)), _norm(self._tmp))
+        self.assertEqual(
+            _norm(cmds.workspace(q=True, rootDirectory=True)), _norm(self._tmp)
+        )
         self.assertEqual(cmds.workspace(fileRuleEntry="scene"), "scenes")
         self.assertEqual(cmds.workspace(fileRuleEntry="sourceImages"), "sourceimages")
         self.assertEqual(cmds.workspace(fileRuleEntry="blenderScene"), "scenes")
@@ -73,15 +76,17 @@ class WorkspaceMelContractTest(MayaTkTestCase):
     def test_maya_rewrite_preserves_foreign_rule(self):
         """Maya's saveWorkspace keeps the Blender-side rule; the codec parses Maya's output."""
         ws = ptk.Workspace.create(self._tmp, create_dirs=False)
-        ptk.write_workspace_mel(ws.marker_path, {"blenderScene": "scenes"})
+        ptk.Workspace.write_workspace_mel(ws.marker_path, {"blenderScene": "scenes"})
 
         cmds.workspace(self._tmp, openWorkspace=True)
         cmds.workspace(fileRule=("clips", "clips"))  # a Maya-side edit on top
         cmds.workspace(saveWorkspace=True)
 
-        rules = ptk.parse_workspace_mel(ws.marker_path)
+        rules = ptk.Workspace.parse_workspace_mel(ws.marker_path)
         self.assertEqual(rules.get("blenderScene"), "scenes")  # survived Maya's rewrite
-        self.assertEqual(rules.get("clips"), "clips")  # Maya's addition visible to the codec
+        self.assertEqual(
+            rules.get("clips"), "clips"
+        )  # Maya's addition visible to the codec
         self.assertEqual(rules.get("scene"), "scenes")  # template rules intact
 
     def test_find_containing_matches_maya_root(self):
@@ -95,7 +100,9 @@ class WorkspaceMelContractTest(MayaTkTestCase):
 
         found = ptk.Workspace.find_containing(scene)
         self.assertIsNotNone(found)
-        self.assertEqual(_norm(found.root), _norm(cmds.workspace(q=True, rootDirectory=True)))
+        self.assertEqual(
+            _norm(found.root), _norm(cmds.workspace(q=True, rootDirectory=True))
+        )
 
 
 if __name__ == "__main__":

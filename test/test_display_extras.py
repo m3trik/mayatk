@@ -162,8 +162,9 @@ class TestExplodedView(MayaTkTestCase):
         ev = ExplodedView()
         cube = cmds.polyCube(name="ev_sel")[0]
         cmds.select(cube)
-        # objects property falls back to current selection when not set
-        self.assertIn(cube, ev.objects)
+        # objects property falls back to current selection when not set;
+        # the fallback returns full DAG paths, so compare by leaf name.
+        self.assertIn(cube, [o.split("|")[-1] for o in ev.objects])
 
     def test_explicit_objects_assigned(self):
         cube = cmds.polyCube(name="ev_exp")[0]

@@ -400,8 +400,10 @@ class TestBlendshapeAnimatorImprovements(MayaTkTestCase):
             5, group_name="_customTweens_GRP", name_prefix="ftw"
         )
         self.assertIsNotNone(tween)
+        # tween.mesh is a full DAG path (unambiguous across setups sharing a
+        # tween group); check the leaf name for the prefix.
         self.assertTrue(
-            tween.mesh.startswith("ftw_f5"),
+            tween.mesh.split("|")[-1].startswith("ftw_f5"),
             f"expected ftw_f5* name, got {tween.mesh}",
         )
         parent = (cmds.listRelatives(tween.mesh, parent=True) or [None])[0]

@@ -137,36 +137,37 @@ class TestComponents(MayaTkTestCase):
         mapping = Components.map_components_to_objects([])
         self.assertEqual(mapping, {})
 
-    def test_map_components_to_objects_collision_resolves_to_path(self):
-        """Keys are collision-prone leaf names; values stay path-qualified.
+    def test_map_components_to_objects_collision_keys_stay_unambiguous(self):
+        """Same-leaf-name objects must land in SEPARATE, cmds-safe groups.
 
-        Two objects sharing a leaf name (under different parents) make the
-        dict key (``pCube1``) ambiguous — passing it straight to a Maya cmd
-        raises ``ValueError: More than one object matches name``. This was the
-        tentacle normals.b000/b001 ``polyOptions(obj)`` crash. The values, by
-        contrast, are path-qualified, so callers must resolve the unambiguous
-        object path from them.
+        Keys used to be leaf names, which merged two ``pCube1``s (under
+        different parents) into ONE group — breaking every per-object consumer
+        (``polyBevel3`` refuses multi-object component lists outright, and the
+        tentacle normals.b000/b001 ``polyOptions(key)`` crash came from the
+        ambiguous key). Keys are now the node strings as ``cmds.ls``
+        disambiguates them: one key per real object, directly usable in cmds.
         """
         c1 = cmds.polyCube(name="pCube1")[0]
         cmds.group(c1, name="grp1")
         c2 = cmds.polyCube(name="pCube1")[0]
         cmds.group(c2, name="grp2")
 
-        edges = cmds.ls("grp1|pCube1.e[0:3]", flatten=True)
+        edges = cmds.ls("grp1|pCube1.e[0:3]", "grp2|pCube1.e[0:3]", flatten=True)
         mapping = Components.map_components_to_objects(edges)
 
-        # The bare leaf key is ambiguous and must not be fed to a cmd directly.
-        self.assertIn("pCube1", mapping)
-        with self.assertRaises(ValueError):
-            cmds.polyOptions("pCube1", se=True)
-
-        # Resolving from the (path-qualified) values yields a unique path that
-        # Maya cmds accept — the fix the slots now rely on.
-        for components in mapping.values():
-            objects = cmds.ls(components, objectsOnly=True, long=True) or []
-            self.assertEqual(len(objects), 1)
-            self.assertTrue(objects[0].startswith("|grp1|pCube1"))
-            cmds.polyOptions(objects, se=True)  # must not raise
+        # One group per real object — never merged by the shared leaf name.
+        self.assertEqual(len(mapping), 2)
+        for key, components in mapping.items():
+            # The key is unambiguous and feeds a Maya cmd directly.
+            self.assertEqual(len(cmds.ls(key)), 1)
+            cmds.polyOptions(key, se=True)  # must not raise
+            # Every component in the group belongs to the key's object
+            # (objectsOnly resolves to the SHAPE; its path sits under the
+            # key's transform).
+            owners = cmds.ls(components, objectsOnly=True, long=True) or []
+            key_long = cmds.ls(key, long=True)[0]
+            self.assertEqual(len(owners), 1)
+            self.assertTrue(owners[0].startswith(key_long))
 
     # -------------------------------------------------------------------------
     # Geometric Operations

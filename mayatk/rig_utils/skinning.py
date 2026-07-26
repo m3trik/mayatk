@@ -18,6 +18,7 @@ Weight data shapes
   ``weights[v * len(influences) + i]``.
 - Sparse: ``{vertex_index: {influence_name: weight}}``.
 """
+
 import os
 import bisect
 from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
@@ -32,7 +33,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # From this package:
-from mayatk.core_utils._core_utils import CoreUtils, leaf_name
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.nurbs_utils._nurbs_utils import NurbsUtils
 
 # DCC-agnostic (name/callable -> f(t) falloff curve); lives upstream so the
@@ -509,9 +510,7 @@ class SkinUtils(ptk.HelpMixin):
         # Undo-safe route: per-vertex skinPercent inside one undo chunk.
         old_weights, _ = cls.get_weights(skin_cluster, vertices)
         geo = cls._resolve_geometry(skin_cluster)
-        vertex_ids = (
-            list(vertices) if vertices is not None else list(range(n_verts))
-        )
+        vertex_ids = list(vertices) if vertices is not None else list(range(n_verts))
         with CoreUtils.undo_chunk():
             for k, v in enumerate(vertex_ids):
                 row = weights[k * n_inf : (k + 1) * n_inf]
@@ -574,9 +573,7 @@ class SkinUtils(ptk.HelpMixin):
             row = flat[k * n_inf : (k + 1) * n_inf]
             specified_sum = sum(specified.values())
             remaining = max(0.0, 1.0 - specified_sum)
-            unspecified_sum = sum(
-                row[i] for i in range(n_inf) if i not in specified
-            )
+            unspecified_sum = sum(row[i] for i in range(n_inf) if i not in specified)
             for i in range(n_inf):
                 if i in specified:
                     row[i] = specified[i]
@@ -654,7 +651,9 @@ class SkinUtils(ptk.HelpMixin):
             raise ValueError(
                 f"Invalid skinning method: {method!r}. Expected one of {sorted(cls.SKINNING_METHODS)}."
             )
-        cmds.setAttr(f"{str(skin_cluster)}.skinningMethod", cls.SKINNING_METHODS[method])
+        cmds.setAttr(
+            f"{str(skin_cluster)}.skinningMethod", cls.SKINNING_METHODS[method]
+        )
 
     # ------------------------------------------------------------------
     # Transfer
@@ -740,10 +739,8 @@ class SkinUtils(ptk.HelpMixin):
         if not skin_cluster:
             raise ValueError(f"No skinCluster on mesh: {mesh}")
         if file_path is None:
-            directory = os.path.join(
-                cmds.internalVar(userTmpDir=True), "skin_weights"
-            )
-            file_path = os.path.join(directory, f"{leaf_name(mesh)}.xml")
+            directory = os.path.join(cmds.internalVar(userTmpDir=True), "skin_weights")
+            file_path = os.path.join(directory, f"{CoreUtils.leaf_name(mesh)}.xml")
         directory, filename = os.path.split(file_path)
         os.makedirs(directory, exist_ok=True)
         cmds.deformerWeights(
@@ -825,9 +822,7 @@ class SkinUtils(ptk.HelpMixin):
         influence_leaves = {i.split("|")[-1] for i in influences}
         if target_influence.split("|")[-1] not in influence_leaves:
             if not add_influence:
-                raise ValueError(
-                    f"Influence not in skinCluster: {target_influence}"
-                )
+                raise ValueError(f"Influence not in skinCluster: {target_influence}")
             cmds.skinCluster(
                 skin_cluster, edit=True, addInfluence=target_influence, weight=0.0
             )
@@ -908,10 +903,17 @@ class SkinUtils(ptk.HelpMixin):
         Returns:
             (str) The skinCluster name.
         """
-        joints = [str(j) for j in (joints if isinstance(joints, (list, tuple)) else [joints])]
+        joints = [
+            str(j) for j in (joints if isinstance(joints, (list, tuple)) else [joints])
+        ]
         # Solve first: fails fast (bad joints/curve) before creating the cluster.
         weights, influences = CurveWeights.solve(
-            mesh, joints, curve=curve, centerline=centerline, profile=profile, degree=degree
+            mesh,
+            joints,
+            curve=curve,
+            centerline=centerline,
+            profile=profile,
+            degree=degree,
         )
         if max_influences is None:
             max_influences = CurveWeights.effective_degree(degree, len(joints)) + 1

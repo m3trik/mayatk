@@ -5,7 +5,7 @@ except ImportError:
 
 from typing import List, Optional, Sequence
 
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 
 class DynamicPipe:
@@ -113,9 +113,7 @@ class DynamicPipe:
         else:
             for i in segments_to_loft:
                 if not isinstance(i, int):
-                    raise ValueError(
-                        "segments_to_loft must be a sequence of integers."
-                    )
+                    raise ValueError("segments_to_loft must be a sequence of integers.")
 
         new_segments: List[str] = []
         for i in segments_to_loft:
@@ -151,7 +149,7 @@ class DynamicPipeSlots:
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Dynamic Pipe",
                 body="Build a pipe-style mesh by lofting NURBS circles "
                 "parented to a chain of locators. Each locator drives a "
@@ -173,7 +171,7 @@ class DynamicPipeSlots:
 
     def b000(self):
         """Initialize Pipe — build pipe from the current ordered selection."""
-        locators = cmds.ls(orderedSelection=True, exactType="transform") or []
+        locators = cmds.ls(orderedSelection=True, exactType="transform", long=True) or []
         if len(locators) < 2:
             self.sb.message_box(
                 "Select at least two transforms (locators) in order, "

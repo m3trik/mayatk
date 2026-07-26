@@ -14,6 +14,7 @@ caller's overrides and feeds the result through :func:`to_context`, which
 turns each value into a Python source literal for
 ``StrUtils.replace_delimited`` substitution into ``templates/*.py``.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -46,27 +47,33 @@ DEFAULTS: Dict[str, Any] = {
 }
 
 
-def python_literal(value: Any) -> str:
-    """Format *value* as a Python source literal for template substitution.
+class TemplateParams:
+    """TemplateParams — module namespace."""
 
-    ``repr`` covers every type the registry uses -- ``repr(True) == 'True'``,
-    ``repr(4096) == '4096'``, ``repr('_high') == "'_high'"`` -- so a
-    substituted token is valid Python when the template assigns it bare
-    (e.g. ``SKY_PRESET = __SKY_PRESET__``).
-    """
-    return repr(value)
+    @staticmethod
+    def python_literal(value: Any) -> str:
+        """Format *value* as a Python source literal for template substitution.
 
+        ``repr`` covers every type the registry uses -- ``repr(True) == 'True'``,
+        ``repr(4096) == '4096'``, ``repr('_high') == "'_high'"`` -- so a
+        substituted token is valid Python when the template assigns it bare
+        (e.g. ``SKY_PRESET = __SKY_PRESET__``).
+        """
+        return repr(value)
 
-def defaults() -> Dict[str, Any]:
-    """Return a copy of :data:`DEFAULTS`."""
-    return dict(DEFAULTS)
+    @staticmethod
+    def defaults() -> Dict[str, Any]:
+        """Return a copy of :data:`DEFAULTS`."""
+        return dict(DEFAULTS)
 
+    @staticmethod
+    def to_context(values: Dict[str, Any]) -> Dict[str, str]:
+        """Map ``{KEY: value}`` to ``{KEY: python-literal-string}``.
 
-def to_context(values: Dict[str, Any]) -> Dict[str, str]:
-    """Map ``{KEY: value}`` to ``{KEY: python-literal-string}``.
-
-    The result is suitable for ``StrUtils.replace_delimited``: every value
-    becomes a Python source literal that can be substituted into a bare
-    ``__KEY__`` token in a template.
-    """
-    return {key: python_literal(value) for key, value in values.items()}
+        The result is suitable for ``StrUtils.replace_delimited``: every value
+        becomes a Python source literal that can be substituted into a bare
+        ``__KEY__`` token in a template.
+        """
+        return {
+            key: TemplateParams.python_literal(value) for key, value in values.items()
+        }

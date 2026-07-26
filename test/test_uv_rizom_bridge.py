@@ -14,6 +14,7 @@ the failure modes the standalone smoketest cannot:
 - Multiple duplicates collapsing to the same leaf name (different parents)
   causing ``cmds.select`` ambiguity.
 """
+
 import os
 import unittest
 import tempfile
@@ -21,11 +22,7 @@ from pathlib import Path
 
 import maya.cmds as cmds
 
-from mayatk.uv_utils.rizom_bridge._rizom_bridge import (
-    RizomUVBridge,
-    _parse_rizom_version,
-    _SCRIPT_DIR,
-)
+from mayatk.uv_utils.rizom_bridge._rizom_bridge import RizomUVBridge, _SCRIPT_DIR
 from mayatk.uv_utils.rizom_bridge import parameters as _params
 
 from base_test import MayaTkTestCase
@@ -72,9 +69,7 @@ class TestRizomBridgeExport(MayaTkTestCase):
             Path(self.export_path).exists(),
             f"FBX not written to {self.export_path}",
         )
-        self.assertGreater(
-            Path(self.export_path).stat().st_size, 0, "FBX is empty."
-        )
+        self.assertGreater(Path(self.export_path).stat().st_size, 0, "FBX is empty.")
 
     def test_export_handles_name_collisions_under_different_parents(self):
         """Two duplicates may share a leaf name -- bridge must use long paths.
@@ -106,14 +101,13 @@ class TestRizomBridgeExport(MayaTkTestCase):
             Path(self.export_path).exists(),
             f"FBX not written to {self.export_path}",
         )
-        self.assertGreater(
-            Path(self.export_path).stat().st_size, 0, "FBX is empty."
-        )
+        self.assertGreater(Path(self.export_path).stat().st_size, 0, "FBX is empty.")
         # Every exported object must land on its OWN map key -- colliding
         # leaf names used to collapse to one key, cross-wiring the UV
         # transfer (both SWITCH_GEOs would receive the same shell).
         self.assertEqual(
-            len(self.bridge._export_name_map), len(exported),
+            len(self.bridge._export_name_map),
+            len(exported),
             f"Expected one unique map key per export, got: "
             f"{self.bridge._export_name_map}",
         )
@@ -121,15 +115,16 @@ class TestRizomBridgeExport(MayaTkTestCase):
         # as distinct transfer targets.
         destinations = list(self.bridge._export_name_map.values())
         self.assertEqual(
-            len(set(destinations)), len(exported),
+            len(set(destinations)),
+            len(exported),
             f"Transfer destinations are not unique: {destinations}",
         )
         switch_geos = [
-            d for d in destinations
-            if d.split("|")[-1].split(":")[-1] == "SWITCH_GEO"
+            d for d in destinations if d.split("|")[-1].split(":")[-1] == "SWITCH_GEO"
         ]
         self.assertEqual(
-            len(switch_geos), 2,
+            len(switch_geos),
+            2,
             f"Both name-colliding originals should be mapped: {destinations}",
         )
 
@@ -147,12 +142,17 @@ class TestRizomBridgeLogic(MayaTkTestCase):
             r"C:\Program Files\Rizom Lab\RizomUV 2020.1\Rizomuv_VS.exe": (2020, 1),
             r"C:\Program Files\Rizom Lab\RizomUV VS RS 2022.2\rizomuv.exe": (2022, 2),
             r"C:\Program Files\Rizom Lab\RizomUV_2024\rizomuv.exe": (2024, 0),
-            r"C:\Program Files\Rizom Lab\RizomUV VS RS 2023.10.1\rizomuv.exe": (2023, 10, 1),
+            r"C:\Program Files\Rizom Lab\RizomUV VS RS 2023.10.1\rizomuv.exe": (
+                2023,
+                10,
+                1,
+            ),
             r"C:\tools\bin\someapp.exe": (0, 0),
         }
         for path, expected in cases.items():
             self.assertEqual(
-                _parse_rizom_version(path), expected,
+                RizomUVBridge._parse_rizom_version(path),
+                expected,
                 f"Version mis-parsed for {path}",
             )
 
@@ -193,8 +193,8 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         hard = (_SCRIPT_DIR / "unwrap_hard.lua").read_text(encoding="utf-8")
         organic = (_SCRIPT_DIR / "unwrap_organic.lua").read_text(encoding="utf-8")
 
-        hard_keys = _params.referenced_keys(hard)
-        organic_keys = _params.referenced_keys(organic)
+        hard_keys = _params.Parameters.referenced_keys(hard)
+        organic_keys = _params.Parameters.referenced_keys(organic)
 
         self.assertIn("WELD_SEAMS", hard_keys)
         self.assertIn("SHARP_ANGLE", hard_keys)
@@ -213,10 +213,200 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         """
         labels = [spec.label for spec in _params.PARAMS.values()]
         self.assertEqual(
-            len(labels), len(set(labels)),
-            f"Duplicate parameter labels: "
-            f"{[l for l in labels if labels.count(l) > 1]}",
+            len(labels),
+            len(set(labels)),
+            f"Duplicate parameter labels: {[l for l in labels if labels.count(l) > 1]}",
         )
+
+    def test_preset_min_version_parses_marker(self):
+        """The @min_rizom header gates a preset as a whole."""
+        self.assertEqual(
+            _params.Parameters.preset_min_version("-- @min_rizom: 2022.2\nZomPack({})"),
+            (2022, 2),
+        )
+        # Single-segment versions pad to (year, 0) for tuple comparison.
+        self.assertEqual(
+            _params.Parameters.preset_min_version("-- @min_rizom: 2024"),
+            (2024, 0),
+        )
+        self.assertIsNone(_params.Parameters.preset_min_version("ZomPack({})"))
+        # Shipped presets: pack is ungated, pack_into_existing needs 2022.2.
+        pack = (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        gap = (_SCRIPT_DIR / "pack_into_existing.lua").read_text(encoding="utf-8")
+        self.assertIsNone(_params.Parameters.preset_min_version(pack))
+        self.assertEqual(_params.Parameters.preset_min_version(gap), (2022, 2))
+
+    def test_pack_preset_references_placement_tokens(self):
+        """pack.lua exposes the post-pack UDIM/coverage placement knobs;
+        optimize.lua (layout-preserving) must not."""
+        pack_keys = _params.Parameters.referenced_keys(
+            (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        )
+        optimize_keys = _params.Parameters.referenced_keys(
+            (_SCRIPT_DIR / "optimize.lua").read_text(encoding="utf-8")
+        )
+        self.assertIn("TARGET_UDIM", pack_keys)
+        self.assertIn("UV_AREA", pack_keys)
+        self.assertNotIn("TARGET_UDIM", optimize_keys)
+        self.assertNotIn("UV_AREA", optimize_keys)
+
+    def test_gated_preset_refused_below_min_version(self):
+        """pack_into_existing must fail loudly (not crash Rizom) on 2020.1."""
+        bridge = RizomUVBridge(
+            rizom_path=r"C:\Program Files\Rizom Lab\RizomUV 2020.1\Rizomuv_VS.exe"
+        )
+        cube = cmds.polyCube(name="gateCube")[0]
+        with self.assertRaisesRegex(RuntimeError, "requires RizomUV >= 2022.2"):
+            bridge.process_with_rizomuv(
+                [cube], preset="pack_into_existing", select_objects=[cube]
+            )
+
+    def test_selection_preset_requires_select_objects(self):
+        """A script with the selection token refuses to run without
+        select_objects -- the raw token would be a Lua syntax error."""
+        cube = cmds.polyCube(name="selReqCube")[0]
+        script = (
+            "ZomSelect({Names=__PACK_SELECT_NAMES__, Select=true})\n"  # noqa: P103
+        )
+        with self.assertRaisesRegex(ValueError, "select_objects"):
+            self.bridge.process_with_rizomuv([cube], uv_script=script)
+
+    def test_expand_includes_expands_directive_not_comment(self):
+        """__PACK_BLOCK__ expands only as a standalone directive line -- an
+        in-comment mention stays literal (the expander is a blind replace
+        for everything else and must not clobber comments)."""
+        directive = _params.Parameters.expand_includes("x\n__PACK_BLOCK__\ny")
+        self.assertIn("ZomPack", directive)
+        self.assertNotIn("__PACK_BLOCK__", directive)
+
+        commented = _params.Parameters.expand_includes(
+            "-- see __PACK_BLOCK__ for details\ncode"
+        )
+        self.assertNotIn("ZomPack", commented)
+        self.assertIn("__PACK_BLOCK__", commented)  # untouched
+
+    def test_pack_block_shared_by_pack_and_unwrap_presets(self):
+        """pack / unwrap_hard / unwrap_organic all pull the shared block, so
+        the pack knobs are defined once. optimize keeps its own inline block."""
+        for preset in ("pack", "unwrap_hard", "unwrap_organic"):
+            body = (_SCRIPT_DIR / f"{preset}.lua").read_text(encoding="utf-8")
+            self.assertIn("__PACK_BLOCK__", body, f"{preset} should use the shared block")
+        optimize = (_SCRIPT_DIR / "optimize.lua").read_text(encoding="utf-8")
+        self.assertNotIn("__PACK_BLOCK__", optimize)
+        self.assertIn("ZomPack", optimize)  # its own inline pack
+
+    def test_padding_field_name_gated_by_rizom_version(self):
+        """Island spacing renders as SpacingSize on <= 2021 (2020.1-safe) and
+        PaddingSize on >= 2022 (the probed rename); MarginSize always survives."""
+        pack = _params.Parameters.expand_includes(
+            (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        )
+        old = _params.Parameters.strip_unsupported(pack, (2020, 1))
+        new = _params.Parameters.strip_unsupported(pack, (2022, 0))
+        self.assertIn("SpacingSize=", old)
+        self.assertNotIn("PaddingSize=", old)
+        self.assertIn("PaddingSize=", new)
+        self.assertNotIn("SpacingSize=", new)
+        self.assertIn("MarginSize=", old)
+        self.assertIn("MarginSize=", new)
+
+    def test_hard_reweld_unoverlap_gated_2022(self):
+        """ReWeld / BooleanUnoverlap access-violate 2020.1 (probed) -- stripped
+        below 2022, present at/above it."""
+        hard = _params.Parameters.expand_includes(
+            (_SCRIPT_DIR / "unwrap_hard.lua").read_text(encoding="utf-8")
+        )
+        old = _params.Parameters.strip_unsupported(hard, (2020, 1))
+        new = _params.Parameters.strip_unsupported(hard, (2022, 0))
+        for field in ("ReWeld=", "BooleanUnoverlap="):
+            self.assertNotIn(field, old)
+            self.assertIn(field, new)
+
+    def test_new_params_registered(self):
+        """Phase 1/2 knobs exist with the expected kinds; the scaling enums
+        now offer the scale-preservation values."""
+        self.assertEqual(_params.PARAMS["PACK_SPACING"].kind, "float")
+        self.assertEqual(_params.PARAMS["PACK_MARGIN"].kind, "float")
+        self.assertEqual(_params.PARAMS["FIT_CONES"].kind, "bool")
+        scale_labels = [c[0] for c in _params.PARAMS["SCALING_MODE"].choices]
+        self.assertTrue(any("Keep current scale" in l for l in scale_labels))
+        layout_vals = [c[1] for c in _params.PARAMS["LAYOUT_SCALING_MODE"].choices]
+        self.assertIn(0, layout_vals)  # "Keep positions" for scale preservation
+
+    def test_organic_exposes_fitcones_hybrid_gated(self):
+        """FIT_CONES is a live organic knob; unwrap_hybrid is preset-gated 2022."""
+        organic_keys = _params.Parameters.referenced_keys(
+            (_SCRIPT_DIR / "unwrap_organic.lua").read_text(encoding="utf-8")
+        )
+        self.assertIn("FIT_CONES", organic_keys)
+        hybrid = (_SCRIPT_DIR / "unwrap_hybrid.lua").read_text(encoding="utf-8")
+        self.assertEqual(_params.Parameters.preset_min_version(hybrid), (2022, 0))
+
+
+class TestRizomBridgePackIntoExisting(MayaTkTestCase):
+    """Maya-side plumbing for the pack_into_existing flow (no RizomUV run)."""
+
+    def test_select_names_lua_maps_to_exported_names(self):
+        """select_objects resolve to the suffixed FBX group names."""
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        a = cmds.polyCube(name="existingMesh")[0]
+        b = cmds.polyCube(name="newMesh")[0]
+        bridge.export_path = str(Path(tempfile.gettempdir()) / "riz_sel_test.fbx")
+        bridge._export_objects([a, b])
+
+        lua = bridge._select_names_lua([b])
+        # Index is export-order-dependent (an implementation detail) --
+        # assert the shape, not the counter.
+        self.assertRegex(lua, r'^\{"newMesh_\d+__RZTMP"\}$')
+        self.assertNotIn("existingMesh", lua)
+
+        # Objects outside the export set fail loudly.
+        c = cmds.polyCube(name="unexported")[0]
+        with self.assertRaises(ValueError):
+            bridge._select_names_lua([c])
+
+    def test_expand_by_materials_pulls_material_sharers(self):
+        """Expansion = every mesh sharing the selection's material(s)."""
+        a = cmds.polyCube(name="expandNew")[0]
+        b = cmds.polyCube(name="expandExisting")[0]
+        c = cmds.polyCube(name="expandUnrelated")[0]
+
+        mat = cmds.shadingNode("lambert", asShader=True, name="expandMat")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="expandMatSG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets([a, b], edit=True, forceElement=sg)
+
+        all_objs, selected = RizomUVBridge.expand_by_materials([a])
+        all_leaves = {n.rsplit("|", 1)[-1] for n in all_objs}
+        sel_leaves = {n.rsplit("|", 1)[-1] for n in selected}
+
+        self.assertEqual(sel_leaves, {"expandNew"})
+        self.assertIn("expandExisting", all_leaves)
+        self.assertIn("expandNew", all_leaves)
+        self.assertNotIn("expandUnrelated", all_leaves)
+
+    def test_skip_instances_exports_one_rep_per_shared_shape(self):
+        """True DAG instances (shared shape) collapse to one exported rep;
+        the non-instance sibling still exports."""
+        base = cmds.polyCube(name="instBase")[0]
+        # cmds.instance makes a second transform over the SAME shape.
+        inst = cmds.instance(base, name="instCopy")[0]
+        solo = cmds.polyCube(name="instSolo")[0]
+
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        bridge.export_path = str(Path(tempfile.gettempdir()) / "riz_inst_test.fbx")
+
+        # filter_duplicate_instances (the dedupe the bridge applies) keeps one
+        # of the shared-shape pair plus the solo cube.
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        kept = NodeUtils.filter_duplicate_instances([base, inst, solo])
+        kept_leaves = {str(k).rsplit("|", 1)[-1] for k in kept}
+        self.assertEqual(len(kept), 2, kept)
+        self.assertIn("instSolo", kept_leaves)
+        self.assertTrue({"instBase", "instCopy"} & kept_leaves)
 
 
 class TestRizomBridgeUiResize(MayaTkTestCase):
@@ -243,21 +433,26 @@ class TestRizomBridgeUiResize(MayaTkTestCase):
         QtWidgets.QApplication.processEvents()
         ui.is_initialized = True
 
-        scripts = sorted(p.stem for p in bridge_mod._SCRIPT_DIR.glob("*.lua"))
+        cmb = ui.cmb000
+        items_by_text = {cmb.itemText(i): i for i in range(cmb.count())}
+
+        # Only presets actually offered in the combo are selectable -- version-
+        # gated presets (unwrap_hybrid, pack_into_existing below their gate)
+        # are absent, so compare among what the combo lists, not the file glob.
+        scripts = [s for s in items_by_text if (bridge_mod._SCRIPT_DIR / f"{s}.lua").is_file()]
 
         def row_count(stem):
             path = bridge_mod._SCRIPT_DIR / f"{stem}.lua"
-            return len(_params.referenced_keys(path.read_text(encoding="utf-8")))
+            return len(
+                _params.Parameters.referenced_keys(path.read_text(encoding="utf-8"))
+            )
 
         if len(scripts) < 2:
-            self.skipTest("Need at least two bundled scripts to compare heights.")
+            self.skipTest("Need at least two selectable scripts to compare heights.")
         sorted_by_rows = sorted(scripts, key=row_count)
         few, many = sorted_by_rows[0], sorted_by_rows[-1]
         if row_count(few) == row_count(many):
-            self.skipTest("All bundled scripts reference the same param count.")
-
-        cmb = ui.cmb000
-        items_by_text = {cmb.itemText(i): i for i in range(cmb.count())}
+            self.skipTest("All selectable scripts reference the same param count.")
 
         # Start with the wider preset and force the window taller than
         # whatever fit would compute, so we can observe a shrink delta.
@@ -311,16 +506,21 @@ class TestRizomBridgeSendFlow(MayaTkTestCase):
         # Capture every AppLauncher.launch call so the test can assert on
         # the args without spawning a real process.
         from pythontk.core_utils import app_launcher as _al
+
         self._launch_calls = []
 
         def _fake_launch(app_identifier, args=None, cwd=None, detached=True, env=None):
-            self._launch_calls.append({
-                "app": app_identifier,
-                "args": list(args or []),
-                "detached": detached,
-            })
+            self._launch_calls.append(
+                {
+                    "app": app_identifier,
+                    "args": list(args or []),
+                    "detached": detached,
+                }
+            )
+
             class _Proc:
                 pid = 0
+
             return _Proc()
 
         self._real_launch = _al.AppLauncher.launch
@@ -328,10 +528,12 @@ class TestRizomBridgeSendFlow(MayaTkTestCase):
 
     def tearDown(self):
         from pythontk.core_utils import app_launcher as _al
+
         _al.AppLauncher.launch = self._real_launch
         # Best-effort: drop the test sandbox; ignore stragglers because
         # Rizom's mtime watch can hold a handle briefly on real hardware.
         import shutil
+
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
         super().tearDown()
 
@@ -364,12 +566,14 @@ class TestRizomBridgeSendFlow(MayaTkTestCase):
         second_fbxs = sorted(self.tmp_dir.glob("*.fbx"))
 
         self.assertNotEqual(
-            first_script, second_script,
+            first_script,
+            second_script,
             "Lua script path must differ between sends so prior Rizom "
             "sessions aren't re-triggered via the -cfi mtime watch.",
         )
         self.assertEqual(
-            len(second_fbxs), 2,
+            len(second_fbxs),
+            2,
             f"expected 2 fbx files after 2 sends (one per send), got {second_fbxs}",
         )
 
@@ -381,7 +585,9 @@ class TestRizomBridgeSendFlow(MayaTkTestCase):
         # MatUtils.get_texture_paths finds something.
         shader = cmds.shadingNode("lambert", asShader=True, name="rizom_send_lam_t")
         sg = cmds.sets(
-            renderable=True, noSurfaceShader=True, empty=True,
+            renderable=True,
+            noSurfaceShader=True,
+            empty=True,
             name="rizom_send_lamSG_t",
         )
         cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
@@ -392,10 +598,13 @@ class TestRizomBridgeSendFlow(MayaTkTestCase):
         tex_path = self.tmp_dir / "diffuse.png"
         # Minimum-valid 1x1 PNG so we don't need PIL in the test env.
         import base64
-        tex_path.write_bytes(base64.b64decode(
-            b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADklEQVR42mP8z8BQDwAEhQGAh"
-            b"KmMIQAAAABJRU5ErkJggg=="
-        ))
+
+        tex_path.write_bytes(
+            base64.b64decode(
+                b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADklEQVR42mP8z8BQDwAEhQGAh"
+                b"KmMIQAAAABJRU5ErkJggg=="
+            )
+        )
         cmds.setAttr(f"{fn}.fileTextureName", str(tex_path), type="string")
         cmds.connectAttr(f"{fn}.outColor", f"{shader}.color", force=True)
         cmds.sets(cube, edit=True, forceElement=sg)
@@ -415,9 +624,12 @@ class TestRizomBridgeSendFlow(MayaTkTestCase):
 
         self.assertIn("XYZUVW=false", body, "LOAD_UVS=False did not propagate.")
         self.assertIn("UVWProps=true", body, "LOAD_UVW_PROPS=True did not propagate.")
-        self.assertIn("ImportGroups=false", body, "IMPORT_GROUPS=False did not propagate.")
         self.assertIn(
-            "ZomLoadTexture", body,
+            "ImportGroups=false", body, "IMPORT_GROUPS=False did not propagate."
+        )
+        self.assertIn(
+            "ZomLoadTexture",
+            body,
             "Texture from shading network did not reach the Lua script.",
         )
         # No ZomSave / ZomQuit *calls*: send is one-way, Rizom must stay
@@ -427,8 +639,12 @@ class TestRizomBridgeSendFlow(MayaTkTestCase):
         executable = "\n".join(
             line for line in body.splitlines() if not line.lstrip().startswith("--")
         )
-        self.assertNotIn("ZomSave(", executable, f"send body must not save: {executable}")
-        self.assertNotIn("ZomQuit(", executable, f"send body must not quit: {executable}")
+        self.assertNotIn(
+            "ZomSave(", executable, f"send body must not save: {executable}"
+        )
+        self.assertNotIn(
+            "ZomQuit(", executable, f"send body must not quit: {executable}"
+        )
 
     def test_send_skips_missing_texture_files(self):
         """A ``fileTextureName`` pointing at a non-existent file is dropped.
@@ -441,7 +657,9 @@ class TestRizomBridgeSendFlow(MayaTkTestCase):
         cube = cmds.polyCube(name="rizom_send_skip_cube")[0]
         shader = cmds.shadingNode("lambert", asShader=True, name="rizom_send_lam_s")
         sg = cmds.sets(
-            renderable=True, noSurfaceShader=True, empty=True,
+            renderable=True,
+            noSurfaceShader=True,
+            empty=True,
             name="rizom_send_lamSG_s",
         )
         cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
@@ -459,7 +677,8 @@ class TestRizomBridgeSendFlow(MayaTkTestCase):
         script_path = self._launch_calls[-1]["args"][1]
         body = Path(script_path).read_text(encoding="utf-8")
         self.assertNotIn(
-            "ZomLoadTexture", body,
+            "ZomLoadTexture",
+            body,
             "Missing texture file should be filtered out, not passed to Rizom.",
         )
 

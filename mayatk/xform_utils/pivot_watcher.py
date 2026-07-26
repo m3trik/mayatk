@@ -38,6 +38,7 @@ Usage::
     self._pivot_watcher.start()
     self._pivot_watcher.attach_widget(self.ui)
 """
+
 from __future__ import annotations
 
 import logging
@@ -51,53 +52,57 @@ from mayatk.core_utils.script_job_manager import ScriptJobManager
 logger = logging.getLogger(__name__)
 
 
-def _read_selection() -> Tuple[str, ...]:
-    try:
-        return tuple(cmds.ls(selection=True, long=True) or ())
-    except Exception:
-        return ()
+class _PivotWatcherInternal(object):
+    """Internal helpers for PivotWatcher."""
 
-
-def _read_manip_override() -> Tuple[float, ...]:
-    """World-space ``cmds.manipPivot`` override, or ``()`` if unavailable.
-
-    Only carries a value while the user is in Custom Pivot mode. Returns
-    ``(0, 0, 0)`` in baked-mode editing.
-
-    ``cmds.manipPivot`` may return either ``[(x, y, z)]`` or ``[x, y, z]``
-    depending on context; both shapes are normalized to a flat tuple.
-    """
-    try:
-        raw = cmds.manipPivot(q=True, p=True) or ()
-    except Exception:
-        return ()
-    if raw and isinstance(raw[0], (list, tuple)):
-        return tuple(raw[0])
-    return tuple(raw)
-
-
-def _read_baked_pivots() -> Tuple[Tuple[float, ...], ...]:
-    """World-space ``rotatePivot`` for each selected transform.
-
-    Captures the baked pivot that Insert-mode editing writes to. Returned
-    as a tuple-of-tuples so equality comparison works for the dedup rule.
-    """
-    try:
-        nodes = cmds.ls(selection=True, type="transform", long=True) or []
-    except Exception:
-        return ()
-    out = []
-    for node in nodes:
+    @staticmethod
+    def _read_selection() -> Tuple[str, ...]:
         try:
-            rp = cmds.xform(node, q=True, ws=True, rp=True)
+            return tuple(cmds.ls(selection=True, long=True) or ())
         except Exception:
-            continue
-        if rp:
-            out.append(tuple(rp))
-    return tuple(out)
+            return ()
+
+    @staticmethod
+    def _read_manip_override() -> Tuple[float, ...]:
+        """World-space ``cmds.manipPivot`` override, or ``()`` if unavailable.
+
+        Only carries a value while the user is in Custom Pivot mode. Returns
+        ``(0, 0, 0)`` in baked-mode editing.
+
+        ``cmds.manipPivot`` may return either ``[(x, y, z)]`` or ``[x, y, z]``
+        depending on context; both shapes are normalized to a flat tuple.
+        """
+        try:
+            raw = cmds.manipPivot(q=True, p=True) or ()
+        except Exception:
+            return ()
+        if raw and isinstance(raw[0], (list, tuple)):
+            return tuple(raw[0])
+        return tuple(raw)
+
+    @staticmethod
+    def _read_baked_pivots() -> Tuple[Tuple[float, ...], ...]:
+        """World-space ``rotatePivot`` for each selected transform.
+
+        Captures the baked pivot that Insert-mode editing writes to. Returned
+        as a tuple-of-tuples so equality comparison works for the dedup rule.
+        """
+        try:
+            nodes = cmds.ls(selection=True, type="transform", long=True) or []
+        except Exception:
+            return ()
+        out = []
+        for node in nodes:
+            try:
+                rp = cmds.xform(node, q=True, ws=True, rp=True)
+            except Exception:
+                continue
+            if rp:
+                out.append(tuple(rp))
+        return tuple(out)
 
 
-class PivotWatcher:
+class PivotWatcher(_PivotWatcherInternal):
     """Fire *callback* on intentional manipulator-pivot drags.
 
     A ``DragRelease`` whose manip position moved while the selection was
@@ -160,9 +165,7 @@ class PivotWatcher:
         mgr = ScriptJobManager.instance()
         for event in self._events:
             self._tokens.append(
-                mgr.subscribe(
-                    event, self._dispatch, owner=self._owner, ephemeral=True
-                )
+                mgr.subscribe(event, self._dispatch, owner=self._owner, ephemeral=True)
             )
         self._started = True
         self._last_state = self._read_state()
@@ -217,15 +220,17 @@ class PivotWatcher:
         sel_prev, override_prev, baked_prev = prev
         sel_curr, override_curr, baked_curr = curr
 
-        pivot_changed = (
-            override_curr != override_prev or baked_curr != baked_prev
-        )
+        pivot_changed = override_curr != override_prev or baked_curr != baked_prev
         selection_unchanged = sel_curr == sel_prev
         intentional_pivot_drag = pivot_changed and selection_unchanged
 
         logger.debug(
             "PivotWatcher: prev=%r curr=%r pivot_changed=%s sel_unchanged=%s -> fire=%s",
-            prev, curr, pivot_changed, selection_unchanged, intentional_pivot_drag,
+            prev,
+            curr,
+            pivot_changed,
+            selection_unchanged,
+            intentional_pivot_drag,
         )
 
         if intentional_pivot_drag:
@@ -240,8 +245,16 @@ class PivotWatcher:
         self._last_state = self._read_state()
 
     @staticmethod
-    def _read_state() -> Tuple[Tuple[str, ...], Tuple[float, ...], Tuple[Tuple[float, ...], ...]]:
-        return (_read_selection(), _read_manip_override(), _read_baked_pivots())
+    def _read_state() -> Tuple[
+        Tuple[str, ...], Tuple[float, ...], Tuple[Tuple[float, ...], ...]
+    ]:
+        # Read through the public class so subclass overrides (and the test's
+        # simulation seams) that shadow these on ``PivotWatcher`` take effect.
+        return (
+            PivotWatcher._read_selection(),
+            PivotWatcher._read_manip_override(),
+            PivotWatcher._read_baked_pivots(),
+        )
 
     def _on_widget_destroyed(self, *_args) -> None:
         self._tokens.clear()

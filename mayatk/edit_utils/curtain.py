@@ -26,6 +26,7 @@ Responsibilities are deliberately split so each stays reusable on its own
 - :class:`CurtainSlots` — *UI wiring*: drives the engine through the hermetic
   :class:`~mayatk.core_utils.preview.Preview` and a built-in preset combo.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -40,7 +41,7 @@ except ImportError as error:
     print(__file__, error)
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # from this package:
 from mayatk.core_utils._core_utils import BoundingBox
@@ -66,7 +67,7 @@ _PRESETS_DIR = Path(__file__).resolve().parent / "presets" / "curtain"
 
 Vec = Tuple[float, float, float]
 
-catenary_shape = ptk.MathUtils.catenary   # back-compat re-export
+catenary_shape = ptk.MathUtils.catenary  # back-compat re-export
 sag_profile = ptk.MathUtils.catenary_sag  # back-compat re-export
 
 
@@ -93,16 +94,21 @@ class Rail(ptk.Polyline):
         transforms (locators/joints). Returns ``(points, closed)`` or ``None``
         when nothing usable is selected.
         """
-        flat = cmds.ls(objects, flatten=True) or []
+        flat = cmds.ls(objects, flatten=True, long=True) or []
         if not flat:
             return None
 
         edges = [o for o in flat if ".e[" in str(o)]
         if edges:
-            verts = cmds.ls(
-                cmds.polyListComponentConversion(edges, fromEdge=True, toVertex=True),
-                flatten=True,
-            ) or []
+            verts = (
+                cmds.ls(
+                    cmds.polyListComponentConversion(
+                        edges, fromEdge=True, toVertex=True
+                    ),
+                    flatten=True,
+                )
+                or []
+            )
             pts = [tuple(cmds.pointPosition(v, world=True)) for v in verts]
             if len(pts) < 2:
                 return None
@@ -483,7 +489,9 @@ class CurtainSlots(ptk.LoggingMixin):
         # Re-drape live as any numeric field changes; rail-shaping fields also
         # resync the generated driver. Closed reshapes the rail; Invert is a
         # pure re-drape.
-        self.sb.connect_multi(self.ui, "s000-27", "valueChanged", self._on_param_changed)
+        self.sb.connect_multi(
+            self.ui, "s000-27", "valueChanged", self._on_param_changed
+        )
         self.ui.chk001.toggled.connect(self._on_param_changed)
         self.ui.chk004.toggled.connect(self.preview.refresh)
 
@@ -504,7 +512,7 @@ class CurtainSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header help text (the preset combo lives in the panel)."""
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Curtain",
                 body="Drape a pleated cloth curtain from a <b>rail</b> — a "
                 "selected NURBS curve, polygon edge loop, or chain of locators, "
@@ -512,31 +520,33 @@ class CurtainSlots(ptk.LoggingMixin):
                 steps=[
                     "Toggle <b>Preview</b> (a rail is auto-created from "
                     "Width/Curvature if you haven't selected your own).",
-                    "Set <b>Hanging Points</b> (the pleats/pins) and "
-                    "<b>Fullness</b>.",
+                    "Set <b>Hanging Points</b> (the pleats/pins) and <b>Fullness</b>.",
                     "Dial <b>Gravity</b> — how far the fabric falls between "
                     "hanging points.",
                     "Press <b>Create</b> to commit.",
                 ],
                 sections=[
-                    ("Model", [
-                        "Each <b>Hanging Point</b> is a pleat where the fabric "
-                        "pins to the rail — one clean gather at the rail — and "
-                        "bellies into a full fold between consecutive points, so "
-                        "the count maps roughly 1:1 to the folds you see. The "
-                        "spans sag down a real <b>catenary</b> (cosh).",
-                        "<b>Gravity</b> sets the sag depth (wider gaps fall "
-                        "further); <b>Catenary Tension</b> shapes that curve.",
-                        "<b>Taper</b> gathers the pleats at the top and flares "
-                        "them toward the hem.",
-                        "<b>Mid Folds</b> fork V-folds down from some hang "
-                        "points (seed varies which), breaking the plain in/out "
-                        "belly; <b>Creases</b> add diagonal V break-lines; "
-                        "<b>Sway</b> randomly leans a subset of the folds left "
-                        "or right along the rail (not just in/out); the "
-                        "<b>Ends</b> group bends each end; <b>Round</b> softens "
-                        "the hooks.",
-                    ]),
+                    (
+                        "Model",
+                        [
+                            "Each <b>Hanging Point</b> is a pleat where the fabric "
+                            "pins to the rail — one clean gather at the rail — and "
+                            "bellies into a full fold between consecutive points, so "
+                            "the count maps roughly 1:1 to the folds you see. The "
+                            "spans sag down a real <b>catenary</b> (cosh).",
+                            "<b>Gravity</b> sets the sag depth (wider gaps fall "
+                            "further); <b>Catenary Tension</b> shapes that curve.",
+                            "<b>Taper</b> gathers the pleats at the top and flares "
+                            "them toward the hem.",
+                            "<b>Mid Folds</b> fork V-folds down from some hang "
+                            "points (seed varies which), breaking the plain in/out "
+                            "belly; <b>Creases</b> add diagonal V break-lines; "
+                            "<b>Sway</b> randomly leans a subset of the folds left "
+                            "or right along the rail (not just in/out); the "
+                            "<b>Ends</b> group bends each end; <b>Round</b> softens "
+                            "the hooks.",
+                        ],
+                    ),
                 ],
                 notes=[
                     "The <b>preset</b> combo loads built-in looks "
@@ -773,7 +783,9 @@ class CurtainSlots(ptk.LoggingMixin):
         re-drape is fired, so the curtain re-centers immediately.
         """
         ours = {self._driver, self.last_curtain}
-        sel = [s for s in (cmds.ls(selection=True, flatten=True) or []) if s not in ours]
+        sel = [
+            s for s in (cmds.ls(selection=True, flatten=True) or []) if s not in ours
+        ]
         if not sel:
             self.sb.message_box("Select object(s) to center the rail on.")
             return

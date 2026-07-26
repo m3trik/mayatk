@@ -14,16 +14,23 @@ Analyzes scene objects to detect what requires baking:
 Auto-detects optimal time range from driver animation.
 Designed for Unity/game engine export workflows.
 """
+
 import math
 import collections
 from contextlib import contextmanager
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union, TYPE_CHECKING
 from dataclasses import dataclass, field
 
 try:
     from maya import cmds
 except ImportError as error:
     print(__file__, error)
+
+if TYPE_CHECKING:
+    # Resolves the ``restore()`` return annotation for type-checkers only; the
+    # real import is done lazily inside the method, keeping bake_session out of
+    # module load like the other deferred imports here.
+    from mayatk.anim_utils.smart_bake.bake_session import RestoreResult
 
 import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
@@ -136,9 +143,11 @@ class SmartBake:
     # Attributes considered for baking (override in subclass to extend).
     # Extends the shared per-axis constant with compound names so that
     # compound plugs like ".translate" are also recognised.
-    TRANSFORM_ATTRS: Set[str] = (
-        set(STANDARD_TRANSFORM_ATTRS) | {"translate", "rotate", "scale"}
-    )
+    TRANSFORM_ATTRS: Set[str] = set(STANDARD_TRANSFORM_ATTRS) | {
+        "translate",
+        "rotate",
+        "scale",
+    }
 
     # Intermediate node types to trace through when finding drivers
     # These are utility nodes that pass values through without being true "drivers"
@@ -534,10 +543,11 @@ class SmartBake:
             or []
         )
 
-        # Process pairs: [dest_plug, src_plug, dest_plug, src_plug, ...]
+        # Process pairs: [dest_plug, src_plug, dest_plug, src_plug, ...].
+        # We only need the destination plug; the driver is traced upstream from
+        # it via ``_trace_upstream_driver`` below, so the paired source is skipped.
         for i in range(0, len(connections), 2):
             dest_plug = connections[i]  # e.g., "pCube1.translateX"
-            src_plug = connections[i + 1]
 
             # Extract attribute name
             if "." not in dest_plug:
@@ -764,13 +774,13 @@ class SmartBake:
                     from mayatk.anim_utils.smart_bake import bake_session
 
                     vis_stash = (
-                        bake_session.stash_curve(child_vis_curves[0])
+                        bake_session.BakeSessionStore.stash_curve(child_vis_curves[0])
                         if child_vis_curves
                         else None
                     )
                     session["visibility"].append(
                         {
-                            "object": bake_session.node_ref(obj),
+                            "object": bake_session.BakeSessionStore.node_ref(obj),
                             "had_curve": bool(child_vis_curves),
                             "stash": vis_stash,
                             "original_value": float(original_vis),
@@ -830,7 +840,7 @@ class SmartBake:
             except Exception as e:
                 result.skipped.append(obj)
                 cmds.warning(
-                    f"SmartBake: Failed to bake inherited visibility " f"for {obj}: {e}"
+                    f"SmartBake: Failed to bake inherited visibility for {obj}: {e}"
                 )
 
     def _create_override_layer(self) -> str:
@@ -985,7 +995,7 @@ class SmartBake:
                         )
                         session["ik_handles"].append(
                             {
-                                "ref": bake_session.node_ref(handle),
+                                "ref": bake_session.BakeSessionStore.node_ref(handle),
                                 "ik_blend": float(cmds.getAttr(f"{handle}.ikBlend")),
                                 "had_incoming": had_incoming,
                             }
@@ -1091,20 +1101,23 @@ class SmartBake:
                 if not channels:
                     continue
                 session["baked_plugs"].append(
-                    {"ref": bake_session.node_ref(obj), "channels": channels}
+                    {
+                        "ref": bake_session.BakeSessionStore.node_ref(obj),
+                        "channels": channels,
+                    }
                 )
                 for channel in channels:
                     plug = f"{obj}.{channel}"
                     session["connections"].extend(
-                        bake_session.snapshot_connections(plug)
+                        bake_session.BakeSessionStore.snapshot_connections(plug)
                     )
-                    for curve in bake_session.collect_upstream_curves(
+                    for curve in bake_session.BakeSessionStore.collect_upstream_curves(
                         plug, self.PASSTHROUGH_TYPES
                     ):
                         if curve not in stashed_curve_nodes:
                             stashed_curve_nodes.add(curve)
                             session["stashed_curves"].append(
-                                bake_session.stash_curve(curve)
+                                bake_session.BakeSessionStore.stash_curve(curve)
                             )
 
         for channels, objects in grouped_by_channels.items():
@@ -1156,7 +1169,7 @@ class SmartBake:
                 if session is not None:
                     session["muted_drivers"] = [
                         {
-                            "ref": bake_session.node_ref(node),
+                            "ref": bake_session.BakeSessionStore.node_ref(node),
                             "prior_state": prior,
                         }
                         for node, prior in muted_with_states
@@ -1242,16 +1255,18 @@ class SmartBake:
         if session is not None:
             if result.baked or result.visibility_curves:
                 if override_layer and cmds.objExists(override_layer):
-                    session["override_layer"] = bake_session.node_ref(override_layer)
+                    session["override_layer"] = bake_session.BakeSessionStore.node_ref(
+                        override_layer
+                    )
                 bake_session.BakeSessionStore.push(session)
                 result.session_id = session["id"]
             else:
                 # Bake was a no-op — discard any stashes created for it.
                 for record in session["stashed_curves"]:
-                    bake_session.discard_stash(record)
+                    bake_session.BakeSessionStore.discard_stash(record)
                 for entry in session["visibility"]:
                     if entry.get("stash"):
-                        bake_session.discard_stash(entry["stash"])
+                        bake_session.BakeSessionStore.discard_stash(entry["stash"])
 
         # An object can be skipped by more than one phase — report it once.
         result.skipped = ptk.remove_duplicates(result.skipped)
@@ -1317,7 +1332,6 @@ class SmartBake:
         from mayatk.anim_utils.smart_bake.bake_session import (
             BakeSessionStore,
             RestoreResult,
-            restore_session,
         )
 
         session = BakeSessionStore.peek(session_id)
@@ -1331,7 +1345,7 @@ class SmartBake:
             cmds.warning(f"SmartBake: {result.warnings[0]}")
             return result
 
-        result = restore_session(session)
+        result = BakeSessionStore.restore_session(session)
         # Pop only after the restore pass completes — an unexpected failure
         # mid-restore leaves the session in place so it can be retried.
         BakeSessionStore.pop(session.get("id"))

@@ -219,8 +219,10 @@ class TestShadowRigSourceCreation(MayaTkTestCase):
 
         rig = ShadowRig(targets=[cube])
         rig.get_or_create_shadow_source(source_name="preexisting_source")
-        # Should reuse it, not create a duplicate
-        self.assertEqual(rig.light, "preexisting_source")
+        # Should reuse it, not create a duplicate. The reused source is stored
+        # as a full DAG path (unambiguous for the rig's downstream ops); compare
+        # by leaf name.
+        self.assertEqual(rig.light.split("|")[-1], "preexisting_source")
 
 
 if __name__ == "__main__":

@@ -52,6 +52,7 @@ class ImageToPlane(ptk.LoggingMixin):
         group_name: str = "imagePlanes_GRP",
         stingray_opacity_mode: str = "transparent",
         mask_threshold: float = 0.5,
+        roughness: float = 0.0,
     ) -> Dict[str, object]:
         """Create textured planes for one or more images.
 
@@ -74,6 +75,11 @@ class ImageToPlane(ptk.LoggingMixin):
                 ``"masked"`` uses ``Standard_Masked.sfx`` — alpha test, no preview
                 tint, hard edges at ``mask_threshold``.
             mask_threshold: Alpha cutoff for ``stingray_opacity_mode="masked"``.
+            roughness: Surface roughness for the created material.  Defaults to
+                ``0.0`` (fully smooth) so image planes read as flat, un-scattered
+                reference cards.  Applied to whichever roughness attribute the
+                chosen shader type exposes; shaders with no roughness concept
+                (lambert) are left untouched.
 
         Returns:
             dict: ``{image_stem: plane_transform, ...}``
@@ -97,6 +103,7 @@ class ImageToPlane(ptk.LoggingMixin):
                     axis=axis,
                     stingray_opacity_mode=stingray_opacity_mode,
                     mask_threshold=mask_threshold,
+                    roughness=roughness,
                 )
                 stem = os.path.splitext(os.path.basename(path))[0]
                 results[stem] = plane
@@ -190,6 +197,7 @@ class ImageToPlane(ptk.LoggingMixin):
         prefix="",
         stingray_opacity_mode="transparent",
         mask_threshold=0.5,
+        roughness=0.0,
     ):
         """Create one plane + material from a single image path."""
         stem = os.path.splitext(os.path.basename(image_path))[0]
@@ -220,6 +228,9 @@ class ImageToPlane(ptk.LoggingMixin):
             stingray_opacity_mode=stingray_opacity_mode,
         )
 
+        # --- Roughness ---
+        cls._set_roughness(shader, roughness)
+
         # --- Connect texture → shader ---
         cls._connect_texture(
             shader, file_node, mat_type, opacity=has_alpha,
@@ -249,6 +260,25 @@ class ImageToPlane(ptk.LoggingMixin):
             return MatUtils._create_standard_shader(name=name, return_type="shader")
         # Explicit node type (lambert / blinn / phong / standardSurface / ...)
         return cmds.shadingNode(mat_type, asShader=True, name=name)
+
+    @staticmethod
+    def _set_roughness(shader, value):
+        """Set the shader's roughness, adapting to the attribute it exposes.
+
+        StingrayPBS graphs expose scalar ``roughness``; ``standardSurface`` uses
+        ``specularRoughness`` (the two are mutually exclusive per shader type).
+        Shaders with no roughness concept (lambert) are skipped silently.
+        """
+        if value is None:
+            return
+        # First existing attr wins; the names never coexist on one node.
+        for attr in ("roughness", "specularRoughness"):
+            if cmds.attributeQuery(attr, node=shader, exists=True):
+                try:
+                    cmds.setAttr(f"{shader}.{attr}", value)
+                except Exception:
+                    pass
+                return
 
     @staticmethod
     def _connect_texture(

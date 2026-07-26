@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import List, Dict, Optional, Callable, Union, Any
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # From this package:
 from mayatk.env_utils._env_utils import EnvUtils
@@ -292,7 +292,7 @@ class SceneExporter(ptk.LoggingMixin):
                 # reflects the conversion time too.
                 elapsed = time.time() - start_time
                 export_info_lines = [
-                    f"✓ File written successfully",
+                    "✓ File written successfully",
                     "",
                     f"Path: {deliverable_path}",
                     f"Duration: {elapsed:.1f}s",
@@ -479,9 +479,7 @@ class SceneExporter(ptk.LoggingMixin):
                 return "x"
 
         try:
-            test_name = internal_format.format_map(
-                _Dummy(stem="test", n=1, ext=ext)
-            )
+            test_name = internal_format.format_map(_Dummy(stem="test", n=1, ext=ext))
             test_stem = os.path.splitext(test_name)[0]
             if not HierarchySidecar.VERSION_SUFFIX_RE.search(test_stem):
                 self.logger.warning(
@@ -493,13 +491,9 @@ class SceneExporter(ptk.LoggingMixin):
             self.logger.warning(f"Could not validate version format: {e}")
 
         try:
-            new_path = ptk.FileUtils.next_version_path(
-                path, format=internal_format
-            )
+            new_path = ptk.FileUtils.next_version_path(path, format=internal_format)
         except ValueError as e:
-            self.logger.error(
-                f"Version format invalid: {e}. Versioning skipped."
-            )
+            self.logger.error(f"Version format invalid: {e}. Versioning skipped.")
             return path
 
         self.logger.info(
@@ -639,7 +633,6 @@ class SceneExporter(ptk.LoggingMixin):
 
 
 class SceneExporterSlots(SceneExporter):
-
     _log_level_options: Dict[str, Any] = {
         "Log Level: DEBUG": 10,
         "Log Level: INFO": 20,
@@ -765,7 +758,7 @@ class SceneExporterSlots(SceneExporter):
             setToolTip="Set the log level.",
         )
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Scene Exporter",
                 body="Batch-export scene objects to FBX using configurable "
                 "task pipelines and YAML presets.",
@@ -776,12 +769,15 @@ class SceneExporterSlots(SceneExporter):
                     "Press the export action button to run.",
                 ],
                 sections=[
-                    ("Header menu", [
-                        "<b>Create Log File</b> — write a sidecar log next to "
-                        "each FBX.",
-                        "<b>Log Level</b> — DEBUG / INFO / WARNING / ERROR / "
-                        "CRITICAL output verbosity.",
-                    ]),
+                    (
+                        "Header menu",
+                        [
+                            "<b>Create Log File</b> — write a sidecar log next to "
+                            "each FBX.",
+                            "<b>Log Level</b> — DEBUG / INFO / WARNING / ERROR / "
+                            "CRITICAL output verbosity.",
+                        ],
+                    ),
                 ],
             )
         )
@@ -798,7 +794,6 @@ class SceneExporterSlots(SceneExporter):
             widget.restore_by = "text"
 
             # Determine initial state
-            current_dir = self.ui.settings.value("preset_dir")
             try:
                 default_dir = EnvUtils.get_env_info("user_app_path")
             except Exception:
@@ -1129,7 +1124,7 @@ class SceneExporterSlots(SceneExporter):
         export_tasks = {**task_params, **check_params}
         export_tasks["output_format"] = self.ui.cmb004.currentData()
 
-        export_successful = self.perform_export(
+        self.perform_export(
             objects=objects_to_export,
             export_dir=self.ui.txt000.text(),
             preset_file=self.ui.cmb000.currentData(),
@@ -1228,9 +1223,7 @@ class SceneExporterSlots(SceneExporter):
         def _launch_editor():
             if not cmds.window("gameExporterWindow", exists=True):
                 try:
-                    mel.eval(
-                        'FBXUICallBack -1 "editExportPresetInNewWindow" "fbx"'
-                    )
+                    mel.eval('FBXUICallBack -1 "editExportPresetInNewWindow" "fbx"')
                 except Exception as e:
                     self.logger.error(
                         f"Failed to open the FBX export preset editor: {e}"

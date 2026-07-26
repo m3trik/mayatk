@@ -11,11 +11,12 @@ except ImportError as error:
     print(__file__, error)
 import math
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # from this package:
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.core_utils.preview import Preview
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 
 
@@ -35,7 +36,11 @@ class DuplicateLinear:
     ):
         originals_to_copies = {}
 
-        for node in objects:
+        for orig in CoreUtils.as_strings(objects):
+            # Resolve to a full path for the scene ops below (instance/duplicate/
+            # xform) so an ambiguous short name can't operate on the wrong
+            # same-named object; the result stays keyed by the caller's ref.
+            node = (cmds.ls(orig, long=True) or [orig])[0]
             copies = []
 
             # Get the pivot matrix (Orientation + Position) using the centralized utility
@@ -122,7 +127,7 @@ class DuplicateLinear:
 
                 copies.append(dup)
 
-            originals_to_copies[node] = copies
+            originals_to_copies[orig] = copies
 
         return originals_to_copies
 
@@ -224,7 +229,7 @@ class DuplicateLinearSlots:
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Duplicate Linear",
                 body="Duplicate selected objects along a linear path with "
                 "per-copy translate, rotate, and scale offsets.",

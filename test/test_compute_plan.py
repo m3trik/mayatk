@@ -6,6 +6,7 @@ Validates that _compute_plan produces correct positions and that
 _execute_plan commits them faithfully. These tests run inside Maya
 to exercise the real ShotStore and sequencer.
 """
+
 import os
 import struct
 import sys
@@ -32,7 +33,7 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     BuilderObject,
     ShotManifest,
 )
-from mayatk.anim_utils.shots.shot_manifest.behaviors import compute_duration
+from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
 _TEMP_DIR = os.path.join(scripts_dir, "mayatk", "test", "temp_tests")
 
@@ -304,7 +305,7 @@ class TestExecutePlan(MayaTkTestCase):
             self.assertGreaterEqual(
                 shots[i + 1].start,
                 shots[i].end,
-                f"Shot {shots[i+1].name} overlaps {shots[i].name}",
+                f"Shot {shots[i + 1].name} overlaps {shots[i].name}",
             )
 
 
@@ -356,7 +357,7 @@ class TestCumulativeRipple(MayaTkTestCase):
 
         # Mock compute_duration to return 50 frames for audio objects
         # (S1 is currently 29 frames, so it should grow by 21)
-        original_compute = compute_duration
+        original_compute = Behaviors.compute_duration
 
         def mock_compute(entries, fallback=30, fps=None):
             for e in entries:
@@ -370,7 +371,7 @@ class TestCumulativeRipple(MayaTkTestCase):
             return original_compute(entries, fallback=fallback, fps=fps)
 
         with patch(
-            "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+            "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
             side_effect=mock_compute,
         ):
             plan = self.manifest._compute_plan(steps)
@@ -420,7 +421,7 @@ class TestCumulativeRipple(MayaTkTestCase):
             _step("S3", objects=["obj_S3"]),
         ]
 
-        original_compute = compute_duration
+        original_compute = Behaviors.compute_duration
 
         def mock_compute(entries, fallback=30, fps=None):
             for e in entries:
@@ -434,7 +435,7 @@ class TestCumulativeRipple(MayaTkTestCase):
             return original_compute(entries, fallback=fallback, fps=fps)
 
         with patch(
-            "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+            "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
             side_effect=mock_compute,
         ):
             self.manifest.update(steps)
@@ -473,17 +474,17 @@ class TestComputeDurationPhaseLayout(MayaTkTestCase):
     def test_single_fade_in(self):
         """One object with fade_in → 15 frames."""
         objs = [BuilderObject(name="A", behaviors=["fade_in"])]
-        self.assertEqual(compute_duration(objs), 15.0)
+        self.assertEqual(Behaviors.compute_duration(objs), 15.0)
 
     def test_single_fade_out(self):
         """One object with fade_out → 15 frames."""
         objs = [BuilderObject(name="A", behaviors=["fade_out"])]
-        self.assertEqual(compute_duration(objs), 15.0)
+        self.assertEqual(Behaviors.compute_duration(objs), 15.0)
 
     def test_same_object_both_phases(self):
         """One object with fade_in + fade_out → 30 frames (sum)."""
         objs = [BuilderObject(name="A", behaviors=["fade_in", "fade_out"])]
-        self.assertEqual(compute_duration(objs), 30.0)
+        self.assertEqual(Behaviors.compute_duration(objs), 30.0)
 
     def test_different_objects_opposite_phases(self):
         """Object A: fade_in, Object B: fade_out → 30 frames (not 15).
@@ -495,7 +496,7 @@ class TestComputeDurationPhaseLayout(MayaTkTestCase):
             BuilderObject(name="A", behaviors=["fade_in"]),
             BuilderObject(name="B", behaviors=["fade_out"]),
         ]
-        dur = compute_duration(objs)
+        dur = Behaviors.compute_duration(objs)
         self.assertEqual(dur, 30.0, "Shot must fit in-phase (15) + out-phase (15)")
 
     def test_multiple_objects_mixed_phases(self):
@@ -507,7 +508,7 @@ class TestComputeDurationPhaseLayout(MayaTkTestCase):
             BuilderObject(name="A", behaviors=["fade_in", "fade_out"]),
             BuilderObject(name="B", behaviors=["fade_in"]),
         ]
-        self.assertEqual(compute_duration(objs), 30.0)
+        self.assertEqual(Behaviors.compute_duration(objs), 30.0)
 
     def test_no_behavior_objects_ignored_in_phase_total(self):
         """Plain objects (no behaviors) must not affect phase_total.
@@ -521,7 +522,7 @@ class TestComputeDurationPhaseLayout(MayaTkTestCase):
             BuilderObject(name="ARROW_B", behaviors=["fade_in"]),
         ]
         # Only the behavior objects matter: in=15 + out=15 = 30
-        self.assertEqual(compute_duration(objs), 30.0)
+        self.assertEqual(Behaviors.compute_duration(objs), 30.0)
 
     def test_single_behavior_among_plain_objects(self):
         """One behavior object among several plain objects → behavior wins."""
@@ -530,16 +531,16 @@ class TestComputeDurationPhaseLayout(MayaTkTestCase):
             BuilderObject(name="B", behaviors=[]),
             BuilderObject(name="C", behaviors=["fade_in"]),
         ]
-        self.assertEqual(compute_duration(objs), 15.0)
+        self.assertEqual(Behaviors.compute_duration(objs), 15.0)
 
     def test_no_behaviors_returns_fallback(self):
         """Objects without behaviors return the fallback (30)."""
         objs = [BuilderObject(name="A", behaviors=[])]
-        self.assertEqual(compute_duration(objs), 30.0)
+        self.assertEqual(Behaviors.compute_duration(objs), 30.0)
 
     def test_empty_list_returns_fallback(self):
         """No entries at all returns the fallback."""
-        self.assertEqual(compute_duration([]), 30.0)
+        self.assertEqual(Behaviors.compute_duration([]), 30.0)
 
 
 class TestAnchorSingleBehavior(MayaTkTestCase):
@@ -558,7 +559,7 @@ class TestAnchorSingleBehavior(MayaTkTestCase):
 
     def test_fade_out_placed_at_end(self):
         """A fade_out on a single-behavior object must key at the END."""
-        from mayatk.anim_utils.shots.shot_manifest.behaviors import apply_to_shots
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
         # Create a scene object
         cube = cmds.polyCube(name="test_cube")[0]
@@ -583,9 +584,7 @@ class TestAnchorSingleBehavior(MayaTkTestCase):
         )
         shot = self.store.sorted_shots()[0]
 
-        from mayatk.anim_utils.shots.shot_manifest.behaviors import apply_behavior
-
-        result = apply_to_shots([shot], apply_fn=apply_behavior)
+        result = Behaviors.apply_to_shots([shot], apply_fn=Behaviors.apply_behavior)
         self.assertTrue(len(result["applied"]) > 0, "Behavior must be applied")
 
         # Fade_out should key at the END of the shot (frames 16-31),
@@ -606,10 +605,7 @@ class TestAnchorSingleBehavior(MayaTkTestCase):
 
     def test_fade_in_still_at_start(self):
         """A fade_in on a single-behavior object remains at the START."""
-        from mayatk.anim_utils.shots.shot_manifest.behaviors import (
-            apply_to_shots,
-            apply_behavior,
-        )
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
         cube = cmds.polyCube(name="test_cube_in")[0]
 
@@ -632,7 +628,7 @@ class TestAnchorSingleBehavior(MayaTkTestCase):
         )
         shot = self.store.sorted_shots()[0]
 
-        apply_to_shots([shot], apply_fn=apply_behavior)
+        Behaviors.apply_to_shots([shot], apply_fn=Behaviors.apply_behavior)
 
         keys = (
             cmds.keyframe(cube, attribute="visibility", query=True, timeChange=True)
@@ -645,10 +641,7 @@ class TestAnchorSingleBehavior(MayaTkTestCase):
 
     def test_multi_behavior_object_still_distributed(self):
         """Objects with 2+ behaviors still get positional distribution."""
-        from mayatk.anim_utils.shots.shot_manifest.behaviors import (
-            apply_to_shots,
-            apply_behavior,
-        )
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
         cube = cmds.polyCube(name="test_cube_multi")[0]
 
@@ -678,9 +671,9 @@ class TestAnchorSingleBehavior(MayaTkTestCase):
         shot = self.store.sorted_shots()[0]
 
         # Bypass the has-keys guard so both behaviors are applied.
-        result = apply_to_shots(
+        result = Behaviors.apply_to_shots(
             [shot],
-            apply_fn=apply_behavior,
+            apply_fn=Behaviors.apply_behavior,
             has_keys_fn=lambda *a, **kw: False,
         )
         self.assertEqual(len(result["applied"]), 2, "Both behaviors must be applied")

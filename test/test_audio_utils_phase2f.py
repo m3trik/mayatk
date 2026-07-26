@@ -8,7 +8,7 @@ Covers:
 - ``rename_track`` — attr + enum + file_map rename
 - ``migrate_legacy_triggers`` — one-shot schema migration
 """
-import os
+
 import sys
 import json
 import unittest
@@ -84,9 +84,7 @@ class TestBakeEvents(MayaTkTestCase):
         _events.write_key("jump", 24, value=1)
         _events.write_key("footstep", 12, value=1)
         # Output is time-ordered across tracks.
-        self.assertEqual(
-            _events.bake_events(), [(12, "footstep"), (24, "jump")]
-        )
+        self.assertEqual(_events.bake_events(), [(12, "footstep"), (24, "jump")])
 
     def test_stop_keys_excluded(self):
         _events.ensure_track_attr("footstep")
@@ -105,9 +103,7 @@ class TestBakeEvents(MayaTkTestCase):
         _events.write_key("footstep", 12, value=1)
         _events.write_key("footstep", 30, value=0)
         _events.write_key("footstep", 40, value=1)
-        self.assertEqual(
-            _events.bake_events(), [(12, "footstep"), (40, "footstep")]
-        )
+        self.assertEqual(_events.bake_events(), [(12, "footstep"), (40, "footstep")])
 
     def test_frames_are_ints(self):
         """Raw Maya frames round to int — rebasing is the caller's policy."""
@@ -207,9 +203,9 @@ class TestMigrateLegacyTriggers(MayaTkTestCase):
 
     def test_detect_legacy_on_plain_obj(self):
         obj = cmds.spaceLocator(name="legacy_obj")[0]
-        self.assertFalse(_migrate.detect_legacy(obj))
+        self.assertFalse(_migrate.Migrate.detect_legacy(obj))
         self._make_legacy(obj)
-        self.assertTrue(_migrate.detect_legacy(obj))
+        self.assertTrue(_migrate.Migrate.detect_legacy(obj))
 
     def test_migrates_start_keys_to_per_track(self):
         obj = cmds.spaceLocator(name="legacy_obj")[0]
@@ -218,7 +214,7 @@ class TestMigrateLegacyTriggers(MayaTkTestCase):
             events=("Footstep", "Jump"),
             keys=[(10, "Footstep"), (20, "Jump")],
         )
-        tids = _migrate.migrate_legacy_triggers(obj)
+        tids = _migrate.Migrate.migrate_legacy_triggers(obj)
         self.assertEqual(sorted(tids), ["footstep", "jump"])
         self.assertTrue(_events.has_track("footstep"))
         self.assertTrue(_events.has_track("jump"))
@@ -232,7 +228,7 @@ class TestMigrateLegacyTriggers(MayaTkTestCase):
             events=("Footstep",),
             keys=[(10, "Footstep"), (25, "None")],
         )
-        _migrate.migrate_legacy_triggers(obj)
+        _migrate.Migrate.migrate_legacy_triggers(obj)
         keys = _events.read_keys("footstep")
         vals = [int(v) for _, v in keys]
         self.assertEqual(vals, [1, 0])
@@ -245,7 +241,7 @@ class TestMigrateLegacyTriggers(MayaTkTestCase):
             keys=[(10, "Footstep")],
             file_map={"footstep": "/audio/foot.wav"},
         )
-        _migrate.migrate_legacy_triggers(obj)
+        _migrate.Migrate.migrate_legacy_triggers(obj)
         self.assertEqual(_file_map.get_path("footstep"), "/audio/foot.wav")
 
     def test_removes_legacy_attrs(self):
@@ -255,7 +251,7 @@ class TestMigrateLegacyTriggers(MayaTkTestCase):
             events=("Footstep",),
             keys=[(10, "Footstep")],
         )
-        _migrate.migrate_legacy_triggers(obj)
+        _migrate.Migrate.migrate_legacy_triggers(obj)
         self.assertFalse(cmds.attributeQuery("audio_trigger", node=obj, exists=True))
 
     def test_keep_old_attrs_flag(self):
@@ -265,7 +261,7 @@ class TestMigrateLegacyTriggers(MayaTkTestCase):
             events=("Footstep",),
             keys=[(10, "Footstep")],
         )
-        _migrate.migrate_legacy_triggers(obj, keep_old_attrs=True)
+        _migrate.Migrate.migrate_legacy_triggers(obj, keep_old_attrs=True)
         self.assertTrue(cmds.attributeQuery("audio_trigger", node=obj, exists=True))
 
     def test_preserves_canonical_file_map_on_data_internal(self):
@@ -281,7 +277,7 @@ class TestMigrateLegacyTriggers(MayaTkTestCase):
             keys=[(10, "Footstep")],
             file_map={"footstep": "/audio/foot.wav"},
         )
-        _migrate.migrate_legacy_triggers(carrier_name)
+        _migrate.Migrate.migrate_legacy_triggers(carrier_name)
         # audio_file_map must still exist (it's the new canonical home).
         self.assertTrue(
             cmds.attributeQuery(_schema.FILE_MAP_ATTR, node=carrier_name, exists=True)
@@ -290,7 +286,7 @@ class TestMigrateLegacyTriggers(MayaTkTestCase):
     def test_no_keys_returns_empty(self):
         obj = cmds.spaceLocator(name="legacy_obj")[0]
         self._make_legacy(obj, events=("Footstep",), keys=[])
-        self.assertEqual(_migrate.migrate_legacy_triggers(obj), [])
+        self.assertEqual(_migrate.Migrate.migrate_legacy_triggers(obj), [])
 
     def test_preserves_unlocked_state(self):
         """Regression: migration must not silently lock an unlocked obj."""
@@ -301,7 +297,7 @@ class TestMigrateLegacyTriggers(MayaTkTestCase):
             events=("Footstep",),
             keys=[(10, "Footstep")],
         )
-        _migrate.migrate_legacy_triggers(obj)
+        _migrate.Migrate.migrate_legacy_triggers(obj)
         self.assertFalse(
             cmds.lockNode(obj, q=True, lock=True)[0],
             "Migration locked a previously unlocked node.",
@@ -315,7 +311,7 @@ class TestMigrateLegacyTriggers(MayaTkTestCase):
             keys=[(10, "Footstep")],
         )
         cmds.lockNode(obj, lock=True, lockName=True)
-        _migrate.migrate_legacy_triggers(obj)
+        _migrate.Migrate.migrate_legacy_triggers(obj)
         # The obj still exists (wasn't deleted) and is still locked.
         self.assertTrue(cmds.objExists(str(obj)))
         self.assertTrue(cmds.lockNode(obj, q=True, lock=True)[0])

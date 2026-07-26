@@ -12,7 +12,7 @@ import string
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils._core_utils import CoreUtils, as_strings
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 
@@ -24,9 +24,7 @@ class Naming(ptk.HelpMixin):
     @CoreUtils.undoable
     def rename(
         cls,
-        objects: Union[
-            str, "object", List[Union[str, "object"]]
-        ],
+        objects: Union[str, "object", List[Union[str, "object"]]],
         to: str,
         fltr: str = "",
         regex: bool = False,
@@ -69,20 +67,23 @@ class Naming(ptk.HelpMixin):
             rename(['pCube1'], '*GEO', retain_suffix=True) # Appends the original suffix (e.g. _GEO) to the new name.
         """
 
-        objects = cmds.ls(as_strings(objects), flatten=True)
+        objects = cmds.ls(CoreUtils.as_strings(objects), flatten=True, long=True)
 
-        # Create a mapping of short names to a LIST of their objects
-        # This prevents issues when renaming changes hierarchy paths and handles duplicates
+        # Map each short name to a LIST of (original_long_path, uuid) pairs.
+        # The short-name key must match ``find_str_and_format``'s oldName output
+        # (which operates on short names); the UUID makes the batch rename immune
+        # to both duplicate leaf names AND intra-batch hierarchy changes (an
+        # earlier rename can invalidate a cached long path, so the object is
+        # re-resolved from its UUID at rename time).
         short_name_to_objs = {}
         short_names = []
         for obj in objects:
-            long_name = obj.split('|')[-1].split(':')[-1]
+            long_name = obj.split("|")[-1].split(":")[-1]
             _, short_name = ptk.split_delimited_string(long_name, occurrence=-1)
             short_name = short_name if short_name else long_name
 
-            if short_name not in short_name_to_objs:
-                short_name_to_objs[short_name] = []
-            short_name_to_objs[short_name].append(obj)
+            uuid = (cmds.ls(obj, uuid=True) or [None])[0]
+            short_name_to_objs.setdefault(short_name, []).append((obj, uuid))
             short_names.append(short_name)
 
         # Handle empty filter case which causes crashes
@@ -174,9 +175,12 @@ class Naming(ptk.HelpMixin):
             # Using the object reference instead of cached paths prevents issues
             # when earlier renames in the batch change the hierarchy
             if oldName in short_name_to_objs and short_name_to_objs[oldName]:
-                obj = short_name_to_objs[oldName].pop(0)
+                obj, uuid = short_name_to_objs[oldName].pop(0)
+                # Re-resolve from the UUID: an earlier rename in this batch may
+                # have changed this object's DAG path since it was captured.
+                target = (cmds.ls(uuid, long=True) or [obj])[0] if uuid else obj
                 try:
-                    n = cmds.rename(obj, newName)  # Rename using the object reference
+                    n = cmds.rename(target, newName)  # Rename via the current path
                     if not n == newName:
                         cmds.warning(
                             f"'{oldName}' renamed to: '{n}' instead of '{newName}'"
@@ -186,7 +190,7 @@ class Naming(ptk.HelpMixin):
                     rename_map[obj] = n
                     count += 1
                 except Exception as e:
-                    if not cmds.ls(obj, readOnly=True) == []:  # Ignore read-only errors
+                    if not cmds.ls(target, readOnly=True) == []:  # Ignore read-only
                         print(f"// Error: renaming '{oldName}' to '{newName}': {e}")
                     rename_map[obj] = obj
             else:
@@ -273,10 +277,10 @@ class Naming(ptk.HelpMixin):
         Returns:
             List[str]: New names assigned.
         """
-        objects = cmds.ls(objects, flatten=True)
+        objects = cmds.ls(objects, flatten=True, long=True)
         name_pairs = []
         for obj in objects:
-            s = obj.split('|')[-1].split('|')[-1]
+            s = obj.split("|")[-1].split("|")[-1]
             if num_chars > len(s):
                 cmds.warning(
                     f'Cannot remove {num_chars} characters from "{s}" as it is shorter than {num_chars} characters.'
@@ -322,7 +326,7 @@ class Naming(ptk.HelpMixin):
         Example:
             set_case(cmds.ls(sl=1), 'upper')
         """
-        for obj in cmds.ls(objects) if objects else cmds.ls():
+        for obj in cmds.ls(objects, long=True) if objects else cmds.ls(long=True):
             leaf = obj.split("|")[-1].split(":")[-1]
             new_name = getattr(leaf, case)()
             try:
@@ -391,11 +395,11 @@ class Naming(ptk.HelpMixin):
         if strip:
             all_suffixes.update(ptk.make_iterable(strip))
 
-        objects = cmds.ls(objects, flatten=True)
+        objects = cmds.ls(objects, flatten=True, long=True)
         name_pairs = []
 
         for obj in objects:
-            short_name = obj.split('|')[-1].split('|')[-1]
+            short_name = obj.split("|")[-1].split("|")[-1]
             # Use NodeUtils for object type resolution
             typ = NodeUtils.get_type(obj)
             target_suffix = default_map.get(typ, "")
@@ -476,7 +480,7 @@ class Naming(ptk.HelpMixin):
             independent_groups (bool): When True, objects matching the same base name (after stripping) are grouped and suffixed independently.
         """
 
-        objects = cmds.ls(as_strings(objects), flatten=True)
+        objects = cmds.ls(CoreUtils.as_strings(objects), flatten=True)
         if not objects:
             return
 
@@ -534,7 +538,7 @@ class Naming(ptk.HelpMixin):
             for obj in objects:
                 # Use nodeName() to ignore namespace/path for grouping purposes
                 # This ensures similar objects in different hierarchies are grouped together
-                short_name = obj.split('|')[-1]
+                short_name = obj.split("|")[-1]
                 base_name = get_base_name(short_name)
 
                 if base_name not in groups:
@@ -598,7 +602,7 @@ class Naming(ptk.HelpMixin):
                 ]  # 1-based index
 
             for n, obj in enumerate(ordered_objs):
-                base_name = get_base_name(obj.split('|')[-1].split(':')[-1])
+                base_name = get_base_name(obj.split("|")[-1].split(":")[-1])
                 obj_suffix = suffix_list[n]
                 newNames[obj] = base_name + "_" + obj_suffix
 

@@ -23,6 +23,7 @@ it captures + restores every key the shipped styles can touch (derived from the 
 new style key can't silently leak), purely for test hygiene — not by resurrecting the removed
 production API.
 """
+
 import unittest
 
 import mayatk as mtk
@@ -43,8 +44,8 @@ def _shipped_key_surface():
     restore-counterpart contract test) can never drift from what ships.
     """
     rgb, display = set(), set()
-    for name in ss.list_styles():
-        style = ss._load_style(name)
+    for name in ss.StyleSetter.list_styles():
+        style = ss.StyleSetter._load_style(name)
         rgb |= set(style.get("rgb", {}))
         for dc_name, spec in style.get("display_color", {}).items():
             display |= {(dc_name, state) for state in spec}
@@ -79,25 +80,35 @@ class TestStyleSetter(QuickTestCase):
         self.assertFalse(hasattr(mtk, "list_styles"))
 
     def test_list_styles_ships_blender_and_maya(self):
-        self.assertEqual(ss.list_styles(), ["Blender", "Maya"])
+        self.assertEqual(ss.StyleSetter.list_styles(), ["Blender", "Maya"])
 
     def test_unknown_style_raises(self):
         with self.assertRaises(FileNotFoundError):
-            ss.set_style("ZZNoSuchStyle")
+            ss.StyleSetter.set_style("ZZNoSuchStyle")
 
     def test_no_backup_restore_api(self):
         """Backup/restore was removed 2026-07-05 — Maya's own colors are never snapshotted; the
         shipped 'Maya' factory style is the revert target, not a live snapshot mechanism."""
-        for name in ("BACKUP_NAME", "ensure_backup", "backup_current", "has_backup", "backup_dir", "backup_path", "restore_default_style"):
+        for name in (
+            "BACKUP_NAME",
+            "ensure_backup",
+            "backup_current",
+            "has_backup",
+            "backup_dir",
+            "backup_path",
+            "restore_default_style",
+        ):
             self.assertFalse(hasattr(ss, name), f"ss.{name} should be gone")
-            self.assertFalse(hasattr(mtk.StyleSetter, name), f"StyleSetter.{name} should be gone")
+            self.assertFalse(
+                hasattr(mtk.StyleSetter, name), f"StyleSetter.{name} should be gone"
+            )
 
     def test_maya_style_mirrors_blender_key_surface(self):
         """The 'Maya' style is the factory-restore counterpart of 'Blender': it must define
         exactly the same rgb keys and display_color name/state entries, or switching between the
         two leaves some keys un-restored (the whole point of shipping it)."""
-        blender = ss._load_style("Blender")
-        maya = ss._load_style("Maya")
+        blender = ss.StyleSetter._load_style("Blender")
+        maya = ss.StyleSetter._load_style("Maya")
         self.assertEqual(set(maya["rgb"]), set(blender["rgb"]))
         self.assertEqual(set(maya["display_color"]), set(blender["display_color"]))
         for name, spec in blender["display_color"].items():
@@ -134,7 +145,7 @@ class TestStyleSetter(QuickTestCase):
         """The Blender→Maya round-trip: applying 'Maya' after 'Blender' must land every key on
         the Maya style's stored (factory) values — the in-repo version of the live capture that
         produced the file (verified against a virgin-prefs Maya 2025.3, 2026-07-09)."""
-        maya_style = ss._load_style("Maya")
+        maya_style = ss.StyleSetter._load_style("Maya")
 
         mtk.StyleSetter.set_style("Blender")
         mtk.StyleSetter.set_style("Maya")

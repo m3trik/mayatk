@@ -56,14 +56,18 @@ class TestDisplayUtils(MayaTkTestCase):
         """Test getting visible geometry in scene."""
         result = mtk.get_visible_geometry()
         self.assertIsInstance(result, list)
-        self.assertIn(self.cube, result)
+        # get_visible_geometry returns full DAG paths (unambiguous under
+        # duplicate leaf names); compare by leaf name.
+        self.assertIn(self.cube, [r.split("|")[-1] for r in result])
 
     def test_get_visible_geometry_shapes_mode(self):
         """Regression: shapes=True compared nodeType (concrete: 'mesh') to
         the abstract type 'geometry', so it ALWAYS returned []."""
         result = mtk.get_visible_geometry(shapes=True)
-        self.assertIn("test_display_cubeShape", result)
-        self.assertIn("test_display_sphereShape", result)
+        # Returns full DAG paths; compare by leaf name.
+        leaves = [r.split("|")[-1] for r in result]
+        self.assertIn("test_display_cubeShape", leaves)
+        self.assertIn("test_display_sphereShape", leaves)
         # Intermediate (Orig) shapes must not appear.
         for s in result:
             self.assertFalse(

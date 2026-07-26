@@ -40,18 +40,10 @@ from mayatk.mat_utils.marmoset_bridge._marmoset_bridge import (
     SEND_TO,
     ROUNDTRIP,
     _TEMPLATE_DIR,
-    list_templates,
-    list_template_modes,
-    template_modes,
-    build_bake_pairs_manifest,
 )
+
 # Log helpers are bundled in the marmoset_bridge subpackage alongside the engine.
-from mayatk.mat_utils.marmoset_bridge.toolbag_log import (
-    resolve_toolbag_log_path,
-    classify_log_line,
-    dispatch_log_lines,
-    start_toolbag_log_tail,
-)
+from mayatk.mat_utils.marmoset_bridge.toolbag_log import ToolbagLog
 from mayatk.mat_utils.marmoset_bridge import parameters as _params
 
 
@@ -228,7 +220,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
 
     def test_every_bundled_template_renders_and_parses(self):
         """Each bundled template, rendered with defaults, must parse as Python."""
-        templates = sorted(p.stem for p in list_templates())
+        templates = sorted(p.stem for p in MarmosetEngine.list_templates())
         self.assertTrue(templates, "No bundled templates found.")
 
         bridge = MarmosetBridge()
@@ -280,7 +272,10 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
 
     def test_bridge_modes_per_template(self):
         """Each bundled template declares the modes we expect."""
-        modes = {p.stem: template_modes(p) for p in list_templates()}
+        modes = {
+            p.stem: MarmosetEngine.template_modes(p)
+            for p in MarmosetEngine.list_templates()
+        }
         self.assertEqual(modes.get("import"), (SEND_TO,))
         self.assertEqual(modes.get("lookdev"), (SEND_TO,))
         # bake supports both -- order matters: it's the source of truth for
@@ -289,7 +284,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
 
     def test_list_template_modes_expands_dual_mode(self):
         """list_template_modes() yields one (stem, mode) per declared mode."""
-        pairs = list_template_modes()
+        pairs = MarmosetEngine.list_template_modes()
         self.assertIn(("import", SEND_TO), pairs)
         self.assertIn(("lookdev", SEND_TO), pairs)
         self.assertIn(("bake", SEND_TO), pairs)
@@ -361,7 +356,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         with unittest.mock.patch.object(
             mock_cmds, "listRelatives", side_effect=_list_relatives
         ):
-            out = build_bake_pairs_manifest(
+            out = MarmosetBridge.build_bake_pairs_manifest(
                 ["|bake_high", "|bake_low", "|loose_low"], "_high", "_low"
             )
 
@@ -381,7 +376,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         with unittest.mock.patch.object(
             mock_cmds, "listRelatives", return_value=[]
         ) as mock_lr:
-            out = build_bake_pairs_manifest(["|anything"], "", "")
+            out = MarmosetBridge.build_bake_pairs_manifest(["|anything"], "", "")
             self.assertEqual(out, {})
             mock_lr.assert_not_called()
 
@@ -456,7 +451,7 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
     def test_parameters_referenced_keys(self):
         """referenced_keys returns only the registered placeholders a template uses."""
         bake = (_TEMPLATE_DIR / "bake.py").read_text(encoding="utf-8")
-        used = _params.referenced_keys(bake)
+        used = _params.Parameters.referenced_keys(bake)
         # bake.py exposes the bake-* and MAP_* + high/low knobs.
         for must_be_present in (
             "BAKE_SIZE",
@@ -486,6 +481,7 @@ class TestResolveToolbagLogPath(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         self._env_patch.stop()
         shutil.rmtree(self._fake_localappdata, ignore_errors=True)
 
@@ -498,6 +494,7 @@ class TestResolveToolbagLogPath(unittest.TestCase):
             fh.write("stub")
         if mtime_offset:
             import time
+
             t = time.time() + mtime_offset
             os.utime(p, (t, t))
         return p
@@ -512,7 +509,7 @@ class TestResolveToolbagLogPath(unittest.TestCase):
         )
         exe = r"C:\Program Files\Marmoset\Toolbag 5\toolbag.exe"
         self.assertEqual(
-            os.path.normpath(resolve_toolbag_log_path(exe)),
+            os.path.normpath(ToolbagLog.resolve_toolbag_log_path(exe)),
             os.path.normpath(expected),
         )
 
@@ -524,7 +521,7 @@ class TestResolveToolbagLogPath(unittest.TestCase):
         )
         exe = r"C:\Custom\Marmoset Toolbag 5\toolbag.exe"
         self.assertEqual(
-            os.path.normpath(resolve_toolbag_log_path(exe)),
+            os.path.normpath(ToolbagLog.resolve_toolbag_log_path(exe)),
             os.path.normpath(expected),
         )
 
@@ -533,24 +530,26 @@ class TestResolveToolbagLogPath(unittest.TestCase):
         expected = self._make_log("6")
         exe = r"D:\custom\Marmoset Toolbag 6\toolbag.exe"
         self.assertEqual(
-            os.path.normpath(resolve_toolbag_log_path(exe)),
+            os.path.normpath(ToolbagLog.resolve_toolbag_log_path(exe)),
             os.path.normpath(expected),
         )
 
     def test_tier2_falls_back_to_newest_localappdata_log(self):
         """No version in exe path -> scan LOCALAPPDATA, newest log wins."""
-        self._make_log("4", mtime_offset=-3600)   # 1h old
+        self._make_log("4", mtime_offset=-3600)  # 1h old
         newer = self._make_log("5", mtime_offset=0)
         exe = r"D:\nonstandard\bin\toolbag.exe"  # no 'Marmoset Toolbag N'
         self.assertEqual(
-            os.path.normpath(resolve_toolbag_log_path(exe)),
+            os.path.normpath(ToolbagLog.resolve_toolbag_log_path(exe)),
             os.path.normpath(newer),
         )
 
     def test_returns_none_when_nothing_found(self):
         """No exe, no LOCALAPPDATA Toolbag dirs -> None."""
-        self.assertIsNone(resolve_toolbag_log_path(None))
-        self.assertIsNone(resolve_toolbag_log_path("/random/path/toolbag.exe"))
+        self.assertIsNone(ToolbagLog.resolve_toolbag_log_path(None))
+        self.assertIsNone(
+            ToolbagLog.resolve_toolbag_log_path("/random/path/toolbag.exe")
+        )
 
     def test_tier1_returns_path_even_when_log_does_not_exist_yet(self):
         """Fresh install: log.txt isn't written yet, but tier 1 must still
@@ -564,7 +563,7 @@ class TestResolveToolbagLogPath(unittest.TestCase):
         )
         exe = r"C:\Program Files\Marmoset\Toolbag 5\toolbag.exe"
         self.assertEqual(
-            os.path.normpath(resolve_toolbag_log_path(exe)),
+            os.path.normpath(ToolbagLog.resolve_toolbag_log_path(exe)),
             os.path.normpath(expected),
         )
 
@@ -577,7 +576,7 @@ class TestResolveToolbagLogPath(unittest.TestCase):
         ):
             with self.subTest(exe=exe):
                 self.assertEqual(
-                    os.path.normpath(resolve_toolbag_log_path(exe)),
+                    os.path.normpath(ToolbagLog.resolve_toolbag_log_path(exe)),
                     os.path.normpath(expected),
                 )
 
@@ -590,7 +589,7 @@ class TestClassifyLogLine(unittest.TestCase):
     bridge panel colour-codes errors visibly (red) and skips (yellow)."""
 
     def assertLevel(self, expected_level, line):
-        result = classify_log_line(line)
+        result = ToolbagLog.classify_log_line(line)
         self.assertIsNotNone(result, f"Line was suppressed: {line!r}")
         actual_level, _ = result
         self.assertEqual(
@@ -612,9 +611,7 @@ class TestClassifyLogLine(unittest.TestCase):
         )
         self.assertLevel("error", "MatField not found")
         self.assertLevel("error", "Traceback (most recent call last):")
-        self.assertLevel(
-            "error", "AttributeError: module 'mset' has no attribute 'X'"
-        )
+        self.assertLevel("error", "AttributeError: module 'mset' has no attribute 'X'")
 
     def test_helper_skip_classified_as_warning(self):
         self.assertLevel(
@@ -645,15 +642,11 @@ class TestClassifyLogLine(unittest.TestCase):
         )
 
     def test_helper_success_classified_as_info(self):
-        self.assertLevel(
-            "info", "    + baseColor -> 'Albedo Map' = body_BC.png"
-        )
+        self.assertLevel("info", "    + baseColor -> 'Albedo Map' = body_BC.png")
 
     def test_helper_status_classified_as_info(self):
         self.assertLevel("info", "[toolbag_helpers] Scene contains 2 material(s).")
-        self.assertLevel(
-            "info", "[Maya->Toolbag] FBX: C:/tmp/x.fbx"
-        )
+        self.assertLevel("info", "[Maya->Toolbag] FBX: C:/tmp/x.fbx")
 
     def test_preload_chatter_is_suppressed(self):
         """Toolbag's shader/image preload spam must not be forwarded."""
@@ -663,11 +656,11 @@ class TestClassifyLogLine(unittest.TestCase):
             "opening shader data/shader/post/post.frag",
         ):
             with self.subTest(line=noise):
-                self.assertIsNone(classify_log_line(noise))
+                self.assertIsNone(ToolbagLog.classify_log_line(noise))
 
     def test_empty_line_is_suppressed(self):
-        self.assertIsNone(classify_log_line(""))
-        self.assertIsNone(classify_log_line("   "))
+        self.assertIsNone(ToolbagLog.classify_log_line(""))
+        self.assertIsNone(ToolbagLog.classify_log_line("   "))
 
 
 @unittest.skipUnless(
@@ -680,13 +673,13 @@ class TestDispatchLogLines(unittest.TestCase):
     def test_each_level_lands_on_the_matching_logger_call(self):
         logger = unittest.mock.MagicMock()
         lines = [
-            "[toolbag_helpers] Scene contains 1 material(s).",   # info
-            "  SKIP  'X' -- no matching Toolbag material.",      # warning
-            "    ! roughness: MatField not found",               # error
-            "opening image data/gui/control/foo.tga",            # suppressed
-            "    + baseColor -> 'Albedo Map' = file.png",        # info
+            "[toolbag_helpers] Scene contains 1 material(s).",  # info
+            "  SKIP  'X' -- no matching Toolbag material.",  # warning
+            "    ! roughness: MatField not found",  # error
+            "opening image data/gui/control/foo.tga",  # suppressed
+            "    + baseColor -> 'Albedo Map' = file.png",  # info
         ]
-        dispatch_log_lines(lines, logger)
+        ToolbagLog.dispatch_log_lines(lines, logger)
 
         self.assertEqual(logger.info.call_count, 2)
         self.assertEqual(logger.warning.call_count, 1)
@@ -712,6 +705,7 @@ class TestToolbagLogTail(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def _append(self, *lines):
@@ -727,13 +721,14 @@ class TestToolbagLogTail(unittest.TestCase):
         class FakeProcess:
             def __init__(self):
                 self._alive = True
+
             def poll(self):
                 return None if self._alive else 0
 
         proc = FakeProcess()
         logger = unittest.mock.MagicMock()
 
-        thread = start_toolbag_log_tail(
+        thread = ToolbagLog.start_toolbag_log_tail(
             self.log_path, self.start_offset, proc, logger, poll_interval=0.05
         )
 
@@ -773,10 +768,13 @@ class TestToolbagLogTail(unittest.TestCase):
 
         class FakeProcess:
             def poll(self):
-                return 0   # already exited
+                return 0  # already exited
 
-        thread = start_toolbag_log_tail(
-            self.log_path, 0, FakeProcess(), unittest.mock.MagicMock(),
+        thread = ToolbagLog.start_toolbag_log_tail(
+            self.log_path,
+            0,
+            FakeProcess(),
+            unittest.mock.MagicMock(),
             poll_interval=0.05,
         )
         thread.join(timeout=2.0)
@@ -794,14 +792,18 @@ class TestToolbagLogTail(unittest.TestCase):
         class FakeProcess:
             def __init__(self):
                 self._alive = True
+
             def poll(self):
                 return None if self._alive else 0
 
         proc = FakeProcess()
         logger = unittest.mock.MagicMock()
 
-        thread = start_toolbag_log_tail(
-            self.log_path, 0, proc, logger,
+        thread = ToolbagLog.start_toolbag_log_tail(
+            self.log_path,
+            0,
+            proc,
+            logger,
             poll_interval=0.05,
             file_wait_timeout=5.0,
         )
@@ -834,12 +836,16 @@ class TestToolbagLogTail(unittest.TestCase):
         class FakeProcess:
             def __init__(self):
                 self._alive = True
+
             def poll(self):
                 return None if self._alive else 0
 
         proc = FakeProcess()
-        thread = start_toolbag_log_tail(
-            self.log_path, 0, proc, unittest.mock.MagicMock(),
+        thread = ToolbagLog.start_toolbag_log_tail(
+            self.log_path,
+            0,
+            proc,
+            unittest.mock.MagicMock(),
             poll_interval=0.05,
             file_wait_timeout=30.0,  # Generous -- we should exit on process death, not timeout.
         )

@@ -352,6 +352,63 @@ class TestSeparateObjects(MayaTkTestCase):
         for r in res:
             self.assertTrue(_short(r).startswith("MyComp"))
 
+    # ---- uninstance guard ---------------------------------------------------
+
+    def _make_instanced_two_shell(self):
+        """A two-shell mesh plus one instance of it; return (master, inst)."""
+        a = cmds.polyCube(n="shellA")[0]
+        b = cmds.polyCube(n="shellB")[0]
+        cmds.move(5, 0, 0, b)
+        master = cmds.polyUnite(a, b, ch=False, n="twoShell")[0]
+        inst = cmds.instance(master, n="twoShell_inst")[0]
+        cmds.move(0, 5, 0, inst)
+        return master, inst
+
+    def test_separate_uninstance_preserves_sibling(self):
+        """Separating an instanced mesh with ``uninstance=True`` must leave the
+        sibling instance intact.
+
+        ``polySeparate`` on instanced geometry silently deletes the sibling
+        (verified in Maya 2025); forking to a unique shape first isolates it.
+        """
+        master, _inst = self._make_instanced_two_shell()
+
+        res = EditUtils.separate_objects([master], uninstance=True)
+
+        self.assertEqual(len(res), 2, "master should still split into two shells")
+        self.assertTrue(
+            cmds.objExists("twoShell_inst"),
+            "uninstance=True must preserve the sibling instance",
+        )
+
+    def test_separate_without_uninstance_destroys_sibling(self):
+        """Characterization: separating instanced geometry without the guard
+        destroys the sibling instance — the hazard ``uninstance`` fixes.
+        """
+        master, _inst = self._make_instanced_two_shell()
+
+        EditUtils.separate_objects([master], uninstance=False)
+
+        self.assertFalse(
+            cmds.objExists("twoShell_inst"),
+            "documents that separate without uninstance deletes the sibling; "
+            "if this ever passes, Maya's polySeparate behavior changed",
+        )
+
+    def test_separate_uninstance_noop_on_non_instanced(self):
+        """``uninstance=True`` (the tentacle default) must be a no-op on plain,
+        non-instanced geometry: a two-shell mesh still splits into two.
+        """
+        c1 = cmds.polyCube()[0]
+        c2 = cmds.polyCube()[0]
+        cmds.move(5, 0, 0, c2)
+        combined = cmds.polyUnite(c1, c2, ch=False)[0]
+
+        res = EditUtils.separate_objects([combined], uninstance=True)
+        self.assertEqual(len(res), 2)
+        for r in res:
+            self.assertTrue(cmds.objExists(r))
+
 
 if __name__ == "__main__":
     unittest.main()

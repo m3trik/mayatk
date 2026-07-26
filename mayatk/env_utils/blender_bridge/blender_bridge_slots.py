@@ -11,6 +11,7 @@ the ``b000`` send action. Mirrors ``marmoset_bridge_slots`` / the blendertk ``ma
 ``REQUIRE_OUTPUT_DIR = False`` -- the bridge round-trips through a temp FBX it manages internally;
 there's no user-visible artifact to point at, so the base skips the Output Dir row.
 """
+
 import traceback
 from pathlib import Path
 
@@ -22,11 +23,7 @@ except ImportError:
 from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
 
 # From this package:
-from mayatk.env_utils.blender_bridge._blender_bridge import (
-    BlenderBridge,
-    _TEMPLATE_DIR,
-    list_template_modes,
-)
+from mayatk.env_utils.blender_bridge._blender_bridge import BlenderBridge, _TEMPLATE_DIR
 from mayatk.env_utils.blender_bridge import parameters as _params
 
 
@@ -58,12 +55,15 @@ class BlenderBridgeSlots(MayaBridgeSlotsBase):
             "Click <b>Send to Blender</b>.",
         ],
         "sections": [
-            ("Options", [
-                "<b>Clear Scene First</b> — delete the current scene's objects before importing "
-                "(clean slate). Off imports additively.",
-                "<b>Frame in View</b> — after import, select &amp; frame the new objects with "
-                "material-preview shading.",
-            ]),
+            (
+                "Options",
+                [
+                    "<b>Clear Scene First</b> — delete the current scene's objects before importing "
+                    "(clean slate). Off imports additively.",
+                    "<b>Frame in View</b> — after import, select &amp; frame the new objects with "
+                    "material-preview shading.",
+                ],
+            ),
         ],
         "notes": [
             "One <b>import</b> template ships, exposing every option above; the dropdown also "
@@ -77,7 +77,7 @@ class BlenderBridgeSlots(MayaBridgeSlotsBase):
     # ------------------------------------------------------------------ base-class hooks
     @property
     def params_module(self):
-        return _params
+        return _params.Parameters
 
     @property
     def template_dir(self) -> Path:
@@ -87,16 +87,18 @@ class BlenderBridgeSlots(MayaBridgeSlotsBase):
         return BlenderBridge()
 
     def list_template_modes(self):
-        return list_template_modes()
+        return BlenderBridge.list_template_modes()
 
     # ------------------------------------------------------------------ b000 -- send
     def b000(self):
         """Send the selected objects to Blender with the chosen template."""
         if cmds is None:
-            self.bridge.logger.error("Maya is not available; cannot run the Blender bridge.")
+            self.bridge.logger.error(
+                "Maya is not available; cannot run the Blender bridge."
+            )
             return
 
-        selection = cmds.ls(selection=True) or []
+        selection = cmds.ls(selection=True, long=True) or []
         if not selection:
             self.bridge.logger.warning(
                 "Nothing selected. Select one or more objects before clicking 'Send to Blender'."
@@ -105,7 +107,9 @@ class BlenderBridgeSlots(MayaBridgeSlotsBase):
 
         pair = self._selected_template_mode()
         if not pair:
-            self.bridge.logger.warning("No template chosen. Pick one from the dropdown above.")
+            self.bridge.logger.warning(
+                "No template chosen. Pick one from the dropdown above."
+            )
             return
         template, mode = pair
 
@@ -116,7 +120,9 @@ class BlenderBridgeSlots(MayaBridgeSlotsBase):
             )
             return
 
-        self.bridge.logger.info(f"--- {template} ({mode}) on {len(selection)} object(s) ---")
+        self.bridge.logger.info(
+            f"--- {template} ({mode}) on {len(selection)} object(s) ---"
+        )
         try:
             with self.sb.progress(text=f"Working: Send to Blender ({template})"):
                 self.bridge.send(

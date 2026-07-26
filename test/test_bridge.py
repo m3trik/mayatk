@@ -14,13 +14,14 @@ on *why* the bridge failed. These tests pin:
 - ``_format_op_error`` collapses a raw multi-line driver error to a single
   clean line (no URLs) and renders an ``OperationError`` as titled rich text.
 """
+
 import unittest
 
 from base_test import MayaTkTestCase
 import maya.cmds as cmds
 
 from mayatk.edit_utils.bridge import Bridge, BridgeSlots
-from mayatk.core_utils.preview import Preview, OperationError, _format_op_error
+from mayatk.core_utils.preview import Preview, OperationError
 
 # Matches what BridgeSlots.perform_operation sends.
 BRIDGE_KW = dict(
@@ -61,9 +62,7 @@ class TestBridge(MayaTkTestCase):
         """Two open cylinders combined into one mesh (two shells)."""
         a = self._open_cyl("brg_a", 0, sx=sx_a)
         b = self._open_cyl("brg_b", 4, sx=sx_b)
-        return cmds.rename(
-            cmds.polyUnite(a, b, ch=False, mergeUVSets=True)[0], "brg"
-        )
+        return cmds.rename(cmds.polyUnite(a, b, ch=False, mergeUVSets=True)[0], "brg")
 
     def _facing_loops(self, comb):
         g = self._loops_by_y(comb)
@@ -114,14 +113,14 @@ class TestBridge(MayaTkTestCase):
             "the meshes being bridged must be combined into a single mesh, or\n"
             "see https://www.autodesk.com/maya-polygon-bridge-error"
         )
-        out = _format_op_error(raw)
+        out = Preview._format_op_error(raw)
         self.assertNotIn("autodesk.com", out)
         self.assertNotIn("http", out)
         self.assertIn("Maya cannot process the selected edges", out)
 
     def test_format_renders_operation_error(self):
         err = OperationError("Boom.", causes=["do X", "do Y"], title="Bridge failed")
-        out = _format_op_error(err)
+        out = Preview._format_op_error(err)
         self.assertIn("Bridge failed", out)
         self.assertIn("Boom.", out)
         self.assertIn("do X", out)
@@ -130,7 +129,7 @@ class TestBridge(MayaTkTestCase):
         # Untrusted exception text with a stray '<' must be escaped, not
         # swallowed as an HTML tag when rendered as rich text.
         err = RuntimeError("'<' not supported between 'int' and 'str'")
-        out = _format_op_error(err)
+        out = Preview._format_op_error(err)
         self.assertIn("&lt;", out)
         self.assertNotIn("'<'", out)
 

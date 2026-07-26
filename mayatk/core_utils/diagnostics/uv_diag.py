@@ -49,6 +49,59 @@ class UvDiagnostics:
     LIGHTMAP_UV_TAG = "lightmapUVSet"
     DEFAULT_LIGHTMAP_NAMES = ("lightmap", "lightmapUV", "UV2", "UVChannel_2")
 
+    @staticmethod
+    def find_non_manifold_uvs(objects: NodeSeq) -> dict:
+        """Map each mesh in *objects* to its non-manifold UVs, via ``polyInfo``.
+
+        Non-manifold UV topology (a UV edge wound the same way in two faces, a
+        UV shared by disjoint face fans, …) can't be authored with Maya's own
+        tools but arrives via imports/legacy files, and it hard-blocks
+        ``u3dUnfold`` with the same "non-manifold" rejection as bad geometry.
+
+        Returns:
+            dict: ``{mesh_shape: [map_components]}`` — only meshes that have
+            any; empty dict when there are none.
+        """
+        by_mesh = {}
+        if not objects:
+            return by_mesh
+        if not isinstance(objects, (list, tuple, set)):
+            objects = [objects]
+        for shape in cmds.ls(objects, dag=True, type="mesh", noIntermediate=True) or []:
+            uvs = cmds.polyInfo(shape, nonManifoldUVs=True) or []
+            if uvs:
+                by_mesh[shape] = cmds.ls(uvs, flatten=True)
+        return by_mesh
+
+    @classmethod
+    def repair_non_manifold_uvs(cls, objects: NodeSeq) -> dict:
+        """Repair non-manifold UVs on *objects* by re-mapping the affected faces.
+
+        Incremental fixes (``polyClean``, ``polyForceUV -unshare``,
+        ``polyMapCut``) cannot clear corrupt UV-face topology — the invalid
+        sharing survives every edit. The only reliable repair is to delete the
+        UV mapping on the offending faces (``polyMapDel``) and re-project them
+        (``polyAutoProjection``). Those faces get a fresh planar layout; the
+        rest of the mesh's UVs are untouched.
+
+        Returns:
+            dict: ``{"total", "fixed", "remaining"}`` counts of non-manifold
+            UVs, so callers can report the outcome.
+        """
+        before = cls.find_non_manifold_uvs(objects)
+        total = sum(len(v) for v in before.values())
+        for shape, uvs in before.items():
+            faces = cmds.ls(
+                cmds.polyListComponentConversion(uvs, fromUV=True, toFace=True),
+                flatten=True,
+            )
+            if not faces:
+                continue
+            cmds.polyMapDel(faces)
+            cmds.polyAutoProjection(faces, ch=False, insertBeforeDeformers=True)
+        remaining = sum(len(v) for v in cls.find_non_manifold_uvs(objects).values())
+        return {"total": total, "fixed": total - remaining, "remaining": remaining}
+
     @classmethod
     def find_lightmap_uv_set(cls, shape, all_sets=None, names=None):
         """Detect a lightmap UV set on *shape*, or ``None``.

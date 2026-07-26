@@ -1,7 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
-import unittest
 import maya.cmds as cmds
 import maya.mel as mel
 from mayatk.mat_utils.render_opacity._render_opacity import RenderOpacity
@@ -223,7 +222,7 @@ class TestSharedMaterialExport(MayaTkTestCase):
         for obj in self.objects:
             # FBX Model names include the short node name
             self.assertIn(
-                obj.split('|')[-1].split(':')[-1],
+                obj.split("|")[-1].split(":")[-1],
                 content,
                 f"Object '{obj.split('|')[-1].split(':')[-1]}' missing from FBX",
             )
@@ -344,12 +343,12 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
         'visibility' but the object has 'opacity', so the behavior
         system keys both channels.
         """
-        from mayatk.anim_utils.shots.shot_manifest.behaviors import apply_behavior
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
         RenderOpacity.create(objects=[self.cube], mode="attribute")
 
         # Apply the fade_in behavior (template targets 'visibility')
-        apply_behavior(self.cube, "fade_in", start=1, end=30)
+        Behaviors.apply_behavior(self.cube, "fade_in", start=1, end=30)
 
         # Verify both channels are keyed in Maya
         opacity_keys = cmds.keyframe(self.cube, attribute="opacity", q=True, tc=True)
@@ -387,12 +386,14 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
         (for the Unity ``RenderOpacityController``) and a stepped
         ``visibility`` curve (for engines that read visibility natively).
         """
-        from mayatk.anim_utils.shots.shot_manifest.behaviors import apply_behavior
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
         # No RenderOpacity.create — start from a plain object
-        self.assertFalse(cmds.attributeQuery("opacity", node=str(self.cube), exists=True))
+        self.assertFalse(
+            cmds.attributeQuery("opacity", node=str(self.cube), exists=True)
+        )
 
-        apply_behavior(self.cube, "fade_in", start=1, end=30)
+        Behaviors.apply_behavior(self.cube, "fade_in", start=1, end=30)
 
         # Auto-promotion must have occurred
         self.assertTrue(

@@ -17,7 +17,7 @@ Combo reflects the track currently "on" at the playhead.  Selecting a
 track in the combo previews its audio DG node on the Time Slider; it
 does *not* modify any attribute.
 """
-import logging
+
 import math
 import os
 
@@ -28,7 +28,7 @@ except ImportError:
 
 import pythontk as ptk
 
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 from mayatk.audio_utils._audio_utils import AudioUtils as _audio_utils
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
@@ -53,7 +53,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
     """
 
     AUDIO_FILTER = (
-        "Audio Files (*.wav *.aif *.aiff *.mp3 *.ogg *.m4a *.flac);;" "All Files (*)"
+        "Audio Files (*.wav *.aif *.aiff *.mp3 *.ogg *.m4a *.flac);;All Files (*)"
     )
 
     def __init__(self, switchboard):
@@ -83,7 +83,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             "QCheckBox",
             setText="Auto Convert",
             setObjectName="chk_auto_convert",
-            setToolTip=fmt(
+            setToolTip=TooltipFormat.fmt(
                 title="Auto Convert",
                 bullets=[
                     "<b>On:</b> Non-Maya audio formats (MP3, OGG, M4A, FLAC, etc.) are automatically converted to WAV on import via FFmpeg.",
@@ -96,7 +96,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
         widget.menu.add(
             "QComboBox",
             setObjectName="cmb_export_mode",
-            setToolTip=fmt(
+            setToolTip=TooltipFormat.fmt(
                 title="Export Mode",
                 bullets=[
                     "<b>Composite</b> — Single mixed WAV of all keyed clips.",
@@ -127,9 +127,14 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             "QCheckBox",
             setText="Suffix Time Range",
             setObjectName="chk_suffix_time_range",
-            setToolTip=fmt(
+            setToolTip=TooltipFormat.fmt(
                 body="When exporting Keyed Tracks, append the keyed frame range to each filename.",
-                rows=[("Example", "Footstep_12-47.wav &nbsp;<i>(start frame 12, end frame 47)</i>")],
+                rows=[
+                    (
+                        "Example",
+                        "Footstep_12-47.wav &nbsp;<i>(start frame 12, end frame 47)</i>",
+                    )
+                ],
             ),
             setChecked=False,
         )
@@ -147,7 +152,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
         btn_attrs.clicked.connect(self._launch_channels)
 
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Audio Clips",
                 body="Scene-wide audio tracks keyed on a canonical data node. "
                 "Keyed events drive a single composite WAV used for "
@@ -166,16 +171,22 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
                     "scrub playback.",
                 ],
                 sections=[
-                    ("Key Audio Event option box (▸)", [
-                        "<b>Auto End None</b> — auto-key an <i>OFF</i> value "
-                        "at the clip's natural end.",
-                        "<b>Next Event</b> — auto-advance the track combo "
-                        "after each key.",
-                    ]),
-                    ("Header menu", [
-                        "<b>Channels</b> — open the Channels UI pinned to the "
-                        "audio carrier node, filtered to per-track attributes.",
-                    ]),
+                    (
+                        "Key Audio Event option box (▸)",
+                        [
+                            "<b>Auto End None</b> — auto-key an <i>OFF</i> value "
+                            "at the clip's natural end.",
+                            "<b>Next Event</b> — auto-advance the track combo "
+                            "after each key.",
+                        ],
+                    ),
+                    (
+                        "Header menu",
+                        [
+                            "<b>Channels</b> — open the Channels UI pinned to the "
+                            "audio carrier node, filtered to per-track attributes.",
+                        ],
+                    ),
                 ],
             )
         )
@@ -194,7 +205,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
 
         launch(sb=self.sb, targets=[carrier], filter="Custom", search="audio_clip_*")
 
-# ------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Tracks combo
     # ------------------------------------------------------------------
 
@@ -202,18 +213,26 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
         """Init track combo with browse option_box and management menu."""
         from uitk.widgets.optionBox.options.browse import BrowseOption
 
-        widget.option_box.add_option(
-            BrowseOption(
-                wrapped_widget=widget,
-                file_types=self.AUDIO_FILTER,
-                mode="files",
-                title="Select Audio Tracks",
-                tooltip="Browse for audio files to add or replace tracks.",
-                callback=self._browse_audio_files_cb,
-            )
+        # Audio-file picker — folded into the "Tracks" menu as "Add Tracks…"
+        # rather than a standalone browse icon.
+        self._browse_option = BrowseOption(
+            wrapped_widget=widget,
+            file_types=self.AUDIO_FILTER,
+            mode="files",
+            title="Select Audio Tracks",
+            tooltip="Browse for audio files to add or replace tracks.",
+            callback=self._browse_audio_files_cb,
         )
 
         widget.option_box.menu.setTitle("Tracks")
+
+        btn_add = widget.option_box.menu.add(
+            "QPushButton",
+            setText="Add Tracks…",
+            setObjectName="btn_add_tracks",
+            setToolTip="Browse for audio files to add or replace tracks.",
+        )
+        btn_add.clicked.connect(lambda *_: self._browse_option.browse())
 
         btn_rename = widget.option_box.menu.add(
             "QPushButton",
@@ -243,7 +262,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             setText="Cleanup Unused",
             setObjectName="btn_cleanup_unused",
             setToolTip=(
-                "Remove tracks that have no keyframes and delete\n" "their DG nodes."
+                "Remove tracks that have no keyframes and delete\ntheir DG nodes."
             ),
         )
         btn_cleanup.clicked.connect(self.b004)
@@ -253,8 +272,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             setText="Remove Audio",
             setObjectName="btn_remove_audio",
             setToolTip=(
-                "Delete every track, its DG node, the composite WAV,\n"
-                "and the file map."
+                "Delete every track, its DG node, the composite WAV,\nand the file map."
             ),
         )
         btn_remove.clicked.connect(self.b002)
@@ -441,24 +459,28 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
 
     def tb001_init(self, widget):
         """Init Key Audio Event option-box menu."""
-        widget.option_box.set_action(
-            self._select_carrier,
-            icon="select",
-            tooltip=(
+        widget.option_box.menu.setTitle("Key Audio Event")
+        # Carrier-select and sync — folded into the menu as rows rather than
+        # standalone icon buttons on the option box.
+        widget.option_box.menu.add(
+            "QPushButton",
+            setText="Select Carrier Node",
+            setObjectName="btn_select_carrier",
+            setToolTip=(
                 "Select the data_internal node in the viewport so "
                 "its track attrs appear in the Channel Box."
             ),
-        )
-        widget.option_box.add_action(
-            self.tb000,
-            icon="refresh",
-            tooltip=(
+        ).clicked.connect(lambda *_: self._select_carrier())
+        widget.option_box.menu.add(
+            "QPushButton",
+            setText="Sync Audio to Timeline",
+            setObjectName="btn_sync_audio",
+            setToolTip=(
                 "Sync audio to timeline.\n"
                 "Reconciles DG nodes and rebuilds the composite WAV\n"
                 "from the current track map and keyframes."
             ),
-        )
-        widget.option_box.menu.setTitle("Key Audio Event")
+        ).clicked.connect(lambda *_: self.tb000())
         widget.option_box.menu.add(
             "QCheckBox",
             setText="Auto End None",
@@ -481,14 +503,12 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
                 "only if you need sub-frame precision."
             ),
         )
-        chk_snap.toggled.connect(
-            lambda checked: _audio_utils.set_snap_frames(checked)
-        )
+        chk_snap.toggled.connect(lambda checked: _audio_utils.set_snap_frames(checked))
         widget.option_box.menu.add(
             "QCheckBox",
             setText="Next Event",
             setObjectName="chk_next_event",
-            setToolTip=fmt(
+            setToolTip=TooltipFormat.fmt(
                 title="Next Event",
                 body="Automatically key the next track in the list. The combo selection updates to reflect the chosen track.",
                 bullets=[

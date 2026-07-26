@@ -15,10 +15,10 @@ subpackage so the two trade-offs sit side by side:
 Quickstart::
 
     from mayatk.mat_utils.marmoset_bridge.marmoset_rpc import (
-        MarmosetConnection, install,
+        MarmosetConnection, Installer,
     )
 
-    install()                                # one-time per Toolbag major
+    Installer.install()                      # one-time per Toolbag major
     # ... user starts Toolbag manually ...
 
     conn = MarmosetConnection()
@@ -29,32 +29,21 @@ Quickstart::
 Adding an op is one decorator + function in the plugin file
 (``plugin_src/marmoset_rpc/__init__.py``). See that module's docstring.
 """
+
 from .connection import (  # noqa: F401
     MarmosetConnection,
     DEFAULT_HOST,
     DEFAULT_PORT,
 )
-from .installer import (  # noqa: F401
-    install,
-    uninstall,
-    is_installed,
-    user_plugin_dir,
-)
-from .job import (  # noqa: F401
-    Call,
-    Result,
-    run_batch,
-)
+from .installer import Installer
+from .job import BatchJob, Call, Result
 
 __all__ = [
     "MarmosetConnection",
     "DEFAULT_HOST",
     "DEFAULT_PORT",
-    "install",
-    "uninstall",
-    "is_installed",
-    "user_plugin_dir",
+    "Installer",
     "Call",
     "Result",
-    "run_batch",
+    "BatchJob",
 ]

@@ -12,7 +12,7 @@ from typing import List, Dict, Any, Optional, Union, Callable
 
 import pythontk as ptk
 from uitk.switchboard import Cancelable
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
@@ -196,9 +196,7 @@ class MatUpdater(ptk.LoggingMixin):
             total_mats = len(materials)
             for mat_index, mat in enumerate(materials):
                 if progress_callback:
-                    progress_callback(
-                        mat_index, total_mats, f"Updating: {mat}"
-                    )
+                    progress_callback(mat_index, total_mats, f"Updating: {mat}")
                 mat_name = str(mat).split("|")[-1].split(":")[-1]
                 mat_link = cls.logger.log_link(mat_name, "select", node=str(mat))
                 cls.logger.log_divider()
@@ -320,7 +318,7 @@ class MatUpdater(ptk.LoggingMixin):
                                     file_names = [os.path.basename(f) for f in s_files]
                                     cls.logger.info(f"  - Set '{s_name}': {file_names}")
                             else:
-                                cls.logger.info(f"Preparing maps...")
+                                cls.logger.info("Preparing maps...")
 
                             try:
                                 # Extract max_workers to avoid collision with kwargs
@@ -339,7 +337,7 @@ class MatUpdater(ptk.LoggingMixin):
                                 cls.logger.error(f"Error preparing maps: {e}")
                                 continue
                 else:
-                    cls.logger.info(f"Skipping factory (using existing textures)")
+                    cls.logger.info("Skipping factory (using existing textures)")
                     processed_files = files
 
                 if not processed_files:
@@ -829,7 +827,7 @@ class MatUpdaterSlots(MatUpdater):
             setToolTip="Optional: Folder to move original files to.",
         )
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Material Updater",
                 body="Batch-process scene materials and their textures — "
                 "format conversion, max-size enforcement, mask scaling, and "
@@ -842,30 +840,36 @@ class MatUpdaterSlots(MatUpdater):
                     "Press <b>Update</b> to run.",
                 ],
                 sections=[
-                    ("Processing options", [
-                        "<b>Max Size</b> — clamp texture resolution.",
-                        "<b>Mask Map Scale</b> — independent resolution for "
-                        "mask outputs.",
-                        "<b>Force Packed Maps</b> — emit ORM / MSAO regardless "
-                        "of whether the source channels exist (uses input fallbacks).",
-                        "<b>Use Input Fallbacks</b> — generate missing inputs "
-                        "from related ones (e.g. Base Color from Diffuse).",
-                        "<b>Use Output Fallbacks</b> — substitute missing "
-                        "outputs (e.g. AO alone for Mask Map). Disabled when "
-                        "Force Packed Maps is on.",
-                        "<b>Discover Maps in sourceimages</b> — gap-fill each "
-                        "material with same-base-name textures sitting in "
-                        "sourceimages that were never connected. Only missing "
-                        "map types are added; connected textures are kept.",
-                        "<b>Dry Run</b> — preview the plan without writing files.",
-                    ]),
-                    ("File management", [
-                        "<b>Transfer Mode</b> — Copy / Move / Use Existing.",
-                        "<b>Output Folder</b> — destination (disabled when "
-                        "Use Existing is selected).",
-                        "<b>Archive To</b> — optional folder to move original "
-                        "files into for safekeeping.",
-                    ]),
+                    (
+                        "Processing options",
+                        [
+                            "<b>Max Size</b> — clamp texture resolution.",
+                            "<b>Mask Map Scale</b> — independent resolution for "
+                            "mask outputs.",
+                            "<b>Force Packed Maps</b> — emit ORM / MSAO regardless "
+                            "of whether the source channels exist (uses input fallbacks).",
+                            "<b>Use Input Fallbacks</b> — generate missing inputs "
+                            "from related ones (e.g. Base Color from Diffuse).",
+                            "<b>Use Output Fallbacks</b> — substitute missing "
+                            "outputs (e.g. AO alone for Mask Map). Disabled when "
+                            "Force Packed Maps is on.",
+                            "<b>Discover Maps in sourceimages</b> — gap-fill each "
+                            "material with same-base-name textures sitting in "
+                            "sourceimages that were never connected. Only missing "
+                            "map types are added; connected textures are kept.",
+                            "<b>Dry Run</b> — preview the plan without writing files.",
+                        ],
+                    ),
+                    (
+                        "File management",
+                        [
+                            "<b>Transfer Mode</b> — Copy / Move / Use Existing.",
+                            "<b>Output Folder</b> — destination (disabled when "
+                            "Use Existing is selected).",
+                            "<b>Archive To</b> — optional folder to move original "
+                            "files into for safekeeping.",
+                        ],
+                    ),
                 ],
             )
         )

@@ -458,6 +458,52 @@ class TestImageToPlane(MayaTkTestCase):
         cmds.select(clear=True)
         self.assertEqual(ImageToPlane.remove(), 0)
 
+    # -- Roughness ---------------------------------------------------------
+
+    def test_default_roughness_is_zero(self):
+        """The standard shader is created with roughness 0 by default."""
+        img = _create_test_image(64, 64, "rough_default", self._tmp_dir)
+        ImageToPlane.create([img], mat_type="standard")
+        shader = "rough_default_MAT"
+        self.assertTrue(cmds.objExists(shader))
+        attr = next(
+            (
+                a
+                for a in ("roughness", "specularRoughness")
+                if cmds.attributeQuery(a, node=shader, exists=True)
+            ),
+            None,
+        )
+        # lambert has no roughness concept — nothing to assert there.
+        if attr is not None:
+            self.assertAlmostEqual(cmds.getAttr(f"{shader}.{attr}"), 0.0, places=5)
+
+    def test_custom_roughness_applied(self):
+        """An explicit roughness value is written to the shader."""
+        img = _create_test_image(64, 64, "rough_custom", self._tmp_dir)
+        ImageToPlane.create([img], mat_type="standard", roughness=0.5)
+        shader = "rough_custom_MAT"
+        attr = next(
+            (
+                a
+                for a in ("roughness", "specularRoughness")
+                if cmds.attributeQuery(a, node=shader, exists=True)
+            ),
+            None,
+        )
+        if attr is not None:
+            self.assertAlmostEqual(cmds.getAttr(f"{shader}.{attr}"), 0.5, places=5)
+
+    def test_stingray_default_roughness_is_zero(self):
+        """The Stingray branch writes the scalar ``roughness`` attr (default 0)."""
+        _ensure_stingray_loadable()
+        img = _create_test_image(64, 64, "sr_rough", self._tmp_dir)
+        ImageToPlane.create([img], mat_type="stingray")
+        shader = "sr_rough_MAT"
+        self.assertTrue(cmds.objExists(shader))
+        if cmds.attributeQuery("roughness", node=shader, exists=True):
+            self.assertAlmostEqual(cmds.getAttr(f"{shader}.roughness"), 0.0, places=5)
+
     # -- Plane height parameter --------------------------------------------
 
     def test_custom_plane_height(self):

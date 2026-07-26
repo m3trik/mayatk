@@ -17,34 +17,6 @@ import pythontk as ptk
 # Import package modules at class level to avoid circular imports.
 
 
-def as_strings(nodes) -> List[str]:
-    """Coerce a node-or-iterable-of-nodes to a list of plain DAG-path strings.
-
-    Single string / non-container input is wrapped in a one-element list.
-    Drops empty entries; preserves order.
-
-    Note: only ``list`` / ``tuple`` / ``set`` are treated as containers — never
-    duck-typed via ``__iter__``. ``cmds.*`` always returns a ``list`` or
-    ``None``, so this is sufficient and avoids accidentally iterating a single
-    string into characters or a node-like object into something nonsensical.
-    """
-    if nodes is None:
-        return []
-    if isinstance(nodes, (list, tuple, set)):
-        return [str(n) for n in nodes if n is not None and str(n)]
-    return [str(nodes)] if str(nodes) else []
-
-
-def short_name(node) -> str:
-    """Leaf name with namespace stripped: ``"|grp|ns:obj"`` -> ``"obj"``."""
-    return str(node).split("|")[-1].split(":")[-1]
-
-
-def leaf_name(node) -> str:
-    """Leaf name with namespace preserved: ``"|grp|ns:obj"`` -> ``"ns:obj"``."""
-    return str(node).split("|")[-1]
-
-
 class BoundingBox:
     """Plain-data bounding box with ``MVector`` extents.
 
@@ -66,25 +38,6 @@ class BoundingBox:
         )
         self.size = self.max - self.min
         self.diagonal = self.size.length()
-
-
-def get_bounding_box(node, world: bool = True) -> BoundingBox:
-    """Return a :class:`BoundingBox` for *node*.
-
-    Uses ``cmds.exactWorldBoundingBox`` for world space. For object space,
-    falls back to ``cmds.polyEvaluate(boundingBox=True)`` when available
-    (mesh nodes), else to the world bbox.
-    """
-    node = str(node)
-    if world:
-        bb = cmds.exactWorldBoundingBox(node)
-        return BoundingBox(bb[:3], bb[3:])
-    bb = cmds.polyEvaluate(node, boundingBox=True)
-    if bb and len(bb) == 3:
-        (xmn, xmx), (ymn, ymx), (zmn, zmx) = bb
-        return BoundingBox((xmn, ymn, zmn), (xmx, ymx, zmx))
-    bb = cmds.exactWorldBoundingBox(node)
-    return BoundingBox(bb[:3], bb[3:])
 
 
 class _CoreUtilsInternal(object):
@@ -161,9 +114,7 @@ class _CoreUtilsInternal(object):
         if parent and new_node:
             target = parent[0] if isinstance(parent, (list, tuple)) else parent
             try:
-                nodes = (
-                    new_node if isinstance(new_node, (list, tuple)) else [new_node]
-                )
+                nodes = new_node if isinstance(new_node, (list, tuple)) else [new_node]
                 for n in nodes:
                     cmds.parent(str(n), target)
             except Exception as e:
@@ -386,7 +337,9 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         if api_version == 1:
             import maya.OpenMaya as om
 
-            shapes = NodeUtils.get_shape_node(cmds.ls(as_strings(objects)) or [])
+            shapes = NodeUtils.get_shape_node(
+                cmds.ls(CoreUtils.as_strings(objects)) or []
+            )
             if not isinstance(shapes, list):
                 shapes = [shapes] if shapes else []
 
@@ -454,7 +407,7 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         Components are returned with their owning **shape** as the prefix
         (``cmds.ls`` keeps the transform name; this helper substitutes in the shape).
         """
-        lst = cmds.ls(as_strings(lst), flatten=flatten) or []
+        lst = cmds.ls(CoreUtils.as_strings(lst), flatten=flatten) or []
         if not lst:
             return []
         if isinstance(lst[0], int):
@@ -574,7 +527,14 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
                     best_match = target_child
 
             if best_match:
-                mapping[short_name(source_child)] = short_name(best_match)
+                # leaf_name (namespace preserved), not short_name (namespace
+                # stripped) -- these values are fed straight into
+                # cmds.transferAttributes by UvUtils.transfer_uvs, and a
+                # namespaced node (e.g. "ns:mesh") is unresolvable by cmds
+                # once its namespace prefix is stripped off.
+                mapping[CoreUtils.leaf_name(source_child)] = CoreUtils.leaf_name(
+                    best_match
+                )
 
         return mapping
 
@@ -605,16 +565,17 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
                 cmds.warning("No objects provided and nothing selected.")
                 return []
         else:
-            obj_list = cmds.ls(as_strings(objects), flatten=True) or []
+            obj_list = cmds.ls(CoreUtils.as_strings(objects), flatten=True) or []
 
         if not obj_list:
             cmds.warning("No valid objects to reorder.")
             return []
 
         if method == "name":
-            sorted_objs = sorted(obj_list, key=leaf_name)
+            sorted_objs = sorted(obj_list, key=CoreUtils.leaf_name)
 
         elif method == "hierarchy":
+
             def get_hierarchy_depth(obj):
                 long_paths = cmds.ls(obj, long=True) or [obj]
                 return long_paths[0].count("|")
@@ -635,6 +596,7 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
             sorted_objs = sorted(obj_list, key=get_position)
 
         elif method == "distance":
+
             def get_distance(obj):
                 try:
                     pos = cmds.xform(obj, q=True, ws=True, t=True) or [0, 0, 0]
@@ -645,6 +607,7 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
             sorted_objs = sorted(obj_list, key=get_distance)
 
         elif method == "volume":
+
             def get_volume(obj):
                 try:
                     bb = cmds.exactWorldBoundingBox(obj)
@@ -655,6 +618,7 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
             sorted_objs = sorted(obj_list, key=get_volume)
 
         elif method == "vertex_count":
+
             def get_vertex_count(obj):
                 try:
                     shapes = []
@@ -697,6 +661,7 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
             random.shuffle(sorted_objs)
 
         elif method == "creation_time":
+
             def get_creation_time(obj):
                 try:
                     uuids = cmds.ls(obj, uuid=True) or []
@@ -708,12 +673,59 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
 
         else:
             cmds.warning(f"Unknown sorting method: '{method}'. Using 'name' instead.")
-            sorted_objs = sorted(obj_list, key=leaf_name)
+            sorted_objs = sorted(obj_list, key=CoreUtils.leaf_name)
 
         if reverse:
             sorted_objs = sorted_objs[::-1]
 
         return sorted_objs
+
+    @staticmethod
+    def as_strings(nodes) -> List[str]:
+        """Coerce a node-or-iterable-of-nodes to a list of plain DAG-path strings.
+
+        Single string / non-container input is wrapped in a one-element list.
+        Drops empty entries; preserves order.
+
+        Note: only ``list`` / ``tuple`` / ``set`` are treated as containers — never
+        duck-typed via ``__iter__``. ``cmds.*`` always returns a ``list`` or
+        ``None``, so this is sufficient and avoids accidentally iterating a single
+        string into characters or a node-like object into something nonsensical.
+        """
+        if nodes is None:
+            return []
+        if isinstance(nodes, (list, tuple, set)):
+            return [str(n) for n in nodes if n is not None and str(n)]
+        return [str(nodes)] if str(nodes) else []
+
+    @staticmethod
+    def short_name(node) -> str:
+        """Leaf name with namespace stripped: ``"|grp|ns:obj"`` -> ``"obj"``."""
+        return str(node).split("|")[-1].split(":")[-1]
+
+    @staticmethod
+    def leaf_name(node) -> str:
+        """Leaf name with namespace preserved: ``"|grp|ns:obj"`` -> ``"ns:obj"``."""
+        return str(node).split("|")[-1]
+
+    @staticmethod
+    def get_bounding_box(node, world: bool = True) -> BoundingBox:
+        """Return a :class:`BoundingBox` for *node*.
+
+        Uses ``cmds.exactWorldBoundingBox`` for world space. For object space,
+        falls back to ``cmds.polyEvaluate(boundingBox=True)`` when available
+        (mesh nodes), else to the world bbox.
+        """
+        node = str(node)
+        if world:
+            bb = cmds.exactWorldBoundingBox(node)
+            return BoundingBox(bb[:3], bb[3:])
+        bb = cmds.polyEvaluate(node, boundingBox=True)
+        if bb and len(bb) == 3:
+            (xmn, xmx), (ymn, ymx), (zmn, zmx) = bb
+            return BoundingBox((xmn, ymn, zmn), (xmx, ymx, zmx))
+        bb = cmds.exactWorldBoundingBox(node)
+        return BoundingBox(bb[:3], bb[3:])
 
 
 # --------------------------------------------------------------------------------------------

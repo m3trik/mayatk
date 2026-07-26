@@ -13,6 +13,11 @@ from mayatk.env_utils._env_utils import EnvUtils
 class WorkspaceManager(ptk.HelpMixin):
     """Shared workspace management utilities for UI components."""
 
+    # Glob patterns the workspace-file cache scans for. A subclass widens this to list more
+    # than the two native scene formats (the Reference Manager adds "*.fbx", which Maya
+    # references natively) without reimplementing the scan.
+    SCENE_FILE_TYPES: tuple[str, ...] = ("*.ma", "*.mb")
+
     def __init__(self):
         self._workspace_files = None
         self._recursive_search = True
@@ -149,6 +154,7 @@ class WorkspaceManager(ptk.HelpMixin):
                     full_path=True,
                     recursive=True,
                     omit_autosave=True,
+                    file_types=list(self.SCENE_FILE_TYPES),
                 )
                 self._workspace_files[ws_path] = scenes
 

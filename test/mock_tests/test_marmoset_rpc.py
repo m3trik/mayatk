@@ -14,15 +14,13 @@ The plugin's auto-start is disabled per-test by setting
 ``MARMOSET_RPC_AUTOSTART=0`` before import, so tests can drive
 ``start_server()`` / ``stop_server()`` explicitly on a free port.
 """
-import json
+
 import os
 import shutil
 import sys
 import tempfile
 import unittest
 import unittest.mock
-import urllib.error
-import urllib.request
 
 
 # ----------------------------------------------------------------------
@@ -64,15 +62,8 @@ from marmoset_rpc import main_thread as plugin_main_thread  # noqa: E402
 from mayatk.mat_utils.marmoset_bridge.marmoset_rpc import (  # noqa: E402
     MarmosetConnection,
     Call,
-    Result,
-    run_batch,
-    install,
-    uninstall,
-    is_installed,
-    user_plugin_dir,
-)
-from mayatk.mat_utils.marmoset_bridge.marmoset_rpc.installer import (  # noqa: E402
-    _plugin_source_dir,
+    BatchJob,
+    Installer,
 )
 
 
@@ -82,6 +73,7 @@ from mayatk.mat_utils.marmoset_bridge.marmoset_rpc.installer import (  # noqa: E
 def _free_port():
     """Find a port that's almost certainly free (bind+close)."""
     import socket
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
@@ -115,6 +107,7 @@ class TestRegistry(unittest.TestCase):
 
         try:
             with self.assertRaises(ValueError):
+
                 @plugin.register("test.unique_xyz")
                 def _b():
                     return 2
@@ -127,6 +120,7 @@ class TestRegistry(unittest.TestCase):
     def test_describe_returns_signature_and_doc(self):
         """describe(name) gives an agent everything it needs to call
         the op without reading source."""
+
         @plugin.register("test.with_sig")
         def _fn(path, count=3):
             """One-line doc."""
@@ -176,9 +170,7 @@ class TestAutostartHostGate(unittest.TestCase):
     def test_no_autostart_outside_toolbag(self):
         """No ``mset`` in the interpreter -> autostart is a silent no-op."""
         self.assertNotIn("mset", sys.modules)  # sanity: not inside Toolbag
-        with unittest.mock.patch.dict(
-            os.environ, {"MARMOSET_RPC_AUTOSTART": "1"}
-        ):
+        with unittest.mock.patch.dict(os.environ, {"MARMOSET_RPC_AUTOSTART": "1"}):
             self.assertIsNone(plugin_server.autostart())
         self.assertFalse(plugin_server.is_running())
 
@@ -202,9 +194,7 @@ class TestAutostartHostGate(unittest.TestCase):
         import types
 
         sys.modules["mset"] = types.ModuleType("mset")
-        with unittest.mock.patch.dict(
-            os.environ, {"MARMOSET_RPC_AUTOSTART": "0"}
-        ):
+        with unittest.mock.patch.dict(os.environ, {"MARMOSET_RPC_AUTOSTART": "0"}):
             self.assertIsNone(plugin_server.autostart())
         self.assertFalse(plugin_server.is_running())
 
@@ -245,6 +235,7 @@ class TestServerClientIntegration(unittest.TestCase):
         @plugin.register("test.always_fail")
         def _boom():
             raise ValueError("intentional test failure")
+
         try:
             with self.assertRaises(RuntimeError) as ctx:
                 self.conn.invoke("test.always_fail")
@@ -257,6 +248,7 @@ class TestServerClientIntegration(unittest.TestCase):
         @plugin.register("test.echo_kwargs")
         def _echo(a=None, b=None):
             return {"a": a, "b": b}
+
         try:
             self.assertEqual(
                 self.conn.invoke("test.echo_kwargs", a=1, b="x"),
@@ -301,7 +293,7 @@ class TestRunBatch(unittest.TestCase):
         plugin.stop_server()
 
     def test_run_batch_returns_result_per_call(self):
-        results = run_batch(
+        results = BatchJob.run_batch(
             [Call("system.ping"), Call("system.list_ops")],
             port=self.port,
         )
@@ -315,7 +307,7 @@ class TestRunBatch(unittest.TestCase):
     def test_run_batch_records_failures_without_aborting(self):
         """Default behaviour: every call runs, failures captured in
         Result.error rather than raising."""
-        results = run_batch(
+        results = BatchJob.run_batch(
             [
                 Call("system.ping"),
                 Call("does.not.exist"),  # will fail
@@ -330,7 +322,7 @@ class TestRunBatch(unittest.TestCase):
         self.assertTrue(results[2].ok)
 
     def test_run_batch_stops_on_error_when_requested(self):
-        results = run_batch(
+        results = BatchJob.run_batch(
             [
                 Call("system.ping"),
                 Call("does.not.exist"),  # will fail
@@ -347,8 +339,9 @@ class TestRunBatch(unittest.TestCase):
         @plugin.register("test.batch_echo")
         def _echo(value=None):
             return value
+
         try:
-            results = run_batch(
+            results = BatchJob.run_batch(
                 [Call("test.batch_echo", kwargs={"value": "hello"})],
                 port=self.port,
             )
@@ -359,7 +352,7 @@ class TestRunBatch(unittest.TestCase):
 
     def test_run_batch_raises_when_plugin_unreachable(self):
         with self.assertRaises(ConnectionError):
-            run_batch([Call("system.ping")], port=_free_port())
+            BatchJob.run_batch([Call("system.ping")], port=_free_port())
 
 
 # ======================================================================
@@ -400,7 +393,7 @@ class TestInstaller(unittest.TestCase):
     def test_user_plugin_dir_resolves_from_install_path(self):
         self._stage_toolbag_dir("5")
         exe = r"C:\Program Files\Marmoset\Toolbag 5\toolbag.exe"
-        result = user_plugin_dir(exe)
+        result = Installer.user_plugin_dir(exe)
         self.assertEqual(
             os.path.normpath(str(result)),
             os.path.normpath(os.path.join(self._tmp, "Marmoset Toolbag 5", "plugins")),
@@ -413,7 +406,7 @@ class TestInstaller(unittest.TestCase):
         # (Tier 2 picks by mtime; either is acceptable as long as result
         # is one of the two real installs.)
         exe = r"D:\custom\toolbag.exe"
-        result = user_plugin_dir(exe)
+        result = Installer.user_plugin_dir(exe)
         self.assertIsNotNone(result)
         self.assertTrue(str(result).endswith("plugins"))
 
@@ -421,37 +414,37 @@ class TestInstaller(unittest.TestCase):
         self._stage_toolbag_dir("5")
         exe = r"C:\Program Files\Marmoset\Toolbag 5\toolbag.exe"
 
-        path = install(toolbag_exe=exe)
+        path = Installer.install(toolbag_exe=exe)
         self.assertIsNotNone(path)
         plugin_init = os.path.join(str(path), "__init__.py")
         self.assertTrue(
             os.path.isfile(plugin_init),
             f"Plugin __init__.py missing at {plugin_init}",
         )
-        self.assertTrue(is_installed(toolbag_exe=exe))
+        self.assertTrue(Installer.is_installed(toolbag_exe=exe))
 
     def test_install_idempotent_without_force(self):
         self._stage_toolbag_dir("5")
         exe = r"C:\Program Files\Marmoset\Toolbag 5\toolbag.exe"
-        first = install(toolbag_exe=exe)
+        first = Installer.install(toolbag_exe=exe)
         # Touch the install so we can prove a second call DOESN'T rewrite it.
         marker = os.path.join(str(first), "_marker.txt")
         with open(marker, "w", encoding="utf-8") as fh:
             fh.write("untouched")
 
-        second = install(toolbag_exe=exe)
+        second = Installer.install(toolbag_exe=exe)
         self.assertEqual(str(first), str(second))
         self.assertTrue(os.path.isfile(marker), "Idempotent install wiped the dir.")
 
     def test_install_force_rewrites(self):
         self._stage_toolbag_dir("5")
         exe = r"C:\Program Files\Marmoset\Toolbag 5\toolbag.exe"
-        first = install(toolbag_exe=exe)
+        first = Installer.install(toolbag_exe=exe)
         marker = os.path.join(str(first), "_marker.txt")
         with open(marker, "w", encoding="utf-8") as fh:
             fh.write("delete me")
 
-        install(toolbag_exe=exe, force=True)
+        Installer.install(toolbag_exe=exe, force=True)
         self.assertFalse(
             os.path.isfile(marker),
             "force=True should have rebuilt the install dir.",
@@ -460,21 +453,21 @@ class TestInstaller(unittest.TestCase):
     def test_uninstall_removes_plugin(self):
         self._stage_toolbag_dir("5")
         exe = r"C:\Program Files\Marmoset\Toolbag 5\toolbag.exe"
-        install(toolbag_exe=exe)
-        self.assertTrue(is_installed(toolbag_exe=exe))
-        self.assertTrue(uninstall(toolbag_exe=exe))
-        self.assertFalse(is_installed(toolbag_exe=exe))
+        Installer.install(toolbag_exe=exe)
+        self.assertTrue(Installer.is_installed(toolbag_exe=exe))
+        self.assertTrue(Installer.uninstall(toolbag_exe=exe))
+        self.assertFalse(Installer.is_installed(toolbag_exe=exe))
 
     def test_install_returns_none_when_no_toolbag(self):
         # No LOCALAPPDATA Toolbag dirs at all.
         # Override env var so the scan finds nothing.
         with unittest.mock.patch.dict(os.environ, {"LOCALAPPDATA": self._tmp}):
-            result = install(toolbag_exe=None)
+            result = Installer.install(toolbag_exe=None)
         self.assertIsNone(result)
 
     def test_plugin_source_dir_exists_in_package(self):
         """Sanity: the source we install from must actually be in the package."""
-        src = _plugin_source_dir()
+        src = Installer._plugin_source_dir()
         self.assertTrue(src.is_dir(), f"plugin source missing: {src}")
         self.assertTrue(
             (src / "__init__.py").is_file(),
@@ -529,6 +522,7 @@ class TestMainThreadMarshalling(unittest.TestCase):
         and uses it -- a regression here would silently bypass the
         main-thread guarantee on real Toolbag installs."""
         import inspect
+
         source = inspect.getsource(plugin_server._Handler._dispatch)
         self.assertIn("run_on_main_thread", source)
 
@@ -555,12 +549,8 @@ class TestConnectShutdown(unittest.TestCase):
             "pythontk.AppLauncher.find_app",
             return_value=r"C:\fake\toolbag.exe",
         )
-        self.launch_patch = unittest.mock.patch(
-            "pythontk.AppLauncher.launch"
-        )
-        self.close_patch = unittest.mock.patch(
-            "pythontk.AppLauncher.close_process"
-        )
+        self.launch_patch = unittest.mock.patch("pythontk.AppLauncher.launch")
+        self.close_patch = unittest.mock.patch("pythontk.AppLauncher.close_process")
         self.exe_patch.start()
         self.mock_launch = self.launch_patch.start()
         self.mock_close = self.close_patch.start()
@@ -603,6 +593,7 @@ class TestConnectShutdown(unittest.TestCase):
         least once before /health responds. Avoids the race the
         sleep-before-start version had with the initial ping."""
         import time
+
         port = _free_port()
 
         def _on_launch(*_a, **_kw):
@@ -628,7 +619,7 @@ class TestConnectShutdown(unittest.TestCase):
         """If the launched Toolbag exits before the plugin comes up,
         connect() returns False rather than waiting out the full timeout."""
         proc = unittest.mock.MagicMock()
-        proc.poll.return_value = 1   # Already dead.
+        proc.poll.return_value = 1  # Already dead.
         self.mock_launch.return_value = proc
 
         conn = MarmosetConnection(port=_free_port())
@@ -636,9 +627,7 @@ class TestConnectShutdown(unittest.TestCase):
 
     def test_connect_raises_when_no_exe_found(self):
         self.exe_patch.stop()
-        with unittest.mock.patch(
-            "pythontk.AppLauncher.find_app", return_value=None
-        ):
+        with unittest.mock.patch("pythontk.AppLauncher.find_app", return_value=None):
             # Use a free port -- a real Toolbag on the dev machine could be
             # listening on 8765 and would make connect() short-circuit on
             # the ping path, never reaching the find_app branch.

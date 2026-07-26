@@ -14,7 +14,8 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils._core_utils import CoreUtils, short_name as _short_name
+from mayatk.core_utils._core_utils import CoreUtils
+
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.env_utils._env_utils import EnvUtils
 
@@ -22,24 +23,22 @@ from mayatk.env_utils._env_utils import EnvUtils
 # off Dropbox/OneDrive sync caches, Windows system folders, version control
 # noise, and Python bytecode caches — all of which can hold stale duplicates
 # of legitimate textures that would otherwise pollute the candidate set.
-_TEXTURE_WALK_SKIP_DIRS = frozenset({
-    ".dropbox.cache", ".dropbox",
-    "$RECYCLE.BIN", "System Volume Information",
-    ".git", ".svn", ".hg",
-    "node_modules", "__pycache__",
-})
+_TEXTURE_WALK_SKIP_DIRS = frozenset(
+    {
+        ".dropbox.cache",
+        ".dropbox",
+        "$RECYCLE.BIN",
+        "System Volume Information",
+        ".git",
+        ".svn",
+        ".hg",
+        "node_modules",
+        "__pycache__",
+    }
+)
 
 
-def _to_strs(nodes) -> List[str]:
-    """Coerce a node/node/iterable to a list of plain string names."""
-    if nodes is None:
-        return []
-    if isinstance(nodes, (list, tuple, set)):
-        return [str(n) for n in nodes if n is not None]
-    return [str(nodes)]
-
-
-class MatUtilsInternals(ptk.HelpMixin):
+class _MatUtilsInternal(ptk.HelpMixin):
     """Internal helper utilities shared across MatUtils operations."""
 
     @staticmethod
@@ -76,12 +75,10 @@ class MatUtilsInternals(ptk.HelpMixin):
         def to_long(nodes):
             if not nodes:
                 return []
-            names = _to_strs(nodes)
+            names = _MatUtilsInternal._to_strs(nodes)
             return cmds.ls(names, long=True, flatten=True) or []
 
-        no_scope_passed = (
-            objects is None and materials is None and file_nodes is None
-        )
+        no_scope_passed = objects is None and materials is None and file_nodes is None
 
         resolved_objects = to_long(objects) if objects else []
 
@@ -229,7 +226,7 @@ class MatUtilsInternals(ptk.HelpMixin):
         candidates = _FOLLOW.get(ntype, ["input", "color", "inColor"])
         for inp in candidates:
             if cmds.objExists(f"{node}.{inp}"):
-                result = MatUtilsInternals.get_texture_file_node(node, inp, _depth + 1)
+                result = _MatUtilsInternal.get_texture_file_node(node, inp, _depth + 1)
                 if result:
                     return result
 
@@ -286,8 +283,17 @@ class MatUtilsInternals(ptk.HelpMixin):
                 f"Invalid return_type: {return_type}. Must be 'type', 'shader', 'shading_group', or 'both'."
             )
 
+    @staticmethod
+    def _to_strs(nodes) -> List[str]:
+        """Coerce a node/node/iterable to a list of plain string names."""
+        if nodes is None:
+            return []
+        if isinstance(nodes, (list, tuple, set)):
+            return [str(n) for n in nodes if n is not None]
+        return [str(nodes)]
 
-class MatUtils(MatUtilsInternals):
+
+class MatUtils(_MatUtilsInternal):
     @staticmethod
     def resolve_path(path: str) -> Union[str, None]:
         """Resolves a texture path by expanding env vars, checking workspace, and handling UDIMs."""
@@ -533,7 +539,7 @@ class MatUtils(MatUtilsInternals):
         """Groups objects based on their assigned material(s)."""
         groups = {}
 
-        objects = cmds.ls(_to_strs(objects), long=True) or []
+        objects = cmds.ls(_MatUtilsInternal._to_strs(objects), long=True) or []
         mats_by_obj = MatUtils._materials_by_object(objects)
 
         for obj in objects:
@@ -695,17 +701,15 @@ class MatUtils(MatUtilsInternals):
         # means "no scope" and short-circuits to an empty result rather than
         # letting ``cmds.ls(mat=True)`` fall back to the whole scene.
         if materials is not None:
-            mat_strs = _to_strs(materials)
+            mat_strs = _MatUtilsInternal._to_strs(materials)
             resolved_materials = (
                 sorted({m for m in (cmds.ls(mat_strs, mat=True) or []) if m})
                 if mat_strs
                 else []
             )
         elif objects is not None:
-            obj_strs = _to_strs(objects)
-            resolved_materials = (
-                sorted(cls.get_mats(obj_strs)) if obj_strs else []
-            )
+            obj_strs = _MatUtilsInternal._to_strs(objects)
+            resolved_materials = sorted(cls.get_mats(obj_strs)) if obj_strs else []
         else:
             resolved_materials = (
                 cls.get_scene_mats(sort=True, exclude_defaults=False) or []
@@ -714,7 +718,9 @@ class MatUtils(MatUtilsInternals):
         if exclude_defaults and resolved_materials:
             default_nodes = cls._default_material_names()
             resolved_materials = [
-                m for m in resolved_materials if _short_name(m) not in default_nodes
+                m
+                for m in resolved_materials
+                if CoreUtils.short_name(m) not in default_nodes
             ]
 
         if exclude_unassigned and resolved_materials:
@@ -745,9 +751,7 @@ class MatUtils(MatUtilsInternals):
                     if not paths:
                         continue
                     path = paths[0]
-                    size_bytes = (
-                        os.path.getsize(path) if os.path.exists(path) else None
-                    )
+                    size_bytes = os.path.getsize(path) if os.path.exists(path) else None
 
                     pil_image = None
                     width = height = None
@@ -760,13 +764,15 @@ class MatUtils(MatUtilsInternals):
                             mode = pil_image.mode
                             img_format = pil_image.format
                         except Exception as e:
-                            tex_entries.append({
-                                "file_node": fn,
-                                "path": path,
-                                "name": os.path.basename(path),
-                                "size": size_bytes,
-                                "error": f"Failed to read image: {e}",
-                            })
+                            tex_entries.append(
+                                {
+                                    "file_node": fn,
+                                    "path": path,
+                                    "name": os.path.basename(path),
+                                    "size": size_bytes,
+                                    "error": f"Failed to read image: {e}",
+                                }
+                            )
                             continue
 
                     info: Dict[str, Any] = {
@@ -776,26 +782,28 @@ class MatUtils(MatUtilsInternals):
                         "size": size_bytes,
                     }
                     if include_image_metadata:
-                        info.update({
-                            "width": width,
-                            "height": height,
-                            "mode": mode,
-                            "format": img_format,
-                            "bit_depth": ptk.ImgUtils.format_bit_depth(mode),
-                        })
+                        info.update(
+                            {
+                                "width": width,
+                                "height": height,
+                                "mode": mode,
+                                "format": img_format,
+                                "bit_depth": ptk.ImgUtils.format_bit_depth(mode),
+                            }
+                        )
                     if optimize_check:
-                        info["optimization"] = (
-                            ptk.MapOptimizer.assess(
-                                path, image=pil_image, **optimize_kwargs
-                            )
+                        info["optimization"] = ptk.MapOptimizer.assess(
+                            path, image=pil_image, **optimize_kwargs
                         )
                     tex_entries.append(info)
 
-            results.append({
-                "material": mat_str,
-                "type": mat_type,
-                "textures": tex_entries,
-            })
+            results.append(
+                {
+                    "material": mat_str,
+                    "type": mat_type,
+                    "textures": tex_entries,
+                }
+            )
 
         if progress_callback and total:
             progress_callback(total, total, "Done")
@@ -846,9 +854,11 @@ class MatUtils(MatUtilsInternals):
 
         if exclude_defaults and mat_list:
             default_nodes = MatUtils._default_material_names()
-            mat_list = [m for m in mat_list if _short_name(m) not in default_nodes]
+            mat_list = [
+                m for m in mat_list if CoreUtils.short_name(m) not in default_nodes
+            ]
 
-        d = {_short_name(m): m for m in mat_list}
+        d = {CoreUtils.short_name(m): m for m in mat_list}
         filtered = ptk.filter_dict(d, keys=True, inc=inc, exc=exc, **filter_kwargs)
 
         mats = list(filtered.values())
@@ -857,15 +867,15 @@ class MatUtils(MatUtilsInternals):
             mats = ptk.filter_list(mats, inc=node_type, map_func=cmds.nodeType)
 
         if as_dict:
-            dct = {_short_name(m): m for m in mats}
+            dct = {CoreUtils.short_name(m): m for m in mats}
             return dict(sorted(dct.items())) if sort else dct
 
-        return sorted(mats, key=_short_name) if sort else mats
+        return sorted(mats, key=CoreUtils.short_name) if sort else mats
 
     @staticmethod
     def get_connected_shaders(file_nodes) -> List[str]:
         """Return surface shaders connected to one or more file nodes, ignoring intermediates."""
-        file_nodes = cmds.ls(_to_strs(file_nodes), flatten=True) or []
+        file_nodes = cmds.ls(_MatUtilsInternal._to_strs(file_nodes), flatten=True) or []
         visited = set()
         shaders = set()
 
@@ -882,9 +892,7 @@ class MatUtils(MatUtilsInternals):
                 return
             visited.add(node)
 
-            outputs = (
-                cmds.listConnections(node, source=False, destination=True) or []
-            )
+            outputs = cmds.listConnections(node, source=False, destination=True) or []
             for out in outputs:
                 # Skip non-shading nodes — only follow shader graph nodes.
                 if cmds.nodeType(out) == "shadingEngine":
@@ -940,9 +948,7 @@ class MatUtils(MatUtilsInternals):
                             )
                             file_nodes_in_history = cmds.ls(history, type="file") or []
                             for node in file_nodes_in_history:
-                                file_to_shaders.setdefault(node, set()).add(
-                                    shader_name
-                                )
+                                file_to_shaders.setdefault(node, set()).add(shader_name)
                                 if node not in file_to_shader_name:
                                     file_to_shader_name[node] = shader_name
                     except Exception:
@@ -1037,9 +1043,7 @@ class MatUtils(MatUtilsInternals):
         """
         mat_str = str(mat)
         try:
-            shading_engines = (
-                cmds.listConnections(mat_str, type="shadingEngine") or []
-            )
+            shading_engines = cmds.listConnections(mat_str, type="shadingEngine") or []
         except Exception:
             return False
         for sg in set(shading_engines):
@@ -1129,7 +1133,7 @@ class MatUtils(MatUtilsInternals):
         else:
             shading_group = shading_groups[0]
 
-        objects = _to_strs(objects)
+        objects = _MatUtilsInternal._to_strs(objects)
         valid_objects = cmds.ls(objects, flatten=True) or []
         if valid_objects:
             cmds.sets(valid_objects, edit=True, forceElement=shading_group)
@@ -1157,7 +1161,9 @@ class MatUtils(MatUtilsInternals):
         for sg in set(cmds.listConnections(shape, type="shadingEngine") or []):
             whole = False
             faces: List[int] = []
-            for m in cmds.ls(cmds.sets(sg, q=True) or [], long=True, flatten=True) or []:
+            for m in (
+                cmds.ls(cmds.sets(sg, q=True) or [], long=True, flatten=True) or []
+            ):
                 if m.split(".f[")[0] not in owners:
                     continue  # a different object that shares this shading group
                 if ".f[" in m:
@@ -1193,7 +1199,9 @@ class MatUtils(MatUtilsInternals):
         tf = (cmds.listRelatives(shape, parent=True, fullPath=True) or [None])[0]
 
         per_face = {sg: f for sg, f in assignments.items() if f and cmds.objExists(sg)}
-        whole = [sg for sg, f in assignments.items() if f is None and cmds.objExists(sg)]
+        whole = [
+            sg for sg, f in assignments.items() if f is None and cmds.objExists(sg)
+        ]
 
         # Pure single-material (no per-face overrides): a whole-object assignment
         # is the natural, cleanest form -- set it directly and return.
@@ -1329,7 +1337,7 @@ class MatUtils(MatUtilsInternals):
         return sg
 
     STINGRAY_GRAPHS = {
-        "none": "Standard.sfx",          # opaque
+        "none": "Standard.sfx",  # opaque
         "masked": "Standard_Masked.sfx",  # alpha test / cutout (clean VP2.0 preview, hard edges)
         "transparent": "Standard_Transparent.sfx",  # alpha blend (soft edges)
     }
@@ -1406,7 +1414,7 @@ class MatUtils(MatUtilsInternals):
 
         target_transforms = set()
         if objects:
-            objects = _to_strs(objects)
+            objects = _MatUtilsInternal._to_strs(objects)
             objects = cmds.ls(objects, long=True) or []
 
             for obj in objects:
@@ -1542,7 +1550,7 @@ class MatUtils(MatUtilsInternals):
         sourceimages_dir_norm = os.path.normpath(sourceimages_dir).replace("\\", "/")
 
         if limit_to_nodes:
-            node_names = _to_strs(limit_to_nodes)
+            node_names = _MatUtilsInternal._to_strs(limit_to_nodes)
             nodes_to_process = cmds.ls(node_names, type="file") or []
         else:
             nodes_to_process = cmds.ls(type="file") or []
@@ -1663,6 +1671,7 @@ class MatUtils(MatUtilsInternals):
         strict: bool = False,
     ) -> Dict[str, List[str]]:
         """Find duplicate materials based on their texture file names or full paths."""
+
         def _texture_id(path: str) -> str:
             if strict:
                 return path.lower()
@@ -1712,20 +1721,20 @@ class MatUtils(MatUtilsInternals):
                     if node in visited:
                         continue
                     visited.add(node)
-                    dest_plugs = cmds.listConnections(
-                        node,
-                        source=False,
-                        destination=True,
-                        plugs=True,
-                    ) or []
+                    dest_plugs = (
+                        cmds.listConnections(
+                            node,
+                            source=False,
+                            destination=True,
+                            plugs=True,
+                        )
+                        or []
+                    )
                     for plug in dest_plugs:
                         plug_node = plug.split(".")[0]
                         if plug_node == material:
                             mat_attrs.add(_parent_attr(plug))
-                        elif (
-                            plug_node not in visited
-                            and plug_node in history_set
-                        ):
+                        elif plug_node not in visited and plug_node in history_set:
                             frontier.append(plug_node)
 
                 if mat_attrs:
@@ -1851,7 +1860,7 @@ class MatUtils(MatUtilsInternals):
         if materials is None:
             materials = cmds.ls(mat=True) or []
         else:
-            materials = cmds.ls(_to_strs(materials), mat=True) or []
+            materials = cmds.ls(_MatUtilsInternal._to_strs(materials), mat=True) or []
 
         file_nodes: List[str] = []
         for material in materials:
@@ -1981,17 +1990,14 @@ class MatUtils(MatUtilsInternals):
         executor = ThreadPoolExecutor(max_workers=workers)
         try:
             futures = {
-                executor.submit(_copy_one, src, fn): src
-                for src, fn in src_entries
+                executor.submit(_copy_one, src, fn): src for src, fn in src_entries
             }
             total = len(futures)
             done = 0
             for future in as_completed(futures):
                 src = futures[future]
                 try:
-                    src_p, dst_p, was_skipped = future.result(
-                        timeout=per_file_timeout
-                    )
+                    src_p, dst_p, was_skipped = future.result(timeout=per_file_timeout)
                     copied.append((src_p, dst_p))
                     if was_skipped:
                         skipped += 1
@@ -2165,7 +2171,7 @@ class MatUtils(MatUtilsInternals):
             return []
 
         if file_nodes and not objects and not materials:
-            texture_nodes = _to_strs(file_nodes)
+            texture_nodes = _MatUtilsInternal._to_strs(file_nodes)
         else:
             scope = cls._resolve_texture_targets(
                 objects=objects,
@@ -2421,7 +2427,7 @@ class MatUtils(MatUtilsInternals):
         if not create_file_node:
             return written
 
-        base_name = node_name or f"{_short_name(bump_node)}_normal"
+        base_name = node_name or f"{CoreUtils.short_name(bump_node)}_normal"
         normal_file_node, _place2d = MatUtils.create_file_node(
             written, name=base_name, color_space="Raw"
         )
@@ -2511,7 +2517,7 @@ class MatUtils(MatUtilsInternals):
         if not materials:
             return
 
-        materials_list = _to_strs(materials)
+        materials_list = _MatUtilsInternal._to_strs(materials)
         cmds.select(materials_list)
 
         mel.eval("HypershadeWindow")

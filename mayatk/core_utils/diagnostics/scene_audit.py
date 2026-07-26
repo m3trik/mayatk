@@ -1366,9 +1366,13 @@ class SceneAnalyzer(ptk.LoggingMixin):
         # Observability — count SEs walked for the AnalysisManifest.
         self._shading_engine_count = len(shading_engines)
 
-        # target_shapes uses full DAG paths; build a leaf-name lookup for matching SE members
+        # target_shapes uses full DAG paths; build a leaf-name lookup for matching SE members.
+        # Map leaf -> list of full paths so shared leaf names (collisions) are detectable;
+        # the fallback is only trusted when exactly one full path owns a given leaf.
         target_shapes = set(shape_map.keys())
-        target_leaf_to_full = {s.split("|")[-1]: s for s in target_shapes}
+        target_leaf_to_full: Dict[str, List[str]] = {}
+        for s in target_shapes:
+            target_leaf_to_full.setdefault(s.split("|")[-1], []).append(s)
 
         total_ses = len(shading_engines)
         span = max(1, pct_end - pct_start)
@@ -1438,20 +1442,22 @@ class SceneAnalyzer(ptk.LoggingMixin):
                 node_leaf = node_full.split("|")[-1]
                 se_objects.add(node_full)
 
+                # Resolve to a target key: prefer the direct full-path match; only fall
+                # back to the leaf lookup when exactly one full path owns that leaf name
+                # (a collision would otherwise mis-attribute the shading engine).
+                if node_full in target_shapes:
+                    key = node_full
+                else:
+                    leaf_candidates = target_leaf_to_full.get(node_leaf, [])
+                    key = leaf_candidates[0] if len(leaf_candidates) == 1 else None
+
                 instances = 1
-                if node_full in shape_map:
-                    instances = len(shape_map[node_full])
-                elif node_leaf in target_leaf_to_full:
-                    instances = len(shape_map[target_leaf_to_full[node_leaf]])
+                if key is not None:
+                    instances = len(shape_map[key])
 
                 se_instance_count += instances
 
-                if node_full in target_shapes or node_leaf in target_leaf_to_full:
-                    key = (
-                        node_full
-                        if node_full in target_shapes
-                        else target_leaf_to_full[node_leaf]
-                    )
+                if key is not None:
                     if key not in self._shading_map:
                         self._shading_map[key] = set()
                     self._shading_map[key].add(se_name)

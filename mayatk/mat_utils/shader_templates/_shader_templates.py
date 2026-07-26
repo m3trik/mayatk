@@ -8,7 +8,7 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 from pythontk.core_utils.engines.textures.map_factory import (
     ConversionRegistry,
     TextureProcessor,
@@ -147,7 +147,7 @@ class GraphCollector:
             or []
         )
         for i in range(0, len(plug_pairs), 2):
-            src_attr = plug_pairs[i]       # plug on queried node (output)
+            src_attr = plug_pairs[i]  # plug on queried node (output)
             dest_attr = plug_pairs[i + 1]  # plug on connected node (input)
             src_node = src_attr.split(".")[0]
             dest_node = dest_attr.split(".")[0]
@@ -188,7 +188,9 @@ class GraphSaver(GraphCollector):
         exclude_types_lower = [t.lower() for t in ptk.make_iterable(exclude_types)]
 
         filtered_nodes = [
-            node for node in nodes if cmds.nodeType(str(node)).lower() not in exclude_types_lower
+            node
+            for node in nodes
+            if cmds.nodeType(str(node)).lower() not in exclude_types_lower
         ]
 
         graph_info = self.collect_graph(filtered_nodes)
@@ -265,9 +267,7 @@ class GraphRestorer:
             map_type = MapFactory.resolve_map_type(path)
             if map_type:
                 available_map_types[map_type] = path
-                self.logger.info(
-                    f"Resolved '{os.path.basename(path)}' as '{map_type}'"
-                )
+                self.logger.info(f"Resolved '{os.path.basename(path)}' as '{map_type}'")
             else:
                 self.logger.warning(
                     f"Could not resolve map type for '{os.path.basename(path)}'"
@@ -323,9 +323,7 @@ class GraphRestorer:
             try:
                 file_path = context.save_map(file_path, required_map_type)
             except Exception as e:
-                logger.error(
-                    f"Failed to save generated '{required_map_type}' map: {e}"
-                )
+                logger.error(f"Failed to save generated '{required_map_type}' map: {e}")
                 file_path = None
 
         if file_path:
@@ -548,26 +546,28 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
             setToolTip="Graph the selected material in the Hypershade.",
         )
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Shader Templates",
                 body="Save and restore shader networks as reusable YAML "
                 "templates. Templates live under the package's "
                 "<i>templates/</i> directory.",
                 steps=[
-                    "Select a material in the scene to capture its full "
-                    "network.",
+                    "Select a material in the scene to capture its full network.",
                     "Press <b>Save Template</b> to write the current "
                     "network out under a new name.",
                     "To restore, pick a template from the combo and press "
                     "<b>Restore Template</b>.",
                 ],
                 sections=[
-                    ("Menu options", [
-                        "<b>Open Templates Directory</b> — reveal the "
-                        "templates folder in Explorer.",
-                        "<b>Graph Material</b> — open the most recently "
-                        "restored material in Maya's Hypershade.",
-                    ]),
+                    (
+                        "Menu options",
+                        [
+                            "<b>Open Templates Directory</b> — reveal the "
+                            "templates folder in Explorer.",
+                            "<b>Graph Material</b> — open the most recently "
+                            "restored material in Maya's Hypershade.",
+                        ],
+                    ),
                 ],
             )
         )
@@ -650,15 +650,13 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
 
         new_path = os.path.join(os.path.dirname(current_path), new_name + ".yaml")
         if os.path.normcase(new_path) == os.path.normcase(current_path):
-            widget.setEditable(False)  # name unchanged (e.g. focus-out): no-op
-            return
+            return  # name unchanged: no-op
         if os.path.exists(new_path):
             self.logger.error("File with new name already exists.")
             return
 
         os.rename(current_path, new_path)
         self.logger.info(f"Template renamed to: {new_path}")
-        widget.setEditable(False)
         widget.init_slot()
 
     def lbl000(self):

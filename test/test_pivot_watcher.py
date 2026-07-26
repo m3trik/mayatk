@@ -15,6 +15,7 @@ We test the decision logic by monkey-patching ``_read_selection`` /
 ``_read_manip_pos`` at the module level so the test does not depend on
 actual viewport drags (impossible to simulate from mayapy).
 """
+
 import unittest
 
 import maya.cmds as cmds
@@ -54,16 +55,16 @@ class TestPivotWatcherDispatch(QuickTestCase):
         super().setUp()
         ScriptJobManager.reset()
         self.state = _FakeState()
-        self._orig_sel = pw_mod._read_selection
-        self._orig_manip = pw_mod._read_manip_override
-        self._orig_baked = pw_mod._read_baked_pivots
-        self.state.install(pw_mod)
+        self._orig_sel = pw_mod.PivotWatcher._read_selection
+        self._orig_manip = pw_mod.PivotWatcher._read_manip_override
+        self._orig_baked = pw_mod.PivotWatcher._read_baked_pivots
+        self.state.install(pw_mod.PivotWatcher)
         self.calls = []
 
     def tearDown(self):
-        pw_mod._read_selection = self._orig_sel
-        pw_mod._read_manip_override = self._orig_manip
-        pw_mod._read_baked_pivots = self._orig_baked
+        pw_mod.PivotWatcher._read_selection = self._orig_sel
+        pw_mod.PivotWatcher._read_manip_override = self._orig_manip
+        pw_mod.PivotWatcher._read_baked_pivots = self._orig_baked
         ScriptJobManager.reset()
         super().tearDown()
 

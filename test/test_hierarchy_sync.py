@@ -10,6 +10,7 @@ Tests for HierarchySync class functionality including:
 - Fuzzy matching
 - Optional real-world scene testing
 """
+
 import os
 import unittest
 from pathlib import Path
@@ -48,21 +49,11 @@ def _pm_undo_chunk():
         yield
     finally:
         cmds.undoInfo(closeChunk=True)
+
+
 # --- end shims ---
-import mayatk as mtk
 from mayatk import HierarchySync, NamespaceSandbox
 from mayatk.env_utils.hierarchy_sync._hierarchy_sync import (
-    HierarchySync,
-    get_clean_node_name,
-    get_clean_node_name_from_string,
-    clean_hierarchy_path,
-    format_component,
-    is_default_maya_camera,
-    should_keep_node_by_type,
-    filter_path_map_by_cameras,
-    filter_path_map_by_types,
-    select_objects_in_maya,
-    _rename_node_removing_namespace,
     MayaObjectMatcher,
     ObjectSwapper,
     HierarchyMapBuilder,
@@ -97,8 +88,8 @@ class TestHierarchySync(MayaTkTestCase):
         """Test basic hierarchy analysis with missing and extra objects."""
         # Create current scene objects
         root_current = cmds.group(empty=True, name="root")
-        child1_current = cmds.group(empty=True, name="child1", parent=root_current)
-        child2_current = cmds.group(empty=True, name="child2", parent=root_current)
+        cmds.group(empty=True, name="child1", parent=root_current)
+        cmds.group(empty=True, name="child2", parent=root_current)
 
         # Create reference objects (simulating an imported reference)
         # Reference has child1, child3 (missing in current), but lacks child2 (extra in current)
@@ -188,8 +179,8 @@ class TestHierarchySync(MayaTkTestCase):
         """
         # Current scene: child1 is under root1
         root1_current = cmds.group(empty=True, name="root1")
-        root2_current = cmds.group(empty=True, name="root2")
-        child1_current = cmds.group(empty=True, name="child1", parent=root1_current)
+        cmds.group(empty=True, name="root2")
+        cmds.group(empty=True, name="child1", parent=root1_current)
 
         # Reference scene: child1 is under root2
         if not cmds.namespace(exists="ref"):
@@ -252,7 +243,9 @@ class TestHierarchySync(MayaTkTestCase):
         root_ref = cmds.group(empty=True, name="ref:root")
         cmds.group(empty=True, name="ref:my_object_v2", parent=root_ref)
 
-        reference_objects = [root_ref] + list((cmds.listRelatives(str(root_ref), children=True) or []))
+        reference_objects = [root_ref] + list(
+            (cmds.listRelatives(str(root_ref), children=True) or [])
+        )
 
         manager = HierarchySync(fuzzy_matching=True, dry_run=True)
 
@@ -293,7 +286,7 @@ class TestHierarchySync(MayaTkTestCase):
 
         # --- Current scene ---
         grp_a = cmds.group(empty=True, name="grp_a")
-        grp_b = cmds.group(empty=True, name="grp_b")
+        cmds.group(empty=True, name="grp_b")
         cmds.group(empty=True, name="shared", parent=grp_a)
         cmds.group(empty=True, name="only_current", parent=grp_a)
         cmds.group(empty=True, name="moved", parent=grp_a)  # reparented
@@ -308,7 +301,8 @@ class TestHierarchySync(MayaTkTestCase):
         cmds.group(empty=True, name="ref:widget_v2", parent=grp_a_ref)  # fuzzy rename
 
         ref_objects = [grp_a_ref, grp_b_ref] + list(
-            (cmds.listRelatives(str(grp_a_ref), children=True) or []) + (cmds.listRelatives(str(grp_b_ref), children=True) or [])
+            (cmds.listRelatives(str(grp_a_ref), children=True) or [])
+            + (cmds.listRelatives(str(grp_b_ref), children=True) or [])
         )
 
         manager = HierarchySync(fuzzy_matching=True, dry_run=True)
@@ -381,7 +375,8 @@ class TestHierarchySync(MayaTkTestCase):
         cmds.group(empty=True, name="ref:adapter_loc", parent=grp_copy_ref)
 
         ref_objects = [grp_ref, grp_copy_ref] + list(
-            (cmds.listRelatives(str(grp_ref), children=True) or []) + (cmds.listRelatives(str(grp_copy_ref), children=True) or [])
+            (cmds.listRelatives(str(grp_ref), children=True) or [])
+            + (cmds.listRelatives(str(grp_copy_ref), children=True) or [])
         )
 
         manager = HierarchySync(fuzzy_matching=True, dry_run=True)
@@ -424,7 +419,9 @@ class TestHierarchySync(MayaTkTestCase):
         cmds.group(empty=True, name="ref:a", parent=root_ref)
         cmds.group(empty=True, name="ref:b", parent=root_ref)
 
-        ref_objects = [root_ref] + list((cmds.listRelatives(str(root_ref), children=True) or []))
+        ref_objects = [root_ref] + list(
+            (cmds.listRelatives(str(root_ref), children=True) or [])
+        )
 
         manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         manager.analyze_hierarchies(
@@ -451,11 +448,16 @@ class TestHierarchySync(MayaTkTestCase):
         # None of these exist yet
         parent = HierarchySync._ensure_parent_chain("GRP_A|GRP_B|LEAF")
         self.assertIsNotNone(parent)
-        self.assertEqual(parent.split('|')[-1].split(':')[-1], "GRP_B")
+        self.assertEqual(parent.split("|")[-1].split(":")[-1], "GRP_B")
         self.assertTrue(cmds.objExists("GRP_A"))
         self.assertTrue(cmds.objExists("GRP_B"))
         # GRP_B should be under GRP_A
-        self.assertEqual(((cmds.listRelatives(str(parent), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1], "GRP_A")
+        self.assertEqual(
+            ((cmds.listRelatives(str(parent), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            "GRP_A",
+        )
 
     def test_ensure_parent_chain_root_level(self):
         """_ensure_parent_chain returns None for root-level paths (no parent needed).
@@ -499,11 +501,18 @@ class TestHierarchySync(MayaTkTestCase):
 
         # stub_child should be under grp
         stub_node = "stub_child"
-        self.assertEqual(((cmds.listRelatives(str(stub_node), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1], "grp")
+        self.assertEqual(
+            ((cmds.listRelatives(str(stub_node), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            "grp",
+        )
 
         # root_stub should be at scene root
         root_stub = "root_stub"
-        self.assertIsNone((cmds.listRelatives(str(root_stub), parent=True) or [None])[0])
+        self.assertIsNone(
+            (cmds.listRelatives(str(root_stub), parent=True) or [None])[0]
+        )
 
     def test_create_stubs_skips_existing(self):
         """create_stubs skips nodes that already exist in the scene.
@@ -533,10 +542,21 @@ class TestHierarchySync(MayaTkTestCase):
         self.assertTrue(cmds.objExists("leaf_stub"))
         # Verify parenting chain
         leaf = "leaf_stub"
-        self.assertEqual(((cmds.listRelatives(str(leaf), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1], "sub_grp")
+        self.assertEqual(
+            ((cmds.listRelatives(str(leaf), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            "sub_grp",
+        )
         leaf_parent = (cmds.listRelatives(str(leaf), parent=True) or [None])[0]
-        leaf_grandparent = (cmds.listRelatives(leaf_parent, parent=True) or [None])[0] if leaf_parent else None
-        self.assertEqual((leaf_grandparent or "").split("|")[-1].split(":")[-1], "deep_grp")
+        leaf_grandparent = (
+            (cmds.listRelatives(leaf_parent, parent=True) or [None])[0]
+            if leaf_parent
+            else None
+        )
+        self.assertEqual(
+            (leaf_grandparent or "").split("|")[-1].split(":")[-1], "deep_grp"
+        )
 
     def test_create_stubs_are_tagged_and_locked(self):
         """Stubs are tagged with hierarchyManagerStub attr, noted, and locked.
@@ -620,7 +640,12 @@ class TestHierarchySync(MayaTkTestCase):
         self.assertEqual(len(created2), 1)
         self.assertTrue(cmds.objExists("leaf_2"))
         leaf2 = "leaf_2"
-        self.assertEqual(((cmds.listRelatives(str(leaf2), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1], "grp_a")
+        self.assertEqual(
+            ((cmds.listRelatives(str(leaf2), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            "grp_a",
+        )
 
         # Parent should still be locked after the second run.
         self.assertTrue(cmds.lockNode("grp_a", query=True, lock=True)[0])
@@ -652,13 +677,13 @@ class TestHierarchySync(MayaTkTestCase):
             pull_children=True,
         )
 
-        clean_name = get_clean_node_name(imported)
+        clean_name = HierarchySync.get_clean_node_name(imported)
         # Should not raise despite the node being locked.
         swapper._integrate_hierarchy(
             imported, clean_name, merge=True, allow_auto_rename=False
         )
 
-        self.assertEqual(imported.split('|')[-1].split(':')[-1], "REPLACE_ME")
+        self.assertEqual(imported.split("|")[-1].split(":")[-1], "REPLACE_ME")
         matches = cmds.ls("REPLACE_ME", type="transform")
         self.assertEqual(len(matches), 1)
 
@@ -688,14 +713,16 @@ class TestHierarchySync(MayaTkTestCase):
 
         # Build current scene with an extra object
         root = cmds.group(empty=True, name="root")
-        child_ok = cmds.group(empty=True, name="child_ok", parent=root)
-        child_extra = cmds.group(empty=True, name="child_extra", parent=root)
+        cmds.group(empty=True, name="child_ok", parent=root)
+        cmds.group(empty=True, name="child_extra", parent=root)
 
         # Reference only has root and child_ok
         root_ref = cmds.group(empty=True, name="ref:root")
         cmds.group(empty=True, name="ref:child_ok", parent=root_ref)
 
-        ref_objects = [root_ref] + list((cmds.listRelatives(str(root_ref), children=True) or []))
+        ref_objects = [root_ref] + list(
+            (cmds.listRelatives(str(root_ref), children=True) or [])
+        )
 
         manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.analyze_hierarchies(
@@ -716,7 +743,12 @@ class TestHierarchySync(MayaTkTestCase):
         # Verify it's now under _QUARANTINE
         self.assertTrue(cmds.objExists("_QUARANTINE"))
         quarantined = "child_extra"
-        self.assertEqual(((cmds.listRelatives(str(quarantined), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1], "_QUARANTINE")
+        self.assertEqual(
+            ((cmds.listRelatives(str(quarantined), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            "_QUARANTINE",
+        )
 
     def test_quarantine_extras_ancestor_dedup(self):
         """quarantine_extras deduplicates when both ancestor and descendant are extra.
@@ -746,8 +778,12 @@ class TestHierarchySync(MayaTkTestCase):
         self.assertEqual(len(moved), 1)
         self.assertEqual(moved[0], "orphan_grp")
         # Both should be under _QUARANTINE
-        self.assertEqual(cmds.listRelatives("orphan_grp", parent=True)[0], "_QUARANTINE")
-        self.assertEqual(cmds.listRelatives("orphan_child", parent=True)[0], "orphan_grp")
+        self.assertEqual(
+            cmds.listRelatives("orphan_grp", parent=True)[0], "_QUARANTINE"
+        )
+        self.assertEqual(
+            cmds.listRelatives("orphan_child", parent=True)[0], "orphan_grp"
+        )
 
     def test_quarantine_extras_custom_group_name(self):
         """quarantine_extras uses a custom group name when specified.
@@ -796,8 +832,8 @@ class TestHierarchySync(MayaTkTestCase):
 
         # Current: child is under grp_a
         grp_a = cmds.group(empty=True, name="grp_a")
-        grp_b = cmds.group(empty=True, name="grp_b")
-        child = cmds.group(empty=True, name="child", parent=grp_a)
+        cmds.group(empty=True, name="grp_b")
+        cmds.group(empty=True, name="child", parent=grp_a)
 
         # Reference: child should be under grp_b
         grp_a_ref = cmds.group(empty=True, name="ref:grp_a")
@@ -826,7 +862,9 @@ class TestHierarchySync(MayaTkTestCase):
         # child should now be under grp_b
         child_node = "child"
         self.assertEqual(
-            ((cmds.listRelatives(str(child_node), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1],
+            ((cmds.listRelatives(str(child_node), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
             "grp_b",
             f"Expected child under grp_b, got {((cmds.listRelatives(str(child_node), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1]}",
         )
@@ -856,7 +894,12 @@ class TestHierarchySync(MayaTkTestCase):
         self.assertEqual(len(fixed), 1)
         self.assertTrue(cmds.objExists("new_parent"))
         child_node = "child"
-        self.assertEqual(((cmds.listRelatives(str(child_node), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1], "new_parent")
+        self.assertEqual(
+            ((cmds.listRelatives(str(child_node), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            "new_parent",
+        )
 
     def test_create_stubs_empty_differences(self):
         """create_stubs returns empty list when no missing items exist.
@@ -901,7 +944,9 @@ class TestHierarchySync(MayaTkTestCase):
         cmds.group(empty=True, name="ref:a", parent=root_ref)
         cmds.group(empty=True, name="ref:c", parent=root_ref)
 
-        ref_objects = [root_ref] + list((cmds.listRelatives(str(root_ref), children=True) or []))
+        ref_objects = [root_ref] + list(
+            (cmds.listRelatives(str(root_ref), children=True) or [])
+        )
 
         manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         diff_result = manager.analyze_hierarchies(
@@ -926,7 +971,7 @@ class TestHierarchySync(MayaTkTestCase):
 
         # Current scene has "my_object_v1"
         root_current = cmds.group(empty=True, name="root")
-        obj_current = cmds.group(empty=True, name="my_object_v1", parent=root_current)
+        cmds.group(empty=True, name="my_object_v1", parent=root_current)
 
         # Reference scene has "my_object_v2"
         root_ref = cmds.group(empty=True, name="ref:root")
@@ -997,18 +1042,30 @@ class TestHierarchySync(MayaTkTestCase):
     def test_path_cleaning_utilities(self):
         """Test module-level path cleaning utilities."""
         # get_clean_node_name_from_string
-        self.assertEqual(get_clean_node_name_from_string("namespace:obj"), "obj")
-        self.assertEqual(get_clean_node_name_from_string("root|namespace:obj"), "obj")
-        self.assertEqual(get_clean_node_name_from_string("root|obj"), "obj")
+        self.assertEqual(
+            HierarchySync.get_clean_node_name_from_string("namespace:obj"), "obj"
+        )
+        self.assertEqual(
+            HierarchySync.get_clean_node_name_from_string("root|namespace:obj"), "obj"
+        )
+        self.assertEqual(
+            HierarchySync.get_clean_node_name_from_string("root|obj"), "obj"
+        )
 
         # clean_hierarchy_path
-        self.assertEqual(clean_hierarchy_path("ns1:root|ns2:child"), "root|child")
-        self.assertEqual(clean_hierarchy_path("root|child"), "root|child")
-        self.assertEqual(clean_hierarchy_path("ns:obj"), "obj")
+        self.assertEqual(
+            HierarchySync.clean_hierarchy_path("ns1:root|ns2:child"), "root|child"
+        )
+        self.assertEqual(HierarchySync.clean_hierarchy_path("root|child"), "root|child")
+        self.assertEqual(HierarchySync.clean_hierarchy_path("ns:obj"), "obj")
 
         # format_component
-        self.assertEqual(format_component("ns:obj", strip_namespaces=True), "obj")
-        self.assertEqual(format_component("ns:obj", strip_namespaces=False), "ns:obj")
+        self.assertEqual(
+            HierarchySync.format_component("ns:obj", strip_namespaces=True), "obj"
+        )
+        self.assertEqual(
+            HierarchySync.format_component("ns:obj", strip_namespaces=False), "ns:obj"
+        )
 
     def test_filtering_utilities(self):
         """Test module-level filtering utilities."""
@@ -1017,28 +1074,36 @@ class TestHierarchySync(MayaTkTestCase):
         mesh = cmds.polyCube(name="my_mesh")[0]
 
         # is_default_maya_camera
-        self.assertTrue(is_default_maya_camera("persp", cam))
-        self.assertFalse(is_default_maya_camera("my_mesh", mesh))
+        self.assertTrue(HierarchySync.is_default_maya_camera("persp", cam))
+        self.assertFalse(HierarchySync.is_default_maya_camera("my_mesh", mesh))
 
         # should_keep_node_by_type
-        self.assertTrue(should_keep_node_by_type(mesh, ["camera"], exclude=True))
-        self.assertFalse(should_keep_node_by_type(cam, ["camera"], exclude=True))
-        self.assertTrue(should_keep_node_by_type(cam, ["camera"], exclude=False))
+        self.assertTrue(
+            HierarchySync.should_keep_node_by_type(mesh, ["camera"], exclude=True)
+        )
+        self.assertFalse(
+            HierarchySync.should_keep_node_by_type(cam, ["camera"], exclude=True)
+        )
+        self.assertTrue(
+            HierarchySync.should_keep_node_by_type(cam, ["camera"], exclude=False)
+        )
 
         # filter_path_map_by_cameras
         path_map = {"persp": cam, "my_mesh": mesh}
-        filtered_map = filter_path_map_by_cameras(path_map)
+        filtered_map = HierarchySync.filter_path_map_by_cameras(path_map)
         self.assertIn("my_mesh", filtered_map)
         self.assertNotIn("persp", filtered_map)
 
         # filter_path_map_by_types
-        filtered_map = filter_path_map_by_types(path_map, ["camera"], exclude=True)
+        filtered_map = HierarchySync.filter_path_map_by_types(
+            path_map, ["camera"], exclude=True
+        )
         self.assertIn("my_mesh", filtered_map)
         self.assertNotIn("persp", filtered_map)
 
         # select_objects_in_maya
         cmds.select(clear=True)
-        count = select_objects_in_maya(["my_mesh"])
+        count = HierarchySync.select_objects_in_maya(["my_mesh"])
         self.assertEqual(count, 1)
         self.assertEqual(cmds.ls(selection=True)[0], mesh)
 
@@ -1046,8 +1111,10 @@ class TestHierarchySync(MayaTkTestCase):
         if not cmds.namespace(exists="test_ns"):
             cmds.namespace(add="test_ns")
         ns_node = cmds.group(empty=True, name="test_ns:my_node")
-        _rename_node_removing_namespace(ns_node, allow_maya_auto_rename=True)
-        self.assertEqual(ns_node.split('|')[-1].split(':')[-1], "my_node")
+        HierarchySync._rename_node_removing_namespace(
+            ns_node, allow_maya_auto_rename=True
+        )
+        self.assertEqual(ns_node.split("|")[-1].split(":")[-1], "my_node")
 
     def test_hierarchy_map_builder(self):
         """Test HierarchyMapBuilder methods."""
@@ -1102,13 +1169,13 @@ class TestHierarchySync(MayaTkTestCase):
             cmds.namespace(add="test_ns")
         ns_node = cmds.group(empty=True, name="test_ns:my_node")
         swapper._integrate_object(ns_node, "my_node", merge=False)
-        self.assertEqual(ns_node.split('|')[-1].split(':')[-1], "my_node")
+        self.assertEqual(ns_node.split("|")[-1].split(":")[-1], "my_node")
 
         # Test single-object integration with hierarchy
         ns_root2 = cmds.group(empty=True, name="test_ns:root2")
         ns_child2 = cmds.group(empty=True, name="test_ns:child2", parent=ns_root2)
         swapper._integrate_object(ns_child2, "child2", merge=False)
-        self.assertEqual(ns_child2.split('|')[-1].split(':')[-1], "child2")
+        self.assertEqual(ns_child2.split("|")[-1].split(":")[-1], "child2")
 
     def test_logging_redirect_to_widget(self):
         """Verify that setup_logging_redirect actually pipes log output to a text widget.
@@ -1264,7 +1331,7 @@ class TestHierarchySync(MayaTkTestCase):
         ref_objs = [
             t
             for t in info.get("transforms", [])
-            if t.split('|')[-1].split(':')[-1].split(":")[-1] not in default_cams
+            if t.split("|")[-1].split(":")[-1].split(":")[-1] not in default_cams
         ]
 
         manager = HierarchySync(
@@ -1318,10 +1385,12 @@ class TestHierarchySync(MayaTkTestCase):
         # --- Cross-validate against actual scene contents ---
         # Independently verify every diff result against the raw filtered maps
         current_cleaned = {
-            clean_hierarchy_path(p) for p in manager.current_scene_path_map
+            HierarchySync.clean_hierarchy_path(p)
+            for p in manager.current_scene_path_map
         }
         reference_cleaned = {
-            clean_hierarchy_path(p) for p in manager.reference_scene_path_map
+            HierarchySync.clean_hierarchy_path(p)
+            for p in manager.reference_scene_path_map
         }
 
         # Every "missing" path must exist in reference but NOT in current
@@ -1419,7 +1488,7 @@ class TestHierarchySync(MayaTkTestCase):
         ref_objs = [
             t
             for t in info.get("transforms", [])
-            if t.split('|')[-1].split(':')[-1].split(":")[-1] not in default_cams
+            if t.split("|")[-1].split(":")[-1].split(":")[-1] not in default_cams
         ]
 
         manager = HierarchySync(
@@ -1457,10 +1526,12 @@ class TestHierarchySync(MayaTkTestCase):
 
         # --- Cross-validate against actual scene contents ---
         current_cleaned = {
-            clean_hierarchy_path(p) for p in manager.current_scene_path_map
+            HierarchySync.clean_hierarchy_path(p)
+            for p in manager.current_scene_path_map
         }
         reference_cleaned = {
-            clean_hierarchy_path(p) for p in manager.reference_scene_path_map
+            HierarchySync.clean_hierarchy_path(p)
+            for p in manager.reference_scene_path_map
         }
 
         for path in diff["missing"]:
@@ -1552,7 +1623,7 @@ class TestHierarchySync(MayaTkTestCase):
         before_assemblies = {}
         for a in cmds.ls(assemblies=True, type="transform"):
             try:
-                name = a.split('|')[-1].split(':')[-1]
+                name = a.split("|")[-1].split(":")[-1]
                 if ":" not in name:  # Only root namespace objects
                     before_assemblies[cmds.ls(str(a), l=True)[0]] = name
             except Exception:
@@ -1593,9 +1664,9 @@ class TestHierarchySync(MayaTkTestCase):
 
         # Verify no _temp_import_conflict_ objects remain (all should be restored)
         leftover_temp = [
-            t.split('|')[-1].split(':')[-1]
+            t.split("|")[-1].split(":")[-1]
             for t in cmds.ls(type="transform")
-            if t.split('|')[-1].split(':')[-1].startswith("_temp_import_conflict_")
+            if t.split("|")[-1].split(":")[-1].startswith("_temp_import_conflict_")
         ]
         self.assertEqual(
             len(leftover_temp),
@@ -1611,7 +1682,8 @@ class TestHierarchySync(MayaTkTestCase):
             matching = [
                 t
                 for t in cmds.ls(type="transform")
-                if t.split('|')[-1].split(':')[-1] == original_name and ":" not in t.split('|')[-1].split(':')[-1]
+                if t.split("|")[-1].split(":")[-1] == original_name
+                and ":" not in t.split("|")[-1].split(":")[-1]
             ]
             self.assertGreater(
                 len(matching),
@@ -1697,9 +1769,9 @@ class TestHierarchySync(MayaTkTestCase):
 
         # Verify no leftover temp names
         leftover = [
-            t.split('|')[-1].split(':')[-1]
+            t.split("|")[-1].split(":")[-1]
             for t in cmds.ls(type="transform")
-            if t.split('|')[-1].split(':')[-1].startswith("_temp_import_conflict_")
+            if t.split("|")[-1].split(":")[-1].startswith("_temp_import_conflict_")
         ]
         self.assertEqual(
             len(leftover),
@@ -1751,7 +1823,7 @@ class TestHierarchySync(MayaTkTestCase):
         ref_objs = [
             t
             for t in info.get("transforms", [])
-            if t.split('|')[-1].split(':')[-1].split(":")[-1] not in default_cams
+            if t.split("|")[-1].split(":")[-1].split(":")[-1] not in default_cams
         ]
 
         manager = HierarchySync(
@@ -1836,10 +1908,12 @@ class TestHierarchySync(MayaTkTestCase):
 
         # --- Cross-validate against actual scene contents ---
         current_cleaned = {
-            clean_hierarchy_path(p) for p in manager.current_scene_path_map
+            HierarchySync.clean_hierarchy_path(p)
+            for p in manager.current_scene_path_map
         }
         reference_cleaned = {
-            clean_hierarchy_path(p) for p in manager.reference_scene_path_map
+            HierarchySync.clean_hierarchy_path(p)
+            for p in manager.reference_scene_path_map
         }
 
         for path in diff["missing"]:
@@ -2115,8 +2189,7 @@ class TestHierarchySync(MayaTkTestCase):
         self.assertEqual(
             len(lost_curves),
             0,
-            f"Repair destroyed {len(lost_curves)} animation curves: "
-            f"{lost_curves[:10]}",
+            f"Repair destroyed {len(lost_curves)} animation curves: {lost_curves[:10]}",
         )
         self.assertEqual(
             len(damaged_curves),
@@ -2225,7 +2298,7 @@ class TestHierarchySync(MayaTkTestCase):
             for t in cmds.ls(type="transform")
             if not cmds.objectType(str(t), isAType="camera")
         ]
-        diff = manager.analyze_hierarchies(
+        manager.analyze_hierarchies(
             current_tree_root="SCENE_WIDE_MODE",
             reference_objects=all_transforms,
             filter_meshes=True,
@@ -2868,7 +2941,7 @@ class TestIgnoreFeature(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        from qtpy import QtWidgets, QtGui
+        from qtpy import QtWidgets
 
         # Minimal stub so the controller can initialise.
         class _FakeUI:
@@ -3332,7 +3405,7 @@ class TestCachedReferenceImport(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        from qtpy import QtWidgets, QtGui
+        from qtpy import QtWidgets
 
         # Minimal stub so the controller can initialise (same pattern as TestIgnoreFeature).
         class _FakeTree(QtWidgets.QTreeWidget):
@@ -3416,7 +3489,9 @@ class TestCachedReferenceImport(MayaTkTestCase):
         cmds.group(empty=True, name="ref:child_a", parent=root_ref)
         cmds.group(empty=True, name="ref:child_b", parent=root_ref)
 
-        ref_objects = [root_ref] + list((cmds.listRelatives(str(root_ref), children=True) or []))
+        ref_objects = [root_ref] + list(
+            (cmds.listRelatives(str(root_ref), children=True) or [])
+        )
 
         # Run analysis directly on the core HierarchySync.
         manager = HierarchySync(fuzzy_matching=False, dry_run=True)
@@ -3461,7 +3536,8 @@ class TestCachedReferenceImport(MayaTkTestCase):
         the stale in-scene objects would be reused silently.
         Fixed: 2026-04-10
         """
-        import tempfile, time
+        import tempfile
+        import time
 
         # Create a temp .ma file so os.path.getmtime works on a real path.
         tmp = tempfile.NamedTemporaryFile(
@@ -3542,7 +3618,7 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
     """Tests for Phase 2 optimizations: batch pm.ls in build_path_map,
     cmds-based traversal in build_path_map_from_nodes/build_hierarchy_structure.
 
-    These verify identical behaviour after replacing per-node 
+    These verify identical behaviour after replacing per-node
     with batch cmds.ls() and PyMEL traversal with cmds equivalents.
     Added: 2026-03-08
     """
@@ -3563,7 +3639,7 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
     def test_build_path_map_scene_wide_mode(self):
         """build_path_map with SCENE_WIDE_MODE sentinel includes all assemblies."""
         r1 = cmds.group(empty=True, name="Root1")
-        r2 = cmds.group(empty=True, name="Root2")
+        cmds.group(empty=True, name="Root2")
         c = cmds.group(empty=True, name="Child", parent=r1)
 
         path_map = HierarchyMapBuilder.build_path_map("SCENE_WIDE_MODE")
@@ -3611,14 +3687,12 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
 
     def test_build_hierarchy_structure_basic(self):
         """build_hierarchy_structure returns correct parent/type info using cmds."""
-        from mayatk.env_utils.hierarchy_sync.tree_utils import (
-            build_hierarchy_structure,
-        )
+        from mayatk.env_utils.hierarchy_sync.tree_utils import TreePathMatcher
 
         parent = cmds.group(empty=True, name="Parent")
         child = cmds.group(empty=True, name="Child", parent=parent)
 
-        items, roots = build_hierarchy_structure([parent, child])
+        items, roots = TreePathMatcher.build_hierarchy_structure([parent, child])
         parent_key = cmds.ls(str(parent), l=True)[0]
         child_key = cmds.ls(str(child), l=True)[0]
 
@@ -3692,7 +3766,7 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
             "extra": ["lone_grp", "lone_grp|lone_child"],
         }
 
-        moved = manager.quarantine_extras()
+        manager.quarantine_extras()
         # Should use default _QUARANTINE since only 1 direct child
         self.assertTrue(cmds.objExists("_QUARANTINE"))
         self.assertEqual(cmds.listRelatives("lone_grp", parent=True)[0], "_QUARANTINE")
@@ -3722,7 +3796,12 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
         # Should recognize it's already under MY_Q
         self.assertIn("already_there", moved)
         # Should NOT have been re-parented
-        self.assertEqual(((cmds.listRelatives(str(existing), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1], "MY_Q")
+        self.assertEqual(
+            ((cmds.listRelatives(str(existing), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            "MY_Q",
+        )
 
     # ── Skip animated ── (detailed tests in TestAnimationSafety)
 
@@ -3782,7 +3861,12 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
 
         moved = manager.quarantine_extras(skip_animated=False)
         self.assertIn("child_under_anim", moved)
-        self.assertEqual(((cmds.listRelatives(str(extra), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1], "_QUARANTINE")
+        self.assertEqual(
+            ((cmds.listRelatives(str(extra), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            "_QUARANTINE",
+        )
 
     def test_quarantine_skip_animated_dry_run(self):
         """quarantine_extras dry_run respects skip_animated.
@@ -3832,7 +3916,7 @@ class TestHierarchyTreeRenderer(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        from qtpy import QtWidgets, QtGui
+        from qtpy import QtWidgets
 
         class _FakeTree(QtWidgets.QTreeWidget):
             def __init__(self):
@@ -3970,7 +4054,7 @@ class TestDiffFormattingAndDelegate(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        from qtpy import QtWidgets, QtGui
+        from qtpy import QtWidgets
 
         class _FakeTree(QtWidgets.QTreeWidget):
             def __init__(self):
@@ -4068,7 +4152,6 @@ class TestDiffFormattingAndDelegate(MayaTkTestCase):
 
     def test_apply_diff_color_sets_foreground_and_background(self):
         """_apply_diff_color sets both foreground and background brushes."""
-        from qtpy import QtGui
 
         item = self._add_item(self.tree001, "test_item")
         self.renderer._apply_diff_color(item, "extra")
@@ -4080,7 +4163,6 @@ class TestDiffFormattingAndDelegate(MayaTkTestCase):
 
     def test_apply_diff_color_unknown_type_is_noop(self):
         """Unknown diff_type silently does nothing."""
-        from qtpy import QtGui
 
         item = self._add_item(self.tree001, "test_item")
         self.renderer._apply_diff_color(item, "nonexistent_type")
@@ -4152,7 +4234,6 @@ class TestDiffFormattingAndDelegate(MayaTkTestCase):
 
     def test_clear_tree_colors_resets_all_item_brushes(self):
         """clear_tree_colors removes fg/bg from all items in the tree."""
-        from qtpy import QtGui
 
         item1 = self._add_item(self.tree001, "item1")
         item2 = self._add_item(self.tree001, "item2")
@@ -4230,7 +4311,7 @@ class TestControllerTreeOrchestration(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        from qtpy import QtWidgets, QtGui
+        from qtpy import QtWidgets
 
         class _FakeTree(QtWidgets.QTreeWidget):
             def __init__(self):
@@ -4371,7 +4452,7 @@ class TestMergeHierarchiesReplaceInPlace(MayaTkTestCase):
         Fixed: 2026-04-10
         """
         # Create an existing world-level object.
-        existing = cmds.group(empty=True, name="TARGET_OBJ")
+        cmds.group(empty=True, name="TARGET_OBJ")
         self.assertTrue(cmds.objExists("TARGET_OBJ"))
 
         # Simulate an imported object in a namespace (as NamespaceSandbox would produce).
@@ -4386,14 +4467,14 @@ class TestMergeHierarchiesReplaceInPlace(MayaTkTestCase):
             pull_children=True,
         )
 
-        clean_name = get_clean_node_name(imported)
+        clean_name = HierarchySync.get_clean_node_name(imported)
         swapper._integrate_hierarchy(
             imported, clean_name, merge=True, allow_auto_rename=False
         )
 
         # The pulled object should have taken the name — no auto-rename suffix.
         self.assertEqual(
-            imported.split('|')[-1].split(':')[-1],
+            imported.split("|")[-1].split(":")[-1],
             "TARGET_OBJ",
             f"Expected 'TARGET_OBJ', got '{imported.split('|')[-1].split(':')[-1]}' (was auto-renamed instead of replacing)",
         )
@@ -4412,7 +4493,12 @@ class TestMergeHierarchiesReplaceInPlace(MayaTkTestCase):
         """
         parent = cmds.group(empty=True, name="PARENT")
         existing = cmds.group(empty=True, name="TARGET_OBJ", parent=parent)
-        self.assertEqual(((cmds.listRelatives(str(existing), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1], "PARENT")
+        self.assertEqual(
+            ((cmds.listRelatives(str(existing), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            "PARENT",
+        )
 
         if not cmds.namespace(exists="temp_import"):
             cmds.namespace(add="temp_import")
@@ -4425,12 +4511,12 @@ class TestMergeHierarchiesReplaceInPlace(MayaTkTestCase):
             pull_children=True,
         )
 
-        clean_name = get_clean_node_name(imported)
+        clean_name = HierarchySync.get_clean_node_name(imported)
         swapper._integrate_hierarchy(
             imported, clean_name, merge=True, allow_auto_rename=False
         )
 
-        self.assertEqual(imported.split('|')[-1].split(':')[-1], "TARGET_OBJ")
+        self.assertEqual(imported.split("|")[-1].split(":")[-1], "TARGET_OBJ")
         matches = cmds.ls("TARGET_OBJ", type="transform")
         self.assertEqual(len(matches), 1)
 
@@ -4443,7 +4529,7 @@ class TestMergeHierarchiesReplaceInPlace(MayaTkTestCase):
         """
         # Existing hierarchy: TARGET_ROOT -> existing_child
         existing_root = cmds.group(empty=True, name="TARGET_ROOT")
-        existing_child = cmds.group(empty=True, name="old_child", parent=existing_root)
+        cmds.group(empty=True, name="old_child", parent=existing_root)
 
         # Imported hierarchy: TARGET_ROOT -> new_child
         if not cmds.namespace(exists="temp_import"):
@@ -4463,18 +4549,20 @@ class TestMergeHierarchiesReplaceInPlace(MayaTkTestCase):
             pull_children=True,
         )
 
-        clean_name = get_clean_node_name(imported_root)
+        clean_name = HierarchySync.get_clean_node_name(imported_root)
         swapper._integrate_hierarchy(
             imported_root, clean_name, merge=True, allow_auto_rename=False
         )
 
         # Re-resolve from UUID after rename
         imported_root = (cmds.ls(imported_root_uuid, long=False) or [imported_root])[0]
-        imported_child = (cmds.ls(imported_child_uuid, long=False) or [imported_child])[0]
+        imported_child = (cmds.ls(imported_child_uuid, long=False) or [imported_child])[
+            0
+        ]
 
         # Pulled root should have the correct name (no suffix).
         self.assertEqual(
-            imported_root.split('|')[-1].split(':')[-1],
+            imported_root.split("|")[-1].split(":")[-1],
             "TARGET_ROOT",
             f"Expected 'TARGET_ROOT', got '{imported_root.split('|')[-1].split(':')[-1]}'",
         )
@@ -4506,7 +4594,12 @@ class TestMergeHierarchiesReplaceInPlace(MayaTkTestCase):
         # Existing: OLD_GRP -> TARGET_OBJ
         old_parent = cmds.group(empty=True, name="OLD_GRP")
         existing = cmds.group(empty=True, name="TARGET_OBJ", parent=old_parent)
-        self.assertEqual(((cmds.listRelatives(str(existing), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1], "OLD_GRP")
+        self.assertEqual(
+            ((cmds.listRelatives(str(existing), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            "OLD_GRP",
+        )
 
         # Reference: NEW_GRP -> TARGET_OBJ (different parent).
         if not cmds.namespace(exists="temp_import"):
@@ -4523,7 +4616,7 @@ class TestMergeHierarchiesReplaceInPlace(MayaTkTestCase):
             pull_children=True,
         )
 
-        clean_name = get_clean_node_name(imported)
+        clean_name = HierarchySync.get_clean_node_name(imported)
         swapper._integrate_hierarchy(
             imported, clean_name, merge=True, allow_auto_rename=False
         )
@@ -4535,18 +4628,22 @@ class TestMergeHierarchiesReplaceInPlace(MayaTkTestCase):
             f"Expected 1 'TARGET_OBJ', got {len(matches)}: {[cmds.ls(str(m), l=True)[0] for m in matches]}",
         )
         imported = matches[0]
-        self.assertEqual(imported.split('|')[-1].split(':')[-1], "TARGET_OBJ")
+        self.assertEqual(imported.split("|")[-1].split(":")[-1], "TARGET_OBJ")
         # Pulled object should live under NEW_GRP, not OLD_GRP.
-        self.assertIsNotNone((cmds.listRelatives(str(imported), parent=True) or [None])[0])
+        self.assertIsNotNone(
+            (cmds.listRelatives(str(imported), parent=True) or [None])[0]
+        )
         self.assertEqual(
-            ((cmds.listRelatives(str(imported), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1],
+            ((cmds.listRelatives(str(imported), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
             "NEW_GRP",
             f"Expected parent 'NEW_GRP', got '{((cmds.listRelatives(str(imported), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1]}'",
         )
 
     def test_integrate_single_replaces_world_level_object(self):
         """Single-object merge mode replaces a world-level object (already correct)."""
-        existing = cmds.group(empty=True, name="SINGLE_OBJ")
+        cmds.group(empty=True, name="SINGLE_OBJ")
 
         if not cmds.namespace(exists="temp_import"):
             cmds.namespace(add="temp_import")
@@ -4559,12 +4656,12 @@ class TestMergeHierarchiesReplaceInPlace(MayaTkTestCase):
             pull_children=False,
         )
 
-        clean_name = get_clean_node_name(imported)
+        clean_name = HierarchySync.get_clean_node_name(imported)
         swapper._integrate_single(
             imported, clean_name, merge=True, allow_auto_rename=False
         )
 
-        self.assertEqual(imported.split('|')[-1].split(':')[-1], "SINGLE_OBJ")
+        self.assertEqual(imported.split("|")[-1].split(":")[-1], "SINGLE_OBJ")
         matches = cmds.ls("SINGLE_OBJ", type="transform")
         self.assertEqual(len(matches), 1)
 
@@ -4628,7 +4725,7 @@ class TestDeleteSelectedObjects(MayaTkTestCase):
 
     def test_delete_only_selected_nodes(self):
         """Only the targeted nodes should be deleted; siblings must survive."""
-        keep = cmds.group(empty=True, name="KEEP_ME")
+        cmds.group(empty=True, name="KEEP_ME")
         delete_me = cmds.group(empty=True, name="DELETE_ME")
 
         cmds.delete(delete_me)
@@ -5230,7 +5327,7 @@ class TestAnimationSafety(MayaTkTestCase):
             pull_mode="Merge Hierarchies",
             pull_children=True,
         )
-        clean_name = get_clean_node_name(imported)
+        clean_name = HierarchySync.get_clean_node_name(imported)
         swapper._integrate_hierarchy(
             imported, clean_name, merge=True, allow_auto_rename=False
         )
@@ -5260,7 +5357,7 @@ class TestAnimationSafety(MayaTkTestCase):
             pull_mode="Merge Hierarchies",
             pull_children=False,
         )
-        clean_name = get_clean_node_name(imported)
+        clean_name = HierarchySync.get_clean_node_name(imported)
         swapper._integrate_single(
             imported, clean_name, merge=True, allow_auto_rename=False
         )
@@ -5273,7 +5370,7 @@ class TestAnimationSafety(MayaTkTestCase):
 
     def test_integrate_hierarchy_transfers_then_replaces(self):
         """Merge mode with time-curve-only existing: transfers animation, replaces node."""
-        existing = self._make_animated_cube("INT_XFER")
+        self._make_animated_cube("INT_XFER")
 
         if not cmds.namespace(exists="temp_import"):
             cmds.namespace(add="temp_import")
@@ -5285,7 +5382,7 @@ class TestAnimationSafety(MayaTkTestCase):
             pull_mode="Merge Hierarchies",
             pull_children=True,
         )
-        clean_name = get_clean_node_name(imported)
+        clean_name = HierarchySync.get_clean_node_name(imported)
         swapper._integrate_hierarchy(
             imported, clean_name, merge=True, allow_auto_rename=False
         )
@@ -5422,7 +5519,7 @@ class TestAnimationSafety(MayaTkTestCase):
 
     def test_fuzzy_rename_dry_run_no_skip(self):
         """Dry-run mode does not apply the skip_animated guard (it doesn't rename anyway)."""
-        node = self._make_expression("FZRN_DRY")
+        self._make_expression("FZRN_DRY")
         hm = HierarchySync()
         hm.dry_run = True
         items = [{"current_name": "FZRN_DRY", "target_name": "FZRN_DRY_NEW"}]
@@ -5817,7 +5914,7 @@ class TestAnimationSafety(MayaTkTestCase):
             pull_mode="Merge Hierarchies",
             pull_children=True,
         )
-        clean_name = get_clean_node_name(imported)
+        clean_name = HierarchySync.get_clean_node_name(imported)
         swapper._integrate_hierarchy(
             imported, clean_name, merge=True, allow_auto_rename=False
         )
@@ -5918,7 +6015,7 @@ class TestAnimationSafety(MayaTkTestCase):
         Uses an IK handle for a valid pole vector target.
         """
         joint1 = cmds.joint(name="CST_PV_J1", position=(0, 0, 0))
-        joint2 = cmds.joint(name="CST_PV_J2", position=(5, 0, 0))
+        cmds.joint(name="CST_PV_J2", position=(5, 0, 0))
         joint3 = cmds.joint(name="CST_PV_J3", position=(10, 0, 0))
         cmds.select(clear=True)
         ik_handle = cmds.ikHandle(
@@ -7022,14 +7119,18 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         grp, loc, child = self._make_locator_group("FLR")
         root = HierarchySync._find_locator_group_root(child)
         self.assertIsNotNone(root)
-        self.assertEqual(root.split('|')[-1].split(':')[-1], grp.split('|')[-1].split(':')[-1])
+        self.assertEqual(
+            root.split("|")[-1].split(":")[-1], grp.split("|")[-1].split(":")[-1]
+        )
 
     def test_find_root_from_locator_itself(self):
         """Locator transform itself returns its parent GRP as root."""
         grp, loc, child = self._make_locator_group("FLR2")
         root = HierarchySync._find_locator_group_root(loc)
         self.assertIsNotNone(root)
-        self.assertEqual(root.split('|')[-1].split(':')[-1], grp.split('|')[-1].split(':')[-1])
+        self.assertEqual(
+            root.split("|")[-1].split(":")[-1], grp.split("|")[-1].split(":")[-1]
+        )
 
     def test_find_root_nested_locators(self):
         """Nested locator chains return the highest-level GRP.
@@ -7047,7 +7148,9 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
 
         root = HierarchySync._find_locator_group_root(child)
         self.assertIsNotNone(root)
-        self.assertEqual(root.split('|')[-1].split(':')[-1], outer_grp.split('|')[-1].split(':')[-1])
+        self.assertEqual(
+            root.split("|")[-1].split(":")[-1], outer_grp.split("|")[-1].split(":")[-1]
+        )
 
     def test_find_root_returns_none_for_plain_hierarchy(self):
         """No locator in chain → returns None."""
@@ -7063,7 +7166,9 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
 
         root = HierarchySync._find_locator_group_root(child)
         self.assertIsNotNone(root)
-        self.assertEqual(root.split('|')[-1].split(':')[-1], loc.split('|')[-1].split(':')[-1])
+        self.assertEqual(
+            root.split("|")[-1].split(":")[-1], loc.split("|")[-1].split(":")[-1]
+        )
 
     def test_find_root_with_intermediate_non_locator_transform(self):
         """Intermediate non-locator transforms between locator and child.
@@ -7080,7 +7185,9 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
 
         root = HierarchySync._find_locator_group_root(child)
         self.assertIsNotNone(root)
-        self.assertEqual(root.split('|')[-1].split(':')[-1], grp.split('|')[-1].split(':')[-1])
+        self.assertEqual(
+            root.split("|")[-1].split(":")[-1], grp.split("|")[-1].split(":")[-1]
+        )
 
     # ── _promote_to_locator_groups ──
 
@@ -7217,21 +7324,31 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
             filter_lights=True,
         )
 
-        moved = manager.quarantine_extras()
+        manager.quarantine_extras()
 
         # The entire GRP should have been moved, keeping its children intact
         self.assertTrue(cmds.objExists("_QUARANTINE"))
         grp_parent = (cmds.listRelatives(str(grp), parent=True) or [None])[0]
         self.assertEqual(
-            grp_parent.split('|')[-1].split(':')[-1], "_QUARANTINE", "GRP should be under _QUARANTINE"
+            grp_parent.split("|")[-1].split(":")[-1],
+            "_QUARANTINE",
+            "GRP should be under _QUARANTINE",
         )
         # LOC should still be under GRP (not ripped out)
         self.assertEqual(
-            ((cmds.listRelatives(str(loc), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1], grp.split('|')[-1].split(':')[-1], "LOC should remain under GRP"
+            ((cmds.listRelatives(str(loc), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            grp.split("|")[-1].split(":")[-1],
+            "LOC should remain under GRP",
         )
         # MESH should still be under LOC
         self.assertEqual(
-            ((cmds.listRelatives(str(mesh), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1], loc.split('|')[-1].split(':')[-1], "MESH should remain under LOC"
+            ((cmds.listRelatives(str(mesh), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            loc.split("|")[-1].split(":")[-1],
+            "MESH should remain under LOC",
         )
 
     def test_quarantine_nested_locators_moves_outermost_group(self):
@@ -7262,27 +7379,35 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
             filter_lights=True,
         )
 
-        moved = manager.quarantine_extras()
+        manager.quarantine_extras()
 
         # Entire chain should be under _QUARANTINE via OUTER_GRP
         self.assertEqual(
-            ((cmds.listRelatives(str(outer_grp), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1],
+            ((cmds.listRelatives(str(outer_grp), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
             "_QUARANTINE",
             "OUTER_GRP should be under _QUARANTINE",
         )
         self.assertEqual(
-            ((cmds.listRelatives(str(outer_loc), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1],
-            outer_grp.split('|')[-1].split(':')[-1],
+            ((cmds.listRelatives(str(outer_loc), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            outer_grp.split("|")[-1].split(":")[-1],
             "OUTER_LOC should remain under OUTER_GRP",
         )
         self.assertEqual(
-            ((cmds.listRelatives(str(inner_grp), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1],
-            outer_loc.split('|')[-1].split(':')[-1],
+            ((cmds.listRelatives(str(inner_grp), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            outer_loc.split("|")[-1].split(":")[-1],
             "INNER_GRP should remain under OUTER_LOC",
         )
         self.assertEqual(
-            ((cmds.listRelatives(str(deep_child), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1],
-            inner_loc.split('|')[-1].split(':')[-1],
+            ((cmds.listRelatives(str(deep_child), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            inner_loc.split("|")[-1].split(":")[-1],
             "DEEP_CHILD should remain under INNER_LOC",
         )
 
@@ -7307,7 +7432,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         if not cmds.namespace(exists="ref"):
             cmds.namespace(add="ref")
         ref_root = cmds.group(empty=True, name="ref:rskip_scene_root")
-        ref_mesh = cmds.group(empty=True, name="ref:RSKIP_MESH", parent=ref_root)
+        cmds.group(empty=True, name="ref:RSKIP_MESH", parent=ref_root)
 
         manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.analyze_hierarchies(
@@ -7318,12 +7443,14 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
             filter_lights=True,
         )
 
-        fixed = manager.fix_reparented()
+        manager.fix_reparented()
 
         # MESH should still be under LOC (reparent was skipped)
         self.assertEqual(
-            ((cmds.listRelatives(str(mesh), parent=True) or [None])[0] or '').split('|')[-1].split(':')[-1],
-            loc.split('|')[-1].split(':')[-1],
+            ((cmds.listRelatives(str(mesh), parent=True) or [None])[0] or "")
+            .split("|")[-1]
+            .split(":")[-1],
+            loc.split("|")[-1].split(":")[-1],
             "MESH should remain under LOC — locator group must not be broken",
         )
 
@@ -7366,10 +7493,15 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
             for loc_shape in cmds.ls(type="locator"):
                 loc_tf = (cmds.listRelatives(str(loc_shape), parent=True) or [None])[0]
                 parent = (cmds.listRelatives(str(loc_tf), parent=True) or [None])[0]
-                children = (cmds.listRelatives(str(loc_tf), children=True, type="transform") or [])
-                chains[loc_tf.split('|')[-1].split(':')[-1]] = {
-                    "parent": parent.split('|')[-1].split(':')[-1] if parent else None,
-                    "children": sorted(c.split('|')[-1].split(':')[-1] for c in children),
+                children = (
+                    cmds.listRelatives(str(loc_tf), children=True, type="transform")
+                    or []
+                )
+                chains[loc_tf.split("|")[-1].split(":")[-1]] = {
+                    "parent": parent.split("|")[-1].split(":")[-1] if parent else None,
+                    "children": sorted(
+                        c.split("|")[-1].split(":")[-1] for c in children
+                    ),
                 }
             return chains
 
@@ -7384,7 +7516,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         ref_objs = [
             t
             for t in info.get("transforms", [])
-            if t.split('|')[-1].split(':')[-1].split(":")[-1] not in default_cams
+            if t.split("|")[-1].split(":")[-1].split(":")[-1] not in default_cams
         ]
 
         manager = HierarchySync(
@@ -7419,8 +7551,14 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
             # Parent must still be the same (or both moved together)
             if pre["parent"] and cmds.objExists(pre["parent"]):
                 loc_node = loc_name
-                current_parent = (cmds.listRelatives(str(loc_node), parent=True) or [None])[0]
-                parent_name = current_parent.split('|')[-1].split(':')[-1] if current_parent else None
+                current_parent = (
+                    cmds.listRelatives(str(loc_node), parent=True) or [None]
+                )[0]
+                parent_name = (
+                    current_parent.split("|")[-1].split(":")[-1]
+                    if current_parent
+                    else None
+                )
                 if parent_name != pre["parent"]:
                     # Parent changed — check if the whole chain moved together
                     # (parent was reparented to quarantine with locator inside)
@@ -7433,9 +7571,18 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
                 if not cmds.objExists(child_name):
                     continue  # deleted
                 child_node = child_name
-                child_parent = (cmds.listRelatives(str(child_node), parent=True) or [None])[0]
-                if child_parent is None or child_parent.split('|')[-1].split(':')[-1] != loc_name:
-                    actual = child_parent.split('|')[-1].split(':')[-1] if child_parent else "world"
+                child_parent = (
+                    cmds.listRelatives(str(child_node), parent=True) or [None]
+                )[0]
+                if (
+                    child_parent is None
+                    or child_parent.split("|")[-1].split(":")[-1] != loc_name
+                ):
+                    actual = (
+                        child_parent.split("|")[-1].split(":")[-1]
+                        if child_parent
+                        else "world"
+                    )
                     broken.append(
                         f"{child_name}: was under {loc_name}, now under {actual}"
                     )
@@ -7443,8 +7590,7 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         self.assertEqual(
             broken,
             [],
-            f"Locator-group chains broken by fix operations:\n"
-            + "\n".join(broken[:20]),
+            "Locator-group chains broken by fix operations:\n" + "\n".join(broken[:20]),
         )
 
         sandbox.cleanup_all_namespaces()
@@ -7671,7 +7817,9 @@ class TestTransferAllOrNothing(MayaTkTestCase):
         """EC-10 hardened: after a failed merge the existing node's animation
         must survive the caller deleting the replacement."""
         existing = cmds.group(empty=True, name="AON_MERGE_PART")
-        cmds.addAttr(existing, longName="customBlend", attributeType="float", keyable=True)
+        cmds.addAttr(
+            existing, longName="customBlend", attributeType="float", keyable=True
+        )
         cmds.setKeyframe(existing, attribute="translateX", time=1, value=0)
         cmds.setKeyframe(existing, attribute="translateX", time=24, value=5)
         cmds.setKeyframe(existing, attribute="customBlend", time=1, value=0)
@@ -7684,8 +7832,12 @@ class TestTransferAllOrNothing(MayaTkTestCase):
         # Simulate what _integrate_hierarchy does next: delete the replacement.
         cmds.delete(replacement)
 
-        keys = cmds.keyframe("AON_MERGE_PART", attribute="translateX", query=True, tc=True)
-        self.assertIsNotNone(keys, "translateX animation was destroyed by partial transfer")
+        keys = cmds.keyframe(
+            "AON_MERGE_PART", attribute="translateX", query=True, tc=True
+        )
+        self.assertIsNotNone(
+            keys, "translateX animation was destroyed by partial transfer"
+        )
         self.assertEqual(len(keys), 2)
 
     def test_transfer_matches_rotate_order(self):
@@ -7711,9 +7863,7 @@ class TestTransferAllOrNothing(MayaTkTestCase):
         new = cmds.group(empty=True, name="AON_SHARED_NEW")
         cmds.setKeyframe(new, attribute="translateX", time=1, value=-1)
         cmds.setKeyframe(new, attribute="translateX", time=24, value=-2)
-        shared_curve = cmds.listConnections(
-            f"{new}.translateX", s=True, d=False
-        )[0]
+        shared_curve = cmds.listConnections(f"{new}.translateX", s=True, d=False)[0]
         other = cmds.group(empty=True, name="AON_SHARED_OTHER")
         cmds.connectAttr(f"{shared_curve}.output", f"{other}.translateY", force=True)
 
@@ -7861,7 +8011,9 @@ class TestAnimationDetectionBlindSpots(MayaTkTestCase):
     def test_has_animation_data_motion_path(self):
         crv = cmds.curve(degree=1, point=[(0, 0, 0), (10, 0, 0)])
         node = cmds.group(empty=True, name="BS_MOPATH")
-        cmds.pathAnimation(node, curve=crv, fractionMode=True, startTimeU=1, endTimeU=24)
+        cmds.pathAnimation(
+            node, curve=crv, fractionMode=True, startTimeU=1, endTimeU=24
+        )
         self.assertTrue(
             HierarchySync._has_animation_data(node),
             "Motion-path-driven node must count as animated",
@@ -7890,7 +8042,9 @@ class TestAnimationDetectionBlindSpots(MayaTkTestCase):
     def test_safe_merge_delete_preserves_motion_path_node(self):
         crv = cmds.curve(degree=1, point=[(0, 0, 0), (5, 0, 0)])
         existing = cmds.group(empty=True, name="BS_MP_EXISTING")
-        cmds.pathAnimation(existing, curve=crv, fractionMode=True, startTimeU=1, endTimeU=24)
+        cmds.pathAnimation(
+            existing, curve=crv, fractionMode=True, startTimeU=1, endTimeU=24
+        )
         replacement = cmds.group(empty=True, name="BS_MP_REPL")
 
         swapper = ObjectSwapper(dry_run=False)
@@ -7900,7 +8054,6 @@ class TestAnimationDetectionBlindSpots(MayaTkTestCase):
     def test_safe_merge_delete_preserves_referenced_node(self):
         """Referenced nodes cannot be deleted — merge must preserve them
         cleanly instead of erroring into the fallback path."""
-        import tempfile
 
         ref_dir = Path(__file__).parent / "temp_tests"
         ref_dir.mkdir(exist_ok=True)
@@ -7935,12 +8088,16 @@ class TestAnimationDetectionBlindSpots(MayaTkTestCase):
         driver = cmds.group(empty=True, name="BS_EXT_DRIVER")
         other = cmds.group(empty=True, name="BS_EXT_DRIVEN")
         cmds.setDrivenKeyframe(
-            f"{other}.translateX", currentDriver=f"{driver}.translateY",
-            driverValue=0, value=0,
+            f"{other}.translateX",
+            currentDriver=f"{driver}.translateY",
+            driverValue=0,
+            value=0,
         )
         cmds.setDrivenKeyframe(
-            f"{other}.translateX", currentDriver=f"{driver}.translateY",
-            driverValue=10, value=5,
+            f"{other}.translateX",
+            currentDriver=f"{driver}.translateY",
+            driverValue=10,
+            value=5,
         )
         replacement = cmds.group(empty=True, name="BS_EXT_REPL")
 
@@ -7948,7 +8105,9 @@ class TestAnimationDetectionBlindSpots(MayaTkTestCase):
         self.assertFalse(swapper._safe_merge_delete(driver, replacement))
         self.assertTrue(cmds.objExists("BS_EXT_DRIVER"))
         self.assertTrue(
-            cmds.listConnections(f"{other}.translateX", type="animCurve", s=True, d=False),
+            cmds.listConnections(
+                f"{other}.translateX", type="animCurve", s=True, d=False
+            ),
             "Driven key on the other node must remain intact",
         )
 
@@ -7998,7 +8157,8 @@ class TestStubCreationRobustness(MayaTkTestCase):
         hm.dry_run = True
         created = hm.create_stubs(["SCR_DR_PAR|SCR_DR_EXISTS", "SCR_DR_PAR|SCR_DR_NEW"])
         self.assertEqual(
-            created, ["SCR_DR_NEW"],
+            created,
+            ["SCR_DR_NEW"],
             "Dry-run must not count stubs that already exist",
         )
 
@@ -8067,7 +8227,8 @@ class TestReparentedPairingAndResolution(MayaTkTestCase):
 
         paired_leaves = [r["leaf"] for r in diff.get("reparented", [])]
         self.assertNotIn(
-            "RPM_ITEM", paired_leaves,
+            "RPM_ITEM",
+            paired_leaves,
             "Mesh vs empty-transform must not be declared reparented",
         )
         self.assertIn("RPM_REAL_PAR|RPM_ITEM", diff.get("missing", []))
@@ -8107,7 +8268,12 @@ class TestReparentedPairingAndResolution(MayaTkTestCase):
         hm.clean_to_raw_reference = {"FRP_KEEP_PAR": "refNS:FRP_KEEP_PAR"}
 
         hm.fix_reparented(
-            [{"current_path": "FRP_KEEP_PAR|FRP_KEEP_CHILD", "reference_path": "FRP_KEEP_CHILD"}]
+            [
+                {
+                    "current_path": "FRP_KEEP_PAR|FRP_KEEP_CHILD",
+                    "reference_path": "FRP_KEEP_CHILD",
+                }
+            ]
         )
         self.assertTrue(cmds.objExists("FRP_KEEP_CHILD"))
         self.assertTrue(
@@ -8131,9 +8297,13 @@ class TestReparentedPairingAndResolution(MayaTkTestCase):
                 self.tree000 = self._FakeTree()
                 self.tree001 = self._FakeTree()
                 self.txt003 = type(
-                    "W", (), {
-                        "append": lambda *a: None, "setHtml": lambda *a: None,
-                        "setText": lambda *a: None, "clear": lambda *a: None,
+                    "W",
+                    (),
+                    {
+                        "append": lambda *a: None,
+                        "setHtml": lambda *a: None,
+                        "setText": lambda *a: None,
+                        "clear": lambda *a: None,
                     },
                 )()
 
@@ -8194,13 +8364,15 @@ class TestPullIntegrationRobustness(MayaTkTestCase):
         """A clean merge pull must not route through the exception fallback."""
         import logging
 
-        existing = cmds.group(empty=True, name="PIR_TARGET")
+        cmds.group(empty=True, name="PIR_TARGET")
         if not cmds.namespace(exists="temp_import"):
             cmds.namespace(add="temp_import")
         imported = cmds.group(empty=True, name="temp_import:PIR_TARGET")
         uuid_before = cmds.ls(imported, uuid=True)[0]
 
-        swapper = ObjectSwapper(dry_run=False, pull_mode="Merge Hierarchies", pull_children=True)
+        swapper = ObjectSwapper(
+            dry_run=False, pull_mode="Merge Hierarchies", pull_children=True
+        )
 
         records = []
 
@@ -8219,13 +8391,15 @@ class TestPullIntegrationRobustness(MayaTkTestCase):
 
         warnings = [r for r in records if r.levelno >= logging.WARNING]
         self.assertEqual(
-            [r.getMessage() for r in warnings], [],
+            [r.getMessage() for r in warnings],
+            [],
             "Clean integration must not emit warnings",
         )
         matches = cmds.ls("PIR_TARGET", type="transform")
         self.assertEqual(len(matches), 1)
         self.assertEqual(
-            cmds.ls("PIR_TARGET", uuid=True)[0], uuid_before,
+            cmds.ls("PIR_TARGET", uuid=True)[0],
+            uuid_before,
             "The pulled node (same UUID) must have taken the name",
         )
 
@@ -8237,14 +8411,17 @@ class TestPullIntegrationRobustness(MayaTkTestCase):
         imported = cmds.group(empty=True, name="temp_import_99:PIR_LOCKED")
         cmds.lockNode(imported, lock=True)
 
-        swapper = ObjectSwapper(dry_run=False, pull_mode="Add to Scene", pull_children=True)
+        swapper = ObjectSwapper(
+            dry_run=False, pull_mode="Add to Scene", pull_children=True
+        )
         swapper._integrate_hierarchy(
             imported, "PIR_LOCKED", merge=False, allow_auto_rename=True
         )
 
         leftovers = cmds.ls("temp_import_99:*", type="transform") or []
         self.assertEqual(
-            leftovers, [],
+            leftovers,
+            [],
             "No pulled node may remain in the temp namespace (cleanup would delete it)",
         )
         self.assertTrue(cmds.objExists("PIR_LOCKED"))
@@ -8279,7 +8456,8 @@ class TestSlotsLockedAndStalePaths(MayaTkTestCase):
         plain = cmds.group(empty=True, name="SLP_PLAIN")
 
         self.slot.ui.tree001.selectedItems.return_value = [
-            self._make_item(stub), self._make_item(plain),
+            self._make_item(stub),
+            self._make_item(plain),
         ]
         self.slot.b018()
 
@@ -8374,9 +8552,13 @@ class TestControllerSettingsCoercion(MayaTkTestCase):
                 self.tree001 = self._FakeTree()
                 self.settings = _FakeSettings()
                 self.txt003 = type(
-                    "W", (), {
-                        "append": lambda *a: None, "setHtml": lambda *a: None,
-                        "setText": lambda *a: None, "clear": lambda *a: None,
+                    "W",
+                    (),
+                    {
+                        "append": lambda *a: None,
+                        "setHtml": lambda *a: None,
+                        "setText": lambda *a: None,
+                        "clear": lambda *a: None,
                     },
                 )()
 
@@ -8413,15 +8595,13 @@ class TestTreeUtilsExtraction(MayaTkTestCase):
     ambiguous leaf name."""
 
     def test_extract_object_name_prefers_user_role_path(self):
-        from mayatk.env_utils.hierarchy_sync.tree_utils import (
-            _extract_object_name_from_item,
-        )
+        from mayatk.env_utils.hierarchy_sync.tree_utils import TreePathMatcher
 
         item = _QtWidgets.QTreeWidgetItem(["LEAF"])
         item.setData(0, QtCore.Qt.UserRole, "|GRP_A|LEAF")
         item._raw_name = "LEAF"
         self.assertEqual(
-            _extract_object_name_from_item(item),
+            TreePathMatcher._extract_object_name_from_item(item),
             "|GRP_A|LEAF",
             "Stored DAG path must win over the leaf name",
         )

@@ -10,7 +10,7 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils._core_utils import CoreUtils, as_strings, leaf_name
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.xform_utils._xform_utils import XformUtils
@@ -61,7 +61,9 @@ class RigUtils(ptk.HelpMixin):
             if current_parent:
                 helper = cmds.parent(helper, world=True)[0]
 
-        cmds.setAttr(f"{helper}.translate", position[0], position[1], position[2], type="double3")
+        cmds.setAttr(
+            f"{helper}.translate", position[0], position[1], position[2], type="double3"
+        )
         cmds.setAttr(f"{helper}.visibility", 0)
 
         return helper
@@ -226,10 +228,14 @@ class RigUtils(ptk.HelpMixin):
         objects_str = (
             [str(o) for o in objects]
             if isinstance(objects, (list, tuple, set))
-            else [str(objects)] if objects else []
+            else [str(objects)]
+            if objects
+            else []
         )
-        for obj in cmds.ls(objects_str, long=True, type="transform", flatten=True) or []:
-            orig_name = leaf_name(obj)
+        for obj in (
+            cmds.ls(objects_str, long=True, type="transform", flatten=True) or []
+        ):
+            orig_name = CoreUtils.leaf_name(obj)
 
             # Strip suffixes from the original name once
             base_name_stripped = format_name_with_suffix(orig_name, "")
@@ -263,7 +269,9 @@ class RigUtils(ptk.HelpMixin):
             if is_group:
                 children = cmds.listRelatives(obj, children=True, type="transform")
                 if children:
-                    bb = cmds.exactWorldBoundingBox(obj)  # [xmin,ymin,zmin,xmax,ymax,zmax]
+                    bb = cmds.exactWorldBoundingBox(
+                        obj
+                    )  # [xmin,ymin,zmin,xmax,ymax,zmax]
                     center = [
                         (bb[0] + bb[3]) / 2.0,
                         (bb[1] + bb[4]) / 2.0,
@@ -285,6 +293,7 @@ class RigUtils(ptk.HelpMixin):
                             rot_deg = rot_deg[0]
                         if any(abs(c) > 1e-6 for c in rot_deg):
                             from math import radians
+
                             euler = om.MEulerRotation(
                                 radians(rot_deg[0]),
                                 radians(rot_deg[1]),
@@ -375,7 +384,9 @@ class RigUtils(ptk.HelpMixin):
         Parameters:
             obj (str/obj/list): The child object or the locator itself.
         """
-        for obj in cmds.ls(as_strings(objects), long=True, objectsOnly=True) or []:
+        for obj in (
+            cmds.ls(CoreUtils.as_strings(objects), long=True, objectsOnly=True) or []
+        ):
             if not cmds.objExists(obj):
                 continue
 
@@ -480,7 +491,9 @@ class RigUtils(ptk.HelpMixin):
                 f"expected one of {sorted(valid_sources)}"
             )
 
-        nodes = cmds.ls(as_strings(objects), type="transform", long=True) or []
+        nodes = (
+            cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True) or []
+        )
         if not nodes:
             return []
 
@@ -506,10 +519,14 @@ class RigUtils(ptk.HelpMixin):
                 or []
             )
             geos = [
-                g for g in geo_xforms
+                g
+                for g in geo_xforms
                 if cmds.listRelatives(
-                    g, shapes=True, type="mesh",
-                    noIntermediate=True, fullPath=True,
+                    g,
+                    shapes=True,
+                    type="mesh",
+                    noIntermediate=True,
+                    fullPath=True,
                 )
             ]
             if not geos:
@@ -540,8 +557,12 @@ class RigUtils(ptk.HelpMixin):
 
         restored: List[str] = []
         anim_attrs = (
-            "translateX", "translateY", "translateZ",
-            "rotateX", "rotateY", "rotateZ",
+            "translateX",
+            "translateY",
+            "translateZ",
+            "rotateX",
+            "rotateY",
+            "rotateZ",
         )
 
         for grp, loc, geos in candidates:
@@ -582,9 +603,7 @@ class RigUtils(ptk.HelpMixin):
             if delta_world.length() < 1e-5:
                 continue
 
-            grp_parent_list = (
-                cmds.listRelatives(grp, parent=True, fullPath=True) or []
-            )
+            grp_parent_list = cmds.listRelatives(grp, parent=True, fullPath=True) or []
             if grp_parent_list:
                 parent_mat = om.MMatrix(
                     cmds.xform(grp_parent_list[0], q=True, ws=True, matrix=True)
@@ -599,21 +618,23 @@ class RigUtils(ptk.HelpMixin):
             # each — in each node's own local space — or the post-restore
             # ws_rp ends up doubled and rotations happen at the wrong place.
             def _shift_pivots(node: str) -> None:
-                node_world = om.MMatrix(
-                    cmds.xform(node, q=True, ws=True, matrix=True)
-                )
+                node_world = om.MMatrix(cmds.xform(node, q=True, ws=True, matrix=True))
                 d = delta_world * node_world.inverse()
                 with Attributes.temporarily_unlock([node]):
                     cur_rp = cmds.getAttr(f"{node}.rotatePivot")[0]
                     cur_sp = cmds.getAttr(f"{node}.scalePivot")[0]
                     cmds.setAttr(
                         f"{node}.rotatePivot",
-                        cur_rp[0] - d.x, cur_rp[1] - d.y, cur_rp[2] - d.z,
+                        cur_rp[0] - d.x,
+                        cur_rp[1] - d.y,
+                        cur_rp[2] - d.z,
                         type="double3",
                     )
                     cmds.setAttr(
                         f"{node}.scalePivot",
-                        cur_sp[0] - d.x, cur_sp[1] - d.y, cur_sp[2] - d.z,
+                        cur_sp[0] - d.x,
+                        cur_sp[1] - d.y,
+                        cur_sp[2] - d.z,
                         type="double3",
                     )
 
@@ -621,25 +642,29 @@ class RigUtils(ptk.HelpMixin):
             _shift_pivots(loc)
 
             for geo in geos:
-                geo_world = om.MMatrix(
-                    cmds.xform(geo, q=True, ws=True, matrix=True)
-                )
+                geo_world = om.MMatrix(cmds.xform(geo, q=True, ws=True, matrix=True))
                 delta_in_geo = delta_world * geo_world.inverse()
                 # ``noIntermediate=True`` excludes the Orig shape on deformed
                 # meshes — shifting both Orig and Deformed corrupts the
                 # deformation graph.
                 mesh_shapes = (
                     cmds.listRelatives(
-                        geo, shapes=True, type="mesh",
-                        noIntermediate=True, fullPath=True,
+                        geo,
+                        shapes=True,
+                        type="mesh",
+                        noIntermediate=True,
+                        fullPath=True,
                     )
                     or []
                 )
                 for mesh in mesh_shapes:
                     cmds.move(
-                        -delta_in_geo.x, -delta_in_geo.y, -delta_in_geo.z,
+                        -delta_in_geo.x,
+                        -delta_in_geo.y,
+                        -delta_in_geo.z,
                         f"{mesh}.vtx[*]",
-                        relative=True, objectSpace=True,
+                        relative=True,
+                        objectSpace=True,
                     )
                 _shift_pivots(geo)
 
@@ -653,12 +678,10 @@ class RigUtils(ptk.HelpMixin):
                     type="double3",
                 )
 
-            restored.append(leaf_name(grp))
+            restored.append(CoreUtils.leaf_name(grp))
 
         if restored:
-            print(
-                f"RigUtils.restore_rig_anchors: restored {len(restored)} rig(s)."
-            )
+            print(f"RigUtils.restore_rig_anchors: restored {len(restored)} rig(s).")
 
         return restored
 
@@ -694,13 +717,9 @@ class RigUtils(ptk.HelpMixin):
         """
         constraint_node = str(constraint_node) if constraint_node else None
         if not constraint_node or not cmds.objExists(constraint_node):
-            raise TypeError(
-                "constraint_node must be a valid constraint node name."
-            )
+            raise TypeError("constraint_node must be a valid constraint node name.")
         if not cmds.objectType(constraint_node, isAType="constraint"):
-            raise TypeError(
-                f"'{constraint_node}' is not a constraint node."
-            )
+            raise TypeError(f"'{constraint_node}' is not a constraint node.")
 
         # The constraint command (``cmds.parentConstraint`` etc.) is reused for
         # target autodetect, wiring the anchor, and reading weight aliases.
@@ -723,8 +742,7 @@ class RigUtils(ptk.HelpMixin):
             constraint_targets = [
                 t
                 for t in dict.fromkeys(target_list)
-                if cmds.objExists(t)
-                and cmds.objectType(t, isAType="transform")
+                if cmds.objExists(t) and cmds.objectType(t, isAType="transform")
             ]
 
         # Check targets
@@ -739,7 +757,9 @@ class RigUtils(ptk.HelpMixin):
             f"{constraint_node}.constraintParentInverseMatrix",
             source=True,
             destination=False,
-        ) or cmds.listRelatives(constraint_node, type="transform", parent=True)
+        ) or cmds.listRelatives(
+            constraint_node, type="transform", parent=True, fullPath=True
+        )
         driven_obj = driven[0] if driven else None
         if node is None:
             node = driven_obj
@@ -770,7 +790,9 @@ class RigUtils(ptk.HelpMixin):
         # a mismatch here bails cleanly, before any anchor helper is created.
         weight_alias_list = query_weight_aliases()
         if len(weight_alias_list) < len(constraint_targets):
-            cmds.warning("Number of constraint weights does not match number of targets.")
+            cmds.warning(
+                "Number of constraint weights does not match number of targets."
+            )
             return result
 
         # Optionally add a neutral/world anchor as the last target. The helper
@@ -824,7 +846,7 @@ class RigUtils(ptk.HelpMixin):
             result["switch_attr"] = switch_attr
 
             weight_attr = weight_alias_list[0]
-            cond_name = f"{leaf_name(constraint_node)}_{attr_name}_cond0"
+            cond_name = f"{CoreUtils.leaf_name(constraint_node)}_{attr_name}_cond0"
             cond_node = cmds.createNode("condition", name=cond_name)
             cmds.setAttr(f"{cond_node}.operation", 0)  # == compare
             cmds.setAttr(f"{cond_node}.firstTerm", 1)
@@ -837,11 +859,13 @@ class RigUtils(ptk.HelpMixin):
 
         # --- Weighted float blend for 2 targets only ---
         if weighted and num_targets == 2:
-            cmds.addAttr(node, longName=attr_name, at="double", min=0.0, max=1.0, k=True)
+            cmds.addAttr(
+                node, longName=attr_name, at="double", min=0.0, max=1.0, k=True
+            )
             result["switch_attr"] = switch_attr
             cmds.setAttr(switch_attr, 0)
             cmds.connectAttr(switch_attr, weight_alias_list[0], f=True)
-            rev_name = f"{leaf_name(node)}_{attr_name}_reverse"
+            rev_name = f"{CoreUtils.leaf_name(node)}_{attr_name}_reverse"
             if cmds.objExists(rev_name):
                 rev_node = rev_name
             else:
@@ -852,7 +876,7 @@ class RigUtils(ptk.HelpMixin):
             return result
 
         # --- Enum dropdown for snap switching (2 or more targets) ---
-        enum_names = [leaf_name(t) for t in constraint_targets]
+        enum_names = [CoreUtils.leaf_name(t) for t in constraint_targets]
         enum_string = ":".join(enum_names)
         cmds.addAttr(node, longName=attr_name, at="enum", en=enum_string, k=True)
         cmds.setAttr(switch_attr, 0)
@@ -860,7 +884,7 @@ class RigUtils(ptk.HelpMixin):
 
         # For each weight, create a condition node that checks if switch matches index
         for i, weight_attr in enumerate(weight_alias_list[:num_targets]):
-            cond_name = f"{leaf_name(constraint_node)}_{attr_name}_cond{i}"
+            cond_name = f"{CoreUtils.leaf_name(constraint_node)}_{attr_name}_cond{i}"
             cond_node = cmds.createNode("condition", name=cond_name)
             cmds.setAttr(f"{cond_node}.operation", 0)  # == compare
             cmds.setAttr(f"{cond_node}.firstTerm", i)
@@ -1050,13 +1074,21 @@ class RigUtils(ptk.HelpMixin):
             >>> RigUtils.joint_in_ik_chain("elbow_jnt", "shoulder_jnt", "wrist_jnt")
             True
         """
+        # Normalize to long paths so the equality checks below are
+        # path-consistent (listRelatives fullPath yields long names).
+        joint = (cmds.ls(joint, long=True) or [joint])[0]
+        start_joint = (cmds.ls(start_joint, long=True) or [start_joint])[0]
+        end_joint = (cmds.ls(end_joint, long=True) or [end_joint])[0]
+
         current = end_joint
         while current:
             if current == joint:
                 return True
             if current == start_joint:
                 return False
-            parent = cmds.listRelatives(current, parent=True, type="joint")
+            parent = cmds.listRelatives(
+                current, parent=True, type="joint", fullPath=True
+            )
             current = parent[0] if parent else None
         return False
 
@@ -1073,18 +1105,20 @@ class RigUtils(ptk.HelpMixin):
         Returns:
             List[str]: The joint chain.
         """
-        joints = cmds.ls(str(root_joint), type="joint", flatten=True) or []
+        joints = cmds.ls(str(root_joint), type="joint", flatten=True, long=True) or []
         if not joints or len(joints) > 1:
             cmds.warning(f"Operation requires a root joint: got {root_joint}")
             return []
-        root_joint = joints[0]
+        root_joint = joints[0]  # long path — keeps the chain uniformly disambiguated
 
         # Traverse the hierarchy to get the joint chain
         joint_chain = []
         current_joint = root_joint
         while current_joint:
             joint_chain.append(current_joint)
-            children = cmds.listRelatives(current_joint, children=True, type="joint")
+            children = cmds.listRelatives(
+                current_joint, children=True, type="joint", fullPath=True
+            )
             if children:
                 current_joint = children[0]
             else:
@@ -1109,7 +1143,9 @@ class RigUtils(ptk.HelpMixin):
         root_joint = str(root_joint)
         # Get the original joint chain starting from the root
         original_joints = (
-            cmds.listRelatives(root_joint, allDescendents=True, type="joint", fullPath=True)
+            cmds.listRelatives(
+                root_joint, allDescendents=True, type="joint", fullPath=True
+            )
             or []
         )
         original_joints.append(root_joint)
@@ -1210,10 +1246,12 @@ class RigUtils(ptk.HelpMixin):
             for shape in cmds.ls(type="mesh", noIntermediate=True) or []:
                 transform = NodeUtils.get_parent(shape)
                 if transform:
-                    shape_inputs.append((shape, transform, leaf_name(transform)))
+                    shape_inputs.append(
+                        (shape, transform, CoreUtils.leaf_name(transform))
+                    )
         else:
             for m in meshes:
-                label = leaf_name(m)
+                label = CoreUtils.leaf_name(m)
                 if not cmds.objectType(m, isAType="transform"):
                     result["wrong_type"].append(label)
                     print(f"[SKIP] Not a mesh transform: {label}")
@@ -1301,7 +1339,7 @@ class RigUtils(ptk.HelpMixin):
                 )
 
                 # Delete original skinCluster
-                skin_cluster_name = leaf_name(skin_cluster)
+                skin_cluster_name = CoreUtils.leaf_name(skin_cluster)
                 cmds.delete(skin_cluster)
 
                 # Recreate skinCluster

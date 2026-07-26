@@ -13,7 +13,7 @@ from pythontk.file_utils._file_utils import FileUtils
 from pythontk.core_utils.engines.textures.map_factory import MapFactory
 from pythontk.str_utils.fuzzy_matcher import FuzzyMatcher
 from uitk.widgets.footer import FooterStatusController
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 # From this package:
 from mayatk.core_utils.script_job_manager import ScriptJobManager
@@ -177,42 +177,51 @@ class TexturePathEditorSlots:
         btn_sel_abs.clicked.connect(self.select_absolute_paths)
 
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Texture Path Editor",
                 body="Inspect and fix file-node texture paths. Path commands "
                 "operate on selected rows if any, otherwise on all file "
                 "nodes in the scene.",
                 sections=[
-                    ("Path management (header menu)", [
-                        "<b>Set Directory…</b> — repath to a chosen folder "
-                        "(subdirs flatten). Option box (▸) chooses leave / "
-                        "copy / move.",
-                        "<b>Find &amp; Copy Textures…</b> — search an external "
-                        "folder for matching textures, copy or move them into "
-                        "a destination. Option box (▸) toggles Copy / Move.",
-                        "<b>Normalize Paths</b> — rewrite absolute paths under "
-                        "<i>sourceimages</i> to relative. Option box (▸) "
-                        "controls external textures: leave / copy / move into "
-                        "sourceimages.",
-                        "<b>Resolve Missing Textures</b> — search sourceimages "
-                        "using strategy cascade <i>Stem → Texture → Fuzzy</i> "
-                        "(safest first; stops at first hit). Option box (▸) "
-                        "enables/disables individual strategies.",
-                    ]),
-                    ("General (header menu)", [
-                        "<b>Open Source Images</b> — Explorer shortcut.",
-                        "<b>Reload Scene Textures</b> — force Maya to re-read "
-                        "all textures from disk (useful after relocations).",
-                    ]),
-                    ("Selection helpers (header menu)", [
-                        "<b>Select Textures for Selected Objects</b> — "
-                        "highlight rows for textures used by the current "
-                        "scene selection.",
-                        "<b>Select Broken Paths</b> — rows whose file is "
-                        "missing on disk.",
-                        "<b>Select Absolute Paths</b> — rows with absolute "
-                        "paths (candidates for Normalize Paths).",
-                    ]),
+                    (
+                        "Path management (header menu)",
+                        [
+                            "<b>Set Directory…</b> — repath to a chosen folder "
+                            "(subdirs flatten). Option box (▸) chooses leave / "
+                            "copy / move.",
+                            "<b>Find &amp; Copy Textures…</b> — search an external "
+                            "folder for matching textures, copy or move them into "
+                            "a destination. Option box (▸) toggles Copy / Move.",
+                            "<b>Normalize Paths</b> — rewrite absolute paths under "
+                            "<i>sourceimages</i> to relative. Option box (▸) "
+                            "controls external textures: leave / copy / move into "
+                            "sourceimages.",
+                            "<b>Resolve Missing Textures</b> — search sourceimages "
+                            "using strategy cascade <i>Stem → Texture → Fuzzy</i> "
+                            "(safest first; stops at first hit). Option box (▸) "
+                            "enables/disables individual strategies.",
+                        ],
+                    ),
+                    (
+                        "General (header menu)",
+                        [
+                            "<b>Open Source Images</b> — Explorer shortcut.",
+                            "<b>Reload Scene Textures</b> — force Maya to re-read "
+                            "all textures from disk (useful after relocations).",
+                        ],
+                    ),
+                    (
+                        "Selection helpers (header menu)",
+                        [
+                            "<b>Select Textures for Selected Objects</b> — "
+                            "highlight rows for textures used by the current "
+                            "scene selection.",
+                            "<b>Select Broken Paths</b> — rows whose file is "
+                            "missing on disk.",
+                            "<b>Select Absolute Paths</b> — rows with absolute "
+                            "paths (candidates for Normalize Paths).",
+                        ],
+                    ),
                 ],
                 notes=[
                     "<b>Right-click</b> any row for per-texture actions: "
@@ -265,7 +274,11 @@ class TexturePathEditorSlots:
         )
 
         def _sync_text(idx):
-            label, _key = self._FIND_MODE_ITEMS[idx] if 0 <= idx < len(self._FIND_MODE_ITEMS) else self._FIND_MODE_ITEMS[0]
+            label, _key = (
+                self._FIND_MODE_ITEMS[idx]
+                if 0 <= idx < len(self._FIND_MODE_ITEMS)
+                else self._FIND_MODE_ITEMS[0]
+            )
             widget.setText(f"Find && {label} Textures…")
 
         cmb.currentIndexChanged.connect(_sync_text)
@@ -421,9 +434,7 @@ class TexturePathEditorSlots:
             selected_nodes = list(dict.fromkeys(selected_nodes))
             if selected_nodes:
                 return selected_nodes, f"{len(selected_nodes)} selected row(s)"
-            cmds.warning(
-                "Selected row(s) contain no valid file nodes; nothing to do."
-            )
+            cmds.warning("Selected row(s) contain no valid file nodes; nothing to do.")
             return [], "selected (no valid file nodes)"
 
         all_nodes = cmds.ls(type="file") or []
@@ -483,7 +494,9 @@ class TexturePathEditorSlots:
         om.MGlobal.displayInfo(
             f"Setting texture paths to: {target_dir} (mode: {relocate_mode})"
         )
-        count = self._set_texture_dir_flat(nodes, target_dir, relocate_mode=relocate_mode)
+        count = self._set_texture_dir_flat(
+            nodes, target_dir, relocate_mode=relocate_mode
+        )
         om.MGlobal.displayInfo(f"Updated {count}/{len(nodes)} file nodes.")
         self.ui.tbl000.init_slot()
 
@@ -540,9 +553,7 @@ class TexturePathEditorSlots:
 
         modes = self._read_resolve_modes(widget)
         if not modes:
-            cmds.warning(
-                "No Resolve Missing strategies enabled in the option-box."
-            )
+            cmds.warning("No Resolve Missing strategies enabled in the option-box.")
             return
 
         self._resolve_missing_textures(modes=modes, file_nodes=nodes)
@@ -556,7 +567,8 @@ class TexturePathEditorSlots:
             "fuzzy": "chk_fuzzy",
         }
         return [
-            mode for mode in self._RESOLVE_STRATEGY_ORDER
+            mode
+            for mode in self._RESOLVE_STRATEGY_ORDER
             if getattr(menu, attr_by_mode[mode]).isChecked()
         ]
 
@@ -676,9 +688,8 @@ class TexturePathEditorSlots:
             self._do_browse_for_file(selection)
         finally:
             from qtpy.QtCore import QTimer
-            QTimer.singleShot(
-                250, lambda: setattr(self, "_browse_in_progress", False)
-            )
+
+            QTimer.singleShot(250, lambda: setattr(self, "_browse_in_progress", False))
 
     def _do_browse_for_file(self, selection):
         nodes = self._file_nodes_from_selection(selection)
@@ -699,7 +710,8 @@ class TexturePathEditorSlots:
         if current:
             workspace = EnvUtils.get_env_info("workspace") or ""
             current_abs = (
-                current if os.path.isabs(current)
+                current
+                if os.path.isabs(current)
                 else os.path.normpath(os.path.join(workspace, current))
             )
             current_dir = os.path.dirname(current_abs)
@@ -708,8 +720,19 @@ class TexturePathEditorSlots:
 
         chosen = self.sb.file_dialog(
             file_types=[
-                "*.png", "*.jpg", "*.jpeg", "*.tga", "*.tif", "*.tiff",
-                "*.exr", "*.hdr", "*.bmp", "*.psd", "*.iff", "*.tx", "*.*",
+                "*.png",
+                "*.jpg",
+                "*.jpeg",
+                "*.tga",
+                "*.tif",
+                "*.tiff",
+                "*.exr",
+                "*.hdr",
+                "*.bmp",
+                "*.psd",
+                "*.iff",
+                "*.tx",
+                "*.*",
             ],
             title=f"Select texture file for {node_name}",
             start_dir=start_dir,
@@ -734,9 +757,7 @@ class TexturePathEditorSlots:
 
     def select_material(self, selection=None):
         """Select scene objects assigned to the materials of selected rows."""
-        contexts = self._get_selected_contexts(
-            selection, require_file_nodes=False
-        )
+        contexts = self._get_selected_contexts(selection, require_file_nodes=False)
         if not contexts:
             return
 
@@ -758,9 +779,7 @@ class TexturePathEditorSlots:
 
         try:
             cmds.select(all_assigned_objects, r=True)
-            om.MGlobal.displayInfo(
-                f"Selected objects for {len(contexts)} material(s)."
-            )
+            om.MGlobal.displayInfo(f"Selected objects for {len(contexts)} material(s).")
         except Exception as e:
             om.MGlobal.displayError(f"Failed to select objects: {str(e)}")
 
@@ -892,8 +911,11 @@ class TexturePathEditorSlots:
             src_abs = None
             if relocate_mode != "rewrite":
                 old_abs = (
-                    old_path if os.path.isabs(old_path)
-                    else os.path.normpath(os.path.join(workspace, old_path)).replace("\\", "/")
+                    old_path
+                    if os.path.isabs(old_path)
+                    else os.path.normpath(os.path.join(workspace, old_path)).replace(
+                        "\\", "/"
+                    )
                 )
                 if os.path.exists(old_abs) and old_abs.lower() != new_abs.lower():
                     src_abs = old_abs
@@ -905,6 +927,7 @@ class TexturePathEditorSlots:
         skipped_nodes = set()
         if relocate_mode in ("copy", "move"):
             import shutil
+
             for node_name, _old_path, _new_path, src, dst in plan:
                 if src is None:
                     continue
@@ -986,6 +1009,7 @@ class TexturePathEditorSlots:
             self._do_find_and_copy_workflow(file_nodes, relocate_mode=relocate_mode)
         finally:
             from qtpy.QtCore import QTimer
+
             QTimer.singleShot(
                 250, lambda: setattr(self, "_find_copy_in_progress", False)
             )
@@ -1121,7 +1145,9 @@ class TexturePathEditorSlots:
     # Normalize workflow
     # ------------------------------------------------------------------
 
-    def _normalize_to_relative(self, file_nodes, external_mode: str = "rewrite") -> None:
+    def _normalize_to_relative(
+        self, file_nodes, external_mode: str = "rewrite"
+    ) -> None:
         """Rewrite (selected) paths under sourceimages to relative.
 
         Per node:
@@ -1216,6 +1242,7 @@ class TexturePathEditorSlots:
         # Relocate phase. setAttr is still undoable; disk ops are not.
         if relocate_actions:
             import shutil
+
             chunk_name = (
                 "Normalize — move externals"
                 if external_mode == "move"
@@ -1262,9 +1289,7 @@ class TexturePathEditorSlots:
                             old_path = cmds.getAttr(f"{node}.fileTextureName") or ""
                         except Exception:
                             old_path = ""
-                        cmds.setAttr(
-                            f"{node}.fileTextureName", new_path, type="string"
-                        )
+                        cmds.setAttr(f"{node}.fileTextureName", new_path, type="string")
                         if old_path and old_path != new_path:
                             self._previous_paths[node] = old_path
                         external_relocated += 1
@@ -1352,9 +1377,7 @@ class TexturePathEditorSlots:
             if not target_map:
                 return None, 0.0, "no_match"
             try:
-                target_base = ImgUtils.get_base_texture_name(
-                    target + ".png"
-                ).lower()
+                target_base = ImgUtils.get_base_texture_name(target + ".png").lower()
             except Exception:
                 target_base = target
 
@@ -1423,7 +1446,8 @@ class TexturePathEditorSlots:
             if not path or "<udim>" in path.lower():
                 continue
             abs_path = (
-                path if os.path.isabs(path)
+                path
+                if os.path.isabs(path)
                 else os.path.normpath(os.path.join(workspace, path))
             )
             if os.path.exists(abs_path):
@@ -1495,9 +1519,7 @@ class TexturePathEditorSlots:
                     cmds.setAttr(f"{node}.fileTextureName", new_path, type="string")
                     self._previous_paths[node] = current_path
                     resolved += 1
-                    om.MGlobal.displayInfo(
-                        f"{node}: '{current_path}' -> '{new_path}'"
-                    )
+                    om.MGlobal.displayInfo(f"{node}: '{current_path}' -> '{new_path}'")
                 except Exception as e:
                     cmds.warning(f"{node}: failed to set path: {e}")
         finally:
@@ -1578,25 +1600,21 @@ class TexturePathEditorSlots:
             for shader_name, path, file_node_name in rows:
                 # Stash node names in UserRole so handle_cell_edit can recover
                 # the old name after editing.
-                formatted.append([
-                    (shader_name, shader_name),
-                    path,
-                    (file_node_name, file_node_name),
-                ])
+                formatted.append(
+                    [
+                        (shader_name, shader_name),
+                        path,
+                        (file_node_name, file_node_name),
+                    ]
+                )
 
             widget.add(formatted, headers=["Shader", "Texture Path", "File Node"])
 
             header = widget.horizontalHeader()
             header.setSectionsMovable(False)
-            header.setSectionResizeMode(
-                0, self.sb.QtWidgets.QHeaderView.Interactive
-            )
-            header.setSectionResizeMode(
-                1, self.sb.QtWidgets.QHeaderView.Stretch
-            )
-            header.setSectionResizeMode(
-                2, self.sb.QtWidgets.QHeaderView.Interactive
-            )
+            header.setSectionResizeMode(0, self.sb.QtWidgets.QHeaderView.Interactive)
+            header.setSectionResizeMode(1, self.sb.QtWidgets.QHeaderView.Stretch)
+            header.setSectionResizeMode(2, self.sb.QtWidgets.QHeaderView.Interactive)
             widget.setColumnWidth(0, 200)
             widget.setColumnWidth(2, 200)
 
@@ -1634,6 +1652,7 @@ class TexturePathEditorSlots:
 
         if len(unique_paths) > 50:
             from concurrent.futures import ThreadPoolExecutor, as_completed
+
             with ThreadPoolExecutor(max_workers=8) as executor:
                 futures = {
                     executor.submit(resolve_and_check, p): p for p in unique_paths
@@ -1725,7 +1744,9 @@ class TexturePathEditorSlots:
             # listHistory directly on the shader is much faster than
             # rebuilding the entire scene-wide mapping via get_file_nodes.
             try:
-                history = cmds.ls(cmds.listHistory(shader_node) or [], type="file") or []
+                history = (
+                    cmds.ls(cmds.listHistory(shader_node) or [], type="file") or []
+                )
                 material_file_nodes = list(dict.fromkeys(history))
             except Exception:
                 material_file_nodes = []
@@ -1853,12 +1874,8 @@ class TexturePathEditorSlots:
                 cmds.warning(f"File node '{file_node}' no longer exists.")
                 return
             try:
-                cmds.setAttr(
-                    f"{file_node}.fileTextureName", new_value, type="string"
-                )
-                om.MGlobal.displayInfo(
-                    f"{file_node}: texture path -> '{new_value}'"
-                )
+                cmds.setAttr(f"{file_node}.fileTextureName", new_value, type="string")
+                om.MGlobal.displayInfo(f"{file_node}: texture path -> '{new_value}'")
                 tbl.apply_formatting()
                 if self._footer_controller:
                     self._footer_controller.update()

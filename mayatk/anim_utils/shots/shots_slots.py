@@ -6,8 +6,9 @@ Provides a single source of truth for shot-level settings
 (detection threshold, use-selected-keys) that both the
 Shot Manifest and Shot Sequencer consume via :class:`ShotStore`.
 """
+
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import fmt
+from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.anim_utils.shots._shots import (
@@ -832,35 +833,47 @@ class ShotsSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            fmt(
+            TooltipFormat.fmt(
                 title="Shots",
                 body="Generation settings, shot properties, and gap control shared by the Shot Manifest and Shot Sequencer.",
                 sections=[
-                    ("Quick Start", [
-                        "Choose a generation mode and set <b>Min Gap</b>.",
-                        "Open the Shot Manifest or Shot Sequencer to generate shots.",
-                        "Edit individual shot properties in the <b>Shot Editor</b> below, including the <b>Gap</b> spinner (option box ▸ to choose scope and apply).",
-                    ]),
-                    ("Generate from Animation", [
-                        "<b>Auto-Detect</b> \u2014 Scans all scene animation; groups contiguous segments separated by gaps larger than Min Gap.",
-                        "<b>All Keys</b> \u2014 Each selected keyframe becomes a shot boundary (select keys in the Graph Editor first).",
-                        "<b>Skip Zero-Value</b> \u2014 Like All Keys but ignores keys with a value of 0.",
-                        "<b>Zero = Shot End</b> \u2014 Non-zero keys start shots, zero-value keys end them (Min Gap is disabled).",
-                        "<b>Min Gap</b> \u2014 Minimum frame gap that separates segments into distinct shots.",
-                    ]),
-                    ("Build Defaults", [
-                        "<b>Initial Length</b> \u2014 Default frame length for a new shot before content-driven resizing.",
-                        "<b>Fit</b> \u2014 Extend Only grows a shot to fit its content but never shrinks. Shrink &amp; Extend resizes to fit exactly.",
-                        "<b>Snap to Whole Frames</b> \u2014 Round all frame values to integers at write time.",
-                    ]),
-                    ("Shot Editor", [
-                        "<b>Name</b> \u2014 Human-readable shot label.",
-                        "<b>Start / End</b> \u2014 Frame range (syncs with Sequencer).",
-                        "<b>Description</b> \u2014 Free-text notes.",
-                        "<b>Gap</b> \u2014 Frame gap. Click option box \u25b8 to choose scope (All Shots / Start / End / Start &amp; End) and apply.",
-                        "<b>Move To</b> \u2014 Set position; click option box \u25b8 to reorder.",
-                        "<b>Delete</b> \u2014 Remove shot; option box \u25b8 for Delete All.",
-                    ]),
+                    (
+                        "Quick Start",
+                        [
+                            "Choose a generation mode and set <b>Min Gap</b>.",
+                            "Open the Shot Manifest or Shot Sequencer to generate shots.",
+                            "Edit individual shot properties in the <b>Shot Editor</b> below, including the <b>Gap</b> spinner (option box ▸ to choose scope and apply).",
+                        ],
+                    ),
+                    (
+                        "Generate from Animation",
+                        [
+                            "<b>Auto-Detect</b> \u2014 Scans all scene animation; groups contiguous segments separated by gaps larger than Min Gap.",
+                            "<b>All Keys</b> \u2014 Each selected keyframe becomes a shot boundary (select keys in the Graph Editor first).",
+                            "<b>Skip Zero-Value</b> \u2014 Like All Keys but ignores keys with a value of 0.",
+                            "<b>Zero = Shot End</b> \u2014 Non-zero keys start shots, zero-value keys end them (Min Gap is disabled).",
+                            "<b>Min Gap</b> \u2014 Minimum frame gap that separates segments into distinct shots.",
+                        ],
+                    ),
+                    (
+                        "Build Defaults",
+                        [
+                            "<b>Initial Length</b> \u2014 Default frame length for a new shot before content-driven resizing.",
+                            "<b>Fit</b> \u2014 Extend Only grows a shot to fit its content but never shrinks. Shrink &amp; Extend resizes to fit exactly.",
+                            "<b>Snap to Whole Frames</b> \u2014 Round all frame values to integers at write time.",
+                        ],
+                    ),
+                    (
+                        "Shot Editor",
+                        [
+                            "<b>Name</b> \u2014 Human-readable shot label.",
+                            "<b>Start / End</b> \u2014 Frame range (syncs with Sequencer).",
+                            "<b>Description</b> \u2014 Free-text notes.",
+                            "<b>Gap</b> \u2014 Frame gap. Click option box \u25b8 to choose scope (All Shots / Start / End / Start &amp; End) and apply.",
+                            "<b>Move To</b> \u2014 Set position; click option box \u25b8 to reorder.",
+                            "<b>Delete</b> \u2014 Remove shot; option box \u25b8 for Delete All.",
+                        ],
+                    ),
                 ],
             )
         )

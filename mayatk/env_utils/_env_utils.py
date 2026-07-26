@@ -101,7 +101,7 @@ class EnvUtils(ptk.HelpMixin):
             "current_tool": lambda: cmds.currentCtx(),
             "up_axis": lambda: cmds.upAxis(q=True, axis=True),
             "maya_uptime": lambda: cmds.timerX(),
-            "total_polys": lambda: sum(cmds.polyEvaluate(m, triangle=True) or 0 for m in (cmds.ls(type="mesh") or [])),
+            "total_polys": lambda: sum(cmds.polyEvaluate(m, triangle=True) or 0 for m in (cmds.ls(type="mesh", long=True) or [])),
             "total_nodes": lambda: len(cmds.ls(dag=True) or []),
         }
 

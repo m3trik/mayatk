@@ -15,6 +15,7 @@ Covers:
 
 All tests run WITHOUT Maya by mocking maya.cmds/cmds.
 """
+
 import sys
 import tempfile
 import unittest
@@ -25,7 +26,6 @@ from unittest.mock import MagicMock, patch
 # Import shared Maya mocks from conftest (injected into sys.modules there)
 # ---------------------------------------------------------------------------
 from conftest import mock_cmds  # noqa: E402  (test dir on sys.path)
-import maya.cmds as cmds
 
 # Aliases for backward-compat with existing test code
 _mock_cmds = mock_cmds
@@ -47,22 +47,15 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     ShotManifest,
     ObjectStatus,
     StepStatus,
-    detect_behaviors,
+    ManifestModel,
 )
-from mayatk.anim_utils.shots.shot_manifest.mapping._mapping import (
-    _audio_prefix,
-    _audio_regex,
-    _audio_map,
-    _audio_derive,
-    _build_default_behaviors,
-)
+from mayatk.anim_utils.shots.shot_manifest.mapping._mapping import Mapping
 from mayatk.anim_utils.shots.shot_manifest.behaviors import (
-    apply_behavior,
+    Behaviors,
     list_behaviors,
     load_behavior,
-    verify_behavior,
 )
-from mayatk.anim_utils.shots.shot_manifest.range_resolver import resolve_ranges
+from mayatk.anim_utils.shots.shot_manifest.range_resolver import RangeResolver
 
 
 # ---------------------------------------------------------------------------
@@ -123,18 +116,23 @@ def _mock_undo_info(test_case):
 
 class TestDetectBehaviors(unittest.TestCase):
     def test_fade_in(self):
-        self.assertEqual(detect_behaviors("Object fades in from black"), ["fade_in"])
+        self.assertEqual(
+            ManifestModel.detect_behaviors("Object fades in from black"), ["fade_in"]
+        )
 
     def test_fade_out(self):
-        self.assertEqual(detect_behaviors("Object fades out slowly"), ["fade_out"])
+        self.assertEqual(
+            ManifestModel.detect_behaviors("Object fades out slowly"), ["fade_out"]
+        )
 
     def test_fade_in_and_out(self):
         self.assertEqual(
-            detect_behaviors("Fades in then fades out"), ["fade_in", "fade_out"]
+            ManifestModel.detect_behaviors("Fades in then fades out"),
+            ["fade_in", "fade_out"],
         )
 
     def test_no_behavior(self):
-        self.assertEqual(detect_behaviors("Object sits still"), [])
+        self.assertEqual(ManifestModel.detect_behaviors("Object sits still"), [])
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +148,7 @@ class TestUpdateBaseline(unittest.TestCase):
         self.assembler = ShotManifest(self.store)
         self.steps = _make_steps("A01", "A02", "A03")
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_creates_shots_sequentially(self, mock_dur):
         mock_dur.return_value = 30.0
         # Use initial_shot_length=30 so cursor placement matches the
@@ -169,7 +167,7 @@ class TestUpdateBaseline(unittest.TestCase):
         self.assertEqual(shots[1].start, 31)
         self.assertEqual(shots[1].end, 61)
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_removes_shots_not_in_csv(self, mock_dur):
         mock_dur.return_value = 30.0
         self.assembler.update(self.steps)
@@ -180,7 +178,7 @@ class TestUpdateBaseline(unittest.TestCase):
         names = {s.name for s in self.store.shots}
         self.assertNotIn("A02", names)
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_skips_locked_shots(self, mock_dur):
         mock_dur.return_value = 30.0
         self.assembler.update(self.steps)
@@ -205,7 +203,7 @@ class TestUpdateWithRanges(unittest.TestCase):
         self.assembler = ShotManifest(self.store)
         self.steps = _make_steps("A01", "A02", "A03")
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_new_shots_use_provided_ranges(self, mock_dur):
         mock_dur.return_value = 30.0
         ranges = {
@@ -216,9 +214,7 @@ class TestUpdateWithRanges(unittest.TestCase):
         # initial_shot_length=100 so resolve_duration uses 100, matching
         # the user-supplied range widths (extend_only floor would otherwise
         # stretch each shot to 200f and ignore the upper bound).
-        self.assembler.update(
-            self.steps, ranges=ranges, initial_shot_length=100
-        )
+        self.assembler.update(self.steps, ranges=ranges, initial_shot_length=100)
 
         shots = {s.name: s for s in self.store.shots}
         self.assertEqual(shots["A01"].start, 100.0)
@@ -226,7 +222,7 @@ class TestUpdateWithRanges(unittest.TestCase):
         self.assertEqual(shots["A02"].start, 250.0)
         self.assertEqual(shots["A02"].end, 350.0)
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_existing_shots_repositioned_by_ranges(self, mock_dur):
         """Existing shots should be repositioned when ranges differ.
 
@@ -252,15 +248,13 @@ class TestUpdateWithRanges(unittest.TestCase):
         # repositioned -> patched
         self.assertEqual(actions["A01"], "patched")
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_partial_ranges_fallback_to_cursor(self, mock_dur):
         """Steps without explicit ranges should use cursor placement."""
         mock_dur.return_value = 30.0
         ranges = {"A01": (100.0, 200.0)}  # only A01 has a range
         # initial_shot_length=30 so cursor-placed shots have 30-frame durations.
-        self.assembler.update(
-            self.steps, ranges=ranges, initial_shot_length=30
-        )
+        self.assembler.update(self.steps, ranges=ranges, initial_shot_length=30)
 
         shots = {s.name: s for s in self.store.shots}
         self.assertEqual(shots["A01"].start, 100.0)
@@ -269,7 +263,7 @@ class TestUpdateWithRanges(unittest.TestCase):
         self.assertEqual(shots["A02"].start, 200.0)
         self.assertEqual(shots["A02"].end, 230.0)
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_locked_shots_not_repositioned(self, mock_dur):
         """Locked shots must not be repositioned even with ranges."""
         mock_dur.return_value = 30.0
@@ -360,9 +354,9 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         _fresh_store()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_user_pin_overrides_auto_fill(self, mock_dur, mock_regions):
         mock_dur.return_value = 30.0
         mock_regions.return_value = []
@@ -376,9 +370,9 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         self.assertTrue(a02[3])  # is_user
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_gap_detection_used_for_auto_fill(self, mock_dur, mock_regions):
         mock_dur.return_value = 30.0
         mock_regions.return_value = [
@@ -397,9 +391,9 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
             self.assertFalse(r[3])
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_many_regions_pruned_to_step_count(self, mock_dur, mock_regions):
         """When more regions than steps, largest gaps become boundaries."""
         mock_dur.return_value = 30.0
@@ -421,9 +415,9 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         self.assertEqual(resolved[2][1], 200.0)  # A03
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_end_derived_from_next_start(self, mock_dur, mock_regions):
         """End of step N = start of step N+1 minus gap."""
         mock_dur.return_value = 30.0
@@ -436,9 +430,9 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         self.assertAlmostEqual(resolved[0][2], resolved[1][1] - 5.0, places=1)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_from_step_idx_freezes_prefix(self, mock_dur, mock_regions):
         """from_step_idx preserves earlier steps and re-resolves later ones."""
         mock_dur.return_value = 30.0
@@ -462,9 +456,9 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         self.assertEqual(resolved_partial[2][1], 200.0)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_set_start_cascades_subsequent(self, mock_dur, mock_regions):
         """Setting a user pin clears subsequent user ranges so they re-flow."""
         mock_dur.return_value = 30.0
@@ -496,9 +490,9 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
         _fresh_store()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_no_collision_when_ranges_are_ordered(self, mock_dur, mock_regions):
         mock_dur.return_value = 30.0
         mock_regions.return_value = []
@@ -513,9 +507,9 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
         self.assertEqual(count, 0)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_collision_detected_when_ranges_overlap(self, mock_dur, mock_regions):
         """Overlapping ranges should be flagged as collisions.
 
@@ -534,9 +528,9 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
         self.assertGreater(count, 0)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_no_collision_when_ranges_are_contiguous(self, mock_dur, mock_regions):
         """Adjacent ranges where end == next_start should NOT collide.
 
@@ -556,9 +550,9 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
         self.assertEqual(count, 0, "Contiguous ranges should not be collisions")
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_collision_applies_background_color(self, mock_dur, mock_regions):
         """Collision cells should have both foreground and background color set."""
         from qtpy.QtCore import Qt
@@ -659,9 +653,9 @@ class TestRangeAbsorption(unittest.TestCase, _ControllerHarness):
         _fresh_store()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_user_end_past_next_gap_pushes_downstream(self, mock_dur, mock_regions):
         """Step 2 must start at or after step 1's user-end + gap, not at gap boundary."""
         mock_dur.return_value = 30.0
@@ -751,7 +745,7 @@ class TestRemoveMissing(unittest.TestCase):
         self.store = _fresh_store()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30.0,
     )
     def test_remove_missing_true_deletes_absent(self, mock_dur):
@@ -768,7 +762,7 @@ class TestRemoveMissing(unittest.TestCase):
         self.assertEqual(len(self.store.shots), 1)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30.0,
     )
     def test_remove_missing_false_preserves_absent(self, mock_dur):
@@ -805,7 +799,7 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.addCleanup(patcher.stop)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     def test_detect_populates_steps_and_ranges(self, mock_regions):
         """detect() fills _steps and _user_ranges from detection results."""
@@ -821,7 +815,7 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.assertEqual(self.ctrl._user_ranges["Shot 2"], (60.0, 100.0))
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     def test_detect_ranges_are_editable_user_ranges(self, mock_regions):
         """Detection ranges are stored as user_ranges (non-dim, editable)."""
@@ -838,7 +832,7 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.assertTrue(self.ctrl._all_ranges_complete())
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     def test_detect_clears_csv_path(self, mock_regions):
         """detect() clears the CSV path, entering detection mode."""
@@ -852,7 +846,7 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.assertTrue(self.ctrl._is_detection_mode)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     def test_detect_no_animation_clears_table(self, mock_regions):
         """detect() with no regions clears the table and shows a message.
@@ -868,7 +862,7 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.assertEqual(self.ctrl._csv_path, "")
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     def test_csv_after_detect_replaces_data(self, mock_regions):
         """Loading a CSV after detect replaces the detection data."""
@@ -884,7 +878,7 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.assertFalse(self.ctrl._is_detection_mode)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     def test_detect_after_csv_replaces_data(self, mock_regions):
         """Detecting after CSV load replaces CSV data."""
@@ -901,7 +895,7 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.assertEqual(self.ctrl._csv_path, "")
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     def test_all_ranges_complete_false_for_csv(self, mock_regions):
         """_all_ranges_complete() returns False when CSV steps lack user ranges."""
@@ -928,7 +922,7 @@ class TestDescriptionEdit(unittest.TestCase, _ControllerHarness):
         self.addCleanup(patcher.stop)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     def test_description_edit_detection_mode(self, mock_regions):
         """Editing Description column in detection mode updates step.description."""
@@ -1023,7 +1017,7 @@ class TestBuildDetectionMode(unittest.TestCase, _ControllerHarness):
         self.ui.txt_csv_path = MagicMock()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
@@ -1155,7 +1149,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         self.ui.txt_csv_path = MagicMock()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
         return_value=[],
     )
     def test_resolve_ranges_returns_empty_when_no_selected_keys(self, _mock_sel):
@@ -1165,7 +1159,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         self.assertEqual(resolved, [])
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
         return_value=[],
     )
     def test_resolve_ranges_empty_even_with_user_ranges(self, _mock_sel):
@@ -1182,7 +1176,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         self.assertEqual(resolved, [])
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
         return_value=[],
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
@@ -1205,7 +1199,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         mock_builder.sync.assert_not_called()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
         return_value=[],
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
@@ -1242,7 +1236,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         mock_builder.sync.assert_not_called()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
     )
     def test_resolve_ranges_no_sequential_fallback_with_partial_regions(self, mock_sel):
         """_resolve_ranges must not add sequential-placement entries for steps
@@ -1265,7 +1259,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         self.assertEqual(resolved[0][0], "A01")
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
@@ -1472,7 +1466,10 @@ class TestMappingCombo(unittest.TestCase, _ControllerHarness):
 
     def test_on_mapping_changed_sets_active(self):
         """Selecting a mapping name loads the JSON dict."""
-        import os, tempfile, shutil, json
+        import os
+        import tempfile
+        import shutil
+        import json
 
         tmp = tempfile.mkdtemp()
         try:
@@ -1505,7 +1502,8 @@ class TestMappingCombo(unittest.TestCase, _ControllerHarness):
 
     def test_on_mapping_changed_bad_name_clears(self):
         """Bad mapping name logs error and clears active mapping."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
 
         tmp = tempfile.mkdtemp()
         try:
@@ -1575,11 +1573,13 @@ class TestMappingCombo(unittest.TestCase, _ControllerHarness):
         import shutil
         from pathlib import Path
         from pythontk import TemplateSet
-        from mayatk.anim_utils.shots.shot_manifest.mapping import templates
+        from mayatk.anim_utils.shots.shot_manifest.mapping import Mapping
 
         tmp = Path(tempfile.mkdtemp())
         try:
-            ts = TemplateSet("seed_test", templates().spec, "mayatk", user_dir=tmp)
+            ts = TemplateSet(
+                "seed_test", Mapping.templates().spec, "mayatk", user_dir=tmp
+            )
             udir = ts.user_dir
             udir.mkdir(parents=True, exist_ok=True)
 
@@ -1606,11 +1606,13 @@ class TestMappingCombo(unittest.TestCase, _ControllerHarness):
         import shutil
         from pathlib import Path
         from pythontk import TemplateSet
-        from mayatk.anim_utils.shots.shot_manifest.mapping import templates
+        from mayatk.anim_utils.shots.shot_manifest.mapping import Mapping
 
         tmp = Path(tempfile.mkdtemp())
         try:
-            ts = TemplateSet("seed_test", templates().spec, "mayatk", user_dir=tmp)
+            ts = TemplateSet(
+                "seed_test", Mapping.templates().spec, "mayatk", user_dir=tmp
+            )
             udir = ts.user_dir
             udir.mkdir(parents=True, exist_ok=True)
             ts.active = "speedrun"  # writes the `.active` dotfile, as a selection does
@@ -1668,7 +1670,9 @@ class TestLoadCsvSeedsStoreRanges(unittest.TestCase, _ControllerHarness):
         self.store.define_shot("A01", 10, 40, ["obj_A01"])
         self.store.define_shot("A02", 50, 80, ["obj_A02"])
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.parse_csv")
+    @patch(
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ManifestModel.parse_csv"
+    )
     def test_store_ranges_seeded_into_user_ranges(self, mock_parse):
         mock_parse.return_value = _make_steps("A01", "A02", "A03")
         import os
@@ -1699,7 +1703,7 @@ class TestZeroDurationFallback(unittest.TestCase):
         self.store.define_shot("A01", 1, 31, ["obj_A01"])
         self.store.define_shot("A02", 31, 61, ["obj_A02"])
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_new_shot_gets_zero_duration(self, mock_dur):
         mock_dur.return_value = 30.0
         steps = _make_steps("A01", "A02", "A03")
@@ -1712,7 +1716,7 @@ class TestZeroDurationFallback(unittest.TestCase):
         shot = next(s for s in self.store.shots if s.name == "A03")
         self.assertEqual(shot.start, shot.end, "New shot should have zero duration")
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_zero_duration_false_uses_compute_duration(self, mock_dur):
         mock_dur.return_value = 30.0
         steps = _make_steps("A01", "A02", "A03")
@@ -1724,7 +1728,7 @@ class TestZeroDurationFallback(unittest.TestCase):
         shot = next(s for s in self.store.shots if s.name == "A03")
         self.assertGreater(shot.end, shot.start, "Should use compute_duration")
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_consecutive_zero_duration_shots_dont_stack(self, mock_dur):
         """Multiple new zero-duration shots should each get a unique position.
 
@@ -1809,10 +1813,10 @@ class TestCsvModeRespectsDetectionMode(unittest.TestCase, _ControllerHarness):
         even in CSV mode."""
         with (
             patch(
-                "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions",
+                "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions",
             ) as mock_auto,
             patch(
-                "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+                "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
                 return_value=[],
             ) as mock_sel,
         ):
@@ -1831,7 +1835,7 @@ class TestCsvModeRespectsDetectionMode(unittest.TestCase, _ControllerHarness):
         _mock_undo_info(self)
 
         with patch(
-            "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+            "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
             return_value=[],
         ) as mock_sel:
             self.ctrl.build()
@@ -2027,7 +2031,7 @@ class TestIncrementalBuildWithUserRange(unittest.TestCase):
         self.store.define_shot("A01", 1, 31, ["obj_A01"])
         self.store.define_shot("A02", 31, 61, ["obj_A02"])
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_explicit_range_overrides_zero_duration(self, mock_dur):
         """New shot with explicit range should use that range, not zero-duration."""
         mock_dur.return_value = 30.0
@@ -2046,7 +2050,7 @@ class TestIncrementalBuildWithUserRange(unittest.TestCase):
         self.assertEqual(shot.start, 100.0)
         self.assertEqual(shot.end, 150.0)
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_mixed_explicit_and_zero_duration(self, mock_dur):
         """Steps with ranges get those ranges; steps without get zero-duration."""
         mock_dur.return_value = 30.0
@@ -2057,9 +2061,7 @@ class TestIncrementalBuildWithUserRange(unittest.TestCase):
             "A02": (31.0, 61.0),
             "A03": (100.0, 150.0),
         }
-        self.assembler.update(
-            steps, ranges=ranges, zero_duration_fallback=True
-        )
+        self.assembler.update(steps, ranges=ranges, zero_duration_fallback=True)
         a03 = next(s for s in self.store.shots if s.name == "A03")
         a04 = next(s for s in self.store.shots if s.name == "A04")
         self.assertEqual(a03.start, 100.0)
@@ -2363,11 +2365,11 @@ class TestFormatBehaviorHtml(unittest.TestCase):
 
     def setUp(self):
         from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
-            format_behavior_html,
+            ManifestData,
             BEHAVIOR_STATUS_COLORS,
         )
 
-        self.format = format_behavior_html
+        self.format = ManifestData.format_behavior_html
         self.colors = BEHAVIOR_STATUS_COLORS
 
     def test_plain_when_no_broken(self):
@@ -2445,7 +2447,7 @@ class TestStoreDetectRegions(unittest.TestCase):
         self.store = _fresh_store()
 
     @patch(
-        "mayatk.anim_utils.shots._shots.detect_shot_regions",
+        "mayatk.anim_utils.shots._shots.Detection.detect_shot_regions",
         return_value=[{"name": "R1", "start": 1, "end": 30, "objects": []}],
     )
     def test_auto_mode_calls_detect_shot_regions(self, mock_auto):
@@ -2456,7 +2458,7 @@ class TestStoreDetectRegions(unittest.TestCase):
         self.assertEqual(len(result), 1)
 
     @patch(
-        "mayatk.anim_utils.shots._shots.regions_from_selected_keys",
+        "mayatk.anim_utils.shots._shots.Detection.regions_from_selected_keys",
         return_value=[{"name": "K1", "start": 10, "end": 40, "objects": []}],
     )
     def test_skip_zero_mode_calls_selected_keys(self, mock_sel):
@@ -2467,7 +2469,7 @@ class TestStoreDetectRegions(unittest.TestCase):
         self.assertEqual(len(result), 1)
 
     @patch(
-        "mayatk.anim_utils.shots._shots.regions_from_selected_keys",
+        "mayatk.anim_utils.shots._shots.Detection.regions_from_selected_keys",
         return_value=[],
     )
     def test_zero_as_end_mode_calls_selected_keys(self, mock_sel):
@@ -2514,7 +2516,7 @@ class TestDetectAndDefine(unittest.TestCase):
             {"name": "R2", "start": 40, "end": 70, "objects": ["obj_b"]},
         ]
 
-    @patch("mayatk.anim_utils.shots._shots.detect_shot_regions")
+    @patch("mayatk.anim_utils.shots._shots.Detection.detect_shot_regions")
     def test_creates_all_shots(self, mock_detect):
         mock_detect.return_value = self.regions
         created = self.store.detect_and_define()
@@ -2523,7 +2525,7 @@ class TestDetectAndDefine(unittest.TestCase):
         self.assertEqual(created[0].name, "R1")
         self.assertEqual(created[1].name, "R2")
 
-    @patch("mayatk.anim_utils.shots._shots.detect_shot_regions")
+    @patch("mayatk.anim_utils.shots._shots.Detection.detect_shot_regions")
     def test_skips_overlapping_by_default(self, mock_detect):
         self.store.define_shot("existing", 20, 50, [])
         mock_detect.return_value = self.regions
@@ -2532,7 +2534,7 @@ class TestDetectAndDefine(unittest.TestCase):
         self.assertEqual(len(created), 0)
         self.assertEqual(len(self.store.shots), 1)  # only "existing"
 
-    @patch("mayatk.anim_utils.shots._shots.detect_shot_regions")
+    @patch("mayatk.anim_utils.shots._shots.Detection.detect_shot_regions")
     def test_overwrite_creates_overlapping(self, mock_detect):
         self.store.define_shot("existing", 20, 50, [])
         mock_detect.return_value = self.regions
@@ -2540,7 +2542,7 @@ class TestDetectAndDefine(unittest.TestCase):
         self.assertEqual(len(created), 2)
         self.assertEqual(len(self.store.shots), 3)
 
-    @patch("mayatk.anim_utils.shots._shots.detect_shot_regions")
+    @patch("mayatk.anim_utils.shots._shots.Detection.detect_shot_regions")
     def test_fires_single_batch_complete(self, mock_detect):
         mock_detect.return_value = self.regions
         events = []
@@ -2577,6 +2579,7 @@ class TestStoreAssess(unittest.TestCase):
         keep working.
         """
         import maya
+
         real_cmds = maya.cmds
         original_ls = real_cmds.ls
 
@@ -2675,10 +2678,10 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         self.store = _fresh_store()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
     )
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     def test_skip_zero_calls_selected_keys_with_empty_steps(self, mock_auto, mock_sel):
         """With skip_zero mode and empty steps, _detect_regions must call
@@ -2696,10 +2699,10 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         self.assertEqual(len(regions), 1)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
     )
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     def test_auto_mode_still_calls_detect_shot_regions(self, mock_auto, mock_sel):
         """With auto mode, _detect_regions must call detect_shot_regions."""
@@ -2714,10 +2717,10 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         mock_sel.assert_not_called()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
     )
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     def test_csv_mode_respects_store_detection_mode(self, mock_auto, mock_sel):
         """When a CSV is loaded and detection_mode is skip_zero,
@@ -2732,10 +2735,10 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         mock_auto.assert_not_called()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
     )
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     def test_settings_changed_triggers_detect_after_first_show(
         self, mock_auto, mock_sel
@@ -2760,10 +2763,10 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         mock_sel.assert_called_once()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
     )
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     def test_settings_changed_skipped_before_first_show(self, mock_auto, mock_sel):
         """SettingsChanged before _on_first_show must NOT trigger detect(),
@@ -2785,10 +2788,10 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         mock_auto.assert_not_called()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
     )
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     def test_settings_changed_refreshes_ranges_in_csv_mode(self, mock_auto, mock_sel):
         """SettingsChanged in CSV mode must refresh ranges (not replace
@@ -2852,7 +2855,7 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         self.ctrl._csv_path = ""
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
         return_value=[],
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
@@ -2872,7 +2875,7 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         mock_builder.assess.assert_not_called()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
@@ -2895,7 +2898,7 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         mock_builder.assess.assert_called_once()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
@@ -2914,7 +2917,7 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         mock_builder.assess.assert_called_once()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
@@ -2946,7 +2949,7 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         )
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
@@ -2995,7 +2998,7 @@ class TestMessageBoxOnUserActions(unittest.TestCase, _ControllerHarness):
         self.ctrl._csv_path = ""
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
         return_value=[],
     )
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
@@ -3007,7 +3010,7 @@ class TestMessageBoxOnUserActions(unittest.TestCase, _ControllerHarness):
         self.ctrl.sb.message_box.assert_called_once()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
         return_value=[],
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
@@ -3022,7 +3025,7 @@ class TestMessageBoxOnUserActions(unittest.TestCase, _ControllerHarness):
         self.ctrl.sb.message_box.assert_called_once()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
         return_value=[],
     )
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
@@ -3056,7 +3059,7 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
         self.ctrl.ui.chk_csv.isChecked.return_value = False
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_scene_change_re_detects_in_detection_mode(self, mock_active, mock_detect):
@@ -3075,7 +3078,7 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
         self.assertIsNone(self.ctrl._store)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_scene_change_reloads_csv_when_csv_checked(self, mock_active, mock_detect):
@@ -3093,7 +3096,7 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
         mock_detect.assert_not_called()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_scene_change_skipped_before_first_show(self, mock_active, mock_detect):
@@ -3122,7 +3125,7 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
                 return_value=new_store,
             ),
             patch(
-                "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.detect_shot_regions",
+                "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions",
                 return_value=[],
             ),
         ):
@@ -3156,7 +3159,7 @@ class TestAudioExcludedFromShotObjects(unittest.TestCase):
         self.store = _fresh_store()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30,
     )
     def test_creation_excludes_audio_from_shot_objects(self, mock_dur):
@@ -3177,7 +3180,7 @@ class TestAudioExcludedFromShotObjects(unittest.TestCase):
         self.assertNotIn("narration_A01", shot.objects)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30,
     )
     def test_metadata_still_contains_audio(self, mock_dur):
@@ -3200,7 +3203,7 @@ class TestAudioExcludedFromShotObjects(unittest.TestCase):
         self.assertEqual(kinds["clip_A01"], "audio")
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30,
     )
     def test_audio_change_triggers_patched(self, mock_dur):
@@ -3229,7 +3232,7 @@ class TestAudioExcludedFromShotObjects(unittest.TestCase):
         self.assertEqual(actions["A01"], "patched")
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30,
     )
     def test_same_audio_yields_skipped(self, mock_dur):
@@ -3289,7 +3292,7 @@ class TestAssessAudioStatus(unittest.TestCase):
         )
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30,
     )
     def test_audio_exists_valid(self, mock_dur):
@@ -3311,7 +3314,7 @@ class TestAssessAudioStatus(unittest.TestCase):
         self.assertEqual(audio_st.status, "valid")
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30,
     )
     def test_audio_missing_object(self, mock_dur):
@@ -3330,7 +3333,7 @@ class TestAssessAudioStatus(unittest.TestCase):
         self.assertFalse(audio_st.exists)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30,
     )
     def test_no_audio_object_no_audio_status(self, mock_dur):
@@ -3351,7 +3354,7 @@ class TestAssessAudioStatus(unittest.TestCase):
         self.assertIsNone(audio_st)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30,
     )
     def test_missing_audio_affects_rollup(self, mock_dur):
@@ -3368,7 +3371,7 @@ class TestAssessAudioStatus(unittest.TestCase):
         self.assertEqual(results[0].status, "missing_object")
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30,
     )
     def test_valid_audio_does_not_degrade_rollup(self, mock_dur):
@@ -3385,7 +3388,7 @@ class TestAssessAudioStatus(unittest.TestCase):
         self.assertEqual(results[0].status, "valid")
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30,
     )
     def test_locked_shot_skips_audio_check(self, mock_dur):
@@ -3405,7 +3408,7 @@ class TestAssessAudioStatus(unittest.TestCase):
         self.assertEqual(results[0].status, "locked")
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30,
     )
     def test_default_audio_exists_fn(self, mock_dur):
@@ -3421,6 +3424,7 @@ class TestAssessAudioStatus(unittest.TestCase):
         builder.update(steps)
 
         import maya
+
         real_cmds = maya.cmds
 
         captured_calls = []
@@ -3439,10 +3443,13 @@ class TestAssessAudioStatus(unittest.TestCase):
                 return ["narration_A01"]
             return original_ls(*args, **kwargs)
 
-        with patch(
-            "mayatk.anim_utils.shots.shot_manifest._shot_manifest.AudioUtils.has_track",
-            return_value=False,
-        ), patch.object(real_cmds, "ls", side_effect=smart_ls):
+        with (
+            patch(
+                "mayatk.anim_utils.shots.shot_manifest._shot_manifest.AudioUtils.has_track",
+                return_value=False,
+            ),
+            patch.object(real_cmds, "ls", side_effect=smart_ls),
+        ):
             results = builder.assess(
                 steps,
                 exists_fn=lambda n: True,
@@ -3457,7 +3464,7 @@ class TestAssessAudioStatus(unittest.TestCase):
         )
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30,
     )
     def test_audio_never_gets_user_animated(self, mock_dur):
@@ -3541,10 +3548,10 @@ class TestSetClipBehavior(unittest.TestCase):
         from unittest.mock import patch as _p
 
         with _p(
-            "mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors._verify_audio_clip",
+            "mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors._BehaviorsInternal._verify_audio_clip",
             return_value=True,
         ) as mock_v:
-            result = verify_behavior("node", "set_clip", 1, 30)
+            result = Behaviors.verify_behavior("node", "set_clip", 1, 30)
         # _verify_audio_clip takes the full (obj, start, end) tuple.
         mock_v.assert_called_once_with("node", 1, 30)
         self.assertTrue(result)
@@ -3554,13 +3561,13 @@ class TestSetClipBehavior(unittest.TestCase):
         from unittest.mock import patch as _p
 
         with _p(
-            "mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors._verify_audio_clip",
+            "mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors._BehaviorsInternal._verify_audio_clip",
             return_value=False,
         ):
-            self.assertFalse(verify_behavior("node", "set_clip", 1, 30))
+            self.assertFalse(Behaviors.verify_behavior("node", "set_clip", 1, 30))
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30,
     )
     def test_assess_audio_with_set_clip_behavior(self, mock_dur):
@@ -3587,7 +3594,7 @@ class TestSetClipBehavior(unittest.TestCase):
         self.assertEqual(audio_st.broken_behaviors, ["set_clip"])
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration",
+        "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration",
         return_value=30,
     )
     def test_assess_audio_set_clip_valid(self, mock_dur):
@@ -3618,9 +3625,11 @@ class TestSetClipBehavior(unittest.TestCase):
         from unittest.mock import patch as _p
 
         with _p(
-            "mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors.apply_audio_clip",
+            "mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors.Behaviors.apply_audio_clip",
         ) as mock_apply:
-            apply_behavior("my_node", "set_clip", 1, 30, source_path="/audio/clip.wav")
+            Behaviors.apply_behavior(
+                "my_node", "set_clip", 1, 30, source_path="/audio/clip.wav"
+            )
         # apply_audio_clip now requires both start AND end.
         mock_apply.assert_called_once_with(
             "my_node", 1, 30, source_path="/audio/clip.wav"
@@ -3631,31 +3640,32 @@ class TestSetClipBehavior(unittest.TestCase):
         from unittest.mock import patch as _p
 
         with _p(
-            "mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors.apply_audio_clip",
+            "mayatk.anim_utils.shots.shot_manifest.behaviors._behaviors.Behaviors.apply_audio_clip",
         ) as mock_apply:
-            apply_behavior("my_node", "set_clip", 1, 30)
+            Behaviors.apply_behavior("my_node", "set_clip", 1, 30)
         # apply_audio_clip now requires both start AND end (end is the
         # upper bound for the off-key).
         mock_apply.assert_called_once_with("my_node", 1, 30, source_path="")
 
     def test_apply_audio_clip_warns_when_no_node_no_source(self):
         """apply_audio_clip logs warning when node missing and no source_path."""
-        from mayatk.anim_utils.shots.shot_manifest.behaviors import (
-            apply_audio_clip,
-        )
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
         # has_track() probes the carrier via cmds.objExists/attributeQuery,
         # which the shared mock reports truthy — so patch it to False to
         # deterministically exercise the missing-track warning path.
-        with patch(
-            "mayatk.audio_utils._audio_utils.AudioUtils.has_track",
-            return_value=False,
-        ), self.assertLogs(
-            "mayatk.anim_utils.shots.shot_manifest.behaviors",
-            level="WARNING",
-        ) as cm:
+        with (
+            patch(
+                "mayatk.audio_utils._audio_utils.AudioUtils.has_track",
+                return_value=False,
+            ),
+            self.assertLogs(
+                "mayatk.anim_utils.shots.shot_manifest.behaviors",
+                level="WARNING",
+            ) as cm,
+        ):
             # apply_audio_clip now requires both start and end.
-            apply_audio_clip("missing_node", 10.0, 40.0)
+            Behaviors.apply_audio_clip("missing_node", 10.0, 40.0)
         self.assertTrue(any("missing_node" in m for m in cm.output))
 
     def tearDown(self):
@@ -3670,6 +3680,7 @@ class TestAudioResolverPath(unittest.TestCase):
 
     def setUp(self):
         import tempfile
+
         # Per-test tempdir avoids Windows file-handle collisions between
         # successive setUp/tearDown cycles when run as part of --all.
         self._TEMP = Path(tempfile.mkdtemp(prefix="audio_resolver_"))
@@ -3688,7 +3699,7 @@ class TestAudioResolverPath(unittest.TestCase):
 
     def test_prefix_sets_audio_object(self):
         """_audio_prefix appends audio BuilderObject with source_path."""
-        resolver = _audio_prefix(self._tmpdir)
+        resolver = Mapping._audio_prefix(self._tmpdir)
         step = BuilderStep(
             step_id="A01",
             section="A",
@@ -3703,7 +3714,7 @@ class TestAudioResolverPath(unittest.TestCase):
 
     def test_prefix_no_match_leaves_no_audio_object(self):
         """_audio_prefix doesn't add audio object when no file matches."""
-        resolver = _audio_prefix(self._tmpdir)
+        resolver = Mapping._audio_prefix(self._tmpdir)
         step = BuilderStep(
             step_id="Z99",
             section="Z",
@@ -3715,7 +3726,7 @@ class TestAudioResolverPath(unittest.TestCase):
 
     def test_regex_sets_audio_object(self):
         """_audio_regex appends audio BuilderObject with source_path."""
-        resolver = _audio_regex(
+        resolver = Mapping._audio_regex(
             self._tmpdir,
             r"{step_id}_.*",
         )
@@ -3733,7 +3744,7 @@ class TestAudioResolverPath(unittest.TestCase):
 
     def test_map_sets_audio_object_no_source_path(self):
         """_audio_map appends audio BuilderObject with no source_path."""
-        resolver = _audio_map({"A01": "narration_A01"})
+        resolver = Mapping._audio_map({"A01": "narration_A01"})
         step = BuilderStep(
             step_id="A01",
             section="A",
@@ -3748,7 +3759,7 @@ class TestAudioResolverPath(unittest.TestCase):
 
     def test_derive_generates_clip_from_audio_text(self):
         """_audio_derive builds clip name from step_id + first N words."""
-        resolver = _audio_derive(words=3)
+        resolver = Mapping._audio_derive(words=3)
         step = BuilderStep(
             step_id="A01",
             section="A",
@@ -3764,7 +3775,7 @@ class TestAudioResolverPath(unittest.TestCase):
 
     def test_derive_skips_na_audio(self):
         """_audio_derive does nothing when audio is N/A."""
-        resolver = _audio_derive(words=3)
+        resolver = Mapping._audio_derive(words=3)
         step = BuilderStep(
             step_id="A01",
             section="A",
@@ -3777,7 +3788,7 @@ class TestAudioResolverPath(unittest.TestCase):
 
     def test_derive_skips_empty_audio(self):
         """_audio_derive does nothing when audio is empty."""
-        resolver = _audio_derive(words=3)
+        resolver = Mapping._audio_derive(words=3)
         step = BuilderStep(
             step_id="A01",
             section="A",
@@ -3790,7 +3801,7 @@ class TestAudioResolverPath(unittest.TestCase):
 
     def test_derive_strips_punctuation(self):
         """_audio_derive strips non-alphanumeric chars from words."""
-        resolver = _audio_derive(words=3)
+        resolver = Mapping._audio_derive(words=3)
         step = BuilderStep(
             step_id="A08",
             section="A",
@@ -3804,7 +3815,7 @@ class TestAudioResolverPath(unittest.TestCase):
 
     def test_derive_fewer_words_than_requested(self):
         """_audio_derive works when audio has fewer words than requested."""
-        resolver = _audio_derive(words=3)
+        resolver = Mapping._audio_derive(words=3)
         step = BuilderStep(
             step_id="A14",
             section="A",
@@ -3818,7 +3829,7 @@ class TestAudioResolverPath(unittest.TestCase):
 
     def test_derive_sets_source_path_when_file_exists(self):
         """_audio_derive sets source_path when matching file found in dir."""
-        resolver = _audio_derive(words=3, directory=self._tmpdir)
+        resolver = Mapping._audio_derive(words=3, directory=self._tmpdir)
         expected = Path(self._tmpdir, "A01_WelcomeToThe.wav")
         expected.write_bytes(b"RIFF")
         step = BuilderStep(
@@ -3850,7 +3861,7 @@ class TestDefaultBehaviors(unittest.TestCase):
 
     def test_adds_behavior_to_matching_kind(self):
         """Behavior is added to objects whose kind matches the config."""
-        proc = _build_default_behaviors({"audio": ["set_clip"]})
+        proc = Mapping._build_default_behaviors({"audio": ["set_clip"]})
         obj = BuilderObject(name="clip", kind="audio")
         step = self._step(obj)
         proc(step)
@@ -3858,7 +3869,7 @@ class TestDefaultBehaviors(unittest.TestCase):
 
     def test_skips_non_matching_kind(self):
         """Scene objects are not affected by audio-only config."""
-        proc = _build_default_behaviors({"audio": ["set_clip"]})
+        proc = Mapping._build_default_behaviors({"audio": ["set_clip"]})
         obj = BuilderObject(name="asset", kind="scene")
         step = self._step(obj)
         proc(step)
@@ -3866,7 +3877,7 @@ class TestDefaultBehaviors(unittest.TestCase):
 
     def test_does_not_duplicate_existing(self):
         """Already-present behaviors are not duplicated."""
-        proc = _build_default_behaviors({"audio": ["set_clip"]})
+        proc = Mapping._build_default_behaviors({"audio": ["set_clip"]})
         obj = BuilderObject(name="clip", kind="audio", behaviors=["set_clip"])
         step = self._step(obj)
         proc(step)
@@ -3874,7 +3885,7 @@ class TestDefaultBehaviors(unittest.TestCase):
 
     def test_appends_to_existing_behaviors(self):
         """New behaviors are appended alongside existing ones."""
-        proc = _build_default_behaviors({"audio": ["set_clip"]})
+        proc = Mapping._build_default_behaviors({"audio": ["set_clip"]})
         obj = BuilderObject(name="clip", kind="audio", behaviors=["fade_in"])
         step = self._step(obj)
         proc(step)
@@ -3882,7 +3893,7 @@ class TestDefaultBehaviors(unittest.TestCase):
 
     def test_multiple_kinds(self):
         """Config can target multiple kinds simultaneously."""
-        proc = _build_default_behaviors(
+        proc = Mapping._build_default_behaviors(
             {
                 "audio": ["set_clip"],
                 "scene": ["fade_in"],
@@ -3897,7 +3908,7 @@ class TestDefaultBehaviors(unittest.TestCase):
 
     def test_empty_config_is_noop(self):
         """Empty config dict leaves objects unchanged."""
-        proc = _build_default_behaviors({})
+        proc = Mapping._build_default_behaviors({})
         obj = BuilderObject(name="asset", kind="scene")
         step = self._step(obj)
         proc(step)
@@ -3923,12 +3934,12 @@ class TestDefaultDurationResolveRanges(unittest.TestCase):
     def setUp(self):
         self.steps = _make_steps("A01", "A02", "A03")
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_uniform_200_frame_ranges(self, mock_dur):
         """Three steps with default_duration=200 yield [0,200], [200,400], [400,600]."""
         mock_dur.return_value = 30.0
 
-        resolved = resolve_ranges(
+        resolved = RangeResolver.resolve_ranges(
             steps=self.steps,
             user_ranges={},
             gap_starts=[],
@@ -3945,12 +3956,12 @@ class TestDefaultDurationResolveRanges(unittest.TestCase):
         self.assertEqual(resolved[2], ("A03", 400.0, 600.0, False))
         mock_dur.assert_not_called()
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_uniform_ranges_with_gap(self, mock_dur):
         """Gap is respected between default-duration steps."""
         mock_dur.return_value = 30.0
 
-        resolved = resolve_ranges(
+        resolved = RangeResolver.resolve_ranges(
             steps=self.steps,
             user_ranges={},
             gap_starts=[],
@@ -3967,12 +3978,12 @@ class TestDefaultDurationResolveRanges(unittest.TestCase):
         # 410 + 10 gap = 420
         self.assertEqual(resolved[2], ("A03", 420.0, 620.0, False))
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_user_range_overrides_default(self, mock_dur):
         """User-pinned ranges still take priority over default_duration."""
         mock_dur.return_value = 30.0
 
-        resolved = resolve_ranges(
+        resolved = RangeResolver.resolve_ranges(
             steps=self.steps,
             user_ranges={"A02": (500.0, 700.0)},
             gap_starts=[],
@@ -3988,12 +3999,12 @@ class TestDefaultDurationResolveRanges(unittest.TestCase):
         # A03 follows after A02's end
         self.assertEqual(resolved[2][1], 700.0)
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_zero_default_duration_uses_compute(self, mock_dur):
         """default_duration=0 preserves legacy behavior (compute_duration)."""
         mock_dur.return_value = 30.0
 
-        resolved = resolve_ranges(
+        resolved = RangeResolver.resolve_ranges(
             steps=self.steps,
             user_ranges={},
             gap_starts=[],
@@ -4009,12 +4020,12 @@ class TestDefaultDurationResolveRanges(unittest.TestCase):
         self.assertEqual(resolved[1][1], 31.0)  # 1 + 30
         self.assertEqual(resolved[2][1], 61.0)  # 31 + 30
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration")
+    @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_default_not_used_when_regions_exist(self, mock_dur):
         """When gap_starts are present, default_duration is ignored."""
         mock_dur.return_value = 30.0
 
-        resolved = resolve_ranges(
+        resolved = RangeResolver.resolve_ranges(
             steps=self.steps,
             user_ranges={},
             gap_starts=[10.0, 100.0, 200.0],
@@ -4033,11 +4044,11 @@ class TestDefaultDurationResolveRanges(unittest.TestCase):
     def test_starts_at_zero_not_one(self):
         """Default ranges start at frame 0, not frame 1."""
         with patch(
-            "mayatk.anim_utils.shots.shot_manifest.behaviors.compute_duration"
+            "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration"
         ) as mock_dur:
             mock_dur.return_value = 30.0
 
-            resolved = resolve_ranges(
+            resolved = RangeResolver.resolve_ranges(
                 steps=_make_steps("A01"),
                 user_ranges={},
                 gap_starts=[],

@@ -13,6 +13,7 @@ Usage::
     python -m pytest mayatk/test/test_sequencer_real_scene.py -v
     mayapy mayatk/test/test_sequencer_real_scene.py
 """
+
 import unittest
 import sys
 import os
@@ -63,7 +64,7 @@ except Exception:
 # ---------------------------------------------------------------------------
 os.environ.setdefault("QT_API", "pyside6")
 try:
-    from qtpy import QtWidgets, QtCore
+    from qtpy import QtWidgets
 
     _app = QtWidgets.QApplication.instance()
     if _app is None:
@@ -79,10 +80,8 @@ if HAS_MAYA and HAS_QT:
     from uitk.widgets.sequencer._sequencer import SequencerWidget
     from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
         ShotSequencer,
-        ShotBlock,
     )
-    from mayatk.anim_utils.shots._shots import ShotStore, detect_shot_regions
-    from mayatk.anim_utils.segment_keys import SegmentKeys
+    from mayatk.anim_utils.shots._shots import Detection, ShotStore
 
 
 def _process_events():
@@ -165,7 +164,7 @@ class TestSceneDiscovery(unittest.TestCase):
     def setUpClass(cls):
         cmds.file(SCENE_PATH, open=True, force=True)
         cls.all_transforms = _get_all_animated_transforms()
-        cls.regions = detect_shot_regions()
+        cls.regions = Detection.detect_shot_regions()
 
     def test_scene_has_animated_objects(self):
         """The scene must contain animated transforms."""
@@ -243,7 +242,7 @@ class TestEngineSegments(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cmds.file(SCENE_PATH, open=True, force=True)
-        cls.regions = detect_shot_regions()
+        cls.regions = Detection.detect_shot_regions()
         cls.store = ShotStore()
         for r in cls.regions:
             cls.store.define_shot(r["name"], r["start"], r["end"], r["objects"])
@@ -354,7 +353,7 @@ class TestWidgetPopulation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cmds.file(SCENE_PATH, open=True, force=True)
-        cls.regions = detect_shot_regions()
+        cls.regions = Detection.detect_shot_regions()
         cls.store = ShotStore()
         for r in cls.regions:
             cls.store.define_shot(r["name"], r["start"], r["end"], r["objects"])
@@ -535,7 +534,7 @@ class TestSubRowExpansion(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cmds.file(SCENE_PATH, open=True, force=True)
-        cls.regions = detect_shot_regions()
+        cls.regions = Detection.detect_shot_regions()
         cls.store = ShotStore()
         for r in cls.regions:
             cls.store.define_shot(r["name"], r["start"], r["end"], r["objects"])
@@ -687,7 +686,7 @@ class TestKeyboardNavigation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cmds.file(SCENE_PATH, open=True, force=True)
-        cls.regions = detect_shot_regions()
+        cls.regions = Detection.detect_shot_regions()
         cls.store = ShotStore()
         for r in cls.regions:
             cls.store.define_shot(r["name"], r["start"], r["end"], r["objects"])
@@ -800,7 +799,7 @@ class TestUndoWithRealData(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cmds.file(SCENE_PATH, open=True, force=True)
-        cls.regions = detect_shot_regions()
+        cls.regions = Detection.detect_shot_regions()
         cls.store = ShotStore()
         for r in cls.regions:
             cls.store.define_shot(r["name"], r["start"], r["end"], r["objects"])
@@ -918,7 +917,7 @@ class TestSceneReport(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cmds.file(SCENE_PATH, open=True, force=True)
-        cls.regions = detect_shot_regions()
+        cls.regions = Detection.detect_shot_regions()
         cls.store = ShotStore()
         for r in cls.regions:
             cls.store.define_shot(r["name"], r["start"], r["end"], r["objects"])

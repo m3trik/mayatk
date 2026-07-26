@@ -105,7 +105,7 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
     # ------------------------------------------------------------------ base-class hooks
     @property
     def params_module(self):
-        return _params
+        return _params.Parameters
 
     @property
     def template_dir(self) -> Path:

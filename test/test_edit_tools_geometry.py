@@ -21,9 +21,10 @@ from mayatk.edit_utils.snap import Snap
 from mayatk.edit_utils.cut_on_axis import CutOnAxis, CutOnAxisSlots
 from mayatk.edit_utils.mirror import MirrorSlots
 from mayatk.edit_utils._edit_utils import EditUtils
-from mayatk.core_utils.preview import Preview
+from mayatk.xform_utils._xform_utils import XformUtils
+from mayatk.core_utils.preview import Preview, OperationError
 
-from base_test import MayaTkTestCase, QuickTestCase
+from base_test import MayaTkTestCase, QuickTestCase, skipIfBatch
 
 
 class TestBevel(MayaTkTestCase):
@@ -42,6 +43,84 @@ class TestBevel(MayaTkTestCase):
         cube = cmds.polyCube(name="bvl_default")[0]
         # Should not raise with defaults
         Bevel.bevel([f"{cube}.e[1]"])
+
+    # ------------------------------------------------ silent no-op detection
+    # Issue-driven (2026-07-25): polyBevel3 does not raise when the requested
+    # width/segment combination cannot fit the adjacent geometry — it silently
+    # produces NO topology change. Inside a Preview refresh that silence is
+    # destructive UX: the rollback removes the visible bevel, the "successful"
+    # re-run applies nothing, and the user — seeing their bevel vanish with no
+    # error — reaches for Ctrl+Z and undoes real pre-preview work.
+
+    def _counts(self, obj):
+        return (
+            cmds.polyEvaluate(obj, vertex=True),
+            cmds.polyEvaluate(obj, edge=True),
+            cmds.polyEvaluate(obj, face=True),
+        )
+
+    def _flat_cube(self, name="flat_cube"):
+        """Cube squashed to 0.001 in Y (frozen): polyBevel3 handles low segment
+        counts but silently no-ops at higher ones — the live repro geometry."""
+        cube = cmds.polyCube(name=name)[0]
+        cmds.setAttr(f"{cube}.scaleY", 0.001)
+        cmds.makeIdentity(cube, apply=True, scale=True)
+        cmds.delete(cube, constructionHistory=True)
+        return cube
+
+    def test_silent_noop_raises_operation_error(self):
+        """seg=4 on the flat cube: polyBevel3 'succeeds' but changes nothing.
+        Bevel.bevel must convert that silence into an OperationError."""
+        cube = self._flat_cube()
+        before = self._counts(cube)
+
+        with self.assertRaises(OperationError) as ctx:
+            Bevel.bevel([f"{cube}.e[0]"], width=0.23, segments=4)
+
+        self.assertEqual(self._counts(cube), before)
+        self.assertIn(cube, str(ctx.exception.user_message))
+
+    def test_fitting_segments_on_same_mesh_do_not_raise(self):
+        """Guard: the same flat cube DOES bevel at seg=1 — detection must not
+        flag a working configuration."""
+        cube = self._flat_cube(name="flat_cube_ok")
+        before = self._counts(cube)
+        Bevel.bevel([f"{cube}.e[0]"], width=0.23, segments=1)
+        self.assertNotEqual(self._counts(cube), before)
+
+    def test_duplicate_leaf_names_bevel_independently(self):
+        """Two objects sharing a leaf name must each get their own polyBevel3
+        call. Leaf-name grouping merged them into one component list, which
+        polyBevel3 rejects outright ('Doesn't work with multiple objects
+        selected') — probed 2026-07-25; fixed by unambiguous
+        map_components_to_objects keys."""
+        cmds.group(cmds.polyCube(name="dupCube")[0], name="dgrp1")
+        cmds.group(cmds.polyCube(name="dupCube")[0], name="dgrp2")
+        cmds.delete("dgrp1|dupCube", "dgrp2|dupCube", constructionHistory=True)
+        before = {o: self._counts(o) for o in ("dgrp1|dupCube", "dgrp2|dupCube")}
+
+        Bevel.bevel(
+            ["dgrp1|dupCube.e[0]", "dgrp2|dupCube.e[0]"], width=0.23, segments=2
+        )
+
+        for obj, counts in before.items():
+            self.assertNotEqual(self._counts(obj), counts, f"{obj} not beveled")
+
+    def test_multi_object_reports_only_failed(self):
+        """One healthy cube + one flat cube: the healthy bevel applies, the
+        silent no-op raises and names only the failing object."""
+        good = cmds.polyCube(name="bevel_good")[0]
+        cmds.delete(good, constructionHistory=True)
+        bad = self._flat_cube(name="bevel_bad")
+        good_before = self._counts(good)
+
+        with self.assertRaises(OperationError) as ctx:
+            Bevel.bevel([f"{good}.e[0]", f"{bad}.e[0]"], width=0.23, segments=4)
+
+        self.assertNotEqual(self._counts(good), good_before, "healthy bevel dropped")
+        msg = str(ctx.exception.user_message)
+        self.assertIn(bad, msg)
+        self.assertNotIn(good, msg)
 
 
 class TestBridge(MayaTkTestCase):
@@ -308,6 +387,129 @@ class TestCutOnAxis(MayaTkTestCase):
         bbox = cmds.exactWorldBoundingBox(cube)
         self.assertLess(bbox[3], 0.01)
         self.assertAlmostEqual(bbox[0], -0.7, places=3)
+
+    def test_spacing_controls_span(self):
+        """An explicit spacing fixes the span between cuts, independent of the
+        object size. For 2 cuts centered on the pivot the outermost cut sits at
+        +spacing/2, so deleting the +X half leaves xmax≈spacing/2.
+        """
+        for spacing, expected_xmax in ((4.0, 2.0), (6.0, 3.0)):
+            with self.subTest(spacing=spacing):
+                cube = cmds.polyCube(
+                    name=f"cut_space_{int(spacing)}", w=10, h=1, d=1
+                )[0]  # spans X in [-5, 5], center pivot at 0
+                CutOnAxis.perform_cut_on_axis(
+                    [cube], axis="x", cuts=2, pivot="center",
+                    cut_spacing=spacing, delete=True, use_object_axes=False,
+                )
+                bbox = cmds.exactWorldBoundingBox(cube)
+                self.assertAlmostEqual(
+                    bbox[3], expected_xmax, places=3,
+                    msg=f"spacing={spacing} expected xmax≈{expected_xmax}, got {bbox[3]}",
+                )
+
+    def test_distribution_runs_and_cuts(self):
+        """Every interpolation mode should produce cuts without raising."""
+        for mode in ("linear", "ease_in", "ease_out", "weighted", "smooth_step"):
+            with self.subTest(mode=mode):
+                cube = cmds.polyCube(name=f"cut_dist_{mode}", w=6, h=1, d=1)[0]
+                before = cmds.polyEvaluate(cube, face=True)
+                CutOnAxis.perform_cut_on_axis(
+                    [cube], axis="x", cuts=3, pivot="center",
+                    distribution=mode, weight_curve=3.0, use_object_axes=False,
+                )
+                after = cmds.polyEvaluate(cube, face=True)
+                self.assertGreater(after, before, f"{mode} produced no cuts")
+
+
+class TestCutOffsets(unittest.TestCase):
+    """EditUtils._cut_offsets — pure cut-distribution math (no scene)."""
+
+    def test_linear_is_even_and_centered(self):
+        # 3 cuts across a span of 5 -> -2.5, 0, 2.5 (symmetric, even gaps).
+        off = EditUtils._cut_offsets(3, 5.0, "linear")
+        self.assertEqual([round(x, 4) for x in off], [-2.5, 0.0, 2.5])
+
+    def test_legacy_even_fill_positions_preserved(self):
+        # Auto span L*(n-1)/(n+1) must reproduce the historical cut_spacing
+        # (L/(n+1)) placement: cube length 10, 3 cuts -> gap 2.5.
+        length, n = 10.0, 3
+        span = length * (n - 1) / (n + 1)
+        off = EditUtils._cut_offsets(n, span, "linear")
+        self.assertEqual([round(x, 4) for x in off], [-2.5, 0.0, 2.5])
+
+    def test_spacing_sets_gap(self):
+        # 2 cuts, span = spacing*(n-1) = 4 -> -2, 2 (gap of 4).
+        off = EditUtils._cut_offsets(2, 4.0, "linear")
+        self.assertEqual([round(x, 4) for x in off], [-2.0, 2.0])
+
+    def test_single_cut_sits_on_pivot(self):
+        self.assertEqual(EditUtils._cut_offsets(1, 999.0, "weighted"), [0.0])
+
+    def test_zero_amount_is_empty(self):
+        self.assertEqual(EditUtils._cut_offsets(0, 5.0), [])
+
+    def test_nonlinear_keeps_endpoints_biases_interior(self):
+        # ease_out keeps the endpoints at ±span/2 but pushes the middle cut off
+        # center toward the +end (density biased toward the pivot side).
+        off = EditUtils._cut_offsets(3, 10.0, "ease_out", weight_curve=3.0)
+        self.assertAlmostEqual(off[0], -5.0, places=4)
+        self.assertAlmostEqual(off[-1], 5.0, places=4)
+        self.assertGreater(off[1], 0.0, "interior cut should shift toward +end")
+        self.assertNotAlmostEqual(off[1], 0.0, places=4)
+
+
+class TestPivotRetrieval(MayaTkTestCase):
+    """XformUtils.get_operation_axis_pos — 'object' vs 'manip' retrieval.
+
+    Guards the report that the pivot helper 'returns the manip pivot for the
+    object pivot'. Verified in a live GUI Maya (see test/temp_tests probes):
+    the resolver honors each pivot type. Headless, manipPivot reports the
+    default origin, so 'manip' deliberately falls back to the rotate pivot —
+    'object' must always return the rotate pivot itself.
+    """
+
+    def test_object_returns_rotate_pivot(self):
+        cube = cmds.polyCube(name="piv_obj", w=2, h=2, d=2)[0]
+        cmds.move(5, 0, 0, cube)
+        rp = cmds.xform(cube, q=True, ws=True, rp=True)
+        obj = XformUtils.get_operation_axis_pos(cube, "object")
+        self.assertEqual([round(v, 4) for v in obj], [round(v, 4) for v in rp])
+        self.assertAlmostEqual(obj[0], 5.0, places=4)
+
+    def test_object_follows_edited_rotate_pivot(self):
+        cube = cmds.polyCube(name="piv_edit", w=2, h=2, d=2)[0]
+        cmds.xform(cube, piv=(3, 0, 0), ws=True)  # move only the pivot
+        obj = XformUtils.get_operation_axis_pos(cube, "object")
+        self.assertAlmostEqual(obj[0], 3.0, places=4)
+        # center is the bbox center (still at origin) — distinct from object.
+        center = XformUtils.get_operation_axis_pos(cube, "center")
+        self.assertAlmostEqual(center[0], 0.0, places=4)
+
+    def test_manip_falls_back_to_rotate_pivot_when_uncustomized(self):
+        # Headless: no custom manip -> manip must equal the object pivot, not
+        # the world origin (regression: cuts were happening at world 0).
+        cube = cmds.polyCube(name="piv_manip", w=2, h=2, d=2)[0]
+        cmds.move(5, 0, 0, cube)
+        cmds.select(cube, replace=True)
+        obj = XformUtils.get_operation_axis_pos(cube, "object")
+        manip = XformUtils.get_operation_axis_pos(cube, "manip")
+        self.assertEqual(
+            [round(v, 4) for v in manip], [round(v, 4) for v in obj]
+        )
+
+    @skipIfBatch("manipPivot override is GUI-only")
+    def test_custom_manip_diverges_from_object(self):
+        # GUI pass: a dragged custom manip pivot must NOT leak into 'object'.
+        cube = cmds.polyCube(name="piv_custom", w=2, h=2, d=2)[0]
+        cmds.move(5, 0, 0, cube)
+        cmds.select(cube, replace=True)
+        cmds.setToolTo("moveSuperContext")
+        cmds.manipPivot(p=(2.0, 0.0, 0.0))
+        obj = XformUtils.get_operation_axis_pos(cube, "object")
+        manip = XformUtils.get_operation_axis_pos(cube, "manip")
+        self.assertAlmostEqual(obj[0], 5.0, places=3, msg="object must stay at rp")
+        self.assertAlmostEqual(manip[0], 2.0, places=3, msg="manip must read custom")
 
 
 class _MockSignal:

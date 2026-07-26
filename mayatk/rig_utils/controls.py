@@ -12,7 +12,7 @@ except ImportError as error:
 
 import pythontk as ptk
 
-from mayatk.core_utils._core_utils import CoreUtils, leaf_name
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.xform_utils._xform_utils import XformUtils
@@ -205,7 +205,9 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         cls._safe_freeze(root)
 
         # Flatten: bring any nested curve shapes up to root so this behaves like a single object
-        descendants = cmds.listRelatives(root, ad=True, type="transform") or []
+        descendants = (
+            cmds.listRelatives(root, ad=True, type="transform", fullPath=True) or []
+        )
         for d in descendants:
             shapes = cmds.listRelatives(d, shapes=True, path=True) or []
             for s in shapes:
@@ -448,7 +450,13 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             else:
                 node = NodeUtils.get_transform_node(item) or item
             try:
-                node = (cmds.ls(node, flatten=True) or [None])[0]
+                matches = cmds.ls(node, flatten=True, long=True) or [None]
+                if len(matches) > 1:
+                    cmds.warning(
+                        f"Controls.combine: ambiguous control {node!r} matched "
+                        f"{len(matches)} nodes; using {matches[0]}."
+                    )
+                node = matches[0]
             except Exception:
                 continue
             if node and node not in resolved:
@@ -457,7 +465,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         if not resolved:
             raise ValueError("Controls.combine: no valid controls provided")
 
-        base = name or leaf_name(resolved[0]).split(":")[-1]
+        base = name or CoreUtils.leaf_name(resolved[0]).split(":")[-1]
         if ctrl_suffix and not base.endswith(ctrl_suffix):
             base = f"{base}{ctrl_suffix}"
 
@@ -629,9 +637,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         return base
 
     @classmethod
-    def _build_two_way_arrow(
-        cls, *, name: str, axis: str = "y", **_
-    ) -> str:
+    def _build_two_way_arrow(cls, *, name: str, axis: str = "y", **_) -> str:
         """3D two-way arrow with depth."""
         outline = [
             (-1.6, 0.0, 0.0),
@@ -662,9 +668,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         return base
 
     @classmethod
-    def _build_four_way_arrow(
-        cls, *, name: str, axis: str = "y", **_
-    ) -> str:
+    def _build_four_way_arrow(cls, *, name: str, axis: str = "y", **_) -> str:
         """3D four-way arrow with depth."""
         L = 1.6
         head_len = 0.5
@@ -740,7 +744,9 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         **_,
     ) -> str:
         """3D chevron — triangular prism pointing in +Z."""
-        prism = cmds.polyPrism(l=0.35, w=1.6, ns=3, sh=1, sc=0, ax=(0, 1, 0), ch=False)[0]
+        prism = cmds.polyPrism(l=0.35, w=1.6, ns=3, sh=1, sc=0, ax=(0, 1, 0), ch=False)[
+            0
+        ]
         # Flatten Y and stretch Z for a chevron silhouette
         cmds.scale(1.0, 0.5, 1.2, prism, r=True)
         cmds.makeIdentity(prism, apply=True, t=True, r=True, s=True, pn=True)
@@ -784,9 +790,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         return base
 
     @classmethod
-    def _build_beveled_cube(
-        cls, *, name: str, axis: str = "y", **_
-    ) -> str:
+    def _build_beveled_cube(cls, *, name: str, axis: str = "y", **_) -> str:
         """Beveled cube — polyCube with all edges beveled at 50%,
         converted to NURBS curves via edge extraction.
         """
@@ -804,9 +808,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         return cls._curves_from_poly(cube, name)
 
     @classmethod
-    def _build_ball(
-        cls, *, name: str, axis: str = "y", sections: int = 20, **_
-    ) -> str:
+    def _build_ball(cls, *, name: str, axis: str = "y", sections: int = 20, **_) -> str:
         # Geodesic sphere (icosahedron wireframe) for a cleaner, more "designed" control.
         # Golden ratio for icosahedron vertex positions
         phi = (1.0 + 5.0**0.5) / 2.0
@@ -927,9 +929,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         return base
 
     @classmethod
-    def _build_star(
-        cls, *, name: str, axis: str = "y", points: int = 6, **_
-    ) -> str:
+    def _build_star(cls, *, name: str, axis: str = "y", points: int = 6, **_) -> str:
         """3D star burst — outer and inner rings connected by radial spokes,
         with a subtle Y-depth for viewport readability."""
         import math

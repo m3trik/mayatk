@@ -16,6 +16,7 @@ replaced material without touching anything still assigned.
 
 Run inside a live Maya session via ``run_tests.py`` (``run_tests.py scene_import``).
 """
+
 import glob
 import json
 import logging
@@ -31,8 +32,6 @@ from mayatk.env_utils.blender_bridge import _scene_import as si
 from mayatk.env_utils.blender_bridge._scene_import import (
     BlenderSceneImport,
     import_blender_scene,
-    _fbx_safe_name,
-    _matches_fbx_name,
     _IMPORT_TEMPLATE,
 )
 
@@ -49,7 +48,9 @@ class TestSceneImportTemplate(unittest.TestCase):
     def test_template_exists_and_is_hidden(self):
         self.assertTrue(_IMPORT_TEMPLATE.is_file())
         # Underscore-prefixed: never a user-pickable send recipe in the panel.
-        self.assertNotIn("_import_scene", {p.stem for p in bb.list_templates()})
+        self.assertNotIn(
+            "_import_scene", {p.stem for p in bb.BlenderBridge.list_templates()}
+        )
 
     def test_judged_by_artifact_contract(self):
         # os._exit makes the exit code honest (blender --background exits 0
@@ -70,8 +71,13 @@ class TestSceneImportTemplate(unittest.TestCase):
         self.assertIn("TypeError", self.txt)
 
     def test_full_fidelity_flags(self):
-        for flag in ("use_mesh_modifiers", "use_tspace", "use_custom_props",
-                     "add_leaf_bones", "bake_anim"):
+        for flag in (
+            "use_mesh_modifiers",
+            "use_tspace",
+            "use_custom_props",
+            "add_leaf_bones",
+            "bake_anim",
+        ):
             self.assertIn(flag, self.txt)
 
     def test_manifest_written_with_fileless_entries(self):
@@ -103,8 +109,10 @@ class TestSceneImportRendering(unittest.TestCase):
     def test_render(self):
         eng = BlenderSceneImport(blender_path="X:/fake/blender.exe")
         script = eng.render_script(
-            r"C:\scenes\test scene.blend", r"C:\tmp\out.fbx",
-            embed_textures=False, include_animation=True,
+            r"C:\scenes\test scene.blend",
+            r"C:\tmp\out.fbx",
+            embed_textures=False,
+            include_animation=True,
         )
         self.assertNotIn("__" + "SRC_PATH" + "__", script)
         self.assertIn('r"C:/scenes/test scene.blend"', script)
@@ -163,18 +171,22 @@ class TestFbxNameMatching(unittest.TestCase):
     """
 
     def test_fbx_safe_name(self):
-        self.assertEqual(_fbx_safe_name("dotted.001"), "dottedFBXASC046001")
-        self.assertEqual(_fbx_safe_name("spa ced"), "spaFBXASC032ced")
-        self.assertEqual(_fbx_safe_name("dash-y"), "dashFBXASC045y")
-        self.assertEqual(_fbx_safe_name("1digit"), "FBXASC049digit")
-        self.assertEqual(_fbx_safe_name("Clean_Name"), "Clean_Name")
+        self.assertEqual(
+            BlenderSceneImport._fbx_safe_name("dotted.001"), "dottedFBXASC046001"
+        )
+        self.assertEqual(
+            BlenderSceneImport._fbx_safe_name("spa ced"), "spaFBXASC032ced"
+        )
+        self.assertEqual(BlenderSceneImport._fbx_safe_name("dash-y"), "dashFBXASC045y")
+        self.assertEqual(BlenderSceneImport._fbx_safe_name("1digit"), "FBXASC049digit")
+        self.assertEqual(BlenderSceneImport._fbx_safe_name("Clean_Name"), "Clean_Name")
 
     def test_matches_with_clash_suffix(self):
-        self.assertTrue(_matches_fbx_name("M_test", "M_test"))
+        self.assertTrue(BlenderSceneImport._matches_fbx_name("M_test", "M_test"))
         # Maya's rename-on-clash appends digits.
-        self.assertTrue(_matches_fbx_name("M_test1", "M_test"))
-        self.assertFalse(_matches_fbx_name("M_test_extra", "M_test"))
-        self.assertFalse(_matches_fbx_name("Other", "M_test"))
+        self.assertTrue(BlenderSceneImport._matches_fbx_name("M_test1", "M_test"))
+        self.assertFalse(BlenderSceneImport._matches_fbx_name("M_test_extra", "M_test"))
+        self.assertFalse(BlenderSceneImport._matches_fbx_name("Other", "M_test"))
 
 
 class _StubbedImport(BlenderSceneImport):
@@ -209,8 +221,9 @@ class _StubbedImport(BlenderSceneImport):
             return None  # "nothing classified" -- keep the FBX material
         # Cheap stand-in for the GameShader network: shader + SG, no textures.
         shader = cmds.shadingNode("standardSurface", asShader=True, name=name)
-        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True,
-                       name=f"{name}SG")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
         cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
         return sg
 
@@ -224,9 +237,7 @@ class TestSceneImportOrchestration(MayaTkTestCase):
         self.src = os.path.join(tempfile.gettempdir(), "mtk_scene_import_src.blend")
         with open(self.src, "wb") as f:
             f.write(b"BLENDER-v500")
-        self.tex = os.path.join(
-            tempfile.gettempdir(), "mtk_scene_import_BaseColor.png"
-        )
+        self.tex = os.path.join(tempfile.gettempdir(), "mtk_scene_import_BaseColor.png")
         with open(self.tex, "wb") as f:
             f.write(b"png-bytes")
 
@@ -246,20 +257,26 @@ class TestSceneImportOrchestration(MayaTkTestCase):
         renamed, and an untouched bystander."""
         cube = cmds.polyCube(name="objA")[0]
         mat_a = cmds.shadingNode("phong", asShader=True, name="M_test")
-        sg_a = cmds.sets(renderable=True, noSurfaceShader=True, empty=True,
-                         name="M_testSG")
+        sg_a = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="M_testSG"
+        )
         cmds.connectAttr(f"{mat_a}.outColor", f"{sg_a}.surfaceShader", force=True)
         mat_b = cmds.shadingNode("phong", asShader=True, name="M_keep")
-        sg_b = cmds.sets(renderable=True, noSurfaceShader=True, empty=True,
-                         name="M_keepSG")
+        sg_b = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="M_keepSG"
+        )
         cmds.connectAttr(f"{mat_b}.outColor", f"{sg_b}.surfaceShader", force=True)
         cmds.sets(f"{cube}.f[0:2]", forceElement=sg_a)
         cmds.sets(f"{cube}.f[3:5]", forceElement=sg_b)
 
         obj_b = cmds.polyCube(name="objB")[0]
         mat_r = cmds.shadingNode("phong", asShader=True, name="M_renamed_by_importer")
-        sg_r = cmds.sets(renderable=True, noSurfaceShader=True, empty=True,
-                         name="M_renamed_by_importerSG")
+        sg_r = cmds.sets(
+            renderable=True,
+            noSurfaceShader=True,
+            empty=True,
+            name="M_renamed_by_importerSG",
+        )
         cmds.connectAttr(f"{mat_r}.outColor", f"{sg_r}.surfaceShader", force=True)
         cmds.sets(obj_b, forceElement=sg_r)
 
@@ -271,14 +288,26 @@ class TestSceneImportOrchestration(MayaTkTestCase):
             "version": 1,
             "materials": [
                 # Primary path: SG-level member transfer (per-face preserved).
-                {"name": "M_test", "fbx_material": "M_test",
-                 "objects": ["objA"], "files": [self.tex]},
+                {
+                    "name": "M_test",
+                    "fbx_material": "M_test",
+                    "objects": ["objA"],
+                    "files": [self.tex],
+                },
                 # Fallback path: importer renamed the material -> object-level.
-                {"name": "M_fb", "fbx_material": "M_nowhere",
-                 "objects": ["objB"], "files": [self.tex]},
+                {
+                    "name": "M_fb",
+                    "fbx_material": "M_nowhere",
+                    "objects": ["objB"],
+                    "files": [self.tex],
+                },
                 # All files gone -> named warning, nothing touched.
-                {"name": "M_gone", "fbx_material": "M_gone",
-                 "objects": ["objC"], "files": ["X:/missing.png"]},
+                {
+                    "name": "M_gone",
+                    "fbx_material": "M_gone",
+                    "objects": ["objC"],
+                    "files": ["X:/missing.png"],
+                },
             ],
         }
         _StubbedImport.calls["import_result"] = self._build_imported_scene
@@ -301,8 +330,9 @@ class TestSceneImportOrchestration(MayaTkTestCase):
         keep_members = cmds.sets("M_keepSG", query=True) or []
         self.assertTrue(any("f[3:5]" in m for m in keep_members), keep_members)
         # The replaced phong (and its emptied SG) purged; the keeper stays.
-        self.assertFalse(cmds.objExists("M_test") and
-                         cmds.nodeType("M_test") == "phong")
+        self.assertFalse(
+            cmds.objExists("M_test") and cmds.nodeType("M_test") == "phong"
+        )
         self.assertTrue(cmds.objExists("M_keep"))
 
         # Fallback: objB force-assigned to the rebuilt M_fb network (Maya
@@ -315,16 +345,18 @@ class TestSceneImportOrchestration(MayaTkTestCase):
 
         # Intermediate payload removed on success.
         self.assertFalse(os.path.exists(_StubbedImport.calls["fbx"]))
-        self.assertFalse(
-            os.path.exists(_StubbedImport.calls["fbx"] + ".manifest.json")
-        )
+        self.assertFalse(os.path.exists(_StubbedImport.calls["fbx"] + ".manifest.json"))
 
     def test_unclassified_entry_keeps_fbx_material(self):
         _StubbedImport.calls["manifest"] = {
             "version": 1,
             "materials": [
-                {"name": "M_unclass", "fbx_material": "M_test",
-                 "objects": ["objA"], "files": [self.tex]},
+                {
+                    "name": "M_unclass",
+                    "fbx_material": "M_test",
+                    "objects": ["objA"],
+                    "files": [self.tex],
+                },
             ],
         }
         _StubbedImport.calls["import_result"] = self._build_imported_scene
@@ -342,10 +374,13 @@ class TestSceneImportOrchestration(MayaTkTestCase):
             for obj_name, mat_name in (("objA", "M_test1"), ("objD", "M_test2")):
                 obj = cmds.polyCube(name=obj_name)[0]
                 mat = cmds.shadingNode("phong", asShader=True, name=mat_name)
-                sg = cmds.sets(renderable=True, noSurfaceShader=True,
-                               empty=True, name=f"{mat_name}SG")
-                cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader",
-                                 force=True)
+                sg = cmds.sets(
+                    renderable=True,
+                    noSurfaceShader=True,
+                    empty=True,
+                    name=f"{mat_name}SG",
+                )
+                cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
                 cmds.sets(obj, forceElement=sg)
                 nodes += [obj, mat, sg]
             return nodes
@@ -355,10 +390,18 @@ class TestSceneImportOrchestration(MayaTkTestCase):
             "materials": [
                 # No exact SG match ("M_test1" only) -> suffix path, which must
                 # skip "M_test2" (a sibling entry's exact target).
-                {"name": "M_test", "fbx_material": "M_test",
-                 "objects": ["objA"], "files": [self.tex]},
-                {"name": "M_two", "fbx_material": "M_test2",
-                 "objects": ["objD"], "files": [self.tex]},
+                {
+                    "name": "M_test",
+                    "fbx_material": "M_test",
+                    "objects": ["objA"],
+                    "files": [self.tex],
+                },
+                {
+                    "name": "M_two",
+                    "fbx_material": "M_test2",
+                    "objects": ["objD"],
+                    "files": [self.tex],
+                },
             ],
         }
         _StubbedImport.calls["import_result"] = build
@@ -376,21 +419,27 @@ class TestSceneImportOrchestration(MayaTkTestCase):
             return {m.split("|")[-1] for m in sg_members}
 
         self.assertTrue(
-            any(s.startswith("objA") for s in
-                shape_of(cmds.sets("M_testSG", query=True) or [])),
+            any(
+                s.startswith("objA")
+                for s in shape_of(cmds.sets("M_testSG", query=True) or [])
+            ),
             "entry M_test should claim the clash-renamed M_test1",
         )
         self.assertTrue(
-            any(s.startswith("objD") for s in
-                shape_of(cmds.sets("M_twoSG", query=True) or [])),
+            any(
+                s.startswith("objD")
+                for s in shape_of(cmds.sets("M_twoSG", query=True) or [])
+            ),
             "entry M_test2 keeps its own SG",
         )
         # The load-bearing assertion: without the sibling guard, M_test's
         # suffix match empties M_test2SG first and M_two only lands via the
         # object-level RESCUE -- same end state, wrong path. Pin the path.
         self.assertTrue(
-            any("Rebuilt material M_two" in m and "shading group(s)" in m
-                for m in records),
+            any(
+                "Rebuilt material M_two" in m and "shading group(s)" in m
+                for m in records
+            ),
             f"M_two must swap via the PRIMARY (SG) path, got: {records}",
         )
 
@@ -406,10 +455,13 @@ class TestSceneImportOrchestration(MayaTkTestCase):
             for obj_name, mat_name in (("objA", "M_test1"), ("objD", "M_test2")):
                 obj = cmds.polyCube(name=obj_name)[0]
                 mat = cmds.shadingNode("phong", asShader=True, name=mat_name)
-                sg = cmds.sets(renderable=True, noSurfaceShader=True,
-                               empty=True, name=f"{mat_name}SG")
-                cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader",
-                                 force=True)
+                sg = cmds.sets(
+                    renderable=True,
+                    noSurfaceShader=True,
+                    empty=True,
+                    name=f"{mat_name}SG",
+                )
+                cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
                 cmds.sets(obj, forceElement=sg)
                 nodes += [obj, mat, sg]
             return nodes
@@ -417,8 +469,12 @@ class TestSceneImportOrchestration(MayaTkTestCase):
         _StubbedImport.calls["manifest"] = {
             "version": 1,
             "materials": [
-                {"name": "M_test", "fbx_material": "M_test",
-                 "objects": ["objA"], "files": [self.tex]},
+                {
+                    "name": "M_test",
+                    "fbx_material": "M_test",
+                    "objects": ["objA"],
+                    "files": [self.tex],
+                },
             ],
             # Untextured materials get no entry, but they ARE listed here.
             "scene_materials": ["M_test", "M_test2"],
@@ -451,12 +507,14 @@ class TestSceneImportOrchestration(MayaTkTestCase):
         self.assertEqual(_StubbedImport.calls["runs"], 1)
         _StubbedImport().import_scene(self.src)
         self.assertEqual(
-            _StubbedImport.calls["runs"], 1,
+            _StubbedImport.calls["runs"],
+            1,
             "second identical import must NOT relaunch Blender",
         )
         _StubbedImport().import_scene(self.src, use_cache=False)
         self.assertEqual(
-            _StubbedImport.calls["runs"], 2,
+            _StubbedImport.calls["runs"],
+            2,
             "use_cache=False must force a fresh conversion",
         )
 
