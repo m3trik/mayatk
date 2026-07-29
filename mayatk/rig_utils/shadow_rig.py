@@ -1201,7 +1201,7 @@ class ShadowRigSlots:
                 ],
                 notes=[
                     "Unity plug-and-play: deploy unitytk's C# templates once "
-                    "(<i>unitytk.deploy_templates</i>), export via the Scene "
+                    "(<i>unitytk.TemplateDeployer.deploy_all</i>), export via the Scene "
                     "Exporter, and copy the silhouette PNG into Assets — the "
                     "import sets up the unlit-transparent material and shadow "
                     "flags automatically. Other engines: assign an "
