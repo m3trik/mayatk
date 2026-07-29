@@ -165,6 +165,13 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
                 "into the field above. Uses the selected Unity Version.",
                 self._new_unity_project,
             ),
+            (
+                "Install/Update Unity Scripts", "btn_deploy_scripts",
+                "Deploy unitytk's C# import automation into the project above as\n"
+                "the embedded com.m3trik.unitytk package (under Packages/).\n"
+                "Run again any time to update it in place.",
+                self._deploy_unity_scripts,
+            ),
         ):
             menu.add(
                 "QPushButton", setText=label, setObjectName=name, setToolTip=tooltip
@@ -193,6 +200,33 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
     def _open_project_folder(self) -> None:
         """Reveal the configured Unity project folder."""
         self.reveal_folder(self.resolved_output_dir())
+
+    def _deploy_unity_scripts(self) -> None:
+        """Deploy/update the unitytk C# template package into the project.
+
+        Writes the full compile-coupled set as the embedded
+        ``Packages/com.m3trik.unitytk`` UPM package -- visible in Unity's
+        Package Manager, configurable under Project Settings > unitytk.
+        """
+        if not self.ensure_optional_package("unitytk", feature="Unity Bridge"):
+            return
+        from unitytk import TemplateDeployer
+
+        project = self.resolved_output_dir()
+        if not project:
+            self.bridge.logger.error(
+                "Set the Unity Project folder first (the one containing 'Assets/')."
+            )
+            return
+        try:
+            written = TemplateDeployer.deploy_package(project)
+        except Exception as e:  # noqa: BLE001
+            self.bridge.logger.error(f"Unity script deploy failed: {e}")
+            return
+        self.bridge.logger.info(
+            f"Deployed the com.m3trik.unitytk package ({len(written)} files) "
+            f"into {project} -- Unity picks it up on its next focus."
+        )
 
     def _new_unity_project(self) -> None:
         """Create a new Unity project (version + location) and load it into the field."""
