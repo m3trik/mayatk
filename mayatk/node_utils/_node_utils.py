@@ -39,6 +39,12 @@ class NodeUtils(ptk.HelpMixin):
     # Type Classification
     # -------------------------------------------------------------------------
 
+    #: Maya's shadeable/renderable shape types -- what "geometry" means to
+    #: ``cmds.ls -type``, to a shading engine, and to ``cmds.displaySurface``
+    #: (which raises "No surfaces selected" on anything else). Note "geometry"
+    #: itself is NOT a queryable ``ls`` type; it silently returns [].
+    SURFACE_TYPES = ("mesh", "nurbsSurface", "subdiv")
+
     @classmethod
     def get_type(cls, objects: Union[str, Any, List[Any]]) -> Union[str, List[str]]:
         """Get the object type as a string.
@@ -448,10 +454,19 @@ class NodeUtils(ptk.HelpMixin):
 
     @classmethod
     def get_unique_children(cls, objects):
-        """Retrieves a unique list of objects' children (if any) in the scene, excluding the groups themselves."""
-        objects = cmds.ls(CoreUtils.as_strings(objects), long=True, flatten=True) or []
+        """Retrieves a unique list of objects' children (if any) in the scene, excluding the groups themselves.
 
-        def recurse_children(obj, final_set):
+        Components resolve to their owning node -- "the children of a face" is
+        meaningless, and callers fed a live component selection would otherwise
+        get back names like ``|pCube1.f[0]`` that no node-level command accepts.
+        """
+        # Strip the component suffix BEFORE ``ls``: nothing is left to flatten
+        # once it's gone, and expanding a dense range like ``f[0:5000]`` into
+        # 5001 names only to collapse them back to one node is pure waste.
+        names = [n.split(".")[0] for n in CoreUtils.as_strings(objects)]
+        objects = list(dict.fromkeys(cmds.ls(names, long=True) or []))
+
+        def recurse_children(obj, final):
             if cls.is_group(obj):
                 for child in (
                     cmds.listRelatives(
@@ -459,16 +474,19 @@ class NodeUtils(ptk.HelpMixin):
                     )
                     or []
                 ):
-                    recurse_children(child, final_set)
+                    recurse_children(child, final)
             else:
-                final_set.add(obj)
+                final[obj] = None
 
-        final_set = set()
+        # dict, not set -- callers key display/transfer decisions off the first
+        # element, so the de-duplication must not scramble the order ``ls`` and
+        # ``listRelatives`` handed back (hierarchy order, for a group).
+        final = {}
 
         for obj in objects:
-            recurse_children(obj, final_set)
+            recurse_children(obj, final)
 
-        return list(final_set)
+        return list(final)
 
     @staticmethod
     def get_transform_node(
@@ -798,6 +816,66 @@ class NodeUtils(ptk.HelpMixin):
 
         return instances
 
+    @staticmethod
+    def _local_bbox_size(node):
+        """Extents of *node*'s geometry in the frame its scale channels act in
+        — i.e. the SHAPE's object-space box, which (unlike a world bounding
+        box, or ``MFnDagNode.boundingBox`` on the transform) carries none of
+        the node's own rotation.  Intermediate shapes are skipped, so
+        deformer history doesn't change the answer.
+
+        This measures the node's OWN shape; child geometry rides along on the
+        resulting scale but doesn't contribute (the uniform path, measuring
+        ``exactWorldBoundingBox``, does include the subtree).  The two agree
+        whenever source and target are the same hierarchy at different sizes —
+        the case instancing is for.
+
+        Returns ``None`` when no single shape resolves (a group, or a
+        multi-shape transform): there is no unambiguous local frame to fit
+        per-axis in, so callers fall back to uniform matching.
+        """
+        import maya.api.OpenMaya as om
+
+        sel = om.MSelectionList()
+        sel.add(str(node))
+        dag = sel.getDagPath(0)
+        try:
+            dag.extendToShape()
+        except RuntimeError:  # no shape, or more than one
+            return None
+        bb = om.MFnDagNode(dag).boundingBox
+        return (bb.width, bb.height, bb.depth)
+
+    @classmethod
+    def _match_bbox_scale_per_axis(cls, instance, target) -> bool:
+        """Scale *instance* per-axis so each of its local extents matches
+        *target*'s.  Measured in the local frame (both share it — the instance
+        already matched the target's rotation), which is what makes a
+        non-uniform fit reproducible: per-axis ratios taken off *world* boxes
+        only reconstruct the box, not the proportions, once the object is
+        rotated off-axis.
+
+        An axis with no extent on either side (flat geometry vs. solid) has no
+        derivable ratio — that axis keeps the target's own scale rather than
+        collapsing to zero.  Returns False when the local frame can't be
+        resolved (no single shape), so the caller can fall back to uniform.
+        """
+        src = cls._local_bbox_size(instance)
+        tgt = cls._local_bbox_size(target)
+        if src is None or tgt is None:
+            return False
+        ratios = [
+            (t / s) if (s > 1e-9 and t > 1e-9) else 1.0 for s, t in zip(src, tgt)
+        ]
+        if not all(r == 1.0 for r in ratios):
+            scale = cmds.getAttr(f"{instance}.scale")[0]
+            cmds.setAttr(
+                f"{instance}.scale",
+                *[v * r for v, r in zip(scale, ratios)],
+                type="double3",
+            )
+        return True
+
     @classmethod
     @CoreUtils.undoable
     def replace_with_instances(
@@ -807,19 +885,45 @@ class NodeUtils(ptk.HelpMixin):
         freeze_transforms=False,
         center_pivot=True,
         delete_history=True,
+        retain_bbox_scale=False,
+        retain_bbox_per_axis=False,
     ):
         """Replace target objects with instances of the source object.
+
+        Placement: each target is first compared geometrically against the
+        source (AutoInstancer's ``GeometryMatcher``).  When the meshes are
+        identical, the instance is placed by registration — the shared shape
+        lands exactly on the target's world geometry, preserving the target's
+        apparent rotation even when it was frozen into the mesh (zeroed
+        channels).  Non-identical targets fall back to ``matchTransform``
+        (channel copy), where the ``retain_bbox_*`` options apply.
 
         Parameters:
             objects (list): Source first, then targets (selection order
                 when None).
             freeze_transforms (bool): Freeze TRANSLATION only before
                 instancing.  Rotation and scale are deliberately left
-                unfrozen — each instance matches its target's orientation
-                and size via ``matchTransform``, so freezing them would
-                bake the source's pose into the shared shape.
-            center_pivot (bool): Center pivots before instancing.
+                unfrozen — freezing them would bake the source's pose into
+                the shared shape.
+            center_pivot (bool): Center pivots before instancing (and on
+                each new instance).
             delete_history (bool): Delete history before instancing.
+            retain_bbox_scale (bool): Fallback path only — preserve each
+                target's apparent size.  ``matchTransform`` only copies the
+                target's scale *channels*, so a target whose size lives in
+                its geometry (frozen scale, or a differently-sized mesh)
+                would come back at the source's size.  This uniformly
+                rescales each instance so its world bounding box matches the
+                size of the object it replaced.  (An exact registration
+                already reproduces the size, so it skips this.)
+            retain_bbox_per_axis (bool): With ``retain_bbox_scale``, match each
+                axis independently instead of uniformly (instances carry their
+                own scale channels, so a non-uniform result is legal — ignored
+                on its own).  Measured in the local frame —
+                see :meth:`_match_bbox_scale_per_axis`.  Prefer the uniform
+                default when the source and target aren't the same proportions:
+                a per-axis fit reaches the target's box by distorting the
+                shared shape.
 
         Returns:
             list: The newly created instance objects.
@@ -836,23 +940,90 @@ class NodeUtils(ptk.HelpMixin):
             cmds.warning("Operation requires a selection of at least two objects.")
             return
 
-        if any((freeze_transforms, center_pivot, delete_history)):
+        if freeze_transforms:
             XformUtils.freeze_transforms(
                 objects,
-                translate=freeze_transforms,
+                translate=True,
                 center_pivot=center_pivot,
                 delete_history=delete_history,
                 force=True,
             )
+        else:
+            # freeze_transforms(translate=False, ...) is an explicit
+            # freeze-nothing request and returns before its centering /
+            # history side-steps — perform them directly.
+            if delete_history:
+                cmds.delete(objects, constructionHistory=True)
+            if center_pivot:
+                cmds.xform(objects, centerPivots=True)
+
+        # Geometric registration (same machinery as AutoInstancer): places the
+        # shared shape exactly where the target's geometry sits, so a target
+        # whose orientation/scale was frozen into its mesh keeps its apparent
+        # rotation — matchTransform can only reproduce the transform CHANNELS,
+        # which are zero after a freeze.
+        try:
+            from mayatk.core_utils.auto_instancer.geometry_matcher import (
+                GeometryMatcher,
+            )
+
+            matcher = GeometryMatcher()
+        except Exception:
+            matcher = None
 
         new_instances = []
         for target in targets:
             name = CoreUtils.short_name(target)
             objParent = cmds.listRelatives(target, parent=True, fullPath=True) or []
             instance = cmds.instance(source)[0]
-            cmds.matchTransform(
-                instance, target, position=True, rotation=True, scale=True, pivots=True
-            )
+            registered = False
+            if matcher is not None:
+                try:
+                    registered, rel_mtx = matcher.are_meshes_identical(source, target)
+                except Exception:
+                    registered, rel_mtx = False, None
+            if registered:
+                # Object-space registration: source_local_pts * rel_mtx ≈
+                # target_local_pts, so rel_mtx * target_world lands the shared
+                # shape on the target's world geometry.
+                target_world = XformUtils.get_object_matrix(target, world=True)
+                XformUtils.set_object_matrix(
+                    instance,
+                    target_world if rel_mtx is None else rel_mtx * target_world,
+                    world=True,
+                )
+                if center_pivot:
+                    cmds.xform(instance, centerPivots=True)
+                else:
+                    rp = cmds.xform(target, q=True, ws=True, rotatePivot=True)
+                    sp = cmds.xform(target, q=True, ws=True, scalePivot=True)
+                    cmds.xform(instance, ws=True, rotatePivot=rp)
+                    cmds.xform(instance, ws=True, scalePivot=sp)
+            else:
+                # Non-identical geometry (or no matcher): fall back to copying
+                # the target's transform channels.
+                cmds.matchTransform(
+                    instance,
+                    target,
+                    position=True,
+                    rotation=True,
+                    scale=True,
+                    pivots=True,
+                )
+            # An exact registration already reproduces the target's size —
+            # only the channel-copy fallback needs the bbox fit.
+            if retain_bbox_scale and not registered:
+                # Run before the target is deleted (and before re-parenting, so
+                # the relative world-space scale isn't filtered through a
+                # parent matrix).
+                if not (
+                    retain_bbox_per_axis
+                    and cls._match_bbox_scale_per_axis(instance, target)
+                ):
+                    # Averaged world-box ratio: safe under any orientation, and
+                    # it never distorts the shared shape.  Also the fallback
+                    # when a per-axis fit has no resolvable local frame.
+                    XformUtils.match_scale(instance, target, average=True)
             if objParent:
                 try:
                     parented = cmds.parent(instance, objParent[0]) or []
@@ -860,8 +1031,11 @@ class NodeUtils(ptk.HelpMixin):
                     parented = []
                 if parented:
                     instance = parented[0]
-            instance = cmds.rename(instance, name + append)
+            # Delete the target BEFORE the rename — renaming against a
+            # still-living sibling of the same name auto-suffixes, so the
+            # replacement never took over the target's exact name.
             cmds.delete(target)
+            instance = cmds.rename(instance, name + append)
             new_instances.append(instance)
 
         if new_instances:
@@ -881,8 +1055,16 @@ class NodeUtils(ptk.HelpMixin):
         return cls.replace_with_instances(*args, **kwargs)
 
     @classmethod
-    def uninstance(cls, objects):
+    def uninstance(cls, objects, freeze=False):
         """Un-Instance the given objects.
+
+        ``freeze`` (optional additional step): after breaking the link, bake the
+        object's SCALE into the now-unique geometry. Breaking the link alone
+        leaves the transform untouched — a mirrored instance still carries its
+        negative scale, which is the part exporters and game engines object to.
+        Baking is only possible once the shape is unique (freezing a shared
+        shape would rewrite every sibling), which is why the two steps belong
+        together: ``uninstance(objs, freeze=True)`` is the engine-safe finish.
 
         For each transform, forks every instanced shape it carries into
         a unique copy and swaps it in — without ever deleting the
@@ -971,6 +1153,14 @@ class NodeUtils(ptk.HelpMixin):
                             pass
 
             results.append(obj_long)
+
+        if freeze and results:
+            # Local import: xform_utils imports NodeUtils, so a module-level
+            # import here would be circular (same pattern as
+            # replace_with_instances).
+            from mayatk import XformUtils
+
+            XformUtils.freeze_transforms(results, scale=True, force=True)
 
         return results
 

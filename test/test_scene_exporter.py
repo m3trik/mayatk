@@ -863,6 +863,45 @@ class TestSceneExporter(MayaTkTestCase):
         self.exporter.logger.removeHandler(handler)
 
     # ------------------------------------------------------------------
+    # Export-transient state — must SURVIVE the write, not revert before it
+    # ------------------------------------------------------------------
+
+    def test_set_linear_unit_survives_run_tasks(self):
+        """The working unit must still be applied when the FBX is written.
+
+        Maya's FBX plugin stamps the file's unit from the working unit at
+        write time, but ``TaskFactory``'s ``set_``/``revert_`` pair fires when
+        ``run_tasks`` returns — *before* the write — so pairing this task made
+        it inert. It uses ``TaskFactory.stage_deferred_restore`` instead.
+        Fixed: 2026-07-28
+        """
+        tm = self.exporter.task_manager
+        original = cmds.currentUnit(query=True, linear=True)
+        target = "m" if original != "m" else "cm"
+        try:
+            self.assertTrue(tm.run_tasks({"set_linear_unit": target}))
+            self.assertEqual(
+                cmds.currentUnit(query=True, linear=True),
+                target,
+                "unit was reverted before the export write (task is inert)",
+            )
+            self.assertIn("linear_unit", tm._deferred_restores)
+
+            tm.run_deferred_restores()
+            self.assertEqual(cmds.currentUnit(query=True, linear=True), original)
+            self.assertFalse(tm._deferred_restores)
+        finally:
+            cmds.currentUnit(linear=original)
+
+    def test_set_linear_unit_off_stages_nothing(self):
+        """An OFF / empty selection must not stage a restore at all."""
+        tm = self.exporter.task_manager
+        original = cmds.currentUnit(query=True, linear=True)
+        tm.run_tasks({"set_linear_unit": "OFF"})
+        self.assertEqual(cmds.currentUnit(query=True, linear=True), original)
+        self.assertFalse(tm._deferred_restores)
+
+    # ------------------------------------------------------------------
     # Framerate check — quiet on pass
     # ------------------------------------------------------------------
 
@@ -1309,7 +1348,7 @@ class TestSceneExporter(MayaTkTestCase):
             json.dump({"paths": previous, "object_count": len(previous)}, f)
 
         # Now wrap everything — long paths gain a prefix
-        wrapper = cmds.group(self.group, name="WrapperGroup")
+        cmds.group(self.group, name="WrapperGroup")  # side effect: wraps the hierarchy
         self.exporter.task_manager.objects = [
             cmds.ls(str(self.cube), l=True)[0],
             cmds.ls(str(self.sphere), l=True)[0],

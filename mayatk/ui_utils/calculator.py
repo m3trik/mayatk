@@ -4,8 +4,6 @@ import maya.cmds as cmds
 import maya.mel as mel
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 
 from qtpy import QtWidgets
 
@@ -85,7 +83,7 @@ class CalculatorSlots:
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Calculator",
                 body="Expression-based calculator with unit conversion and "
                 "Maya time helpers.",

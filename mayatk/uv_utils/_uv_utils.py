@@ -24,8 +24,14 @@ class UvUtils(ptk.HelpMixin):
     def calculate_uv_padding(
         map_size: int, normalize: bool = False, factor: int = 256
     ) -> float:
-        """Calculate the UV padding for a given map size to ensure consistent texture padding across different resolutions.
-        Optionally return the padding as a normalized value relative to the map size.
+        """The texture gutter for a given map size — Maya-side name for the ecosystem rule.
+
+        Delegates to :meth:`pythontk.MathUtils.calculate_uv_padding` (the primitive is
+        pure ratio math, so it lives at the bottom of the stack and blendertk mirrors
+        this same name over the same rule). Every packer here feeds from it — the
+        ``u3dLayout`` ``shellSpacing`` / ``tileMargin`` pair and the RizomUV bridge's
+        derived ``ZomPack`` gutter — so a map packed one way keeps its gutter when
+        repacked another.
 
         Parameters:
         map_size (int): The size of the map for which to calculate UV padding, typically the width or height in pixels.
@@ -45,10 +51,28 @@ class UvUtils(ptk.HelpMixin):
             calculate_uv_padding(4096, normalize=True)
         0.00390625
         """
-        padding = map_size / factor
-        if normalize:
-            return padding / map_size
-        return padding
+        return ptk.MathUtils.calculate_uv_padding(
+            map_size, normalize=normalize, factor=factor
+        )
+
+    @staticmethod
+    def udim_to_tile(udim: int) -> Tuple[int, int]:
+        """UDIM tile number to its (u, v) tile offset — Maya-side name for the
+        ecosystem rule.
+
+        Delegates to :meth:`pythontk.MathUtils.udim_to_tile` (pure integer
+        math, so it lives at the bottom of the stack). Every packer here
+        anchors from it — the Pack tool's ``u3dLayout`` pack box and the
+        xatlas path's placement — so a tile means the same thing everywhere.
+
+        Parameters:
+            udim (int): UDIM tile number, e.g. 1001.
+
+        Returns:
+            tuple: ``(u, v)`` integer tile offsets (the tile's bottom-left
+            corner in UV units).
+        """
+        return ptk.MathUtils.udim_to_tile(udim)
 
     @staticmethod
     def orient_shells(objects):
@@ -89,12 +113,41 @@ class UvUtils(ptk.HelpMixin):
         """
 
         objects = CoreUtils.as_strings(objects)
-        # Convert the objects to UVs
-        uvs = cmds.polyListComponentConversion(objects, fromFace=True, toUV=True) or []
+        # Convert the objects to UVs. No `from*` filter, so any input type
+        # resolves — a `fromFace` filter silently drops a UV/edge/vertex
+        # selection, which made the move a no-op for those (and would desync
+        # the caller's bounds from what actually moves).
+        uvs = cmds.polyListComponentConversion(objects, toUV=True) or []
         uvs = cmds.ls(uvs, flatten=True) or []
 
         # Move the UVs to the given u and v coordinates
         cmds.polyEditUV(uvs, u=u, v=v, relative=relative)
+
+    @staticmethod
+    def get_uv_bounds(objects) -> Optional[Tuple[float, float, float, float]]:
+        """The UV-space bounding box of *objects*, as one box over the whole input.
+
+        Parameters:
+            objects (str/obj/list): Object(s), faces, or UVs.
+
+        Returns:
+            tuple: ``(u_min, v_min, u_max, v_max)``, or None when the input
+            resolves to no UVs.
+        """
+        objects = CoreUtils.as_strings(objects)
+        # Deliberately NOT flattened: polyEvaluate reads ranged components fine,
+        # and flattening would materialize one string per UV — the move pad calls
+        # this on every arrow press.
+        uvs = cmds.polyListComponentConversion(objects, toUV=True) or []
+        if not uvs:
+            return None
+
+        # polyEvaluate returns ((u_min, u_max), (v_min, v_max)), unioned over
+        # every object in the input.
+        (u_min, u_max), (v_min, v_max) = cmds.polyEvaluate(
+            uvs, boundingBoxComponent2d=True
+        )
+        return (u_min, v_min, u_max, v_max)
 
     @classmethod
     @CoreUtils.undoable
@@ -724,15 +777,456 @@ class UvUtils(ptk.HelpMixin):
         ]
         return max(loops, key=len) if any(loops) else []
 
+    @staticmethod
+    def _shortest_edge_path(starts, targets, edge_ids, ev, pts):
+        """Shortest vertex-to-vertex path along the given edges (Dijkstra).
+
+        Parameters:
+            starts (set): Source vertex ids (multi-source).
+            targets (set): Destination vertex ids; the search stops at the
+                first one reached.
+            edge_ids (iterable): Edge ids the path may travel along.
+            ev (list): ``edge id -> (vertex a, vertex b)`` table.
+            pts (MPointArray): Vertex positions (for edge-length weights).
+
+        Returns:
+            (list) edge ids of the path, or ``None`` when no target is
+            reachable through ``edge_ids``.
+        """
+        import heapq
+        from collections import defaultdict
+
+        adj = defaultdict(list)
+        for e in edge_ids:
+            a, b = ev[e]
+            w = (pts[a] - pts[b]).length()
+            adj[a].append((b, e, w))
+            adj[b].append((a, e, w))
+
+        dist = {v: 0.0 for v in starts}
+        prev = {}
+        heap = [(0.0, v) for v in starts]
+        heapq.heapify(heap)
+        done = set()
+        while heap:
+            d, v = heapq.heappop(heap)
+            if v in done:
+                continue
+            done.add(v)
+            if v in targets:
+                path = []
+                while v in prev:
+                    v, e = prev[v]
+                    path.append(e)
+                return path
+            for nv, e, w in adj[v]:
+                nd = d + w
+                if nd < dist.get(nv, float("inf")):
+                    dist[nv] = nd
+                    prev[nv] = (v, e)
+                    heapq.heappush(heap, (nd, nv))
+        return None
+
     @classmethod
-    def _seam_cut_one(cls, mesh, angle=45.0, invert_seam=False, history=True, sew=True):
+    def get_topology_seam_edges(cls, mesh, angle: float = 45.0, invert_seam=False):
+        """Seam edges from smooth-region topology — no global axis assumed.
+
+        Advanced alternative to :meth:`get_auto_seam_edges` for shapes that
+        are *not* clean bodies of revolution: bent / swept tubes (elbows,
+        pipes), toruses, and turned forms whose sections are offset from a
+        straight axis. The mesh is segmented into smooth regions, and each
+        region contributes exactly the cuts its own surface topology needs:
+
+        - **Region borders** — edges where two regions meet — are cut, like
+          the hard creases of the axis algorithm. When the mesh carries
+          authored hard/soft shading the hard flags define the regions
+          (coplanar hard edges are ignored, so triangulated flat caps don't
+          shatter). Otherwise the ``angle`` dihedral threshold applies, but
+          only to *ring-direction* edges — those chained across quads from a
+          boundary rim or a cap border — so the sweep-direction faceting of
+          a coarse tube can't shatter the band (a facet edge is cut only
+          past an unambiguous ~60 degree cap).
+        - **Tube regions** (two or more boundary loops) are opened with one
+          lengthwise cut per extra boundary. The cut prefers a topological
+          edge-loop walk (a straight seam that follows the surface, so bent
+          tubes seam cleanly) and falls back to the shortest edge path.
+        - **Closed regions** (no boundary at all) are opened with one edge
+          loop — plus the crossing edge ring when torus-like — so a torus
+          body unrolls to a single rectangle and a sphere splits in two.
+        - **Disk regions** (caps, flat steps) need no opening cut.
+
+        3D boundary edges (an open tube's rims) are already UV borders and
+        are never cut. Returns a flat list of edge component strings.
+
+        Parameters:
+            mesh (str): A polygon transform or shape.
+            angle (float): Crease threshold in degrees; used only when the
+                mesh has no authored hard edges (all-soft / all-hard
+                imports). Default 45.
+            invert_seam (bool): Start the main lengthwise cut on the far
+                side of its boundary loop.
+        """
+        import math
+        import maya.api.OpenMaya as om
+        from collections import defaultdict
+
+        name = str(mesh)
+        sel = om.MSelectionList()
+        sel.add(name)
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        fn = om.MFnMesh(dag)
+        pts = fn.getPoints(om.MSpace.kWorld)
+        if not pts:
+            return []
+
+        # --- adjacency + face normals (one polygon pass) -------------------
+        edge_faces = defaultdict(list)
+        face_edges = {}  # face -> edge ids in face order (for quad opposites)
+        normals = {}
+        pit = om.MItMeshPolygon(dag)
+        while not pit.isDone():
+            f = pit.index()
+            normals[f] = fn.getPolygonNormal(f, om.MSpace.kWorld).normal()
+            edges = list(pit.getEdges())
+            face_edges[f] = edges
+            for e in edges:
+                edge_faces[e].append(f)
+            pit.next()
+
+        smooth = {}
+        eit = om.MItMeshEdge(dag)
+        while not eit.isDone():
+            smooth[eit.index()] = eit.isSmooth
+            eit.next()
+        has_soft = any(smooth.values())
+
+        ev = [fn.getEdgeVertices(e) for e in range(fn.numEdges)]
+
+        # --- ring-direction edges (the crease-eligible set) ----------------
+        # A smooth surface facets, and at coarse tessellation a facet's
+        # dihedral reaches ordinary crease thresholds (a torus with 8 section
+        # divisions facets past 45 degrees — the default angle), so a raw
+        # dihedral test would shatter the band. Mirror the axis algorithm's
+        # axial-edge exemption topologically: only edges running in the RING
+        # direction — reachable via quad-opposite-edge chains from a 3D
+        # boundary rim or a non-quad (cap) face's border — are candidate
+        # creases at the user threshold. Sweep-direction facet edges never
+        # chain from those seeds, so they stay exempt unless unambiguously
+        # sharp (the hard cap below, for boxy all-quad closed shapes whose
+        # creases have no rim/cap seed at all). Only consulted by the
+        # dihedral fallback — authored shading defines its own regions.
+        ring_dir = set()
+        if not has_soft:
+            stack = []
+            for e, faces in edge_faces.items():
+                if len(faces) == 1:  # boundary rim
+                    stack.append(e)
+                elif any(len(face_edges[f]) != 4 for f in faces):  # cap border
+                    stack.append(e)
+            ring_dir.update(stack)
+            while stack:
+                e = stack.pop()
+                for f in edge_faces[e]:
+                    edges = face_edges[f]
+                    if len(edges) != 4:
+                        continue
+                    opp = edges[(edges.index(e) + 2) % 4]
+                    if opp not in ring_dir:
+                        ring_dir.add(opp)
+                        stack.append(opp)
+
+        # --- classify creases; region-grow faces across the soft edges -----
+        thresh = math.radians(angle)
+        hard_cap = max(thresh, math.radians(60.0))  # unambiguous crease
+        coplanar_eps = math.radians(0.5)  # authored-hard but flat: not a crease
+        parent = list(range(fn.numPolygons))
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        crease = set()
+        for e in range(fn.numEdges):
+            faces = edge_faces.get(e, [])
+            if len(faces) < 2:
+                continue  # 3D boundary: already a UV border
+            dot = max(-1.0, min(1.0, normals[faces[0]] * normals[faces[1]]))
+            dihedral = math.acos(dot)
+            if len(faces) > 2:  # non-manifold: always split
+                is_crease = True
+            elif has_soft:  # authored shading defines the regions
+                is_crease = not smooth[e] and dihedral >= coplanar_eps
+            elif e in ring_dir:
+                is_crease = dihedral >= thresh
+            else:  # sweep-direction facet: exempt unless unambiguously sharp
+                is_crease = dihedral >= hard_cap
+            if is_crease:
+                crease.add(e)
+            else:
+                ra, rb = find(faces[0]), find(faces[1])
+                if ra != rb:
+                    parent[ra] = rb
+
+        regions = defaultdict(list)
+        for f in range(fn.numPolygons):
+            regions[find(f)].append(f)
+
+        cuts = set(crease)
+
+        # --- per-region opening cuts ---------------------------------------
+        # Iterate deterministically (by lowest face id) so repeat runs cut
+        # the identical seam set.
+        first_region = True
+        for faces in sorted(regions.values(), key=min):
+            in_region = set(faces)
+            # Built from the region's own faces (not a scan of every mesh
+            # edge per region, which would go quadratic on shattered meshes).
+            region_edges = set()
+            for f in faces:
+                region_edges.update(face_edges[f])
+            interior = {
+                e
+                for e in region_edges
+                if e not in crease
+                and len(edge_faces[e]) == 2
+                and all(f in in_region for f in edge_faces[e])
+            }
+            border = region_edges - interior
+            verts = set()
+            for f in faces:
+                verts.update(fn.getPolygonVertices(f))
+            euler = len(verts) - len(region_edges) + len(faces)
+
+            # Boundary loops: connected components of the border edges.
+            border_adj = defaultdict(set)
+            for e in border:
+                for v in ev[e]:
+                    border_adj[v].add(e)
+            unvisited = set(border)
+            loops = []  # [(vertex ids, edge ids), ...]
+            while unvisited:
+                e0 = unvisited.pop()
+                comp, stack = {e0}, [e0]
+                lverts = set(ev[e0])
+                while stack:
+                    e = stack.pop()
+                    for v in ev[e]:
+                        for ne in border_adj[v]:
+                            if ne in unvisited:
+                                unvisited.remove(ne)
+                                comp.add(ne)
+                                stack.append(ne)
+                                lverts.update(ev[ne])
+                loops.append((lverts, comp))
+            loops.sort(key=lambda lp: min(lp[0]))
+
+            if len(loops) == 1 and euler == 1:
+                continue  # disk (cap / flat step): unfolds as-is
+
+            if not loops:  # closed region: torus body, sphere, ...
+                if not interior:
+                    continue
+                seed = min(interior)
+                loop = cls._comp_ids(
+                    cmds.polySelect(name, edgeLoop=seed, ass=True, noSelection=True)
+                    or []
+                ) & interior
+                cuts |= loop
+                if euler <= 0:  # torus-like: also the crossing ring
+                    ring = cls._comp_ids(
+                        cmds.polySelect(
+                            name, edgeRing=seed, ass=True, noSelection=True
+                        )
+                        or []
+                    ) & interior
+                    cuts |= ring
+                continue
+
+            # Tube-like: connect the boundary loops with lengthwise cuts.
+            loop_a_verts = loops[0][0]
+            v0 = min(loop_a_verts)
+            if invert_seam and first_region and len(loop_a_verts) > 2:
+                p0 = pts[v0]
+                v0 = max(loop_a_verts, key=lambda v: (pts[v] - p0).length())
+            first_region = False
+
+            connected = set(loop_a_verts)
+            remaining = [set(lv) for lv, _ in loops[1:]]
+            primary = True
+            while remaining:
+                targets = set().union(*remaining)
+                path = None
+                if primary:
+                    # Prefer a topological edge-loop walk from v0: on quad
+                    # tubes it runs a straight column even when the tube bends.
+                    v0_edges = [
+                        e for e in interior if v0 in ev[e]
+                    ]
+                    if v0_edges:
+                        walk = cls._comp_ids(
+                            cmds.polySelect(
+                                name,
+                                edgeLoop=min(v0_edges),
+                                ass=True,
+                                noSelection=True,
+                            )
+                            or []
+                        ) & interior
+                        path = cls._shortest_edge_path(
+                            {v0}, targets, walk, ev, pts
+                        )
+                    if path is None:
+                        path = cls._shortest_edge_path(
+                            {v0}, targets, interior, ev, pts
+                        )
+                else:
+                    path = cls._shortest_edge_path(
+                        connected, targets, interior, ev, pts
+                    )
+                primary = False
+                if path is None:  # genus cut needed, or unreachable: best effort
+                    break
+                cuts.update(path)
+                for e in path:
+                    connected.update(ev[e])
+                for lv in remaining[:]:
+                    if lv & connected:
+                        connected |= lv
+                        remaining.remove(lv)
+
+        return [f"{name}.e[{i}]" for i in sorted(cuts)]
+
+    # Seam-detection strategies for cylinder / tube unwrapping, keyed by the
+    # ``algorithm`` parameter of the cutting entry points. ``"auto"`` picks
+    # between the other two per mesh.
+    SEAM_ALGORITHMS = ("auto", "axis", "topology")
+
+    @classmethod
+    def detect_seam_algorithm(cls, mesh) -> str:
+        """Pick the seam strategy that suits *mesh*: ``"axis"`` or ``"topology"``.
+
+        The axis algorithm opens a tube with a single lengthwise column about a
+        fitted revolution axis. A bent tube is still a body of revolution -- an
+        elbow is part of a torus -- so "is it revolved?" doesn't decide this.
+        What matters is whether the tube runs *along* the axis or *around* it,
+        and that shows in the two shapes an axial column can't open:
+
+        - **Closed with a handle** (a torus): no boundary and Euler
+          characteristic <= 0. One lengthwise cut leaves it still closed; it
+          needs the crossing ring the topology algorithm adds.
+        - **Bent / swept** (an elbow, a pipe run): its open ends don't encircle
+          the fitted axis -- they sit off to the side of it -- so an axial
+          column would cut across the tube instead of running down it.
+
+        Everything else -- straight tubes, turned profiles, stepped columns,
+        capped cylinders -- takes the cheaper, more predictable axis path. When
+        in doubt this favours ``"axis"``; pass ``algorithm`` explicitly to
+        override (a *capped* bend, having no open ends to measure, reads as
+        axial).
+        """
+        import maya.api.OpenMaya as om
+        import numpy as np
+        from collections import defaultdict
+
+        sel = om.MSelectionList()
+        sel.add(str(mesh))
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        fn = om.MFnMesh(dag)
+
+        points = fn.getPoints(om.MSpace.kObject)
+        if len(points) < 8:  # too coarse to characterize; axis is the safe default
+            return "axis"
+
+        adjacency = defaultdict(set)
+        edge_it = om.MItMeshEdge(dag)
+        while not edge_it.isDone():
+            if edge_it.onBoundary():
+                v0, v1 = edge_it.vertexId(0), edge_it.vertexId(1)
+                adjacency[v0].add(v1)
+                adjacency[v1].add(v0)
+            edge_it.next()
+
+        if not adjacency:
+            euler = fn.numVertices - fn.numEdges + fn.numPolygons
+            return "topology" if euler <= 0 else "axis"
+
+        pts = np.array([[p.x, p.y, p.z] for p in points], dtype=float)
+        axis = cls._revolution_axis(points)
+        a = np.array([axis.x, axis.y, axis.z], dtype=float)
+        center = pts.mean(axis=0)
+
+        for loop in cls._connected_groups(adjacency):
+            loop_pts = pts[list(loop)]
+            loop_center = loop_pts.mean(axis=0)
+            # How wide the opening is, versus how far it sits off the axis.
+            radius = float(np.linalg.norm(loop_pts - loop_center, axis=1).mean())
+            if radius <= 1e-9:
+                continue
+            offset_vec = loop_center - center
+            offset = float(
+                np.linalg.norm(offset_vec - np.dot(offset_vec, a) * a)
+            )
+            if offset / radius > cls._SEAM_OFFSET_TOLERANCE:
+                return "topology"
+        return "axis"
+
+    # How far an opening's centre may sit off the fitted axis, as a multiple of
+    # the opening's own radius, before the mesh reads as bent rather than
+    # straight. A straight tube's rings are centred on the axis (~0); an
+    # elbow's sit a whole bend-radius away (>1).
+    _SEAM_OFFSET_TOLERANCE = 0.5
+
+    @staticmethod
+    def _connected_groups(adjacency):
+        """Group an undirected adjacency map into connected vertex sets."""
+        seen = set()
+        for start in adjacency:
+            if start in seen:
+                continue
+            group, stack = set(), [start]
+            seen.add(start)
+            while stack:
+                node = stack.pop()
+                group.add(node)
+                for neighbor in adjacency[node]:
+                    if neighbor not in seen:
+                        seen.add(neighbor)
+                        stack.append(neighbor)
+            yield group
+
+    @classmethod
+    def _seam_edges(cls, mesh, algorithm, angle, invert_seam):
+        """Dispatch seam detection to the chosen algorithm."""
+        if algorithm not in cls.SEAM_ALGORITHMS:
+            raise ValueError(
+                f"Unknown seam algorithm {algorithm!r}; expected one of "
+                f"{cls.SEAM_ALGORITHMS}."
+            )
+        if algorithm == "auto":
+            algorithm = cls.detect_seam_algorithm(mesh)
+        fn = (
+            cls.get_topology_seam_edges
+            if algorithm == "topology"
+            else cls.get_auto_seam_edges
+        )
+        return fn(mesh, angle=angle, invert_seam=invert_seam)
+
+    @classmethod
+    def _seam_cut_one(
+        cls, mesh, angle=45.0, invert_seam=False, history=True, sew=True,
+        algorithm="axis",
+    ):
         """Cut the auto seams on one mesh; return whether anything was cut.
 
         With ``sew`` (default) any pre-existing UV cuts are sewn shut first, so
         the result's shells come only from this operation's seams rather than
         stray borders left by an earlier unwrap / manual edit.
         """
-        seam = cls.get_auto_seam_edges(mesh, angle=angle, invert_seam=invert_seam)
+        seam = cls._seam_edges(mesh, algorithm, angle, invert_seam)
         if not seam:
             return False
         if sew:
@@ -743,7 +1237,8 @@ class UvUtils(ptk.HelpMixin):
     @classmethod
     @CoreUtils.undoable
     def cut_cylinder_seams(
-        cls, objects=None, angle=45.0, invert_seam=False, history=True, sew=True
+        cls, objects=None, angle=45.0, invert_seam=False, history=True, sew=True,
+        algorithm="auto",
     ):
         """Cut auto UV seams for cylinder / tube unwrapping on each mesh.
 
@@ -760,15 +1255,223 @@ class UvUtils(ptk.HelpMixin):
             history (bool): Keep the ``polyMapCut`` construction history.
             sew (bool): Sew any pre-existing UV cuts shut first (default) so the
                 result's shells come only from this operation's seams.
+            algorithm (str): Seam-detection strategy. ``"auto"`` (default)
+                picks per mesh via :meth:`detect_seam_algorithm`. ``"axis"``
+                assumes a straight revolution axis (see
+                :meth:`get_auto_seam_edges`); ``"topology"`` derives the cuts
+                from smooth-region topology, handling bent / swept tubes and
+                toruses (see :meth:`get_topology_seam_edges`).
         """
         meshes = cls._cylinder_meshes(objects)
         return [
             m
             for m in meshes
             if cls._seam_cut_one(
-                m, angle=angle, invert_seam=invert_seam, history=history, sew=sew
+                m, angle=angle, invert_seam=invert_seam, history=history, sew=sew,
+                algorithm=algorithm,
             )
         ]
+
+    @staticmethod
+    @CoreUtils.undoable
+    def cut_uv_edges(edges, history: bool = True):
+        """Cut (split) UV shells along the given edges, spanning any number of objects.
+
+        ``cmds.polyMapCut`` refuses a component list that spans more than one
+        object ("Doesn't work with multiple objects selected"), so the edges
+        are grouped per object and cut object-by-object.
+
+        Parameters:
+            edges (str/list): Edge components — any mix of objects.
+            history (bool): Keep the ``polyMapCut`` construction history.
+
+        Returns:
+            (dict): ``{object: [edge, ...]}`` — the edges cut, grouped per object.
+        """
+        grouped = Components.map_components_to_objects(edges)
+        for obj_edges in grouped.values():
+            cmds.polyMapCut(obj_edges, constructionHistory=history)
+        return grouped
+
+    @classmethod
+    def auto_unwrap(
+        cls,
+        objects=None,
+        method: str = "hard",
+        map_size: int = 4096,
+        pack: Optional[bool] = None,
+        orient: bool = True,
+        engine_params: Optional[dict] = None,
+    ):
+        """Automatically unwrap meshes with an external unwrapping engine.
+
+        A true alternative to Maya's built-in auto projection, which is the
+        2015-era Unfold3D technology. Each mesh is exported to OBJ, unwrapped
+        by the chosen engine, and its UVs transferred back — all inside one
+        undo chunk, with each mesh's original UVs snapshotted so a failure
+        leaves that mesh untouched.
+
+        Both engines return the input topology unchanged, so UVs map back by
+        component index exactly; no triangulation or spatial sampling is
+        involved.
+
+        Parameters:
+            objects (str/obj/list): Mesh(es) to unwrap. None uses the selection.
+                Instances collapse to one representative (they share a shape).
+            method (str): ``"hard"`` — Ministry of Flat, for hard-surface /
+                mechanical meshes; topology-aware, artist-like seam placement,
+                and it packs its own result. ``"organic"`` — Boundary First
+                Flattening, for sculpted / scanned / character meshes; conformal
+                flattening with automatic cone singularities. The engine keys
+                ``"mof"`` / ``"bff"`` are accepted directly.
+            map_size (int): Texture size the packing gutter is derived from;
+                also Ministry of Flat's island-spacing resolution.
+            pack (bool): What to do with the engine's UVs afterwards. None
+                (default) picks per engine: Ministry of Flat's own island
+                arrangement is kept and merely scaled into the 0-1 tile (it
+                packs into a rectangle that overruns it), while BFF — which
+                only flattens — gets a full layout pass. True forces the full
+                repack; False leaves the engine's UVs exactly as produced,
+                tile overrun and all.
+            orient (bool): Orient each shell to its nearest U/V axis when packing.
+            engine_params (dict): Extra engine settings forwarded to
+                :class:`pythontk.UvUnwrap` (e.g. ``{"separate_hard_edges": True}``
+                for Ministry of Flat, ``{"n_cones": 8}`` for BFF).
+
+        Returns:
+            (AutoUnwrapResult): ``engine``, ``succeeded`` and ``failed``
+            ``(mesh, reason)`` pairs. Truthy when at least one mesh unwrapped.
+
+        Raises:
+            FileNotFoundError: The engine executable isn't installed. The
+                message carries its download URL.
+            ValueError: No meshes given/selected, or an unknown *method*.
+        """
+        from mayatk.uv_utils._auto_unwrap import _AutoUnwrapInternal
+
+        return _AutoUnwrapInternal.run(
+            cls,
+            objects=objects,
+            method=method,
+            map_size=map_size,
+            pack=pack,
+            orient=orient,
+            engine_params=engine_params,
+        )
+
+    @classmethod
+    def pack_uvs(
+        cls,
+        objects=None,
+        map_size: int = 1024,
+        udim: int = 1001,
+        coverage: Tuple[float, float] = (1.0, 1.0),
+        rotate: bool = True,
+        brute_force: bool = False,
+        preserve_3d: bool = True,
+        padding: Optional[float] = None,
+    ):
+        """Pack existing UV shells with the external xatlas engine.
+
+        The pack-only counterpart of :meth:`auto_unwrap`: shells are taken as
+        they are (never re-cut) and packed together into the target UDIM tile.
+        In-process round trip — UV/triangle arrays go to
+        :class:`pythontk.UvPack`, and each shell's solved similarity transform
+        comes back through ``cmds.polyEditUV``, so the whole pack is a single
+        undoable edit and a mesh either packs whole or reports and stays put.
+
+        Parameters:
+            objects (str/obj/list): Mesh(es) to pack. None uses the selection.
+                Instances collapse to one representative (they share a shape).
+            map_size (int): Target texture size; sets the engine's page size
+                (so the island gutter is exact pixels) and the tile margin.
+            udim (int): Target UDIM tile number, e.g. 1001.
+            coverage (tuple): (u, v) fraction of the tile to fill, anchored at
+                its bottom-left corner (the Pack tool's Tile Coverage). The
+                box is tiled with square cells along its long axis — Full and
+                Quarter pack one cell, the halves two stacked — and the engine
+                scale-searches square pages to fill each cell edge-to-edge.
+                Fractions off the 1:1/1:2 grid pack with reduced fill.
+            rotate (bool): Allow shell re-orientation where it packs tighter.
+                True also lets the engine pre-turn shells to their hull axis by
+                an arbitrary angle when that packs better (it is searched, not
+                assumed — no fixed choice wins on all content). False means no
+                rotation at all. Like u3dLayout, the engine may still mirror
+                shells either way; every case is honored on write-back.
+            brute_force (bool): Exhaustive placement search — tighter, slower.
+            preserve_3d (bool): Equalize per-shell texel density first
+                (u3dLayout -preScaleMode 1 equivalent; the engine preserves
+                relative input scale). False keeps the shells' current
+                relative UV scale (Preserve UV).
+            padding (float): Island gutter in pixels. None derives it from
+                *map_size* via :meth:`calculate_uv_padding`.
+
+        Returns:
+            (PackUvsResult): ``engine``, ``succeeded``, ``failed``
+            ``(mesh, reason)`` pairs and the packed atlas dimensions. Truthy
+            when at least one mesh packed.
+
+        Raises:
+            RuntimeError: The xatlas Python package isn't installed in this
+                interpreter. The message carries the pip install command.
+            ValueError: No meshes given/selected.
+        """
+        from mayatk.uv_utils._uv_pack import _UvPackInternal
+
+        return _UvPackInternal.run(
+            cls,
+            objects=objects,
+            map_size=map_size,
+            udim=udim,
+            coverage=coverage,
+            rotate=rotate,
+            brute_force=brute_force,
+            preserve_3d=preserve_3d,
+            padding=padding,
+        )
+
+    @classmethod
+    def _pack_shells(cls, mesh, map_size: int = 4096, orient: bool = True) -> None:
+        """Lay the mesh's UV shells out into the 0-1 square without overlap.
+
+        ``u3dLayout`` (not ``polyLayoutUV``, which collapses cylindrically-
+        seeded shells) packs; scaling by 3D area can overrun the square, so
+        :meth:`_fit_uvs_to_tile` collectively fits it back.
+
+        ``u3dLayout``'s cost is ~quadratic in resolution (4096 -> ~1.2s,
+        8192 -> ~4.7s) yet the packing is pixel-identical from ~256 up --
+        ``shellSpacing`` is already normalized, so resolution only sets pack
+        precision, not the gap. Cap it well below *map_size* to stay fast.
+        """
+        cmds.loadPlugin("Unfold3D.mll", quiet=True)
+        pad = cls.calculate_uv_padding(map_size, normalize=True)
+        uvs = cmds.polyListComponentConversion(mesh, toUV=True) or []
+        if not uvs:
+            return
+        cmds.u3dLayout(
+            uvs,
+            resolution=min(map_size, 1024),
+            shellSpacing=pad,
+            tileMargin=pad / 2,
+            preScaleMode=1,
+            preRotateMode=1 if orient else 0,
+            packBox=[0, 1, 0, 1],
+        )
+        cls._fit_uvs_to_tile(mesh)
+
+    @staticmethod
+    def _fit_uvs_to_tile(mesh) -> None:
+        """Scale the mesh's UVs as a whole into 0-1, keeping their layout.
+
+        A uniform, aspect-preserving fit -- shells keep their relative
+        arrangement and can't gain new overlaps. This is what an externally
+        laid-out result needs: Ministry of Flat packs into a *rectangle* whose
+        extent routinely runs past 1.0 (~1.5 x 1.8 is typical), so its own
+        packing is worth keeping but not its scale.
+        """
+        uvs = cmds.polyListComponentConversion(mesh, toUV=True) or []
+        if uvs:
+            cmds.polyNormalizeUV(uvs, normalizeType=1, preserveAspectRatio=True)
 
     @classmethod
     def _seed_shell_uvs(cls, mesh):
@@ -897,6 +1600,7 @@ class UvUtils(ptk.HelpMixin):
         orient=True,
         map_size=4096,
         sew=True,
+        algorithm="auto",
     ):
         """Auto-unwrap cylinder / tube / turned meshes: seam, then unfold flat.
 
@@ -918,21 +1622,22 @@ class UvUtils(ptk.HelpMixin):
             map_size (int): Texture size the unfold optimizes spacing against.
             sew (bool): Sew any pre-existing UV cuts shut first (default) so the
                 result's shells come only from this operation's seams.
+            algorithm (str): Seam-detection strategy. ``"auto"`` (default)
+                picks per mesh via :meth:`detect_seam_algorithm`. ``"axis"``
+                assumes a straight revolution axis; ``"topology"`` derives the
+                cuts from smooth-region topology, handling bent / swept tubes
+                and toruses (see :meth:`get_topology_seam_edges`).
         """
         meshes = cls._cylinder_meshes(objects)
         seamed = [
             m
             for m in meshes
-            if cls._seam_cut_one(m, angle=angle, invert_seam=invert_seam, sew=sew)
+            if cls._seam_cut_one(
+                m, angle=angle, invert_seam=invert_seam, sew=sew, algorithm=algorithm
+            )
         ]
         if unfold and seamed:
             cmds.loadPlugin("Unfold3D.mll", quiet=True)
-            pad = cls.calculate_uv_padding(map_size, normalize=True)
-            # u3dLayout's cost is ~quadratic in resolution (4096 -> ~1.2s,
-            # 8192 -> ~4.7s) yet the packing is pixel-identical from ~256 up --
-            # shellSpacing is already normalized, so resolution only sets pack
-            # precision, not the gap. Cap it well below map_size to stay fast.
-            pack_res = min(map_size, 1024)
             # Unfold each mesh on its own: a mesh u3dUnfold rejects (e.g. one
             # with "non-manifold UVs") then only skips itself -- a single batched
             # unfold would abort the whole selection on the first bad mesh.
@@ -952,26 +1657,12 @@ class UvUtils(ptk.HelpMixin):
                         mapsize=map_size,
                         roomspace=0,
                     )
-                    # Pack the shells into 0-1 without overlap. u3dLayout (not
-                    # polyLayoutUV, which collapses cylindrically-seeded shells)
-                    # packs; scaling by 3D area can overrun the square, so
-                    # polyNormalizeUV collectively fits it back; then any shell
-                    # u3dLayout mirrored to pack tighter is flipped back. The UV
+                    # Pack the shells into 0-1 without overlap, then flip back
+                    # any shell u3dLayout mirrored to pack tighter. The UV
                     # pipeline stays construction history (a consistent chain --
                     # u3dUnfold emits a polyTweakUV), so the caller's modeling /
                     # deformer history is left intact rather than baked away.
-                    cmds.u3dLayout(
-                        muvs,
-                        resolution=pack_res,
-                        shellSpacing=pad,
-                        tileMargin=pad / 2,
-                        preScaleMode=1,
-                        preRotateMode=1 if orient else 0,
-                        packBox=[0, 1, 0, 1],
-                    )
-                    cmds.polyNormalizeUV(
-                        muvs, normalizeType=1, preserveAspectRatio=True
-                    )
+                    cls._pack_shells(m, map_size=map_size, orient=orient)
                     cls._unflip_reversed_shells(m)
                 except Exception as error:  # plugin missing / non-unfoldable mesh
                     cmds.warning(f"unwrap_cylinder: unfold skipped for {m} ({error}).")
@@ -1046,18 +1737,31 @@ class UvUtils(ptk.HelpMixin):
     def set_texel_density(cls, objects=None, density=1.0, map_size=4096):
         """Set the texel density for the given objects.
 
-        Delegates to Maya's native ``texSetTexelDensity`` (the UV Toolkit
-        "Set" operation), which scales each UV shell about its own center
-        to the target density. Component input scales as the toolkit does:
-        a partial face/UV selection scales those components, not the
-        enclosing shell.
+        Native reimplementation of Maya's ``texSetTexelDensity`` (the UV
+        Toolkit "Set" operation): each UV shell — or the selected portion of
+        one — is scaled about its own 2D bounding-box center to the target
+        density. Component input scales as the toolkit does: a partial
+        face/UV selection scales those components, not the enclosing shell.
+
+        Unlike the MEL script, a shell whose current density can't be
+        measured (zero UV area or zero surface area — collapsed, unmapped or
+        degenerate UVs) is skipped and summarized in a single warning,
+        instead of aborting everything with the MEL's division by zero
+        (``texSetTexelDensity.mel`` line 56).
 
         Parameters:
             objects (str, obj, list): List of objects or a single object to set texel density for.
                 If None, the currently selected objects will be used.
             density (float): The desired texel density.
             map_size (int): Size of the map to calculate the texel density against.
+
+        Returns:
+            (tuple): (scaled_shell_count, skipped_shell_count)
         """
+        from math import sqrt
+        from collections import defaultdict
+        import maya.api.OpenMaya as om
+
         objects = (
             CoreUtils.as_strings(objects)
             if objects
@@ -1065,18 +1769,56 @@ class UvUtils(ptk.HelpMixin):
         )
         if not objects:
             cmds.warning("set_texel_density: no objects given or selected.")
-            return
+            return (0, 0)
 
-        # texSetTexelDensity operates on the current selection.
-        original_selection = cmds.ls(selection=True)
-        try:
-            cmds.select(objects, replace=True)
-            mel.eval(f"texSetTexelDensity {density} {map_size}")
-        finally:
-            if original_selection:
-                cmds.select(original_selection, replace=True)
-            else:
-                cmds.select(clear=True)
+        uvs = cmds.polyListComponentConversion(objects, toUV=True) or []
+        if not uvs:
+            cmds.warning("set_texel_density: no UVs found on the input.")
+            return (0, 0)
+
+        scaled = skipped = 0
+        for node, node_uvs in Components.map_components_to_objects(uvs).items():
+            sel = om.MSelectionList()
+            sel.add(node)
+            dag = sel.getDagPath(0)
+            dag.extendToShape()
+            _, shell_ids = om.MFnMesh(dag).getUvShellsIds()
+
+            # Group the input UVs by the shell they belong to, so each shell
+            # (or selected part of one) scales about its own center.
+            groups = defaultdict(list)
+            for comp in cmds.ls(node_uvs, flatten=True) or []:
+                groups[shell_ids[int(comp.split("[")[1].rstrip("]"))]].append(comp)
+
+            for comps in groups.values():
+                faces = (
+                    cmds.polyListComponentConversion(comps, fromUV=True, toFace=True)
+                    or []
+                )
+                area_3d = sum(cmds.polyEvaluate(faces, worldFaceArea=True) or [0.0])
+                area_uv = sum(cmds.polyEvaluate(faces, uvFaceArea=True) or [0.0])
+                if area_3d <= 0 or area_uv <= 0:
+                    skipped += 1
+                    continue
+                current = sqrt(area_uv / area_3d) * map_size
+                (u_min, u_max), (v_min, v_max) = cmds.polyEvaluate(
+                    comps, boundingBoxComponent2d=True
+                )
+                cmds.polyEditUV(
+                    comps,
+                    pivotU=(u_min + u_max) / 2,
+                    pivotV=(v_min + v_max) / 2,
+                    scaleU=density / current,
+                    scaleV=density / current,
+                )
+                scaled += 1
+
+        if skipped:
+            cmds.warning(
+                f"set_texel_density: skipped {skipped} shell(s) with zero UV or "
+                "surface area."
+            )
+        return (scaled, skipped)
 
     @staticmethod
     def _copy_uv_set_in_place(shape: str, source_set: str, dest_set: str) -> None:
@@ -1140,6 +1882,10 @@ class UvUtils(ptk.HelpMixin):
             # alone leaves the new set empty on some Maya builds.
             cmds.polyUVSet(shape, create=True, uvSet=candidate)
             UvUtils._copy_uv_set_in_place(shape, current, candidate)
+            # `-create` makes the new set current. Taking a backup must not
+            # change which set is being worked on, or every UV edit that
+            # follows lands in the backup and is lost when it's discarded.
+            cmds.polyUVSet(shape, currentUVSet=True, uvSet=current)
             snapshots.append((shape, current, candidate))
         return snapshots
 

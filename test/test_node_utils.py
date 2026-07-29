@@ -154,6 +154,23 @@ class TestNodeUtils(MayaTkTestCase):
         self.assertIn(c1, leaves)
         self.assertIn(c2, leaves)
 
+    def test_get_unique_children_preserves_hierarchy_order(self):
+        """Callers key decisions off the first element, so order must be stable."""
+        a = cmds.polyCube(n="ord_a")[0]
+        b = cmds.polyCube(n="ord_b")[0]
+        c = cmds.polyCube(n="ord_c")[0]
+        grp = cmds.group(a, b, c, n="ord_grp")
+
+        expected = cmds.listRelatives(grp, children=True, fullPath=True)
+        self.assertEqual(NodeUtils.get_unique_children(grp), expected)
+
+    def test_get_unique_children_resolves_components(self):
+        cube = cmds.polyCube(n="comp_cube")[0]
+
+        children = NodeUtils.get_unique_children([f"{cube}.f[0]", f"{cube}.f[1]"])
+
+        self.assertEqual([c.split("|")[-1] for c in children], [cube])
+
     def test_get_shapes(self):
         """get_shapes returns non-intermediate shape children of a transform."""
         shapes = NodeUtils.get_shapes("cyl")
@@ -284,6 +301,23 @@ class TestNodeUtils(MayaTkTestCase):
             self.assertTrue(cmds.getAttr(plug, lock=True))
         finally:
             cmds.setAttr(plug, lock=False)
+
+    def test_set_plug_skips_connected_plug(self):
+        """A connected plug is unwritable — skip it rather than raising.
+
+        ``force`` deliberately does NOT help here: unlike a lock, clearing a
+        connection is destructive.
+        """
+        driver = cmds.createNode("multiplyDivide", name="drv")
+        cmds.setAttr(f"{driver}.input1X", 5.0)
+        plug = f"{self.cyl}.translateX"
+        cmds.connectAttr(f"{driver}.outputX", plug)
+
+        Attributes.set_plug(plug, 7.0)
+        Attributes.set_plug(plug, 7.0, force=True)
+
+        self.assertTrue(cmds.isConnected(f"{driver}.outputX", plug))
+        self.assertAlmostEqual(cmds.getAttr(plug), 5.0)
 
     def test_set_plug_writes_float3_tuple(self):
         """set_plug expands a 3-tuple into a double3 setAttr."""
@@ -503,6 +537,274 @@ class TestNodeUtils(MayaTkTestCase):
             cmds.listRelatives(i, parent=True, fullPath=True)[0] for i in instances
         ]
         self.assertEqual(parents, [dupA, dupB])
+
+    def test_replace_with_instances_retain_bbox_scale(self):
+        """retain_bbox_scale keeps each target's apparent size when the size
+        lives in the geometry (identical scale channels, different mesh size).
+        Without it, matchTransform copies only the scale channels, so the
+        instance comes back at the SOURCE's size.
+        """
+        src = cmds.polyCube(name="src", width=1, height=1, depth=1)[0]
+        # Target is 3x bigger at the vertex level; its scale channels stay 1.
+        tgt = cmds.polyCube(name="tgt", width=3, height=3, depth=3)[0]
+        cmds.move(20, 0, 0, tgt)
+
+        # Off (default): instance takes the source's size.
+        plain = mtk.NodeUtils.replace_with_instances([src, cmds.duplicate(tgt)[0]])
+        sx, sy, sz = mtk.XformUtils.get_bounding_box(plain[0], "size", world_space=True)
+        for axis, v in zip("xyz", (sx, sy, sz)):
+            self.assertAlmostEqual(v, 1.0, places=3, msg=f"default size {axis}")
+
+        # On: instance is rescaled to the size of the object it replaced.
+        instances = mtk.NodeUtils.replace_with_instances(
+            [src, tgt], retain_bbox_scale=True
+        )
+        rx, ry, rz = mtk.XformUtils.get_bounding_box(
+            instances[0], "size", world_space=True
+        )
+        for axis, v in zip("xyz", (rx, ry, rz)):
+            self.assertAlmostEqual(v, 3.0, places=3, msg=f"retained size {axis}")
+
+        # Still a real instance of the source shape.
+        shape = cmds.listRelatives(instances[0], shapes=True, ni=True, fullPath=True)[0]
+        self.assertGreater(
+            len(cmds.listRelatives(shape, allParents=True, fullPath=True) or []), 1
+        )
+
+    def test_replace_with_instances_retain_bbox_per_axis(self):
+        """retain_bbox_per_axis fits each axis independently — and does it in
+        the LOCAL frame, so a rotated target still lands on its own size
+        (a world-axis ratio would be wrong there).
+        """
+        src = cmds.polyCube(name="src", width=1, height=1, depth=1)[0]
+        # Target's proportions differ per axis (1 x 2 x 4), baked into geometry.
+        tgt = cmds.polyCube(name="tgt", width=1, height=2, depth=4)[0]
+        cmds.move(20, 0, 0, tgt)
+        cmds.rotate(0, 45, 0, tgt)  # local frame != world frame
+
+        want = mtk.XformUtils.get_bounding_box(tgt, "size", world_space=True)
+        instances = mtk.NodeUtils.replace_with_instances(
+            [src, tgt], retain_bbox_scale=True, retain_bbox_per_axis=True
+        )
+        got = mtk.XformUtils.get_bounding_box(instances[0], "size", world_space=True)
+        for axis, g, w in zip("xyz", got, want):
+            self.assertAlmostEqual(g, w, places=3, msg=f"world size {axis}")
+
+        # Local scale really is non-uniform (1 x 2 x 4 against a unit cube).
+        sx, sy, sz = cmds.getAttr(f"{instances[0]}.scale")[0]
+        self.assertAlmostEqual(sy / sx, 2.0, places=3)
+        self.assertAlmostEqual(sz / sx, 4.0, places=3)
+
+    def test_replace_with_instances_retain_bbox_scale_rotated(self):
+        """The uniform path goes through a relative world-space xform — pin
+        that it still lands on the target's own size when the target is
+        rotated off-axis."""
+        src = cmds.polyCube(name="src", width=1, height=1, depth=1)[0]
+        tgt = cmds.polyCube(name="tgt", width=4, height=4, depth=4)[0]
+        cmds.move(20, 0, 0, tgt)
+        cmds.rotate(15, 45, 30, tgt)
+
+        want = mtk.XformUtils.get_bounding_box(tgt, "size", world_space=True)
+        instances = mtk.NodeUtils.replace_with_instances(
+            [src, tgt], retain_bbox_scale=True
+        )
+        got = mtk.XformUtils.get_bounding_box(instances[0], "size", world_space=True)
+        for axis, g, w in zip("xyz", got, want):
+            self.assertAlmostEqual(g, w, places=3, msg=f"world size {axis}")
+
+    def test_replace_with_instances_retain_scale_preserves_mirroring(self):
+        """The scale fit must never introduce or cancel a mirror: bounding-box
+        extents are unsigned, so the ratio is always positive and each scale
+        channel keeps the sign ``matchTransform`` copied off the target.
+        (A negative determinant can't be corrected per-instance anyway —
+        ``opposite`` is a SHAPE attribute, shared by every sibling.)
+        """
+        for per_axis in (False, True):
+            with self.subTest(per_axis=per_axis):
+                cmds.file(new=True, force=True)
+                src = cmds.polyCube(name="src", width=1, height=1, depth=1)[0]
+                tgt = cmds.polyCube(name="tgt", width=3, height=3, depth=3)[0]
+                cmds.move(20, 0, 0, tgt)
+                cmds.setAttr(f"{tgt}.scaleX", -1)  # mirrored target
+
+                instances = mtk.NodeUtils.replace_with_instances(
+                    [src, tgt],
+                    retain_bbox_scale=True,
+                    retain_bbox_per_axis=per_axis,
+                )
+                sx, sy, sz = cmds.getAttr(f"{instances[0]}.scale")[0]
+                self.assertLess(sx, 0, "mirror was cancelled")
+                self.assertGreater(sy, 0)
+                self.assertGreater(sz, 0)
+                # ...and it still lands on the target's size.
+                size = mtk.XformUtils.get_bounding_box(
+                    instances[0], "size", world_space=True
+                )
+                for axis, v in zip("xyz", size):
+                    self.assertAlmostEqual(v, 3.0, places=3, msg=f"world size {axis}")
+                # The shared shape is untouched — the source is not mirrored.
+                self.assertGreater(cmds.getAttr(f"{src}.scaleX"), 0)
+
+    def test_replace_with_instances_per_axis_falls_back_for_groups(self):
+        """A group has no single shape, so there's no unambiguous local frame
+        to fit per-axis in — the request must degrade to the uniform fit
+        rather than raise or silently skip the retention."""
+        src = cmds.group(cmds.polyCube(width=1, height=1, depth=1)[0], name="src_grp")
+        tgt = cmds.group(cmds.polyCube(width=3, height=3, depth=3)[0], name="tgt_grp")
+        cmds.move(20, 0, 0, tgt)
+
+        self.assertIsNone(mtk.NodeUtils._local_bbox_size(tgt))  # no single shape
+
+        instances = mtk.NodeUtils.replace_with_instances(
+            [src, tgt], retain_bbox_scale=True, retain_bbox_per_axis=True
+        )
+        size = mtk.XformUtils.get_bounding_box(instances[0], "size", world_space=True)
+        for axis, v in zip("xyz", size):
+            self.assertAlmostEqual(v, 3.0, places=3, msg=f"world size {axis}")
+
+    def test_replace_with_instances_per_axis_skips_degenerate_axis(self):
+        """An axis with no extent on one side has no reproducible ratio — it
+        keeps the target's own scale instead of collapsing the instance."""
+        src = cmds.polyCube(name="src", width=1, height=1, depth=1)[0]
+        tgt = cmds.polyPlane(name="tgt", width=3, height=3, axis=(0, 1, 0))[0]
+        # Plane has zero Y extent; X/Z are 3.
+        instances = mtk.NodeUtils.replace_with_instances(
+            [src, tgt], retain_bbox_scale=True, retain_bbox_per_axis=True
+        )
+        sx, sy, sz = cmds.getAttr(f"{instances[0]}.scale")[0]
+        self.assertAlmostEqual(sx, 3.0, places=3)
+        self.assertAlmostEqual(sz, 3.0, places=3)
+        self.assertAlmostEqual(sy, 1.0, places=3, msg="degenerate axis collapsed")
+
+    def test_replace_with_instances_preserves_frozen_rotation(self):
+        """A target whose rotation was frozen (orientation baked into the
+        geometry, rotate channels zeroed) must come back at its own apparent
+        orientation. matchTransform alone copies the channels (0,0,0) and
+        silently snaps the instance to the SOURCE's orientation — the fix
+        places identical geometry by geometric registration instead."""
+        src = cmds.polyCube(name="src", width=4, height=2, depth=1)[0]
+        tgt = cmds.duplicate(src)[0]
+        cmds.setAttr(f"{tgt}.translateX", 20)
+        cmds.setAttr(f"{tgt}.rotateZ", 90)
+        cmds.makeIdentity(tgt, apply=True, rotate=True)  # bake the rotation
+
+        want = mtk.XformUtils.get_bounding_box(tgt, "size", world_space=True)
+        want_center = mtk.XformUtils.get_bounding_box(tgt, "center", world_space=True)
+
+        instances = mtk.NodeUtils.replace_with_instances([src, tgt])
+
+        got = mtk.XformUtils.get_bounding_box(instances[0], "size", world_space=True)
+        got_center = mtk.XformUtils.get_bounding_box(
+            instances[0], "center", world_space=True
+        )
+        for axis, g, w in zip("xyz", got, want):
+            self.assertAlmostEqual(g, w, places=3, msg=f"world size {axis}")
+        for axis, g, w in zip("xyz", got_center, want_center):
+            self.assertAlmostEqual(g, w, places=3, msg=f"world center {axis}")
+
+        # Still a real instance of the source shape.
+        shape = cmds.listRelatives(instances[0], shapes=True, ni=True, fullPath=True)[0]
+        self.assertGreater(
+            len(cmds.listRelatives(shape, allParents=True, fullPath=True) or []), 1
+        )
+
+    def test_replace_with_instances_center_pivot_without_freeze(self):
+        """center_pivot must act even when freeze_transforms is False —
+        passing translate=False into freeze_transforms is an explicit
+        'freeze nothing' request, which returned before the centering step
+        and made the option a silent no-op."""
+        src = cmds.polyCube(name="src")[0]
+        cmds.xform(src, ws=True, rotatePivot=(5, 5, 5))
+        tgt = cmds.duplicate(src)[0]
+        cmds.setAttr(f"{tgt}.translateX", 20)
+
+        instances = mtk.NodeUtils.replace_with_instances(
+            [src, tgt], center_pivot=True, freeze_transforms=False
+        )
+
+        rp = cmds.xform(instances[0], q=True, ws=True, rotatePivot=True)
+        center = mtk.XformUtils.get_bounding_box(
+            instances[0], "center", world_space=True
+        )
+        for axis, p, c in zip("xyz", rp, center):
+            self.assertAlmostEqual(p, c, places=3, msg=f"pivot {axis} not centered")
+
+    def test_replace_with_instances_frozen_rotation_under_rotated_parent(self):
+        """The registration path sets the world matrix while the instance is
+        still under the SOURCE's parent, then reparents under the target's —
+        pin that the two steps compose under a transformed parent."""
+        src = cmds.polyCube(name="src", width=4, height=2, depth=1)[0]
+        tgt = cmds.duplicate(src)[0]
+        cmds.setAttr(f"{tgt}.rotateZ", 90)
+        cmds.makeIdentity(tgt, apply=True, rotate=True)
+        grp = cmds.group(tgt, name="grp")
+        cmds.setAttr(f"{grp}.rotate", 30, 40, 10)
+        cmds.setAttr(f"{grp}.translateY", 5)
+        tgt = cmds.listRelatives(grp, children=True, fullPath=True)[0]
+
+        want = mtk.XformUtils.get_bounding_box(tgt, "size", world_space=True)
+        want_center = mtk.XformUtils.get_bounding_box(tgt, "center", world_space=True)
+
+        instances = mtk.NodeUtils.replace_with_instances([src, tgt])
+
+        got = mtk.XformUtils.get_bounding_box(instances[0], "size", world_space=True)
+        got_center = mtk.XformUtils.get_bounding_box(
+            instances[0], "center", world_space=True
+        )
+        for axis, g, w in zip("xyz", got, want):
+            self.assertAlmostEqual(g, w, places=3, msg=f"world size {axis}")
+        for axis, g, w in zip("xyz", got_center, want_center):
+            self.assertAlmostEqual(g, w, places=3, msg=f"world center {axis}")
+        self.assertEqual(
+            cmds.listRelatives(instances[0], parent=True)[0], grp, "wrong parent"
+        )
+
+    def test_replace_with_instances_mirrored_identical_target(self):
+        """A mirrored (negative-scale) target whose object-space geometry is
+        identical to the source takes the registration path and must come
+        back with its exact world matrix — negative determinant included.
+        (Which CHANNEL carries the mirror may differ from the target's own
+        decomposition; the world matrix is the contract.)"""
+        src = cmds.polyCube(name="src", width=4, height=2, depth=1)[0]
+        tgt = cmds.duplicate(src)[0]
+        cmds.setAttr(f"{tgt}.translateX", 20)
+        cmds.setAttr(f"{tgt}.scaleX", -1)
+        want = cmds.xform(tgt, q=True, ws=True, m=True)
+
+        instances = mtk.NodeUtils.replace_with_instances([src, tgt])
+
+        got = cmds.xform(instances[0], q=True, ws=True, m=True)
+        for i, (g, w) in enumerate(zip(got, want)):
+            self.assertAlmostEqual(g, w, places=4, msg=f"world matrix [{i}]")
+
+    def test_replace_with_instances_keeps_target_name(self):
+        """The replacement takes over the target's exact name: the target is
+        deleted BEFORE the rename — renaming against the still-living target
+        auto-suffixed ('my_wall' came back as 'my_wall1')."""
+        src = cmds.polyCube(name="src")[0]
+        tgt = cmds.polyCube(name="my_wall")[0]
+        cmds.setAttr(f"{tgt}.translateX", 20)
+
+        instances = mtk.NodeUtils.replace_with_instances([src, tgt])
+
+        self.assertEqual(instances[0].split("|")[-1], "my_wall")
+
+    def test_replace_with_instances_no_center_pivot_keeps_target_pivot(self):
+        """With center_pivot off, the instance keeps the pivot of the object
+        it replaced — including on the geometric-registration path."""
+        src = cmds.polyCube(name="src")[0]
+        tgt = cmds.duplicate(src)[0]
+        cmds.setAttr(f"{tgt}.translateX", 20)
+        cmds.xform(tgt, ws=True, rotatePivot=(22, 3, 1))
+        want_rp = cmds.xform(tgt, q=True, ws=True, rotatePivot=True)
+
+        instances = mtk.NodeUtils.replace_with_instances(
+            [src, tgt], center_pivot=False
+        )
+
+        got_rp = cmds.xform(instances[0], q=True, ws=True, rotatePivot=True)
+        for axis, g, w in zip("xyz", got_rp, want_rp):
+            self.assertAlmostEqual(g, w, places=3, msg=f"pivot {axis}")
 
     # -------------------------------------------------------------------------
     # Assembly Tests

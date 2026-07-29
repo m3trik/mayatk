@@ -16,6 +16,11 @@
 -- Probe every change: test/rizom_headless_probe.py. Field safety on 2020.1
 -- (probed): MarginSize + SpacingSize safe; PaddingSize + MapResolution
 -- access-violate (gated >= 2022 below).
+--
+-- MarginSize / SpacingSize / PaddingSize are NOT user knobs -- their tokens
+-- are computed by Parameters.derived_values from the same padding rule the
+-- Maya pack operation uses (see DERIVED_KEYS in parameters.py), so a Rizom
+-- round-trip and an in-Maya repack agree on the gutter.
 
 -- Group every island under RootGroup and distribute across tiles.
 -- MergingPolicy=8322 is the canonical bitmask RizomUV's reference bridges

@@ -18,8 +18,6 @@ from datetime import datetime
 from typing import List, Dict, Optional, Callable, Union, Any
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # From this package:
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.display_utils._display_utils import DisplayUtils
@@ -325,6 +323,11 @@ class SceneExporter(ptk.LoggingMixin):
                 if self.create_log_file:
                     self.close_file_handlers()
         finally:
+            # Scene state the FBX write itself reads (working linear unit,
+            # active workspace) is staged rather than set_/revert_-paired,
+            # because that pairing fires before the write. Undo it here, on
+            # every exit path — a failed check, a raising task, or a bad write.
+            self.task_manager.run_deferred_restores()
             # Restore the scene state recorded by smart_bake's session
             # manifest: deletes the override layer, re-enables IK handles
             # (bakeResults' disableImplicitControl zeroes ikBlend even when
@@ -758,7 +761,7 @@ class SceneExporterSlots(SceneExporter):
             setToolTip="Set the log level.",
         )
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Scene Exporter",
                 body="Batch-export scene objects to FBX using configurable "
                 "task pipelines and YAML presets.",

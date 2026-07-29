@@ -14,7 +14,7 @@ Tests for XformUtils class functionality including:
 """
 import unittest
 import mayatk as mtk
-from mayatk.xform_utils._xform_utils import XformUtils
+from mayatk.xform_utils._xform_utils import XformUtils, _XformUtilsInternal
 
 from base_test import MayaTkTestCase, skipIfBatch
 import maya.cmds as cmds
@@ -712,6 +712,106 @@ class TestXformUtils(MayaTkTestCase):
         ]
         self.assertAlmostEqual(center[0], 10.0, delta=1.0)  # Approx check
 
+    def test_freeze_transforms_skips_instanced_by_default(self):
+        """Baking into a shared shape would rewrite every sibling's geometry —
+        an instanced object must be skipped, leaving BOTH halves untouched."""
+        import mayatk as mtk
+
+        src = cmds.polyCube(name="inst_src", width=2, height=1, depth=1)[0]
+        inst = mtk.EditUtils.mirror_instance(src, axis="x", pivot=(3.0, 0.0, 0.0))[0]
+        src_before = cmds.exactWorldBoundingBox(src)
+
+        XformUtils.freeze_transforms(inst, scale=True, force=True)
+
+        self.assertNotEqual(
+            tuple(cmds.getAttr(f"{inst}.scale")[0]), (1.0, 1.0, 1.0), "scale was baked"
+        )
+        for axis, b, a in zip("xyzXYZ", src_before, cmds.exactWorldBoundingBox(src)):
+            self.assertAlmostEqual(a, b, places=4, msg=f"source geometry moved ({axis})")
+
+    def test_freeze_disconnect_strategy_finds_child_plug_blockers(self):
+        """A per-axis connection (``drv.rotateZ -> cube.rotateZ``) must be
+        found and broken by ``connection_strategy='disconnect'``. Compound
+        ``listConnections`` queries don't see child-plug connections — anim
+        curves and constraints connect per-axis — so the old compound-only
+        blocker scan found nothing and silently skipped the node."""
+        drv = cmds.spaceLocator(name="fz_drv")[0]
+        cmds.setAttr(f"{drv}.rotateZ", 20.0)
+        cmds.connectAttr(f"{drv}.rotateZ", f"{self.cube1}.rotateZ")
+
+        XformUtils.freeze_transforms(
+            self.cube1, rotate=True, connection_strategy="disconnect", force=True
+        )
+
+        self.assertFalse(
+            cmds.listConnections(f"{self.cube1}.rotateZ", source=True, plugs=True),
+            "child-plug driver should have been disconnected",
+        )
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cube1}.rotateZ"), 0.0, places=5)
+
+    def test_uninstance_freeze_bakes_to_engine_safe_geometry(self):
+        """uninstance(freeze=True) breaks the link AND bakes in one step: the
+        mirrored instance becomes independent geometry with a POSITIVE scale,
+        while the source keeps its own geometry.
+
+        Breaking the link alone is not enough — the transform would still carry
+        the negative scale that exporters object to.
+        """
+        import mayatk as mtk
+
+        src = cmds.polyCube(name="bake_src", width=2, height=1, depth=1)[0]
+        inst = mtk.EditUtils.mirror_instance(src, axis="x", pivot=(3.0, 0.0, 0.0))[0]
+        src_before = cmds.exactWorldBoundingBox(src)
+        inst_before = cmds.exactWorldBoundingBox(inst)
+
+        # Link-break alone leaves the negative scale in place.
+        mtk.NodeUtils.uninstance(inst)
+        self.assertLess(
+            min(cmds.getAttr(f"{inst}.scale")[0]),
+            0,
+            "uninstance alone should not touch the transform",
+        )
+
+        mtk.NodeUtils.uninstance(inst, freeze=True)
+
+        # Scale baked away, so nothing negative survives for an exporter to trip on.
+        for axis, v in zip("xyz", cmds.getAttr(f"{inst}.scale")[0]):
+            self.assertAlmostEqual(v, 1.0, places=4, msg=f"scale {axis} not baked")
+        # Shape is now unique to the instance.
+        shape = cmds.listRelatives(inst, shapes=True, ni=True, fullPath=True)[0]
+        self.assertEqual(
+            len(cmds.listRelatives(shape, allParents=True, fullPath=True) or []), 1
+        )
+        # Both halves stayed where they were.
+        for label, before, node in (("src", src_before, src), ("inst", inst_before, inst)):
+            for v_before, v_after in zip(before, cmds.exactWorldBoundingBox(node)):
+                self.assertAlmostEqual(
+                    v_after, v_before, places=4, msg=f"{label} moved"
+                )
+
+    def test_uninstance_freeze_both_siblings_in_one_batch(self):
+        """Both halves of an instanced pair in a single call: each must end up
+        with its own shape and a baked scale, with neither half moving."""
+        import mayatk as mtk
+
+        src = cmds.polyCube(name="pair_src", width=2, height=1, depth=1)[0]
+        inst = mtk.EditUtils.mirror_instance(src, axis="x", pivot=(3.0, 0.0, 0.0))[0]
+        before = {n: cmds.exactWorldBoundingBox(n) for n in (src, inst)}
+
+        mtk.NodeUtils.uninstance([src, inst], freeze=True)
+
+        for node in (src, inst):
+            shape = cmds.listRelatives(node, shapes=True, ni=True, fullPath=True)[0]
+            self.assertEqual(
+                len(cmds.listRelatives(shape, allParents=True, fullPath=True) or []),
+                1,
+                f"{node} shape still shared",
+            )
+            for v in cmds.getAttr(f"{node}.scale")[0]:
+                self.assertAlmostEqual(v, 1.0, places=4, msg=f"{node} scale not baked")
+            for v_before, v_after in zip(before[node], cmds.exactWorldBoundingBox(node)):
+                self.assertAlmostEqual(v_after, v_before, places=4, msg=f"{node} moved")
+
     def test_freeze_to_opm(self):
         """Test freezing to Offset Parent Matrix."""
         cmds.move(10, 10, 10, self.cube1)
@@ -958,6 +1058,137 @@ class TestXformUtils(MayaTkTestCase):
         cmds.select(f"{self.cube1}.f[1]", replace=True)
         result = XformUtils.world_align_pivot(mode="set", pivot_type="object")
         self.assertTrue(result)
+
+    def test_world_align_pivot_keeps_component_selection(self):
+        """World-align pivot must leave a component selection in component mode.
+
+        Bug: ``world_align_pivot`` opened with ``cmds.select(transforms, replace=True)``,
+        so clicking Pivot > Align World with faces/verts selected kicked Maya back to
+        object mode (and the ``manip`` branch never restored the selection at all).
+        Fixed: 2026-07-26
+        """
+        face = f"{self.cube1}.f[1]"
+        for pivot_type in ("manip", "object"):
+            with self.subTest(pivot_type=pivot_type):
+                cmds.select(face, replace=True)
+                result = XformUtils.world_align_pivot(
+                    mode="set", pivot_type=pivot_type
+                )
+                self.assertTrue(result)
+                selection = cmds.ls(sl=True, flatten=True) or []
+                self.assertEqual(selection, cmds.ls(face, flatten=True))
+
+    def test_world_align_pivot_object_uses_component_center(self):
+        """The permanent pivot lands on the selected components, not the object pivot."""
+        face = f"{self.cube1}.f[1]"
+        expected = XformUtils.get_bounding_box(face, "center")
+        cmds.select(face, replace=True)
+
+        self.assertTrue(XformUtils.world_align_pivot(mode="set", pivot_type="object"))
+
+        rp = cmds.xform(self.cube1, q=True, rotatePivot=True, worldSpace=True)
+        for actual, want in zip(rp, expected):
+            self.assertAlmostEqual(actual, want, places=4)
+        # The face itself must not have moved — only the pivot.
+        for actual, want in zip(
+            XformUtils.get_bounding_box(face, "center"), expected
+        ):
+            self.assertAlmostEqual(actual, want, places=4)
+
+    def test_world_align_pivot_get_reports_component_center(self):
+        """``mode='get'`` reports the component extent and the components it used."""
+        faces = [f"{self.cube1}.f[0]", f"{self.cube1}.f[1]"]
+        cmds.select(faces, replace=True)
+
+        result = XformUtils.world_align_pivot(mode="get")
+
+        expected = XformUtils.get_bounding_box(faces, "center")
+        for actual, want in zip(result["position"], expected):
+            self.assertAlmostEqual(actual, want, places=4)
+        self.assertEqual(result["orientation"], [0, 0, 0])
+        # Components come back unexpanded (Maya consolidates the pair into one
+        # "f[0:1]" range) — flatten before counting.
+        self.assertEqual(
+            cmds.ls(result["components"], flatten=True), cmds.ls(faces, flatten=True)
+        )
+        self.assertEqual(len(result["objects"]), 1)
+
+    def test_world_align_pivot_components_on_multiple_objects(self):
+        """Each object pivots on its own components; the manip pivot spans them all."""
+        f1, f2 = f"{self.cube1}.f[1]", f"{self.cube2}.f[1]"
+        want1 = XformUtils.get_bounding_box(f1, "center")
+        want2 = XformUtils.get_bounding_box(f2, "center")
+        cmds.select([f1, f2], replace=True)
+
+        self.assertTrue(XformUtils.world_align_pivot(mode="set", pivot_type="object"))
+
+        for cube, want in ((self.cube1, want1), (self.cube2, want2)):
+            rp = cmds.xform(cube, q=True, rotatePivot=True, worldSpace=True)
+            for actual, expected in zip(rp, want):
+                self.assertAlmostEqual(actual, expected, places=4)
+
+    def test_resolve_transforms_dedupes_object_mixed_with_its_components(self):
+        """An object listed alongside its own components must resolve to ONE entry.
+
+        Bug: the shape->parent branch used ``listRelatives(path=True)``, which returns
+        the *shortest unique* name, while the transform branch returned long paths. So
+        ``["test_cube1", "test_cube1.f[1]"]`` produced both "|test_cube1" and
+        "test_cube1" — two spellings ``dict.fromkeys`` can't merge. ``bake_pivot``
+        then ran its relative move twice on the same object.
+        Fixed: 2026-07-26
+        """
+        resolved = _XformUtilsInternal._resolve_transforms(
+            [self.cube1, f"{self.cube1}.f[1]"]
+        )
+        self.assertEqual(len(resolved), 1)
+        self.assertTrue(all(p.startswith("|") for p in resolved))  # long paths
+
+    def test_world_align_pivot_unmeasurable_components_keep_object_pivot(self):
+        """Components with no measurable extent must not collapse the pivot to origin.
+
+        Bug: ``exactWorldBoundingBox`` reports "nothing to measure" as an inverted
+        sentinel box (min +1e20 / max -1e20) instead of raising, so averaging it
+        produced exactly (0, 0, 0). A NURBS surface-face selection — a legitimately
+        masked component type — therefore yanked the pivot to the world origin.
+        Fixed: 2026-07-26
+        """
+        srf = cmds.nurbsPlane(name="test_srf")[0]
+        cmds.move(8, 2, 0, srf, absolute=True)
+        expected = cmds.xform(srf, q=True, rotatePivot=True, worldSpace=True)
+        self.assertIsNone(  # the sentinel box the guard has to catch
+            XformUtils._component_center([f"{srf}.sf[0][0]"])
+        )
+
+        cmds.select(f"{srf}.sf[0][0]", replace=True)
+        self.assertTrue(XformUtils.world_align_pivot(mode="set", pivot_type="object"))
+
+        rp = cmds.xform(srf, q=True, rotatePivot=True, worldSpace=True)
+        for actual, want in zip(rp, expected):
+            self.assertAlmostEqual(actual, want, places=4)
+        self.assertNotAlmostEqual(rp[0], 0.0, places=4)  # not yanked to the origin
+
+    def test_world_align_pivot_ignores_non_geometry_component_masks(self):
+        """A selected rotate-pivot handle is a manipulator, not geometry to center on."""
+        cmds.move(6, 3, 0, self.cube1, absolute=True)
+        self.assertEqual(
+            _XformUtilsInternal._group_components_by_transform(
+                [f"{self.cube1}.rotatePivot", f"{self.cube1}.scalePivot"]
+            ),
+            {},
+        )
+
+    def test_world_align_pivot_object_selection_unchanged(self):
+        """A whole-object selection still pivots on the object's own rotate pivot."""
+        cmds.move(3, 4, 5, self.cube1, absolute=True)
+        expected = cmds.xform(self.cube1, q=True, rotatePivot=True, worldSpace=True)
+        cmds.select(self.cube1, replace=True)
+
+        self.assertTrue(XformUtils.world_align_pivot(mode="set", pivot_type="object"))
+
+        rp = cmds.xform(self.cube1, q=True, rotatePivot=True, worldSpace=True)
+        for actual, want in zip(rp, expected):
+            self.assertAlmostEqual(actual, want, places=4)
+        self.assertEqual(cmds.ls(sl=True), cmds.ls(self.cube1))
 
     # -------------------------------------------------------------------------
     # Orientation Tests

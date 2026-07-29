@@ -12,8 +12,6 @@ from typing import List, Dict, Any, Optional, Union, Callable
 
 import pythontk as ptk
 from uitk.switchboard import Cancelable
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.mat_utils.game_shader import GameShader
@@ -827,7 +825,7 @@ class MatUpdaterSlots(MatUpdater):
             setToolTip="Optional: Folder to move original files to.",
         )
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Material Updater",
                 body="Batch-process scene materials and their textures — "
                 "format conversion, max-size enforcement, mask scaling, and "

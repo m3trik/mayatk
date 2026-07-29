@@ -8,7 +8,6 @@ from typing import Optional, Dict, Any, List
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-    import maya.api.OpenMaya as om
 except ImportError as error:
     cmds = None
     mel = None
@@ -20,7 +19,6 @@ from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.anim_utils._anim_utils import AnimUtils
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.mat_utils._mat_utils import MatUtils
-from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from pythontk import TaskFactory
 from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import HierarchySidecar
@@ -90,12 +88,25 @@ class _TaskActionsMixin(_TaskDataMixin):
     """ """
 
     def set_workspace(self, enable=True):
-        """Manage temporary workspace change."""
+        """Switch to the workspace matching the scene path for the export.
+
+        **Staged, not ``set_``/``revert_``-paired**: the FBX plugin resolves
+        (project-relative) texture paths against the *active* workspace when it
+        WRITES, while the paired revert fires when ``run_tasks`` returns \u2014
+        before the write. Pairing it therefore restored the old project first
+        and could leave the shipped FBX with unresolved textures, exactly what
+        this task pairs with ``convert_to_relative_paths`` to prevent. Returns
+        ``None`` so the too-early pairing stays disarmed; see
+        ``TaskFactory.stage_deferred_restore``.
+        """
         original_workspace = cmds.workspace(query=True, rootDirectory=True)
 
         if enable:
             new_workspace = EnvUtils.find_workspace_using_path()
             if new_workspace and new_workspace != original_workspace:
+                self.stage_deferred_restore(
+                    "workspace", lambda: self._restore_workspace(original_workspace)
+                )
                 cmds.workspace(new_workspace, openWorkspace=True)
                 self.logger.debug(
                     f"Changed workspace from {original_workspace} to {new_workspace}"
@@ -108,18 +119,28 @@ class _TaskActionsMixin(_TaskDataMixin):
             else:
                 self.logger.debug("Workspace already matches scene path.")
 
-        return original_workspace
+        return None
 
-    def revert_workspace(self, original_workspace):
-        """Revert to the original workspace."""
-        cmds.workspace(original_workspace, openWorkspace=True)
-        self.logger.debug(f"Reverted workspace to: {original_workspace}")
+    def _restore_workspace(self, original):
+        cmds.workspace(original, openWorkspace=True)
+        self.logger.debug(f"Reverted workspace to: {original}")
 
     def set_linear_unit(self, linear_unit):
-        """Manage temporary linear unit change."""
+        """Set Maya's working linear unit for the export.
+
+        **Staged, not ``set_``/``revert_``-paired** \u2014 same reason as
+        :meth:`set_workspace`: the FBX plugin stamps the file's unit from the
+        working unit at WRITE time (proven: exporting the same cube under
+        ``cm`` vs ``m`` yields different files), and the paired revert fires
+        before the write, which made this task inert. Returns ``None`` so that
+        pairing stays disarmed.
+        """
         original_linear_unit = cmds.currentUnit(query=True, linear=True)
 
         if linear_unit and linear_unit != "OFF":
+            self.stage_deferred_restore(
+                "linear_unit", lambda: self._restore_linear_unit(original_linear_unit)
+            )
             cmds.currentUnit(linear=linear_unit)
             self.logger.debug(
                 f"Changed linear unit from {original_linear_unit} to {linear_unit}"
@@ -127,12 +148,11 @@ class _TaskActionsMixin(_TaskDataMixin):
         else:
             self.logger.debug(f"Linear unit change skipped (value: {linear_unit})")
 
-        return original_linear_unit
+        return None
 
-    def revert_linear_unit(self, original_linear_unit):
-        """Revert to the original linear unit."""
-        cmds.currentUnit(linear=original_linear_unit)
-        self.logger.debug(f"Reverted linear unit to: {original_linear_unit}")
+    def _restore_linear_unit(self, original):
+        cmds.currentUnit(linear=original)
+        self.logger.debug(f"Reverted linear unit to: {original}")
 
     def convert_to_relative_paths(self):
         """Copy external textures into sourceimages, then convert paths to relative.
@@ -708,7 +728,7 @@ class _TaskChecksMixin(_TaskDataMixin):
             ):
                 if not box_logged:
                     log_messages.append(
-                        f"Root level group nodes found with non-default transforms:"
+                        "Root level group nodes found with non-default transforms:"
                     )
                     box_logged = True
 
@@ -1047,8 +1067,7 @@ class _TaskChecksMixin(_TaskDataMixin):
     def check_hidden_geometry(self) -> tuple:
         """Check if any geometry objects are hidden."""
         hidden_objects = []
-        # Define what we consider "geometry"
-        geometry_types = {"mesh", "nurbsSurface", "subdiv"}
+        geometry_types = NodeUtils.SURFACE_TYPES
 
         for obj in self.objects:
             # Check if geometry (has shapes)

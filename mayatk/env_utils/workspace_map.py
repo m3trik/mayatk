@@ -6,8 +6,6 @@ import re
 from typing import Optional, Dict, List
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # from this package:
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.workspace_manager import WorkspaceManager
@@ -378,7 +376,7 @@ class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Workspace Map",
                 body="Browse a directory tree of Maya workspaces; click a "
                 "node to set it as the active workspace.",

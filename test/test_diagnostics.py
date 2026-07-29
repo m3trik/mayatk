@@ -17,6 +17,7 @@ from mayatk.core_utils.diagnostics.animation_diag import AnimCurveDiagnostics
 from mayatk.core_utils.diagnostics.mesh_diag import MeshDiagnostics
 from mayatk.core_utils.diagnostics.transform_diag import TransformDiagnostics
 from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics, UvSetCleanupResult
+from mayatk.xform_utils._xform_utils import XformUtils
 
 from base_test import MayaTkTestCase, QuickTestCase
 
@@ -219,6 +220,214 @@ class TestTransformDiagnostics(MayaTkTestCase):
             set(cmds.listRelatives(result[0], shapes=True, fullPath=True) or [])
             & set(cmds.listRelatives(cube, shapes=True, fullPath=True) or [])
         )
+
+
+class TestTransformDiagnosticsInheritedShear(MayaTkTestCase):
+    """get_non_orthogonal — the world-space (FBX-facing) check.
+
+    An object under a non-uniformly scaled AND rotated ancestor evaluates to
+    non-perpendicular world axes while carrying zero shear of its own. That is
+    the usual source of the FBX "Non-orthogonal matrix support" warning, and
+    the local-only ``get_sheared`` check cannot see it.
+    """
+
+    def _sheared_hierarchy(self, prefix):
+        """Build ``grp`` (non-uniform scale) -> ``child`` (rotated). Returns both."""
+        grp = cmds.group(empty=True, name=f"{prefix}_grp")
+        cmds.setAttr(f"{grp}.scaleX", 3.0)
+        child = cmds.polyCube(name=f"{prefix}_child")[0]
+        cmds.parent(child, grp)
+        cmds.setAttr(f"{child}.rotateZ", 35.0)
+        return grp, child
+
+    @staticmethod
+    def _world_points(node):
+        return cmds.xform(f"{node}.vtx[*]", q=True, ws=True, t=True)
+
+    def test_inherited_shear_detected_but_not_by_get_sheared(self):
+        _grp, child = self._sheared_hierarchy("td_inh")
+
+        self.assertEqual(TransformDiagnostics.get_sheared(objects=[child]), [])
+        self.assertEqual(
+            TransformDiagnostics.get_non_orthogonal(objects=[child]), [child]
+        )
+
+    def test_detailed_reports_cause_and_skew(self):
+        grp, child = self._sheared_hierarchy("td_cause")
+        own = cmds.polyCube(name="td_cause_own")[0]
+        cmds.xform(own, shear=(0.4, 0.0, 0.0))
+
+        detail = TransformDiagnostics.get_non_orthogonal(
+            objects=[grp, child, own], detailed=True
+        )
+        self.assertEqual(detail[child]["cause"], "inherited")
+        self.assertEqual(detail[own]["cause"], "shear")
+        self.assertGreater(detail[child]["skew"], 0.0)
+        self.assertNotIn(grp, detail)  # non-uniform scale alone is orthogonal
+
+    def test_uniform_and_rotated_hierarchy_is_not_flagged(self):
+        """Non-uniform scale WITHOUT a rotated descendant keeps axes perpendicular."""
+        cube = cmds.polyCube(name="td_clean_hier")[0]
+        cmds.setAttr(f"{cube}.rotateY", 45.0)
+        cmds.setAttr(f"{cube}.scaleX", 2.0)
+        grp = cmds.group(cube, name="td_clean_hier_grp")
+        cmds.setAttr(f"{grp}.rotateZ", 20.0)
+
+        self.assertEqual(
+            TransformDiagnostics.get_non_orthogonal(objects=[grp, cube]), []
+        )
+
+    def test_fix_clears_inherited_shear_without_moving_geometry(self):
+        grp, child = self._sheared_hierarchy("td_inh_fix")
+        before = self._world_points(child)
+
+        fixed = TransformDiagnostics.fix_non_orthogonal_axes(
+            objects=[child], quiet=True
+        )
+
+        self.assertEqual([f.split("|")[-1] for f in fixed], [child])
+        self.assertEqual(TransformDiagnostics.get_non_orthogonal(objects=[child]), [])
+        # Freezing bakes the local matrix into the points, so the composite
+        # result — where the vertices actually sit — must not change.
+        for a, b in zip(before, self._world_points(child)):
+            self.assertAlmostEqual(a, b, places=5)
+        # ...and the object stays in its hierarchy (unlike an unparent-to-world fix).
+        self.assertEqual(cmds.listRelatives(child, parent=True), [grp])
+
+    def test_fix_processes_top_down_and_skips_cleared_descendants(self):
+        """Freezing an ancestor clears its descendants — they aren't frozen twice."""
+        root = cmds.group(empty=True, name="td_chain_root")
+        cmds.setAttr(f"{root}.scaleX", 2.0)
+        mid = cmds.group(empty=True, name="td_chain_mid")
+        cmds.parent(mid, root)
+        cmds.setAttr(f"{mid}.rotateZ", 30.0)
+        cmds.setAttr(f"{mid}.scaleY", 3.0)
+        leaf = cmds.polyCube(name="td_chain_leaf")[0]
+        cmds.parent(leaf, mid)
+        cmds.setAttr(f"{leaf}.rotateY", 20.0)
+
+        chain = [root, mid, leaf]
+        self.assertEqual(
+            set(TransformDiagnostics.get_non_orthogonal(objects=chain)), {mid, leaf}
+        )
+        before = self._world_points(leaf)
+
+        fixed = TransformDiagnostics.fix_non_orthogonal_axes(objects=chain, quiet=True)
+
+        self.assertEqual(TransformDiagnostics.get_non_orthogonal(objects=chain), [])
+        # Only the ancestor needed freezing; the leaf came out clean with it.
+        self.assertEqual([f.split("|")[-1] for f in fixed], [mid])
+        for a, b in zip(before, self._world_points(leaf)):
+            self.assertAlmostEqual(a, b, places=5)
+
+    def test_dry_run_lists_inherited_offenders_without_modifying(self):
+        _grp, child = self._sheared_hierarchy("td_inh_dry")
+        before = cmds.getAttr(f"{child}.rotateZ")
+
+        result = TransformDiagnostics.fix_non_orthogonal_axes(
+            objects=[child], dry_run=True, quiet=True
+        )
+
+        self.assertEqual(result, [child])
+        self.assertAlmostEqual(cmds.getAttr(f"{child}.rotateZ"), before, places=6)
+
+
+class TestTransformDiagnosticsConnections(MayaTkTestCase):
+    """Connection-aware fix behavior.
+
+    Only rotate/scale/shear are frozen (translation never contributes to axis
+    skew), so translate connections survive untouched. Driven rotate/scale
+    channels are skipped by default — reconnecting after a freeze re-drives
+    the channel the freeze zeroed (double-transform + the skew returns,
+    probe-measured), so there is no accurate restore; breaking the driver is
+    explicit opt-in via ``break_connections``.
+    """
+
+    def _sheared_child(self, prefix):
+        grp = cmds.group(empty=True, name=f"{prefix}_grp")
+        cmds.setAttr(f"{grp}.scaleX", 3.0)
+        child = cmds.polyCube(name=f"{prefix}_child")[0]
+        cmds.parent(child, grp)
+        cmds.setAttr(f"{child}.rotateZ", 35.0)
+        return grp, child
+
+    def test_translate_connection_survives_the_fix(self):
+        _grp, child = self._sheared_child("tdc_t")
+        drv = cmds.spaceLocator(name="tdc_t_drv")[0]
+        cmds.setAttr(f"{drv}.translate", 1.0, 2.0, 3.0)
+        cmds.connectAttr(f"{drv}.translate", f"{child}.translate")
+
+        fixed = TransformDiagnostics.fix_non_orthogonal_axes(
+            objects=[child], quiet=True
+        )
+
+        self.assertEqual([f.split("|")[-1] for f in fixed], [child])
+        self.assertEqual(TransformDiagnostics.get_non_orthogonal([child]), [])
+        self.assertEqual(
+            cmds.listConnections(f"{child}.translate", source=True, plugs=True),
+            [f"{drv}.translate"],
+        )
+
+    def test_driven_rotate_skipped_by_default_and_reported(self):
+        _grp, child = self._sheared_child("tdc_r")
+        drv = cmds.spaceLocator(name="tdc_r_drv")[0]
+        cmds.setAttr(f"{drv}.rotateZ", 35.0)
+        cmds.connectAttr(f"{drv}.rotateZ", f"{child}.rotateZ", force=True)
+
+        detail = TransformDiagnostics.get_non_orthogonal([child], detailed=True)
+        self.assertEqual(detail[child]["driven"], [f"{drv}.rotateZ"])
+
+        fixed = TransformDiagnostics.fix_non_orthogonal_axes(
+            objects=[child], quiet=True
+        )
+        self.assertEqual(fixed, [])
+        # Untouched: still flagged, connection intact.
+        self.assertEqual(TransformDiagnostics.get_non_orthogonal([child]), [child])
+        self.assertEqual(
+            cmds.listConnections(f"{child}.rotateZ", source=True, plugs=True),
+            [f"{drv}.rotateZ"],
+        )
+        # Dry run excludes it too — the return is the would-fix list.
+        self.assertEqual(
+            TransformDiagnostics.fix_non_orthogonal_axes(
+                objects=[child], dry_run=True, quiet=True
+            ),
+            [],
+        )
+
+    def test_break_connections_fixes_and_disconnects(self):
+        _grp, child = self._sheared_child("tdc_b")
+        drv = cmds.spaceLocator(name="tdc_b_drv")[0]
+        cmds.setAttr(f"{drv}.rotateZ", 35.0)
+        cmds.connectAttr(f"{drv}.rotateZ", f"{child}.rotateZ", force=True)
+
+        fixed = TransformDiagnostics.fix_non_orthogonal_axes(
+            objects=[child], quiet=True, break_connections=True
+        )
+
+        self.assertEqual([f.split("|")[-1] for f in fixed], [child])
+        self.assertEqual(TransformDiagnostics.get_non_orthogonal([child]), [])
+        self.assertFalse(
+            cmds.listConnections(f"{child}.rotateZ", source=True, plugs=True)
+        )
+
+    def test_store_restore_contract_survives_the_fix(self):
+        """A stored-then-frozen object later fixed still restores fully."""
+        cube = cmds.polyCube(name="tdc_store")[0]
+        cmds.setAttr(f"{cube}.rotateZ", 25.0)
+        cmds.xform(cube, shear=(0.4, 0.0, 0.0))
+        XformUtils.store_transforms(cube, accumulate=True)
+        XformUtils.freeze_transforms(cube, force=True)
+        # New shear + rotation for the fix to bake.
+        cmds.xform(cube, shear=(0.3, 0.0, 0.0))
+        cmds.setAttr(f"{cube}.rotateZ", 10.0)
+
+        TransformDiagnostics.fix_non_orthogonal_axes(objects=[cube], quiet=True)
+        self.assertEqual(TransformDiagnostics.get_non_orthogonal([cube]), [])
+
+        XformUtils.restore_transforms(cube)
+        # Both freezes' rotations compose: 25 (panel) + 10 (fix).
+        self.assertAlmostEqual(cmds.getAttr(f"{cube}.rotateZ"), 35.0, places=3)
 
 
 class TestUvSetCleanupResult(QuickTestCase):

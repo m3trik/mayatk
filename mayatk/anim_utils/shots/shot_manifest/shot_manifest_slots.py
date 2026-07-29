@@ -14,8 +14,6 @@ Range resolution is delegated to :func:`._range_resolver.resolve_ranges`.
 from typing import Dict, List, Optional, Tuple
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     Detection,
@@ -1051,7 +1049,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         )
 
         self.ui.header.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Shot Manifest",
                 body="Build and validate shots from a CSV file or by generating from scene animation.",
                 sections=[

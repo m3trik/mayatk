@@ -7,8 +7,8 @@
 -- Requires RizomUV >= 2022.0: running both segmenters in one Auto block
 -- access-violates 2020.1 (probed) -- so this preset is version-gated
 -- (hidden from the panel combo and refused by the bridge below the gate).
--- Effect verification on a >= 2022 install is still owed -- see
--- docs/rizom_bridge_upgrade_plan.md.
+-- Effect verification on a >= 2022 install is still owed -- probe it with
+-- test/rizom_headless_probe.py.
 -- @min_rizom: 2022.0
 
 -- 0. Weld First (default on): weld ALL existing seams so the auto-seam

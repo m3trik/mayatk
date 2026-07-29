@@ -8,8 +8,6 @@ try:
 except ModuleNotFoundError as error:
     print(__file__, error)
 
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # from this package:
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils.attributes._attributes import Attributes
@@ -411,7 +409,7 @@ class ColorIdSlots(ColorId):
         # Gesture-scoped window: pin button + auto-hide on key_show release.
         widget.config_buttons("menu", "collapse", "pin")
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Color ID",
                 body="Assign colors to scene objects through any combination "
                 "of four channels: material, outliner tint, wireframe "
@@ -432,7 +430,7 @@ class ColorIdSlots(ColorId):
                         [
                             "<b>Reset Colors</b> — clear assignments on the "
                             f"current selection (or every geometry node with "
-                            f"{TooltipFormat.kbd('Ctrl')}-click).",
+                            f"{self.sb.tooltip.kbd('Ctrl')}-click).",
                             "<b>Remove Vertex Colors</b> — clear vertex-color "
                             "data without touching other channels.",
                         ],

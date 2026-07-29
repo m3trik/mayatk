@@ -10,8 +10,6 @@ except ImportError:
 from typing import List, Tuple, Optional
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # from this package:
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.core_utils._core_utils import CoreUtils
@@ -361,7 +359,7 @@ class WheelRigSlots:
         cmb_space = widget.menu.add(
             "QComboBox",
             setObjectName="cmb_space",
-            setToolTip=TooltipFormat.fmt(
+            setToolTip=self.sb.tooltip.fmt(
                 title="Space",
                 bullets=[
                     "<b>Local</b> (default) \u2014 reads the driver's local "
@@ -380,7 +378,7 @@ class WheelRigSlots:
         cmb_space.currentTextChanged.connect(self._on_space_changed)
 
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Wheel Rig",
                 body="Drive wheel rotation from a control's linear movement. "
                 "Wheel diameter (Wheel Height) and travel axis determine the "
@@ -391,7 +389,7 @@ class WheelRigSlots:
                         [
                             "Select one or more <b>wheel</b> objects "
                             "(or locators driving them).",
-                            f"{TooltipFormat.kbd('Shift')}-select the <b>driver / control</b> "
+                            f"{self.sb.tooltip.kbd('Shift')}-select the <b>driver / control</b> "
                             "object last.",
                             "Click <b>Rig Rotation</b>.",
                         ],
@@ -539,7 +537,7 @@ class WheelRigSlots:
         ui = self.ui
 
         ui.txt000.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Rig Name",
                 body="Base name for the expression (and its decomposeMatrix "
                 "node, in World Space mode) that this rig creates.",
@@ -547,7 +545,7 @@ class WheelRigSlots:
             )
         )
         ui.s000.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Wheel Height",
                 body="Wheel diameter, used to convert the driver's travel into "
                 "rotation — a larger wheel turns slower over the same distance.",
@@ -558,7 +556,7 @@ class WheelRigSlots:
             )
         )
         ui.cmb000.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Movement → Rotation Axis",
                 body="Which translation axis drives which rotation axis.",
                 rows=[
@@ -569,7 +567,7 @@ class WheelRigSlots:
             )
         )
         ui.chk010.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Freeze Transforms",
                 body="Freezes <b>translation</b> on the driver and wheel(s) "
                 "before rigging, so travel is measured from a clean zero.",
@@ -579,7 +577,7 @@ class WheelRigSlots:
             )
         )
         ui.b000.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Rig Rotation",
                 body="Creates (or updates) the expression that spins the "
                 "wheel(s) from the driver's movement.",
@@ -603,7 +601,7 @@ class WheelRigSlots:
             "QPushButton",
             setText="Get Wheel Size",
             setObjectName="b010",
-            setToolTip=TooltipFormat.fmt(
+            setToolTip=self.sb.tooltip.fmt(
                 title="Get Wheel Size",
                 body="Sets <b>Wheel Height</b> from the selected object's "
                 "bounding box, based on the current movement axis.",

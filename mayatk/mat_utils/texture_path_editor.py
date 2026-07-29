@@ -13,8 +13,6 @@ from pythontk.file_utils._file_utils import FileUtils
 from pythontk.core_utils.engines.textures.map_factory import MapFactory
 from pythontk.str_utils.fuzzy_matcher import FuzzyMatcher
 from uitk.widgets.footer import FooterStatusController
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # From this package:
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.env_utils._env_utils import EnvUtils
@@ -177,7 +175,7 @@ class TexturePathEditorSlots:
         btn_sel_abs.clicked.connect(self.select_absolute_paths)
 
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Texture Path Editor",
                 body="Inspect and fix file-node texture paths. Path commands "
                 "operate on selected rows if any, otherwise on all file "

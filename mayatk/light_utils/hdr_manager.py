@@ -46,8 +46,6 @@ except ImportError as error:
     print(__file__, error)
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.script_job_manager import ScriptJobManager
@@ -774,7 +772,7 @@ class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             setToolTip="Delete the skydome and its connected file / place2d nodes.",
         )
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="HDR Manager",
                 body="Manage the scene's Arnold HDR environment lighting "
                 "(aiSkyDomeLight + file + place2dTexture network).",

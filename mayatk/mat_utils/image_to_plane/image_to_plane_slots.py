@@ -12,8 +12,6 @@ except ImportError:
     pass
 
 import mayatk as mtk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 
 class ImageToPlaneSlots:
     """Switchboard slots for the Image to Plane UI.
@@ -55,7 +53,7 @@ class ImageToPlaneSlots:
         )
 
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Image to Plane",
                 body="Creates textured polygon planes from image files — one "
                 "plane per image, sized to its aspect ratio and assigned a "

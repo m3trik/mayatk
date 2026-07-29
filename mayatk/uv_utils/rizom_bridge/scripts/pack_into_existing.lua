@@ -15,7 +15,7 @@
 -- so this preset is version-gated -- hidden from the panel combo and
 -- refused by the bridge below the gate. The recipe follows the official
 -- RizomUVLink parameter reference; live verification on a >= 2022.2
--- install is still owed (see docs/rizom_bridge_upgrade_plan.md).
+-- install is still owed (probe it with test/rizom_headless_probe.py).
 -- @min_rizom: 2022.2
 
 ZomSelect({

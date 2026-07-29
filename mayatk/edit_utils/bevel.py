@@ -2,7 +2,6 @@
 # coding=utf-8
 # from this package:
 import maya.cmds as cmds
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 from mayatk.core_utils.preview import Preview, OperationError
 from mayatk.core_utils.components import Components
 
@@ -138,7 +137,7 @@ class BevelSlots:
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Bevel",
                 body="Add chamfer bevels to selected polygon edges.",
                 steps=[

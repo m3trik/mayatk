@@ -44,8 +44,6 @@ except ImportError as error:
     print(__file__, error)
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # from this package:
 from mayatk.core_utils.preview import Preview, OperationError
 from mayatk.uv_utils._uv_utils import UvUtils
@@ -756,7 +754,7 @@ class CurveToTubeSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Curve to Tube",
                 body="Sweep a circular profile along selected NURBS curves to "
                 "build a tube, output as a NURBS surface or a polygon mesh.",

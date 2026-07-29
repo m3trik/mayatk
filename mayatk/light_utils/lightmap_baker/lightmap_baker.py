@@ -50,11 +50,6 @@ except ImportError as error:
 
 import pythontk as ptk
 
-try:  # UI-only helper; keep the headless workflow import clean if uitk is absent
-    from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-except ImportError:
-    TooltipFormat = None
-
 from mayatk.mat_utils.texture_baker import TextureBaker
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.node_utils._node_utils import NodeUtils
@@ -1458,105 +1453,104 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             setToolTip="Open the project's sourceimages folder (where bakes are "
             "written) in Explorer.",
         )
-        if TooltipFormat is not None:
-            widget.set_help_text(
-                TooltipFormat.fmt(
-                    title="Lightmap Baker",
-                    body="Bake Maya scene lighting into a texture per object for "
-                    "game engines (Unity-first; the fallback when Bakery isn't an "
-                    "option) and wire it up in one step — no manual export prep.",
-                    steps=[
-                        "Choose a <b>Scope</b> — bake the <b>Selected</b> objects "
-                        "(default), all <b>Visible</b> meshes, or the whole "
-                        "<b>Scene</b>.",
-                        "Pick a <b>Mode</b> and <b>Packing</b> (see below) and a "
-                        "<b>Quality</b> preset (fills Resolution / Samples; override "
-                        "either to taste).",
-                        "Press <b>Bake Lightmaps</b>, then export the FBX. "
-                        "<b>Include the hidden <i>data_export</i> node</b> in the "
-                        "export (use <i>Export All</i>, or mayatk's Scene Exporter, "
-                        "which adds it automatically) — a plain <i>Export Selection</i> "
-                        "of just the meshes omits it and the Unity wiring won't ship.",
-                    ],
-                    sections=[
-                        (
-                            "Mode: Lighting Only — real lightmapping (default)",
-                            [
-                                "This is how you normally light-map. Bakes <i>lighting "
-                                "only</i> (white-card irradiance) onto a second UV "
-                                "channel; your full PBR material — albedo, normal, "
-                                "metallic/roughness — is <b>kept untouched</b>.",
-                                "The lightmap is a <b>separate texture asset</b> (written "
-                                "to the project's <i>sourceimages</i>, alongside your "
-                                "other maps) — the engine multiplies albedo × lightmap "
-                                "at runtime and your normal map still lights normally. "
-                                "Exactly how Unity's own lightmaps work.",
-                                "The export is <b>self-contained</b>: the mesh's UV2 "
-                                "samples the map directly, so it works in any engine "
-                                "(or any shader that reads a lightmap on UV2) with no "
-                                "extra setup. Import <i>sourceimages</i> as usual so "
-                                "the lightmap is in the project.",
-                                "To bind Unity's <b>native</b> lightmap slots "
-                                "(standard Lit shaders, no custom work), drop unitytk's "
-                                "<i>LightmapMetadataController.cs</i> into the project "
-                                "once — it reads the FBX wiring and assigns "
-                                "everything on import. Optional: without it you wire "
-                                "the map by hand or sample UV2 in your shader.",
-                                "Use this for normal game assets — nothing is thrown "
-                                "away.",
-                                "<b>Packing</b>: <i>Per-Object</i> (default) gives each "
-                                "object its own full-resolution lightmap. For many small "
-                                "objects, <i>Atlas by Material</i> consolidates everything "
-                                "sharing a material into <b>one shared map</b> — each "
-                                "object's lightmap UVs are repacked into its atlas rect "
-                                "(area-weighted, so bigger objects get more texels), so "
-                                "the atlas needs <b>no engine-side binding at all</b>. "
-                                "Fewer textures, no naming collisions. The bake itself "
-                                "is unchanged either way, and Revert restores the UVs.",
-                            ],
-                        ),
-                        (
-                            "Mode: Fused Unlit — flatten to one texture (NOT lightmapping)",
-                            [
-                                "<b>Not</b> a lightmap. Bakes albedo × lighting into one "
-                                "HDR texture and assigns an <i>unlit</i> material, so the "
-                                "surface becomes a single flat painted image — normal, "
-                                "metallic and roughness are <b>discarded</b> and it can "
-                                "never be re-lit.",
-                                "Only for things you intend to flatten forever: a skybox, "
-                                "a far LOD, or a lowest-end / mobile prop where one "
-                                "texture lookup is the whole budget. It exports to a "
-                                "stock <i>Unlit/Texture</i> shader with zero setup.",
-                                "If your asset has a normal map you want to keep, this is "
-                                "the wrong mode — use <b>Lighting Only</b>.",
-                            ],
-                        ),
-                        (
-                            "Non-destructive",
-                            [
-                                "Nothing is deleted — the source material and UVs stay "
-                                "in the scene and the restore data is stamped on the "
-                                "mesh.",
-                                "<b>Revert to Source</b> (header menu) undoes the wiring "
-                                "on the selected, or all baked, objects.",
-                                "Re-baking auto-reverts first, so it always bakes the "
-                                "real material.",
-                            ],
-                        ),
-                    ],
-                    notes=[
-                        "The lightmap texture (in <i>sourceimages</i>) and its UV "
-                        "channel both ride along regardless — <i>data_export</i> only "
-                        "carries the optional wiring that lets Unity's native "
-                        "lightmap slots be bound automatically. Without it nothing "
-                        "is lost: the mesh's UV2 already samples the right texels.",
-                        "Arnold (mtoa) is strongly recommended — it provides the "
-                        "HDR output and alpha coverage the dilation relies on. "
-                        "Without it the bake falls back to an LDR convertSolidTx "
-                        "pass and dilation no-ops.",
-                    ],
-                )
+        widget.set_help_text(
+            self.sb.tooltip.fmt(
+                title="Lightmap Baker",
+                body="Bake Maya scene lighting into a texture per object for "
+                "game engines (Unity-first; the fallback when Bakery isn't an "
+                "option) and wire it up in one step — no manual export prep.",
+                steps=[
+                    "Choose a <b>Scope</b> — bake the <b>Selected</b> objects "
+                    "(default), all <b>Visible</b> meshes, or the whole "
+                    "<b>Scene</b>.",
+                    "Pick a <b>Mode</b> and <b>Packing</b> (see below) and a "
+                    "<b>Quality</b> preset (fills Resolution / Samples; override "
+                    "either to taste).",
+                    "Press <b>Bake Lightmaps</b>, then export the FBX. "
+                    "<b>Include the hidden <i>data_export</i> node</b> in the "
+                    "export (use <i>Export All</i>, or mayatk's Scene Exporter, "
+                    "which adds it automatically) — a plain <i>Export Selection</i> "
+                    "of just the meshes omits it and the Unity wiring won't ship.",
+                ],
+                sections=[
+                    (
+                        "Mode: Lighting Only — real lightmapping (default)",
+                        [
+                            "This is how you normally light-map. Bakes <i>lighting "
+                            "only</i> (white-card irradiance) onto a second UV "
+                            "channel; your full PBR material — albedo, normal, "
+                            "metallic/roughness — is <b>kept untouched</b>.",
+                            "The lightmap is a <b>separate texture asset</b> (written "
+                            "to the project's <i>sourceimages</i>, alongside your "
+                            "other maps) — the engine multiplies albedo × lightmap "
+                            "at runtime and your normal map still lights normally. "
+                            "Exactly how Unity's own lightmaps work.",
+                            "The export is <b>self-contained</b>: the mesh's UV2 "
+                            "samples the map directly, so it works in any engine "
+                            "(or any shader that reads a lightmap on UV2) with no "
+                            "extra setup. Import <i>sourceimages</i> as usual so "
+                            "the lightmap is in the project.",
+                            "To bind Unity's <b>native</b> lightmap slots "
+                            "(standard Lit shaders, no custom work), drop unitytk's "
+                            "<i>LightmapMetadataController.cs</i> into the project "
+                            "once — it reads the FBX wiring and assigns "
+                            "everything on import. Optional: without it you wire "
+                            "the map by hand or sample UV2 in your shader.",
+                            "Use this for normal game assets — nothing is thrown "
+                            "away.",
+                            "<b>Packing</b>: <i>Per-Object</i> (default) gives each "
+                            "object its own full-resolution lightmap. For many small "
+                            "objects, <i>Atlas by Material</i> consolidates everything "
+                            "sharing a material into <b>one shared map</b> — each "
+                            "object's lightmap UVs are repacked into its atlas rect "
+                            "(area-weighted, so bigger objects get more texels), so "
+                            "the atlas needs <b>no engine-side binding at all</b>. "
+                            "Fewer textures, no naming collisions. The bake itself "
+                            "is unchanged either way, and Revert restores the UVs.",
+                        ],
+                    ),
+                    (
+                        "Mode: Fused Unlit — flatten to one texture (NOT lightmapping)",
+                        [
+                            "<b>Not</b> a lightmap. Bakes albedo × lighting into one "
+                            "HDR texture and assigns an <i>unlit</i> material, so the "
+                            "surface becomes a single flat painted image — normal, "
+                            "metallic and roughness are <b>discarded</b> and it can "
+                            "never be re-lit.",
+                            "Only for things you intend to flatten forever: a skybox, "
+                            "a far LOD, or a lowest-end / mobile prop where one "
+                            "texture lookup is the whole budget. It exports to a "
+                            "stock <i>Unlit/Texture</i> shader with zero setup.",
+                            "If your asset has a normal map you want to keep, this is "
+                            "the wrong mode — use <b>Lighting Only</b>.",
+                        ],
+                    ),
+                    (
+                        "Non-destructive",
+                        [
+                            "Nothing is deleted — the source material and UVs stay "
+                            "in the scene and the restore data is stamped on the "
+                            "mesh.",
+                            "<b>Revert to Source</b> (header menu) undoes the wiring "
+                            "on the selected, or all baked, objects.",
+                            "Re-baking auto-reverts first, so it always bakes the "
+                            "real material.",
+                        ],
+                    ),
+                ],
+                notes=[
+                    "The lightmap texture (in <i>sourceimages</i>) and its UV "
+                    "channel both ride along regardless — <i>data_export</i> only "
+                    "carries the optional wiring that lets Unity's native "
+                    "lightmap slots be bound automatically. Without it nothing "
+                    "is lost: the mesh's UV2 already samples the right texels.",
+                    "Arnold (mtoa) is strongly recommended — it provides the "
+                    "HDR output and alpha coverage the dilation relies on. "
+                    "Without it the bake falls back to an LDR convertSolidTx "
+                    "pass and dilation no-ops.",
+                ],
             )
+        )
 
     # ------------------------------------------------------------------
     # Quality preset combobox

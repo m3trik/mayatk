@@ -23,11 +23,6 @@ except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
 
-try:  # UI-only helper; keep the headless ArnoldBridge import clean if uitk is absent
-    from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-except Exception:
-    TooltipFormat = None
-
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
@@ -612,40 +607,39 @@ class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin):
             setToolTip="Select every scene material that currently has an "
             "Arnold bridge.",
         )
-        if TooltipFormat is not None:
-            widget.set_help_text(
-                TooltipFormat.fmt(
-                    title="Arnold Render Bridge",
-                    body="Attach (or remove) an Arnold <i>aiStandardSurface</i> "
-                    "shader alongside a game material so the asset renders in "
-                    "Arnold — without disturbing the Stingray / Standard Surface "
-                    "material that exports to FBX.",
-                    steps=[
-                        "Pick a <b>Scope</b>: the selected objects' materials, or "
-                        "every scene material.",
-                        "<b>Add Network</b> mirrors each material's textures onto a "
-                        "new Arnold shader wired to the shading group's "
-                        "<i>aiSurfaceShader</i> slot.",
-                        "<b>Remove Network</b> deletes the Arnold network (the "
-                        "exported material is untouched). Enable <b>Force</b> to "
-                        "rebuild a material that already has a network.",
-                    ],
-                    sections=[
-                        (
-                            "Scene-only by design",
-                            [
-                                "The bridge drives <i>aiSurfaceShader</i>, which FBX "
-                                "doesn't represent — only the Stingray / Standard "
-                                "Surface material on <i>surfaceShader</i> exports. The "
-                                "Arnold network never leaves the Maya scene.",
-                                "It owns dedicated file nodes, so Remove cleanly deletes "
-                                "the whole Arnold island and the base material's "
-                                "textures stay put.",
-                            ],
-                        ),
-                    ],
-                )
+        widget.set_help_text(
+            self.sb.tooltip.fmt(
+                title="Arnold Render Bridge",
+                body="Attach (or remove) an Arnold <i>aiStandardSurface</i> "
+                "shader alongside a game material so the asset renders in "
+                "Arnold — without disturbing the Stingray / Standard Surface "
+                "material that exports to FBX.",
+                steps=[
+                    "Pick a <b>Scope</b>: the selected objects' materials, or "
+                    "every scene material.",
+                    "<b>Add Network</b> mirrors each material's textures onto a "
+                    "new Arnold shader wired to the shading group's "
+                    "<i>aiSurfaceShader</i> slot.",
+                    "<b>Remove Network</b> deletes the Arnold network (the "
+                    "exported material is untouched). Enable <b>Force</b> to "
+                    "rebuild a material that already has a network.",
+                ],
+                sections=[
+                    (
+                        "Scene-only by design",
+                        [
+                            "The bridge drives <i>aiSurfaceShader</i>, which FBX "
+                            "doesn't represent — only the Stingray / Standard "
+                            "Surface material on <i>surfaceShader</i> exports. The "
+                            "Arnold network never leaves the Maya scene.",
+                            "It owns dedicated file nodes, so Remove cleanly deletes "
+                            "the whole Arnold island and the base material's "
+                            "textures stay put.",
+                        ],
+                    ),
+                ],
             )
+        )
 
     # -------------------------------------------------------------------- combo
     def cmb000_init(self, widget) -> None:

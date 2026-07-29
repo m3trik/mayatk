@@ -156,7 +156,7 @@
           </size>
          </property>
          <property name="toolTip">
-          <string>Name prefix for the new blendShape node (becomes &lt;prefix&gt;_BS).</string>
+          <string>Name prefix for the new blendShape node (becomes &amp;lt;prefix&amp;gt;_BS).</string>
          </property>
          <property name="placeholderText">
           <string>Name prefix:	morph</string>

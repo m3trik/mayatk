@@ -2,7 +2,6 @@
 # coding=utf-8
 # from this package:
 import maya.cmds as cmds
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.core_utils.preview import Preview
@@ -140,7 +139,7 @@ class CutOnAxisSlots:
         # Gesture-scoped window: pin button + auto-hide on key_show release.
         widget.config_buttons("menu", "collapse", "pin")
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Cut on Axis",
                 body="Slice selected meshes along an axis, then optionally "
                 "delete or mirror the cut half.",

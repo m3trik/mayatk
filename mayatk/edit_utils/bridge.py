@@ -6,7 +6,6 @@ try:
 except ImportError:
     cmds = None
 
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 from mayatk.core_utils.preview import Preview, OperationError
 from mayatk.core_utils.components import Components
 
@@ -202,7 +201,7 @@ class BridgeSlots:
         # Gesture-scoped window: pin button + auto-hide on key_show release.
         widget.config_buttons("menu", "collapse", "pin")
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Bridge",
                 body="Connect two open edge loops with new polygon faces.",
                 steps=[

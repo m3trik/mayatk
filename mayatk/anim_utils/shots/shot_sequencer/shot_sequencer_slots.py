@@ -30,8 +30,6 @@ from uitk.widgets.sequencer._sequencer import (
     _COMMON_ATTRIBUTES,
     _DEFAULT_ATTRIBUTE_COLORS,
 )
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # Arrow-key labels used in keyboard-shortcut help. Defined as module
 # constants so the help builder can pass them into kbd() without
 # triggering Python 3.11's "backslash inside f-string expression" error
@@ -2852,7 +2850,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         cmb_scope = widget.menu.add(
             _WCB2,
             setObjectName="cmb_track_order",
-            setToolTip=TooltipFormat.fmt(
+            setToolTip=self.sb.tooltip.fmt(
                 title="Track Order",
                 bullets=[
                     "<b>Visible:</b> Show objects from visible shots only.",
@@ -2916,7 +2914,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             setToolTip="Open shared shot generation, gap, and editing settings.",
         )
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Shot Sequencer",
                 body="Visual timeline editor for per-shot animation with ripple editing, gap management, markers, and audio tracks.",
                 sections=[
@@ -2969,31 +2967,31 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                             # constants keeps the surface text readable in tools
                             # that auto-escape non-ASCII on save.
                             (
-                                TooltipFormat.kbd(_KB_LEFT)
+                                self.sb.tooltip.kbd(_KB_LEFT)
                                 + " / "
-                                + TooltipFormat.kbd(_KB_RIGHT)
+                                + self.sb.tooltip.kbd(_KB_RIGHT)
                                 + " \u2014 prev / next key &nbsp;\u00b7&nbsp; "
-                                + TooltipFormat.kbd("Shift", _KB_LEFT)
+                                + self.sb.tooltip.kbd("Shift", _KB_LEFT)
                                 + " / "
-                                + TooltipFormat.kbd("Shift", _KB_RIGHT)
+                                + self.sb.tooltip.kbd("Shift", _KB_RIGHT)
                                 + " \u2014 step \u00b11 frame"
                             ),
                             (
-                                TooltipFormat.kbd("Home")
+                                self.sb.tooltip.kbd("Home")
                                 + " / "
-                                + TooltipFormat.kbd("End")
+                                + self.sb.tooltip.kbd("End")
                                 + " \u2014 start / end &nbsp;\u00b7&nbsp; "
-                                + TooltipFormat.kbd("F")
+                                + self.sb.tooltip.kbd("F")
                                 + " \u2014 frame shot &nbsp;\u00b7&nbsp; "
-                                + TooltipFormat.kbd("M")
+                                + self.sb.tooltip.kbd("M")
                                 + " \u2014 add marker"
                             ),
                             (
-                                TooltipFormat.kbd("Ctrl", "Z")
+                                self.sb.tooltip.kbd("Ctrl", "Z")
                                 + " \u2014 undo &nbsp;\u00b7&nbsp; "
-                                + TooltipFormat.kbd("Ctrl", "Shift", "Z")
+                                + self.sb.tooltip.kbd("Ctrl", "Shift", "Z")
                                 + " \u2014 redo &nbsp;\u00b7&nbsp; "
-                                + TooltipFormat.kbd("Del")
+                                + self.sb.tooltip.kbd("Del")
                                 + " \u2014 delete keys"
                             ),
                         ],

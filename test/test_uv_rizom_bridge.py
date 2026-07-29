@@ -16,12 +16,14 @@ the failure modes the standalone smoketest cannot:
 """
 
 import os
+import re
 import unittest
 import tempfile
 from pathlib import Path
 
 import maya.cmds as cmds
 
+from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.uv_utils.rizom_bridge._rizom_bridge import RizomUVBridge, _SCRIPT_DIR
 from mayatk.uv_utils.rizom_bridge import parameters as _params
 
@@ -325,13 +327,56 @@ class TestRizomBridgeLogic(MayaTkTestCase):
     def test_new_params_registered(self):
         """Phase 1/2 knobs exist with the expected kinds; the scaling enums
         now offer the scale-preservation values."""
-        self.assertEqual(_params.PARAMS["PACK_SPACING"].kind, "float")
-        self.assertEqual(_params.PARAMS["PACK_MARGIN"].kind, "float")
         self.assertEqual(_params.PARAMS["FIT_CONES"].kind, "bool")
         scale_labels = [c[0] for c in _params.PARAMS["SCALING_MODE"].choices]
         self.assertTrue(any("Keep current scale" in l for l in scale_labels))
         layout_vals = [c[1] for c in _params.PARAMS["LAYOUT_SCALING_MODE"].choices]
         self.assertIn(0, layout_vals)  # "Keep positions" for scale preservation
+
+    def test_pack_gutter_is_derived_not_exposed(self):
+        """Island spacing / tile margin are computed from the shared UV-padding
+        rule instead of being user knobs -- so a Rizom round-trip and an in-Maya
+        u3dLayout repack land on the same gutter."""
+        for key in _params.DERIVED_KEYS:
+            self.assertNotIn(key, _params.PARAMS, f"{key} must not be a UI knob")
+            self.assertNotIn(key, _params.Parameters.defaults())
+        # The pack block still references both, so they must be substituted.
+        pack = _params.Parameters.expand_includes(
+            (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        )
+        for key in _params.DERIVED_KEYS:
+            self.assertIn(f"__{key}__", pack)  # noqa: P103
+
+        pad = UvUtils.calculate_uv_padding(1024, normalize=True)
+        derived = _params.Parameters.derived_values({"PACK_RESOLUTION": 1024})
+        self.assertAlmostEqual(derived["PACK_SPACING"], pad)
+        self.assertAlmostEqual(derived["PACK_MARGIN"], pad / 2)
+        # Normalized padding is map-size-invariant: same UV-unit gutter at 4096.
+        self.assertAlmostEqual(
+            _params.Parameters.derived_values({"PACK_RESOLUTION": 4096})[
+                "PACK_SPACING"
+            ],
+            pad,
+        )
+        # A stale value from a saved preset must not win over the derived one.
+        ctx = _params.Parameters.render_context(
+            {"PACK_RESOLUTION": 1024, "PACK_SPACING": 0.5, "PACK_MARGIN": 0.5}
+        )
+        self.assertEqual(float(ctx["PACK_SPACING"]), pad)
+        self.assertEqual(float(ctx["PACK_MARGIN"]), pad / 2)
+
+    def test_pack_script_substitutes_derived_gutter(self):
+        """The constructed script carries real numbers, not leftover tokens."""
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        pack = (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        script = bridge._construct_full_script(pack)
+        pad = UvUtils.calculate_uv_padding(1024, normalize=True)
+        for key in _params.DERIVED_KEYS:
+            self.assertNotIn(f"__{key}__", script)  # noqa: P103
+        self.assertIn(f"MarginSize={pad / 2}", script)
+        # Which spelling survives is Rizom-version-dependent (SpacingSize <= 2021,
+        # PaddingSize >= 2022) -- either is correct here, the NUMBER is the point.
+        self.assertRegex(script, rf"(Spacing|Padding)Size={re.escape(str(pad))}")
 
     def test_organic_exposes_fitcones_hybrid_gated(self):
         """FIT_CONES is a live organic knob; unwrap_hybrid is preset-gated 2022."""

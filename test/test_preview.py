@@ -25,6 +25,7 @@ except ImportError:
 
 from base_test import MayaTkTestCase
 from mayatk.core_utils.preview import CleanupContract, Preview
+from mayatk.node_utils._node_utils import NodeUtils
 import maya.cmds as cmds
 
 
@@ -639,6 +640,125 @@ class TestPreviewSelectResult(MayaTkTestCase):
         for fn in captured:
             fn()
         self.assertNotIn(mesh_long, cmds.ls(selection=True, long=True) or [])  # settled
+
+
+class TestPreviewPrepareOperation(MayaTkTestCase):
+    """``prepare_operation`` — the one-shot precondition hook.
+
+    Some operations need scene state in place that must NOT participate in
+    rollback. Mirror's case: forking an instanced shape inside
+    ``perform_operation`` is unreversible — rollback deletes the forked shape
+    as a *created* node, and the preserved-original restore never fires
+    (it only triggers for originals that were deleted), leaving the transform
+    empty. Running it once at ``enable``, outside any contract, keeps every
+    later refresh/rollback cycle clean.
+    """
+
+    class _PrepareOp(MockOperation):
+        def __init__(self):
+            super().__init__()
+            self.prepared = []
+
+        def prepare_operation(self, objects):
+            self.prepared.append(list(objects))
+            NodeUtils.uninstance(objects)
+
+    def _preview(self, op):
+        preview = Preview(
+            op,
+            QtWidgets.QCheckBox(),
+            QtWidgets.QPushButton(),
+            message_func=lambda m: None,
+        )
+        self.addCleanup(preview.cleanup)
+        return preview
+
+    def test_hook_runs_once_at_enable_before_the_operation(self):
+        mesh = cmds.polyCube(name="prep_hook")[0]
+        op = self._PrepareOp()
+        preview = self._preview(op)
+
+        cmds.select(mesh)
+        preview.enable()
+
+        self.assertEqual(len(op.prepared), 1, "prepare_operation must run once")
+        self.assertEqual(op.perform_count, 1)
+        # Refreshing re-runs the operation but NOT the precondition.
+        preview.refresh()
+        self.assertEqual(len(op.prepared), 1, "prepare must not re-run on refresh")
+        self.assertEqual(op.perform_count, 2)
+
+    def test_instanced_mirror_round_trips_through_preview(self):
+        """The regression this hook exists for: previewing a mirror on an
+        instanced object and cancelling must leave BOTH objects intact.
+        Pre-hook this emptied them — rollback deleted the forked shape and the
+        transforms survived shapeless.
+        """
+        src = cmds.polyCube(name="prep_src", width=2, height=1, depth=1)[0]
+        sib = cmds.instance(src, name="prep_sib")[0]
+        cmds.move(10, 0, 0, sib)
+
+        op = self._PrepareOp()
+        preview = self._preview(op)
+        cmds.select(src)
+        preview.enable()  # prepare (fork) + first preview build
+
+        # The link is broken outside the contract...
+        for node in (src, sib):
+            shape = cmds.listRelatives(node, shapes=True, ni=True, fullPath=True)[0]
+            self.assertEqual(
+                len(cmds.listRelatives(shape, allParents=True, fullPath=True) or []), 1
+            )
+
+        preview.disable()  # rollback
+
+        # ...and both objects survive the rollback with their geometry.
+        for node in (src, sib):
+            self.assertTrue(cmds.objExists(node), f"{node} was destroyed")
+            self.assertTrue(
+                cmds.listRelatives(node, shapes=True, ni=True),
+                f"{node} was left shapeless by the rollback",
+            )
+            self.assertEqual(cmds.polyEvaluate(node, face=True), 6)
+
+    def test_failing_hook_aborts_the_enable(self):
+        """If the precondition can't be met, previewing isn't safe — the enable
+        must bail instead of running the operation, and must not leave any
+        half-populated capture state behind."""
+        mesh = cmds.polyCube(name="prep_fail")[0]
+
+        class _Boom(MockOperation):
+            def prepare_operation(self, objects):
+                raise RuntimeError("precondition failed")
+
+        op = _Boom()
+        preview = self._preview(op)
+        cmds.select(mesh)
+        preview.enable()
+
+        self.assertFalse(preview.is_enabled, "enable should have aborted")
+        self.assertEqual(op.perform_count, 0, "operation ran despite a failed prepare")
+        self.assertFalse(preview.operated_objects, "stale capture state after abort")
+
+    def test_hook_runs_before_capture(self):
+        """The hook precedes the snapshots, so they reflect the state the
+        preview actually starts from — not the pre-precondition scene."""
+        mesh = cmds.polyCube(name="prep_order")[0]
+        seen = {}
+
+        class _Order(MockOperation):
+            def prepare_operation(inner_self, objects):
+                seen["captured_at_prepare"] = list(preview._captured_objects)
+
+        op = _Order()
+        preview = self._preview(op)
+        cmds.select(mesh)
+        preview.enable()
+
+        self.assertEqual(
+            seen["captured_at_prepare"], [], "capture ran before prepare_operation"
+        )
+        self.assertTrue(preview._captured_objects, "capture never ran")
 
 
 if __name__ == "__main__":

@@ -11,8 +11,6 @@ except ImportError as error:
     print(__file__, error)
 import math
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # from this package:
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.core_utils.preview import Preview
@@ -229,7 +227,7 @@ class DuplicateLinearSlots:
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Duplicate Linear",
                 body="Duplicate selected objects along a linear path with "
                 "per-copy translate, rotate, and scale offsets.",

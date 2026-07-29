@@ -19,6 +19,7 @@ import pythontk as ptk
 
 from base_test import MayaTkTestCase
 import maya.cmds as cmds
+import maya.api.OpenMaya as om
 
 
 class TestEditUtils(MayaTkTestCase):
@@ -185,6 +186,95 @@ class TestEditUtils(MayaTkTestCase):
         )
         self.assertTrue(result)
         self.assertTrue(cmds.objExists(cube))
+
+    def test_mirror_separate_mode_on_instanced_source_keeps_both(self):
+        """Regression: separate mode (mergeMode=-1) runs polySeparate, which
+        consumes the source transform. On a SHARED shape that used to delete the
+        mirrored object AND every sibling instance — the whole selection vanished.
+        The separate path must fork the shape first regardless of `uninstance`.
+        """
+        src = cmds.polyCube(name="inst_mirror_src", width=2, height=1, depth=1)[0]
+        sib = cmds.instance(src, name="inst_mirror_sib")[0]
+        cmds.move(10, 0, 0, sib)
+        sib_faces_before = cmds.polyEvaluate(sib, face=True)
+
+        EditUtils.mirror(src, axis="x", pivot="object", mergeMode=-1)
+
+        # Both survive (pre-fix: neither did).
+        self.assertTrue(cmds.objExists(sib), "sibling instance was deleted")
+        self.assertTrue(
+            cmds.ls(f"{src}*", type="transform"), "source side vanished entirely"
+        )
+        # The untouched sibling keeps its own geometry — the mirror didn't leak
+        # into it through the shared shape.
+        self.assertEqual(cmds.polyEvaluate(sib, face=True), sib_faces_before)
+
+    def test_mirror_merge_mode_leaves_sibling_instances_alone(self):
+        """Mirroring always breaks the instance link first, so a merge-mode
+        mirror can no longer rewrite every other instance's geometry through
+        the shared shape."""
+        src = cmds.polyCube(name="merge_inst_src", width=2, height=1, depth=1)[0]
+        sib = cmds.instance(src, name="merge_inst_sib")[0]
+        cmds.move(10, 0, 0, sib)
+        sib_faces_before = cmds.polyEvaluate(sib, face=True)
+
+        EditUtils.mirror(src, axis="x", pivot="object", mergeMode=1)
+
+        self.assertTrue(cmds.objExists(sib))
+        self.assertEqual(
+            cmds.polyEvaluate(sib, face=True),
+            sib_faces_before,
+            "sibling instance was mirrored through the shared shape",
+        )
+        self.assertGreater(cmds.polyEvaluate(src, face=True), sib_faces_before)
+        # The link is gone: each transform now owns its shape.
+        for node in (src, sib):
+            shape = cmds.listRelatives(node, shapes=True, ni=True, fullPath=True)[0]
+            self.assertEqual(
+                len(cmds.listRelatives(shape, allParents=True, fullPath=True) or []),
+                1,
+                f"{node} shape still shared",
+            )
+
+    def test_mirror_instance_shares_shape_and_reflects(self):
+        """mirror_instance produces a LINKED copy (shared shape) reflected across
+        the plane — not new geometry."""
+        cmds.move(5, 0, 0, self.cube)
+        result = EditUtils.mirror_instance(self.cube, axis="x", pivot="world")
+        self.assertEqual(len(result), 1)
+        inst = result[0]
+
+        # Shape is shared with the source -> a real instance, not a duplicate.
+        shape = cmds.listRelatives(inst, shapes=True, ni=True, fullPath=True)[0]
+        parents = cmds.listRelatives(shape, allParents=True, fullPath=True) or []
+        self.assertEqual(len(parents), 2, "shape is not instanced")
+
+        # Reflected across the world YZ plane: +5 -> -5, and the transform is
+        # mirrored (negative determinant).
+        self.assertAlmostEqual(cmds.objectCenter(inst)[0], -5.0, places=3)
+        matrix = om.MMatrix(cmds.xform(inst, q=True, m=True, ws=True))
+        self.assertLess(matrix.det4x4(), 0, "instance is not mirrored")
+
+    def test_mirror_instance_object_pivot_uses_object_axes(self):
+        """With pivot='object' the plane rides the object's own axes, so a
+        rotated object mirrors about itself and its center doesn't move."""
+        cube = cmds.polyCube(name="rot_cube", w=2, h=2, d=2)[0]
+        cmds.move(7, 0, 0, cube)
+        cmds.rotate(0, 45, 0, cube)
+
+        before = cmds.objectCenter(cube)
+        inst = EditUtils.mirror_instance(cube, axis="x", pivot="object")[0]
+        after = cmds.objectCenter(inst)
+        for axis, b, a in zip("xyz", before, after):
+            self.assertAlmostEqual(a, b, places=3, msg=f"center moved on {axis}")
+        self.assertLess(
+            om.MMatrix(cmds.xform(inst, q=True, m=True, ws=True)).det4x4(), 0
+        )
+
+    def test_mirror_instance_invalid_axis_raises(self):
+        """A bad axis fails loudly rather than silently mirroring across X."""
+        with self.assertRaises(ValueError):
+            EditUtils.mirror_instance(self.cube, axis="w")
 
     def test_mirror_world_pivot(self):
         """Test mirror with world origin pivot."""
@@ -359,6 +449,72 @@ class TestEditUtils(MayaTkTestCase):
         for obj in result:
             self.assertLess(self._pivot_offset(obj), 0.01)  # each on its own center
         self.assertLess(self._pivot_offset(extracted), 0.01)
+
+    def test_detach_faces_across_multiple_objects(self):
+        """Faces spanning more than one object detach in one call.
+
+        Bug (live report, 2026-07-27): ``polyChipOff`` refuses a component list that
+        spans multiple objects — "RuntimeError: Doesn't work with multiple objects
+        selected" — so Polygons ▸ Detach died on a multi-object face selection.
+        Fixed: chip off object-by-object (same grouping fix as ``UvUtils.cut_uv_edges``).
+        """
+        a = cmds.polyCube(name="det_multi_a", w=10, h=10, d=10)[0]
+        b = cmds.polyCube(name="det_multi_b", w=10, h=10, d=10)[0]
+        cmds.move(30, 0, 0, b)
+
+        result = EditUtils.detach_components(
+            [f"{a}.f[0]", f"{b}.f[0]"],
+            duplicate=False,
+            separate=True,
+            keep_faces_together=True,
+        )
+        cmds.selectMode(object=True)
+
+        # Each source splits into body + extracted face.
+        self.assertEqual(len(result), 4, f"expected 4 pieces, got {result}")
+        for obj in result:
+            self.assertTrue(cmds.objExists(obj))
+            self.assertLess(self._pivot_offset(obj), 0.01)  # each on its own center
+        # One extracted single-face piece per source object, both left selected.
+        singles = [o for o in result if cmds.polyEvaluate(o, face=True) == 1]
+        self.assertEqual(len(singles), 2, f"expected one face per source, got {singles}")
+        selected = set(cmds.ls(sl=True, long=True))
+        self.assertEqual(selected, set(cmds.ls(singles, long=True)))
+
+    def test_detach_faces_multi_object_without_separate(self):
+        """The in-place path (separate=False) also spans objects — every source mesh gets
+        its own polyChipOff node, and the faces are chipped loose within each mesh."""
+        a = cmds.polyCube(name="det_ip_a", w=10, h=10, d=10)[0]
+        b = cmds.polyCube(name="det_ip_b", w=10, h=10, d=10)[0]
+        cmds.move(30, 0, 0, b)
+
+        extract = EditUtils.detach_components(
+            [f"{a}.f[0]", f"{b}.f[0]"],
+            duplicate=False,
+            separate=False,
+            keep_faces_together=True,
+        )
+        cmds.selectMode(object=True)
+
+        self.assertTrue(cmds.ls(extract, type="polyChipOff"))
+        for obj in (a, b):  # body + loose face = 2 shells, still one object
+            self.assertEqual(cmds.polyEvaluate(obj, shell=True), 2)
+
+    def test_detach_vertices_uses_given_components(self):
+        """The vertex path must split the components it was GIVEN, not whatever happens to
+        be selected (it used to ``mel.eval("polySplitVertex")``, which reads the selection —
+        so an explicit component argument was silently ignored)."""
+        cube = cmds.polyCube(name="det_vtx", w=10, h=10, d=10)[0]
+        other = cmds.polyCube(name="det_vtx_other", w=10, h=10, d=10)[0]
+        cmds.move(30, 0, 0, other)
+        before = cmds.polyEvaluate(cube, vertex=True)
+
+        cmds.select(f"{other}.vtx[0]")  # a DIFFERENT, misleading selection
+        EditUtils.detach_components([f"{cube}.vtx[0]"], separate=False)
+        cmds.selectMode(object=True)
+
+        self.assertGreater(cmds.polyEvaluate(cube, vertex=True), before)
+        self.assertEqual(cmds.polyEvaluate(other, vertex=True), before)
 
     def test_separate_mirrored_mesh(self):
         """Test separating a mirrored mesh using the polyMirrorFace history node."""

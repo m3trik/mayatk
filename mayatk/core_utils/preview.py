@@ -31,7 +31,11 @@ Constraints on ``perform_operation`` authors:
     identity/UUID, and per-face (multi-material) shading, which the geometry pipe
     alone doesn't carry.
   - Do not delete pre-existing nodes inside ``perform_operation`` (diff is
-    one-way; deletions cannot be reversed).
+    one-way; deletions cannot be reversed).  This includes *replacing* one --
+    un-instancing swaps a transform's shape, so the rollback deletes the new
+    shape as a created node and leaves the transform empty.  Preconditions
+    like that belong in the optional ``prepare_operation(objects)`` hook,
+    which runs once at ``enable`` outside any contract (see below).
   - Mutating an attribute on a pre-existing node requires
     ``contract.record_modification(node, attr)`` before the ``setAttr``.
   - Disk writes that should be cleaned on rollback require
@@ -728,6 +732,28 @@ class Preview(_PreviewInternal):
             self.message_func("Operation validation failed.")
             self._set_checkbox(False)
             return
+
+        # Optional one-shot precondition, run OUTSIDE any contract: state the
+        # operation needs in place that must not participate in rollback.
+        # Mirror uses it to break instance links -- forking a shape inside
+        # perform_operation is unreversible (rollback deletes the forked shape
+        # as a created node and the transform is left empty), but doing it once
+        # here keeps every later refresh/rollback cycle clean.
+        #
+        # Runs BEFORE the capture below for two reasons: the snapshots must
+        # reflect the state the preview actually starts from (a fork replaces
+        # the shape the shading snapshot is keyed to), and an aborted enable
+        # must not leave half-populated capture state behind. Failure aborts
+        # the enable -- if the precondition can't be met, previewing isn't safe.
+        prepare = getattr(self.operation_instance, "prepare_operation", None)
+        if callable(prepare):
+            try:
+                prepare(list(sel))
+            except Exception as e:
+                self.logger.exception(f"prepare_operation raised: {e}")
+                self.message_func(_PreviewInternal._format_op_error(e))
+                self._set_checkbox(False)
+                return
 
         self._captured_objects = list(sel)
         self._shading_snapshot = self._capture_shading_snapshot(sel)

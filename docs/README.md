@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-3890%20passed%202%20failed-orange.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-4176%20passed-brightgreen.svg)](../test/)
 
 # mayatk
 
@@ -161,6 +161,7 @@ it bootstraps one with a fresh `Switchboard`. The editor window is cached per-ha
 
 - **[Scene data nodes](data_nodes.md)** — the shared `data_internal` / `data_export` two-node model that every tool uses to stash scene-wide metadata and (optionally) embed it in an FBX.
 - **[Shot data in the FBX → Unity](shot_export_unity.md)** — exporting Shots as named Unity AnimationClips plus embedded shot metadata, and side-by-side coexistence with Audio events.
+- **[Emissive groups → Unity](emissive_groups.md)** — runtime-toggleable emissive regions: one all-on emissive map, per-group gating via vertex-color or mask-texture encoding; cross-package SSoT (pythontk region-mask engine, blendertk mirror, unitytk templates).
 
 Format specs (co-located with the code that consumes them):
 

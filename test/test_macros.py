@@ -211,6 +211,84 @@ class TestEditMacros(MayaTkTestCase):
         self.assertLessEqual(after, before)
 
 
+class TestCycleDisplayState(MayaTkTestCase):
+    """m_cycle_display_state expands a selected group to its leaf children.
+
+    ``cmds.displaySurface`` only accepts nodes with a surface shape below them —
+    a locator / joint / curve leaf raises "No surfaces selected", which used to
+    abort the whole macro when a mixed group was selected.
+    """
+
+    def _make_mixed_group(self):
+        cube = cmds.polyCube(name="cyc_cube")[0]
+        loc = cmds.spaceLocator(name="cyc_loc")[0]
+        grp = cmds.group(cube, loc, name="cyc_grp")
+        return cube, loc, grp
+
+    def test_group_with_non_surface_child_does_not_raise(self):
+        cube, loc, grp = self._make_mixed_group()
+        cmds.select(grp, replace=True)
+
+        DisplayMacros.m_cycle_display_state()  # must not raise
+
+        self.assertTrue(cmds.displaySurface(cube, xRay=True, query=True)[0])
+
+    def test_full_cycle_returns_to_visible(self):
+        cube, loc, grp = self._make_mixed_group()
+        cmds.select(grp, replace=True)
+
+        for _ in range(4):  # Visible -> XRay -> Templated -> Hidden -> Visible
+            DisplayMacros.m_cycle_display_state()
+
+        self.assertTrue(cmds.getAttr(f"{cube}.visibility"))
+        self.assertFalse(cmds.getAttr(f"{cube}.template"))
+        self.assertFalse(cmds.displaySurface(cube, xRay=True, query=True)[0])
+
+    def test_non_surface_children_still_hide(self):
+        """The x-ray leg is surface-only, but hide/template must reach every leaf."""
+        cube, loc, grp = self._make_mixed_group()
+        cmds.select(grp, replace=True)
+
+        for _ in range(3):  # Visible -> XRay -> Templated -> Hidden
+            DisplayMacros.m_cycle_display_state()
+
+        self.assertFalse(cmds.getAttr(f"{cube}.visibility"))
+        self.assertFalse(cmds.getAttr(f"{loc}.visibility"))
+
+    def test_group_of_non_surfaces_still_cycles(self):
+        """With nothing to x-ray the cycle skips that leg rather than stalling."""
+        a = cmds.spaceLocator(name="cyc_loc_a")[0]
+        b = cmds.spaceLocator(name="cyc_loc_b")[0]
+        grp = cmds.group(a, b, name="cyc_loc_grp")
+        cmds.select(grp, replace=True)
+
+        DisplayMacros.m_cycle_display_state()
+        self.assertTrue(cmds.getAttr(f"{a}.template"))
+
+        DisplayMacros.m_cycle_display_state()
+        self.assertFalse(cmds.getAttr(f"{a}.visibility"))
+
+    def test_component_selection_cycles_the_owning_object(self):
+        cube = cmds.polyCube(name="cyc_comp_cube")[0]
+        cmds.select(f"{cube}.f[0:2]", replace=True)
+
+        DisplayMacros.m_cycle_display_state()
+
+        self.assertTrue(cmds.displaySurface(cube, xRay=True, query=True)[0])
+
+    def test_locked_visibility_child_does_not_abort_siblings(self):
+        cube = cmds.polyCube(name="cyc_locked_cube")[0]
+        other = cmds.polyCube(name="cyc_other_cube")[0]
+        grp = cmds.group(cube, other, name="cyc_locked_grp")
+        cmds.setAttr(f"{cube}.visibility", lock=True)
+        cmds.select(grp, replace=True)
+
+        for _ in range(3):  # ... -> Hidden
+            DisplayMacros.m_cycle_display_state()
+
+        self.assertFalse(cmds.getAttr(f"{other}.visibility"))
+
+
 class TestGridMacros(MayaTkTestCase):
     """m_grid toggles the grid on its own; m_grid_and_image_planes drives that same
     toggle (the grid LEADS) and syncs image planes to it — mirroring blendertk, whose

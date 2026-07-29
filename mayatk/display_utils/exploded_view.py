@@ -4,8 +4,6 @@ import numpy as np
 import functools
 from typing import Optional
 
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 try:
     import maya.cmds as cmds
 except ModuleNotFoundError as error:
@@ -251,7 +249,7 @@ class ExplodedViewSlots(ExplodedView):
         # Gesture-scoped window: pin button + auto-hide on key_show release.
         widget.config_buttons("menu", "collapse", "pin")
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Exploded View",
                 body="Spread selected objects outward from their shared "
                 "center to inspect interior parts. Original world positions "

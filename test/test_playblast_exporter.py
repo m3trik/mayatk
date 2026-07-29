@@ -388,6 +388,76 @@ class TestPlayblastExporter(MayaTkTestCase):
         duration = frame_count / fps if fps else 0
         self.assertAlmostEqual(duration, 1.0, delta=0.2)
 
+    def _write_wav(self, path, amplitude, seconds=1.0, rate=8000):
+        """Write a mono 16-bit sine WAV; amplitude 0.0 writes digital silence."""
+        import math
+        import struct
+        import wave
+
+        with wave.open(path, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(rate)
+            wf.writeframes(
+                b"".join(
+                    struct.pack(
+                        "<h", int(amplitude * 32767 * math.sin(i * 0.3))
+                    )
+                    for i in range(int(rate * seconds))
+                )
+            )
+
+    def test_audio_peak_db_discriminates_silence(self):
+        if not FFMPEG_AVAILABLE:
+            self.skipTest("ffmpeg not available")
+        silent = os.path.join(self.tmp, "silent.wav")
+        loud = os.path.join(self.tmp, "loud.wav")
+        self._write_wav(silent, 0.0)
+        self._write_wav(loud, 0.8)
+        silent_peak = PlayblastExporter._audio_peak_db(silent)
+        loud_peak = PlayblastExporter._audio_peak_db(loud)
+        self.assertIsNotNone(silent_peak)
+        self.assertIsNotNone(loud_peak)
+        self.assertLess(silent_peak, PlayblastExporter._SILENT_PEAK_DB)
+        self.assertGreater(loud_peak, PlayblastExporter._SILENT_PEAK_DB)
+        # Unmeasurable input (no audio stream) -> None, never an exception.
+        self.assertIsNone(
+            PlayblastExporter._audio_peak_db(os.path.join(self.tmp, "missing.wav"))
+        )
+
+    def test_encode_sequence_warns_on_silent_audio(self):
+        """A muxed-but-silent track must be reported, not passed silently."""
+        wav = os.path.join(self.tmp, "mux.wav")
+        self._write_wav(wav, 0.0)
+        capture = CaptureResult(
+            directory=self.tmp,
+            prefix="s",
+            image_format="png",
+            start=1,
+            end=5,
+            padding=4,
+            frames=[],
+            fps=24.0,
+        )
+
+        def fake_compress(**kwargs):
+            with open(kwargs["output_filepath"], "w") as handle:
+                handle.write("video")
+            return kwargs["output_filepath"]
+
+        exporter = PlayblastExporter()
+        with (
+            patch.object(ptk.VidUtils, "compress_video", side_effect=fake_compress),
+            patch.object(PlayblastExporter, "_audio_peak_db", return_value=-91.0),
+        ):
+            with self.assertLogs(exporter.logger, level="WARNING") as logs:
+                exporter.encode_sequence(
+                    capture, os.path.join(self.tmp, "s.mp4"), audio=wav
+                )
+        self.assertTrue(
+            any("silent" in message for message in logs.output), logs.output
+        )
+
     def test_capture_movie_avi_smoke(self):
         exporter = PlayblastExporter(width=320, height=240)
         target = os.path.join(self.tmp, "smoke.avi")

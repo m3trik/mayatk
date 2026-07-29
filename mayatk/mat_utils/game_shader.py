@@ -10,8 +10,6 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
@@ -1707,7 +1705,7 @@ class GameShaderSlots(GameShader):
             setToolTip="Graph the material in the Hypershade.",
         )
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Game Shader",
                 body="Build complete PBR shader networks from a folder of "
                 "texture maps. Map types (Base Color, Normal, Roughness, "

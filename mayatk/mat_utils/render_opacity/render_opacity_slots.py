@@ -15,8 +15,6 @@ import logging
 
 import mayatk as mtk
 from mayatk.core_utils.script_job_manager import ScriptJobManager
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 
 class RenderOpacitySlots:
     """Switchboard slots for the Render Opacity UI.
@@ -61,7 +59,7 @@ class RenderOpacitySlots:
             setText="Last Selected Only",
             setObjectName="chk_last_selected",
             setChecked=False,
-            setToolTip=TooltipFormat.fmt(
+            setToolTip=self.sb.tooltip.fmt(
                 body="Applies to Create, Key, and Remove operations.",
                 bullets=[
                     "<b>On:</b> Only the last selected object is processed.",
@@ -74,7 +72,7 @@ class RenderOpacitySlots:
             setText="Delete Visibility Keys",
             setObjectName="chk_delete_vis_keys",
             setChecked=False,
-            setToolTip=TooltipFormat.fmt(
+            setToolTip=self.sb.tooltip.fmt(
                 bullets=[
                     "<b>On:</b> Existing visibility keyframes are deleted before applying opacity.",
                     "<b>Off:</b> Objects with visibility keys are skipped with a warning.",
@@ -82,7 +80,7 @@ class RenderOpacitySlots:
             ),
         )
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Render Opacity",
                 body="Add a keyable opacity attribute to objects for "
                 "engine-ready transparency control. The <b>Mode</b> combo "
@@ -185,7 +183,7 @@ class RenderOpacitySlots:
             setText="End at Playhead",
             setObjectName="chk000",
             setChecked=True,
-            setToolTip=TooltipFormat.fmt(
+            setToolTip=self.sb.tooltip.fmt(
                 bullets=[
                     "<b>On:</b> Fade ends at the playhead (keys span current\u2212frames \u2192 current).",
                     "<b>Off:</b> Fade starts at the playhead (keys span current \u2192 current+frames).",
@@ -195,7 +193,7 @@ class RenderOpacitySlots:
         cmb = widget.option_box.menu.add(
             "QComboBox",
             setObjectName="cmb_direction",
-            setToolTip=TooltipFormat.fmt(
+            setToolTip=self.sb.tooltip.fmt(
                 title="Fade Direction",
                 bullets=[
                     "<b>Fade In:</b> Key opacity 0 \u2192 1.",
