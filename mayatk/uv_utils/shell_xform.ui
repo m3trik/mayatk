@@ -74,6 +74,12 @@
       </item>
       <item>
        <widget class="CollapsableGroup" name="move_grp">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
         <property name="title">
          <string>Move to UV Space</string>
         </property>
@@ -200,11 +206,39 @@
            </property>
           </widget>
          </item>
+         <item row="2" column="0" colspan="4">
+          <widget class="QPushButton" name="gather_to_udim">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Move shells sitting outside the selection's UDIM tile into it (keeps each shell's sub-tile position; respects the border padding).</string>
+           </property>
+           <property name="text">
+            <string>Gather to Tile</string>
+           </property>
+          </widget>
+         </item>
         </layout>
        </widget>
       </item>
       <item>
        <widget class="CollapsableGroup" name="shell">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
         <property name="title">
          <string>Shell</string>
         </property>
@@ -295,6 +329,12 @@
       </item>
       <item>
        <widget class="CollapsableGroup" name="fliprotate">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
         <property name="title">
          <string>Flip / Rotate</string>
         </property>
@@ -441,6 +481,12 @@
       </item>
       <item>
        <widget class="CollapsableGroup" name="align">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
         <property name="title">
          <string>Align</string>
         </property>
@@ -663,6 +709,12 @@
       </item>
       <item>
        <widget class="CollapsableGroup" name="orient">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
         <property name="title">
          <string>Orient</string>
         </property>
@@ -777,6 +829,9 @@
        <spacer name="verticalSpacer">
         <property name="orientation">
          <enum>Qt::Vertical</enum>
+        </property>
+        <property name="sizeType">
+         <enum>QSizePolicy::Fixed</enum>
         </property>
         <property name="sizeHint" stdset="0">
          <size>

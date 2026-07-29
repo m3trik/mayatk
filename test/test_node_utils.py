@@ -831,6 +831,46 @@ class TestNodeUtils(MayaTkTestCase):
     # Render Node Tests
     # -------------------------------------------------------------------------
 
+    def test_get_classification_tokens_drops_draw_overrides(self):
+        """Draw-override / swatch tokens are not roles and must be dropped.
+
+        Matching them is how ``aiBump2d`` (``drawdb/shader/surface/...``, role
+        ``utility/shader``) reads as a surface shader.
+        """
+        tokens = NodeUtils.get_classification_tokens("bump2d")
+        self.assertIn("utility/general/bump", tokens)
+        self.assertFalse([t for t in tokens if t.startswith(("drawdb/", "swatch/"))])
+
+        # Unknown type: empty, not an exception.
+        self.assertEqual(NodeUtils.get_classification_tokens("noSuchNodeType"), [])
+
+    def test_get_classification_tokens_draw_only_fallback(self):
+        """A type classified ONLY by its draw override still reports a role."""
+        raw = cmds.getClassification("adskMaterial") or []
+        if not raw or any(
+            not tok.startswith(("drawdb/", "swatch/"))
+            for entry in raw
+            for tok in entry.split(":")
+        ):
+            self.skipTest("adskMaterial is absent or no longer draw-only")
+        # 'drawdb/shader/surface/adskMaterial' -> 'shader/surface/adskMaterial'
+        self.assertEqual(
+            NodeUtils.get_classification_tokens("adskMaterial"),
+            ["shader/surface/adskMaterial"],
+        )
+
+    def test_create_render_node_flags_utility_types_as_utility(self):
+        """A utility type must not be created as a shader.
+
+        ``shadingNode -asShader`` parks the node in ``defaultShaderList1``,
+        which is what ``cmds.ls(materials=True)`` reports — so a bump2d created
+        that way shows up as a material (and gets a spurious shading group).
+        """
+        bump = NodeUtils.create_render_node("bump2d", name="test_render_bump")
+        self.assertEqual(cmds.nodeType(bump), "bump2d")
+        self.assertNotIn(bump, cmds.ls(materials=True) or [])
+        self.assertFalse(cmds.listConnections(bump, type="shadingEngine"))
+
     def test_create_render_node(self):
         """Test create_render_node."""
         # Try to source the MEL script required

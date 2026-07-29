@@ -54,6 +54,12 @@
     </item>
     <item>
      <widget class="CollapsableGroup" name="apply_group">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
       <property name="title">
        <string>Create Attribute</string>
       </property>
@@ -133,6 +139,12 @@ If nothing is selected, creates a polyCube first.</string>
     </item>
     <item>
      <widget class="CollapsableGroup" name="fade_group">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
       <property name="title">
        <string>Key</string>
       </property>
@@ -180,6 +192,12 @@ Use the option box to configure frames, direction, and timing.</string>
     </item>
     <item>
      <widget class="CollapsableGroup" name="manage_group">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
       <property name="title">
        <string>Manage</string>
       </property>
@@ -229,10 +247,13 @@ Use the option box to configure frames, direction, and timing.</string>
       <property name="orientation">
        <enum>Qt::Vertical</enum>
       </property>
+      <property name="sizeType">
+       <enum>QSizePolicy::Fixed</enum>
+      </property>
       <property name="sizeHint" stdset="0">
        <size>
         <width>20</width>
-        <height>40</height>
+        <height>10</height>
        </size>
       </property>
      </spacer>

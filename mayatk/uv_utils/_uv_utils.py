@@ -151,6 +151,71 @@ class UvUtils(ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undoable
+    def gather_to_udim(
+        cls,
+        objects,
+        udim: Optional[int] = None,
+        map_size: int = 4096,
+    ) -> Optional[int]:
+        """Move UV shells sitting outside the target UDIM tile into it.
+
+        The cheap alternative to a repack: each stray shell keeps its
+        sub-tile position via a whole-tile translation (a shell straddling
+        the tile's border gets the minimal pull-in instead), clamped inside
+        the tile's border padding — the same margin the packers use
+        (:meth:`pythontk.MathUtils.uv_tile_margin`). Shells already inside
+        the tile do not move; overlaps with resident shells are accepted.
+
+        Parameters:
+            objects (str/obj/list): Object(s), faces, or UVs. Shells are
+                resolved over the whole input.
+            udim (int, optional): Target UDIM tile number (e.g. 1001).
+                None targets the tile most of the input's shells already
+                occupy (majority vote by shell-bbox center).
+            map_size (int): Map resolution the border padding derives
+                from. Default 4096.
+
+        Returns:
+            int: The number of shells moved, or None when the input
+            resolves to no UVs.
+        """
+        shells = []  # (uvs, (u_min, v_min, u_max, v_max)) per shell
+        # Whole shells, not just the input's faces: translating a face subset of
+        # a shell tears it in half. Matches the Blender twin's `_target_islands`.
+        for face_set in cls.get_uv_shell_sets(
+            objects, returned_type="shell", whole_shells=True
+        ):
+            uvs = cmds.polyListComponentConversion(face_set, toUV=True) or []
+            if not uvs:
+                continue
+            (u_min, u_max), (v_min, v_max) = cmds.polyEvaluate(
+                uvs, boundingBoxComponent2d=True
+            )
+            shells.append((uvs, (u_min, v_min, u_max, v_max)))
+        if not shells:
+            return None
+
+        tile = (
+            ptk.MathUtils.majority_tile(b for _, b in shells)
+            if udim is None
+            else ptk.MathUtils.udim_to_tile(udim)
+        )
+
+        margin = ptk.MathUtils.uv_tile_margin(map_size)
+        moved = 0
+        cmds.refresh(suspend=True)  # one edit per shell adds up on a dense scene
+        try:
+            for uvs, bounds in shells:
+                du, dv = ptk.MathUtils.fit_into_tile(bounds, tile, margin)
+                if du or dv:
+                    cmds.polyEditUV(uvs, u=du, v=dv, relative=True)
+                    moved += 1
+        finally:
+            cmds.refresh(suspend=False)
+        return moved
+
+    @classmethod
+    @CoreUtils.undoable
     def mirror_uvs(
         cls,
         objects,
@@ -308,7 +373,7 @@ class UvUtils(ptk.HelpMixin):
         )
 
     @staticmethod
-    def get_uv_shell_sets(objects=None, returned_type="shell"):
+    def get_uv_shell_sets(objects=None, returned_type="shell", whole_shells=False):
         """Get UV shells and their corresponding sets of faces.
 
         Optimized to use the Maya API (OpenMaya) for performance and reliability,
@@ -319,6 +384,12 @@ class UvUtils(ptk.HelpMixin):
                 uses the current selection.
             returned_type (str): The desired returned type. Valid values are:
                 'shell', 'id'.
+            whole_shells (bool): Expand each shell the input *touches* to all of
+                its faces, instead of returning only the input's own faces
+                grouped by shell. A shell-level op (gather, orient) needs this —
+                translating a face subset of a shell tears it in half — while a
+                face-level op wants the default. Expanded faces come back as
+                path strings rather than the caller's component objects.
 
         Returns:
             (list)(dict): Depending on the given returned_type arg.
@@ -390,6 +461,29 @@ class UvUtils(ptk.HelpMixin):
                     except Exception:
                         # Case: Face has no UVs projected
                         pass
+
+                if (
+                    whole_shells
+                    and local_shells
+                    and len(shape_faces) < mfn_mesh.numPolygons
+                ):
+                    # Re-walk the mesh once, keeping every face whose shell the
+                    # input touched — the input's own faces are only a probe.
+                    # Skipped when the input already covers the mesh (the common
+                    # whole-object case), where the grouping is complete already.
+                    touched = set(local_shells)
+                    local_shells = {sid: [] for sid in touched}
+                    for face_idx in range(mfn_mesh.numPolygons):
+                        try:
+                            if mfn_mesh.polygonVertexCount(face_idx) <= 0:
+                                continue
+                            sid = uv_shell_ids[
+                                mfn_mesh.getPolygonUVid(face_idx, 0, current_uv_set)
+                            ]
+                        except Exception:  # face has no UVs projected
+                            continue
+                        if sid in touched:
+                            local_shells[sid].append(f"{shape_str}.f[{face_idx}]")
 
                 # Add to main results
                 for sid in local_shells:

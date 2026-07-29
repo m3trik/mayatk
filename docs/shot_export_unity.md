@@ -55,8 +55,9 @@ reader:
 A ready-to-use **`ShotMetadataController.cs`** ships in `unitytk/templates/`
 (runtime component + an `AssetPostprocessor` that parses `shot_metadata`, attaches
 the controller to the prefab root, and joins records to clips by name). Deploy it
-alongside `RenderOpacityController.cs`, which provides the shared `ImportAllowlist`
-(`unitytk.TemplateDeployer.deploy_all(scripts_dir)` deploys the full compile-coupled set).
+as part of the full compile-coupled set — `UnitytkSettings.cs` provides the shared
+`ImportGate`/`CarrierImport` (`unitytk.TemplateDeployer.deploy_package(project_root)`
+writes the whole set as the embedded `com.m3trik.unitytk` UPM package).
 Verified end-to-end by `unitytk/test/test_shot_metadata_integration.py`.
 
 The minimal read, for reference — clips import natively; Maya exports the

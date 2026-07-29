@@ -7,7 +7,8 @@ Two groups: *Export* knobs drive the Maya-side FBX export (read by
 copy-to-Assets delivery (read by :class:`unitytk.CopyToAssetsDeliverer`). Unlike the
 script-launch bridges these are never substituted into a template -- the Unity
 deliverer copies the FBX into the project rather than rendering a live-session
-script -- so the panel shows every param (no per-template visibility gating).
+script. Visibility gates on the selected combo entry: the export/Unity params
+show for Copy to Project, SCRIPTS_ACTION alone for Manage Unity Scripts.
 
 Mirrors :mod:`mayatk.env_utils.blender_bridge.parameters` in shape; the blendertk
 ``unity_bridge`` counterpart mirrors this file.
@@ -129,6 +130,30 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "Which installed Unity Editor to create/launch with (used by\n"
             "'Launch Editor' and 'New Unity Project…'). Auto uses the newest\n"
             "installed version."
+        ),
+    ),
+    # Shown only when the 'Manage Unity Scripts' template is selected
+    # (the slots' _relevant_param_keys gates it; export params hide).
+    "SCRIPTS_ACTION": AttributeSpec(
+        key="SCRIPTS_ACTION",
+        label="Action",
+        kind="choice",
+        default="status",
+        choices=[
+            ("Status", "status"),
+            ("Install / Update", "install"),
+            ("Uninstall", "uninstall"),
+        ],
+        section="Unity Scripts",
+        tooltip=(
+            "Manage unitytk's C# import automation in the Unity project above\n"
+            "(the embedded Packages/com.m3trik.unitytk package):\n"
+            "• Status — report the deployed version vs this unitytk release,\n"
+            "  and any missing files.\n"
+            "• Install / Update — deploy the full script set (updates in place;\n"
+            "  configure per-channel behavior in Unity under Project Settings ▸\n"
+            "  unitytk).\n"
+            "• Uninstall — remove the package folder from the project."
         ),
     ),
 }

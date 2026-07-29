@@ -21,7 +21,7 @@ from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from pythontk import TaskFactory
-from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import HierarchySidecar
+from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import SceneDataSidecar
 
 
 class _TaskDataMixin:
@@ -56,6 +56,17 @@ class _TaskDataMixin:
         self._key_times = set(times)
         return times
 
+    def _invalidate_material_caches(self) -> None:
+        """Drop the derived material/texture caches.
+
+        Both are derived from the same source (the materials assigned to
+        ``self.objects``), so they must always be cleared together — a lone
+        ``_cached_materials = None`` would leave the file-node cache describing
+        a material set that no longer exists.
+        """
+        self._cached_materials = None
+        self._cached_export_file_nodes = None
+
     def _get_all_materials(self) -> List[str]:
         """Return a list of all materials assigned to the specified objects.
 
@@ -76,12 +87,24 @@ class _TaskDataMixin:
         connected ``file`` texture nodes.  Shared by the texture-oriented tasks
         and checks so they all scope to exactly the textures that will ship,
         rather than every ``file`` node in the scene.
+
+        Cached alongside ``_cached_materials`` and invalidated with it: the walk
+        is a ``listHistory`` over every export material, and three tasks/checks
+        (``resolve_invalid_texture_paths``, ``check_valid_paths``,
+        ``check_texture_file_size``) each want the same answer in one run.
         """
+        cached = getattr(self, "_cached_export_file_nodes", None)
+        if cached is not None:
+            return cached
+
         materials = [m for m in self._get_all_materials() if cmds.objExists(m)]
         if not materials:
-            return []
+            self._cached_export_file_nodes = []
+            return self._cached_export_file_nodes
+
         history = cmds.listHistory(materials, pruneDagObjects=True) or []
-        return list(set(cmds.ls(history, type="file") or []))
+        self._cached_export_file_nodes = list(set(cmds.ls(history, type="file") or []))
+        return self._cached_export_file_nodes
 
 
 class _TaskActionsMixin(_TaskDataMixin):
@@ -192,8 +215,8 @@ class _TaskActionsMixin(_TaskDataMixin):
         self.logger.debug("Reassigning duplicate materials")
         materials = self._get_all_materials()
         MatUtils.reassign_duplicate_materials(materials, delete=True)
-        # Invalidate the materials cache since duplicates were deleted
-        self._cached_materials = None
+        # Duplicates were deleted — drop every cache derived from the old set.
+        self._invalidate_material_caches()
         self.logger.debug("Reassignment completed.")
 
     def resolve_invalid_texture_paths(self):
@@ -769,17 +792,33 @@ class _TaskChecksMixin(_TaskDataMixin):
         return all_relative, log_messages
 
     def check_valid_paths(self) -> tuple:
-        """Check if all file paths (textures, references, etc.) exist on disk."""
-        import os
+        """Check that every export texture and scene reference resolves on disk.
 
-        # We can accept relative paths if they resolve relative to project
+        Texture scope is the ``file`` nodes feeding the export materials
+        (``_get_export_file_nodes``), not every ``file`` node in the scene.
+        Scene-wide scanning flagged maps that never ship: the Arnold skydome's
+        HDR (already dropped from the export set by ``exclude_hdr``) and the
+        orphaned file nodes left behind when ``reassign_duplicate_materials``
+        deletes a duplicate shader — the file nodes outlive the shader they fed.
+
+        Resolution goes through ``MatUtils.resolve_path(search=False)``: env
+        vars and ``workspace(expandName=...)`` — i.e. exactly how Maya itself
+        resolves the stored path — plus ``<UDIM>`` expansion, which the previous
+        hand-rolled lookup lacked entirely (every tiled texture read as
+        missing).  ``search=False`` is load-bearing: the default hunt would
+        match any same-named file under ``sourceimages``, so a node pointing at
+        a stale directory would pass validation and still ship broken.  Entries
+        are grouped by path so a texture shared by several file nodes logs once.
+
+        Returns:
+            tuple: (status: bool, messages: list)
+        """
         log_messages = []
         all_valid = True
 
-        # 1. Texture Paths
-        # Use cmds to avoid nodes
-        file_nodes = cmds.ls(type="file") or []
-        for node in file_nodes:
+        # 1. Texture paths — scoped to the maps that will actually ship.
+        missing_textures: Dict[str, List[str]] = {}
+        for node in self._get_export_file_nodes():
             if not cmds.attributeQuery("fileTextureName", node=node, exists=True):
                 continue
 
@@ -788,35 +827,20 @@ class _TaskChecksMixin(_TaskDataMixin):
                 # Some empty file nodes might exist?
                 continue
 
-            expanded_path = os.path.expandvars(path)
+            if MatUtils.resolve_path(path, search=False):
+                continue
 
-            # If absolute check directly
-            if os.path.isabs(expanded_path):
-                if not os.path.exists(expanded_path):
-                    all_valid = False
-                    link = self._obj_link(node, "select")
-                    log_messages.append(f"Missing Texture: {link} -> {path}")
-            else:
-                # If relative, try to resolve
-                workspace_root = cmds.workspace(query=True, rootDirectory=True)
+            missing_textures.setdefault(path, []).append(node)
 
-                # Check common relative locations
-                possible_paths = [
-                    os.path.join(workspace_root, expanded_path),
-                    os.path.join(workspace_root, "sourceimages", expanded_path),
-                    os.path.abspath(expanded_path),  # Relative to current working dir
-                ]
-
-                found = False
-                for p in possible_paths:
-                    if os.path.exists(p):
-                        found = True
-                        break
-
-                if not found:
-                    all_valid = False
-                    link = self._obj_link(node, "select")
-                    log_messages.append(f"Missing Texture (Relative): {link} -> {path}")
+        if missing_textures:
+            all_valid = False
+            entries = []
+            for path in sorted(missing_textures):
+                links = ", ".join(
+                    self._obj_link(n, "select") for n in sorted(missing_textures[path])
+                )
+                entries.append(f"Missing Texture: {links} -> {path}")
+            log_messages.extend(self._truncate_obj_entries(entries))
 
         # 2. Reference Paths
         references = cmds.ls(references=True) or []
@@ -882,7 +906,10 @@ class _TaskChecksMixin(_TaskDataMixin):
             # convert_to_relative_paths task runs before checks and rewrites
             # texture paths to workspace-relative form.  Missing files are the
             # domain of check_valid_paths, so an unresolved path is skipped.
-            resolved = MatUtils.resolve_path(path)
+            # search=False for the same reason that check applies it: the
+            # basename hunt would size-probe a same-named file the node does
+            # not actually point at.
+            resolved = MatUtils.resolve_path(path, search=False)
             if not resolved:
                 continue
 
@@ -1222,19 +1249,19 @@ class _TaskChecksMixin(_TaskDataMixin):
         return True, log_messages
 
     # ------------------------------------------------------------------
-    # Hierarchy diff check — delegates to HierarchySidecar
+    # Scene-data sidecar — delegates to SceneDataSidecar
     # ------------------------------------------------------------------
 
     # Backward-compatible aliases so existing call-sites still work.
-    _manifest_path_for = staticmethod(HierarchySidecar.manifest_path_for)
-    _diff_report_path_for = staticmethod(HierarchySidecar.diff_report_path_for)
-    _build_clean_path_set = staticmethod(HierarchySidecar.build_clean_path_set)
-    _get_top_level = staticmethod(HierarchySidecar.get_top_level)
-    rename_hierarchy_sidecar = HierarchySidecar.rename
+    _manifest_path_for = staticmethod(SceneDataSidecar.manifest_path_for)
+    _diff_report_path_for = staticmethod(SceneDataSidecar.diff_report_path_for)
+    _build_clean_path_set = staticmethod(SceneDataSidecar.build_clean_path_set)
+    _get_top_level = staticmethod(SceneDataSidecar.get_top_level)
+    rename_sidecar = SceneDataSidecar.rename
 
     def _build_full_hierarchy_set(self) -> set:
         """Build a clean path set including all descendants of ``self.objects``."""
-        return HierarchySidecar.build_full_path_set(self.objects)
+        return SceneDataSidecar.build_full_path_set(self.objects)
 
     def _sidecar_kwargs(self) -> dict:
         """Return sidecar path-derivation kwargs based on versioning state.
@@ -1245,11 +1272,37 @@ class _TaskChecksMixin(_TaskDataMixin):
         """
         return {"base_stem": bool(getattr(self, "_version_format", ""))}
 
-    def write_hierarchy_manifest(self) -> None:
-        """Write a sidecar JSON manifest of the exported hierarchy paths.
+    def _data_export_snapshot(self) -> dict:
+        """Decoded copy of every ``data_export`` channel, as shipped in the FBX.
 
-        Only writes when the manifest already exists (maintaining it for
-        future checks) or the check was enabled in the current run.
+        Empty dict when the carrier is absent, empty, or not part of the
+        export set — the carrier is a hidden node, so outside the ``all``
+        mode it only ships when ``export_data_node`` folded it in, and the
+        record must only claim what actually shipped.  Never raises — the
+        record must not break the export it records.
+        """
+        try:
+            from mayatk.node_utils.data_nodes import DataNodes
+
+            if not any(
+                str(o).split("|")[-1] == DataNodes.EXPORT
+                for o in (self.objects or [])
+            ):
+                return {}
+            return DataNodes.dump(decode=True).get(DataNodes.EXPORT) or {}
+        except Exception:
+            self.logger.debug("data_export snapshot skipped.", exc_info=True)
+            return {}
+
+    def write_scene_data_sidecar(self) -> None:
+        """Write the sidecar JSON recording what shipped in the export.
+
+        The manifest carries the exported hierarchy paths (the diff-check
+        baseline) plus a snapshot of the ``data_export`` carrier channels.
+        The hierarchy section is maintained when the check is in play (it
+        ran this export, or a manifest already exists); the data section is
+        recorded whenever the carrier shipped content.  A metadata-free
+        export with the check off leaves no sidecar.
         """
         export_path = getattr(self, "export_path", None)
         if not export_path or not self.objects:
@@ -1257,22 +1310,25 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         sk = self._sidecar_kwargs()
 
-        # Symmetric with check_hierarchy_vs_existing_fbx: when versioning
-        # is active, promote any legacy `_v\d+` sidecar to the base-stem
-        # name so subsequent writes find it via the "manifest already
-        # exists" condition below.
-        if sk["base_stem"]:
-            HierarchySidecar.ensure_base_name(export_path)
+        # Symmetric with check_hierarchy_vs_existing_fbx: bring any
+        # legacy-named (and, when versioning, per-version) sidecar up to
+        # the current name so subsequent writes find it via the "manifest
+        # already exists" condition below.
+        SceneDataSidecar.migrate_legacy(export_path, **sk)
 
-        manifest_path = HierarchySidecar.manifest_path_for(export_path, **sk)
+        manifest_path = SceneDataSidecar.manifest_path_for(export_path, **sk)
 
+        data = self._data_export_snapshot()
         check_ran = getattr(self, "_hierarchy_check_ran", False)
-        if not check_ran and not os.path.exists(manifest_path):
+        if not check_ran and not data and not os.path.exists(manifest_path):
             return
 
-        paths = HierarchySidecar.build_full_path_set(self.objects)
-        if HierarchySidecar.write_manifest(export_path, paths, **sk) is None:
-            self.logger.debug("Could not write hierarchy manifest")
+        paths = SceneDataSidecar.build_full_path_set(self.objects)
+        if (
+            SceneDataSidecar.write_manifest(export_path, paths, data=data, **sk)
+            is None
+        ):
+            self.logger.debug("Could not write scene-data sidecar")
 
     def check_hierarchy_vs_existing_fbx(self) -> tuple:
         """Check export objects against the hierarchy manifest of the previous export.
@@ -1290,12 +1346,11 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         sk = self._sidecar_kwargs()
 
-        # When versioning is active, migrate any legacy per-version sidecar
-        # to the base-stem name so the diff baseline carries forward.
-        if sk["base_stem"]:
-            HierarchySidecar.ensure_base_name(export_path)
+        # Migrate any legacy-named (and, when versioning, per-version)
+        # sidecar to the current name so the diff baseline carries forward.
+        SceneDataSidecar.migrate_legacy(export_path, **sk)
 
-        manifest_path = HierarchySidecar.manifest_path_for(export_path, **sk)
+        manifest_path = SceneDataSidecar.manifest_path_for(export_path, **sk)
 
         messages = []
         if not os.path.exists(manifest_path):
@@ -1316,20 +1371,20 @@ class _TaskChecksMixin(_TaskDataMixin):
             else:
                 return True, []
 
-        current_paths = HierarchySidecar.build_full_path_set(self.objects)
+        current_paths = SceneDataSidecar.build_full_path_set(self.objects)
 
-        match, missing, extra = HierarchySidecar.compare(
+        match, missing, extra = SceneDataSidecar.compare(
             export_path, current_paths, **sk
         )
 
         if match:
-            HierarchySidecar.clean_stale_diff(export_path, **sk)
+            SceneDataSidecar.clean_stale_diff(export_path, **sk)
             return True, messages
 
         # Detect reparenting patterns for a cleaner summary
-        reparented = HierarchySidecar.detect_reparenting(missing, extra)
+        reparented = SceneDataSidecar.detect_reparenting(missing, extra)
 
-        diff_path = HierarchySidecar.write_diff_report(
+        diff_path = SceneDataSidecar.write_diff_report(
             export_path, missing, extra, reparented=reparented, **sk
         )
 
@@ -1355,7 +1410,7 @@ class _TaskChecksMixin(_TaskDataMixin):
             remaining_extra = extra
 
         if remaining_missing:
-            top_missing = HierarchySidecar.get_top_level(remaining_missing)
+            top_missing = SceneDataSidecar.get_top_level(remaining_missing)
             messages.append(
                 f"{len(remaining_missing)} node(s) in previous export but missing now "
                 f"({len(top_missing)} top-level):"
@@ -1366,7 +1421,7 @@ class _TaskChecksMixin(_TaskDataMixin):
                 messages.append(f"  … and {len(top_missing) - 20} more")
 
         if remaining_extra:
-            top_extra = HierarchySidecar.get_top_level(remaining_extra)
+            top_extra = SceneDataSidecar.get_top_level(remaining_extra)
             messages.append(
                 f"{len(remaining_extra)} new node(s) not in previous export "
                 f"({len(top_extra)} top-level):"
@@ -1452,7 +1507,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
 
         self.logger = logger
         self._objects = None
-        self._cached_materials = None
+        self._invalidate_material_caches()
 
     @property
     def objects(self):
@@ -1462,7 +1517,7 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
     def objects(self, value):
         """Invalidate the materials and keyframe caches whenever objects change."""
         self._objects = value
-        self._cached_materials = None
+        self._invalidate_material_caches()
         if hasattr(self, "_key_times"):
             delattr(self, "_key_times")
 
@@ -1495,7 +1550,9 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                     "audio_manifest, …) ships in the FBX.\nThe carrier is a hidden "
                     "node, so the 'Visible'/'Selected' export modes would "
                     "otherwise omit it.  Refreshed from the live scene at export; "
-                    "no-ops when there's no metadata to carry."
+                    "no-ops when there's no metadata to carry.\nA readable copy of "
+                    "the shipped channels is also written to the export's "
+                    ".scene_data.json sidecar."
                 ),
                 "setChecked": True,
             },
@@ -1730,7 +1787,12 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
             "check_valid_paths": {
                 "widget_type": "QCheckBox",
                 "setText": "Check For Valid Paths.",
-                "setToolTip": "Check if all file paths (textures, references) exist on disk.",
+                "setToolTip": (
+                    "Check that every texture feeding the export materials — plus "
+                    "every scene reference — resolves on disk.\nTextures on objects "
+                    "that won't ship (the HDR skydome, file nodes orphaned by the "
+                    "duplicate-material cleanup) are not reported."
+                ),
                 "setChecked": True,
             },
             "check_texture_file_size": {

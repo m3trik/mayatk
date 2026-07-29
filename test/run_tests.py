@@ -522,7 +522,8 @@ except Exception as e:
         """
         env = os.environ.copy()
         env["PYTHONPATH"] = os.pathsep.join(
-            str(SCRIPTS_ROOT / pkg) for pkg in ("mayatk", "pythontk", "uitk", "tentacle")
+            str(SCRIPTS_ROOT / pkg)
+            for pkg in ("mayatk", "pythontk", "uitk", "tentacle", "unitytk")
         )
         env.pop("PYTHONHOME", None)
         env.pop("VIRTUAL_ENV", None)

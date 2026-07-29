@@ -36,6 +36,12 @@
       </item>
       <item>
        <widget class="CollapsableGroup" name="grp_rail">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
         <property name="title"><string>Rail</string></property>
         <layout class="QVBoxLayout" name="lay_rail">
          <property name="leftMargin"><number>3</number></property>
@@ -135,6 +141,12 @@
       </item>
       <item>
        <widget class="CollapsableGroup" name="grp_hang">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
         <property name="title"><string>Hanging</string></property>
         <layout class="QVBoxLayout" name="lay_hang">
          <property name="leftMargin"><number>3</number></property>
@@ -241,6 +253,12 @@
       </item>
       <item>
        <widget class="CollapsableGroup" name="grp_drape">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
         <property name="title"><string>Drape</string></property>
         <layout class="QVBoxLayout" name="lay_drape">
          <property name="leftMargin"><number>3</number></property>
@@ -295,6 +313,12 @@
       </item>
       <item>
        <widget class="CollapsableGroup" name="grp_folds">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
         <property name="title"><string>Folds / Noise</string></property>
         <property name="checked"><bool>false</bool></property>
         <layout class="QVBoxLayout" name="lay_folds">
@@ -400,6 +424,12 @@
       </item>
       <item>
        <widget class="CollapsableGroup" name="grp_ends">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
         <property name="title"><string>Ends</string></property>
         <property name="checked"><bool>false</bool></property>
         <layout class="QVBoxLayout" name="lay_ends">
@@ -455,6 +485,12 @@
       </item>
       <item>
        <widget class="CollapsableGroup" name="grp_mesh">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
         <property name="title"><string>Mesh</string></property>
         <layout class="QVBoxLayout" name="lay_mesh">
          <property name="leftMargin"><number>3</number></property>
@@ -558,6 +594,9 @@
       <item>
        <spacer name="verticalSpacer">
         <property name="orientation"><enum>Qt::Vertical</enum></property>
+        <property name="sizeType">
+         <enum>QSizePolicy::Fixed</enum>
+        </property>
         <property name="sizeHint" stdset="0"><size><width>0</width><height>10</height></size></property>
        </spacer>
       </item>

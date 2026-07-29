@@ -380,12 +380,20 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
         Creates an ``aiStandardSurface`` (→ ``aiSurfaceShader``), an
         ``aiMultiply`` feeding its ``baseColor``, and a tangent-space ``bump2d``
         feeding its ``normalCamera``.
+
+        All three go through ``create_render_node``, which derives the
+        ``shadingNode`` flag from the type's classification — the two helpers
+        are ``utility/math`` / ``utility/general/bump``, so they're created
+        ``asUtility``. Creating them ``asShader`` (as this did) parks them in
+        ``defaultShaderList1``, and that list is exactly what
+        ``cmds.ls(materials=True)`` reports, so they surfaced as materials in
+        Hypershade and in every materials list built on it.
         """
         ai_node = NodeUtils.create_render_node(
             "aiStandardSurface", name=name + "_ai" if name else ""
         )
-        aiMult_node = cmds.shadingNode("aiMultiply", asShader=True)
-        bump_node = cmds.shadingNode("bump2d", asShader=True)
+        aiMult_node = NodeUtils.create_render_node("aiMultiply")
+        bump_node = NodeUtils.create_render_node("bump2d")
         cmds.setAttr(f"{bump_node}.bumpInterp", 1)  # tangent-space normals
 
         Attributes.connect_multi(

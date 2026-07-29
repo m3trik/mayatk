@@ -862,16 +862,16 @@ class HierarchySyncController(ptk.LoggingMixin):
 
         self.logger.log_divider()
 
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
-            HierarchySidecar,
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
         )
 
         if missing:
-            top_missing = HierarchySidecar.get_top_level(missing)
+            top_missing = SceneDataSidecar.get_top_level(missing)
             missing_set = set(missing)
             items = []
             for t in top_missing[:10]:
-                count = HierarchySidecar.count_descendants(t, missing_set)
+                count = SceneDataSidecar.count_descendants(t, missing_set)
                 suffix = f"  ({count} nodes)" if count > 1 else ""
                 items.append(f"  - {t}{suffix}")
             if len(top_missing) > 10:
@@ -883,11 +883,11 @@ class HierarchySyncController(ptk.LoggingMixin):
             )
 
         if extra:
-            top_extra = HierarchySidecar.get_top_level(extra)
+            top_extra = SceneDataSidecar.get_top_level(extra)
             extra_set = set(extra)
             items = []
             for t in top_extra[:10]:
-                count = HierarchySidecar.count_descendants(t, extra_set)
+                count = SceneDataSidecar.count_descendants(t, extra_set)
                 link = self.logger.log_link(t, "select", node=t)
                 suffix = f"  ({count} nodes)" if count > 1 else ""
                 items.append(f"  + {link}{suffix}")

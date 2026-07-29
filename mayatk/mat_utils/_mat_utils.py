@@ -284,6 +284,50 @@ class _MatUtilsInternal(ptk.HelpMixin):
             )
 
     @staticmethod
+    def _classification_tokens(node) -> List[str]:
+        """Role classifications of *node* (an instance, not a type name).
+
+        Resolves the node's type and delegates to
+        :meth:`NodeUtils.get_classification_tokens`, which owns the parsing.
+        """
+        try:
+            node_type = cmds.nodeType(str(node))
+        except Exception:
+            return []
+        return NodeUtils.get_classification_tokens(node_type)
+
+    @staticmethod
+    def _has_role(tokens, *prefixes: str) -> bool:
+        """Whether any classification token starts with one of *prefixes*."""
+        return any(t.startswith(prefixes) for t in tokens)
+
+    @classmethod
+    def _is_surface_shader(cls, node) -> bool:
+        """Whether *node*'s type is classified as a surface shader."""
+        return cls._has_role(cls._classification_tokens(node), "shader/surface")
+
+    @classmethod
+    def _is_utility_node(cls, node) -> bool:
+        """Whether *node* is positively classified as a non-shader utility/texture.
+
+        ``shadingNode -asShader`` parks ANY node type in ``defaultShaderList1``,
+        and that list is exactly what ``cmds.ls(materials=True)`` reports — so a
+        mis-flagged ``aiMultiply`` / ``bump2d`` reads as a material. This is the
+        test that filters them back out.
+
+        Deliberately conservative: a node is rejected only when it *claims* a
+        ``utility/`` / ``texture/`` / ``math/`` role and claims no shader role,
+        so an unclassified custom-plugin shader is still treated as a material.
+        The shader test comes first because a real shader may carry "utility"
+        deeper in its path — ``StingrayPBS`` and ``surfaceShader`` are both
+        classified ``shader/surface/utility``.
+        """
+        tokens = cls._classification_tokens(node)
+        if not tokens or cls._has_role(tokens, "shader/"):
+            return False
+        return cls._has_role(tokens, "utility/", "texture/", "math/")
+
+    @staticmethod
     def _to_strs(nodes) -> List[str]:
         """Coerce a node/node/iterable to a list of plain string names."""
         if nodes is None:
@@ -295,8 +339,26 @@ class _MatUtilsInternal(ptk.HelpMixin):
 
 class MatUtils(_MatUtilsInternal):
     @staticmethod
-    def resolve_path(path: str) -> Union[str, None]:
-        """Resolves a texture path by expanding env vars, checking workspace, and handling UDIMs."""
+    def resolve_path(path: str, search: bool = True) -> Union[str, None]:
+        """Resolve a texture path, expanding env vars and ``<UDIM>`` tokens.
+
+        Parameters:
+            path: The stored ``fileTextureName`` value.
+            search: When True (default) fall back to *hunting* for the texture
+                under the project's ``sourceimages`` — by relative path, then by
+                bare basename. That is what makes this a repair primitive
+                (``resolve_invalid_texture_paths`` writes the result back).
+
+                Pass ``search=False`` to answer the narrower question "does this
+                path resolve the way **Maya** will resolve it" — env-var
+                expansion plus ``workspace(expandName=...)`` only. Validity
+                checks must use this: the basename hunt happily matches a
+                same-named file the node does not point at, so a genuinely
+                broken link would read as valid and ship broken.
+
+        Returns:
+            str|None: The resolved path, or None when it does not resolve.
+        """
         if not path:
             return None
 
@@ -314,6 +376,9 @@ class MatUtils(_MatUtilsInternal):
                 return ws_path
         except Exception:
             pass
+
+        if not search:
+            return None
 
         try:
             ws_root = cmds.workspace(q=True, rd=True)
@@ -841,14 +906,30 @@ class MatUtils(_MatUtilsInternal):
         sort: bool = False,
         as_dict: bool = False,
         exclude_defaults: bool = True,
+        exclude_utility_nodes: bool = True,
+        exc_classification=None,
         **filter_kwargs,
     ):
         """Retrieves all materials from the current scene, with flexible name/type filtering.
 
-        ``exclude_defaults`` (default True) drops Maya's built-in defaults
-        (``lambert1``, ``particleCloud1``, ``shaderGlow1``, ``standardSurface1``,
-        plus anything reported by ``cmds.ls(defaultNodes=True)``). Pass
-        ``exclude_defaults=False`` to include them.
+        Parameters:
+            inc/exc (str/list): Name patterns to keep / drop (shell wildcards).
+            node_type (str/list): Keep only these node types.
+            sort (bool): Sort by short name.
+            as_dict (bool): Return ``{short_name: material}`` instead of a list.
+            exclude_defaults (bool): Drop Maya's built-in defaults (``lambert1``,
+                ``particleCloud1``, ``shaderGlow1``, ``standardSurface1``, plus
+                anything reported by ``cmds.ls(defaultNodes=True)``). Default True.
+            exclude_utility_nodes (bool): Drop nodes that Maya reports as materials
+                only because something registered them with ``shadingNode -asShader``
+                while their classification claims a ``utility/`` / ``texture/`` /
+                ``math/`` role — e.g. an ``aiMultiply`` or ``bump2d`` helper from
+                inside a shading network.
+                Default True; pass False for Maya's raw ``ls(materials=True)`` view.
+            exc_classification (str/list): Drop materials whose classification
+                matches these patterns (shell wildcards, matched per classification
+                token). ``"rendernode/arnold*"`` hides Arnold shaders,
+                ``"rendernode/redshift*"`` Redshift's, and so on.
         """
         mat_list = cmds.ls(materials=True, flatten=True) or []
 
@@ -856,6 +937,19 @@ class MatUtils(_MatUtilsInternal):
             default_nodes = MatUtils._default_material_names()
             mat_list = [
                 m for m in mat_list if CoreUtils.short_name(m) not in default_nodes
+            ]
+
+        if exclude_utility_nodes and mat_list:
+            mat_list = [m for m in mat_list if not MatUtils._is_utility_node(m)]
+
+        if exc_classification and mat_list:
+            # Keep the material when none of its classification tokens matches.
+            mat_list = [
+                m
+                for m in mat_list
+                if not ptk.filter_list(
+                    MatUtils._classification_tokens(m), inc=exc_classification
+                )
             ]
 
         d = {CoreUtils.short_name(m): m for m in mat_list}
@@ -872,20 +966,12 @@ class MatUtils(_MatUtilsInternal):
 
         return sorted(mats, key=CoreUtils.short_name) if sort else mats
 
-    @staticmethod
-    def get_connected_shaders(file_nodes) -> List[str]:
+    @classmethod
+    def get_connected_shaders(cls, file_nodes) -> List[str]:
         """Return surface shaders connected to one or more file nodes, ignoring intermediates."""
-        file_nodes = cmds.ls(_MatUtilsInternal._to_strs(file_nodes), flatten=True) or []
+        file_nodes = cmds.ls(cls._to_strs(file_nodes), flatten=True) or []
         visited = set()
         shaders = set()
-
-        # Maya classifies shaders via the ``shader/surface`` classification.
-        def _is_surface_shader(node):
-            try:
-                cls_strs = cmds.getClassification(cmds.nodeType(node)) or []
-                return any("shader/surface" in c for c in cls_strs)
-            except Exception:
-                return False
 
         def _traverse(node):
             if node in visited:
@@ -897,7 +983,7 @@ class MatUtils(_MatUtilsInternal):
                 # Skip non-shading nodes — only follow shader graph nodes.
                 if cmds.nodeType(out) == "shadingEngine":
                     continue
-                if _is_surface_shader(out):
+                if cls._is_surface_shader(out):
                     shaders.add(out)
                 _traverse(out)
 
@@ -912,8 +998,17 @@ class MatUtils(_MatUtilsInternal):
         materials: Optional[List[str]] = None,
         raw: bool = False,
         return_type: str = "fileNode",
+        exc_classification=None,
     ) -> list:
-        """Returns file node info in any column order based on return_type."""
+        """Returns file node info in any column order based on return_type.
+
+        ``exc_classification`` (str/list, shell wildcards) drops file nodes used
+        *exclusively* by shaders whose classification matches — e.g.
+        ``"rendernode/arnold*"`` hides the duplicate rows an Arnold preview
+        shader contributes (it owns dedicated file nodes per texture). A file
+        node shared with a non-matching shader is kept, so hiding a renderer
+        never hides a texture something else still uses.
+        """
         file_node_names = cmds.ls(type="file") or []
         if not file_node_names:
             return []
@@ -921,7 +1016,10 @@ class MatUtils(_MatUtilsInternal):
         workspace_dir = cmds.workspace(q=True, rd=True) or ""
         columns = return_type.split("|")
         needs_shader = (
-            "shader" in columns or "shaderName" in columns or materials is not None
+            "shader" in columns
+            or "shaderName" in columns
+            or materials is not None
+            or bool(exc_classification)
         )
 
         file_to_shader_name = {}
@@ -931,28 +1029,43 @@ class MatUtils(_MatUtilsInternal):
             shader_attrs = ["surfaceShader", "volumeShader", "displacementShader"]
             processed_shaders = set()
 
+            def _record_shader(shader_name):
+                """Map every file node upstream of *shader_name* onto it."""
+                if not shader_name or shader_name in processed_shaders:
+                    return
+                processed_shaders.add(shader_name)
+                try:
+                    history = cmds.listHistory(shader_name, pruneDagObjects=True) or []
+                    file_nodes_in_history = cmds.ls(history, type="file") or []
+                except Exception:
+                    return
+                for node in file_nodes_in_history:
+                    file_to_shaders.setdefault(node, set()).add(shader_name)
+                    file_to_shader_name.setdefault(node, shader_name)
+
             for sg in shading_engines:
+                # Classic slots first, so a file node driven by several shaders
+                # is still *reported* under the surface shader.
                 for attr_name in shader_attrs:
                     try:
                         connections = cmds.listConnections(
                             f"{sg}.{attr_name}", source=True, destination=False
                         )
-                        if connections:
-                            shader_name = connections[0]
-                            if shader_name in processed_shaders:
-                                continue
-                            processed_shaders.add(shader_name)
-                            history = (
-                                cmds.listHistory(shader_name, pruneDagObjects=True)
-                                or []
-                            )
-                            file_nodes_in_history = cmds.ls(history, type="file") or []
-                            for node in file_nodes_in_history:
-                                file_to_shaders.setdefault(node, set()).add(shader_name)
-                                if node not in file_to_shader_name:
-                                    file_to_shader_name[node] = shader_name
                     except Exception:
-                        pass
+                        continue
+                    if connections:
+                        _record_shader(connections[0])
+                # Renderer-specific slots (Arnold's aiSurfaceShader, and its
+                # equivalents) hold shaders the classic three never see. An
+                # Arnold preview shader owns dedicated file nodes, so missing
+                # it leaves those textures looking like unowned orphans.
+                try:
+                    sources = cmds.listConnections(sg, source=True, destination=False)
+                except Exception:
+                    sources = None
+                for src in sources or []:
+                    if src not in processed_shaders and cls._is_surface_shader(src):
+                        _record_shader(src)
 
         if materials:
             mat_names = {str(m) for m in materials}
@@ -961,6 +1074,30 @@ class MatUtils(_MatUtilsInternal):
                 for fn in file_node_names
                 if mat_names & file_to_shaders.get(fn, set())
             ]
+
+        if exc_classification:
+            excluded = {}  # shader -> verdict, so each shader is classified once
+            kept = []
+            for fn in file_node_names:
+                shaders = file_to_shaders.get(fn) or set()
+                for shader in shaders:
+                    if shader not in excluded:
+                        excluded[shader] = bool(
+                            ptk.filter_list(
+                                cls._classification_tokens(shader),
+                                inc=exc_classification,
+                            )
+                        )
+                allowed = [s for s in shaders if not excluded[s]]
+                if shaders and not allowed:
+                    continue
+                # An unused file node has no shader to judge it by — keep it,
+                # an orphan texture is exactly what this editor exists to surface.
+                kept.append(fn)
+                # Don't label the row with a shader the caller asked to hide.
+                if allowed and file_to_shader_name.get(fn) not in allowed:
+                    file_to_shader_name[fn] = sorted(allowed)[0]
+            file_node_names = kept
 
         file_paths = {}
         for fn in file_node_names:

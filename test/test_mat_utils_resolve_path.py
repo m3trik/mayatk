@@ -64,6 +64,85 @@ class ResolvePathTest(MayaTkTestCase):
         out = MatUtils.resolve_path(ref)
         self.assertIsNotNone(out, "UDIM-token path should resolve via 1001 tile")
 
+    def test_search_false_rejects_the_basename_hunt(self):
+        """search=False must not match a same-named file the path doesn't point at.
+
+        resolve_path is two things at once: a repair primitive (hunt for the
+        texture anywhere sensible, write the result back) and a validity probe
+        (does THIS path resolve the way Maya will resolve it). The hunt makes it
+        unusable for the second job — a node pointing at a stale directory would
+        read as valid and still ship a broken link.
+        Added: 2026-07-29
+        """
+        ws_root = tempfile.mkdtemp(prefix="resolve_ws_strict_")
+        si = os.path.join(ws_root, "sourceimages")
+        os.makedirs(si, exist_ok=True)
+        decoy = os.path.join(si, "stale.png")
+        with open(decoy, "w") as f:
+            f.write("dummy")
+
+        # The node points at a directory that doesn't exist; only the basename
+        # matches something under sourceimages.
+        stale_ref = os.path.join(self.tmp, "gone_dir", "stale.png").replace("\\", "/")
+
+        original_ws = cmds.workspace(q=True, rd=True)
+        try:
+            cmds.workspace(ws_root, openWorkspace=True)
+            self.assertIsNotNone(
+                MatUtils.resolve_path(stale_ref),
+                "default (search=True) should still find it — that's the repair path",
+            )
+            self.assertIsNone(
+                MatUtils.resolve_path(stale_ref, search=False),
+                "search=False must not accept a basename match",
+            )
+        finally:
+            try:
+                if original_ws and os.path.isdir(original_ws):
+                    cmds.workspace(original_ws, openWorkspace=True)
+            except Exception:
+                pass
+            shutil.rmtree(ws_root, ignore_errors=True)
+
+    def test_search_false_keeps_env_udim_and_workspace_resolution(self):
+        """search=False still expands env vars, <UDIM>, and workspace-relative paths.
+
+        Added: 2026-07-29
+        """
+        os.environ["MTK_TEST_TEX_DIR"] = self.tmp
+        try:
+            self.assertIsNotNone(
+                MatUtils.resolve_path("$MTK_TEST_TEX_DIR/real.png", search=False)
+            )
+        finally:
+            del os.environ["MTK_TEST_TEX_DIR"]
+
+        udim_real = os.path.join(self.tmp, "tile_1001.png")
+        with open(udim_real, "w") as f:
+            f.write("dummy")
+        ref = os.path.join(self.tmp, "tile_<UDIM>.png").replace("\\", "/")
+        self.assertIsNotNone(MatUtils.resolve_path(ref, search=False))
+
+        ws_root = tempfile.mkdtemp(prefix="resolve_ws_rel_")
+        si = os.path.join(ws_root, "sourceimages")
+        os.makedirs(si, exist_ok=True)
+        with open(os.path.join(si, "rel.png"), "w") as f:
+            f.write("dummy")
+        original_ws = cmds.workspace(q=True, rd=True)
+        try:
+            cmds.workspace(ws_root, openWorkspace=True)
+            self.assertIsNotNone(
+                MatUtils.resolve_path("sourceimages/rel.png", search=False),
+                "workspace(expandName=...) is how Maya resolves it — must survive",
+            )
+        finally:
+            try:
+                if original_ws and os.path.isdir(original_ws):
+                    cmds.workspace(original_ws, openWorkspace=True)
+            except Exception:
+                pass
+            shutil.rmtree(ws_root, ignore_errors=True)
+
     def test_resolves_from_workspace_sourceimages(self):
         """A bare basename should resolve when found under workspace sourceimages."""
         ws_root = tempfile.mkdtemp(prefix="resolve_ws_")

@@ -100,6 +100,21 @@ class TexturePathEditorSlots:
         )
         btn_reload.clicked.connect(self.reload_scene_textures)
 
+        chk_exc_arnold = widget.menu.add(
+            "QCheckBox",
+            setText="Exclude Arnold Nodes",
+            setObjectName="chk_exclude_arnold",
+            setChecked=False,
+            setToolTip=(
+                "Hide rows whose texture is used only by an Arnold shader.\n"
+                "An Arnold preview shader (Materials ▸ Arnold Preview Shader) "
+                "owns a dedicated file node per texture, so every bridged "
+                "material contributes a duplicate row for the same image.\n"
+                "A texture shared with a non-Arnold shader is always shown."
+            ),
+        )
+        chk_exc_arnold.toggled.connect(lambda *_: self.refresh_texture_table())
+
         widget.menu.add("Separator", setTitle="Path Management")
         widget.menu.add(
             self.sb.registered_widgets.PushButton,
@@ -206,6 +221,10 @@ class TexturePathEditorSlots:
                             "<b>Open Source Images</b> — Explorer shortcut.",
                             "<b>Reload Scene Textures</b> — force Maya to re-read "
                             "all textures from disk (useful after relocations).",
+                            "<b>Exclude Arnold Nodes</b> — hide rows whose texture "
+                            "is used only by an Arnold shader (a preview shader "
+                            "owns a duplicate file node per texture). Also narrows "
+                            "the <i>all</i> scope, so path commands skip them too.",
                         ],
                     ),
                     (
@@ -410,12 +429,26 @@ class TexturePathEditorSlots:
     # Smart scope
     # ------------------------------------------------------------------
 
+    def _exclude_arnold_pattern(self):
+        """Classification pattern behind the header's "Exclude Arnold Nodes" toggle.
+
+        Returns None (no filtering) when the toggle is off or the header menu
+        hasn't been built yet, so an early refresh is safe.
+        """
+        header = getattr(self.ui, "header", None)
+        menu = getattr(header, "menu", None) if header else None
+        chk = getattr(menu, "chk_exclude_arnold", None) if menu else None
+        return "rendernode/arnold*" if (chk and chk.isChecked()) else None
+
     def _get_scope_nodes(self):
         """Return (nodes, scope_label).
 
         Selection-aware: returns selected rows' file nodes if any, otherwise
         all file nodes in the scene. ``scope_label`` is a human-readable
         descriptor used in dialog titles and info logs.
+
+        The "all" scope honors the header's Exclude Arnold Nodes toggle, so a
+        path command never touches rows the panel is hiding.
 
         Distinguishes "no selection" (fall through to all) from "selection
         with no valid file nodes" (warn + return empty) so a user with a
@@ -435,7 +468,13 @@ class TexturePathEditorSlots:
             cmds.warning("Selected row(s) contain no valid file nodes; nothing to do.")
             return [], "selected (no valid file nodes)"
 
-        all_nodes = cmds.ls(type="file") or []
+        exc_classification = self._exclude_arnold_pattern()
+        if exc_classification:
+            all_nodes = MatUtils.get_file_nodes(
+                return_type="fileNode", exc_classification=exc_classification
+            )
+        else:
+            all_nodes = cmds.ls(type="file") or []
         return all_nodes, f"all {len(all_nodes)} file node(s)"
 
     # ------------------------------------------------------------------
@@ -1589,7 +1628,9 @@ class TexturePathEditorSlots:
             widget.setUpdatesEnabled(False)
             widget.clear()
             rows = MatUtils.get_file_nodes(
-                return_type="shaderName|path|fileNodeName", raw=True
+                return_type="shaderName|path|fileNodeName",
+                raw=True,
+                exc_classification=self._exclude_arnold_pattern(),
             )
             if not rows:
                 rows = [("", "", "No file nodes found")]

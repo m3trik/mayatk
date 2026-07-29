@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.13.12"
+__version__ = "0.13.15"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -117,6 +117,7 @@ DEFAULT_INCLUDE = {
         "HierarchySync",
         "ObjectSwapper",
     ],
+    "env_utils.hierarchy_sync.scene_data_sidecar": "SceneDataSidecar",
     "env_utils.fbx_utils": "FbxUtils",
     # USD import/export over the native mayaUsd runtime — the USD sibling of
     # FbxUtils (mirrored by blendertk's ``env_utils.usd``: mtk.UsdUtils ↔

@@ -27,6 +27,7 @@ except ImportError as error:
     print(__file__, error)
 
 import mayatk as mtk
+from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.mat_utils.arnold_bridge import ArnoldBridgeSlots
 
 ArnoldBridge = mtk.ArnoldBridge
@@ -191,6 +192,98 @@ class ArnoldBridgeTest(unittest.TestCase):
         # New DG node (Maya may recycle the freed name, so compare by UUID).
         self.assertNotEqual(first_uuid, second_uuid)
         self.assertEqual(_ai_count(), 1)  # old bridge fully replaced
+
+    def test_helpers_are_utility_nodes_not_materials(self):
+        """The aiMultiply / bump2d helpers must not register as shaders.
+
+        Creating them with ``shadingNode -asShader`` parked them in
+        ``defaultShaderList1``, so ``cmds.ls(materials=True)`` (and every
+        materials list built on it, including tentacle's materials combo)
+        listed 'aiMultiply1' / 'bump2d1' alongside real shaders.
+        """
+        maps = ["model_BaseColor.png", "model_Normal_OpenGL.png"]
+        shader, _, _ = self._make_base_material("matA", maps)
+        self.bridge.add(materials=shader)
+
+        ai = self.bridge.get_bridge(shader)
+        helpers = cmds.ls(
+            cmds.listHistory(ai) or [], type=["aiMultiply", "bump2d"]
+        ) or []
+        self.assertTrue(helpers, "expected aiMultiply + bump2d helpers")
+
+        mats = set(cmds.ls(materials=True) or [])
+        leaked = mats.intersection(helpers)
+        self.assertFalse(leaked, f"bridge helpers registered as shaders: {leaked}")
+        # The bridge shader itself IS a material and must stay listed.
+        self.assertIn(ai, mats)
+
+    def test_bridge_file_nodes_hidden_by_exc_classification(self):
+        """The Texture Path Editor's "Exclude Arnold Nodes" toggle must hide these.
+
+        The bridge owns a dedicated file node per texture, so each bridged
+        material doubles the rows in the panel. Requires the bridge shader to
+        be discoverable: it drives the SG's ``aiSurfaceShader`` slot, not
+        ``surfaceShader``.
+        """
+        maps = ["model_BaseColor.png", "model_Roughness.png"]
+        shader, _, base_files = self._make_base_material("matA", maps)
+        self.bridge.add(materials=shader)
+        bridge_files = self._bridge_file_nodes(shader)
+        self.assertTrue(bridge_files, "expected dedicated bridge file nodes")
+
+        kept = MatUtils.get_file_nodes(
+            return_type="fileNodeName", exc_classification="rendernode/arnold*"
+        )
+        for fn in bridge_files:
+            self.assertNotIn(fn, kept, f"Arnold-only file node still listed: {fn}")
+        for fn in base_files:
+            self.assertIn(fn, kept, f"base material's texture was hidden: {fn}")
+
+        # Unfiltered, the bridge's textures report the bridge shader — they
+        # used to come back with an empty Shader column (the SG's Arnold slot
+        # wasn't read), which also made them look like unowned orphans.
+        ai = self.bridge.get_bridge(shader)
+        owners = dict(
+            MatUtils.get_file_nodes(return_type="fileNodeName|shaderName")
+        )
+        for fn in bridge_files:
+            self.assertEqual(owners.get(fn), ai)
+        for fn in base_files:
+            self.assertEqual(owners.get(fn), shader)
+
+    def test_bridge_discoverable_via_arnold_sg_slot(self):
+        """The bridge must stay hideable after its own empty SG is cleaned up.
+
+        ``create_render_node`` gives the aiStandardSurface a shading group of
+        its own, which has no members — exactly what "Delete All Unused
+        Materials" removes. Once it's gone, the only link from a shading group
+        to the bridge is the SG's ``aiSurfaceShader`` slot, so shader discovery
+        has to read that slot too.
+        """
+        shader, sg, _ = self._make_base_material("matA", ["model_BaseColor.png"])
+        self.bridge.add(materials=shader)
+        ai = self.bridge.get_bridge(shader)
+        bridge_files = self._bridge_file_nodes(shader)
+
+        # Drop the bridge's own member-less shading group.
+        own_sgs = [
+            s
+            for s in (cmds.listConnections(ai, type="shadingEngine") or [])
+            if s != sg
+        ]
+        self.assertTrue(own_sgs, "expected an auto-created SG on the bridge shader")
+        cmds.delete(own_sgs)
+        self.assertEqual(
+            cmds.listConnections(f"{sg}.aiSurfaceShader", source=True, destination=False),
+            [ai],
+            "bridge must still drive the base SG's Arnold slot",
+        )
+
+        kept = MatUtils.get_file_nodes(
+            return_type="fileNodeName", exc_classification="rendernode/arnold*"
+        )
+        for fn in bridge_files:
+            self.assertNotIn(fn, kept, f"Arnold-only file node still listed: {fn}")
 
     # ----------------------------------------------------- robustness (scope)
     def test_get_shading_engine_nonexistent_returns_none(self):

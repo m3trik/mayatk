@@ -66,6 +66,11 @@ class ShellXformSlots(ptk.LoggingMixin):
     # blow the grid math up, so the arrow falls back to a whole tile.
     _MIN_EXTENT = 1e-6
 
+    # Map size the tile border padding derives from. The normalized margin is
+    # map-size-invariant (``uv_tile_margin`` == 1/512 at every resolution), so
+    # this only names the rule — the panel needs no map-size control.
+    _MAP_SIZE = 4096
+
     def __init__(self, switchboard, log_level: str = "WARNING"):
         super().__init__()
         self.logger.setLevel(log_level)
@@ -107,7 +112,11 @@ class ShellXformSlots(ptk.LoggingMixin):
                     "<b>Move</b> nudges the selection by one <i>scope</i> — a "
                     "whole tile, a fraction of one, or the selection's own size. "
                     "The grid button (▦) snaps the result onto that scope's grid "
-                    "instead of offsetting relatively.",
+                    "instead of offsetting relatively, inset by the border "
+                    "padding so shells never touch a tile border.",
+                    "<b>Gather to Tile</b> moves shells sitting outside the "
+                    "selection's UDIM tile into it — whole-tile offsets keep "
+                    "each shell's sub-tile position (no repack).",
                     "<b>Flip / Rotate</b> mirrors or spins the UVs about their "
                     "center (rotation amount = the angle field).",
                     "<b>Straighten / Mirror / Distribute</b> each expose their "
@@ -210,12 +219,27 @@ class ShellXformSlots(ptk.LoggingMixin):
         snap = self._snap_enabled()
         # Snap anchors on the selection's lower-left corner, so "up" means the
         # shell's bottom edge lands on the next grid line — what the eye expects.
-        u_min, v_min = bounds[0], bounds[1]
+        # The grid is offset by the tile border padding, so a snapped shell sits
+        # just inside the line rather than on it (a shell exactly on a tile seam
+        # bleeds across it at render time). Snapping the *unpadded* anchor and
+        # adding the margin back keeps the grid uniform in both directions —
+        # padding the result instead would strand the reverse press on the
+        # margin it just added, and the arrow would read as dead.
+        margin = self._border_margin() if snap else 0.0
+        u_min, v_min = bounds[0] - margin, bounds[1] - margin
         UvUtils.move_to_uv_space(
             selection,
             ptk.MathUtils.step_offset(u_min, step_u, du, snap=snap),
             ptk.MathUtils.step_offset(v_min, step_v, dv, snap=snap),
         )
+
+    def _border_margin(self) -> float:
+        """Normalized tile border the snap keeps clear.
+
+        Gather derives the same margin inside the engine from the same
+        ``_MAP_SIZE``, so both routes inset by an identical amount.
+        """
+        return ptk.MathUtils.uv_tile_margin(self._MAP_SIZE)
 
     def b023(self):
         """Move To UV Space: Left"""
@@ -232,6 +256,30 @@ class ShellXformSlots(ptk.LoggingMixin):
     def b026(self):
         """Move To UV Space: Right"""
         self._move(1, 0)
+
+    def gather_to_udim(self):
+        """Move shells sitting outside the selection's UDIM tile into it.
+
+        The cheap counterpart to a repack: each stray shell keeps its
+        sub-tile position, inset by the same border padding the snap uses.
+        The target tile is the one most of the selection's shells already
+        occupy, so the majority stays put.
+        """
+        selection = self._selection_or_warn(
+            "<b>Nothing selected.</b><br>Select mesh(es), faces, or UVs to gather."
+        )
+        if not selection:
+            return
+
+        moved = UvUtils.gather_to_udim(selection, map_size=self._MAP_SIZE)
+        if moved is None:
+            self.sb.message_box(
+                "<b>No UVs found.</b><br>Select a mesh, faces, edges, or UVs."
+            )
+        elif not moved:
+            self.sb.message_box(
+                "<b>Nothing to gather.</b><br>Every shell is in the tile."
+            )
 
     # ------------------------------------------------------------------ flip / rotate (b034-b037)
     def _flip_uvs(self, axis):

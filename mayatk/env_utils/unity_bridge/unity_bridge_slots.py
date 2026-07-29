@@ -58,11 +58,16 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
         "No project yet? Create one via 'New Unity Project...' in the field's menu."
     )
 
-    # Single delivery target: export the selection and copy the FBX into the Unity
-    # project's Assets/ (optionally launching the chosen Editor). Matches the shared
-    # CopyToAssetsDeliverer's one mode; the combo shows it under a friendly label.
+    # Two combo entries: the export delivery (copy the FBX into Assets/), and
+    # the unitytk script management flow (status / install-update / uninstall
+    # of the embedded com.m3trik.unitytk package) — panel-native, driven by its
+    # own SCRIPTS_ACTION parameter rather than a buried menu button.
     MODE_COPY = "copy_to_assets"
-    MODE_LABELS = {MODE_COPY: "Copy to Project"}
+    MODE_MANAGE = "manage_scripts"
+    MODE_LABELS = {
+        MODE_COPY: "Copy to Project",
+        MODE_MANAGE: "Manage Unity Scripts",
+    }
 
     # The project actions (Set / Open / New) live on the Unity Project field's
     # option menu now (see _configure_output_dir_options), co-located with the
@@ -94,6 +99,10 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
         "notes": [
             "Embedded textures (default) ride inside the FBX so Unity extracts the maps.",
             "Copying into Assets/ is non-destructive to a running Unity session.",
+            "The <b>Manage Unity Scripts</b> template installs, updates, "
+            "inspects or removes unitytk's C# import automation in the project "
+            "(the embedded <i>com.m3trik.unitytk</i> package); per-channel "
+            "toggles live in Unity under Project Settings ▸ unitytk.",
         ],
     }
 
@@ -114,18 +123,20 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
         return _PKG_DIR
 
     def make_bridge(self):
-        """Build the engine, offering to install the optional unitytk if absent.
+        """Build the engine, or ``None`` when the optional unitytk is absent.
 
-        The engine defers its ``unitytk`` import, so the check happens here --
-        where there is a UI to ask in -- rather than surfacing as an import
-        error when the module is merely loaded.
+        SILENT on purpose -- this runs from ``__init__`` (via the log wiring),
+        and a modal raised from a constructor is parented to a window that does
+        not exist yet, stranding an undismissable dialog if construction then
+        fails. The panel opens either way; installing unitytk is an explicit
+        action on the Unity Scripts template.
         """
-        if not self.ensure_optional_package("unitytk", feature="Unity Bridge"):
+        if not self.optional_package_available("unitytk"):
             return None
         return UnityBridge()
 
     def list_template_modes(self):
-        return [(self.MODE_COPY, "")]
+        return [(self.MODE_COPY, ""), (self.MODE_MANAGE, "")]
 
     def _format_combo_label(self, template, mode):
         # Friendly label over the internal stem.
@@ -136,10 +147,14 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
         return ""
 
     def _relevant_param_keys(self):
-        # Copy-to-assets is template-free, so every parameter stays visible (no
-        # per-template gating). Explicit so visibility never silently depends on
-        # the absence of a 'copy_to_assets.py' file in the package dir.
-        return None
+        # Copy-to-assets shows every export param; Manage Unity Scripts shows
+        # only its action combo. Explicit (not file-driven) so visibility never
+        # silently depends on the absence of a template file in the package dir.
+        pair = self._selected_template_mode()
+        template = pair[0] if pair else self.MODE_COPY
+        if template == self.MODE_MANAGE:
+            return {"SCRIPTS_ACTION"}
+        return set(self.params_module.PARAMS) - {"SCRIPTS_ACTION"}
 
     def _configure_output_dir_options(self, edit) -> None:
         """Unity Project field: recent-history button + an option menu of project
@@ -193,6 +208,79 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
     def _open_project_folder(self) -> None:
         """Reveal the configured Unity project folder."""
         self.reveal_folder(self.resolved_output_dir())
+
+    def _manage_unity_scripts(self, action: str) -> None:
+        """Run the Manage Unity Scripts template's chosen *action*.
+
+        Status / install-update / uninstall of the embedded
+        ``Packages/com.m3trik.unitytk`` UPM package in the configured project.
+        Logs via :meth:`panel_log` throughout — every branch here must be able
+        to report while the optional engine is missing.
+        """
+        project = self.resolved_output_dir()
+        if not project:
+            self.panel_log(
+                "Set the Unity Project folder first (the one containing "
+                "'Assets/').",
+                "error",
+            )
+            if self._output_dir_edit is not None:
+                self._output_dir_edit.setFocus()
+            return
+
+        if action == "install":
+            # Explicit action — prompting to install the DCC-side unitytk
+            # package is appropriate here (and only here).
+            if not self.ensure_optional_package("unitytk", feature="Unity Bridge"):
+                return
+        elif not self.optional_package_available("unitytk"):
+            self.panel_log(
+                "The unitytk python package is not installed in this session — "
+                "run the 'Install / Update' action first.",
+                "error",
+            )
+            return
+        from unitytk import TemplateDeployer
+
+        try:
+            if action == "install":
+                written = TemplateDeployer.deploy_package(project)
+                self.panel_log(
+                    f"Deployed the com.m3trik.unitytk package ({len(written)} "
+                    f"files) into {project} — Unity picks it up on its next "
+                    f"focus. Per-channel toggles: Project Settings ▸ unitytk."
+                )
+            elif action == "uninstall":
+                removed = TemplateDeployer.uninstall_package(project)
+                self.panel_log(
+                    f"Removed {TemplateDeployer.package_dir(project)}."
+                    if removed
+                    else "Nothing to uninstall — the package is not deployed."
+                )
+            else:  # status (the default)
+                info = TemplateDeployer.status(project)
+                if not info["installed"]:
+                    self.panel_log(
+                        f"Unity scripts: NOT deployed to {project} "
+                        f"(this unitytk release: {info['bundled_version']})."
+                    )
+                else:
+                    state = (
+                        "up to date"
+                        if info["up_to_date"]
+                        else f"needs update (this release: {info['bundled_version']})"
+                    )
+                    self.panel_log(
+                        f"Unity scripts: deployed v{info['version']} — {state}."
+                    )
+                    if info["missing"]:
+                        self.panel_log(
+                            "Missing files (partial deploy — run Install / "
+                            "Update): " + ", ".join(info["missing"]),
+                            "warning",
+                        )
+        except Exception as e:  # noqa: BLE001
+            self.panel_log(f"Unity scripts {action} failed: {e}", "error")
 
     def _new_unity_project(self) -> None:
         """Create a new Unity project (version + location) and load it into the field."""
@@ -272,7 +360,14 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
 
     # ------------------------------------------------------------------ b000 -- send
     def b000(self):
-        """Export per the chosen Scope and copy the FBX into the Unity project."""
+        """Run the selected template: export-and-copy, or script management."""
+        pair = self._selected_template_mode()
+        template = pair[0] if pair else self.MODE_COPY
+        if template == self.MODE_MANAGE:
+            action = self.collect_param_values().get("SCRIPTS_ACTION", "status")
+            self._manage_unity_scripts(action)
+            return
+
         if cmds is None:
             self.bridge.logger.error("Maya is not available; cannot run the Unity bridge.")
             return

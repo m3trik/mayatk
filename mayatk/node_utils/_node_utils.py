@@ -612,6 +612,35 @@ class NodeUtils(ptk.HelpMixin):
         result = ptk.filter_list(result, inc, exc)
         return ptk.format_return(list(set(result)), nodes)
 
+    @staticmethod
+    def get_classification_tokens(node_type: str) -> List[str]:
+        """Role classifications of *node_type* — ``shader/surface``, ``utility/math``, …
+
+        ``drawdb/`` (viewport draw override) and ``swatch/`` (swatch renderer)
+        tokens are dropped: they describe how a node is *drawn*, not what it is,
+        and their paths embed misleading substrings — Arnold's ``aiBump2d``
+        carries ``drawdb/shader/surface/arnold/genericShader`` while its actual
+        role is ``utility/shader``. Match against these tokens, never against
+        the raw ``cmds.getClassification`` strings.
+
+        A type classified *only* by its draw override (``adskMaterial`` is just
+        ``drawdb/shader/surface/adskMaterial``) has nothing else to go on, so
+        that path is returned with the ``drawdb/`` prefix stripped — the best
+        role hint available rather than "no role at all".
+
+        Returns an empty list for an unknown / unclassified type, so callers
+        simply don't match instead of raising.
+        """
+        try:
+            raw = cmds.getClassification(str(node_type)) or []
+        except Exception:
+            return []
+        tokens = [tok for entry in raw for tok in str(entry).split(":") if tok]
+        roles = [t for t in tokens if not t.startswith(("drawdb/", "swatch/"))]
+        if roles:
+            return roles
+        return [t.split("/", 1)[1] for t in tokens if t.startswith("drawdb/")]
+
     @classmethod
     def create_render_node(
         cls,
@@ -642,20 +671,24 @@ class NodeUtils(ptk.HelpMixin):
             return "asShader"
 
         if classification is None or category is None:
-            classification_string = cmds.getClassification(node_type) or []
-            if any("shader/surface" in c for c in classification_string):
+            # Role tokens only — matching the raw classification strings would
+            # read a node's draw override as its role (Arnold's aiBump2d is
+            # drawn as 'drawdb/shader/surface/...' but IS 'utility/shader',
+            # so it would be created asShader, with a shading group).
+            tokens = cls.get_classification_tokens(node_type)
+            if any(t.startswith("shader/surface") for t in tokens):
                 classification = classification or "asShader"
                 category = category or "surfaceShader"
-            elif any("texture/3d" in c for c in classification_string):
+            elif any("texture/3d" in t for t in tokens):
                 classification = classification or "as3DTexture"
                 category = category or ""
-            elif any("texture/environment" in c for c in classification_string):
+            elif any("texture/environment" in t for t in tokens):
                 classification = classification or "asEnvTexture"
                 category = category or ""
-            elif any("texture" in c for c in classification_string):
+            elif any("texture" in t for t in tokens):
                 classification = classification or "as2DTexture"
                 category = category or ""
-            elif any("light" in c for c in classification_string):
+            elif any("light" in t for t in tokens):
                 classification = classification or "asLight"
                 category = category or "defaultLight"
             else:
