@@ -2075,10 +2075,10 @@ Maya Connection Module
 
 Unity bridge engine -- export the Maya selection into a Unity project's Assets/.
 
-- **[`class UnityBridge(MayaExportMixin, ptk.HandoffBridge)`](mayatk/mayatk/env_utils/unity_bridge/_unity_bridge.py#L43)** — Export the Maya selection and copy it into a Unity project's ``Assets/``.
+- **[`class UnityBridge(MayaExportMixin, ptk.HandoffBridge)`](mayatk/mayatk/env_utils/unity_bridge/_unity_bridge.py#L37)** — Export the Maya selection and copy it into a Unity project's ``Assets/``.
   - `UnityBridge.list_template_modes(self)`
   - `UnityBridge.params_defaults(self)`
-  - `UnityBridge.list_delivery_modes() -> List[Tuple[str, str]]` *(static)* — ``[(mode_stem, ""), ...]`` for the panel's delivery combo.
+  - `UnityBridge.list_delivery_modes(cls) -> List[Tuple[str, str]]` *(class)* — ``[(mode_stem, ""), ...]`` for the panel's delivery combo.
 
 <a id="env_utils--unity_bridge--parameters"></a>
 ### `env_utils/unity_bridge/parameters.py`
@@ -2098,7 +2098,7 @@ Slots for the Unity bridge panel.
 - **[`class UnityBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/env_utils/unity_bridge/unity_bridge_slots.py#L39)** — Slots wired to ``unity_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
   - `UnityBridgeSlots.params_module(self)` *(property)*
   - `UnityBridgeSlots.template_dir(self) -> Path` *(property)*
-  - `UnityBridgeSlots.make_bridge(self) -> UnityBridge`
+  - `UnityBridgeSlots.make_bridge(self)` — Build the engine, offering to install the optional unitytk if absent.
   - `UnityBridgeSlots.list_template_modes(self)`
   - `UnityBridgeSlots.default_output_dir(self) -> str`
   - `UnityBridgeSlots.b000(self)` — Export per the chosen Scope and copy the FBX into the Unity project.

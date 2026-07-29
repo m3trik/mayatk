@@ -113,7 +113,15 @@ class UnityBridgeSlots(MayaBridgeSlotsBase):
         # a harmless stand-in for the (no-op) per-template description lookup.
         return _PKG_DIR
 
-    def make_bridge(self) -> UnityBridge:
+    def make_bridge(self):
+        """Build the engine, offering to install the optional unitytk if absent.
+
+        The engine defers its ``unitytk`` import, so the check happens here --
+        where there is a UI to ask in -- rather than surfacing as an import
+        error when the module is merely loaded.
+        """
+        if not self.ensure_optional_package("unitytk", feature="Unity Bridge"):
+            return None
         return UnityBridge()
 
     def list_template_modes(self):

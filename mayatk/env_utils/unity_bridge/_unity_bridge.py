@@ -28,23 +28,10 @@ from typing import List, Optional, Tuple
 
 import pythontk as ptk
 
-try:
-    from unitytk import CopyToAssetsDeliverer
-except ImportError as error:  # optional dependency -- Unity users only
-    raise ImportError(
-        "The Unity Bridge needs the optional 'unitytk' package, which is not "
-        "installed. Install it with:  pip install mayatk[unity]\n"
-        "(Every other mayatk feature works without it.)"
-    ) from error
-
 from mayatk.env_utils.handoff_export import MayaExportMixin
 
 
 _PKG_DIR = Path(__file__).resolve().parent
-
-
-# Module-level helper so the slots can populate the combo without a live engine. Single-sources the
-# delivery modes from the shared deliverer (the seam for a future ``executeMethod`` mode).
 
 
 class UnityBridge(MayaExportMixin, ptk.HandoffBridge):
@@ -57,10 +44,24 @@ class UnityBridge(MayaExportMixin, ptk.HandoffBridge):
 
     payload_prefix = "mtk_to_unity"
 
+    @staticmethod
+    def _deliverer_cls():
+        """unitytk's deliverer, imported on use rather than at module scope.
+
+        ``unitytk`` is an optional distribution (``pip install mayatk[unity]``).
+        Deferring the import keeps a missing one from raising while the module
+        is merely being imported -- which would fire before any UI exists to say
+        so -- and lets the panel offer to install it on demand instead
+        (:meth:`uitk.bridge.BridgeSlotsBase.ensure_optional_package`).
+        """
+        from unitytk import CopyToAssetsDeliverer
+
+        return CopyToAssetsDeliverer
+
     def __init__(self, project_path: Optional[str] = None):
         super().__init__()
         self.project_path = project_path
-        self.deliverer = CopyToAssetsDeliverer()
+        self.deliverer = self._deliverer_cls()()
 
     # ------------------------------------------------------------------ bindings
     def list_template_modes(self):
@@ -83,10 +84,10 @@ class UnityBridge(MayaExportMixin, ptk.HandoffBridge):
 
         return CoreUtils.leaf_name(objects[0])
 
-    @staticmethod
-    def list_delivery_modes() -> List[Tuple[str, str]]:
+    @classmethod
+    def list_delivery_modes(cls) -> List[Tuple[str, str]]:
         """``[(mode_stem, ""), ...]`` for the panel's delivery combo."""
-        return list(CopyToAssetsDeliverer.DELIVERY_MODES)
+        return list(cls._deliverer_cls().DELIVERY_MODES)
 
 
 # -----------------------------------------------------------------------------

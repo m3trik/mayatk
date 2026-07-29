@@ -74,6 +74,20 @@ class TestScriptOutput(unittest.TestCase):
 
         from qtpy import QtGui, QtCore, QtTest, QtWidgets
 
+        # The OS clipboard is a machine-global resource: any other process can
+        # hold it open, and the set then fails silently so ``text()`` comes back
+        # empty — a false failure that says nothing about the copy path under
+        # test. (This suite runs in a GUI Maya, i.e. a real platform, so there
+        # is no in-memory offscreen clipboard to fall back on.) Probe rather
+        # than key off the platform, so a genuine Ctrl+C regression still fails.
+        _cb = QtWidgets.QApplication.clipboard()
+        _cb.setText("mtk-clipboard-probe")
+        if _cb.text() != "mtk-clipboard-probe":
+            self.skipTest(
+                "OS clipboard is unavailable in this environment "
+                "(another process holds it)."
+            )
+
         module = self._import_script_output()
         ScriptOutput = module.ScriptOutput
 

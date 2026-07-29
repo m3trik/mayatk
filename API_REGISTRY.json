@@ -12405,7 +12405,7 @@
         {
           "name": "UnityBridge",
           "summary": "Export the Maya selection and copy it into a Unity project's ``Assets/``.",
-          "line": 43,
+          "line": 37,
           "bases": [
             "MayaExportMixin",
             "ptk.HandoffBridge"
@@ -12417,7 +12417,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 59,
+              "line": 67,
               "deprecated": false
             },
             {
@@ -12426,16 +12426,16 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 62,
+              "line": 70,
               "deprecated": false
             },
             {
               "name": "list_delivery_modes",
               "qualname": "UnityBridge.list_delivery_modes",
-              "kind": "staticmethod",
-              "signature": "() -> List[Tuple[str, str]]",
+              "kind": "classmethod",
+              "signature": "(cls) -> List[Tuple[str, str]]",
               "summary": "``[(mode_stem, \"\"), ...]`` for the panel's delivery combo.",
-              "line": 80,
+              "line": 88,
               "deprecated": false
             }
           ]
@@ -12519,8 +12519,8 @@
               "name": "make_bridge",
               "qualname": "UnityBridgeSlots.make_bridge",
               "kind": "method",
-              "signature": "(self) -> UnityBridge",
-              "summary": "",
+              "signature": "(self)",
+              "summary": "Build the engine, offering to install the optional unitytk if absent.",
               "line": 116,
               "deprecated": false
             },
@@ -12530,7 +12530,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 119,
+              "line": 127,
               "deprecated": false
             },
             {
@@ -12539,7 +12539,7 @@
               "kind": "method",
               "signature": "(self) -> str",
               "summary": "",
-              "line": 126,
+              "line": 134,
               "deprecated": false
             },
             {
@@ -12548,7 +12548,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Export per the chosen Scope and copy the FBX into the Unity project.",
-              "line": 266,
+              "line": 274,
               "deprecated": false
             }
           ]
