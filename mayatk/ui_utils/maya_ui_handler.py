@@ -138,18 +138,20 @@ class MayaUiHandler(UiHandler):
 
         return super().get(name, reload=reload, **kwargs)
 
-    def apply_styles(self, ui, style=None):
-        """Override to give mayatk-sourced UIs a hide button instead of pin."""
-        import copy
+    def default_persistence(self, ui) -> str:
+        """mayatk-sourced UIs stay open by default (hide button, not pin).
 
-        style = copy.deepcopy(style or self.DEFAULT_STYLE)
+        A tool panel popped from a marking-menu button is doing work the user
+        came for, so it shouldn't vanish when they leave the menu. This is a
+        *default*, not a hardcode: the UI Browser's global setting and its
+        per-window overrides both outrank it (see ``UiHandler.resolve_persistence``).
+        """
         try:
             if ui.has_tags(["mayatk"]):
-                style["header_buttons"] = ("menu", "collapse", "hide")
+                return self.PERSISTENCE_STICKY
         except AttributeError:
             pass
-        # Pass pre-built style so the base skips its own deepcopy.
-        super().apply_styles(ui, style=style)
+        return super().default_persistence(ui)
 
     def _load_maya_ui(
         self,

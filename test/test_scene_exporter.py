@@ -769,6 +769,152 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertTrue(any("rel_big.png" in m for m in messages))
 
     # ------------------------------------------------------------------
+    # check_valid_paths — scoped to the textures that actually ship
+    # ------------------------------------------------------------------
+
+    def test_check_valid_paths_ignores_unassigned_file_nodes(self):
+        """File nodes outside the export materials must not be reported.
+
+        Bug: the check scanned every ``file`` node in the scene, so it flagged
+        the Arnold skydome's HDR (already dropped by exclude_hdr) and the
+        orphaned file nodes left behind when reassign_duplicate_materials
+        deletes a duplicate shader — neither ever reaches the FBX.
+        Added: 2026-07-29
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        good = os.path.join(sourceimages, "assigned.png")
+        with open(good, "wb") as f:
+            f.write(b"PNGDATA")
+        self._assign_texture(self.cube, good)
+
+        # A stray file node with a broken path, connected to nothing.
+        stray = cmds.shadingNode("file", asTexture=True, name="stray_hdr_file")
+        cmds.setAttr(
+            f"{stray}.fileTextureName", "/nonexistent/machine_shop.hdr", type="string"
+        )
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        passed, messages = tm.check_valid_paths()
+        self.assertTrue(
+            passed, f"unassigned file node must not fail the check: {messages}"
+        )
+        self.assertFalse(any(stray in m for m in messages))
+
+    def test_check_valid_paths_flags_missing_export_texture(self):
+        """A missing texture on an export material still fails the check.
+
+        Added: 2026-07-29
+        """
+        self._set_project(self.temp_dir)
+        file_node = self._assign_texture(self.cube, "/nonexistent/wood_missing.png")
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        passed, messages = tm.check_valid_paths()
+        self.assertFalse(passed)
+        self.assertTrue(any("wood_missing.png" in m for m in messages))
+        self.assertTrue(any(file_node in m for m in messages))
+
+    def test_check_valid_paths_groups_nodes_sharing_a_path(self):
+        """Several file nodes on one missing path collapse into one message.
+
+        Bug: a material carrying duplicate file nodes for the same map emitted
+        one identical ERROR line per node, flooding the export log.
+        Added: 2026-07-29
+        """
+        self._set_project(self.temp_dir)
+        missing = "/nonexistent/shared_map.png"
+        shader = cmds.shadingNode("lambert", asShader=True)
+        nodes = []
+        for attr in ("color", "transparency"):
+            file_node = cmds.shadingNode("file", asTexture=True)
+            cmds.setAttr(f"{file_node}.fileTextureName", missing, type="string")
+            cmds.connectAttr(f"{file_node}.outColor", f"{shader}.{attr}")
+            nodes.append(file_node)
+        cmds.select(self.cube)
+        cmds.hyperShade(assign=shader)
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        passed, messages = tm.check_valid_paths()
+        self.assertFalse(passed)
+        entries = [m for m in messages if "shared_map.png" in m]
+        self.assertEqual(len(entries), 1, f"expected one grouped entry: {messages}")
+        for node in nodes:
+            self.assertIn(node, entries[0])
+
+    def test_check_valid_paths_rejects_a_basename_only_match(self):
+        """A node pointing at a stale directory is missing, even if the basename
+        exists under sourceimages.
+
+        MatUtils.resolve_path defaults to hunting for the texture by basename —
+        correct for the repair task that writes the result back, wrong for a
+        validity gate, which would then pass a link the FBX still ships broken.
+        Added: 2026-07-29
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        decoy = os.path.join(sourceimages, "stale.png")
+        with open(decoy, "wb") as f:
+            f.write(b"PNGDATA")
+
+        stale_ref = os.path.join(self.temp_dir, "gone_dir", "stale.png")
+        self._assign_texture(self.cube, stale_ref)
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        passed, messages = tm.check_valid_paths()
+        self.assertFalse(
+            passed, f"basename-only match must not validate the path: {messages}"
+        )
+
+    def test_export_file_node_cache_clears_with_the_materials_cache(self):
+        """The two derived caches must never describe different material sets.
+
+        _get_export_file_nodes is derived from _get_all_materials, so a lone
+        `_cached_materials = None` would leave the file-node cache pinned to
+        materials that no longer exist.
+        Added: 2026-07-29
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        tex = os.path.join(sourceimages, "cached.png")
+        with open(tex, "wb") as f:
+            f.write(b"PNGDATA")
+        file_node = self._assign_texture(self.cube, tex)
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        self.assertIn(file_node, tm._get_export_file_nodes())  # populates the cache
+
+        # Reassigning objects must drop BOTH caches, not just the materials one.
+        tm.objects = []
+        self.assertIsNone(tm._cached_materials)
+        self.assertIsNone(tm._cached_export_file_nodes)
+        self.assertEqual(tm._get_export_file_nodes(), [])
+
+    def test_check_valid_paths_resolves_udim_tokens(self):
+        """A <UDIM> path whose first tile exists must pass.
+
+        Bug: the hand-rolled lookup compared the literal ``<UDIM>`` path against
+        disk, so every tiled texture was reported missing.
+        Added: 2026-07-29
+        """
+        sourceimages = self._set_project(self.temp_dir)
+        tile = os.path.join(sourceimages, "tiled.1001.png")
+        with open(tile, "wb") as f:
+            f.write(b"PNGDATA")
+
+        self._assign_texture(self.cube, os.path.join(sourceimages, "tiled.<UDIM>.png"))
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        passed, messages = tm.check_valid_paths()
+        self.assertTrue(passed, f"UDIM path must resolve via tile 1001: {messages}")
+
+    # ------------------------------------------------------------------
     # Objects-below-floor tolerance
     # ------------------------------------------------------------------
 
@@ -1033,56 +1179,56 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_manifest_path_for(self):
         """Verify sidecar manifest path derivation."""
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
-            HierarchySidecar,
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
         )
 
-        result = HierarchySidecar.manifest_path_for("/assets/hero.fbx")
-        self.assertTrue(result.endswith(".hero.hierarchy.json"))
+        result = SceneDataSidecar.manifest_path_for("/assets/hero.fbx")
+        self.assertTrue(result.endswith(".hero.scene_data.json"))
 
     def test_diff_report_path_for(self):
         """Verify sidecar diff report path derivation."""
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
-            HierarchySidecar,
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
         )
 
-        result = HierarchySidecar.diff_report_path_for("/assets/hero.fbx")
+        result = SceneDataSidecar.diff_report_path_for("/assets/hero.fbx")
         self.assertTrue(result.endswith(".hero.hierarchy_diff.txt"))
 
     def test_build_clean_path_set_strips_namespace(self):
         """Verify namespace stripping and leading pipe removal."""
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
-            HierarchySidecar,
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
         )
 
         objects = ["|ns:group|ns:child", "|group2|child2"]
-        result = HierarchySidecar.build_clean_path_set(objects)
+        result = SceneDataSidecar.build_clean_path_set(objects)
         self.assertEqual(result, {"group|child", "group2|child2"})
 
     def test_get_top_level_collapses_children(self):
         """Verify that children are collapsed under their top-level parent."""
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
-            HierarchySidecar,
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
         )
 
         paths = ["group", "group|child", "group|child|grandchild", "other"]
-        result = HierarchySidecar.get_top_level(paths)
+        result = SceneDataSidecar.get_top_level(paths)
         self.assertEqual(sorted(result), ["group", "other"])
 
     def test_get_top_level_preserves_siblings(self):
         """Verify that siblings with similar prefix names are NOT collapsed."""
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
-            HierarchySidecar,
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
         )
 
         paths = ["group", "group_alt", "group|child"]
-        result = HierarchySidecar.get_top_level(paths)
+        result = SceneDataSidecar.get_top_level(paths)
         self.assertEqual(sorted(result), ["group", "group_alt"])
 
     def test_detect_reparenting_finds_moved_subtree(self):
         """detect_reparenting recognises a subtree moved under a new parent."""
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
-            HierarchySidecar,
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
         )
 
         missing = [
@@ -1100,7 +1246,7 @@ class TestSceneExporter(MayaTkTestCase):
             "new|GRP|LOC|GEOShape",
             "new|GRP|LOC|LOCShape",
         ]
-        result = HierarchySidecar.detect_reparenting(missing, extra)
+        result = SceneDataSidecar.detect_reparenting(missing, extra)
         self.assertEqual(len(result), 1)
         root, parent, count = result[0]
         self.assertEqual(root, "GRP")
@@ -1109,13 +1255,13 @@ class TestSceneExporter(MayaTkTestCase):
 
     def test_detect_reparenting_returns_empty_on_unrelated_changes(self):
         """detect_reparenting returns empty when changes are not reparenting."""
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
-            HierarchySidecar,
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
         )
 
         missing = ["OldNode", "OldNode|Child"]
         extra = ["CompletelyDifferent"]
-        result = HierarchySidecar.detect_reparenting(missing, extra)
+        result = SceneDataSidecar.detect_reparenting(missing, extra)
         self.assertEqual(result, [])
 
     def test_hierarchy_check_no_manifest(self):
@@ -1447,6 +1593,56 @@ class TestExportDataNodeOption(MayaTkTestCase):
         # No producer wrote anything → carrier never created, selection untouched.
         self.assertFalse(cmds.objExists(DataNodes.EXPORT))
         self.assertEqual(self.tm.objects, before)
+
+    def test_sidecar_written_when_carrier_ships(self):
+        # New with the scene-data sidecar: a metadata-carrying export leaves
+        # the record even when the hierarchy check never ran.  Uses a channel
+        # no producer owns — export_data_node's refresh clears stale
+        # producer-owned channels (e.g. lightmap_metadata with no bake).
+        import tempfile
+        from mayatk.node_utils.data_nodes import DataNodes
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
+        )
+
+        DataNodes.set_export_string("test_channel", '{"version": 1}')
+        self.tm.export_data_node()  # folds the carrier into the export set
+        with tempfile.TemporaryDirectory() as d:
+            self.tm.export_path = os.path.join(d, "dn.fbx")
+            self.tm.write_scene_data_sidecar()
+            data = SceneDataSidecar.read_data(self.tm.export_path)
+            self.assertIsNotNone(data)
+            self.assertEqual(data.get("test_channel"), {"version": 1})
+            paths = SceneDataSidecar.read_manifest(self.tm.export_path)
+            self.assertTrue(any("dnCube" in p for p in paths))
+
+    def test_data_not_recorded_when_carrier_excluded(self):
+        # The carrier exists in the scene but is NOT in the export set (e.g.
+        # 'selected' mode with the export_data_node task off): its channels
+        # did not ship, so the record must not claim them — and with nothing
+        # else to record, no sidecar is written at all.
+        import tempfile
+        from mayatk.node_utils.data_nodes import DataNodes
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
+        )
+
+        DataNodes.set_export_string("test_channel", '{"version": 1}')
+        with tempfile.TemporaryDirectory() as d:
+            self.tm.export_path = os.path.join(d, "dn.fbx")
+            self.tm.write_scene_data_sidecar()
+            self.assertIsNone(SceneDataSidecar.read_manifest(self.tm.export_path))
+
+    def test_no_sidecar_without_metadata_or_check(self):
+        import tempfile
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
+        )
+
+        with tempfile.TemporaryDirectory() as d:
+            self.tm.export_path = os.path.join(d, "dn.fbx")
+            self.tm.write_scene_data_sidecar()
+            self.assertIsNone(SceneDataSidecar.read_manifest(self.tm.export_path))
 
     def test_summary_logs_embedded_shot_count(self):
         from mayatk.anim_utils.shots._shots import ShotStore

@@ -169,5 +169,50 @@ class TestLoadMayaUiEviction(unittest.TestCase):
         broken_ui.deleteLater.assert_called_once()
 
 
+class DefaultPersistence(unittest.TestCase):
+    """mayatk-sourced UIs declare a sticky *default* (hide button, not pin).
+
+    Declared through ``UiHandler.default_persistence`` rather than by swapping
+    ``header_buttons`` in ``apply_styles``: a hardcoded button set is a value a
+    user override has no way to outrank, which is why the UI Browser's window-
+    persistence setting had no effect on marking-menu panels.
+    """
+
+    def setUp(self):
+        self.handler = object.__new__(MayaUiHandler)
+
+    @staticmethod
+    def _ui(*tags):
+        ui = MagicMock()
+        ui.has_tags = lambda t: bool(set(tags) & set(t))
+        return ui
+
+    def test_mayatk_tagged_ui_is_sticky(self):
+        self.assertEqual(
+            self.handler.default_persistence(self._ui("mayatk")),
+            MayaUiHandler.PERSISTENCE_STICKY,
+        )
+
+    def test_untagged_ui_keeps_the_base_default(self):
+        # Native-menu wrappers ("maya_menu") are not mayatk-sourced panels.
+        self.assertEqual(
+            self.handler.default_persistence(self._ui("maya_menu")),
+            MayaUiHandler.PERSISTENCE_TRANSIENT,
+        )
+
+    def test_ui_without_tag_support_does_not_raise(self):
+        self.assertEqual(
+            self.handler.default_persistence(object()),
+            MayaUiHandler.PERSISTENCE_TRANSIENT,
+        )
+
+    def test_apply_styles_is_not_overridden(self):
+        """The hardcoded ``header_buttons`` swap must stay gone — it would
+        re-take precedence over the user's stored choice."""
+        from uitk.handlers.ui_handler import UiHandler
+
+        self.assertIs(MayaUiHandler.apply_styles, UiHandler.apply_styles)
+
+
 if __name__ == "__main__":
     unittest.main()

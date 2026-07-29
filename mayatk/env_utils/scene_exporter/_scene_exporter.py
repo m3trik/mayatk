@@ -22,7 +22,7 @@ import pythontk as ptk
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.env_utils.scene_exporter.task_manager import TaskManager
-from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import HierarchySidecar
+from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import SceneDataSidecar
 
 
 class SceneExporter(ptk.LoggingMixin):
@@ -195,7 +195,7 @@ class SceneExporter(ptk.LoggingMixin):
 
         # Make export path available to checks (e.g. hierarchy diff).  The
         # `_version_format` flag tells the hierarchy check to route sidecar
-        # paths through HierarchySidecar.base_stem so all versions of a
+        # paths through SceneDataSidecar.base_stem so all versions of a
         # series share one manifest.
         self.task_manager.export_path = self.export_path
         self.task_manager._version_format = version_format
@@ -259,10 +259,11 @@ class SceneExporter(ptk.LoggingMixin):
                 )
                 export_succeeded = True
 
-                # Write hierarchy manifest for future diff checks. Keyed off the
-                # logical export path (output dir + stem), independent of where
-                # the FBX was actually written.
-                self.task_manager.write_hierarchy_manifest()
+                # Write the scene-data sidecar (hierarchy baseline for future
+                # diff checks + data_export snapshot). Keyed off the logical
+                # export path (output dir + stem), independent of where the
+                # FBX was actually written.
+                self.task_manager.write_scene_data_sidecar()
 
                 # GLB conversion. For GLB-only, convert the temp FBX then move the
                 # .glb into the output dir; the banner reports it as the
@@ -484,7 +485,7 @@ class SceneExporter(ptk.LoggingMixin):
         try:
             test_name = internal_format.format_map(_Dummy(stem="test", n=1, ext=ext))
             test_stem = os.path.splitext(test_name)[0]
-            if not HierarchySidecar.VERSION_SUFFIX_RE.search(test_stem):
+            if not SceneDataSidecar.VERSION_SUFFIX_RE.search(test_stem):
                 self.logger.warning(
                     f"Version format {template!r} produces names not matching "
                     "'_v<N>' — hierarchy diff baseline will not carry across "

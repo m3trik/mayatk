@@ -126,17 +126,45 @@ class ShellXformMovePadTest(MayaTkTestCase):
         self.assertAlmostEqual(final[1], after[1] - 1.0, places=5)
 
     # ------------------------------------------------------------------ snap
-    def test_snap_lands_an_off_grid_shell_on_the_grid(self):
+    def test_snap_lands_an_off_grid_shell_on_the_padded_grid(self):
         """The reported case: a shell sitting in one half of a UDIM steps to the
-        next half line, rather than carrying its sub-tile drift along."""
+        next half line, rather than carrying its sub-tile drift along.
+
+        It lands one border margin *inside* the line, not on it — a shell flush
+        against a tile seam bleeds across it at render time.
+        """
+        margin = self.slot._border_margin()
         plane = self.make_plane(v_offset=0.6)  # V bounds 0.6 .. 1.6
         self.set_scope("Half Tile", snap=True)
 
         self.slot.b025()  # up
-        self.assertAlmostEqual(UvUtils.get_uv_bounds(plane)[1], 1.0, places=5)
+        self.assertAlmostEqual(
+            UvUtils.get_uv_bounds(plane)[1], 1.0 + margin, places=5
+        )
 
         self.slot.b024()  # back down
-        self.assertAlmostEqual(UvUtils.get_uv_bounds(plane)[1], 0.5, places=5)
+        self.assertAlmostEqual(
+            UvUtils.get_uv_bounds(plane)[1], 0.5 + margin, places=5
+        )
+
+    def test_snap_is_reversible_from_a_padded_position(self):
+        """Every press moves a full step once the shell is on the padded grid.
+
+        Padding the *result* rather than the anchor would strand the reverse
+        press on the margin it had just added, and the arrow would read as dead.
+        """
+        margin = self.slot._border_margin()
+        plane = self.make_plane(v_offset=0.6)
+        self.set_scope("Tile", snap=True)
+
+        self.slot.b025()  # onto the padded grid
+        landed = UvUtils.get_uv_bounds(plane)[1]
+        self.assertAlmostEqual(landed % 1.0, margin, places=5)
+
+        self.slot.b025()
+        self.assertAlmostEqual(UvUtils.get_uv_bounds(plane)[1], landed + 1.0, places=5)
+        self.slot.b024()
+        self.assertAlmostEqual(UvUtils.get_uv_bounds(plane)[1], landed, places=5)
 
     def test_snap_off_preserves_sub_tile_drift(self):
         plane = self.make_plane(v_offset=0.6)
@@ -145,6 +173,37 @@ class ShellXformMovePadTest(MayaTkTestCase):
         self.slot.b025()
 
         self.assertAlmostEqual(UvUtils.get_uv_bounds(plane)[1], 1.1, places=5)
+
+    # ------------------------------------------------------------------ gather
+    def test_gather_slot_pulls_a_stray_into_the_majority_tile(self):
+        """The Gather button is wired to the engine and acts on the selection.
+
+        Two residents define the target tile, so only the stray travels — with a
+        lone shell there is by definition no stray, and the button no-ops.
+        """
+        residents = [self.make_plane(), self.make_plane()]
+        stray = self.make_plane(u_offset=3.0, v_offset=2.0)
+        cmds.select(residents + [stray])
+        before = [UvUtils.get_uv_bounds(r) for r in residents]
+
+        self.slot.gather_to_udim()
+
+        u_min, v_min, u_max, v_max = UvUtils.get_uv_bounds(stray)
+        self.assertAlmostEqual(u_min, 0.0, places=5)
+        self.assertAlmostEqual(v_min, 0.0, places=5)
+        for bounds, resident in zip(before, residents):
+            for b, a in zip(bounds, UvUtils.get_uv_bounds(resident)):
+                self.assertAlmostEqual(b, a, places=6)
+
+    def test_gather_slot_with_nothing_selected_warns(self):
+        """No selection is a message box, not a traceback."""
+        messages = []
+        self.slot.sb = NS(message_box=lambda *a, **k: messages.append(a))
+        cmds.select(clear=True)
+
+        self.slot.gather_to_udim()
+
+        self.assertTrue(messages)
 
     def test_snap_toggle_defaults_off_when_unset(self):
         """A slots instance that never ran `cmb_move_scope_init` must not crash."""

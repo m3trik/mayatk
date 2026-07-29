@@ -12,6 +12,7 @@ Tests for UvUtils class functionality including:
 - UV space movement
 """
 import unittest
+import pythontk as ptk
 import mayatk as mtk
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.core_utils._core_utils import CoreUtils
@@ -216,6 +217,124 @@ class TestUvUtils(MayaTkTestCase):
         self.assertAlmostEqual(after[0], before[0] + 0.25, places=5)
         self.assertAlmostEqual(after[1], before[1] - 0.75, places=5)
 
+    def _uv_shell_at(self, u_min, v_min, size=0.5):
+        """A plane whose single UV shell has *size* extent, anchored at (u_min, v_min).
+
+        Sized well inside the tile on purpose: the padding clamp legitimately
+        nudges a shell that sits exactly on a tile border, which would blur the
+        "did the gather move it?" assertions these tests make.
+        """
+        plane = cmds.polyPlane(width=1, height=1, sx=1, sy=1)[0]
+        cmds.polyEditUV(
+            f"{plane}.map[*]", pivotU=0, pivotV=0, scaleU=size, scaleV=size
+        )
+        UvUtils.move_to_uv_space(plane, u_min, v_min)
+        return plane
+
+    def test_gather_to_udim_pulls_a_stray_shell_in(self):
+        """A shell parked in another tile comes back, keeping its sub-tile position."""
+        shell = self._uv_shell_at(3.2, 2.3)
+
+        moved = UvUtils.gather_to_udim(shell, udim=1001)
+
+        self.assertEqual(moved, 1)
+        u_min, v_min, u_max, v_max = UvUtils.get_uv_bounds(shell)
+        self.assertAlmostEqual(u_min, 0.2, places=5)
+        self.assertAlmostEqual(v_min, 0.3, places=5)
+
+    def test_gather_to_udim_leaves_resident_shells_alone(self):
+        """Shells already inside the target tile are untouched (moved count 0)."""
+        shell = self._uv_shell_at(0.2, 0.3)
+        before = UvUtils.get_uv_bounds(shell)
+
+        moved = UvUtils.gather_to_udim(shell, udim=1001)
+
+        self.assertEqual(moved, 0)
+        for b, a in zip(before, UvUtils.get_uv_bounds(shell)):
+            self.assertAlmostEqual(b, a, places=6)
+
+    def test_gather_to_udim_targets_a_non_origin_tile(self):
+        """An explicit UDIM anchors the result on that tile."""
+        shell = self._uv_shell_at(0.2, 0.3)
+
+        UvUtils.gather_to_udim(shell, udim=1013)  # tile (2, 1)
+
+        u_min, v_min, u_max, v_max = UvUtils.get_uv_bounds(shell)
+        self.assertAlmostEqual(u_min, 2.2, places=5)
+        self.assertAlmostEqual(v_min, 1.3, places=5)
+
+    def test_gather_to_udim_respects_border_padding(self):
+        """A shell overhanging the tile is pulled in to the padded border, not the border."""
+        margin = ptk.MathUtils.uv_tile_margin(4096)
+        shell = self._uv_shell_at(0.55, 0.55)  # overhangs the top-right of tile 1001
+
+        UvUtils.gather_to_udim(shell, udim=1001)
+
+        u_min, v_min, u_max, v_max = UvUtils.get_uv_bounds(shell)
+        self.assertAlmostEqual(u_max, 1.0 - margin, places=5)
+        self.assertAlmostEqual(v_max, 1.0 - margin, places=5)
+
+    def test_gather_to_udim_full_coverage_shell_stays_put(self):
+        """A shell spanning the tile exactly is not shoved off the far border by the margin."""
+        shell = self._uv_shell_at(0.0, 0.0, size=1.0)
+
+        self.assertEqual(UvUtils.gather_to_udim(shell, udim=1001), 0)
+
+    def test_gather_to_udim_votes_for_the_majority_tile(self):
+        """With no explicit UDIM the tile most shells occupy wins — the majority stays put."""
+        residents = [self._uv_shell_at(1.2, 0.2), self._uv_shell_at(1.3, 0.3)]
+        stray = self._uv_shell_at(4.25, 3.25)
+        before = [UvUtils.get_uv_bounds(r) for r in residents]
+
+        moved = UvUtils.gather_to_udim(residents + [stray])
+
+        self.assertEqual(moved, 1)  # only the stray
+        u_min, v_min, u_max, v_max = UvUtils.get_uv_bounds(stray)
+        self.assertAlmostEqual(u_min, 1.25, places=5)
+        self.assertAlmostEqual(v_min, 0.25, places=5)
+        for bounds, resident in zip(before, residents):
+            for b, a in zip(bounds, UvUtils.get_uv_bounds(resident)):
+                self.assertAlmostEqual(b, a, places=6)
+
+    def test_gather_to_udim_moves_whole_shells_from_a_partial_selection(self):
+        """A partial face selection moves the WHOLE shell, not just those faces.
+
+        `get_uv_shell_sets` groups only the *input* faces by shell, so gathering a
+        face subset used to translate that fragment alone and tear the shell in
+        half. The Blender twin acts on whole islands (`_target_islands`), so this
+        is a parity contract too.
+        """
+        plane = cmds.polyPlane(width=1, height=1, sx=4, sy=4)[0]
+        UvUtils.move_to_uv_space(plane, 3.0, 2.0)
+        before = UvUtils.get_uv_bounds(plane)
+
+        # One face of a 16-face single-shell plane.
+        UvUtils.gather_to_udim(f"{plane}.f[0]", udim=1001)
+
+        after = UvUtils.get_uv_bounds(plane)
+        width = before[2] - before[0]
+        self.assertAlmostEqual(after[2] - after[0], width, places=5)  # not torn
+        self.assertAlmostEqual(after[0], before[0] - 3.0, places=5)
+
+    def test_gather_to_udim_accepts_a_uv_component_selection(self):
+        """A UV-component selection resolves to its shell (the move pad accepts these too)."""
+        plane = cmds.polyPlane(width=1, height=1, sx=2, sy=2)[0]
+        UvUtils.move_to_uv_space(plane, 4.0, 0.0)
+        before = UvUtils.get_uv_bounds(plane)
+
+        uvs = cmds.ls(f"{plane}.map[*]", flatten=True)
+        moved = UvUtils.gather_to_udim(uvs[:1], udim=1001)
+
+        self.assertEqual(moved, 1)
+        after = UvUtils.get_uv_bounds(plane)
+        self.assertAlmostEqual(after[2] - after[0], before[2] - before[0], places=5)
+        self.assertAlmostEqual(after[0], before[0] - 4.0, places=5)
+
+    def test_gather_to_udim_on_input_without_uvs(self):
+        """A non-poly input resolves to no shells -> None (the panel warns, not raises)."""
+        locator = cmds.spaceLocator()[0]
+        self.assertIsNone(UvUtils.gather_to_udim(locator))
+
     def test_mirror_uvs(self):
         """Test mirroring UVs."""
         # Get initial UV positions
@@ -246,6 +365,29 @@ class TestUvUtils(MayaTkTestCase):
         # Check ID return type
         ids = UvUtils.get_uv_shell_sets(self.cube, returned_type="id")
         self.assertIsInstance(ids, list)
+
+    def test_get_uv_shell_sets_whole_shells_expands_only_when_asked(self):
+        """The default groups the INPUT's faces; `whole_shells` expands to the shell.
+
+        Face-level callers (mirror per-shell on a face selection) depend on the
+        default staying narrow; shell-level ones (gather) need the expansion, or
+        they translate a fragment and tear the shell.
+        """
+        plane = cmds.polyPlane(width=1, height=1, sx=4, sy=4)[0]  # 16 faces, 1 shell
+
+        narrow = UvUtils.get_uv_shell_sets(f"{plane}.f[0]", returned_type="shell")
+        self.assertEqual([len(s) for s in narrow], [1])
+
+        whole = UvUtils.get_uv_shell_sets(
+            f"{plane}.f[0]", returned_type="shell", whole_shells=True
+        )
+        self.assertEqual([len(s) for s in whole], [16])
+
+        # A whole-object input is already complete — expansion must not duplicate.
+        full = UvUtils.get_uv_shell_sets(
+            plane, returned_type="shell", whole_shells=True
+        )
+        self.assertEqual([len(s) for s in full], [16])
 
     def test_get_uv_shell_border_edges(self):
         """Test getting UV border edges."""

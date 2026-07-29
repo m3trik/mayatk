@@ -482,6 +482,31 @@ class TestMenuStateReaders(unittest.TestCase):
     def _slot(self):
         return TexturePathEditorSlots.__new__(TexturePathEditorSlots)
 
+    def _slot_with_header(self, menu):
+        """Build a slot whose ui.header.menu is *menu* (None = menu not built yet)."""
+        slot = self._slot()
+        slot.ui = SimpleNamespace(header=SimpleNamespace(menu=menu))
+        return slot
+
+    def test_exclude_arnold_off_returns_no_pattern(self):
+        slot = self._slot_with_header(
+            SimpleNamespace(chk_exclude_arnold=self._FakeCheck(False))
+        )
+        self.assertIsNone(slot._exclude_arnold_pattern())
+
+    def test_exclude_arnold_on_returns_arnold_classification(self):
+        slot = self._slot_with_header(
+            SimpleNamespace(chk_exclude_arnold=self._FakeCheck(True))
+        )
+        self.assertEqual(slot._exclude_arnold_pattern(), "rendernode/arnold*")
+
+    def test_exclude_arnold_before_menu_is_built_returns_no_pattern(self):
+        """A refresh that beats header_init must not raise."""
+        self.assertIsNone(self._slot_with_header(None)._exclude_arnold_pattern())
+        self.assertIsNone(
+            self._slot_with_header(SimpleNamespace())._exclude_arnold_pattern()
+        )
+
     def test_normalize_mode_index_zero_is_rewrite(self):
         slot = self._slot()
         self.assertEqual(

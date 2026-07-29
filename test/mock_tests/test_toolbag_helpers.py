@@ -59,7 +59,14 @@ _PKG_DIR = os.path.normpath(
 if _PKG_DIR not in sys.path:
     sys.path.insert(0, _PKG_DIR)
 
-import _toolbag_helpers as helpers  # noqa: E402
+import _toolbag_helpers as _toolbag_helpers_module  # noqa: E402
+
+# The helpers were moved off the module root onto a class (the workspace's
+# "no root-level functions" rule), so bind the namespace the tests call
+# through to the class rather than the module — a module-level lookup still
+# imports fine and only fails at attribute access, so nothing in collection
+# catches the drift.
+helpers = _toolbag_helpers_module.ToolbagHelpers
 
 
 class TestFindMaterial(unittest.TestCase):

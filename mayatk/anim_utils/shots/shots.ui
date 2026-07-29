@@ -54,6 +54,12 @@
     </item>
     <item>
      <widget class="CollapsableGroup" name="detection">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
       <property name="title">
        <string>Generate from Animation</string>
       </property>
@@ -158,6 +164,12 @@ Unused in Zero = Shot End mode.</string>
     </item>
     <item>
      <widget class="CollapsableGroup" name="build">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
       <property name="title">
        <string>Build</string>
       </property>
@@ -277,6 +289,12 @@ Shrink &amp; Extend: resize to fit contents exactly.</string>
     </item>
     <item>
      <widget class="CollapsableGroup" name="shot_editor">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
       <property name="title">
        <string>Shot Editor</string>
       </property>
@@ -542,10 +560,13 @@ Shrink &amp; Extend: resize to fit contents exactly.</string>
       <property name="orientation">
        <enum>Qt::Vertical</enum>
       </property>
+      <property name="sizeType">
+       <enum>QSizePolicy::Fixed</enum>
+      </property>
       <property name="sizeHint" stdset="0">
        <size>
         <width>20</width>
-        <height>40</height>
+        <height>10</height>
        </size>
       </property>
      </spacer>

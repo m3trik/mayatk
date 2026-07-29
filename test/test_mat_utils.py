@@ -156,6 +156,92 @@ class TestMatUtils(MayaTkTestCase):
         # lambert1 exists in every Maya scene; the others may not, depending on plugins.
         self.assertIn("lambert1", all_short)
 
+    def test_get_scene_mats_excludes_utility_nodes(self):
+        """Utility nodes parked in the shader list are not materials.
+
+        ``shadingNode -asShader`` registers ANY node type in
+        ``defaultShaderList1``, which is precisely what ``cmds.ls(materials=True)``
+        reports — so a ``bump2d`` (classified ``utility/general/bump``) created
+        that way showed up as a material. Regression: the Arnold bridge's
+        ``aiMultiply`` / ``bump2d`` helpers leaking into the materials combo.
+        """
+        bump = cmds.shadingNode("bump2d", asShader=True, name="test_util_bump")
+        # Maya itself considers it a material — the filter is ours to apply.
+        self.assertIn(bump, cmds.ls(materials=True) or [])
+
+        # A shader whose classification embeds "utility" deeper in the path
+        # (surfaceShader and StingrayPBS are both 'shader/surface/utility')
+        # must survive — the shader role is tested first.
+        surf = cmds.shadingNode("surfaceShader", asShader=True, name="test_surf_shader")
+
+        names = {str(m).split("|")[-1] for m in MatUtils.get_scene_mats()}
+        self.assertNotIn(bump, names)
+        self.assertIn(self.lambert1, names)  # real shaders unaffected
+        self.assertIn(surf, names)
+
+        # Opt-out: Maya's raw view is still reachable.
+        raw = {
+            str(m).split("|")[-1]
+            for m in MatUtils.get_scene_mats(exclude_utility_nodes=False)
+        }
+        self.assertIn(bump, raw)
+
+    def test_get_scene_mats_exc_classification(self):
+        """``exc_classification`` drops materials whose type matches a pattern."""
+        kept = {
+            str(m).split("|")[-1]
+            for m in MatUtils.get_scene_mats(exc_classification="shader/surface*")
+        }
+        self.assertNotIn(self.lambert1, kept)
+        self.assertNotIn(self.lambert2, kept)
+
+        # A non-matching pattern leaves the list intact.
+        kept = {
+            str(m).split("|")[-1]
+            for m in MatUtils.get_scene_mats(exc_classification="rendernode/nosuch*")
+        }
+        self.assertIn(self.lambert1, kept)
+
+    def test_get_file_nodes_exc_classification(self):
+        """``exc_classification`` drops file nodes used only by matching shaders.
+
+        Backs the Texture Path Editor's "Exclude Arnold Nodes" toggle: an
+        Arnold preview shader owns a dedicated file node per texture, so every
+        bridged material contributes a duplicate row. Uses ``surfaceShader``
+        (``shader/surface/utility``) vs ``lambert`` (``shader/surface``) so the
+        mechanism is testable without the Arnold plugin.
+        """
+        sur = cmds.shadingNode("surfaceShader", asShader=True, name="tpe_surface")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="tpe_surfaceSG"
+        )
+        cmds.connectAttr(f"{sur}.outColor", f"{sg}.surfaceShader")
+
+        def _file(name):
+            return cmds.shadingNode("file", asTexture=True, name=name)
+
+        own_lambert = _file("tpe_fileL")
+        cmds.connectAttr(f"{own_lambert}.outColor", f"{self.lambert1}.color")
+        own_surface = _file("tpe_fileS")
+        cmds.connectAttr(f"{own_surface}.outColor", f"{sur}.outColor")
+        shared = _file("tpe_fileShared")
+        cmds.connectAttr(f"{shared}.outColor", f"{self.lambert1}.incandescence")
+        cmds.connectAttr(f"{shared}.outColor", f"{sur}.outTransparency")
+
+        nodes = MatUtils.get_file_nodes(
+            return_type="fileNodeName", exc_classification="shader/surface/utility*"
+        )
+        self.assertIn(own_lambert, nodes)
+        self.assertNotIn(own_surface, nodes)
+        # Shared with a non-excluded shader — hiding a renderer must not hide a
+        # texture something else still uses.
+        self.assertIn(shared, nodes)
+
+        # Unfiltered, all three are present.
+        nodes = MatUtils.get_file_nodes(return_type="fileNodeName")
+        for n in (own_lambert, own_surface, shared):
+            self.assertIn(n, nodes)
+
     def test_get_fav_mats(self):
         """Test getting favorite materials."""
         try:

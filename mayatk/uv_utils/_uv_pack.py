@@ -332,7 +332,7 @@ class _UvPackInternal:
         # Cells: the margin-inset box split into `pages` near-square cells
         # along its long axis (same margin rule as the native u3dLayout path).
         u_tile, v_tile = ptk.MathUtils.udim_to_tile(udim)
-        margin = uv_utils.calculate_uv_padding(map_size, normalize=True) / 2
+        margin = ptk.MathUtils.uv_tile_margin(map_size)
         inner_origin = np.array([u_tile + margin, v_tile + margin])
         inner_size = np.array(
             [max(cov_u - 2 * margin, 1e-6), max(cov_v - 2 * margin, 1e-6)]

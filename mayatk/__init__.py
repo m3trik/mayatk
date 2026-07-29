@@ -117,6 +117,7 @@ DEFAULT_INCLUDE = {
         "HierarchySync",
         "ObjectSwapper",
     ],
+    "env_utils.hierarchy_sync.scene_data_sidecar": "SceneDataSidecar",
     "env_utils.fbx_utils": "FbxUtils",
     # USD import/export over the native mayaUsd runtime — the USD sibling of
     # FbxUtils (mirrored by blendertk's ``env_utils.usd``: mtk.UsdUtils ↔
