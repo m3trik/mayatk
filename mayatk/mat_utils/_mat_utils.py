@@ -377,7 +377,7 @@ class MatUtils(_MatUtilsInternal):
 
             shapes = cmds.listRelatives(objects, shapes=True, fullPath=True) or []
             for obj in objects:
-                if cmds.nodeType(obj) in ["mesh", "nurbsSurface", "subdiv"]:
+                if cmds.nodeType(obj) in NodeUtils.SURFACE_TYPES:
                     shapes.append(obj)
 
             shapes = list(set(shapes))
@@ -485,7 +485,7 @@ class MatUtils(_MatUtilsInternal):
         # Resolve each input transform to its shape(s) and build a reverse map.
         shape_to_obj: Dict[str, str] = {}
         for obj in objects:
-            if cmds.nodeType(obj) in ("mesh", "nurbsSurface", "subdiv"):
+            if cmds.nodeType(obj) in NodeUtils.SURFACE_TYPES:
                 shapes = [obj]
             else:
                 shapes = (

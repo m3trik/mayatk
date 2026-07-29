@@ -383,6 +383,11 @@ class FbxUtils(ptk.HelpMixin):
             "ShadowRig",
             "refresh_export_metadata",
         ),
+        "emissive_groups": (
+            "mayatk.mat_utils.emissive_groups",
+            "EmissiveGroups",
+            "refresh_export_metadata",
+        ),
     }
 
     @staticmethod

@@ -11,8 +11,6 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # From this package:
 from mayatk import NodeUtils
 from mayatk.core_utils._core_utils import CoreUtils
@@ -1154,7 +1152,7 @@ class ShadowRigSlots:
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Shadow Rig",
                 body="Create a projected-shadow plane rig that exports cleanly "
                 "for game engines (Unity, etc.). The plane carries a baked "
@@ -1220,7 +1218,7 @@ class ShadowRigSlots:
         ui = self.ui
 
         ui.cmb_mode.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Rig Mode",
                 body="How the shadow plane reacts to the light's position.",
                 sections=[
@@ -1246,7 +1244,7 @@ class ShadowRigSlots:
             )
         )
         ui.chk_combine.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Include Children",
                 body="Include the selected objects' descendant meshes in the "
                 "baked silhouette.",
@@ -1257,7 +1255,7 @@ class ShadowRigSlots:
             )
         )
         ui.txt_source.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Source Name",
                 body="Name for the shadow-source locator that anchors the projection.",
                 notes=[
@@ -1267,7 +1265,7 @@ class ShadowRigSlots:
             )
         )
         ui.s000.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Texture Resolution",
                 body="Pixel resolution of the baked silhouette PNG carried by "
                 "the shadow plane.",
@@ -1277,7 +1275,7 @@ class ShadowRigSlots:
             )
         )
         ui.cmb000.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Projection Axis",
                 body="Viewing axis the silhouette is rendered along.",
                 rows=[
@@ -1287,7 +1285,7 @@ class ShadowRigSlots:
             )
         )
         ui.chk_preview.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Preview",
                 body="Builds the shadow rig live so you can judge it before "
                 "committing.",
@@ -1298,7 +1296,7 @@ class ShadowRigSlots:
             )
         )
         ui.b000.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Create Shadow",
                 body="Commits the previewed shadow rig for the selected target(s).",
                 steps=[
@@ -1313,13 +1311,13 @@ class ShadowRigSlots:
             )
         )
         ui.b001.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Reset to Defaults",
                 body="Restores every option on this panel to its default value.",
             )
         )
         ui.b002.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Bake to Keyframes",
                 body="Bakes the shadow plane's driven motion to keyframes over "
                 "the playback range and removes the live rig — leaving an "

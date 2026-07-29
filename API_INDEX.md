@@ -292,8 +292,8 @@ _Generated: 2026-07-29_
   - methods: fix_ocio, fix_missing_color_spaces, fix_unknown_plugins, remove_xgen_expressions, cleanup_scene
 
 ### `core_utils/diagnostics/transform_diag.py` — Transform diagnostics and repair helpers.
-- `class TransformDiagnostics`
-  - methods: get_sheared, fix_non_orthogonal_axes
+- `class TransformDiagnostics(_TransformDiagnosticsInternal)`
+  - methods: get_sheared, get_non_orthogonal, fix_non_orthogonal_axes
 
 ### `core_utils/diagnostics/uv_diag.py` — UV diagnostics and repair helpers.
 - `class UvSetCleanupResult`
@@ -341,7 +341,7 @@ _Generated: 2026-07-29_
 
 ### `edit_utils/_edit_utils.py`
 - `class EditUtils(ptk.HelpMixin, _EditUtilsInternal)`
-  - methods: combine_objects, group_objects, separate_objects, merge_vertices, merge_vertex_pairs, detach_components, decimate, dissolve_coplanar, get_all_faces_on_axis, cut_along_axis, delete_along_axis, mirror, separate_mirrored_mesh, get_overlapping_duplicates, find_non_manifold_vertex, split_non_manifold_vertex, get_overlapping_vertices, get_overlapping_faces, get_similar_mesh, get_similar_topo, invert_geometry, invert_components, delete_selected, create_curve_from_edges
+  - methods: combine_objects, group_objects, separate_objects, merge_vertices, merge_vertex_pairs, detach_components, decimate, dissolve_coplanar, get_all_faces_on_axis, cut_along_axis, delete_along_axis, mirror, mirror_instance, separate_mirrored_mesh, get_overlapping_duplicates, find_non_manifold_vertex, split_non_manifold_vertex, get_overlapping_vertices, get_overlapping_faces, get_similar_mesh, get_similar_topo, invert_geometry, invert_components, delete_selected, create_curve_from_edges
 
 ### `edit_utils/bevel.py`
 - `class Bevel`
@@ -418,7 +418,7 @@ _Generated: 2026-07-29_
 
 ### `edit_utils/mirror.py`
 - `class MirrorSlots(ptk.LoggingMixin)`
-  - methods: header_init, perform_operation
+  - methods: header_init, prepare_operation, perform_operation
 
 ### `edit_utils/naming/_naming.py`
 - `class Naming(ptk.HelpMixin)`
@@ -620,6 +620,12 @@ _Generated: 2026-07-29_
   - methods: add, remove, rebuild, get_bridge, has_bridge
 - `class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin)`
   - methods: header_init, cmb000_init, b000, b001, select_bridged
+
+### `mat_utils/emissive_groups.py` — Emissive groups — named face sets that gate emissive regions at runtime.
+- `class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin)`
+  - methods: add_group, remove_group, list_groups, select_group, set_default, make_weights_keyable, remove_keyable_weights, key_weight, compact_slots, validate, bake_vertex_colors, bake_mask, refresh_export_metadata
+- `class EmissiveGroupsSlots(ptk.LoggingMixin, ptk.HelpMixin)`
+  - methods: header_init, tbl000_init, b000, b001, b002, b003, tb000_init, tb000, select_members, remove_group, weights_all_on, weights_all_off, make_weights_keyable, key_weights, remove_keyable_weights, compact_slots, republish_export
 
 ### `mat_utils/game_shader.py`
 - `class GameShader(ptk.LoggingMixin, _GameShaderInternal)`
@@ -958,9 +964,15 @@ _Generated: 2026-07-29_
 - `class StyleSetter(_StyleSetterInternal)`
   - methods: list_styles, set_style, list_templates, apply_template
 
+### `uv_utils/_auto_unwrap.py` — External auto-unwrap round-trip: OBJ out, engine, OBJ back, UVs transferred.
+- `class AutoUnwrapResult`
+
+### `uv_utils/_uv_pack.py` — xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
+- `class PackUvsResult`
+
 ### `uv_utils/_uv_utils.py`
 - `class UvUtils(ptk.HelpMixin)`
-  - methods: calculate_uv_padding, orient_shells, move_to_uv_space, mirror_uvs, flip_uvs, get_uv_shell_sets, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, create_lightmap_uvs, remove_empty_uv_sets
+  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, mirror_uvs, flip_uvs, get_uv_shell_sets, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, get_topology_seam_edges, detect_seam_algorithm, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, create_lightmap_uvs, remove_empty_uv_sets
 
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 - `class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal)`
@@ -968,7 +980,7 @@ _Generated: 2026-07-29_
 
 ### `uv_utils/rizom_bridge/parameters.py` — Registry of user-tunable RizomUV parameters exposed to the bridge UI.
 - `class Parameters`
-  - methods: expand_includes, preset_min_version, referenced_keys, defaults, render_context, strip_unsupported
+  - methods: expand_includes, preset_min_version, referenced_keys, defaults, derived_values, render_context, strip_unsupported
 
 ### `uv_utils/rizom_bridge/rizom_bridge_slots.py` — Slots for the RizomUV bridge panel.
 - `class RizomBridgeSlots(MayaBridgeSlotsBase)`
@@ -976,7 +988,7 @@ _Generated: 2026-07-29_
 
 ### `uv_utils/shell_xform.py` — Dedicated UV shell-transform panel.
 - `class ShellXformSlots(ptk.LoggingMixin)`
-  - methods: header_init, b023, b024, b025, b026, b034, b035, b036, b037, s041, tb005_init, tb005, tb006_init, tb006, tb008_init, tb008, align_u_min, align_u_avg, align_u_max, align_v_min, align_v_avg, align_v_max, linear_align, orient_shells, orient_edges, gather_shells, randomize_shells, open_uv_editor
+  - methods: header_init, cmb_move_scope_init, b023, b024, b025, b026, b034, b035, b036, b037, s041, tb005_init, tb005, tb006_init, tb006, tb008_init, tb008, align_u_min, align_u_avg, align_u_max, align_v_min, align_v_avg, align_v_max, linear_align, orient_shells, orient_edges, gather_shells, randomize_shells, open_uv_editor
 
 ### `xform_utils/_xform_utils.py`
 - `class XformUtils(_XformUtilsInternal, ptk.HelpMixin)`

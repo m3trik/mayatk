@@ -1,8 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # from this package:
 from mayatk.core_utils.preview import Preview
 from mayatk.edit_utils._edit_utils import EditUtils
@@ -43,11 +41,16 @@ class MirrorSlots(ptk.LoggingMixin):
         # is settled before perform_operation re-reads the axis on a pivot change.
         self.ui.cmb000.currentIndexChanged.connect(self._sync_axis_sign_enabled)
 
+        # Instance output shares the source's shape, so the geometry-level
+        # options (merge / delete half / uninstance) have nothing to act on.
+        # Same connect-before-preview ordering rationale as the axis sign.
+        self.ui.chk007.toggled.connect(self._sync_instance_mode)
+
         # Connect sliders and checkboxes to preview refresh function
         self.sb.connect_multi(
             self.ui, "cmb000-1", "currentIndexChanged", self.preview.refresh
         )
-        self.sb.connect_multi(self.ui, "chk001-6", "clicked", self.preview.refresh)
+        self.sb.connect_multi(self.ui, "chk001-7", "clicked", self.preview.refresh)
 
         # Refresh preview when the viewport pivot changes (selection, tool,
         # or manipulator drag release). EditUtils.mirror deletes and
@@ -65,13 +68,14 @@ class MirrorSlots(ptk.LoggingMixin):
         # Settle the '-' toggle's enabled state for the initial (default /
         # restored) pivot before the user interacts.
         self._sync_axis_sign_enabled()
+        self._sync_instance_mode()
 
     def header_init(self, widget):
         """Configure header help text."""
         # Gesture-scoped window: pin button + auto-hide on key_show release.
         widget.config_buttons("menu", "collapse", "pin")
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Mirror",
                 body="Mirror selected geometry across an axis, optionally "
                 "merging seam vertices and discarding the original half.",
@@ -100,7 +104,17 @@ class MirrorSlots(ptk.LoggingMixin):
                     (
                         "Options",
                         [
-                            "<b>Uninstance</b> — break instance links before mirroring.",
+                            "<b>Instance</b> — output a linked copy instead of new "
+                            "geometry: the mirrored half shares the source's shape, "
+                            "so editing either half updates both. Merge Mode, "
+                            "Delete Original and Un-Instance don't apply, and the "
+                            "Bounding Box (center) pivot can't be used (it cuts "
+                            "geometry). Best for modeling: the linked half carries "
+                            "a negative scale, which game engines handle unevenly — "
+                            "bake it (Un-Instance, then freeze scale) before export, "
+                            "or mirror with Instance off.",
+                            "Instance links are broken automatically — mirroring a "
+                            "shared shape would rewrite every other instance.",
                             "<b>Delete Original Half</b> — discard the source side "
                             "after the mirror copy is created.",
                         ],
@@ -108,6 +122,22 @@ class MirrorSlots(ptk.LoggingMixin):
                 ],
             )
         )
+
+    def prepare_operation(self, objects):
+        """Break instance links once, before the preview contract exists.
+
+        Mirroring geometry can never leave a shape shared (separate mode's
+        polySeparate consumes the transform and would take every sibling
+        instance with it), but forking inside ``perform_operation`` is
+        unreversible: rollback deletes the forked shape as a created node and
+        leaves the transform empty. Doing it here — once, at enable, outside
+        any contract — keeps every later refresh/rollback cycle clean.
+
+        Instance OUTPUT is exempt: it only ever adds a new instance of the
+        source, so the source's existing links are none of its business.
+        """
+        if not self.ui.chk007.isChecked():
+            NodeUtils.uninstance(objects)
 
     def perform_operation(self, objects, contract):
         # Read values from UI
@@ -121,7 +151,21 @@ class MirrorSlots(ptk.LoggingMixin):
             raise ValueError("Select an axis (X / Y / Z) to mirror across.")
 
         pivot_index = self.ui.cmb000.currentIndex()
-        uninstance = self.ui.chk005.isChecked()
+
+        # Instance output: the mirrored half is a linked copy of the source's
+        # shape, reflected purely in its transform. Symmetrize (bounding-box
+        # center) cuts and rebuilds geometry, so the two are incompatible —
+        # say so instead of silently falling through to the geometry path.
+        if self.ui.chk007.isChecked():
+            if pivot_index == 3:
+                raise ValueError(
+                    "Instance output can't symmetrize — the Bounding Box (center) "
+                    "pivot cuts geometry. Pick another pivot, or uncheck Instance."
+                )
+            EditUtils.mirror_instance(
+                objects, axis=axis, pivot=self._resolve_pivot(pivot_index, axis)
+            )
+            return
 
         # Bounding Box (center): reflecting the whole object across its own
         # center just overlaps it, so this pivot SYMMETRIZES instead — cut at
@@ -130,8 +174,11 @@ class MirrorSlots(ptk.LoggingMixin):
         # inverted vs. this panel ("x" there deletes the +X half), so invert=True
         # makes the UI's "+X" keep the +X half.
         if pivot_index == 3:
-            if uninstance:
-                objects = NodeUtils.uninstance(objects)
+            # Symmetrize cuts and rebuilds geometry, so a shared shape would take
+            # every sibling instance with it — break the link first, always. (The
+            # mirror engine does the same internally; cut_along_axis is a general
+            # cutting op, so the panel owns the decision here.)
+            NodeUtils.uninstance(objects)
             EditUtils.cut_along_axis(
                 objects,
                 axis=axis,
@@ -154,7 +201,6 @@ class MirrorSlots(ptk.LoggingMixin):
             axis=axis,
             pivot=pivot,
             mergeMode=mergeMode,
-            uninstance=uninstance,
             delete_original=self.ui.chk006.isChecked(),
         )
 
@@ -168,6 +214,17 @@ class MirrorSlots(ptk.LoggingMixin):
         no-op there and the toggle is disabled.
         """
         return pivot_index in (3, 4)
+
+    def _sync_instance_mode(self, *args) -> None:
+        """Gray out the geometry-only options while Instance output is on.
+
+        A linked instance shares the source's shape, so there is nothing to
+        merge, no second half to delete, and breaking the instance link is
+        self-contradictory.
+        """
+        geometry_mode = not self.ui.chk007.isChecked()
+        for widget in (self.ui.cmb001, self.ui.chk006):
+            widget.setEnabled(geometry_mode)
 
     def _sync_axis_sign_enabled(self, *args) -> None:
         """Enable the '-' toggle only where the sign matters; uncheck it when

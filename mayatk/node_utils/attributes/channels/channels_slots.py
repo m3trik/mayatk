@@ -19,8 +19,6 @@ from mayatk.node_utils.attributes.channels._channels import (
 )
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 
 class ChannelsSlots:
     """Switchboard slots for the Channels UI.
@@ -322,7 +320,7 @@ class ChannelsSlots:
             lambda: mel.eval("ConnectionEditor")
         )
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Channels",
                 body="Inspect, edit, and manage Maya node attributes in a "
                 "spreadsheet-style table with bulk operations and wheel-scrub "
@@ -341,10 +339,10 @@ class ChannelsSlots:
                         "Wheel-scrub modifiers",
                         [
                             "plain &mdash; ×1",
-                            f"{TooltipFormat.kbd('Ctrl')} &mdash; ×10 (coarse)",
-                            f"{TooltipFormat.kbd('Ctrl', 'Shift')} &mdash; ×100 (very coarse)",
-                            f"{TooltipFormat.kbd('Alt')} &mdash; ÷10 (fine)",
-                            f"{TooltipFormat.kbd('Ctrl', 'Alt')} &mdash; smallest representable step",
+                            f"{self.sb.tooltip.kbd('Ctrl')} &mdash; ×10 (coarse)",
+                            f"{self.sb.tooltip.kbd('Ctrl', 'Shift')} &mdash; ×100 (very coarse)",
+                            f"{self.sb.tooltip.kbd('Alt')} &mdash; ÷10 (fine)",
+                            f"{self.sb.tooltip.kbd('Ctrl', 'Alt')} &mdash; smallest representable step",
                         ],
                     ),
                     (

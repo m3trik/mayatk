@@ -206,17 +206,21 @@
            </item>
           </layout>
          </item>
-         <item row="10" column="0" colspan="2">
-          <widget class="QCheckBox" name="chk005">
+         <item row="9" column="0" colspan="4">
+          <widget class="QCheckBox" name="chk007">
            <property name="toolTip">
-            <string>Un-instance the object(s) before performing the operation.</string>
+            <string>Output a linked instance instead of new geometry: the mirrored half shares the source's shape, so editing either half updates both.
+
+Merge Mode, Delete Original and Un-Instance have nothing to act on and are disabled, as is the Bounding Box (center) pivot — it cuts geometry.
+
+Best for modeling. The linked half carries a negative scale, which game engines handle unevenly (inverted normal-map handedness, collider and batching warnings), so bake it to real geometry before export — Un-Instance, then freeze scale — or mirror with this off.</string>
            </property>
            <property name="text">
-            <string>Un-Instance</string>
+            <string>Instance</string>
            </property>
           </widget>
          </item>
-         <item row="10" column="2" colspan="2">
+         <item row="10" column="0" colspan="4">
           <widget class="QCheckBox" name="chk006">
            <property name="toolTip">
             <string>Delete the original half after mirroring (only applies when Merge is OFF).</string>

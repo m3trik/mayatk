@@ -8,7 +8,6 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 from pythontk.core_utils.engines.textures.map_factory import (
     ConversionRegistry,
     TextureProcessor,
@@ -546,7 +545,7 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
             setToolTip="Graph the selected material in the Hypershade.",
         )
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Shader Templates",
                 body="Save and restore shader networks as reusable YAML "
                 "templates. Templates live under the package's "

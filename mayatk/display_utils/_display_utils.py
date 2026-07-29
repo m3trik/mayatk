@@ -163,14 +163,16 @@ class DisplayUtils(ptk.HelpMixin):
             return True
 
         result = []
-        _RENDERABLE = ("mesh", "nurbsSurface", "subdiv")
 
         if shapes:
             # List the concrete renderable types — "geometry" is not a
             # queryable ls type (it silently returns []), which is why the
             # shapes branch always came back empty. Intermediate (Orig)
             # shapes are construction data, never visible geometry.
-            nodes = cmds.ls(type=_RENDERABLE, noIntermediate=True, long=True) or []
+            nodes = (
+                cmds.ls(type=NodeUtils.SURFACE_TYPES, noIntermediate=True, long=True)
+                or []
+            )
         else:
             nodes = cmds.ls(type="transform", long=True) or []
 
@@ -185,7 +187,7 @@ class DisplayUtils(ptk.HelpMixin):
                 result.append(node)
             else:
                 for s in cmds.listRelatives(node, shapes=True, fullPath=True) or []:
-                    if cmds.nodeType(s) in _RENDERABLE:
+                    if cmds.nodeType(s) in NodeUtils.SURFACE_TYPES:
                         result.append(node)
                         break
 

@@ -5,8 +5,6 @@ from __future__ import annotations
 import re
 from typing import List, Dict, Tuple, Union
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 try:
     import maya.cmds as cmds
 except ImportError as error:
@@ -363,7 +361,7 @@ class DuplicateRadialSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Duplicate Radial",
                 body="Duplicate selected objects in a radial / circular pattern "
                 "around a chosen pivot.",

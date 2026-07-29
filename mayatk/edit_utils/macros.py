@@ -1087,12 +1087,13 @@ class DisplayMacros:
     @staticmethod
     @CoreUtils.selected
     def m_cycle_display_state(objects) -> None:
-        """Cycle the display state of all selected objects based on the first object's state."""
-        sel = NodeUtils.get_unique_children(objects)
+        """Cycle the display state of the selection: Visible -> XRay -> Templated -> Hidden.
 
-        try:  # Determine the state of the first object
-            first_obj = sel[0]
-        except IndexError:
+        Selected groups are expanded to their leaf children, so the cycle acts on
+        the geometry rather than on an empty transform.
+        """
+        sel = NodeUtils.get_unique_children(objects)
+        if not sel:
             cmds.inViewMessage(
                 statusMessage="No objects selected. Please select at least one object.",
                 pos="topCenter",
@@ -1100,37 +1101,58 @@ class DisplayMacros:
             )
             return
 
-        # Validate the object and attributes existence
+        # ``displaySurface`` raises "No surfaces selected" on anything without a
+        # surface shape below it, so a locator / joint / curve among the group's
+        # children would otherwise abort the whole cycle.
+        surfaces = [
+            obj
+            for obj in sel
+            if cmds.ls(obj, dag=True, noIntermediate=True, type=NodeUtils.SURFACE_TYPES)
+        ]
+        surface_set = set(surfaces)
+
+        # Probe the cycle position from a surface when the selection has one --
+        # a non-surface leaf can't report x-ray, so probing it would strand the
+        # cycle on the visible/templated legs.
+        first_obj = surfaces[0] if surfaces else sel[0]
+
         is_visible = cmds.getAttr(f"{first_obj}.visibility")
-        is_templated = cmds.attributeQuery(
-            "template", node=first_obj, exists=True
-        ) and cmds.getAttr(f"{first_obj}.template")
-        xray_query_result = cmds.displaySurface(first_obj, xRay=True, query=True)
+        is_templated = Attributes.has_attr(first_obj, "template") and cmds.getAttr(
+            f"{first_obj}.template"
+        )
+        xray_query_result = (
+            cmds.displaySurface(first_obj, xRay=True, query=True) if surfaces else None
+        )
         is_xray = xray_query_result[0] if xray_query_result else False
 
-        # Define the next state and action based on the initial state
-        if is_visible and not is_templated and not is_xray:
-            next_state = "XRay"
-            action = lambda obj: cmds.displaySurface(obj, xRay=True)
-        elif is_xray:
+        if is_xray:
             next_state = "Templated"
-            action = lambda obj: (
-                cmds.displaySurface(obj, xRay=False),
-                cmds.setAttr(f"{obj}.template", True),
-            )
         elif is_templated:
             next_state = "Hidden"
-            action = lambda obj: (
-                cmds.setAttr(f"{obj}.template", False),
-                cmds.setAttr(f"{obj}.visibility", False),
-            )
-        else:  # Assume hidden if not visible, templated, or x-ray
+        elif not is_visible:
             next_state = "Visible"
-            action = lambda obj: cmds.setAttr(f"{obj}.visibility", True)
+        elif surfaces:
+            next_state = "XRay"
+        else:  # Nothing to x-ray -- skip that leg rather than stalling the cycle.
+            next_state = "Templated"
 
-        # Apply the state transition to all selected objects
-        for obj in sel:
-            action(obj)
+        # ``set_plug`` skips locked / connected plugs, so one keyed or
+        # constrained child can't abort the cycle for every sibling after it.
+        if next_state == "XRay":
+            for obj in surfaces:
+                cmds.displaySurface(obj, xRay=True)
+        elif next_state == "Templated":
+            for obj in sel:
+                if obj in surface_set:
+                    cmds.displaySurface(obj, xRay=False)
+                Attributes.set_plug(f"{obj}.template", True)
+        elif next_state == "Hidden":
+            for obj in sel:
+                Attributes.set_plug(f"{obj}.template", False)
+                Attributes.set_plug(f"{obj}.visibility", False)
+        else:
+            for obj in sel:
+                Attributes.set_plug(f"{obj}.visibility", True)
 
         cmds.inViewMessage(
             statusMessage=f"Display: <hl>{next_state}</hl>.",

@@ -14,8 +14,6 @@ except ImportError as error:
     om = None
     print(__file__, error)
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.components import Components
@@ -2740,7 +2738,7 @@ class TubeRigSlots:
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Tube Rig",
                 body="Generate joint rigs along tube-shaped meshes. The tool "
                 "auto-detects the tube's centerline via edge loops or surface "
@@ -2780,7 +2778,7 @@ class TubeRigSlots:
         ui = self.ui
 
         ui.cmb_preset.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Rig Mode",
                 body="Selects the build strategy and presets the step "
                 "parameters below. Options a mode doesn't support are "
@@ -2813,7 +2811,7 @@ class TubeRigSlots:
             )
         )
         ui.txt000.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Rig Name",
                 body="Base name for every node the rig creates (group, "
                 "joints, controls, skinCluster).",
@@ -2821,7 +2819,7 @@ class TubeRigSlots:
             )
         )
         ui.s000.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Number of Joints",
                 body="Joint count along the tube centerline.",
                 rows=[
@@ -2832,7 +2830,7 @@ class TubeRigSlots:
             )
         )
         ui.s001.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Number of Controls",
                 body="Driver control count for the Spline rig. Increase for "
                 "complex shapes.",
@@ -2843,7 +2841,7 @@ class TubeRigSlots:
             )
         )
         ui.s002.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Joint Size",
                 body="Joint display radius in the viewport.",
                 rows=[("Auto", "half the measured tube radius")],
@@ -2854,14 +2852,14 @@ class TubeRigSlots:
             )
         )
         ui.chk000.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Reverse Direction",
                 body="Builds the joint chain from the far end (swaps start/end).",
                 notes=["Applies to Step 1 and the One-Click build."],
             )
         )
         ui.chk_stretch.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Stretch",
                 bullets=[
                     "<b>Spline:</b> joints scale along the tube to follow "
@@ -2871,28 +2869,28 @@ class TubeRigSlots:
             )
         )
         ui.chk_twist.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Twist",
                 body="Advanced spline twist driven by the start/end control rotation.",
                 notes=["Spline only. Adds a <b>roll</b> attribute to the end control."],
             )
         )
         ui.chk_squash.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Squash",
                 body="Joints compress when the curve shortens.",
                 notes=["Spline only."],
             )
         )
         ui.chk_volume.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Volume Preservation",
                 body="Bulges when squashed, thins when stretched.",
                 notes=["Spline only."],
             )
         )
         ui.chk_auto_bend.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Auto-Bend (Mid)",
                 body="The mid control bows outward automatically as the ends "
                 "compress toward each other.",
@@ -2900,7 +2898,7 @@ class TubeRigSlots:
             )
         )
         ui.b001.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Step 1 — Create Joints",
                 body="Places this rig's joints along the tube's centerline.",
                 steps=[
@@ -2914,7 +2912,7 @@ class TubeRigSlots:
             )
         )
         ui.b002.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Step 2 — Create Controls",
                 body="Builds the active mode's control rig on the joints from Step 1.",
                 steps=[
@@ -2936,7 +2934,7 @@ class TubeRigSlots:
             )
         )
         ui.b003.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Step 3 — Bind Skin",
                 body="Smooth-binds the tube mesh to the joints with "
                 "ring-uniform parametric weights — the same solver the "
@@ -2950,7 +2948,7 @@ class TubeRigSlots:
             )
         )
         ui.b004.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Constrain Ends to Anchors",
                 body="Constrains both tube ends to external anchor objects "
                 "(each end's control follows its anchor) with "
@@ -2969,7 +2967,7 @@ class TubeRigSlots:
             )
         )
         ui.b000.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="One-Click Rig",
                 body="Runs <b>Step 1 → Step 2 → Step 3</b> in order, using "
                 "the parameter values set in each step's page.",

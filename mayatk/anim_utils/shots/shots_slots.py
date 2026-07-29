@@ -8,8 +8,6 @@ Shot Manifest and Shot Sequencer consume via :class:`ShotStore`.
 """
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.anim_utils.shots._shots import (
     ShotStore,
@@ -833,7 +831,7 @@ class ShotsSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Shots",
                 body="Generation settings, shot properties, and gap control shared by the Shot Manifest and Shot Sequencer.",
                 sections=[

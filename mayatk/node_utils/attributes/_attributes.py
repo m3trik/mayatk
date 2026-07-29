@@ -121,6 +121,11 @@ class Attributes(ptk.HelpMixin):
         With ``force=True``, the plug is unlocked for the duration of the
         write and re-locked afterwards. When ``force=False`` and the plug
         is locked, the write is silently skipped.
+
+        A **connected** plug is skipped in both modes: it is no more writable
+        than a locked one, but unlike a lock ``force`` cannot clear it —
+        disconnecting is destructive, and a caller asking to set a value has
+        not asked to break a rig.
         """
         if not cmds.objExists(plug):
             return
@@ -131,6 +136,10 @@ class Attributes(ptk.HelpMixin):
         if locked and force:
             cmds.setAttr(plug, lock=False)
         try:
+            # Tested after the unlock so that ``settable`` reports on the
+            # connection alone rather than on the lock we just cleared.
+            if not cmds.getAttr(plug, settable=True):
+                return
             if isinstance(value, (tuple, list)) and cmds.getAttr(plug, type=True) in (
                 "float3",
                 "double3",

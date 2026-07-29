@@ -8,8 +8,6 @@ except ImportError:
 
 import pythontk as ptk
 from uitk import Signals
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # From this package
 from mayatk.edit_utils.naming._naming import Naming
 
@@ -34,7 +32,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
             "QComboBox",
             addItems=["Selection", "All Objects"],
             setObjectName="cmb_scope",
-            setToolTip=TooltipFormat.fmt(
+            setToolTip=self.sb.tooltip.fmt(
                 title="Scope",
                 bullets=[
                     "<b>Selection</b> — Only the current selection.",
@@ -44,7 +42,7 @@ class NamingSlots(Naming, ptk.LoggingMixin):
         )
 
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Naming",
                 body="Batch find, rename, and suffix scene objects. Each "
                 "operation button has an option box (▸) for its parameters.",

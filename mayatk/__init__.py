@@ -146,6 +146,9 @@ DEFAULT_INCLUDE = {
     "mat_utils.substance_bridge._substance_bridge": "SubstanceBridge",
     # Texture baking (bake an object's shaded surface to a texture)
     "mat_utils.texture_baker": "TextureBaker",
+    # Emissive groups — engine + co-located panel. The ``EmissiveGroupsSlots``
+    # class is discovered by MayaUiHandler, not registered here.
+    "mat_utils.emissive_groups": "EmissiveGroups",
     # Render utils
     "render_utils._render_utils": "RenderUtils",
     # Light utils

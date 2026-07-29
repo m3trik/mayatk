@@ -254,6 +254,27 @@ class MockSB:
     def __init__(self):
         self.QtWidgets = QtWidgets
         self.QtCore = QtCore
+        self._tooltip = None
+
+    @property
+    def tooltip(self):
+        """The REAL Switchboard tooltip namespace, built on first access.
+
+        Production reaches the rich-text DSL through ``self.sb.tooltip`` (it
+        used to import ``TooltipFormat`` directly), and the preview tests assert
+        on actually-rendered HTML -- a stub would leave those assertions passing
+        while proving nothing.
+
+        Resolved lazily rather than in ``__init__`` because the real namespace
+        needs a Qt binding while this suite otherwise runs against the fake
+        ``QtWidgets`` above: building it eagerly would make every MockSB-backed
+        test in the file depend on Qt, when only the two preview cases touch it.
+        """
+        if self._tooltip is None:
+            from uitk.widgets.mixins.tooltip_mixin import TooltipNamespace
+
+            self._tooltip = TooltipNamespace(self)
+        return self._tooltip
 
     def message_box(self, msg):
         pass

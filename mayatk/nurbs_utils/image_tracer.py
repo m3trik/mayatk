@@ -5,8 +5,6 @@ from __future__ import annotations
 import os
 from typing import List, Optional, Union
 
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 try:
     import cv2
 except ImportError:
@@ -436,7 +434,7 @@ class ImageTracerSlots:
             clicked=lambda: mel.eval("OpenBluePencil"),
         )
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Image Tracer",
                 body="Trace contours from a raster image (or Blue Pencil "
                 "strokes) into editable NURBS curves.",

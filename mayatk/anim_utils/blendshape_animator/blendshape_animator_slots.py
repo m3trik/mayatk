@@ -10,8 +10,6 @@ except ImportError:
     cmds = None
 
 from qtpy import QtCore, QtWidgets
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 from mayatk.anim_utils.blendshape_animator._blendshape_animator import (
     BlendshapeAnimator,
 )
@@ -195,7 +193,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         widget.config_buttons("menu", "minimize", "hide")
 
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Blendshape Animator",
                 body="Build a morph between two meshes, add in-between "
                 "(tween) shapes for custom curve control, edit them, and "
@@ -246,7 +244,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             "QPushButton",
             setText="Load From Existing",
             setObjectName="btn_from_existing",
-            setToolTip=TooltipFormat.fmt(
+            setToolTip=self.sb.tooltip.fmt(
                 title="Load From Existing",
                 body=(
                     "Bind to the blendShape on the selected base mesh "
@@ -262,7 +260,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             "QPushButton",
             setText="Recover Setup",
             setObjectName="btn_recover_setup",
-            setToolTip=TooltipFormat.fmt(
+            setToolTip=self.sb.tooltip.fmt(
                 title="Recover Setup",
                 body=(
                     "Rebuild a corrupted blendShape, preserving keyframes "

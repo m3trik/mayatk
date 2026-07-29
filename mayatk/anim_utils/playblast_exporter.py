@@ -31,6 +31,7 @@ except ImportError:
 
 import os
 import re
+import subprocess
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
@@ -179,6 +180,11 @@ class PlayblastExporter(ptk.LoggingMixin):
 
     #: Native playblast format -> file extension.
     NATIVE_EXTENSIONS: Dict[str, str] = {"avi": ".avi", "movie": ".avi", "qt": ".mov"}
+
+    #: Peak level (dBFS) below which a muxed audio track is reported as
+    #: silent. Digital silence measures ~-91 dB; audible content sits far
+    #: above -60 dB.
+    _SILENT_PEAK_DB: float = -60.0
 
     #: Frame-range modes accepted by :meth:`resolve_frame_range`.
     RANGE_MODES: Tuple[str, ...] = ("playback", "animation", "current", "custom")
@@ -459,6 +465,10 @@ class PlayblastExporter(ptk.LoggingMixin):
             audio: True resolves the scene's active sound node; a string is
                 an audio filepath used as-is.
             quality: 0-100, mapped onto the H.264 CRF scale (100 -> 16).
+
+        A warning is logged when audio was muxed but the resulting track is
+        effectively silent — e.g. the timeline's active sound node has no
+        audible content over the encoded frame range.
         """
         if isinstance(capture, CaptureResult):
             pattern = capture.pattern
@@ -494,6 +504,15 @@ class PlayblastExporter(ptk.LoggingMixin):
             raise RuntimeError(
                 f"ffmpeg encode failed for {pattern!r} -> {output_filepath!r}."
             )
+        if audio_filepath:
+            peak = self._audio_peak_db(encoded)
+            if peak is not None and peak < self._SILENT_PEAK_DB:
+                self.logger.warning(
+                    f"Encoded audio track is effectively silent (peak "
+                    f"{peak:.1f} dB): {audio_filepath!r} has no audible "
+                    "content over the encoded frame range — check the "
+                    "timeline's active sound node."
+                )
         om.MGlobal.displayInfo(f"Encoded movie created: {encoded}")
         return encoded
 
@@ -780,6 +799,26 @@ class PlayblastExporter(ptk.LoggingMixin):
         """Map 0-100 quality onto the H.264 CRF scale (100 -> 16, 0 -> 40)."""
         quality = max(0, min(100, int(quality)))
         return round(40 - quality * 0.24)
+
+    @staticmethod
+    def _audio_peak_db(filepath: str) -> Optional[float]:
+        """Peak level (dBFS) of a file's first audio stream, or None when it
+        can't be measured (no ffmpeg, no/undecodable audio stream)."""
+        ffmpeg = ptk.VidUtils.resolve_ffmpeg(required=False)
+        if not ffmpeg:
+            return None
+        try:
+            result = subprocess.run(
+                [ffmpeg, "-hide_banner", "-i", filepath, "-map", "0:a:0",
+                 "-af", "volumedetect", "-f", "null", "-"],
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+        except OSError:  # a diagnostics probe must never fail the export
+            return None
+        match = re.search(r"max_volume:\s*(-?[\d.]+)\s*dB", result.stderr)
+        return float(match.group(1)) if match else None
 
     @staticmethod
     def _is_valid_file(path: Optional[str]) -> bool:

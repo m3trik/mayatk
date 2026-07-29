@@ -147,6 +147,75 @@ class TestUvUtils(MayaTkTestCase):
         # Default cube UVs are in 0-1 range. Moving by 1 should put them in 1-2 range.
         self.assertGreaterEqual(min_u, 1.0)
 
+    def test_move_to_uv_space_fractional(self):
+        """A fractional step moves by exactly that amount (the Half/Quarter Tile scopes)."""
+        before = UvUtils.get_uv_bounds(self.cube)
+
+        UvUtils.move_to_uv_space(self.cube, u=0.0, v=0.5, relative=True)
+
+        after = UvUtils.get_uv_bounds(self.cube)
+        self.assertAlmostEqual(after[0], before[0], places=5)  # u untouched
+        self.assertAlmostEqual(after[1], before[1] + 0.5, places=5)
+
+    def test_move_to_uv_space_accepts_uv_components(self):
+        """A UV-component selection moves too.
+
+        A `fromFace` filter on the conversion silently dropped non-face input,
+        making the move a no-op for a UV / edge / vertex selection.
+        """
+        uvs = cmds.ls(f"{self.cube}.map[*]", flatten=True)
+        before = UvUtils.get_uv_bounds(self.cube)
+
+        UvUtils.move_to_uv_space(uvs, u=1.0, v=0.0, relative=True)
+
+        after = UvUtils.get_uv_bounds(self.cube)
+        self.assertAlmostEqual(after[0], before[0] + 1.0, places=5)
+
+    def test_get_uv_bounds(self):
+        """UV bounds come back as a single (u_min, v_min, u_max, v_max) box."""
+        bounds = UvUtils.get_uv_bounds(self.cube)
+        self.assertIsNotNone(bounds)
+        u_min, v_min, u_max, v_max = bounds
+        self.assertLess(u_min, u_max)
+        self.assertLess(v_min, v_max)
+
+        # Agrees with a raw query of the same UVs.
+        uvs = cmds.polyEditUV(f"{self.cube}.map[*]", q=True)
+        self.assertAlmostEqual(u_min, min(uvs[0::2]), places=5)
+        self.assertAlmostEqual(v_max, max(uvs[1::2]), places=5)
+
+    def test_get_uv_bounds_unions_multiple_objects(self):
+        """One box over the whole input, not just the first object.
+
+        The move pad hands its entire selection to this, so a per-object box
+        would put the snap anchor on the wrong shell.
+        """
+        other = cmds.polyPlane(width=1, height=1, sx=1, sy=1)[0]
+        UvUtils.move_to_uv_space(other, 2.0, 3.0)
+
+        cube_bounds = UvUtils.get_uv_bounds(self.cube)
+        both = UvUtils.get_uv_bounds([self.cube, other])
+
+        self.assertAlmostEqual(both[0], min(cube_bounds[0], 2.0), places=5)
+        self.assertAlmostEqual(both[1], min(cube_bounds[1], 3.0), places=5)
+        self.assertAlmostEqual(both[2], max(cube_bounds[2], 3.0), places=5)
+        self.assertAlmostEqual(both[3], max(cube_bounds[3], 4.0), places=5)
+
+    def test_get_uv_bounds_on_input_without_uvs(self):
+        """A non-poly input resolves to no UVs -> None (the panel warns, not raises)."""
+        locator = cmds.spaceLocator()[0]
+        self.assertIsNone(UvUtils.get_uv_bounds(locator))
+
+    def test_get_uv_bounds_tracks_a_move(self):
+        """The bounds shift by exactly the applied offset — this pairing is what
+        the Shell Xform snap mode relies on to land on a grid line."""
+        before = UvUtils.get_uv_bounds(self.cube)
+        UvUtils.move_to_uv_space(self.cube, u=0.25, v=-0.75, relative=True)
+        after = UvUtils.get_uv_bounds(self.cube)
+
+        self.assertAlmostEqual(after[0], before[0] + 0.25, places=5)
+        self.assertAlmostEqual(after[1], before[1] - 0.75, places=5)
+
     def test_mirror_uvs(self):
         """Test mirroring UVs."""
         # Get initial UV positions
@@ -207,6 +276,47 @@ class TestUvUtils(MayaTkTestCase):
         # Verify
         new_density = UvUtils.get_texel_density(self.cube, map_size=1024)
         self.assertAlmostEqual(new_density, target_density, places=1)
+
+    def test_set_texel_density_multiple_objects(self):
+        """Both objects of a multi-object input reach the target density."""
+        target = 10.0
+        UvUtils.set_texel_density([self.cube, self.cube2], density=target, map_size=1024)
+        for obj in (self.cube, self.cube2):
+            self.assertAlmostEqual(
+                UvUtils.get_texel_density(obj, map_size=1024), target, places=1
+            )
+
+    def test_set_texel_density_skips_degenerate_shells(self):
+        """Regression: a zero-UV-area shell must be skipped, not abort with
+        texSetTexelDensity.mel's division by zero (line 56)."""
+        # Collapse cube2's UVs to a single point -> zero UV area.
+        cmds.polyEditUV(f"{self.cube2}.map[*]", uValue=0.5, vValue=0.5, relative=False)
+        target = 5.12
+        scaled, skipped = UvUtils.set_texel_density(
+            [self.cube, self.cube2], density=target, map_size=1024
+        )
+        self.assertGreaterEqual(scaled, 1)
+        self.assertGreaterEqual(skipped, 1)
+        # The healthy object still reaches the target density.
+        self.assertAlmostEqual(
+            UvUtils.get_texel_density(self.cube, map_size=1024), target, places=1
+        )
+
+    def test_cut_uv_edges_multiple_objects(self):
+        """Regression: polyMapCut refuses edges spanning objects
+        ("Doesn't work with multiple objects selected") -- cut_uv_edges
+        groups per object so a multi-object hard-edge cut succeeds."""
+        from mayatk.core_utils.components import Components
+
+        before = [cmds.polyEvaluate(o, uvShell=True) for o in (self.cube, self.cube2)]
+        hard = Components.get_edges_by_normal_angle(
+            [self.cube, self.cube2], low_angle=70, high_angle=180
+        )
+        grouped = UvUtils.cut_uv_edges(hard)
+        self.assertEqual(len(grouped), 2)  # one polyMapCut per object
+        after = [cmds.polyEvaluate(o, uvShell=True) for o in (self.cube, self.cube2)]
+        for b, a in zip(before, after):
+            self.assertGreater(a, b)  # every object's shells were actually cut
 
     # -------------------------------------------------------------------------
     # UV Set & Transfer Tests
@@ -663,6 +773,609 @@ class TestUvCylinderUnwrap(MayaTkTestCase):
             self.assertEqual(count, 3)  # body + 2 caps -> actually unfolded
             self.assertEqual(degen, 0)
             self.assertTrue(inside)
+
+
+class TestTopologySeamAlgorithm(MayaTkTestCase):
+    """UvUtils.get_topology_seam_edges + the ``algorithm`` dispatch."""
+
+    def _uv_shells(self, mesh):
+        return cmds.polyEvaluate(mesh, uvShell=True)
+
+    @staticmethod
+    def _flatten_uvs_to_one_shell(mesh):
+        cmds.polyProjection(
+            f"{mesh}.f[*]", type="Planar", md="y", insertBeforeDeformers=0
+        )
+
+    def test_unknown_algorithm_raises(self):
+        cyl = cmds.polyCylinder(name="topo_bad_algo")[0]
+        with self.assertRaises(ValueError):
+            UvUtils.cut_cylinder_seams(cyl, algorithm="bogus")
+
+    def test_topology_capped_cylinder_three_shells(self):
+        """Parity with the axis algorithm on its home turf: a capped cylinder
+        still peels into body + 2 caps, topology unchanged."""
+        cyl = cmds.polyCylinder(
+            name="topo_capped", radius=1, height=4, subdivisionsAxis=12
+        )[0]
+        self._flatten_uvs_to_one_shell(cyl)
+        seamed = UvUtils.unwrap_cylinder(cyl, unfold=False, algorithm="topology")
+        self.assertEqual(seamed, [cmds.ls(cyl, long=True)[0]])
+        self.assertEqual(self._uv_shells(cyl), 3)
+        v = cmds.polyEvaluate(cyl, vertex=True)
+        e = cmds.polyEvaluate(cyl, edge=True)
+        f = cmds.polyEvaluate(cyl, face=True)
+        self.assertEqual(v - e + f, 2)  # cuts don't change mesh topology
+
+    def test_topology_bent_tube_single_strip(self):
+        """A bent (half-torus) tube -- where the straight-axis assumption
+        breaks -- opens into a single strip with one lengthwise seam."""
+        tor = cmds.polyTorus(
+            name="topo_bent", radius=2, sectionRadius=0.5,
+            subdivisionsAxis=12, subdivisionsHeight=8,
+        )[0]
+        # Delete half the donut -> an open bent tube (a 180-degree elbow).
+        centers = {}
+        for i in range(cmds.polyEvaluate(tor, face=True)):
+            verts = cmds.ls(
+                cmds.polyListComponentConversion(f"{tor}.f[{i}]", toVertex=True),
+                flatten=True,
+            )
+            xs = [cmds.pointPosition(v, world=True)[0] for v in verts]
+            centers[i] = sum(xs) / len(xs)
+        cmds.delete([f"{tor}.f[{i}]" for i, x in centers.items() if x < 0])
+        self._flatten_uvs_to_one_shell(tor)
+
+        seam = UvUtils.get_topology_seam_edges(tor)
+        self.assertTrue(seam)
+        UvUtils.unwrap_cylinder(tor, unfold=False, algorithm="topology")
+        self.assertEqual(self._uv_shells(tor), 1)  # one strip
+        # The lengthwise cut duplicates UVs along the seam.
+        self.assertGreater(
+            cmds.polyEvaluate(tor, uvcoord=True), cmds.polyEvaluate(tor, vertex=True)
+        )
+
+    def test_topology_closed_torus_opens(self):
+        """A closed torus (no boundary, no creases) gets loop + ring cuts so
+        it can unroll -- the axis algorithm has no answer here."""
+        tor = cmds.polyTorus(
+            name="topo_torus", radius=2, sectionRadius=0.5,
+            subdivisionsAxis=12, subdivisionsHeight=8,
+        )[0]
+        self._flatten_uvs_to_one_shell(tor)
+        seam = UvUtils.get_topology_seam_edges(tor)
+        # One lengthwise loop + one crossing ring, and nothing else.
+        self.assertTrue(seam)
+        UvUtils.cut_cylinder_seams(tor, algorithm="topology")
+        # Cutting loop + ring opens the torus without splitting it apart.
+        self.assertEqual(self._uv_shells(tor), 1)
+        self.assertGreater(
+            cmds.polyEvaluate(tor, uvcoord=True), cmds.polyEvaluate(tor, vertex=True)
+        )
+
+
+class TestDetectSeamAlgorithm(MayaTkTestCase):
+    """UvUtils.detect_seam_algorithm — replaces the old UI algorithm picker."""
+
+    def test_straight_cylinder_picks_axis(self):
+        cyl = cmds.polyCylinder(
+            name="detect_cyl", radius=1, height=4, subdivisionsAxis=12
+        )[0]
+        self.assertEqual(UvUtils.detect_seam_algorithm(cyl), "axis")
+
+    def test_flat_flange_picks_axis(self):
+        """Wider than it is tall — still a straight body of revolution."""
+        flange = cmds.polyCylinder(
+            name="detect_flange", radius=4, height=0.5, subdivisionsAxis=16
+        )[0]
+        self.assertEqual(UvUtils.detect_seam_algorithm(flange), "axis")
+
+    def test_closed_torus_picks_topology(self):
+        """No boundary and genus 1: one lengthwise cut can't unroll it."""
+        tor = cmds.polyTorus(
+            name="detect_torus", radius=2, sectionRadius=0.5,
+            subdivisionsAxis=12, subdivisionsHeight=8,
+        )[0]
+        self.assertEqual(UvUtils.detect_seam_algorithm(tor), "topology")
+
+    def test_bent_tube_picks_topology(self):
+        """An elbow's rings drift off any fitted axis."""
+        tor = cmds.polyTorus(
+            name="detect_bent", radius=2, sectionRadius=0.5,
+            subdivisionsAxis=12, subdivisionsHeight=8,
+        )[0]
+        centers = {}
+        for i in range(cmds.polyEvaluate(tor, face=True)):
+            verts = cmds.ls(
+                cmds.polyListComponentConversion(f"{tor}.f[{i}]", toVertex=True),
+                flatten=True,
+            )
+            xs = [cmds.pointPosition(v, world=True)[0] for v in verts]
+            centers[i] = sum(xs) / len(xs)
+        cmds.delete([f"{tor}.f[{i}]" for i, x in centers.items() if x < 0])
+        self.assertEqual(UvUtils.detect_seam_algorithm(tor), "topology")
+
+    def test_auto_is_the_default_and_dispatches(self):
+        cyl = cmds.polyCylinder(
+            name="detect_default", radius=1, height=4, subdivisionsAxis=12
+        )[0]
+        cmds.polyProjection(
+            f"{cyl}.f[*]", type="Planar", md="y", insertBeforeDeformers=0
+        )
+        # No algorithm= argument at all: "auto" must resolve and cut.
+        seamed = UvUtils.cut_cylinder_seams(cyl)
+        self.assertEqual(seamed, [cmds.ls(cyl, long=True)[0]])
+        self.assertEqual(cmds.polyEvaluate(cyl, uvShell=True), 3)
+
+    def test_auto_is_an_accepted_algorithm(self):
+        self.assertIn("auto", UvUtils.SEAM_ALGORITHMS)
+
+
+class TestAutoUnwrap(MayaTkTestCase):
+    """UvUtils.auto_unwrap — the external-engine OBJ round-trip.
+
+    The engine executable is stubbed, so these exercise the real Maya-side
+    export / import / transfer path without needing Ministry of Flat or BFF.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="unwrap_cube")[0]
+
+    @staticmethod
+    def _offset_uvs(obj_in, obj_out, du=0.25, dv=0.1):
+        """Stand in for an engine: shift every UV so the transfer is visible."""
+        lines = []
+        for line in open(obj_in, encoding="utf-8"):
+            if line.startswith("vt "):
+                parts = line.split()
+                u, v = float(parts[1]) + du, float(parts[2]) + dv
+                line = f"vt {u:.6f} {v:.6f}\n"
+            lines.append(line)
+        with open(obj_out, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+
+    def _stub_engine(self, handler=None, check_engine=None):
+        """Patch the engine seam; return the recorder of what it received."""
+        from unittest.mock import patch
+        from mayatk.uv_utils import _auto_unwrap
+
+        received = {}
+
+        def engine(obj_in, engine_key, **params):
+            received["input"] = obj_in
+            received["engine"] = engine_key
+            received["params"] = params
+            obj_out = obj_in.replace(".obj", "_out.obj")
+            (handler or self._offset_uvs)(obj_in, obj_out)
+            return obj_out
+
+        patches = [
+            patch.object(
+                _auto_unwrap._AutoUnwrapInternal, "_engine_unwrap", staticmethod(engine)
+            ),
+            patch.object(
+                _auto_unwrap._AutoUnwrapInternal,
+                "_check_engine",
+                staticmethod(check_engine or (lambda key: "stub.exe")),
+            ),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return received
+
+    @staticmethod
+    def _uvs(mesh):
+        return cmds.polyEditUV(f"{mesh}.map[*]", query=True) or []
+
+    @staticmethod
+    def _uvs_per_face(mesh):
+        """UV values keyed by face — the mapping that actually matters.
+
+        ``snapshot_uv_sets`` / ``restore_uv_snapshot`` rebuild the UV set, which
+        renumbers ``map[i]`` while leaving every face's UVs identical, so a raw
+        ``map[*]`` comparison reports a difference where there is none.
+        """
+        return {
+            i: sorted(
+                cmds.polyEditUV(
+                    cmds.polyListComponentConversion(f"{mesh}.f[{i}]", toUV=True),
+                    query=True,
+                )
+            )
+            for i in range(cmds.polyEvaluate(mesh, face=True))
+        }
+
+    def test_engine_uvs_are_applied_to_the_original(self):
+        received = self._stub_engine()
+        before = self._uvs(self.cube)
+        result = UvUtils.auto_unwrap(self.cube, method="hard", pack=False)
+
+        self.assertTrue(result)
+        self.assertEqual(result.engine, "mof")
+        self.assertEqual(result.failed, [])
+        after = self._uvs(self.cube)
+        self.assertEqual(len(before), len(after))
+        # The stub shifted every UV by (0.25, 0.1); the transfer must land it.
+        self.assertAlmostEqual(after[0], before[0] + 0.25, places=3)
+        self.assertAlmostEqual(after[1], before[1] + 0.1, places=3)
+        self.assertTrue(received["input"].endswith(".obj"))
+
+    def test_method_names_map_to_engines(self):
+        received = self._stub_engine()
+        UvUtils.auto_unwrap(self.cube, method="organic", pack=False)
+        self.assertEqual(received["engine"], "bff")
+
+    def test_map_size_drives_ministry_of_flat_resolution(self):
+        received = self._stub_engine()
+        UvUtils.auto_unwrap(self.cube, method="hard", map_size=2048, pack=False)
+        self.assertEqual(received["params"]["resolution"], 2048)
+
+    def test_engine_params_are_forwarded(self):
+        received = self._stub_engine()
+        UvUtils.auto_unwrap(
+            self.cube, method="organic", pack=False, engine_params={"n_cones": 8}
+        )
+        self.assertEqual(received["params"]["n_cones"], 8)
+
+    def test_unknown_method_raises(self):
+        self._stub_engine()
+        with self.assertRaises(ValueError):
+            UvUtils.auto_unwrap(self.cube, method="wishful")
+
+    def test_no_meshes_raises(self):
+        self._stub_engine()
+        cmds.select(clear=True)
+        with self.assertRaises(ValueError):
+            UvUtils.auto_unwrap()
+
+    def test_missing_engine_raises_before_touching_the_scene(self):
+        def missing(_key):
+            raise FileNotFoundError("Ministry of Flat not found: https://example/dl")
+
+        self._stub_engine(check_engine=missing)
+        before = self._uvs(self.cube)
+        with self.assertRaises(FileNotFoundError) as ctx:
+            UvUtils.auto_unwrap(self.cube)
+        self.assertIn("https://", str(ctx.exception))
+        self.assertEqual(self._uvs(self.cube), before)
+        self.assertFalse(cmds.namespace(exists="UvUnwrapImport"))
+
+    def test_per_object_failure_is_isolated_and_restored(self):
+        # A sphere, so the payload is identifiable by its geometry: the export
+        # carries no object/group names to match on.
+        doomed = cmds.polySphere(name="unwrap_sphere_doomed", sx=8, sy=6)[0]
+
+        def flaky(obj_in, obj_out):
+            verts = sum(
+                1 for line in open(obj_in, encoding="utf-8") if line.startswith("v ")
+            )
+            if verts > 8:  # the sphere, not the cube — order-independent
+                raise RuntimeError("engine exploded")
+            self._offset_uvs(obj_in, obj_out)
+
+        self._stub_engine(handler=flaky)
+        before_ok = self._uvs(self.cube)
+        before_doomed = self._uvs_per_face(doomed)
+
+        result = UvUtils.auto_unwrap([self.cube, doomed], method="hard", pack=False)
+
+        self.assertEqual(len(result.succeeded), 1)
+        self.assertEqual(len(result.failed), 1)
+        self.assertIn("engine exploded", result.failed[0][1])
+        self.assertIn("unwrap_sphere_doomed", result.failed[0][0])
+        # The survivor changed; the casualty was rolled back untouched.
+        self.assertNotAlmostEqual(self._uvs(self.cube)[0], before_ok[0], places=3)
+        self.assertEqual(self._uvs_per_face(doomed), before_doomed)
+
+    def test_results_follow_the_caller_order(self):
+        second = cmds.polyCube(name="aaa_sorts_first")[0]
+        self._stub_engine()
+        result = UvUtils.auto_unwrap([self.cube, second], method="hard", pack=False)
+        self.assertEqual(len(result.succeeded), 2)
+        self.assertIn("unwrap_cube", result.succeeded[0])
+        self.assertIn("aaa_sorts_first", result.succeeded[1])
+
+    def test_leaves_no_residue(self):
+        self._stub_engine()
+        cmds.select(self.cube, replace=True)
+        # Every DAG/DG node present before the run, so the import's object-set
+        # and shading nodes -- which aren't children of the imported mesh and
+        # so survive deleting it -- can't slip through.
+        before = set(cmds.ls())
+
+        UvUtils.auto_unwrap(self.cube, method="hard", pack=False)
+
+        self.assertFalse(cmds.namespace(exists="UvUnwrapImport"))
+        self.assertEqual(
+            cmds.ls(selection=True, long=True), cmds.ls(self.cube, long=True)
+        )
+        self.assertEqual(len(cmds.ls(type="mesh", noIntermediate=True)), 1)
+        snapshots = [
+            s
+            for s in (cmds.polyUVSet(self.cube, query=True, allUVSets=True) or [])
+            if s.startswith("_uv_snap")
+        ]
+        self.assertEqual(snapshots, [])
+        # Construction history on the original is expected -- including the
+        # intermediate shape Maya keeps when a history node is added. Imported
+        # geometry and the translator's set / groupId nodes are not.
+        leaked = [
+            n
+            for n in sorted(set(cmds.ls()) - before)
+            if cmds.objectType(n) in ("mesh", "transform", "objectSet", "groupId")
+            and not (
+                cmds.objectType(n) == "mesh"
+                and cmds.getAttr(f"{n}.intermediateObject")
+            )
+        ]
+        self.assertEqual(leaked, [])
+
+    def test_layout_defaults_per_engine(self):
+        from unittest.mock import patch
+
+        self._stub_engine()
+        # Ministry of Flat lays its own islands out; only the scale is fixed.
+        with patch.object(UvUtils, "_pack_shells") as pack, patch.object(
+            UvUtils, "_fit_uvs_to_tile"
+        ) as fit:
+            UvUtils.auto_unwrap(self.cube, method="hard")
+        pack.assert_not_called()
+        fit.assert_called_once()
+
+        # BFF only flattens, so it needs the full layout pass.
+        with patch.object(UvUtils, "_pack_shells") as pack, patch.object(
+            UvUtils, "_fit_uvs_to_tile"
+        ) as fit:
+            UvUtils.auto_unwrap(self.cube, method="organic")
+        pack.assert_called_once()
+        fit.assert_not_called()
+
+    def test_pack_true_forces_a_full_repack(self):
+        from unittest.mock import patch
+
+        self._stub_engine()
+        with patch.object(UvUtils, "_pack_shells") as pack:
+            UvUtils.auto_unwrap(self.cube, method="hard", pack=True)
+        pack.assert_called_once()
+
+    def test_pack_false_leaves_engine_uvs_untouched(self):
+        from unittest.mock import patch
+
+        self._stub_engine()
+        with patch.object(UvUtils, "_pack_shells") as pack, patch.object(
+            UvUtils, "_fit_uvs_to_tile"
+        ) as fit:
+            UvUtils.auto_unwrap(self.cube, method="hard", pack=False)
+        pack.assert_not_called()
+        fit.assert_not_called()
+
+    def test_default_run_fits_uvs_into_the_tile(self):
+        """The engine's raw output can overrun 0-1; the default must not."""
+
+        def oversized(obj_in, obj_out):
+            lines = []
+            for line in open(obj_in, encoding="utf-8"):
+                if line.startswith("vt "):
+                    _, u, v = line.split()[:3]
+                    line = f"vt {float(u) * 1.8:.6f} {float(v) * 1.8:.6f}\n"
+                lines.append(line)
+            with open(obj_out, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+
+        self._stub_engine(handler=oversized)
+        UvUtils.auto_unwrap(self.cube, method="hard")
+        self.assertTrue(all(-0.001 <= c <= 1.001 for c in self._uvs(self.cube)))
+
+    def test_output_without_uvs_is_a_recorded_failure(self):
+        def strip_uvs(obj_in, obj_out):
+            with open(obj_out, "w", encoding="utf-8") as f:
+                for line in open(obj_in, encoding="utf-8"):
+                    if not line.startswith("vt "):
+                        f.write(line)
+
+        self._stub_engine(handler=strip_uvs)
+        result = UvUtils.auto_unwrap(self.cube, method="hard", pack=False)
+        self.assertFalse(result)
+        self.assertEqual(len(result.failed), 1)
+
+    def test_instances_collapse_to_one_round_trip(self):
+        inst = cmds.instance(self.cube, name="unwrap_cube_inst")[0]
+        received = self._stub_engine()
+        result = UvUtils.auto_unwrap([self.cube, inst], method="hard", pack=False)
+        # They share a shape — unwrapping once covers both.
+        self.assertEqual(len(result.succeeded) + len(result.failed), 1)
+        self.assertTrue(received)
+
+
+class TestUvSnapshotSideEffects(MayaTkTestCase):
+    """snapshot_uv_sets must not change which UV set is active.
+
+    ``cmds.polyUVSet -create`` switches the current set to the one it just
+    made. Left alone, every UV operation performed after taking a snapshot
+    (the auto-unwrap post-pass, the rizom bridge's) silently edits the backup
+    set instead of the real one, and the edit vanishes when the backup is
+    discarded.
+    """
+
+    def _shape(self, transform):
+        return cmds.listRelatives(str(transform), shapes=True, ni=True)[0]
+
+    def test_snapshot_leaves_the_original_set_current(self):
+        cube = cmds.polyCube(name="snap_current")[0]
+        shape = self._shape(cube)
+        before = cmds.polyUVSet(shape, query=True, currentUVSet=True)
+        UvUtils.snapshot_uv_sets([cube])
+        self.assertEqual(
+            cmds.polyUVSet(shape, query=True, currentUVSet=True), before
+        )
+
+    def test_uv_edits_after_snapshot_survive_discard(self):
+        cube = cmds.polyCube(name="snap_edit")[0]
+        snapshot = UvUtils.snapshot_uv_sets([cube])
+        cmds.polyEditUV(f"{cube}.map[*]", u=0.5, v=0.0)
+        edited = cmds.polyEditUV(f"{cube}.map[*]", query=True)[0]
+        UvUtils.discard_uv_snapshot(snapshot)
+        self.assertAlmostEqual(
+            cmds.polyEditUV(f"{cube}.map[*]", query=True)[0], edited, places=4
+        )
+
+
+class TestPackShells(MayaTkTestCase):
+    """UvUtils._pack_shells — the layout pass shared with unwrap_cylinder."""
+
+    def test_packs_into_unit_square(self):
+        cyl = cmds.polyCylinder(name="pack_cyl", radius=1, height=4)[0]
+        cmds.polyEditUV(f"{cyl}.map[*]", u=3.0, v=3.0)  # shove it out of 0-1
+        UvUtils._pack_shells(cyl, map_size=1024)
+        uvs = cmds.polyEditUV(f"{cyl}.map[*]", query=True) or []
+        self.assertTrue(uvs)
+        self.assertTrue(all(-0.001 <= c <= 1.001 for c in uvs))
+
+
+class TestPackUvs(MayaTkTestCase):
+    """UvUtils.pack_uvs — external xatlas pack round-trip.
+
+    Runs against the real engine (skips when the optional xatlas package is
+    absent). Behaviors pinned from the live verification session 2026-07-28:
+    exact UDIM/coverage placement, exact relative-scale preservation with
+    preserve_3d off, density equalization with it on, and full undo capture
+    (per-shell polyEditUV write-back, never raw MFnMesh.setUVs).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import pythontk as ptk
+
+        if not ptk.UvPack.available():
+            raise unittest.SkipTest("xatlas not installed in this interpreter")
+
+    @staticmethod
+    def _bbox(obj):
+        return cmds.polyEvaluate(obj, boundingBox2d=True)
+
+    def test_missing_engine_message_carries_install_command(self):
+        from unittest import mock
+        import pythontk as ptk
+
+        with mock.patch.object(
+            ptk.UvPack, "resolve", side_effect=RuntimeError("pip install --user xatlas")
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                UvUtils.pack_uvs([cmds.polyCube(ch=False)[0]])
+        self.assertIn("pip install", str(ctx.exception))
+
+    def test_udim_and_coverage_placement(self):
+        plane = cmds.polyPlane(name="pk_place", sx=1, sy=1, ch=False)[0]
+        result = UvUtils.pack_uvs([plane], map_size=1024, udim=1002, coverage=(0.5, 1.0))
+        self.assertEqual(len(result.succeeded), 1)
+        (u0, u1), (v0, v1) = self._bbox(plane)
+        self.assertGreaterEqual(u0, 1.0)
+        self.assertLessEqual(u1, 1.5)
+        self.assertLessEqual(v1, 1.0)
+
+    def test_preserve_3d_toggle_controls_relative_scale(self):
+        a = cmds.polyPlane(name="pk_a", sx=1, sy=1, ch=False)[0]
+        b = cmds.polyPlane(name="pk_b", sx=1, sy=1, ch=False)[0]
+        cmds.polyEditUV(f"{b}.map[*]", pivotU=0.0, pivotV=0.0, scaleU=0.5, scaleV=0.5)
+
+        # Fixed-page packing snaps chart placement to integer texels, so the
+        # realized per-shell scale can deviate by ~a texel (<=0.5% here) —
+        # sub-pixel at any map size, but past a places=3 assertion.
+        UvUtils.pack_uvs([a, b], map_size=1024, preserve_3d=False, rotate=False)
+        ratio = (self._bbox(a)[0][1] - self._bbox(a)[0][0]) / (
+            self._bbox(b)[0][1] - self._bbox(b)[0][0]
+        )
+        self.assertAlmostEqual(ratio, 2.0, delta=0.01)  # Preserve UV: input ratio kept
+
+        UvUtils.pack_uvs([a, b], map_size=1024, preserve_3d=True, rotate=False)
+        ratio = (self._bbox(a)[0][1] - self._bbox(a)[0][0]) / (
+            self._bbox(b)[0][1] - self._bbox(b)[0][0]
+        )
+        self.assertAlmostEqual(ratio, 1.0, delta=0.01)  # equal 3D area -> equal UV
+
+    def test_common_primitives_all_pack_inside_the_tile(self):
+        """Regression: the residual tolerance was tighter than the engine's own
+        precision (measured <=2.1e-04), so ordinary meshes were rejected, left
+        unpacked, and landed on top of the packed ones."""
+        objs = [
+            cmds.polyCube(name="pk_cu", ch=False)[0],
+            cmds.polyCylinder(name="pk_cy", ch=False)[0],
+            cmds.polySphere(name="pk_sp", ch=False)[0],
+            cmds.polyTorus(name="pk_to", ch=False)[0],
+            cmds.polyCone(name="pk_co", ch=False)[0],
+        ]
+        for o in objs:
+            cmds.polyAutoProjection(o, layoutMethod=0, layout=2, planes=6, ch=False)
+
+        result = UvUtils.pack_uvs(objs, map_size=1024)
+
+        self.assertEqual(result.failed, [], f"unexpected rejections: {result.failed}")
+        self.assertEqual(len(result.succeeded), len(objs))
+        for o in objs:
+            (u0, u1), (v0, v1) = self._bbox(o)
+            self.assertGreaterEqual(min(u0, v0), -1e-4, f"{o} left the tile")
+            self.assertLessEqual(max(u1, v1), 1.0 + 1e-4, f"{o} left the tile")
+
+    def test_pinched_shell_mesh_is_rejected_and_restored(self):
+        """A shell pinched to another at a single UV point is two EDGE-connected
+        charts to the engine, which packs them apart without duplicating the
+        shared vertex — unreproducible as a rigid per-shell move. That mesh must
+        be put back (the density pre-pass already rewrote it), not left floating
+        over the packed ones.
+        """
+        pinched = cmds.polyPlatonicSolid(name="pk_plat", ch=False)[0]
+        ordinary = cmds.polyCube(name="pk_ok", ch=False)[0]
+        for o in (pinched, ordinary):
+            cmds.polyAutoProjection(o, layoutMethod=0, layout=2, planes=6, ch=False)
+        before = self._bbox(pinched)
+
+        result = UvUtils.pack_uvs([pinched, ordinary], map_size=1024)
+
+        self.assertEqual([n for n, _ in result.failed], ["pk_plat"])
+        self.assertIn("pinched", result.failed[0][1])
+        after = self._bbox(pinched)
+        for axis_before, axis_after in zip(before, after):
+            for b, a in zip(axis_before, axis_after):
+                self.assertAlmostEqual(b, a, places=6, msg="rejected mesh not restored")
+        # the healthy mesh still packed
+        self.assertEqual(len(result.succeeded), 1)
+
+    def test_cut_cube_fills_a_useful_fraction_of_every_coverage_box(self):
+        """User-reported regression: a cube with all edges cut filled only
+        0.50/0.25 of the Full/Half-V boxes (content-driven atlas aspect wasted
+        against the box). Fixed-page packing must keep every coverage option
+        above 0.6 fill for this content (measured 0.68-0.77; u3dLayout's own
+        range on it is 0.55-0.96)."""
+        for cov in ((1.0, 1.0), (0.5, 1.0), (1.0, 0.5), (0.5, 0.5)):
+            cmds.file(new=True, force=True)
+            cube = cmds.polyCube(name="pk_cut", ch=False)[0]
+            cmds.polyMapCut(f"{cube}.e[*]", ch=False)
+
+            result = UvUtils.pack_uvs([cube], map_size=1024, coverage=cov)
+
+            self.assertEqual(result.failed, [], f"cov={cov}: {result.failed}")
+            faces = cmds.polyListComponentConversion(cube, toFace=True)
+            area = sum(cmds.polyEvaluate(faces, uvFaceArea=True) or [0.0])
+            fill = area / (cov[0] * cov[1])
+            self.assertGreater(fill, 0.6, f"cov={cov}: fill {fill:.3f}")
+            (u0, u1), (v0, v1) = self._bbox(cube)
+            self.assertGreaterEqual(min(u0, v0), -1e-4)
+            self.assertLessEqual(u1, cov[0] + 1e-4, f"cov={cov} spilled U")
+            self.assertLessEqual(v1, cov[1] + 1e-4, f"cov={cov} spilled V")
+
+    def test_pack_is_fully_undoable(self):
+        plane = cmds.polyPlane(name="pk_undo", sx=1, sy=1, ch=False)[0]
+        before = self._bbox(plane)
+        cmds.undoInfo(openChunk=True)
+        try:
+            UvUtils.pack_uvs([plane], map_size=1024, udim=1005)
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        self.assertGreaterEqual(self._bbox(plane)[0][0], 4.0)
+        cmds.undo()
+        self.assertEqual(self._bbox(plane), before)
 
 
 class TestUvUtilsEdgeCases(MayaTkTestCase):

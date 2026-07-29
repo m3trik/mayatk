@@ -7,8 +7,6 @@ except ImportError:
 
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.components import Components
@@ -279,7 +277,7 @@ class SnapSlots:
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Snap",
                 body="Snap vertices to other vertices, surfaces, or world grid. "
                 "Each button has an option box (▸) for its per-tool parameters.",

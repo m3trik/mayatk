@@ -41,8 +41,6 @@ except ImportError as error:
     print(__file__, error)
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # from this package:
 from mayatk.core_utils._core_utils import BoundingBox
 from mayatk.core_utils.preview import Preview
@@ -512,7 +510,7 @@ class CurtainSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header help text (the preset combo lives in the panel)."""
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Curtain",
                 body="Drape a pleated cloth curtain from a <b>rail</b> — a "
                 "selected NURBS curve, polygon edge loop, or chain of locators, "

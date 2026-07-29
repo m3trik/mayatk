@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import List, Tuple, Dict, Set
+from typing import List, Tuple, Dict, Set, Optional
 
 try:
     import maya.cmds as cmds
@@ -377,10 +377,75 @@ class _XformUtilsInternal:
         resolved = cmds.ls(objects, objectsOnly=True, long=True) or []
         transforms = cmds.ls(resolved, transforms=True, long=True) or []
         shapes = cmds.ls(resolved, shapes=True, long=True) or []
+        # fullPath, not path: ``path=True`` yields the *shortest unique* name, so a
+        # selection holding both an object and one of its components produced "|pc"
+        # and "pc" — two entries the de-dupe can't merge, and two spellings callers
+        # can't match against each other.
         transforms += (
-            cmds.listRelatives(shapes, path=True, parent=True, type="transform") or []
+            cmds.listRelatives(shapes, fullPath=True, parent=True, type="transform")
+            or []
         )
         return list(dict.fromkeys(transforms))  # de-dupe, preserve order
+
+    # Component selection masks that carry a real world position. One masked call
+    # classifies a whole selection, versus walking ``Components.component_mapping``
+    # a type at a time. Deliberately NOT the full mapping: the parametric types
+    # (curve/surface parameter points, knots, ranges, trim edges, isoparms — 39-45)
+    # report positions ``exactWorldBoundingBox`` can't measure, and a selected
+    # rotate/scale pivot handle (49/50) is a manipulator, not geometry. Both would
+    # otherwise be "centered on" as if they were. Passing this filter is necessary
+    # but not sufficient — see ``_component_center``.
+    _COMPONENT_MASKS = (
+        28, 30, 31, 32, 34, 35, 36, 37, 38, 46, 47, 70, 72, 73,
+    )  # fmt: skip
+
+    @staticmethod
+    def _component_center(components) -> Optional[List[float]]:
+        """World-space center of *components*, or None if they have no measurable extent.
+
+        ``exactWorldBoundingBox`` reports "nothing to measure" as an *inverted*
+        sentinel box (min +1e20 / max -1e20) rather than raising, and averaging
+        that yields exactly (0, 0, 0) — so an unguarded caller silently pivots on
+        the world origin. NURBS surface faces hit this despite being a
+        legitimately-masked component type, which is why the mask filter alone
+        can't be trusted. ``XformUtils.get_bounding_box`` is not used here for the
+        same reason: its "center" carries no such guard.
+        """
+        components = list(components)
+        if not components:  # an empty list would make the query selection-wide
+            return None
+        bbox = cmds.exactWorldBoundingBox(components)
+        if any(bbox[i] > bbox[i + 3] for i in range(3)):
+            return None
+        return [(bbox[i] + bbox[i + 3]) / 2 for i in range(3)]
+
+    @classmethod
+    def _group_components_by_transform(cls, objects) -> Dict[str, List[str]]:
+        """Map each owning transform (long path) to the components of *objects* it owns.
+
+        Components stay unexpanded (``pCube1.f[0:5]`` is not flattened into six
+        names) — the callers only feed them to ``exactWorldBoundingBox``, which
+        handles ranges, so a dense selection costs one entry rather than
+        thousands. An empty dict means *objects* held no components at all,
+        which is the signal to fall back to whole-object behaviour.
+        """
+        objects = CoreUtils.as_strings(objects)
+        if not objects:  # an empty list would make the filtered call selection-wide
+            return {}
+        components = (
+            cmds.filterExpand(objects, sm=cls._COMPONENT_MASKS, expand=False) or []
+        )
+        by_node: Dict[str, List[str]] = {}
+        for comp in components:  # node names can't contain "."
+            by_node.setdefault(comp.split(".", 1)[0], []).append(comp)
+
+        grouped: Dict[str, List[str]] = {}
+        for node, comps in by_node.items():  # resolve once per owner, not per component
+            transform = (cls._resolve_transforms([node]) or [None])[0]
+            if transform is None:
+                continue
+            grouped.setdefault(transform, []).extend(comps)
+        return grouped
 
 
 class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
@@ -755,7 +820,13 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         from_channel_box=False,
         **kwargs,
     ):
-        """Freezes transformations on the given objects."""
+        """Freezes transformations on the given objects.
+
+        Objects whose shape is instanced are *skipped* — baking into a shared
+        shape would rewrite every sibling instance's geometry. To bake one
+        anyway, break the link first and bake in one step:
+        ``NodeUtils.uninstance(objs, freeze=True)``.
+        """
         if center_pivot is True:
             center_pivot = 2
         elif center_pivot is False:
@@ -898,12 +969,24 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         def get_blockers(node: str) -> Dict[str, List[str]]:
             """Helper to find input connections on specified channels.
 
+            Queries both the compound plug and its children — a compound
+            ``listConnections`` does NOT see child-plug connections
+            (``d.rotateZ -> c.rotateZ`` is invisible to a ``c.rotate`` query)
+            and vice versa. Anim curves and constraints connect per-axis, so
+            without the child plugs the disconnect/delete strategies found no
+            blockers and silently skipped the node.
+
             Returns ``{dest_plug: [src_plug, ...]}``.
             """
             plugs = []
             for ch in freeze_channels:
                 if cmds.attributeQuery(ch, node=node, exists=True):
                     plugs.append(f"{node}.{ch}")
+                    children = (
+                        cmds.attributeQuery(ch, node=node, listChildren=True)
+                        or []
+                    )
+                    plugs.extend(f"{node}.{child}" for child in children)
             if not plugs:
                 return {}
 
@@ -946,12 +1029,18 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 or []
             )
             if shapes:
+                # Baking into a shared shape would rewrite every sibling instance's
+                # geometry, so an instanced object is never frozen in place. Callers
+                # that want it baked go through NodeUtils.uninstance(freeze=True),
+                # which breaks the link first and then calls back into here.
                 try:
-                    if NodeUtils.get_instances(obj):
-                        instanced_skips.append(CoreUtils.short_name(obj))
-                        continue
+                    instanced = bool(NodeUtils.get_instances(obj))
                 except Exception:
-                    pass
+                    instanced = False
+
+                if instanced:
+                    instanced_skips.append(CoreUtils.short_name(obj))
+                    continue
 
             nodes_to_unlock = []
             if force:
@@ -1957,70 +2046,104 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 pass
 
     @staticmethod
+    @CoreUtils.undoable
     def world_align_pivot(
         objects=None,
         pivot_type: str = "object",
         mode: str = "set",
     ):
-        """Get or set a world-aligned pivot for the specified objects."""
+        """Get or set a world-aligned pivot for the specified objects or components.
+
+        Parameters:
+            objects (str/list/None): Objects *or* components. None (default) operates on
+                the active selection.
+            pivot_type (str): 'manip' sets a temporary manipulator pivot; 'object' sets
+                the permanent object pivot.
+            mode (str): 'set' applies the pivot, 'get' returns it without changing the scene.
+
+        Component selections are honoured rather than collapsed to their object: the pivot
+        lands on the selected components' bounding-box center — per owning transform for
+        'object', the combined center for 'manip' — instead of on the object's existing
+        rotate pivot. The selection is never touched (the whole op addresses nodes by name),
+        so a component selection survives and Maya stays in component mode. Components with
+        no measurable extent fall back to their object's rotate pivot rather than collapsing
+        the pivot onto the world origin.
+
+        Returns:
+            (bool)(dict)(None): 'set' → success; 'get' → the pivot dict, or None if there
+            was nothing to align.
+        """
         if objects is None:
             objects = cmds.ls(selection=True) or []
-        objects = _XformUtilsInternal._resolve_transforms(objects)
 
-        if not objects:
+        grouped = _XformUtilsInternal._group_components_by_transform(objects)
+        transforms = _XformUtilsInternal._resolve_transforms(objects)
+
+        if not transforms:
             cmds.warning("No valid transform objects to align pivot.")
             return False if mode == "set" else None
 
-        original_selection = cmds.ls(selection=True) or []
-        cmds.select(objects, replace=True)
+        resolved: Dict[str, List[float]] = {}
 
-        pivot_positions = [
-            cmds.xform(obj, q=True, rotatePivot=True, worldSpace=True)
-            for obj in objects
-        ]
-        avg_pivot_pos = [sum(coords) / len(coords) for coords in zip(*pivot_positions)]
+        def pivot_for(xf):
+            """A transform that contributed measurable components pivots on those; one
+            selected whole (or whose components can't be measured) keeps its rotate pivot.
+
+            Memoized so the mean below and the write further down can't disagree, and
+            so neither re-queries what the other already resolved.
+            """
+            if xf not in resolved:
+                center = (
+                    _XformUtilsInternal._component_center(grouped[xf])
+                    if xf in grouped
+                    else None
+                )
+                resolved[xf] = center or cmds.xform(
+                    xf, q=True, rotatePivot=True, worldSpace=True
+                )
+            return resolved[xf]
+
+        all_components = [c for comps in grouped.values() for c in comps]
+        # One shared manip position: the extent of every selected component (what the
+        # manipulator itself straddles), falling back to the mean of the object pivots.
+        shared_pivot_pos = (
+            _XformUtilsInternal._component_center(all_components)
+            if all_components
+            else None
+        )
+        if shared_pivot_pos is None:
+            positions = [pivot_for(xf) for xf in transforms]
+            shared_pivot_pos = [sum(axis) / len(axis) for axis in zip(*positions)]
 
         if mode == "get":
-            result = {
-                "position": avg_pivot_pos,
+            return {
+                "position": shared_pivot_pos,
                 "orientation": [0, 0, 0],
-                "objects": [str(obj) for obj in objects],
+                "objects": [str(xf) for xf in transforms],
+                "components": [str(c) for c in all_components],
             }
-            if original_selection:
-                cmds.select(original_selection, replace=True)
-            return result
 
         if mode == "set":
             if pivot_type == "manip":
-                cmds.manipPivot(p=avg_pivot_pos, o=(0, 0, 0))
+                cmds.manipPivot(p=shared_pivot_pos, o=(0, 0, 0))
                 return True
 
             if pivot_type == "object":
-                for obj in objects:
-                    pivot_pos = cmds.xform(
-                        obj, q=True, rotatePivot=True, worldSpace=True
-                    )
-                    cmds.xform(obj, worldSpace=True, pivots=pivot_pos, preserve=True)
-                    # See ``reset_pivot_transforms`` for why this differs
-                    # from the legacy overload.
-                    try:
-                        cmds.manipPivot(p=pivot_pos, o=(0.0, 0.0, 0.0))
-                    except Exception:
-                        pass
-                    cmds.xform(obj, preserve=True, rotateAxis=(0, 0, 0))
-
-                if original_selection:
-                    cmds.select(original_selection, replace=True)
+                for xf in transforms:
+                    cmds.xform(xf, worldSpace=True, pivots=pivot_for(xf), preserve=True)
+                    cmds.xform(xf, preserve=True, rotateAxis=(0, 0, 0))
+                # Re-align the manipulator onto the new pivot. See
+                # ``reset_pivot_transforms`` for why this differs from the legacy overload.
+                try:
+                    cmds.manipPivot(p=shared_pivot_pos, o=(0.0, 0.0, 0.0))
+                except Exception:
+                    pass
                 return True
 
             cmds.warning(f"Invalid pivot_type: {pivot_type}. Use 'manip' or 'object'.")
-            if original_selection:
-                cmds.select(original_selection, replace=True)
             return False
 
         cmds.warning(f"Invalid mode: {mode}. Use 'get' or 'set'.")
-        if original_selection:
-            cmds.select(original_selection, replace=True)
         return False
 
     @staticmethod

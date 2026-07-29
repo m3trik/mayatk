@@ -420,7 +420,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>Distance between adjacent cuts. 0 fills the axis evenly; &gt;0 fixes the span between cuts.</string>
+            <string>Fixed distance between adjacent cuts. 0 spreads the cuts evenly across the whole axis instead.</string>
            </property>
            <property name="buttonSymbols">
             <enum>QAbstractSpinBox::NoButtons</enum>
@@ -460,7 +460,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>Distribute the cuts across the span. Linear keeps them evenly spaced; ease/weighted modes bias density toward one end.</string>
+            <string>How the cuts are distributed across the span. Linear spaces them evenly; Ease In and Exponential bunch them toward the start; Ease Out and Smooth Step bunch them toward the end; Ease In-Out bunches them at both ends and thins the middle; Weighted takes its direction and strength from Bias.</string>
            </property>
            <property name="maxVisibleItems">
             <number>40</number>
@@ -488,7 +488,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>Bias for the 'weighted' distribution (0..1).</string>
+            <string>Which end the cuts bunch toward, 0-1: 0.5 is even, above 0.5 bunches them toward the start and below 0.5 toward the end, strongest at the extremes. Weighted distribution only, and inert while Curve is 1.</string>
            </property>
            <property name="buttonSymbols">
             <enum>QAbstractSpinBox::NoButtons</enum>
@@ -528,7 +528,7 @@
             </size>
            </property>
            <property name="toolTip">
-            <string>Curve strength for non-linear distributions.</string>
+            <string>How sharply the distribution curve bends - higher values push the cuts harder toward the dense end. Disabled for Linear and Smooth Step.</string>
            </property>
            <property name="buttonSymbols">
             <enum>QAbstractSpinBox::NoButtons</enum>

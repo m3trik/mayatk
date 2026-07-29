@@ -48,6 +48,43 @@ class _EditUtilsInternal(object):
         except Exception as e:
             cmds.warning(f"Parent '{node}' under '{parent}' failed: {e}")
 
+    @staticmethod
+    def _mirror_pivot_point(obj, pivot, use_object_axes: bool = True) -> list:
+        """World-space point the mirror plane passes through for *obj*.
+
+        ``use_object_axes`` resolves the object-relative pivots (``"object"`` /
+        ``"manip"`` / ``"baked"``) through the object's own matrix, so a rotated
+        object mirrors about its own axes rather than the world's.  Every other
+        pivot (``"world"``, a bounding-box key, or an explicit point) is already
+        world-space.  Shared by :meth:`EditUtils.mirror` and
+        :meth:`EditUtils.mirror_instance` so both resolve the plane identically.
+        """
+        object_relative = (
+            use_object_axes
+            and isinstance(pivot, str)
+            and pivot in {"object", "manip", "baked"}
+        )
+        if not object_relative:
+            return list(XformUtils.get_operation_axis_pos(obj, pivot))
+
+        obj_matrix = om.MMatrix(cmds.xform(str(obj), q=True, m=True, ws=True))
+        if pivot == "object":
+            local_pivot = [0.0, 0.0, 0.0]
+        else:  # "manip" / "baked" — world point folded into the object's frame
+            world_pt = XformUtils.get_operation_axis_pos(obj, pivot)
+            lp = om.MPoint(world_pt) * obj_matrix.inverse()
+            local_pivot = [float(lp[0]), float(lp[1]), float(lp[2])]
+        return list(om.MPoint(local_pivot) * obj_matrix)[:3]
+
+    @staticmethod
+    def _reflection_matrix(axis_index: int, point) -> "om.MMatrix":
+        """Row-vector reflection across the axis-aligned plane with normal
+        ``axis_index`` passing through *point* (``p' = p * M``)."""
+        vals = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+        vals[axis_index * 4 + axis_index] = -1.0
+        vals[12 + axis_index] = 2.0 * point[axis_index]
+        return om.MMatrix(vals)
+
 
 class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
     """ """
@@ -479,8 +516,14 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         For faces: Extracts faces using polyChipOff, optionally duplicating and separating.
         For other components: Falls back to Maya's DetachComponent command.
 
+        A component list spanning several objects is handled — ``polyChipOff`` and
+        ``polySeparate`` both refuse multi-object input, so the work is grouped and run
+        object-by-object. On the ``separate`` path each source's newly detached piece(s)
+        are left selected.
+
         Parameters:
-            components: The components to detach. If None, uses current selection.
+            components: The components to detach (may span multiple objects). If None,
+                uses current selection.
             duplicate (bool): For faces, duplicate them leaving the original mesh unchanged.
             separate (bool): For faces, separate the detached faces into individual objects.
             offset (bool): For faces, offset/translate the extracted faces from their
@@ -519,27 +562,81 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             face_mode = bool(cmds.selectType(q=True, facet=True))
 
         if vertex_mode:
-            mel.eval("polySplitVertex")
+            # Act on the components given, not the selection: the old mel.eval
+            # ("polySplitVertex") read cmds.ls(sl=True), silently ignoring an explicit
+            # argument (and splitting whatever the user happened to have selected).
+            vertices = cmds.filterExpand(components, selectionMask=31)
+            if not vertices:  # reached via the selectType fallback on a non-vertex input
+                cmds.warning("Operation requires a vertex selection.")
+                return None
+            cmds.polySplitVertex(vertices)
             return None
 
         elif face_mode:
-            # Get the parent objects before polyChipOff modifies the mesh
-            parent_objects = list(set(cmds.ls(components, objectsOnly=True)))
+            # Restrict to the face components (the input may carry a mixed selection).
+            faces = cmds.filterExpand(components, selectionMask=34)
+            if not faces:  # reached via the selectType fallback on a non-face input
+                cmds.warning("Operation requires a face selection.")
+                return None
 
-            extract = cmds.polyChipOff(
-                components,
-                ch=True,
-                keepFacesTogether=keep_faces_together,
-                dup=duplicate,
-                off=offset,
-            )
+            # polyChipOff refuses a component list that spans more than one object
+            # ("Doesn't work with multiple objects selected"), so chip off object-by-object
+            # — the same per-object grouping UvUtils.cut_uv_edges needs for polyMapCut.
+            # Group per PARENT rather than per component-name prefix: the same mesh can be
+            # addressed through its transform or its shape ("pCube1.f[0]" / "pCubeShape1.f[1]"),
+            # and ls(objectsOnly) resolves both spellings to the one shape.
+            grouped = {}
+            for node, obj_faces in Components.map_components_to_objects(faces).items():
+                parent = (cmds.ls(obj_faces[0], objectsOnly=True, long=True) or [node])[0]
+                grouped.setdefault(parent, []).extend(obj_faces)
+
+            extract = []
+            # {parent object: face count the leftover BODY will carry}, measured before
+            # polyChipOff modifies the mesh — how the extraction is told apart below.
+            expected_body = {}
+            for parent, obj_faces in grouped.items():
+                face_count = cmds.polyEvaluate(parent, face=True)
+                chipped = len(cmds.ls(obj_faces, flatten=True) or [])
+                expected_body[parent] = face_count if duplicate else face_count - chipped
+                extract.extend(
+                    cmds.polyChipOff(
+                        obj_faces,
+                        ch=True,
+                        keepFacesTogether=keep_faces_together,
+                        dup=duplicate,
+                        off=offset,
+                    )
+                    or []
+                )
 
             if separate:
-                # polySeparate must be called on transform/mesh objects, not components.
-                # Its return also includes the construction (polySeparate) node — keep only
-                # the DAG transforms so downstream pivot/selection ops get valid objects.
-                split_objects = cmds.polySeparate(parent_objects) or []
-                result_objects = cmds.ls(split_objects, type="transform") or []
+                # polySeparate must be called on transform/mesh objects, not components,
+                # and per source object so each one's extracted piece(s) can be identified
+                # (its return also includes the construction node — keep only the DAG
+                # transforms so downstream pivot/selection ops get valid objects).
+                result_objects, new_pieces = [], []
+                for obj, body_faces in expected_body.items():
+                    try:
+                        split_objects = cmds.polySeparate(obj) or []
+                    except RuntimeError as e:  # e.g. every face chipped off -> one shell
+                        cmds.warning(f"Could not separate '{obj}': {e}")
+                        continue
+                    pieces = cmds.ls(split_objects, type="transform") or []
+                    result_objects.extend(pieces)
+                    # The extraction is every piece except the leftover body, identified by
+                    # face count — polySeparate's output ORDER is not stable (the extraction
+                    # comes first when chipped in place, last when duplicated; verified in
+                    # Maya 2025). When the count can't single out a body — exactly half the
+                    # faces chipped, or the source already had loose shells — don't guess:
+                    # keep every piece.
+                    bodies = [
+                        p for p in pieces if cmds.polyEvaluate(p, face=True) == body_faces
+                    ]
+                    new_pieces.extend(
+                        pieces
+                        if len(bodies) != 1
+                        else [p for p in pieces if p != bodies[0]]
+                    )
                 if result_objects:
                     if center_pivot:
                         # polySeparate leaves the SOURCE transform's pivot on EVERY piece
@@ -548,8 +645,8 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                         # objects each get their own pivot instead of the source's corner one.
                         for obj in result_objects:
                             cmds.xform(obj, centerPivots=True)
-                    # Select the last resulting transform.
-                    cmds.select(result_objects[-1])
+                    # Select each source's newly detached piece(s).
+                    cmds.select(new_pieces or result_objects)
                 return result_objects
 
             return extract
@@ -774,7 +871,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         bbox_value = bbox_keys[axis_index]
         relevant_faces = []
         for shape in NodeUtils.get_shapes(obj):
-            if cmds.nodeType(shape) in ["mesh", "nurbsSurface", "subdiv"]:
+            if cmds.nodeType(shape) in NodeUtils.SURFACE_TYPES:
                 for face in cmds.ls(f"{shape}.f[*]", fl=True) or []:
                     bb_val = XformUtils.get_bounding_box(
                         face, value=bbox_value, world_space=face_world_space
@@ -1114,7 +1211,6 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         axis: str = "x",
         pivot: Union[str, tuple] = "object",
         mergeMode: int = -1,
-        uninstance: bool = False,
         use_object_axes: bool = True,
         delete_original: bool = False,
         center_pivot: bool = True,
@@ -1133,7 +1229,6 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 - A tuple `(x, y, z)` → Uses a specified world-space pivot.
             mergeMode (int): Defines how the geometry is merged after mirroring. Accepts:
                 - `-1` → Custom separate mode (default). valid: -1, 0, 1, 2, 3
-            uninstance (bool): If True, uninstances the object before mirroring.
             use_object_axes (bool): If True, computes the mirror pivot in object-local
                 space (relevant when the object is rotated and pivot is "object", "manip", or "baked").
             delete_original (bool): If True, deletes the original half after mirroring
@@ -1175,44 +1270,20 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         )
         results = []
 
-        # Determine whether to compute pivot in object space
-        use_object_space = (
-            use_object_axes
-            and isinstance(pivot, str)
-            and pivot
-            in {
-                "object",
-                "manip",
-                "baked",
-            }
-        )
-
         for obj in original_objects:
-            if uninstance:
-                uninstanced_result = NodeUtils.uninstance(obj)
-                if uninstanced_result:
-                    obj = uninstanced_result[0]
+            # Mirroring ALWAYS breaks the instance link first -- there is no safe way
+            # to mirror a shared shape. Separate mode routes through polySeparate,
+            # which consumes the source transform, and on a shared shape that takes
+            # every sibling instance with it (verified in mayapy: mirroring one
+            # instance deleted BOTH it and its sibling, leaving nothing). The merge
+            # modes survive, but silently rewrite every other instance's geometry.
+            # Callers who want a mirror to propagate across instances should mirror
+            # the shape they all share, not one of its parents.
+            uninstanced_result = NodeUtils.uninstance(obj)
+            if uninstanced_result:
+                obj = uninstanced_result[0]
 
-            # Compute pivot position
-            if use_object_space:
-                # Compute pivot in object-local space, then transform to world
-                obj_matrix = om.MMatrix(cmds.xform(str(obj), q=True, m=True, ws=True))
-                if pivot == "object":
-                    local_pivot = [0.0, 0.0, 0.0]
-                elif pivot == "manip":
-                    world_manip = XformUtils.get_operation_axis_pos(obj, "manip")
-                    lp = om.MPoint(world_manip) * obj_matrix.inverse()
-                    local_pivot = [float(lp[0]), float(lp[1]), float(lp[2])]
-                else:  # "baked"
-                    world_pt = XformUtils.get_operation_axis_pos(obj, pivot)
-                    lp = om.MPoint(world_pt) * obj_matrix.inverse()
-                    local_pivot = [float(lp[0]), float(lp[1]), float(lp[2])]
-                # Transform local pivot back to world space for polyMirrorFace
-                world_pivot = list(om.MPoint(local_pivot) * obj_matrix)
-                pivot_point = world_pivot[:3]
-            else:
-                pivot_point = list(XformUtils.get_operation_axis_pos(obj, pivot))
-
+            pivot_point = cls._mirror_pivot_point(obj, pivot, use_object_axes)
             kwargs["pivot"] = tuple(pivot_point)
 
             # Handle custom separate mode
@@ -1253,6 +1324,72 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 results.append(obj)
 
         return ptk.format_return(results, objects)
+
+    @classmethod
+    @CoreUtils.undoable
+    def mirror_instance(
+        cls,
+        objects=None,
+        axis: str = "x",
+        pivot: Union[str, tuple] = "object",
+        use_object_axes: bool = True,
+    ) -> list:
+        """Mirror as **instances**: each object gets a linked copy reflected
+        across the mirror plane, still sharing the source's shape.
+
+        The counterpart to :meth:`mirror`, which builds new geometry.  Here the
+        halves stay live — edit either one and the other follows — because the
+        reflection lives entirely in the copy's transform (its world matrix is
+        multiplied by the plane's reflection, giving it a negative determinant).
+        Maya carries that correctly: normals stay outward (they transform by the
+        inverse-transpose) and VP2 flips the winding for display.
+
+        Note the tradeoff: a mirrored instance can't have its normals corrected
+        per-copy, because ``opposite`` is a *shape* attribute shared by every
+        instance.  Use :meth:`mirror` when the halves must diverge, or when
+        baking to an engine that dislikes negative scale.
+
+        Parameters:
+            objects (str/obj/list): Transform(s) to mirror (selection if None).
+            axis (str): Plane normal — ``x``/``y``/``z``.  The sign only picks a
+                side for the bounding-box pivots (resolved by the caller into a
+                ``"xmin"``/``"xmax"``-style pivot), never the plane itself, so
+                it is stripped here.
+            pivot (str/tuple): Same vocabulary as :meth:`mirror` — ``"object"``,
+                ``"manip"``, ``"world"``, a bounding-box key, or a world point.
+            use_object_axes (bool): Resolve object-relative pivots through the
+                object's own matrix (see :meth:`_mirror_pivot_point`).
+
+        Returns:
+            list: The newly created mirrored instances.
+        """
+        base = str(axis).lstrip("-").lower()
+        if base not in ("x", "y", "z"):
+            raise ValueError(f"Invalid axis '{axis}'. Use one of 'x', 'y', 'z'.")
+        axis_index = "xyz".index(base)
+
+        if objects is None:
+            objects = cmds.ls(selection=True, type="transform", long=True) or []
+        original_objects = cmds.ls(
+            CoreUtils.as_strings(objects), type="transform", flatten=True, long=True
+        )
+
+        results = []
+        for obj in original_objects:
+            point = cls._mirror_pivot_point(obj, pivot, use_object_axes)
+            instance = cmds.instance(obj)[0]
+            matrix = om.MMatrix(cmds.xform(instance, q=True, m=True, ws=True))
+            cmds.xform(
+                instance,
+                matrix=list(matrix * cls._reflection_matrix(axis_index, point)),
+                worldSpace=True,
+            )
+            results.append(instance)
+
+        # No cmds.select here: the sibling `mirror` doesn't select either, and
+        # this runs under Preview — which owns "Select Result" and would be
+        # fighting a selection change on every refresh.
+        return results
 
     @staticmethod
     def separate_mirrored_mesh(

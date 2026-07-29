@@ -8,8 +8,6 @@ from typing import Optional, Dict, List, Any
 import maya.cmds as cmds
 from qtpy import QtCore, QtWidgets, QtGui
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 # From this package
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.env_utils._env_utils import EnvUtils
@@ -1294,7 +1292,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
         widget.menu.chk_hide_ignored.toggled.connect(self._on_hide_ignored_toggled)
 
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Hierarchy Sync",
                 body="Compare, diff, and synchronise scene hierarchies "
                 "against a reference file.",

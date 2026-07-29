@@ -10,7 +10,6 @@ except ImportError as error:
     print(__file__, error)
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.edit_utils.naming._naming import Naming
 
@@ -502,7 +501,7 @@ class TelescopeRigSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Telescope Rig",
                 body="Build a telescoping segment rig where nested segments "
                 "extend and retract between a base and end locator, driven by "
@@ -538,7 +537,7 @@ class TelescopeRigSlots(ptk.LoggingMixin):
         ui = self.ui
 
         ui.cmb_axis.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Aim Axis",
                 body="The segments' long axis — the local axis that points "
                 "from the base toward the end locator. The rig aims every "
@@ -550,7 +549,7 @@ class TelescopeRigSlots(ptk.LoggingMixin):
             )
         )
         ui.spin_collapsed.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Collapsed Distance",
                 body="Base-to-end distance at which the segments are fully "
                 "retracted (nested). As the end locator pulls farther than "
@@ -566,7 +565,7 @@ class TelescopeRigSlots(ptk.LoggingMixin):
             )
         )
         ui.btn_build.setToolTip(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Build Telescope Rig",
                 body="Wires distance-driven keys onto each segment so they "
                 "extend and retract as the gap between the base and end "

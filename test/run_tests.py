@@ -32,7 +32,8 @@ Usage:
     python run_tests.py --list                   # List available test modules
     python run_tests.py --no-badge               # Skip README badge update
     python run_tests.py --no-wait                # Fire-and-forget (GUI mode only)
-    python run_tests.py --timeout 7200           # GUI-pass results-wait timeout (seconds)
+    python run_tests.py --timeout 7200           # GUI-pass hard ceiling (seconds); a
+                                                 # stalled pass ends sooner, on its own
     python run_tests.py --keep-maya              # Keep GUI Maya open after tests
     python run_tests.py --reuse                  # Reuse existing Maya (CAUTION: resets scene; implies --gui)
 
@@ -88,6 +89,10 @@ except ImportError:
 # offenders here so they skip the wasted crash/relaunch cycle.
 GUI_REQUIRED = {
     "test_sequencer": "Qt table classes hard-crash mayapy (0xC0000409)",
+    "test_emissive_groups_panel": (
+        "loads the emissive_groups panel; its uitk TableWidget hard-crashes "
+        "mayapy in batch (same 0xC0000409 as test_sequencer)"
+    ),
     "test_shot_manifest": (
         "shots adapters register OpenMaya/scriptJob callbacks that "
         "segfault without a real Maya event loop"
@@ -896,7 +901,11 @@ finally:
             print(f'  Get-Content "{res_path}" -Wait')
             return "nowait"
 
-        timeout = self.wait_timeout or max(600, 30 * len(gui_modules))
+        # Ceiling, not a budget -- the stall detector in wait_for_results ends a
+        # genuinely hung pass long before this. 30s/module was under the real
+        # cost of a GUI module on a busy box (one took ~6 min), so the old
+        # max(600, 30*n) killed healthy runs.
+        timeout = self.wait_timeout or max(1800, 90 * len(gui_modules))
         completed = self.wait_for_results(res_path, timeout=timeout)
         self._merge_into_master(res_path)
 
@@ -923,16 +932,29 @@ finally:
             return ""
 
     def wait_for_results(
-        self, results_path, timeout: int, poll_interval: float = 2.0
+        self,
+        results_path,
+        timeout: int,
+        poll_interval: float = 2.0,
+        idle_timeout: int = 600,
     ) -> bool:
         """Poll Maya for test completion, with file-based fallback.
 
         Primary: asks Maya via socket whether the ``_mayatk_test_complete``
         sentinel is True.  Fallback: watches the results file for the
         suite-complete marker.
+
+        The deadline is *progress-aware*: a pass that is still finishing modules
+        must not be killed for being slow. A flat wall clock killed a GUI pass at
+        13/15 modules with four seconds to spare, and the two casualties then
+        counted as NOT RUN — which correctly blocks the badge, so a slow machine
+        could never publish a number at all. ``idle_timeout`` is the real stall
+        detector (no module has finished in that long); ``timeout`` is the hard
+        ceiling that still bounds a pathological run.
         """
         results_path = Path(results_path)
         start = time.monotonic()
+        last_progress = start
         last_size = 0
         use_socket = (
             self.connection
@@ -941,10 +963,20 @@ finally:
         )
         socket_failures = 0
 
-        print(f"\nWaiting for tests to complete (timeout: {timeout}s) ...")
+        print(
+            f"\nWaiting for tests to complete "
+            f"(stall: {idle_timeout}s, ceiling: {timeout}s) ..."
+        )
 
-        while (time.monotonic() - start) < timeout:
-            elapsed = int(time.monotonic() - start)
+        while True:
+            now = time.monotonic()
+            if now - start >= timeout:
+                stop_reason = f"ceiling {timeout}s reached"
+                break
+            if now - last_progress >= idle_timeout:
+                stop_reason = f"no module finished in {idle_timeout}s"
+                break
+            elapsed = int(now - start)
 
             # ---- primary: socket-based sentinel check ----
             if use_socket:
@@ -992,6 +1024,7 @@ finally:
                         flush=True,
                     )
                     last_size = cur_size
+                    last_progress = now  # still working — push the stall clock
 
                 if SUITE_COMPLETE_MARKER in content or "SUMMARY" in content:
                     print(f"\r  Tests completed in {elapsed}s.{' ' * 30}")
@@ -1000,7 +1033,7 @@ finally:
             time.sleep(poll_interval)
 
         elapsed = int(time.monotonic() - start)
-        print(f"\n[TIMEOUT] Results not found after {elapsed}s.")
+        print(f"\n[TIMEOUT] Results not found after {elapsed}s ({stop_reason}).")
         return False
 
     # ------------------------------------------------------------------
@@ -1193,7 +1226,9 @@ finally:
             "failures": failures,
             "errors": errors,
             "skipped": skipped,
-            "passed": tests - failures - errors,
+            # Skips are not passes -- a batch-skipped GUI module must not pad
+            # the badge (ecosystem rule: m3trik/docs/TEST_BADGE_STANDARD.md).
+            "passed": tests - failures - errors - skipped,
             "failed": failures + errors,
             "failed_modules": failed_modules,
             "not_run": not_run,
@@ -1220,86 +1255,25 @@ finally:
             print("\n" + safe)
 
     def update_readme_badge(self, passed: int, failed: int) -> bool:
-        """Update the README with a test status badge."""
+        """Update the README with a test status badge.
+
+        Delegates to the ecosystem-wide SSoT (``ptk.StatusBadge``). ``passed``
+        must be individual test cases with skips excluded, so mayatk's number is
+        comparable with its siblings'. See m3trik/docs/TEST_BADGE_STANDARD.md.
+        """
+        from pythontk.core_utils.status_badge import StatusBadge
+
         readme_path = self.test_dir.parent / "docs" / "README.md"
 
-        if not readme_path.exists():
-            print(f"README not found at {readme_path}")
+        if not StatusBadge.update_test_badge(
+            readme_path, passed, failed, test_dir=self.test_dir
+        ):
+            print(f"[WARNING] README badge not updated (missing or unwritable): {readme_path}")
             return False
 
-        content = readme_path.read_text(encoding="utf-8")
-
-        if failed == 0:
-            color = "brightgreen"
-            status = f"{passed} passed"
-        elif passed == 0:
-            color = "red"
-            status = f"{failed} failed"
-        else:
-            color = "orange"
-            status = f"{passed} passed, {failed} failed"
-
-        # Link target computed relative to the README's location
-        # (docs/README.md -> ../test/), so a regenerate can't break the link.
-        link_target = (
-            Path(os.path.relpath(self.test_dir, readme_path.parent)).as_posix() + "/"
-        )
-        new_badge = f"[![Tests](https://img.shields.io/badge/Tests-{status.replace(' ', '%20').replace(',', '')}-{color}.svg)]({link_target})"
-
-        # Check if a Tests badge already exists and replace it
-        tests_badge_pattern = (
-            r"\[!\[Tests\]\(https://img\.shields\.io/badge/Tests-[^\)]+\)\]\([^\)]+\)"
-        )
-
-        if re.search(tests_badge_pattern, content):
-            new_content = re.sub(tests_badge_pattern, new_badge, content)
-        else:
-            # Add badge after the Maya badge line
-            maya_badge_pattern = r"(\[!\[Maya\]\(https://img\.shields\.io/badge/Maya-[^\)]+\)\]\([^\)]+\))"
-            match = re.search(maya_badge_pattern, content)
-            if match:
-                insert_pos = match.end()
-                new_content = (
-                    content[:insert_pos] + "\n" + new_badge + content[insert_pos:]
-                )
-            else:
-                python_badge_pattern = r"(\[!\[Python\]\(https://img\.shields\.io/badge/Python-[^\)]+\)\]\([^\)]+\))"
-                match = re.search(python_badge_pattern, content)
-                if match:
-                    insert_pos = match.end()
-                    new_content = (
-                        content[:insert_pos] + "\n" + new_badge + content[insert_pos:]
-                    )
-                else:
-                    new_content = new_badge + "\n" + content
-
-        readme_path.write_text(new_content, encoding="utf-8")
+        status = StatusBadge.test_status(passed, failed)[0]
         print(f"\n[OK] README badge updated: {status}")
         return True
-
-    def parse_test_results(self) -> tuple:
-        """Parse the results file to extract test counts.
-
-        Returns:
-            Tuple of (passed, failed) where failed = failures + errors
-        """
-        if not self.results_file.exists():
-            return (0, 0)
-
-        content = self.results_file.read_text(encoding="utf-8")
-
-        match = re.search(
-            r"Total: (\d+) tests, (\d+) failures?, (\d+) errors?", content
-        )
-
-        if match:
-            total = int(match.group(1))
-            failures = int(match.group(2))
-            errors = int(match.group(3))
-            passed = total - failures - errors
-            return (passed, failures + errors)
-
-        return (0, 0)
 
 
 def _pop_value(args: List[str], name: str, cast, default):

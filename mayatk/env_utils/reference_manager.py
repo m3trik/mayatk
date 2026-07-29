@@ -10,8 +10,6 @@ try:
 except ImportError as error:
     print(__file__, error)
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.core_utils._core_utils import CoreUtils
 
@@ -706,7 +704,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         # Fold the field's help text into the live tooltip (binding replaces the
         # static setToolTip): purpose + what each placeholder means + its value.
-        return TooltipFormat.placeholder_preview(
+        return self.sb.tooltip.placeholder_preview(
             resolve_pattern,
             context,
             title="Folder Structure",
@@ -2406,7 +2404,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             setToolTip="Remove all references from the scene.",
         )
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Reference Manager",
                 body="A workspace scene-file manager: browse a project's scene files, open / save / "
                 "rename / delete them, and reference them into the current scene.",

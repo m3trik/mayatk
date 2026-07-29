@@ -28,7 +28,6 @@ except ImportError:
 
 import pythontk as ptk
 
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 from mayatk.audio_utils._audio_utils import AudioUtils as _audio_utils
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
@@ -83,7 +82,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             "QCheckBox",
             setText="Auto Convert",
             setObjectName="chk_auto_convert",
-            setToolTip=TooltipFormat.fmt(
+            setToolTip=self.sb.tooltip.fmt(
                 title="Auto Convert",
                 bullets=[
                     "<b>On:</b> Non-Maya audio formats (MP3, OGG, M4A, FLAC, etc.) are automatically converted to WAV on import via FFmpeg.",
@@ -96,7 +95,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
         widget.menu.add(
             "QComboBox",
             setObjectName="cmb_export_mode",
-            setToolTip=TooltipFormat.fmt(
+            setToolTip=self.sb.tooltip.fmt(
                 title="Export Mode",
                 bullets=[
                     "<b>Composite</b> — Single mixed WAV of all keyed clips.",
@@ -127,7 +126,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             "QCheckBox",
             setText="Suffix Time Range",
             setObjectName="chk_suffix_time_range",
-            setToolTip=TooltipFormat.fmt(
+            setToolTip=self.sb.tooltip.fmt(
                 body="When exporting Keyed Tracks, append the keyed frame range to each filename.",
                 rows=[
                     (
@@ -152,7 +151,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
         btn_attrs.clicked.connect(self._launch_channels)
 
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Audio Clips",
                 body="Scene-wide audio tracks keyed on a canonical data node. "
                 "Keyed events drive a single composite WAV used for "
@@ -508,7 +507,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             "QCheckBox",
             setText="Next Event",
             setObjectName="chk_next_event",
-            setToolTip=TooltipFormat.fmt(
+            setToolTip=self.sb.tooltip.fmt(
                 title="Next Event",
                 body="Automatically key the next track in the list. The combo selection updates to reflect the chosen track.",
                 bullets=[

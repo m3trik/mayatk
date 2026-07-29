@@ -8,8 +8,6 @@ except ImportError as error:
     print(__file__, error)
 from typing import List, Tuple, Union
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.core_utils.preview import Preview
 from mayatk.core_utils._core_utils import CoreUtils
@@ -325,7 +323,7 @@ class DuplicateGridSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Duplicate Grid",
                 body="Duplicate selected objects into a 3D grid layout.",
                 steps=[

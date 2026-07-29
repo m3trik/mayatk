@@ -167,41 +167,8 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "preserve; off = fully recompute scale from scratch."
         ),
     ),
-    # Island-to-island spacing and tile-border margin (UV units). Both
-    # probe-verified safe on 2020.1 (MarginSize + SpacingSize); the newer
-    # PaddingSize field-name for spacing access-violates 2020.1 and is
-    # emitted only on >= 2022 via an inline @min/@max_rizom_line split in
-    # templates/pack_block.lua (SpacingSize <= 2021, PaddingSize >= 2022).
-    "PACK_SPACING": AttributeSpec(
-        key="PACK_SPACING",
-        label="Edge Spacing",
-        kind="float",
-        default=0.004,
-        minimum=0.0,
-        maximum=0.1,
-        step=0.001,
-        decimals=4,
-        tooltip=(
-            "Gap between packed islands, in UV units (fraction of the tile).\n"
-            "0.004 at a 1024 map ~= 4 px. Bigger = more bleed protection,\n"
-            "less usable area."
-        ),
-    ),
-    "PACK_MARGIN": AttributeSpec(
-        key="PACK_MARGIN",
-        label="Tile Margin",
-        kind="float",
-        default=0.002,
-        minimum=0.0,
-        maximum=0.1,
-        step=0.001,
-        decimals=4,
-        tooltip=(
-            "Empty border kept inside the tile edge, in UV units.\n"
-            "0.002 at a 1024 map ~= 2 px. Prevents islands touching the\n"
-            "tile boundary."
-        ),
-    ),
+    # NOTE: island spacing + tile margin are NOT registry entries -- they're
+    # derived, see DERIVED_KEYS / Parameters.derived_values below.
     # Post-pack placement (ZomDeform). Both probe-verified on 2020.1:
     # ZomDeform accepts a row-major 3x3 UV-space Transform, so target-UDIM
     # translation and fractional-tile compression need no version gate.
@@ -427,7 +394,7 @@ _PRESET_MIN_VERSION_RE = re.compile(
 # param token under different field names for different Rizom versions -- e.g.
 # ``SpacingSize=__PACK_SPACING__`` (<= 2021) vs ``PaddingSize=__PACK_SPACING__``
 # (>= 2022), the probed rename (2020.1: SpacingSize/MarginSize safe,
-# PaddingSize access-violates). See docs/rizom_bridge_upgrade_plan.md.
+# PaddingSize access-violates). Re-probe with test/rizom_headless_probe.py.
 _INLINE_MIN_LINE_RE = re.compile(r"--\s*@min_rizom_line:\s*(\d+(?:\.\d+)*)")
 _INLINE_MAX_LINE_RE = re.compile(r"--\s*@max_rizom_line:\s*(\d+(?:\.\d+)*)")
 
@@ -436,6 +403,24 @@ _INLINE_MAX_LINE_RE = re.compile(r"--\s*@max_rizom_line:\s*(\d+(?:\.\d+)*)")
 # instead of duplicated across pack.lua + the unwrap_*.lua presets.
 _INCLUDE_TOKENS = {"PACK_BLOCK": "pack_block.lua"}
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+
+# Pack gutter tokens that are COMPUTED, not exposed. They render into
+# ``ZomPack.SpacingSize`` / ``PaddingSize`` (island-to-island) and
+# ``MarginSize`` (tile border) -- the same two gutters Maya's own pack
+# operation feeds to ``u3dLayout`` as ``shellSpacing`` / ``tileMargin``.
+#
+# Why derived: a Rizom round-trip and an in-Maya repack must land on the
+# same gutter, or re-packing a Rizom result silently reflows the layout.
+# Two hand-dialed spinboxes made that agreement the user's problem; one
+# ecosystem rule (:meth:`UvUtils.calculate_uv_padding`) makes it structural.
+# The ratio mirrors the pack op exactly: tile margin is HALF the island
+# spacing (see ``UvUtils.unwrap_cylinder`` / the ``tb000`` pack slot).
+#
+# Resolution-invariant by construction: normalized padding is
+# ``(map_size / 256) / map_size`` == 1/256 for every map size, so the value
+# is stable whatever PACK_RESOLUTION is set to -- 4 px at 1024, 16 px at
+# 4096, always the same fraction of the tile.
+DERIVED_KEYS = ("PACK_SPACING", "PACK_MARGIN")
 
 
 def _parse_version_literal(text: str) -> "tuple[int, ...]":
@@ -501,9 +486,42 @@ class Parameters:
         return _BridgeParams.defaults(PARAMS)
 
     @staticmethod
+    def derived_values(values: "dict[str, Any]") -> "dict[str, float]":
+        """Return the computed pack-gutter tokens (see :data:`DERIVED_KEYS`).
+
+        Both come off the single ecosystem padding rule,
+        :meth:`mayatk.uv_utils.UvUtils.calculate_uv_padding`, so a Rizom
+        round-trip packs to the same gutter an in-Maya ``u3dLayout`` pack
+        would -- island spacing = the normalized padding, tile margin =
+        half of it, matching the ``shellSpacing`` / ``tileMargin`` pair the
+        pack slot passes.
+
+        Imported lazily: this module is otherwise Maya-free (the panel
+        imports it to build widgets), and ``_uv_utils`` pulls ``maya.cmds``.
+        """
+        from mayatk.uv_utils._uv_utils import UvUtils
+
+        try:
+            map_size = int(values.get("PACK_RESOLUTION") or 0)
+        except (TypeError, ValueError):
+            map_size = 0
+        if map_size <= 0:  # 0 would divide by zero in the normalize step
+            map_size = PARAMS["PACK_RESOLUTION"].default
+        spacing = UvUtils.calculate_uv_padding(map_size, normalize=True)
+        spacing_key, margin_key = DERIVED_KEYS
+        return {spacing_key: spacing, margin_key: spacing / 2}
+
+    @staticmethod
     def render_context(values: "dict[str, Any]") -> "dict[str, str]":
-        """Format *values* for ``StrUtils.replace_delimited`` using Lua literals."""
-        return _BridgeParams.render_context(values, PARAMS, formatter=_FORMATTER)
+        """Format *values* for ``StrUtils.replace_delimited`` using Lua literals.
+
+        The derived gutter tokens are folded in LAST so they win over any
+        stale ``PACK_SPACING`` / ``PACK_MARGIN`` left in a saved JSON preset
+        from when the two were spinboxes.
+        """
+        merged = dict(values)
+        merged.update(Parameters.derived_values(merged))
+        return _BridgeParams.render_context(merged, PARAMS, formatter=_FORMATTER)
 
     @staticmethod
     def strip_unsupported(script_text: str, version: "tuple[int, ...]") -> str:

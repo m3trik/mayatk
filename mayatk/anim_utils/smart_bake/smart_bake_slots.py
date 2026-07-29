@@ -10,7 +10,6 @@ except ImportError:
     cmds = None
 
 import pythontk as ptk
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 from uitk.switchboard.slots import Cancelable
 
 from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
@@ -126,7 +125,7 @@ class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin):
             setToolTip="Reset every field in this panel to its default value.",
         )
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Smart Bake",
                 body="Analyzes the scene for constraints, driven keys, expressions, "
                 "IK, motion paths, and blend shapes, then bakes only the channels "

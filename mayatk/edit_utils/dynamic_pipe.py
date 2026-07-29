@@ -5,8 +5,6 @@ except ImportError:
 
 from typing import List, Optional, Sequence
 
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
-
 
 class DynamicPipe:
     """Build a pipe-style mesh by lofting NURBS circles parented to a chain of locators.
@@ -149,7 +147,7 @@ class DynamicPipeSlots:
     def header_init(self, widget):
         """Configure header help text."""
         widget.set_help_text(
-            TooltipFormat.fmt(
+            self.sb.tooltip.fmt(
                 title="Dynamic Pipe",
                 body="Build a pipe-style mesh by lofting NURBS circles "
                 "parented to a chain of locators. Each locator drives a "
