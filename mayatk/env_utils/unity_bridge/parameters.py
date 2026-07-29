@@ -7,7 +7,8 @@ Two groups: *Export* knobs drive the Maya-side FBX export (read by
 copy-to-Assets delivery (read by :class:`unitytk.CopyToAssetsDeliverer`). Unlike the
 script-launch bridges these are never substituted into a template -- the Unity
 deliverer copies the FBX into the project rather than rendering a live-session
-script -- so the panel shows every param (no per-template visibility gating).
+script. Visibility gates on the selected combo entry: the export/Unity params
+show for Copy to Project, SCRIPTS_ACTION alone for Manage Unity Scripts.
 
 Mirrors :mod:`mayatk.env_utils.blender_bridge.parameters` in shape; the blendertk
 ``unity_bridge`` counterpart mirrors this file.
