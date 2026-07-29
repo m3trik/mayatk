@@ -41,20 +41,31 @@ class TestUnityBridgeUnit(unittest.TestCase):
         self.assertEqual(d["SCOPE"], "selected")
         self.assertEqual(d["UNITY_VERSION"], "")  # auto/newest
 
-    def test_slot_single_delivery_mode_no_studio(self):
-        """The slot exposes one copy-to-Assets target; the 'Unity Studio' mode is gone.
+    def test_slot_delivery_and_manage_modes_no_studio(self):
+        """The slot exposes copy-to-Assets plus the Manage Unity Scripts flow;
+        the 'Unity Studio' mode is gone.
 
         Unity Studio is a separate paid, browser-based product (Unity Cloud Asset
-        Manager), not this desktop FBX hand-off, so it was removed.
+        Manager), not this desktop FBX hand-off, so it was removed. Script
+        management is panel-native (its own SCRIPTS_ACTION parameter), not a
+        buried menu button.
         """
         from mayatk.env_utils.unity_bridge.unity_bridge_slots import (
             UnityBridgeSlots as S,
         )
 
-        # One mode, friendly label over the internal stem (matches the deliverer's stem).
         self.assertEqual(S.MODE_COPY, "copy_to_assets")
-        self.assertEqual(S.MODE_LABELS, {S.MODE_COPY: "Copy to Project"})
-        self.assertEqual(S.list_template_modes(S), [(S.MODE_COPY, "")])
+        self.assertEqual(S.MODE_MANAGE, "manage_scripts")
+        self.assertEqual(
+            S.MODE_LABELS,
+            {S.MODE_COPY: "Copy to Project", S.MODE_MANAGE: "Manage Unity Scripts"},
+        )
+        self.assertEqual(
+            S.list_template_modes(S), [(S.MODE_COPY, ""), (S.MODE_MANAGE, "")]
+        )
+        # The management flow is a template, not a field-menu button.
+        self.assertTrue(hasattr(S, "_manage_unity_scripts"))
+        self.assertFalse(hasattr(S, "_deploy_unity_scripts"))
         # No leftover Unity Studio surface.
         self.assertFalse(hasattr(S, "MODE_STUDIO"))
         self.assertFalse(hasattr(S, "MODE_EXISTING"))

@@ -131,6 +131,30 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "installed version."
         ),
     ),
+    # Shown only when the 'Manage Unity Scripts' template is selected
+    # (the slots' _relevant_param_keys gates it; export params hide).
+    "SCRIPTS_ACTION": AttributeSpec(
+        key="SCRIPTS_ACTION",
+        label="Action",
+        kind="choice",
+        default="status",
+        choices=[
+            ("Status", "status"),
+            ("Install / Update", "install"),
+            ("Uninstall", "uninstall"),
+        ],
+        section="Unity Scripts",
+        tooltip=(
+            "Manage unitytk's C# import automation in the Unity project above\n"
+            "(the embedded Packages/com.m3trik.unitytk package):\n"
+            "• Status — report the deployed version vs this unitytk release,\n"
+            "  and any missing files.\n"
+            "• Install / Update — deploy the full script set (updates in place;\n"
+            "  configure per-channel behavior in Unity under Project Settings ▸\n"
+            "  unitytk).\n"
+            "• Uninstall — remove the package folder from the project."
+        ),
+    ),
 }
 
 
