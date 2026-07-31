@@ -17,11 +17,16 @@ the failure modes the standalone smoketest cannot:
 
 import os
 import re
+import shutil
+import subprocess
 import unittest
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 import maya.cmds as cmds
+
+from pythontk.core_utils.app_launcher import AppLauncher
 
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.uv_utils.rizom_bridge._rizom_bridge import RizomUVBridge, _SCRIPT_DIR
@@ -137,6 +142,10 @@ class TestRizomBridgeLogic(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.bridge = RizomUVBridge(rizom_path="not-used.exe")
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="rizom_logic_test_"))
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        # Temp payloads the bridges allocate are scoped to this test.
+        self.addCleanup(self.bridge._release_temp_payloads)
 
     def test_parse_rizom_version_handles_install_dir_variants(self):
         """The parser must survive every real-world install-dir naming."""
@@ -174,6 +183,109 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         """OBJ was a trap -- the exporter always wrote FBX data."""
         with self.assertRaises(ValueError):
             self.bridge.export_path = "C:/temp/out.obj"
+
+    def test_roundtrip_temp_payloads_are_unique_per_bridge(self):
+        """Two bridges must never be handed the same FBX / Lua path.
+
+        Regression: both were fixed ``%TEMP%`` names (``rizomuv_exported.fbx``
+        / ``riz_uv_script.lua``) shared with the Blender twin, a second Maya,
+        and this very suite. RizomUV re-reads the ``-cfi`` script after
+        launch, so another process overwriting it mid-run made RizomUV exit 0
+        without reaching ZomSave -- reproduced, and the reported "exited
+        cleanly but did not modify the FBX". Lifecycle is now
+        ``ptk.TempArtifacts``, which mints a unique tag per allocation.
+        """
+        other = RizomUVBridge(rizom_path="not-used.exe")
+        self.addCleanup(other._release_temp_payloads)
+        for bridge in (self.bridge, other):
+            bridge.script_path = 'ZomSelect({PrimType="Edge"})'
+
+        self.assertNotEqual(self.bridge.export_path, other.export_path)
+        self.assertNotEqual(self.bridge.script_path, other.script_path)
+        # Prefix-scoped so the store's stale sweep can find them again.
+        for path in (self.bridge.export_path, self.bridge.script_path):
+            self.assertTrue(
+                Path(path).name.startswith("rizom_roundtrip_"), path
+            )
+
+    def test_second_run_through_one_bridge_still_tracks_its_payloads(self):
+        """A reused bridge must re-allocate, or run 2's files leak.
+
+        ``TempArtifacts.cleanup`` untracks what it removed, so caching the
+        paths across runs would leave the next run's payloads untracked --
+        and the panel keeps one bridge for the whole session.
+        """
+        first_fbx = self.bridge.export_path
+        self.bridge.script_path = "ZomPack({})"
+        first_lua = self.bridge.script_path
+        self.assertTrue(Path(first_lua).is_file())
+        Path(first_fbx).write_bytes(b"fbx")
+
+        self.bridge._release_temp_payloads()
+        self.assertFalse(Path(first_fbx).exists())
+        self.assertFalse(Path(first_lua).exists())
+
+        self.bridge.script_path = "ZomPack({})"
+        self.assertNotEqual(first_fbx, self.bridge.export_path)
+        self.assertNotEqual(first_lua, self.bridge.script_path)
+
+    def test_explicit_export_path_is_never_deleted(self):
+        """A caller-assigned export_path isn't ours to clean up."""
+        mine = Path(self.tmp_dir) / "keep_me.fbx"
+        mine.write_bytes(b"fbx")
+        self.bridge.export_path = str(mine)
+        self.bridge.script_path = "ZomPack({})"
+
+        self.bridge._release_temp_payloads()
+        self.assertTrue(mine.is_file(), "explicit export_path was deleted")
+        self.assertEqual(str(mine), str(Path(self.bridge.export_path)))
+
+    def test_no_save_diagnosis_flags_a_mid_run_overwrite(self):
+        """The no-save error must name the script and detect a clobber.
+
+        The old message told the user to "enable debug logging to see the Lua
+        traceback" -- RizomUV emits nothing on stdout/stderr in ``-cfi``
+        mode, so no log level could ever produce one.
+        """
+        self.bridge.script_path = "ZomPack({})"
+        script = Path(self.bridge.script_path)
+
+        intact = self.bridge._no_save_diagnosis(script.read_text(encoding="utf-8"))
+        self.assertIn(str(script), intact)
+        self.assertIn(str(Path(self.bridge.export_path)), intact)
+        self.assertNotIn("no longer matches", intact)
+        self.assertNotIn("enable debug logging", intact)
+
+        clobbered = self.bridge._no_save_diagnosis("ZomPack({}) -- what we wrote")
+        self.assertIn("no longer matches", clobbered)
+
+    def test_unmodified_fbx_raises_through_the_real_run_path(self):
+        """Drive ``_execute_uv_script``'s no-save branch, not just its message.
+
+        The formatter test above can't catch a name/scope error in the branch
+        that calls it -- and that branch only ever fires on failure, so a
+        mistake there would ship silently.
+        """
+        self.bridge.export_path = str(Path(self.tmp_dir) / "untouched.fbx")
+        Path(self.bridge.export_path).write_bytes(b"pre-run FBX")
+        self.bridge.script_path = "ZomPack({})"
+
+        calls = []
+
+        def fake_run(exe, args=None, timeout=None):  # RizomUV that does nothing
+            calls.append(args)
+            return subprocess.CompletedProcess(args=[exe], returncode=0, stdout="")
+
+        with mock.patch.object(AppLauncher, "run", staticmethod(fake_run)):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.bridge._execute_uv_script()
+
+        self.assertTrue(calls, "RizomUV was never invoked")
+        message = str(ctx.exception)
+        self.assertIn("never wrote the FBX", message)
+        self.assertIn(str(Path(self.bridge.script_path)), message)
+        # The script it ran is the one we wrote, so no clobber must be claimed.
+        self.assertNotIn("no longer matches", message)
 
     def test_passthrough_script_still_substitutes_params(self):
         """A script with its own ZomLoad/ZomSave skips the wrapper but must
@@ -257,6 +369,9 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         bridge = RizomUVBridge(
             rizom_path=r"C:\Program Files\Rizom Lab\RizomUV 2020.1\Rizomuv_VS.exe"
         )
+        # The refusal happens after the script file is written, and the
+        # scoped policy keeps payloads on failure -- so clean up ours.
+        self.addCleanup(bridge._release_temp_payloads)
         cube = cmds.polyCube(name="gateCube")[0]
         with self.assertRaisesRegex(RuntimeError, "requires RizomUV >= 2022.2"):
             bridge.process_with_rizomuv(

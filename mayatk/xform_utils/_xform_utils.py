@@ -105,6 +105,129 @@ class _XformUtilsInternal:
             )
         return True
 
+    #: Channels a freeze rewrites — copied wholesale from the stand-in so the
+    #: master ends up byte-identical to a real ``makeIdentity`` (pivots and
+    #: rotateAxis included, not just TRS).
+    _FREEZE_CHANNEL_ATTRS = (
+        "translate",
+        "rotate",
+        "scale",
+        "shear",
+        "rotatePivot",
+        "rotatePivotTranslate",
+        "scalePivot",
+        "scalePivotTranslate",
+        "rotateAxis",
+    )
+
+    @staticmethod
+    def _authoring_shapes(transform: str) -> List[str]:
+        """Shapes under *transform* whose points a bake should be written to.
+
+        Construction history (``polyCube1`` → ``inMesh``) is fine: point
+        writes land on the shape's tweak and survive re-evaluation. A
+        **deformer** is not — a shape downstream of a ``geometryFilter`` is
+        evaluated output, so the deformer's orig (intermediate) shape is the
+        one carrying the authored points and the visible shape is skipped
+        to avoid baking the same delta twice.
+
+        Empty shapes (no vertices) are skipped: there is nothing to
+        transform and ``MFnMesh`` rejects them outright.
+        """
+        meshes = [
+            s
+            for s in cmds.listRelatives(transform, shapes=True, fullPath=True) or []
+            if cmds.nodeType(s) == "mesh"
+        ]
+
+        def _has_vertices(shape):
+            try:
+                return bool(cmds.polyEvaluate(shape, vertex=True))
+            except Exception:
+                return False
+
+        def _deformed(shape):
+            return any(
+                "geometryfilter" in NodeUtils.get_inherited_types(n)
+                for n in cmds.listHistory(shape, pruneDagObjects=True) or []
+            )
+
+        visible = [s for s in meshes if not cmds.getAttr(f"{s}.intermediateObject")]
+        # Only when a visible shape is deformer output does its orig shape
+        # carry the authored points. Otherwise every intermediate present is
+        # dead data (an orphaned history remnant — common in imported/scanned
+        # assets) and baking it would be pointless work on a shape whose
+        # member set may not even match the visible one.
+        take_intermediates = any(_deformed(s) for s in visible)
+
+        out = []
+        for s in meshes:
+            is_inter = bool(cmds.getAttr(f"{s}.intermediateObject"))
+            if is_inter and not take_intermediates:
+                continue
+            if not is_inter and _deformed(s):
+                continue  # evaluated output; its orig shape is baked instead
+            if not _has_vertices(s):
+                continue
+            out.append(s)
+        return out
+
+    @classmethod
+    def _instance_group_members(cls, transform: str):
+        """``(members, shapes)`` for the instance group *transform* belongs
+        to, resolved from the shapes a bake would actually write to.
+
+        Single source of truth for "who is in this group": deriving it from
+        :meth:`_authoring_shapes` rather than from every shared shape keeps
+        the set that gets compensated identical to the set the caller
+        considers handled — an orphaned intermediate can be shared with
+        transforms that the visible shape is not, and treating those as
+        group members silently drops them from the operation.
+
+        Returns ``(None, None)`` when the shapes disagree about membership.
+        """
+        shapes = cls._authoring_shapes(transform)
+        if not shapes:
+            return None, None
+        member_sets = {
+            tuple(sorted(cmds.listRelatives(s, allParents=True, fullPath=True) or []))
+            for s in shapes
+        }
+        if len(member_sets) != 1:
+            return None, None
+        return list(next(iter(member_sets))), shapes
+
+    @staticmethod
+    def _is_multi_path(transform: str) -> bool:
+        """True when *transform* itself is instanced (several DAG paths)."""
+        try:
+            sel = om.MSelectionList()
+            sel.add(transform)
+            return sel.getDagPath(0).isInstanced()
+        except Exception:
+            return False
+
+    @staticmethod
+    def _transform_is_driven(transform: str) -> bool:
+        """True when anything feeds *transform*'s TRS/shear channels.
+
+        Compact yes/no twin of ``transform_diag._driving_connections``,
+        which returns per-driver tags for its diagnosis dict; it can't be
+        reused here because that module imports this one.
+        """
+        plugs = []
+        for ch in ("translate", "rotate", "scale", "shear"):
+            if cmds.attributeQuery(ch, node=transform, exists=True):
+                plugs.append(f"{transform}.{ch}")
+                plugs.extend(
+                    f"{transform}.{c}"
+                    for c in cmds.attributeQuery(ch, node=transform, listChildren=True)
+                    or []
+                )
+        return bool(
+            plugs and cmds.listConnections(plugs, source=True, destination=False)
+        )
+
     @staticmethod
     def _set_matrix_plug(plug: str, mmatrix) -> None:
         """Write an ``om.MMatrix`` (or 16-flat iterable) to a matrix attribute plug."""
@@ -807,6 +930,164 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 _XformUtilsInternal._write_bake_s(obj, s_attr, new_s)
 
     @classmethod
+    def freeze_instanced_group(
+        cls,
+        master: str,
+        translate: bool = True,
+        rotate: bool = True,
+        scale: bool = True,
+        quiet: bool = True,
+    ) -> bool:
+        """Freeze *master* while keeping its instance group intact.
+
+        Maya refuses ``makeIdentity`` on a transform sharing a shape, and
+        forking the shape to get around it is not viable: the fork has to be
+        re-linked onto every sibling afterwards, and adding/removing DAG
+        instance edges renumbers ``instObjGroups``, breaking per-instance
+        shading assignments (measured on a production scene:
+        ``Connection not made … SG.dagSetMembers[n]``, leaving siblings on
+        baked geometry with un-compensated matrices — geometry visibly out
+        of position).
+
+        So nothing here touches the DAG. The shared shape is edited in
+        place, which every member sees at once:
+
+        1. Duplicate *master* ``parentOnly`` (a shapeless stand-in that Maya
+           *will* freeze) and ``makeIdentity`` it — this yields the exact
+           baked delta ``B = pre_local · post_local⁻¹`` including pivots,
+           without touching real geometry.
+        2. Bake the shared authoring shapes' points by ``B``.
+        3. Copy the stand-in's frozen channels onto *master*.
+        4. Compensate every sibling, ``L → B⁻¹·L``, re-pinning world pivots.
+
+        World geometry is preserved for the whole group (measured 1.4e-7 on
+        a 4-member production group), instancing and per-instance shading
+        are untouched, and a shared intermediate shape is irrelevant — it is
+        baked alongside rather than forked.
+
+        Note the siblings absorb ``B⁻¹`` into their channels: if *master*
+        carried shear the others did not, they come out sheared. That is
+        unavoidable — one shared point set cannot satisfy two different
+        corrections — and it is why the non-orthogonal fix uninstances a
+        lone skewed member instead of calling this.
+
+        Returns:
+            True when the group was frozen; False when it was left alone
+            (reason warned unless *quiet*).
+        """
+        master = (cmds.ls(master, long=True) or [master])[0]
+        members, shapes = cls._instance_group_members(master)
+        if members is None:
+            if not quiet:
+                cmds.warning(
+                    f"freeze_instanced_group: '{master}' shares shapes with "
+                    "differing member sets — skipped."
+                )
+            return False
+        siblings = [m for m in members if m != master]
+
+        # Checked across EVERY member, not just the siblings: a driven
+        # sibling would have its compensation overwritten on the next
+        # evaluation (displaced against baked geometry), and a driven master
+        # rejects the frozen channels outright ("child attribute … is locked
+        # or connected"). Which member the caller happened to pass must not
+        # change the answer. A member on several DAG paths cannot carry a
+        # per-path compensation at all.
+        for m in members:
+            if cls._transform_is_driven(m):
+                if not quiet:
+                    cmds.warning(
+                        f"freeze_instanced_group: '{CoreUtils.short_name(m)}' has "
+                        "driven transform channels — group skipped."
+                    )
+                return False
+            if m != master and cls._is_multi_path(m):
+                if not quiet:
+                    cmds.warning(
+                        f"freeze_instanced_group: '{CoreUtils.short_name(m)}' is "
+                        "itself instanced (multiple DAG paths) — group skipped."
+                    )
+                return False
+
+        for node in members:
+            try:
+                if cmds.referenceQuery(node, isNodeReferenced=True):
+                    if not quiet:
+                        cmds.warning(
+                            f"freeze_instanced_group: '{node}' is referenced — skipped."
+                        )
+                    return False
+            except RuntimeError:
+                pass
+
+        pre_local = om.MMatrix(cmds.xform(master, q=True, os=True, matrix=True))
+        sib_local = {
+            m: om.MMatrix(cmds.xform(m, q=True, os=True, matrix=True)) for m in siblings
+        }
+        sib_pivots = {
+            m: (
+                cmds.xform(m, q=True, ws=True, rotatePivot=True),
+                cmds.xform(m, q=True, ws=True, scalePivot=True),
+            )
+            for m in siblings
+        }
+
+        standin = cmds.duplicate(master, parentOnly=True)[0]
+        try:
+            with Attributes.temporarily_unlock([standin]):
+                cmds.makeIdentity(
+                    standin,
+                    apply=True,
+                    t=translate,
+                    r=rotate,
+                    s=scale,
+                    n=False,
+                    pn=True,
+                )
+            post_local = om.MMatrix(cmds.xform(standin, q=True, os=True, matrix=True))
+            B = pre_local * post_local.inverse()
+            if B.isEquivalent(om.MMatrix(), 1e-12):
+                return False
+
+            for shape in shapes:
+                sel = om.MSelectionList()
+                sel.add(shape)
+                fn = om.MFnMesh(sel.getDagPath(0))
+                fn.setPoints(
+                    om.MPointArray(
+                        [p * B for p in fn.getPoints(om.MSpace.kObject)]
+                    ),
+                    om.MSpace.kObject,
+                )
+
+            with Attributes.temporarily_unlock([master]):
+                for attr in cls._FREEZE_CHANNEL_ATTRS:
+                    cmds.setAttr(
+                        f"{master}.{attr}",
+                        *cmds.getAttr(f"{standin}.{attr}")[0],
+                        type="double3",
+                    )
+        finally:
+            if cmds.objExists(standin):
+                cmds.delete(standin)
+
+        b_inv = B.inverse()
+        for m in siblings:
+            comp = b_inv * sib_local[m]
+            with Attributes.temporarily_unlock([m]):
+                cmds.xform(
+                    m,
+                    os=True,
+                    matrix=[
+                        comp.getElement(r, c) for r in range(4) for c in range(4)
+                    ],
+                )
+                rp, sp = sib_pivots[m]
+                cmds.xform(m, ws=True, rotatePivot=rp)
+                cmds.xform(m, ws=True, scalePivot=sp)
+        return True
+
+    @classmethod
     @CoreUtils.undoable
     def freeze_transforms(
         cls,
@@ -817,15 +1098,24 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         freeze_children=False,
         unlock_children=True,
         connection_strategy="preserve",
+        instance_strategy="skip",
         from_channel_box=False,
         **kwargs,
     ):
         """Freezes transformations on the given objects.
 
-        Objects whose shape is instanced are *skipped* — baking into a shared
-        shape would rewrite every sibling instance's geometry. To bake one
-        anyway, break the link first and bake in one step:
-        ``NodeUtils.uninstance(objs, freeze=True)``.
+        ``instance_strategy`` decides what happens to instanced objects:
+
+        - ``"skip"`` (default): skipped in place — baking into a shared
+          shape would rewrite every sibling instance's geometry.
+        - ``"preserve"``: each group's first targeted member is frozen via
+          ``XformUtils.freeze_instanced_group``, which bakes the *shared* shape in
+          place rather than forking it — instancing, per-instance shading and
+          every member's world geometry survive; sibling channels are
+          rewritten with the compensating matrix (so only the operated
+          member ends identity).
+        - ``"uninstance"``: break the instance links first
+          (``NodeUtils.uninstance``), then freeze every object normally.
         """
         if center_pivot is True:
             center_pivot = 2
@@ -942,6 +1232,59 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 f"Valid options: {sorted(valid_strategies)}"
             )
 
+        inst_strategy = (instance_strategy or "skip").lower()
+        valid_inst_strategies = {"skip", "preserve", "uninstance"}
+        if inst_strategy not in valid_inst_strategies:
+            raise ValueError(
+                f"Invalid instance_strategy '{instance_strategy}'. "
+                f"Valid options: {sorted(valid_inst_strategies)}"
+            )
+
+        if inst_strategy != "skip" and objects:
+            instanced = [o for o in objects if NodeUtils.get_instanced_shapes(o)]
+            if instanced:
+                if inst_strategy == "uninstance":
+                    NodeUtils.uninstance(instanced, delete_history=delete_history)
+                else:
+                    # Preserve: bake the SHARED geometry in place and
+                    # compensate the siblings — no fork, no DAG surgery, so
+                    # per-instance shading survives (see
+                    # freeze_instanced_group). One member per group does the
+                    # work; the rest are dropped from this call's object list
+                    # so they aren't frozen a second time.
+                    handled: Set[str] = set()
+                    frozen_groups = 0
+                    for obj in instanced:
+                        if obj in handled:
+                            continue
+                        # Claim exactly the members the bake compensates —
+                        # NOT every transform sharing any shape. An orphaned
+                        # intermediate can be shared more widely than the
+                        # visible shape, and claiming those would drop them
+                        # from this freeze without ever touching them.
+                        members, _ = cls._instance_group_members(obj)
+                        if cls.freeze_instanced_group(
+                            obj,
+                            translate=not axes_to_freeze.isdisjoint({"tx", "ty", "tz"}),
+                            rotate=not axes_to_freeze.isdisjoint({"rx", "ry", "rz"}),
+                            scale=not axes_to_freeze.isdisjoint({"sx", "sy", "sz"}),
+                            quiet=False,
+                        ):
+                            # Claim the members only once the bake actually
+                            # compensated them; a skipped group falls through
+                            # to the normal loop, which reports it as an
+                            # instanced skip instead of dropping it silently.
+                            handled.update(members or [obj])
+                            frozen_groups += 1
+                    objects = [o for o in objects if o not in handled]
+                    if frozen_groups:
+                        print(
+                            "XformUtils.freeze_transforms: "
+                            f"{frozen_groups} instance group(s) frozen in place."
+                        )
+                    if not objects:
+                        return
+
         if freeze_children:
             objects_set = set(objects)
             for obj in list(objects):
@@ -1022,25 +1365,21 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 if shapes:
                     cmds.xform(obj, centerPivots=True)
 
-            shapes = (
-                cmds.listRelatives(
-                    obj, shapes=True, noIntermediate=False, fullPath=True
-                )
-                or []
-            )
-            if shapes:
-                # Baking into a shared shape would rewrite every sibling instance's
-                # geometry, so an instanced object is never frozen in place. Callers
-                # that want it baked go through NodeUtils.uninstance(freeze=True),
-                # which breaks the link first and then calls back into here.
-                try:
-                    instanced = bool(NodeUtils.get_instances(obj))
-                except Exception:
-                    instanced = False
+            # Baking into a shared shape would rewrite every sibling instance's
+            # geometry, so an instanced object is never frozen in place. Callers
+            # that want it baked go through instance_strategy (or
+            # NodeUtils.uninstance(freeze=True)), which forks first and then
+            # calls back into here. Shared INTERMEDIATE shapes count — Maya's
+            # makeIdentity refuses while any child shape is multiply-instanced,
+            # so the test and the fork must span the same set.
+            try:
+                instanced = bool(NodeUtils.get_instanced_shapes(obj))
+            except Exception:
+                instanced = False
 
-                if instanced:
-                    instanced_skips.append(CoreUtils.short_name(obj))
-                    continue
+            if instanced:
+                instanced_skips.append(CoreUtils.short_name(obj))
+                continue
 
             nodes_to_unlock = []
             if force:

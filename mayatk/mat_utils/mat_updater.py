@@ -706,7 +706,8 @@ class MatUpdaterSlots(MatUpdater):
             addItems=["Selected Objects", "All Scene Materials", "Browse..."],
             setToolTip=(
                 "Choose the texture/material source:\n"
-                "• Selected Objects — textures from materials on the current selection.\n"
+                "• Selected Objects — materials on the current selection; "
+                "material nodes selected directly (Hypershade, Outliner) count too.\n"
                 "• All Scene Materials — every supported material in the scene.\n"
                 "• Browse… — pick texture files; updates materials that reference them."
             ),
@@ -969,8 +970,10 @@ class MatUpdaterSlots(MatUpdater):
         if mode == "Selected Objects":
             sel = cmds.ls(selection=True, long=True) or []
             if not sel:
-                self.ui.txt001.append("No objects selected.")
+                self.ui.txt001.append("Nothing selected.")
                 return
+            # get_mats passes selected material nodes straight through, so a
+            # Hypershade/Outliner selection works as well as geometry.
             materials = self._filter_supported(
                 MatUtils.get_mats(sel, as_strings=True) or []
             )
@@ -978,7 +981,7 @@ class MatUpdaterSlots(MatUpdater):
                 self.ui.txt001.append(
                     "No supported materials "
                     f"({', '.join(self.SUPPORTED_MAT_TYPES)}) "
-                    "found on the selected objects."
+                    "found in the selection."
                 )
                 return
         elif mode == "Browse...":

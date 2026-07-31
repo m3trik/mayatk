@@ -556,6 +556,84 @@ class TestMatUtils(MayaTkTestCase):
         # Production returns strings like "node.f[N]".
         self.assertIn(".f[", str(found_faces[0]))
 
+    def test_find_unassigned_reports_default_shaded_and_orphans(self):
+        """"No material" in Maya is two states, and both must be found.
+
+        New geometry joins ``initialShadingGroup``, so it reports the default
+        shader rather than nothing; geometry pulled out of every shading engine
+        reports nothing at all. Both read as "unshaded" to a user.
+        """
+        default_shaded = cmds.polyCube(name="unassigned_default")[0]
+        orphan = cmds.polyCube(name="unassigned_orphan")[0]
+        orphan_shape = cmds.listRelatives(orphan, shapes=True, fullPath=True)[0]
+        for sg in cmds.listConnections(orphan_shape, type="shadingEngine") or []:
+            cmds.sets(orphan_shape, remove=sg)
+        cmds.sets(self.cube, edit=True, forceElement=self.sg1)  # a real material
+
+        leaves = [str(o).split("|")[-1] for o in MatUtils.find_unassigned()]
+        self.assertIn(default_shaded, leaves)
+        self.assertIn(orphan, leaves)
+        self.assertNotIn(self.cube, leaves)
+
+    def test_find_unassigned_include_default_false_is_orphans_only(self):
+        """Opting out of the default-shaded case leaves only truly orphaned shapes."""
+        default_shaded = cmds.polyCube(name="unassigned_default_only")[0]
+        orphan = cmds.polyCube(name="unassigned_orphan_only")[0]
+        orphan_shape = cmds.listRelatives(orphan, shapes=True, fullPath=True)[0]
+        for sg in cmds.listConnections(orphan_shape, type="shadingEngine") or []:
+            cmds.sets(orphan_shape, remove=sg)
+
+        leaves = [
+            str(o).split("|")[-1]
+            for o in MatUtils.find_unassigned(include_default=False)
+        ]
+        self.assertIn(orphan, leaves)
+        self.assertNotIn(default_shaded, leaves)
+
+    def test_find_unassigned_scopes_to_given_objects(self):
+        """A pool restricts the search; transforms and shapes both resolve."""
+        inside = cmds.polyCube(name="unassigned_inside")[0]
+        outside = cmds.polyCube(name="unassigned_outside")[0]
+
+        leaves = [str(o).split("|")[-1] for o in MatUtils.find_unassigned([inside])]
+        self.assertEqual(leaves, [inside])
+
+        shape = cmds.listRelatives(inside, shapes=True, fullPath=True)[0]
+        by_shape = [str(o).split("|")[-1] for o in MatUtils.find_unassigned([shape])]
+        self.assertEqual(by_shape, [inside])
+        self.assertNotIn(outside, leaves)
+
+    def test_find_unassigned_accepts_components_like_find_by_mat_id(self):
+        """A face selection must resolve to its object, not silently scope to nothing."""
+        cube = cmds.polyCube(name="unassigned_component")[0]
+        found = [str(o).split("|")[-1] for o in MatUtils.find_unassigned([f"{cube}.f[0]"])]
+        self.assertEqual(found, [cube])
+
+    def test_find_unassigned_scoped_to_nothing_is_not_a_scene_scan(self):
+        """An input that resolves to no object must return [] — an argless
+        ``cmds.ls`` would list the whole scene instead."""
+        cmds.polyCube(name="unassigned_bystander")
+        self.assertEqual(MatUtils.find_unassigned(["does_not_exist"]), [])
+
+    def test_find_unassigned_skips_partially_assigned_objects(self):
+        """Partially shaded geometry is assigned — its unshaded faces are a
+        different question than "which objects did I forget to shade"."""
+        partial = cmds.polyCube(name="unassigned_partial")[0]
+        cmds.sets(f"{partial}.f[0:2]", edit=True, forceElement=self.sg1)
+
+        leaves = [str(o).split("|")[-1] for o in MatUtils.find_unassigned()]
+        self.assertNotIn(partial, leaves)
+
+    def test_find_unassigned_is_the_complement_of_find_by_mat_id(self):
+        """No object can be both unassigned and a user of a real material."""
+        cmds.sets(self.sphere, edit=True, forceElement=self.sg1)
+        users = {
+            str(o).split("|")[-1]
+            for o in MatUtils.find_by_mat_id(self.lambert1, shell=True)
+        }
+        unassigned = {str(o).split("|")[-1] for o in MatUtils.find_unassigned()}
+        self.assertEqual(users & unassigned, set())
+
     def test_module_exposure(self):
         """Test that MatUtils methods are exposed at the module level."""
         # Test assign_mat exposure
@@ -836,6 +914,225 @@ class TestMatUtils(MayaTkTestCase):
             1,
             "File node connected via 3 SGs should appear exactly once",
         )
+
+
+class TestViewportOpacity(MayaTkTestCase):
+    """Wiring an opacity map into the slot the viewport honours."""
+
+    def setUp(self):
+        super().setUp()
+        import tempfile
+
+        self.tmp = tempfile.mkdtemp(prefix="vpo_")
+        self.cube = cmds.polyCube(name="vpo_cube")[0]
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        super().tearDown()
+
+    def _png(self, name):
+        from PIL import Image
+
+        path = os.path.join(self.tmp, name)
+        Image.new("RGBA", (8, 8), (128, 128, 128, 255)).save(path)
+        return path
+
+    def _file_node(self, path, name):
+        node = cmds.shadingNode("file", asTexture=True, name=name)
+        cmds.setAttr(f"{node}.fileTextureName", path, type="string")
+        return node
+
+    def _mat(self, node_type, name):
+        mat = cmds.shadingNode(node_type, asShader=True, name=name)
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(self.cube, edit=True, forceElement=sg)
+        return mat
+
+    def test_find_opacity_source_in_network(self):
+        """An Opacity map already in the network is the source."""
+        mat = self._mat("standardSurface", "vpo_std")
+        color = self._file_node(self._png("set_Base_color.png"), "vpo_color")
+        opacity = self._file_node(self._png("set_Opacity.png"), "vpo_opacity")
+        cmds.connectAttr(f"{color}.outColor", f"{mat}.baseColor", force=True)
+        cmds.connectAttr(f"{opacity}.outColor", f"{mat}.coatColor", force=True)
+
+        self.assertEqual(MatUtils.find_opacity_source(mat), opacity)
+
+    def test_find_opacity_source_none_without_opacity_map(self):
+        """A material with no opacity map reports none."""
+        mat = self._mat("standardSurface", "vpo_std_plain")
+        color = self._file_node(self._png("set_Base_color.png"), "vpo_color_only")
+        cmds.connectAttr(f"{color}.outColor", f"{mat}.baseColor", force=True)
+
+        self.assertIsNone(MatUtils.find_opacity_source(mat))
+
+    def test_enable_viewport_opacity_standard_surface(self):
+        """standardSurface: alpha drives every opacity channel."""
+        mat = self._mat("standardSurface", "vpo_std_wire")
+        opacity = self._file_node(self._png("set_Opacity.png"), "vpo_op_wire")
+        cmds.connectAttr(f"{opacity}.outColor", f"{mat}.coatColor", force=True)
+
+        results = MatUtils.enable_viewport_opacity([mat])
+
+        self.assertEqual(results, {"vpo_std_wire": "enabled"})
+        for channel in ("opacityR", "opacityG", "opacityB"):
+            self.assertEqual(
+                cmds.listConnections(
+                    f"{mat}.{channel}", source=True, destination=False, plugs=True
+                ),
+                [f"{opacity}.outAlpha"],
+                f"{channel} not driven by the opacity map",
+            )
+
+    def test_enable_viewport_opacity_inverts_for_classic_shader(self):
+        """lambert has no opacity slot — drive transparency with 1-alpha."""
+        mat = self._mat("lambert", "vpo_lambert")
+        opacity = self._file_node(self._png("set_Opacity.png"), "vpo_op_lam")
+        cmds.connectAttr(f"{opacity}.outColor", f"{mat}.color", force=True)
+
+        results = MatUtils.enable_viewport_opacity([mat])
+
+        self.assertEqual(results, {"vpo_lambert": "enabled"})
+        rev = cmds.listConnections(
+            f"{mat}.transparencyR", source=True, destination=False, type="reverse"
+        )
+        self.assertTrue(rev, "transparency should be driven through a reverse node")
+
+    def test_enable_viewport_opacity_stingray_loads_transparent_graph(self):
+        """StingrayPBS gains its opacity slots and keeps its other textures."""
+        shader = mtk.GameShader()
+        sr_node = shader.setup_stringray_node("vpo_sr", opacity=False)
+        color = self._file_node(self._png("set_Base_color.png"), "vpo_sr_color")
+        opacity = self._file_node(self._png("set_Opacity.png"), "vpo_sr_opacity")
+        cmds.connectAttr(f"{color}.outColor", f"{sr_node}.TEX_color_map", force=True)
+        cmds.setAttr(f"{sr_node}.use_color_map", 1)
+        # The opacity map is in the network but has nowhere to go on this graph.
+        cmds.connectAttr(
+            f"{opacity}.outColor", f"{sr_node}.TEX_emissive_map", force=True
+        )
+
+        results = MatUtils.enable_viewport_opacity([sr_node])
+
+        self.assertEqual(results, {"vpo_sr": "enabled"})
+        self.assertTrue(cmds.attributeQuery("opacity", node=sr_node, exists=True))
+        self.assertEqual(cmds.getAttr(f"{sr_node}.use_opacity_map"), 1)
+        self.assertTrue(
+            cmds.listConnections(
+                f"{sr_node}.opacity", source=True, destination=False
+            ),
+            "opacity slot left unconnected",
+        )
+        # The base color survived the graph swap.
+        self.assertTrue(
+            cmds.listConnections(f"{sr_node}.TEX_color_map", source=True),
+            "base color lost when the transparent graph was loaded",
+        )
+
+    def test_enable_viewport_opacity_finds_map_on_disk(self):
+        """An opacity map beside the material's textures is imported."""
+        mat = self._mat("standardSurface", "vpo_disk")
+        color_path = self._png("set_Base_color.png")
+        self._png("set_Opacity.png")  # on disk only — not in the network
+        color = self._file_node(color_path, "vpo_disk_color")
+        cmds.connectAttr(f"{color}.outColor", f"{mat}.baseColor", force=True)
+
+        results = MatUtils.enable_viewport_opacity([mat])
+
+        self.assertEqual(results, {"vpo_disk": "enabled"})
+        source = cmds.listConnections(
+            f"{mat}.opacityR", source=True, destination=False
+        )
+        self.assertTrue(source)
+        self.assertTrue(
+            cmds.getAttr(f"{source[0]}.fileTextureName").endswith("set_Opacity.png")
+        )
+
+    def test_enable_viewport_opacity_alpha_source_per_map_type(self):
+        """Grayscale Opacity reads luminance; packed albedo reads real alpha."""
+        gray = self._mat("standardSurface", "vpo_gray")
+        gray_map = self._file_node(self._png("set_Opacity.png"), "vpo_gray_op")
+        cmds.connectAttr(f"{gray_map}.outColor", f"{gray}.coatColor", force=True)
+        cmds.setAttr(f"{gray_map}.alphaIsLuminance", 0)
+
+        packed = self._mat("standardSurface", "vpo_packed")
+        packed_map = self._file_node(
+            self._png("other_Albedo_Transparency.png"), "vpo_packed_at"
+        )
+        cmds.connectAttr(f"{packed_map}.outColor", f"{packed}.baseColor", force=True)
+        cmds.setAttr(f"{packed_map}.alphaIsLuminance", 1)
+
+        MatUtils.enable_viewport_opacity([gray, packed])
+
+        self.assertEqual(
+            cmds.getAttr(f"{gray_map}.alphaIsLuminance"),
+            1,
+            "a grayscale Opacity map must be read as luminance",
+        )
+        self.assertEqual(
+            cmds.getAttr(f"{packed_map}.alphaIsLuminance"),
+            0,
+            "a packed Albedo_Transparency map must read its real alpha",
+        )
+
+    def test_enable_viewport_opacity_is_idempotent(self):
+        """A second run rewires nothing and builds no duplicate reverse node."""
+        mat = self._mat("lambert", "vpo_twice")
+        opacity = self._file_node(self._png("set_Opacity.png"), "vpo_twice_op")
+        cmds.connectAttr(f"{opacity}.outColor", f"{mat}.color", force=True)
+
+        MatUtils.enable_viewport_opacity([mat])
+        before = len(cmds.ls(type="reverse") or [])
+        results = MatUtils.enable_viewport_opacity([mat])
+
+        self.assertEqual(results, {"vpo_twice": "already enabled"})
+        self.assertEqual(len(cmds.ls(type="reverse") or []), before)
+
+    def test_enable_viewport_opacity_skips_materials_without_a_map(self):
+        """No opacity map anywhere — the material is left untouched."""
+        mat = self._mat("standardSurface", "vpo_skip")
+        color = self._file_node(self._png("set_Base_color.png"), "vpo_skip_color")
+        cmds.connectAttr(f"{color}.outColor", f"{mat}.baseColor", force=True)
+
+        results = MatUtils.enable_viewport_opacity([mat])
+
+        self.assertEqual(results, {"vpo_skip": "no opacity map"})
+        self.assertFalse(
+            cmds.listConnections(f"{mat}.opacityR", source=True, destination=False)
+        )
+
+    def test_enable_viewport_opacity_accepts_objects(self):
+        """Objects resolve to their materials (same call, either input)."""
+        mat = self._mat("standardSurface", "vpo_obj")
+        opacity = self._file_node(self._png("set_Opacity.png"), "vpo_obj_op")
+        cmds.connectAttr(f"{opacity}.outColor", f"{mat}.coatColor", force=True)
+
+        results = MatUtils.enable_viewport_opacity([self.cube])
+
+        self.assertEqual(results.get("vpo_obj"), "enabled")
+
+    def test_get_mats_by_scope(self):
+        """Scope resolves selection / scene consistently."""
+        mat = self._mat("standardSurface", "vpo_scope")
+
+        cmds.select(self.cube, replace=True)
+        self.assertIn(mat, MatUtils.get_mats_by_scope("selected"))
+
+        cmds.select(clear=True)
+        self.assertEqual(MatUtils.get_mats_by_scope("selected"), [])
+        self.assertIn(mat, MatUtils.get_mats_by_scope("scene"))
+
+    def test_set_transparency_algorithm(self):
+        """Named viewport transparency modes map to their index."""
+        self.assertTrue(MatUtils.set_transparency_algorithm("depth_peeling"))
+        self.assertEqual(
+            cmds.getAttr("hardwareRenderingGlobals.transparencyAlgorithm"), 3
+        )
+        self.assertFalse(MatUtils.set_transparency_algorithm("nonsense"))
 
 
 if __name__ == "__main__":

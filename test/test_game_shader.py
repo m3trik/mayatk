@@ -514,6 +514,263 @@ class GameShaderTest(unittest.TestCase):
         self.assertIsNotNone(roughness_conn)
 
     # -------------------------------------------------------------------------
+    # Test one-source-per-slot (packed map vs. the separate maps it contains)
+    # -------------------------------------------------------------------------
+
+    def _texture_set(self, *map_names):
+        """Write 8x8 PNGs named `set_<map>.png` into a temp dir; return paths."""
+        from PIL import Image
+
+        out = tempfile.mkdtemp(dir=self.temp_dir)
+        paths = []
+        for map_name in map_names:
+            path = os.path.join(out, f"set_{map_name}.png")
+            Image.new("RGBA", (8, 8), (128, 128, 128, 255)).save(path)
+            paths.append(path)
+        return paths
+
+    def _slot_sources(self, shader, slot):
+        """Source plugs driving `slot` — parent and per-channel children."""
+        sources = []
+        for attr in (slot, f"{slot}R", f"{slot}G", f"{slot}B", f"{slot}X"):
+            if not cmds.attributeQuery(attr, node=shader, exists=True):
+                continue
+            sources += (
+                cmds.listConnections(
+                    f"{shader}.{attr}", source=True, destination=False, plugs=True
+                )
+                or []
+            )
+        return sources
+
+    def test_separate_maps_supersede_unrequested_packed_map(self):
+        """No packed workflow requested: Metallic/Roughness/AO win, MSAO drops.
+
+        Regression: every one of them was wired into the same three slots, so
+        the last connection won and the losers lingered as stray file nodes.
+        """
+        textures = self._texture_set(
+            "Base_color", "Metallic", "Roughness", "MSAO", "AO"
+        )
+
+        self.shader.create_network(textures, name="test_packed_conflict")
+
+        shader = "test_packed_conflict"
+        # Exactly one source per contested slot.
+        for slot in ("TEX_metallic_map", "TEX_roughness_map", "TEX_ao_map"):
+            sources = self._slot_sources(shader, slot)
+            files = {s.split(".")[0] for s in sources}
+            self.assertEqual(
+                len(files), 1, f"{slot} driven by {len(files)} textures: {sources}"
+            )
+        # The separate maps won, so no MSAO file node was ever created.
+        msao = [f for f in cmds.ls(type="file") if "MSAO" in f]
+        self.assertFalse(msao, f"superseded MSAO map still built a node: {msao}")
+
+    def test_uncovered_channel_recovered_from_dropped_packed_map(self):
+        """MSAO + Metallic/Roughness but NO separate AO: the AO channel is
+        extracted to a real file and wired — dropping the packed map must not
+        cost the network its AO."""
+        textures = self._texture_set("Base_color", "Metallic", "Roughness", "MSAO")
+
+        self.shader.create_network(textures, name="test_recovered_ao")
+
+        shader = "test_recovered_ao"
+        # No MSAO node — it was superseded...
+        msao = [f for f in cmds.ls(type="file") if "MSAO" in f]
+        self.assertFalse(msao, f"superseded MSAO map still built a node: {msao}")
+        # ...but its AO channel survived as an extracted loose map, wired in.
+        ao_sources = self._slot_sources(shader, "TEX_ao_map")
+        self.assertTrue(ao_sources, "recovered AO channel not connected")
+        ao_file = ao_sources[0].split(".")[0]
+        path = cmds.getAttr(f"{ao_file}.fileTextureName")
+        self.assertIn(
+            "Ambient_Occlusion",
+            os.path.basename(path),
+            f"AO slot driven by {path}, not the extracted channel",
+        )
+        self.assertTrue(os.path.isfile(path), "extracted AO file not on disk")
+
+    def test_requested_packed_map_supersedes_separate_maps(self):
+        """mask_map=True: MSAO wins and the separate maps are dropped."""
+        textures = self._texture_set(
+            "Base_color", "Metallic", "Roughness", "MSAO", "AO"
+        )
+
+        self.shader.create_network(
+            textures, name="test_packed_wins", mask_map=True
+        )
+
+        shader = "test_packed_wins"
+        for slot in ("TEX_metallic_map", "TEX_roughness_map", "TEX_ao_map"):
+            files = {s.split(".")[0] for s in self._slot_sources(shader, slot)}
+            self.assertEqual(len(files), 1, f"{slot} driven by {files}")
+        # The packed map is the one source: no separate AO node was built.
+        stray = [f for f in cmds.ls(type="file") if f.endswith("_AO")]
+        self.assertFalse(stray, f"superseded AO map still built a node: {stray}")
+
+    def test_resolve_map_conflicts_reports_dropped_maps(self):
+        """Superseded maps are returned with a reason, never silently dropped."""
+        textures = ["s_Metallic.png", "s_Roughness.png", "s_MSAO.png", "s_AO.png"]
+        type_cache = {
+            "s_Metallic.png": "Metallic",
+            "s_Roughness.png": "Roughness",
+            "s_MSAO.png": "MSAO",
+            "s_AO.png": "Ambient_Occlusion",
+        }
+
+        kept, dropped, extracted = self.shader._resolve_map_conflicts(
+            textures, type_cache, {"mask_map": False}
+        )
+
+        self.assertEqual(
+            kept, ["s_Metallic.png", "s_Roughness.png", "s_AO.png"]
+        )
+        self.assertEqual([d[1] for d in dropped], ["MSAO"])
+        self.assertIn("superseded", dropped[0][2])
+
+    def test_resolve_map_conflicts_follows_the_requested_workflow(self):
+        """mask_map=True flips the winner — the registry's rule, not ours."""
+        textures = ["s_Metallic.png", "s_MSAO.png"]
+        type_cache = {"s_Metallic.png": "Metallic", "s_MSAO.png": "MSAO"}
+
+        kept, dropped, extracted = self.shader._resolve_map_conflicts(
+            textures, type_cache, {"mask_map": True}
+        )
+
+        self.assertEqual(kept, ["s_MSAO.png"])
+        self.assertEqual([d[1] for d in dropped], ["Metallic"])
+        self.assertIn("superseded by MSAO", dropped[0][2])
+
+    def test_albedo_transparency_supersedes_the_separate_opacity_map(self):
+        """Packing opacity into the albedo must retire the standalone map.
+
+        Regression: both stayed in the set, so the old Opacity map re-connected
+        alongside the packed albedo and won the opacity slot.
+        """
+        textures = ["s_Albedo_Transparency.png", "s_Base_color.png", "s_Opacity.png"]
+        type_cache = {
+            "s_Albedo_Transparency.png": "Albedo_Transparency",
+            "s_Base_color.png": "Base_Color",
+            "s_Opacity.png": "Opacity",
+        }
+
+        kept, dropped, extracted = self.shader._resolve_map_conflicts(
+            textures, type_cache, {"albedo_transparency": True}
+        )
+
+        self.assertEqual(kept, ["s_Albedo_Transparency.png"])
+        self.assertEqual(
+            sorted(d[1] for d in dropped), ["Base_Color", "Opacity"]
+        )
+        self.assertTrue(
+            all("superseded by Albedo_Transparency" in d[2] for d in dropped)
+        )
+
+    def test_resolve_map_conflicts_collapses_duplicate_types(self):
+        """Two maps of the same type can't both drive the slot."""
+        textures = ["s_Mixed_AO.png", "s_AO.png"]
+        type_cache = {
+            "s_Mixed_AO.png": "Ambient_Occlusion",
+            "s_AO.png": "Ambient_Occlusion",
+        }
+
+        kept, dropped, extracted = self.shader._resolve_map_conflicts(
+            textures, type_cache
+        )
+
+        self.assertEqual(kept, ["s_Mixed_AO.png"])
+        self.assertEqual([d[1] for d in dropped], ["Ambient_Occlusion"])
+        self.assertIn("duplicate", dropped[0][2])
+
+    # -------------------------------------------------------------------------
+    # Test graph-dependent slots (Standard_Transparent.sfx)
+    #
+    # A StingrayPBS node's slots come from the ShaderFX graph loaded into it.
+    # The transparent graph (used whenever the set has an Opacity map) exposes
+    # NO TEX_ao_map / use_ao_map, so every plug write must be probed first.
+    # -------------------------------------------------------------------------
+
+    def test_transparent_graph_omits_ao_slot(self):
+        """Premise of the guards below: the opacity graph has no AO slot."""
+        sr_node = self.shader.setup_stringray_node("test_transp_slots", opacity=True)
+
+        self.assertFalse(
+            cmds.attributeQuery("TEX_ao_map", node=sr_node, exists=True),
+            "Standard_Transparent.sfx unexpectedly exposes TEX_ao_map",
+        )
+        self.assertFalse(
+            cmds.attributeQuery("use_ao_map", node=sr_node, exists=True),
+            "Standard_Transparent.sfx unexpectedly exposes use_ao_map",
+        )
+        # The opaque graph does — otherwise the AO path would never be exercised.
+        opaque = self.shader.setup_stringray_node("test_opaque_slots", opacity=False)
+        self.assertTrue(cmds.attributeQuery("TEX_ao_map", node=opaque, exists=True))
+
+    def test_connect_msao_on_transparent_graph(self):
+        """MSAO on the opacity graph wires metallic/roughness, skips absent AO.
+
+        Regression: this raised
+        `setAttr: No object matches name: <shader>.use_ao_map`.
+        """
+        sr_node = self.shader.setup_stringray_node("test_transp_msao", opacity=True)
+        texture_path = os.path.join(self.test_assets, "model_MaskMap.png")
+
+        success = self.shader.connect_stingray_nodes(texture_path, "MSAO", sr_node)
+
+        self.assertTrue(success, "MSAO should still connect its available channels")
+        metallic_conn = cmds.listConnections(f"{sr_node}.TEX_metallic_map")
+        self.assertIsNotNone(metallic_conn, "Metallic connection missing")
+        roughness_conn = cmds.listConnections(f"{sr_node}.TEX_roughness_mapX")
+        self.assertIsNotNone(roughness_conn, "Roughness connection missing")
+
+    def test_connect_orm_on_transparent_graph(self):
+        """ORM on the opacity graph wires roughness/metallic, skips absent AO."""
+        sr_node = self.shader.setup_stringray_node("test_transp_orm", opacity=True)
+        texture_path = os.path.join(self.test_assets, "model_MaskMap.png")
+
+        success = self.shader.connect_stingray_nodes(texture_path, "ORM", sr_node)
+
+        self.assertTrue(success)
+        roughness_conn = cmds.listConnections(f"{sr_node}.TEX_roughness_mapX")
+        self.assertIsNotNone(roughness_conn, "Roughness connection missing")
+
+    def test_connect_ao_on_transparent_graph(self):
+        """A standalone AO map has nowhere to go — report it, leave no stray node."""
+        sr_node = self.shader.setup_stringray_node("test_transp_ao", opacity=True)
+        texture_path = os.path.join(self.test_assets, "model_AO.png")
+        before = set(cmds.ls(type="file"))
+
+        success = self.shader.connect_stingray_nodes(
+            texture_path, "Ambient_Occlusion", sr_node
+        )
+
+        self.assertFalse(success, "AO has no slot on the transparent graph")
+        self.assertEqual(
+            set(cmds.ls(type="file")), before, "orphan file node left behind"
+        )
+
+    def test_create_network_opacity_set_with_ao(self):
+        """End-to-end: an Opacity + AO/MSAO set builds without raising."""
+        textures = [
+            os.path.join(self.test_assets, "model_Base_Color.png"),
+            os.path.join(self.test_assets, "model_Opacity.png"),
+            os.path.join(self.test_assets, "model_Metallic.png"),
+            os.path.join(self.test_assets, "model_Roughness.png"),
+            os.path.join(self.test_assets, "model_AO.png"),
+        ]
+
+        result = self.shader.create_network(textures, name="test_transp_network")
+
+        self.assertIsNotNone(result)
+        self.assertTrue(cmds.objExists("test_transp_network"))
+        # Opacity map drove the transparent graph, so the opacity slot is wired.
+        self.assertIsNotNone(
+            cmds.listConnections("test_transp_network.opacity"),
+            "Opacity map should be connected on the transparent graph",
+        )
+
+    # -------------------------------------------------------------------------
     # Test Full Network Creation
     # -------------------------------------------------------------------------
 

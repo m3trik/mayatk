@@ -94,6 +94,15 @@ class TestSceneImportTemplate(unittest.TestCase):
         self.assertIn("ShaderNodeGroup", self.txt)
         self.assertIn("ShaderNodeTexImage", self.txt)
 
+    def test_tiled_images_resolve_to_a_real_tile(self):
+        # A <UDIM>/<UVTILE> token is not an on-disk file: it must resolve to the
+        # set's first existing tile (flattened, logged) instead of producing a
+        # misleading "packed or needs relinking" file-less entry.
+        self.assertIn("_TILE_TOKENS", self.txt)
+        self.assertIn("<UDIM>", self.txt)
+        self.assertIn("<UVTILE>", self.txt)
+        self.assertIn("glob.escape", self.txt)  # paths may hold glob-special chars
+
     def test_manifest_scopes_to_the_active_scene(self):
         # The FBX exporter writes the ACTIVE scene's objects; bpy.data.objects
         # would drag in other scenes / unlinked objects and produce manifest
@@ -536,6 +545,30 @@ class TestSceneImportOrchestration(MayaTkTestCase):
         _StubbedImport.calls["import_result"] = self._build_imported_scene
         imported = _StubbedImport().import_scene(self.src, use_cache=False)
         self.assertEqual(sorted(imported), ["objA", "objB", "objC"])
+
+    def test_import_fbx_resets_sticky_plugin_state(self):
+        """The FBX plugin's import options are global + sticky: whatever the
+        user's last interactive import set (verified live: a poisoned mode
+        persists across calls) silently shapes cmds.file imports. _import_fbx
+        must reset and pin mode to "add" — the factory default "merge" can
+        retarget animation onto same-named pre-existing scene nodes."""
+        import maya.mel as mel
+
+        cube = cmds.polyCube(name="fbx_state_probe")[0]
+        fbx = os.path.join(
+            tempfile.gettempdir(), "mtk_scene_import_state_probe.fbx"
+        ).replace("\\", "/")
+        if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
+            cmds.loadPlugin("fbxmaya", quiet=True)
+        cmds.select(cube)
+        mel.eval(f'FBXExport -f "{fbx}" -s')
+        try:
+            mel.eval("FBXImportMode -v exmerge")  # poison: "update animation"
+            new_nodes = BlenderSceneImport()._import_fbx(fbx)
+            self.assertEqual(mel.eval("FBXImportMode -q"), "add")
+            self.assertTrue(new_nodes, "the import must ADD nodes")
+        finally:
+            os.remove(fbx)
 
 
 class TestSceneImportSurface(unittest.TestCase):

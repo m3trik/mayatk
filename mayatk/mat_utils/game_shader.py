@@ -22,9 +22,90 @@ class _GameShaderInternal(object):
     """Internal helpers for GameShader."""
 
     @staticmethod
-    def _plug(node, attr: str) -> str:
-        """Build a plug string from a node-or-string node."""
-        return f"{node}.{attr}"
+    def _has_attr(node, attr: str) -> bool:
+        """True if `attr` exists on `node`.
+
+        A StingrayPBS node's slots come from the ShaderFX graph loaded into it, so
+        the set is not fixed: `Standard_Transparent.sfx` (loaded for opacity
+        materials) omits slots that `Standard.sfx` exposes — notably `TEX_ao_map` /
+        `use_ao_map`. Every plug write must be probed first.
+        """
+        try:
+            return bool(cmds.attributeQuery(attr, node=str(node), exists=True))
+        except RuntimeError:  # node gone / not queryable
+            return False
+
+    @classmethod
+    def _set_flag(cls, node, attr: str, value=1) -> bool:
+        """Set a shader toggle (e.g. `use_ao_map`) if the graph exposes it."""
+        if not cls._has_attr(node, attr):
+            return False
+        cmds.setAttr(f"{node}.{attr}", value)
+        return True
+
+    @classmethod
+    def _clear_slot(cls, node, attr: str) -> None:
+        """Break existing inputs on `attr` and on its child plugs.
+
+        Packed maps wire the R/G/B children (`_connect_channel`) while simple
+        maps wire the parent; without clearing both levels a re-run would leave
+        two textures driving one slot.
+        """
+        for plug in [attr] + [f"{attr}{s}" for s in ("R", "G", "B", "X", "Y", "Z")]:
+            if not cls._has_attr(node, plug):
+                continue
+            for src in (
+                cmds.listConnections(
+                    f"{node}.{plug}", source=True, destination=False, plugs=True
+                )
+                or []
+            ):
+                cmds.disconnectAttr(src, f"{node}.{plug}")
+
+    def _missing_slot(self, node, texture_type: str, attr: str) -> bool:
+        """Report a slot the loaded shader graph doesn't expose. Always False."""
+        self.logger.warning(
+            f"{node}: shader graph has no '{attr}' slot — {texture_type} not connected."
+        )
+        return False
+
+    def _wire(
+        self,
+        node,
+        texture_type: str,
+        attr: str,
+        source_plug: str,
+        flag: str = None,
+        channel: bool = False,
+    ) -> bool:
+        """Connect `source_plug` → `node.attr` and enable its `use_*` toggle.
+
+        Skips (and reports) cleanly when the loaded graph has no such slot, so a
+        graph-specific gap is a skipped map rather than a hard failure.
+
+        Parameters:
+            node: The shader node.
+            texture_type (str): Map type, for reporting.
+            attr (str): Target slot, e.g. "TEX_ao_map".
+            source_plug (str): Source plug to connect from.
+            flag (str): Toggle attribute; derived from `attr` when omitted.
+            channel (bool): Route through `_connect_channel` (per-child connect).
+
+        Returns:
+            bool: True if the connection was made.
+        """
+        if not self._has_attr(node, attr):
+            return self._missing_slot(node, texture_type, attr)
+
+        self._clear_slot(node, attr)
+        if channel:
+            if not self._connect_channel(source_plug, node, attr):
+                return False
+        else:
+            cmds.connectAttr(source_plug, f"{node}.{attr}", force=True)
+
+        self._set_flag(node, flag or attr.replace("TEX_", "use_", 1))
+        return True
 
 
 class GameShader(ptk.LoggingMixin, _GameShaderInternal):
@@ -41,6 +122,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         "MSAO": "smoothness → roughness; R/G channels split",
         "Albedo_Transparency": "alpha → opacity",
     }
+
 
     @CoreUtils.undoable
     def create_network(
@@ -167,14 +249,20 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                     pct = 50 + int((i / total) * 50)
                     progress_callback(pct, f"Building Network: {set_name}")
 
-                node = self._create_single_network(
-                    set_textures,
-                    set_name,  # Use set name for shader name
-                    cfg["shader_type"],
-                    cfg["create_arnold"],
-                    prefix=prefix,
-                    suffix=suffix,
-                )
+                # Isolate each set: one bad set must not abort the remaining ones.
+                try:
+                    node = self._create_single_network(
+                        set_textures,
+                        set_name,  # Use set name for shader name
+                        cfg["shader_type"],
+                        cfg["create_arnold"],
+                        prefix=prefix,
+                        suffix=suffix,
+                        config=cfg,
+                    )
+                except Exception as e:
+                    self.logger.error(f"Set '{set_name}' failed: {e}")
+                    node = None
                 results.append(node)
 
                 status = "Success" if node else "Failed"
@@ -203,12 +291,88 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 cfg["create_arnold"],
                 prefix=prefix,
                 suffix=suffix,
+                config=cfg,
             )
 
             if progress_callback:
                 progress_callback(100, "Completed")
 
             return node
+
+    def _resolve_map_conflicts(
+        self,
+        textures: List[str],
+        type_cache: Dict[str, str],
+        config: Dict[str, Any] = None,
+    ) -> tuple:
+        """Reduce `textures` to one source per shader slot.
+
+        A packed map (ORM / MSAO / MRAO / Metallic_Smoothness /
+        Albedo_Transparency) drives the same slots as the separate maps it
+        contains, so a set carrying both wires each slot twice — the second
+        connection wins and the first map is left as a stray file node, with
+        parent and child plugs driven by different textures on split channels.
+
+        Which side wins is `ptk.MapFactory.filter_redundant_maps`' call: the
+        registry's `replaces` / `config_key` / `channels` rules are the single
+        source of truth, so this and Mat Updater can't drift apart. When
+        dropping a packed map would lose a channel no loose map covers, the
+        filter extracts that channel to a real file first — those recovered
+        maps join the kept list and get wired like any other texture. Same-type
+        duplicates (a set with both `_Mixed_AO` and `_AO`) collapse to the
+        first occurrence.
+
+        Parameters:
+            textures: Prepared texture paths.
+            type_cache: Path → resolved map type (extracted paths are added).
+            config: Resolved workflow config; decides packed-vs-separate.
+
+        Returns:
+            tuple: (kept textures, [(texture, type, reason), …] dropped,
+            {extracted path: table note}).
+        """
+        inventory: Dict[str, List[str]] = {}
+        for t in textures:
+            map_type = type_cache.get(t)
+            if map_type:
+                inventory.setdefault(map_type, []).append(t)
+
+        surviving = {k: list(v) for k, v in inventory.items()}
+        report = ptk.MapFactory.filter_redundant_maps(surviving, config=config)
+
+        kept: List[str] = []
+        dropped: List[tuple] = []
+        seen: set = set()
+        for t in textures:
+            map_type = type_cache.get(t)
+            if map_type in report["dropped"]:
+                dropped.append((t, map_type, report["dropped"][map_type]))
+            elif map_type is not None and map_type in seen:
+                dropped.append((t, map_type, f"duplicate {map_type} map"))
+            else:
+                seen.add(map_type)
+                kept.append(t)
+
+        # Channels recovered from a dropped packed map are real files now —
+        # wire them like any other texture, noting their provenance.
+        packed_sources = [
+            t
+            for t, reason in report["dropped"].items()
+            if t in inventory and reason == "superseded by separate maps"
+        ]
+        source_note = (
+            f"extracted from {', '.join(packed_sources)}"
+            if packed_sources
+            else "extracted"
+        )
+        # Keyed by FILENAME: the table loop may relativize paths before lookup.
+        extracted_notes: Dict[str, str] = {}
+        for map_type, path in report["extracted"].items():
+            type_cache[path] = map_type
+            kept.append(path)
+            extracted_notes[ptk.format_path(path, "file")] = source_note
+
+        return kept, dropped, extracted_notes
 
     def _create_single_network(
         self,
@@ -218,6 +382,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         create_arnold: bool,
         prefix: str = "",
         suffix: str = "",
+        config: Dict[str, Any] = None,
     ) -> Optional[object]:
         """Internal method to create a single shader network from prepared textures."""
         if not textures:
@@ -243,24 +408,12 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         # Pre-compute map type for each texture to avoid redundant lookups
         type_cache = {t: ptk.MapFactory.resolve_map_type(t) for t in textures}
 
-        # Prioritize packed maps to avoid conflicts
-        # If ORM exists, remove MSAO and Metallic_Smoothness
-        # If MSAO exists, remove Metallic_Smoothness
-        orm_maps = ptk.MapFactory.filter_images_by_type(textures, "ORM")
-        msao_maps = ptk.MapFactory.filter_images_by_type(textures, "MSAO")
-
-        if orm_maps:
-            # Remove MSAO and Metallic_Smoothness from the list we process
-            textures = [
-                t
-                for t in textures
-                if type_cache.get(t) not in ["MSAO", "Metallic_Smoothness"]
-            ]
-        elif msao_maps:
-            # Remove Metallic_Smoothness
-            textures = [
-                t for t in textures if type_cache.get(t) not in ["Metallic_Smoothness"]
-            ]
+        # One source per slot: drop the maps another map already supplies.
+        # Channels only a dropped packed map carried come back as extracted
+        # loose files, appended to `textures` with a provenance note.
+        textures, superseded, extracted_notes = self._resolve_map_conflicts(
+            textures, type_cache, config
+        )
 
         # Create the base shader based on shader_type
         if shader_type == "standard_surface":
@@ -285,6 +438,13 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         connected_count = 0
         failed_count = 0
         conversion_count = 0
+
+        # Report what a packed map (or an earlier duplicate) took over, so a
+        # missing map in the shading network is never a silent drop.
+        for texture, texture_type, reason in superseded:
+            rows.append(
+                ["–", texture_type, ptk.format_path(texture, "file"), reason]
+            )
 
         for texture in ptk.convert_to_relative_path(textures, base_dir):
             texture_name = ptk.format_path(texture, "file")
@@ -312,7 +472,9 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                     texture, texture_type, shader_node
                 )
 
-            note = self.CONVERSION_NOTES.get(texture_type, "")
+            note = extracted_notes.get(texture_name) or self.CONVERSION_NOTES.get(
+                texture_type, ""
+            )
             if success:
                 connected_count += 1
                 if note:
@@ -345,14 +507,14 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         link = self.logger.log_link(result_name, "select", node=str(shader_node))
 
         # Final compact summary
+        tail = f"{conversion_count} converted"
+        if superseded:
+            tail = f"{len(superseded)} superseded, {tail}"
         if failed_count == 0:
-            self.logger.success(
-                f"{link} — {connected_count} connected, {conversion_count} converted"
-            )
+            self.logger.success(f"{link} — {connected_count} connected, {tail}")
         else:
             self.logger.warning(
-                f"{link} — {connected_count} connected, "
-                f"{failed_count} failed, {conversion_count} converted"
+                f"{link} — {connected_count} connected, {failed_count} failed, {tail}"
             )
 
         return result_node
@@ -473,57 +635,25 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         return op_node
 
     def _connect_channel(self, source_plug, node, attr_name):
-        """Helper to connect a source plug to a target attribute, handling compound attributes.
+        """Drive a compound slot's channels from a single-channel source.
 
-        Args:
-            source_plug (pm.Attribute): The source attribute to connect from.
+        Thin reporting layer over :meth:`MatUtils.connect_to_channels` — the
+        shared primitive both this and the viewport-opacity path use.
+
+        Parameters:
+            source_plug (str): The source plug to connect from.
             node (str): The target node.
             attr_name (str): The name of the target attribute.
         """
-        # Check if attribute exists
-        if not cmds.attributeQuery(attr_name, node=node, exists=True):
-            print(f"Warning: Attribute {attr_name} not found on {node}")
+        if not self._has_attr(node, attr_name):
+            self.logger.debug(f"Attribute {attr_name} not found on {node}")
             return False
 
-        # Try to find children (R, G, B or X, Y, Z)
-        children = []
-        for suffix in ["R", "G", "B"]:
-            if cmds.attributeQuery(attr_name + suffix, node=node, exists=True):
-                children.append(attr_name + suffix)
-
-        if not children:
-            for suffix in ["X", "Y", "Z"]:
-                if cmds.attributeQuery(attr_name + suffix, node=node, exists=True):
-                    children.append(attr_name + suffix)
-
-        if children and len(children) >= 3:
-            # Explicitly break connection to parent attribute if it exists
-            # This prevents "ghost" connections where parent remains connected to old node
-            try:
-                if cmds.attributeQuery(attr_name, node=node, exists=True):
-                    inputs = cmds.listConnections(
-                        f"{node}.{attr_name}",
-                        plugs=True,
-                        source=True,
-                        destination=False,
-                    )
-                    if inputs:
-                        cmds.disconnectAttr(inputs[0], f"{node}.{attr_name}")
-            except Exception as e:
-                print(f"Warning: Failed to disconnect parent {attr_name}: {e}")
-
-            # Connect to all 3 children
-            for child in children[:3]:
-                cmds.connectAttr(source_plug, f"{node}.{child}", force=True)
+        if MatUtils.connect_to_channels(source_plug, str(node), attr_name):
             return True
-        else:
-            # Fallback: try connecting to parent directly
-            try:
-                cmds.connectAttr(source_plug, f"{node}.{attr_name}", force=True)
-                return True
-            except Exception as e:
-                print(f"Failed to connect {source_plug} to {node}.{attr_name}: {e}")
-                return False
+
+        self.logger.warning(f"Failed to connect {source_plug} to {node}.{attr_name}")
+        return False
 
     def _ensure_fbx_safe_connection(self, texture_node, shader_node, attr_name):
         """Creates a dummy connection to a custom attribute to ensure FBX export preserves the texture reference.
@@ -582,32 +712,48 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         Returns:
             bool: True if the connection is successful, False otherwise.
         """
-        if texture_type in ["Base_Color", "Diffuse"]:
-            texture_node = NodeUtils.create_render_node(
+        # Slots are graph-dependent (see _has_attr): probe before creating any node
+        # so a slot the graph lacks costs a skipped map, not an orphan file node.
+        def _file_node():
+            return NodeUtils.create_render_node(
                 "file",
                 fileTextureName=texture,
                 name=ptk.format_path(texture, section="name"),
             )
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{sr_node}.TEX_color_map", force=True
+
+        def _invert_alpha(texture_node):
+            """Alpha (smoothness) -> reverse node; Stingray expects roughness."""
+            rev_node = NodeUtils.create_render_node("reverse")
+            for axis in ("X", "Y", "Z"):
+                cmds.connectAttr(
+                    f"{texture_node}.outAlpha", f"{rev_node}.input{axis}", force=True
+                )
+            return rev_node
+
+        if texture_type in ["Base_Color", "Diffuse"]:
+            if not self._has_attr(sr_node, "TEX_color_map"):
+                return self._missing_slot(sr_node, texture_type, "TEX_color_map")
+            texture_node = _file_node()
+            return self._wire(
+                sr_node, texture_type, "TEX_color_map", f"{texture_node}.outColor"
             )
-            cmds.setAttr(f"{sr_node}.use_color_map", 1)
 
         elif texture_type == "Albedo_Transparency":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                name=ptk.format_path(texture, section="name"),
+            if not self._has_attr(sr_node, "TEX_color_map"):
+                return self._missing_slot(sr_node, texture_type, "TEX_color_map")
+            texture_node = _file_node()
+            self._wire(
+                sr_node, texture_type, "TEX_color_map", f"{texture_node}.outColor"
             )
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{sr_node}.TEX_color_map", force=True
-            )
-            if cmds.attributeQuery("opacity", node=str(sr_node), exists=True):
-                cmds.connectAttr(
-                    f"{texture_node}.outAlpha", f"{sr_node}.opacity", force=True
+            # Opacity only exists on the transparent graph — silent when absent.
+            if self._has_attr(sr_node, "opacity"):
+                self._wire(
+                    sr_node,
+                    texture_type,
+                    "opacity",
+                    f"{texture_node}.outAlpha",
+                    flag="use_opacity_map",
                 )
-                cmds.setAttr(f"{sr_node}.use_opacity_map", 1)
-            cmds.setAttr(f"{sr_node}.use_color_map", 1)
             return True
 
         elif texture_type in ["Roughness", "Metallic"]:
@@ -616,196 +762,160 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 if texture_type == "Roughness"
                 else "TEX_metallic_map"
             )
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                name=ptk.format_path(texture, section="name"),
-            )
+            if not self._has_attr(sr_node, target_attr_name):
+                return self._missing_slot(sr_node, texture_type, target_attr_name)
+            texture_node = _file_node()
             # Connect RGB directly to ensure FBX export (Single channel maps are usually grayscale so RGB matches)
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{sr_node}.{target_attr_name}", force=True
+            return self._wire(
+                sr_node, texture_type, target_attr_name, f"{texture_node}.outColor"
             )
-            cmds.setAttr(f"{sr_node}.use_{texture_type.lower()}_map", 1)
 
         elif texture_type == "Metallic_Smoothness":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                name=ptk.format_path(texture, section="name"),
-            )
+            targets = ["TEX_metallic_map", "TEX_roughness_map"]
+            if not any(self._has_attr(sr_node, a) for a in targets):
+                return self._missing_slot(sr_node, texture_type, " / ".join(targets))
+            texture_node = _file_node()
+
             # Metallic (RGB) -> Metallic Map
             # Connect RGB directly to ensure FBX export (Metallic is usually grayscale so RGB matches)
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{sr_node}.TEX_metallic_map", force=True
+            connected = self._wire(
+                sr_node, texture_type, "TEX_metallic_map", f"{texture_node}.outColor"
             )
 
             # Smoothness (Alpha) -> Invert -> Roughness Map (Unity stores smoothness, Stingray expects roughness)
-            rev_node = NodeUtils.create_render_node("reverse")
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{rev_node}.inputX", force=True
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{rev_node}.inputY", force=True
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{rev_node}.inputZ", force=True
-            )
-            self._connect_channel(f"{rev_node}.outputX", sr_node, "TEX_roughness_map")
-
-            cmds.setAttr(f"{sr_node}.use_metallic_map", 1)
-            cmds.setAttr(f"{sr_node}.use_roughness_map", 1)
+            if self._has_attr(sr_node, "TEX_roughness_map"):
+                rev_node = _invert_alpha(texture_node)
+                connected = (
+                    self._wire(
+                        sr_node,
+                        texture_type,
+                        "TEX_roughness_map",
+                        f"{rev_node}.outputX",
+                        channel=True,
+                    )
+                    or connected
+                )
+            else:
+                self._missing_slot(sr_node, texture_type, "TEX_roughness_map")
+            return connected
 
         elif texture_type == "ORM":
             # Unreal/glTF ORM Map: R=AO, G=Roughness, B=Metallic
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                name=ptk.format_path(texture, section="name"),
-            )
+            targets = ["TEX_ao_map", "TEX_roughness_map", "TEX_metallic_map"]
+            if not any(self._has_attr(sr_node, a) for a in targets):
+                return self._missing_slot(sr_node, texture_type, " / ".join(targets))
+            texture_node = _file_node()
+
             # Connect RGB directly to AO map (R channel matches AO) to ensure FBX export
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{sr_node}.TEX_ao_map", force=True
+            connected = self._wire(
+                sr_node, texture_type, "TEX_ao_map", f"{texture_node}.outColor"
             )
-
             # Connect other channels individually
-            self._connect_channel(
-                f"{texture_node}.outColorG", sr_node, "TEX_roughness_map"
-            )
-            self._connect_channel(
-                f"{texture_node}.outColorB", sr_node, "TEX_metallic_map"
-            )
-
-            cmds.setAttr(f"{sr_node}.use_ao_map", 1)
-            cmds.setAttr(f"{sr_node}.use_roughness_map", 1)
-            cmds.setAttr(f"{sr_node}.use_metallic_map", 1)
+            for attr, plug in (
+                ("TEX_roughness_map", f"{texture_node}.outColorG"),
+                ("TEX_metallic_map", f"{texture_node}.outColorB"),
+            ):
+                connected = (
+                    self._wire(sr_node, texture_type, attr, plug, channel=True)
+                    or connected
+                )
+            return connected
 
         elif texture_type == "MSAO":
             # Unity HDRP Mask Map: R=Metallic, G=AO, B=Detail, A=Smoothness
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                name=ptk.format_path(texture, section="name"),
-            )
+            targets = ["TEX_metallic_map", "TEX_ao_map", "TEX_roughness_map"]
+            if not any(self._has_attr(sr_node, a) for a in targets):
+                return self._missing_slot(sr_node, texture_type, " / ".join(targets))
+            texture_node = _file_node()
 
             # Connect metallic channel (R) -> TEX_metallic_map
             # Connect RGB directly to ensure FBX export (R=Metallic matches)
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{sr_node}.TEX_metallic_map", force=True
+            connected = self._wire(
+                sr_node, texture_type, "TEX_metallic_map", f"{texture_node}.outColor"
             )
-
             # Connect AO channel (G) -> TEX_ao_map
-            self._connect_channel(f"{texture_node}.outColorG", sr_node, "TEX_ao_map")
-
+            connected = (
+                self._wire(
+                    sr_node,
+                    texture_type,
+                    "TEX_ao_map",
+                    f"{texture_node}.outColorG",
+                    channel=True,
+                )
+                or connected
+            )
             # Connect smoothness channel (A) -> Invert -> TEX_roughness_map
             # Unity Smoothness is inverse of Roughness
-            rev_node = NodeUtils.create_render_node("reverse")
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{rev_node}.inputX", force=True
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{rev_node}.inputY", force=True
-            )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{rev_node}.inputZ", force=True
-            )
-
-            # Use reverse output X (float) for roughness
-            self._connect_channel(f"{rev_node}.outputX", sr_node, "TEX_roughness_map")
-
-            cmds.setAttr(f"{sr_node}.use_metallic_map", 1)
-            cmds.setAttr(f"{sr_node}.use_ao_map", 1)
-            cmds.setAttr(f"{sr_node}.use_roughness_map", 1)
+            if self._has_attr(sr_node, "TEX_roughness_map"):
+                rev_node = _invert_alpha(texture_node)
+                # Use reverse output X (float) for roughness
+                connected = (
+                    self._wire(
+                        sr_node,
+                        texture_type,
+                        "TEX_roughness_map",
+                        f"{rev_node}.outputX",
+                        channel=True,
+                    )
+                    or connected
+                )
+            else:
+                self._missing_slot(sr_node, texture_type, "TEX_roughness_map")
+            return connected
 
         elif "Normal" in texture_type:
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                name=ptk.format_path(texture, section="name"),
+            if not self._has_attr(sr_node, "TEX_normal_map"):
+                return self._missing_slot(sr_node, texture_type, "TEX_normal_map")
+            texture_node = _file_node()
+            return self._wire(
+                sr_node, texture_type, "TEX_normal_map", f"{texture_node}.outColor"
             )
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{sr_node}.TEX_normal_map", force=True
-            )
-            cmds.setAttr(f"{sr_node}.use_normal_map", 1)
 
         elif texture_type == "Emissive":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                name=ptk.format_path(texture, section="name"),
+            if not self._has_attr(sr_node, "TEX_emissive_map"):
+                return self._missing_slot(sr_node, texture_type, "TEX_emissive_map")
+            texture_node = _file_node()
+            return self._wire(
+                sr_node, texture_type, "TEX_emissive_map", f"{texture_node}.outColor"
             )
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{sr_node}.TEX_emissive_map", force=True
-            )
-            cmds.setAttr(f"{sr_node}.use_emissive_map", 1)
 
         elif texture_type == "Ambient_Occlusion":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                name=ptk.format_path(texture, section="name"),
-            )
+            if not self._has_attr(sr_node, "TEX_ao_map"):
+                return self._missing_slot(sr_node, texture_type, "TEX_ao_map")
+            texture_node = _file_node()
             # Connect RGB directly to ensure FBX export (AO is usually grayscale so RGB matches)
-            cmds.connectAttr(
-                f"{texture_node}.outColor", f"{sr_node}.TEX_ao_map", force=True
+            return self._wire(
+                sr_node, texture_type, "TEX_ao_map", f"{texture_node}.outColor"
             )
-            cmds.setAttr(f"{sr_node}.use_ao_map", 1)
 
         elif texture_type == "Opacity":
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                name=ptk.format_path(texture, section="name"),
+            if not self._has_attr(sr_node, "opacity"):
+                return self._missing_slot(sr_node, texture_type, "opacity")
+            texture_node = _file_node()
+            return self._wire(
+                sr_node,
+                texture_type,
+                "opacity",
+                f"{texture_node}.outAlpha",
+                flag="use_opacity_map",
             )
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{sr_node}.opacity", force=True
+
+        elif texture_type in ["Specular", "Glossiness"]:
+            target_attr_name = (
+                "TEX_specular_map"
+                if texture_type == "Specular"
+                else "TEX_glossiness_map"
             )
-            cmds.setAttr(f"{sr_node}.use_opacity_map", 1)
-
-        elif texture_type == "Specular":
-            if cmds.attributeQuery("TEX_specular_map", node=str(sr_node), exists=True):
-                texture_node = NodeUtils.create_render_node(
-                    "file",
-                    fileTextureName=texture,
-                    name=ptk.format_path(texture, section="name"),
-                )
-                cmds.connectAttr(
-                    f"{texture_node}.outColor",
-                    f"{sr_node}.TEX_specular_map",
-                    force=True,
-                )
-                if cmds.attributeQuery(
-                    "use_specular_map", node=str(sr_node), exists=True
-                ):
-                    cmds.setAttr(f"{sr_node}.use_specular_map", 1)
-                return True
-            return False
-
-        elif texture_type == "Glossiness":
-            if cmds.attributeQuery(
-                "TEX_glossiness_map", node=str(sr_node), exists=True
-            ):
-                texture_node = NodeUtils.create_render_node(
-                    "file",
-                    fileTextureName=texture,
-                    name=ptk.format_path(texture, section="name"),
-                )
-                # Connect RGB directly to ensure FBX export
-                cmds.connectAttr(
-                    f"{texture_node}.outColor",
-                    f"{sr_node}.TEX_glossiness_map",
-                    force=True,
-                )
-                if cmds.attributeQuery(
-                    "use_glossiness_map", node=str(sr_node), exists=True
-                ):
-                    cmds.setAttr(f"{sr_node}.use_glossiness_map", 1)
-                return True
-            return False
+            if not self._has_attr(sr_node, target_attr_name):
+                return self._missing_slot(sr_node, texture_type, target_attr_name)
+            texture_node = _file_node()
+            # Connect RGB directly to ensure FBX export
+            return self._wire(
+                sr_node, texture_type, target_attr_name, f"{texture_node}.outColor"
+            )
 
         else:  # Unsupported texture type
             return False
-
-        return True
 
     def connect_standard_surface_nodes(
         self, texture: str, texture_type: str, std_node: object

@@ -495,5 +495,80 @@ class TestUvDiagnostics(MayaTkTestCase):
         self.assertNotIn("extraSet", remaining)
 
 
+class TestFixNonOrthogonalInstances(MayaTkTestCase):
+    """fix_non_orthogonal_axes on instanced objects — instancing preserved.
+
+    Regression for the multi-instance failure: previously every flagged
+    member was permanently uninstanced one at a time.  With the default
+    ``instance_strategy="preserve"``, a group whose members share the same
+    skew is fixed by one master freeze + sibling compensation; only members
+    whose own divergent skew survives compensation fall back to uninstance.
+    """
+
+    def _make_sheared_group(self, shears, name="nio"):
+        src = cmds.polyCube(name=f"{name}_m0")[0]
+        members = [src]
+        for i in range(1, len(shears)):
+            members.append(cmds.instance(src, name=f"{name}_m{i}")[0])
+        for i, (m, sh) in enumerate(zip(members, shears)):
+            cmds.setAttr(f"{m}.shearXY", sh)
+            cmds.setAttr(f"{m}.translateX", i * 3.0)
+        return cmds.ls(members, long=True)
+
+    def _world_verts(self, obj, count=8):
+        return [
+            cmds.xform(f"{obj}.vtx[{i}]", q=True, ws=True, t=True)
+            for i in range(count)
+        ]
+
+    def _shared_parent_count(self, member):
+        shape = cmds.listRelatives(member, shapes=True, fullPath=True)[0]
+        return len(cmds.listRelatives(shape, allParents=True) or [])
+
+    def test_shared_skew_group_fixed_in_place(self):
+        members = self._make_sheared_group([0.4, 0.4, 0.4])
+        self.assertEqual(
+            len(TransformDiagnostics.get_non_orthogonal(members)), 3
+        )
+        before = {m: self._world_verts(m) for m in members}
+
+        fixed = TransformDiagnostics.fix_non_orthogonal_axes(members, quiet=True)
+
+        self.assertTrue(fixed)
+        self.assertEqual(TransformDiagnostics.get_non_orthogonal(members), [])
+        for m in cmds.ls(members, long=True):
+            self.assertEqual(self._shared_parent_count(m), 3)
+            for va, vb in zip(before[m], self._world_verts(m)):
+                for x, y in zip(va, vb):
+                    self.assertAlmostEqual(x, y, places=3)
+
+    def test_divergent_skew_falls_back_per_member(self):
+        members = self._make_sheared_group([0.4, 0.4, -0.6], name="niod")
+        before = {m: self._world_verts(m) for m in members}
+
+        TransformDiagnostics.fix_non_orthogonal_axes(members, quiet=True)
+
+        self.assertEqual(TransformDiagnostics.get_non_orthogonal(members), [])
+        for m in cmds.ls(members, long=True):
+            for va, vb in zip(before[m], self._world_verts(m)):
+                for x, y in zip(va, vb):
+                    self.assertAlmostEqual(x, y, places=3)
+        # m0/m1 (shared skew) stay instanced together; m2 was forked off.
+        self.assertEqual(self._shared_parent_count(members[0]), 2)
+        self.assertEqual(self._shared_parent_count(members[1]), 2)
+        self.assertEqual(self._shared_parent_count(members[2]), 1)
+
+    def test_uninstance_strategy_matches_legacy_behavior(self):
+        members = self._make_sheared_group([0.4, 0.4], name="niol")
+
+        TransformDiagnostics.fix_non_orthogonal_axes(
+            members, quiet=True, instance_strategy="uninstance"
+        )
+
+        self.assertEqual(TransformDiagnostics.get_non_orthogonal(members), [])
+        for m in cmds.ls(members, long=True):
+            self.assertEqual(self._shared_parent_count(m), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

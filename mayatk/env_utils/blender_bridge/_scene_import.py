@@ -235,7 +235,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         **script_opts: Any,
     ) -> "ptk.ScriptRunResult":
         """Convert *src_path* to *out_path* in a fresh headless Blender (blocking)."""
-        src = os.path.abspath(os.path.expandvars(str(src_path)))
+        src = os.path.abspath(os.path.expanduser(os.path.expandvars(str(src_path))))
         if not os.path.isfile(src):
             raise FileNotFoundError(f"Blender scene not found: {src}")
         if not src.lower().endswith(SUPPORTED_EXTENSIONS):
@@ -349,7 +349,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             **script_opts: Blender-side knobs (``embed_textures`` /
                 ``include_animation``; ``embed_textures`` is FBX-route only).
         """
-        src = os.path.abspath(os.path.expandvars(str(src_path)))
+        src = os.path.abspath(os.path.expanduser(os.path.expandvars(str(src_path))))
         if os.path.splitext(src)[1].lower() in USD_EXTENSIONS:
             # USD fast path: native import, no headless-Blender round-trip at all.
             from mayatk.env_utils.usd import UsdUtils
@@ -457,7 +457,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
 
     def bake(self, fbx_path: str, out_path: str, *, timeout: float = 600) -> Any:
         """Bake *fbx_path* into the .ma at *out_path* in a fresh ``mayapy`` (blocking)."""
-        fbx = os.path.abspath(os.path.expandvars(str(fbx_path)))
+        fbx = os.path.abspath(os.path.expanduser(os.path.expandvars(str(fbx_path))))
         if not os.path.isfile(fbx):
             raise FileNotFoundError(f"FBX not found: {fbx}")
         mayapy = self.require_mayapy()
@@ -516,7 +516,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         Returns:
             str: Path to the cached ``.ma`` — pass it to ``cmds.file(reference=True)``.
         """
-        src = os.path.abspath(os.path.expandvars(str(src_path)))
+        src = os.path.abspath(os.path.expanduser(os.path.expandvars(str(src_path))))
         ext = os.path.splitext(src)[1].lower()
         if ext not in BAKE_SOURCE_EXTENSIONS:
             raise ValueError(
@@ -591,11 +591,26 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         self, fbx_path: str, fbx_options: Optional[Dict[str, Any]] = None
     ) -> List[str]:
         """Import *fbx_path* into the current scene; return ALL new nodes
-        (the manifest apply needs the shading engines, not just transforms)."""
+        (the manifest apply needs the shading engines, not just transforms).
+
+        Deterministic baseline first: the plugin's import options are global
+        and sticky (the user's last interactive FBX import shapes this one),
+        and the factory default mode "merge" can RETARGET animation onto
+        same-named nodes already in the scene -- reset, then pin "add". The
+        import mirror of the conversion template's FBXResetExport rule;
+        best-effort, so a plugin build missing a command can't block the
+        import.
+        """
         import maya.cmds as cmds
 
-        if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
-            cmds.loadPlugin("fbxmaya", quiet=True)
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        FbxUtils.load_plugin()
+        try:
+            FbxUtils.reset_import()
+        except RuntimeError as e:
+            self.logger.debug(f"FBXResetImport unavailable: {e}")
+        FbxUtils._apply_import_options({"FBXImportMode": "add"})
         options = dict(
             i=True,
             type="FBX",

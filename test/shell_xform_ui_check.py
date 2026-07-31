@@ -90,8 +90,60 @@ def main():
         f"{collapsed}",
     )
 
-    check("snap toggle installed", getattr(slots, "_snap_toggle", None) is not None)
-    check("snap defaults off", slots._snap_enabled() is False)
+    # ---- tri-state snap button (off / grid / shell)
+    # `cmb_move_scope_init` installs on the panel's real settings key, so the
+    # restored value is whatever the user last left the panel on. Read that the
+    # button exists, then re-install on a throwaway key before touching state:
+    # asserting "defaults off" against the live key would fail for anyone who
+    # had left it on shell, and cycling it would overwrite their choice. (uitk's
+    # own suite sandboxes QSettings from a conftest, which a standalone script
+    # like this never loads.)
+    check("snap button installed", getattr(slots, "_snap_action", None) is not None)
+    check(
+        "the restored mode is a valid cycle position",
+        slots._snap_mode() in (ShellXformSlots._SNAP_OFF, ShellXformSlots._SNAP_GRID,
+                               ShellXformSlots._SNAP_SHELL),
+        f"{slots._snap_mode()}",
+    )
+
+    # `settings_key=False` opts out of persistence entirely, so this writes
+    # nothing at all — not even a stray probe key.
+    action = combo.option_box.set_action(
+        states=slots._snap_states(), settings_key=False
+    )
+    slots._snap_action = action
+    check(
+        "an unpersisted install defaults off",
+        slots._snap_mode() == ShellXformSlots._SNAP_OFF,
+        f"{slots._snap_mode()}",
+    )
+
+    # Clicking cycles off -> grid -> shell -> off, and `_snap_mode` must track
+    # it: the cycle index IS the mode the move path reads.
+    seen = []
+    for _ in range(4):
+        action.current_state = (slots._snap_mode() + 1) % 3
+        seen.append(slots._snap_mode())
+    check(
+        "cycling the button walks the three modes and wraps",
+        seen == [
+            ShellXformSlots._SNAP_GRID,
+            ShellXformSlots._SNAP_SHELL,
+            ShellXformSlots._SNAP_OFF,
+            ShellXformSlots._SNAP_GRID,
+        ],
+        f"{seen}",
+    )
+
+    states = slots._snap_states()
+    colors = [s.get("color") for s in states]
+    check("three states, each tinted, all tints distinct",
+          len(states) == 3 and all(colors) and len(set(colors)) == 3, f"{colors}")
+    check("shell snap carries its own icon",
+          states[ShellXformSlots._SNAP_SHELL]["icon"]
+          != states[ShellXformSlots._SNAP_GRID]["icon"],
+          f"{[s['icon'] for s in states]}")
+    check("every state has a tooltip", all(s.get("tooltip") for s in states))
 
     # The option-box wrap reparents the combo; its grid siblings must survive.
     check(

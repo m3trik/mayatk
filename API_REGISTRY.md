@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-07-29_
+_Generated: 2026-07-31_
 
 ## Index
 
@@ -916,11 +916,14 @@ Consumer-facing segment discovery for sequencer + manifest.
 <a id="cam_utils--_cam_utils"></a>
 ### `cam_utils/_cam_utils.py`
 
-- **[`class CamUtils(ptk.HelpMixin)`](mayatk/mayatk/cam_utils/_cam_utils.py#L18)**
+- **[`class CamUtils(ptk.HelpMixin)`](mayatk/mayatk/cam_utils/_cam_utils.py#L19)**
   - `CamUtils.group_cameras(name='cameras', non_default=True, root_only=False, hide_group=False)` *(static)* — Group cameras in the scene based on the provided parameters.
   - `CamUtils.toggle_safe_frames(cls)` *(class)* — Toggle display of the film gate for the current camera.
   - `CamUtils.get_current_cam()` *(static)* — Get the currently active camera.
   - `CamUtils.create_camera_from_view(name='camera#')` *(static)* — Create a new camera based on the current view.
+  - `CamUtils.get_view_state(cls, camera=None)` *(class)* — Snapshot a camera's placement and lens clipping, for a later restore.
+  - `CamUtils.set_view_state(cls, state)` *(class)* — Restore a snapshot taken by :meth:`get_view_state`.
+  - `CamUtils.fit_camera_clipping(cls, objects=None, camera=None, buffer=0.25)` *(class)* — Widen a camera's clip planes until `objects` can't be clipped by them.
   - `CamUtils.adjust_camera_clipping(cls, camera=None, near_clip=None, far_clip=None)` *(class)* — Adjusts the near and far clipping planes of one or multiple cameras.
   - `CamUtils.switch_viewport_camera(cls, camera_name)` *(class)* — Unified method to switch to a camera, creating custom ones if needed.
 
@@ -928,7 +931,8 @@ Consumer-facing segment discovery for sequencer + manifest.
 ### `core_utils/_core_utils.py`
 
 - **[`class BoundingBox`](mayatk/mayatk/core_utils/_core_utils.py#L20)** — Plain-data bounding box with ``MVector`` extents.
-- **[`class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal)`](mayatk/mayatk/core_utils/_core_utils.py#L171)**
+  - `BoundingBox.corners(self)` *(property)* — The box's 8 corner ``MVector``s (every min/max combination per axis).
+- **[`class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal)`](mayatk/mayatk/core_utils/_core_utils.py#L187)**
   - `CoreUtils.undo_chunk(name: str = '')` *(static)* — Group operations into a single Maya undo chunk.
   - `CoreUtils.suspended_refresh()` *(static)* — Suspend viewport refresh for the duration of a bulk operation.
   - `CoreUtils.selected(func: Callable) -> Callable` *(static)* — A decorator to pass the current selection to the target parameter if None is given.
@@ -1147,7 +1151,7 @@ Transform diagnostics and repair helpers.
 - **[`class TransformDiagnostics(_TransformDiagnosticsInternal)`](mayatk/mayatk/core_utils/diagnostics/transform_diag.py#L112)** — Operations for inspecting and fixing common transform issues.
   - `TransformDiagnostics.get_sheared(cls, objects: Optional[NodeSeq] = None, tolerance: Optional[float] = None) -> List[str]` *(class)* — Return the transforms carrying their own shear.
   - `TransformDiagnostics.get_non_orthogonal(cls, objects: Optional[NodeSeq] = None, tolerance: Optional[float] = None, detailed: bool = False) -> Union[List[str], Dict[str, dict]]` *(class)* — Return the transforms whose evaluated (world) axes are not perpendicular.
-  - `TransformDiagnostics.fix_non_orthogonal_axes(cls, objects: Optional[NodeSeq] = None, dry_run: bool = False, tolerance: Optional[float] = None, quiet: bool = False, break_connections: bool = False) -> List[str]` *(class)* — Fix non-orthogonal axes by freezing the offending transforms.
+  - `TransformDiagnostics.fix_non_orthogonal_axes(cls, objects: Optional[NodeSeq] = None, dry_run: bool = False, tolerance: Optional[float] = None, quiet: bool = False, break_connections: bool = False, instance_strategy: str = 'preserve', delete_history: bool = False) -> List[str]` *(class)* — Fix non-orthogonal axes by freezing the offending transforms.
 
 <a id="core_utils--diagnostics--uv_diag"></a>
 ### `core_utils/diagnostics/uv_diag.py`
@@ -1409,7 +1413,7 @@ Procedural draped-cloth (curtain) generator for Maya.
 <a id="edit_utils--macros"></a>
 ### `edit_utils/macros.py`
 
-- **[`class MacroManager(ptk.HelpMixin)`](mayatk/mayatk/edit_utils/macros.py#L25)** — Assign macro functions to hotkeys.
+- **[`class MacroManager(ptk.HelpMixin)`](mayatk/mayatk/edit_utils/macros.py#L26)** — Assign macro functions to hotkeys.
   - `MacroManager.set_macros(cls, *args)` *(class)* — Extends `set_macro` to accept a list of strings representing positional and keyword arguments.
   - `MacroManager.call_with_input(func, input_string)` *(static)* — Parses an input string into positional and keyword arguments, and
   - `MacroManager.set_macro(cls, name, key=None, cat=None, ann=None, default=False, delete_existing=True)` *(class)* — Sets a default runtime command with a keyboard shortcut.
@@ -1438,7 +1442,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `MacroManager.export_bindings(cls) -> Dict[str, dict]` *(class)* — The persist-worthy subset of the live bindings — every macro with a
   - `MacroManager.import_bindings(cls, data: Optional[Dict[str, dict]]) -> int` *(class)* — Apply a loaded binding set (the preset ``value_applier``): release
   - `MacroManager.show_editor(cls, parent=None)` *(class)* — Open the Macro Manager — the unified uitk ``ShortcutEditor`` over
-- **[`class DisplayMacros`](mayatk/mayatk/edit_utils/macros.py#L874)**
+- **[`class DisplayMacros`](mayatk/mayatk/edit_utils/macros.py#L875)**
   - `DisplayMacros.m_component_id_display()` *(static)* — Toggle Component Id Display through vertices, edges, faces, UVs, and off.
   - `DisplayMacros.m_normals_display()` *(static)* — Toggle face normals, vertex normals, tangents, and off.
   - `DisplayMacros.m_soft_edge_display()` *(static)* — Toggle Soft Edge Display.
@@ -1450,13 +1454,13 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `DisplayMacros.m_wireframe_toggle(objects) -> None` *(static)* — Toggle Wireframe Display on selected objects, or on all objects if none are selected.
   - `DisplayMacros.m_grid() -> bool` *(static)* — Toggle the grid.
   - `DisplayMacros.m_grid_and_image_planes() -> None` *(static)* — Toggle grid and image plane visibility together.
-  - `DisplayMacros.m_frame(objects) -> None` *(static)* — Frame the selection, cycling zoom level on repeated presses.
+  - `DisplayMacros.m_frame(cls, steps: int = 2, adjust_clipping: bool = True) -> None` *(class)* — Frame the selection at the ideal working distance;
   - `DisplayMacros.m_smooth_preview(cls, objects) -> None` *(class)* — Toggle smooth mesh preview.
   - `DisplayMacros.m_wireframe() -> None` *(static)* — Toggles the wireframe display state.
   - `DisplayMacros.m_material_override()` *(static)* — Toggle the viewport's default-material override.
   - `DisplayMacros.m_shading(cls) -> None` *(class)* — Toggles viewport display mode between wireframe, smooth shaded with textures off,
   - `DisplayMacros.m_lighting(cls) -> None` *(class)* — Toggles viewport lighting between different states: default, all lights, active lights,
-- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L1470)**
+- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L1495)**
   - `EditMacros.m_group(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditMacros.m_combine(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)` *(static)* — Combine multiple meshes.
   - `EditMacros.m_boolean(objects, repair_mesh=True, keep_boolean=True, **kwargs)` *(static)* — Perform a boolean operation on two meshes using cmds, managing shorthand and full parameter names d…
@@ -1464,7 +1468,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `EditMacros.m_paste_and_rename() -> None` *(static)* — Paste and rename by removing 'pasted__' prefix and reference file names,
   - `EditMacros.m_multi_component() -> None` *(static)* — Enable the multi-component selection mask.
   - `EditMacros.m_merge_vertices(objects, tolerance=0.001) -> None` *(static)* — Merge vertices within a small distance tolerance.
-- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L1727)**
+- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L1752)**
   - `SelectionMacros.m_object_selection() -> None` *(static)* — Set object selection mask.
   - `SelectionMacros.m_vertex_selection() -> None` *(static)* — Set vertex selection mask.
   - `SelectionMacros.m_edge_selection() -> None` *(static)* — Set edge selection mask.
@@ -1473,12 +1477,12 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `SelectionMacros.m_toggle_selectability(objects)` *(static)* — Toggle selectability of the given objects.
   - `SelectionMacros.m_toggle_UV_select_type() -> None` *(static)* — Toggles between UV shell and UV component selection.
   - `SelectionMacros.m_invert_component_selection() -> None` *(static)* — Invert the component selection on the currently selected objects.
-- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1890)**
+- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L1915)**
   - `UiMacros.m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None` *(static)* — Toggle UI toolbars and menu bar in sync.
-- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L1926)**
+- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L1951)**
   - `AnimationMacros.m_set_selected_keys(objects) -> None` *(static)* — Set keys for any attributes (channels) that are selected in the channel box.
   - `AnimationMacros.m_unset_selected_keys(objects) -> None` *(static)* — Un-set keys for any attributes (channels) that are selected in the channel box.
-- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L1953)**
+- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L1978)**
 
 <a id="edit_utils--mesh_graph"></a>
 ### `edit_utils/mesh_graph.py`
@@ -1681,10 +1685,10 @@ Import an FBX headlessly (mayapy) and save it as a ``.ma`` so a foreign scene ca
 
 Open a .blend headlessly (blender --background) and export it as FBX for a Maya import.
 
-- [`collect_texture_manifest(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L84) — Manifest entries for every textured material on an exportable object,
-- [`write_texture_manifest(entries, scene_materials, path)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L139) — Sidecar for the textures FBX cannot carry, consumed by BlenderSceneImport.
-- [`export_fbx(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L157) — Full-fidelity FBX export with per-flag tolerance across Blender versions.
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L191)
+- [`collect_texture_manifest(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L104) — Manifest entries for every textured material on an exportable object,
+- [`write_texture_manifest(entries, scene_materials, path)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L159) — Sidecar for the textures FBX cannot carry, consumed by BlenderSceneImport.
+- [`export_fbx(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L177) — Full-fidelity FBX export with per-flag tolerance across Blender versions.
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L211)
 
 <a id="env_utils--blender_bridge--templates--_import_scene_usd"></a>
 ### `env_utils/blender_bridge/templates/_import_scene_usd.py`
@@ -1741,6 +1745,7 @@ Import the bridged FBX into Blender, with optional clean-slate and frame-on-impo
 
 - **[`class FbxUtils(ptk.HelpMixin)`](mayatk/mayatk/env_utils/fbx_utils.py#L18)** — Low-level utilities for FBX import/export operations in Maya.
   - `FbxUtils.load_plugin()` *(static)* — Ensure the fbxmaya plugin is loaded.
+  - `FbxUtils.reset_import()` *(static)* — Reset the FBX plugin's global IMPORT options to factory defaults.
   - `FbxUtils.set_fbx_options(options: Dict[str, Any])` *(static)* — Apply FBX export options via MEL commands.
   - `FbxUtils.load_preset(preset_path: str)` *(static)* — Load an FBX export preset file.
   - `FbxUtils.export(cls, file_path: str, objects: Optional[List] = None, preset_file: Optional[str] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True) -> str` *(class)* — Export geometry to an FBX file.
@@ -2241,7 +2246,7 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 <a id="mat_utils--_mat_utils"></a>
 ### `mat_utils/_mat_utils.py`
 
-- **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L340)**
+- **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L406)**
   - `MatUtils.resolve_path(path: str, search: bool = True) -> Union[str, None]` *(static)* — Resolve a texture path, expanding env vars and ``<UDIM>`` tokens.
   - `MatUtils.get_mats(objs=None, as_strings=True, mat_type=None) -> List[str]` *(static)* — Returns the set of materials assigned to a given list of objects or components.
   - `MatUtils.group_objects_by_material(objects, cluster_by_distance=False, threshold=10000.0)` *(static)* — Groups objects based on their assigned material(s).
@@ -2254,6 +2259,12 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
   - `MatUtils.format_mat_info_html(cls, records: List[Dict[str, Any]]) -> str` *(class)* — Render :meth:`get_mat_info` output as styled HTML (``pythontk.MatReport``).
   - `MatUtils.get_scene_mats(inc=None, exc=None, node_type=None, sort: bool = False, as_dict: bool = False, exclude_defaults: bool = True, exclude_utility_nodes: bool = True, exc_classification=None, **filter_kwargs)` *(static)* — Retrieves all materials from the current scene, with flexible name/type filtering.
   - `MatUtils.get_connected_shaders(cls, file_nodes) -> List[str]` *(class)* — Return surface shaders connected to one or more file nodes, ignoring intermediates.
+  - `MatUtils.connect_to_channels(source_plug: str, node: str, attr: str) -> bool` *(static)* — Connect a single-channel `source_plug` into a (possibly compound) slot.
+  - `MatUtils.get_mats_by_scope(cls, scope: str = 'selected', mat_type: Optional[str] = None) -> List[str]` *(class)* — Materials in the given scope.
+  - `MatUtils.find_opacity_source(cls, mat: str) -> Optional[str]` *(class)* — The file node in `mat`'s network that carries its opacity.
+  - `MatUtils.enable_viewport_opacity(cls, materials=None, transparency_algorithm: Optional[str] = None, search_disk: bool = True) -> Dict[str, str]` *(class)* — Wire every opacity map in `materials` so it shows in the viewport.
+  - `MatUtils.set_transparency_algorithm(cls, algorithm: str) -> bool` *(class)* — Set the Viewport 2.0 transparency mode.
+  - `MatUtils.ensure_transparent_graph(cls, mat: str) -> bool` *(class)* — Load ``Standard_Transparent.sfx`` onto a StingrayPBS node if needed.
   - `MatUtils.get_file_nodes(cls, materials: Optional[List[str]] = None, raw: bool = False, return_type: str = 'fileNode', exc_classification=None) -> list` *(class)* — Returns file node info in any column order based on return_type.
   - `MatUtils.get_fav_mats()` *(static)* — Retrieves the list of favorite materials in Maya.
   - `MatUtils.is_mat_assigned(mat: object) -> bool` *(static)* — True iff *mat*'s shading engines contain at least one DAG member.
@@ -2266,6 +2277,7 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
   - `MatUtils.create_shading_group(shader, name=None, assign_to=None)` *(static)* — Create a shading group for *shader* and optionally assign objects.
   - `MatUtils.create_stingray_shader(name, opacity=False, opacity_mode=None)` *(static)* — Create a StingrayPBS shader by loading a ShaderFX preset graph.
   - `MatUtils.find_by_mat_id(cls, material: str, objects: Optional[List[str]] = None, shell: bool = False) -> List[str]` *(class)* — Find objects or faces by the material ID.
+  - `MatUtils.find_unassigned(cls, objects: Optional[List[str]] = None, include_default: bool = True) -> List[str]` *(class)* — Objects carrying no material — the complement of :meth:`find_by_mat_id`.
   - `MatUtils.collect_material_paths(materials: Optional[List[str]] = None, attributes: Optional[List[str]] = None, inc_mat_name: bool = False, inc_path_type: bool = False, resolve_full_path: bool = False) -> Union[List[str], List[Tuple[str, ...]]]` *(static)* — Collects specified attributes file paths for given materials.
   - `MatUtils.remap_file_nodes(file_paths: List[str], target_dir: str, silent: bool = False, limit_to_nodes: Optional[List[str]] = None, as_strings: bool = True) -> List[str]` *(static)* — Internal helper to remap file nodes to target_dir, preserving relative subfolders inside sourceimag…
   - `MatUtils.remap_texture_paths(cls, materials: Optional[List[str]] = None, new_dir: Optional[str] = None, silent: bool = False, file_nodes: Optional[List[str]] = None, objects: Optional[List[str]] = None, as_strings: bool = True) -> None` *(class)* — Remaps file texture paths for materials to new_dir.
@@ -2343,7 +2355,7 @@ Emissive groups — named face sets that gate emissive regions at runtime.
 <a id="mat_utils--game_shader"></a>
 ### `mat_utils/game_shader.py`
 
-- **[`class GameShader(ptk.LoggingMixin, _GameShaderInternal)`](mayatk/mayatk/mat_utils/game_shader.py#L30)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
+- **[`class GameShader(ptk.LoggingMixin, _GameShaderInternal)`](mayatk/mayatk/mat_utils/game_shader.py#L111)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
   - `GameShader.create_network(self, textures: List[str], name: str = '', prefix: str = '', suffix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]` — Create a PBR shader network with textures.
   - `GameShader.setup_stringray_node(self, name: str, opacity: bool) -> object` — Initializes and sets up a StingrayPBS shader node in Maya.
   - `GameShader.setup_standard_surface_node(self, name: str, opacity: bool) -> object` — Creates and sets up a Maya Standard Surface shader node.
@@ -2355,7 +2367,7 @@ Emissive groups — named face sets that gate emissive regions at runtime.
   - `GameShader.filter_for_correct_metallic_map(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]` — Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…
   - `GameShader.filter_for_mask_map(self, textures: List[str], output_extension: str = 'png') -> List[str]` — Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
   - `GameShader.filter_for_correct_base_color_map(self, textures: List[str], use_albedo_transparency: bool) -> List[str]` — Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…
-- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1655)**
+- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L1765)**
   - `GameShaderSlots.header_init(self, widget)` — Initialize the header widget.
   - `GameShaderSlots.lbl_graph_material(self)` — Graph the material in the Hypershade.
   - `GameShaderSlots.mat_name(self) -> str` *(property)* — Get the mat name from the user input text field.
@@ -2628,9 +2640,8 @@ Lightweight material state snapshot and restore.
 <a id="mat_utils--render_opacity--material_mode"></a>
 ### `mat_utils/render_opacity/material_mode.py`
 
-- **[`class OpacityMaterialMode(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/render_opacity/material_mode.py#L18)** — Implements the 'material' mode for RenderOpacity.
+- **[`class OpacityMaterialMode(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/render_opacity/material_mode.py#L16)** — Implements the 'material' mode for RenderOpacity.
   - `OpacityMaterialMode.get_stingray_mats(cls, objects: Optional[list] = None) -> list` *(class)* — Return unique StingrayPBS materials assigned to *objects*.
-  - `OpacityMaterialMode.ensure_transparent_graph(cls, mat) -> bool` *(class)* — Load Standard_Transparent.sfx onto a StingrayPBS node if needed.
   - `OpacityMaterialMode.create(cls, objects) -> Dict[str, Dict]` *(class)* — Expose StingrayPBS transparency (load graph).
   - `OpacityMaterialMode.ensure_connections(cls, objects) -> None` *(class)* — Re-establish ``Transform.opacity → Material.opacity`` proxy
   - `OpacityMaterialMode.remove(cls, objects)` *(class)* — Remove material-mode artifacts from *objects*.
@@ -2897,7 +2908,8 @@ Bake an object's shaded surface (material under scene lighting) to a texture.
   - `NodeUtils.get_instances(objects=None, return_parent_objects=False)` *(static)* — Get any instances of given object, or if None given, get all instanced objects in the scene.
   - `NodeUtils.replace_with_instances(cls, objects=None, append='', freeze_transforms=False, center_pivot=True, delete_history=True, retain_bbox_scale=False, retain_bbox_per_axis=False)` *(class)* — Replace target objects with instances of the source object.
   - `NodeUtils.instance(cls, *args, **kwargs)` *(class)* — Deprecated: Use replace_with_instances instead.
-  - `NodeUtils.uninstance(cls, objects, freeze=False)` *(class)* — Un-Instance the given objects.
+  - `NodeUtils.get_instanced_shapes(cls, node, intermediate: bool = True) -> List[str]` *(class)* — Every shape under *node* that is shared with another transform.
+  - `NodeUtils.uninstance(cls, objects, freeze=False, delete_history=False, quiet=True)` *(class)* — Un-Instance the given objects.
   - `NodeUtils.filter_duplicate_instances(nodes) -> List[str]` *(static)* — Keep only one transform per instance group.
 
 <a id="node_utils--attributes--_attributes"></a>
@@ -3397,7 +3409,7 @@ External auto-unwrap round-trip: OBJ out, engine, OBJ back, UVs transferred.
 
 xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
 
-- **[`class PackUvsResult`](mayatk/mayatk/uv_utils/_uv_pack.py#L51)** — Per-object outcome of a :meth:`mayatk.UvUtils.pack_uvs` run.
+- **[`class PackUvsResult`](mayatk/mayatk/uv_utils/_uv_pack.py#L61)** — Per-object outcome of a :meth:`mayatk.UvUtils.pack_uvs` run.
 
 <a id="uv_utils--_uv_utils"></a>
 ### `uv_utils/_uv_utils.py`
@@ -3409,6 +3421,7 @@ xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
   - `UvUtils.move_to_uv_space(objects, u, v, relative=True)` *(static)* — Move objects to the given u and v coordinates.
   - `UvUtils.get_uv_bounds(objects) -> Optional[Tuple[float, float, float, float]]` *(static)* — The UV-space bounding box of *objects*, as one box over the whole input.
   - `UvUtils.gather_to_udim(cls, objects, udim: Optional[int] = None, map_size: int = 4096) -> Optional[int]` *(class)* — Move UV shells sitting outside the target UDIM tile into it.
+  - `UvUtils.get_neighbor_shell_bounds(objects) -> List[Tuple[float, float, float, float]]` *(static)* — Per-shell UV boxes that share *objects*' UV space, excluding their own.
   - `UvUtils.mirror_uvs(cls, objects, axis: str = 'u', pivot: tuple | None = None, per_shell: bool = True, preserve_position: bool = True)` *(class)* — Mirror UVs across U or V.
   - `UvUtils.flip_uvs(cls, objects, axis: str = 'u', pivot: tuple | None = None, per_shell: bool = True, preserve_position: bool = True)` *(class)* — Backward-compatible alias for :meth:`mirror_uvs`.
   - `UvUtils.get_uv_shell_sets(objects=None, returned_type='shell', whole_shells=False)` *(static)* — Get UV shells and their corresponding sets of faces.
@@ -3436,7 +3449,7 @@ xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
 <a id="uv_utils--rizom_bridge--_rizom_bridge"></a>
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 
-- **[`class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal)`](mayatk/mayatk/uv_utils/rizom_bridge/_rizom_bridge.py#L70)**
+- **[`class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal)`](mayatk/mayatk/uv_utils/rizom_bridge/_rizom_bridge.py#L69)**
   - `RizomUVBridge.rizom_path(self)` *(property)* — Resolve the RizomUV executable path.
   - `RizomUVBridge.rizom_version(self) -> 'tuple[int, ...]'` *(property)* — The installed Rizom version, parsed from the install-dir name.
   - `RizomUVBridge.export_path(self)` *(property)* — Lazy initialization of the export path.
@@ -3477,9 +3490,9 @@ Slots for the RizomUV bridge panel.
 
 Dedicated UV shell-transform panel.
 
-- **[`class ShellXformSlots(ptk.LoggingMixin)`](mayatk/mayatk/uv_utils/shell_xform.py#L36)** — Switchboard slots for the Shell Xform panel (``shell_xform.ui``).
+- **[`class ShellXformSlots(ptk.LoggingMixin)`](mayatk/mayatk/uv_utils/shell_xform.py#L37)** — Switchboard slots for the Shell Xform panel (``shell_xform.ui``).
   - `ShellXformSlots.header_init(self, widget)` — Header menu — Open UV Editor + panel help.
-  - `ShellXformSlots.cmb_move_scope_init(self, widget)` — Move scope — how far one arrow press travels, plus the snap toggle.
+  - `ShellXformSlots.cmb_move_scope_init(self, widget)` — Move scope — how far one arrow press travels, plus the snap button.
   - `ShellXformSlots.b023(self)` — Move To UV Space: Left
   - `ShellXformSlots.b024(self)` — Move To UV Space: Down
   - `ShellXformSlots.b025(self)` — Move To UV Space: Up
@@ -3512,14 +3525,15 @@ Dedicated UV shell-transform panel.
 <a id="xform_utils--_xform_utils"></a>
 ### `xform_utils/_xform_utils.py`
 
-- **[`class XformUtils(_XformUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L451)** — Transform utilities for Maya objects.
+- **[`class XformUtils(_XformUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L574)** — Transform utilities for Maya objects.
   - `XformUtils.convert_axis(value, invert=False, ortho=False, to_integer=False)` *(static)* — Converts between axis representations and optionally inverts the axis or returns an orthogonal axis.
   - `XformUtils.move_to(cls, source, target, pivot='center', group_move=False)` *(class)* — Move source object(s) to align with the target object(s).
   - `XformUtils.drop_to_grid(objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)` *(static)* — Align objects to Y origin on the grid using a helper plane.
   - `XformUtils.match_scale(cls, a, b, scale=True, average=False)` *(class)* — Scale each of the given objects in 'a' to the combined bounding box of the objects in 'b'.
   - `XformUtils.scale_connected_edges(objects, scale_factor=1.1) -> None` *(static)* — Scales each set of connected edges separately, either uniformly or non-uniformly.
   - `XformUtils.store_transforms(objects, prefix='original', accumulate=True, traverse=False, channels=None)` *(static)* — Capture the current local TRS as a cumulative per-channel bake history.
-  - `XformUtils.freeze_transforms(cls, objects, center_pivot=0, force=True, delete_history=False, freeze_children=False, unlock_children=True, connection_strategy='preserve', from_channel_box=False, **kwargs)` *(class)* — Freezes transformations on the given objects.
+  - `XformUtils.freeze_instanced_group(cls, master: str, translate: bool = True, rotate: bool = True, scale: bool = True, quiet: bool = True) -> bool` *(class)* — Freeze *master* while keeping its instance group intact.
+  - `XformUtils.freeze_transforms(cls, objects, center_pivot=0, force=True, delete_history=False, freeze_children=False, unlock_children=True, connection_strategy='preserve', instance_strategy='skip', from_channel_box=False, **kwargs)` *(class)* — Freezes transformations on the given objects.
   - `XformUtils.freeze_to_opm(objects, reset_rotate_axis: bool = False, reset_joint_orient: bool = False) -> None` *(static)* — Freeze transforms into offsetParentMatrix while preserving pivot placement.
   - `XformUtils.unfreeze_to_parent(objects, traverse: bool = False, preserve_root: bool = True) -> List[str]` *(static)* — Push a child transform's local matrix up into its parent and zero the child.
   - `XformUtils.restore_transforms(objects, prefix='original', delete_attrs=True, channels=None, traverse=False)` *(static)* — Compose stored bake history with current local TRS, per channel.

@@ -1,7 +1,6 @@
 import os
 import re
 import subprocess
-import tempfile
 from pathlib import Path
 
 try:
@@ -88,6 +87,8 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         self.timeout = timeout
         self._export_path = None  # Default to None, to be set during processing
         self._script_path = None  # Stores the path to the UV script file
+        self._temp = None  # Round-trip temp store (see _temp_store)
+        self._lua_path = None  # Store-allocated path the generated Lua is written to
         # Mapping of exported (temporary suffixed) transform short names -> original transform str
         self._export_name_map = {}
         # Suffix applied to temporary duplicate nodes to avoid FBX re-import overwriting originals
@@ -147,16 +148,58 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         return version
 
     @property
+    def _temp_store(self) -> "ptk.TempArtifacts":
+        """Lifecycle owner of the round-trip's temp FBX + Lua script.
+
+        Both used to be FIXED ``%TEMP%`` names (``rizomuv_exported.fbx`` /
+        ``riz_uv_script.lua``) shared by every process running a bridge -- a
+        second Maya, the Blender twin (byte-identical names), and this repo's
+        own test suite. RizomUV keeps re-reading the ``-cfi`` script *after*
+        launch (the same mtime-watch behaviour the send flow designs around),
+        so a concurrent run replacing the script mid-flight left RizomUV
+        exiting 0 without ever reaching ``ZomSave`` -- reproduced, and the
+        cause of a user-reported "exited cleanly but did not modify the FBX".
+
+        ``"scoped"`` is this flow's exact shape: the run blocks until RizomUV
+        exits, so a clean run deletes both payloads while a **failure keeps
+        them** (logged) -- which is what makes the no-save error's "open the
+        script in RizomUV's Script Editor" advice actionable. Allocation also
+        age-sweeps same-prefix leftovers, so crashed runs can't accumulate.
+        """
+        if self._temp is None:
+            # Prefer ~/temp when it exists -- the original export dir, kept
+            # because it can have friendlier permissions than %TEMP%.
+            home_temp = Path.home() / "temp"
+            self._temp = ptk.TempArtifacts(
+                "rizom_roundtrip",
+                policy="scoped",
+                dir=str(home_temp) if home_temp.exists() else None,
+            )
+        return self._temp
+
+    def _release_temp_payloads(self) -> None:
+        """Delete this run's temp payloads and forget the paths they used.
+
+        Forgetting matters: ``cleanup`` *untracks* what it removed, so a
+        second run through the same bridge (the panel keeps one per session)
+        would rewrite the same now-untracked paths and never clean them
+        again. Only the paths the store actually allocated are dropped -- an
+        explicitly assigned ``export_path`` was never tracked, so it is never
+        removed and never forgotten.
+        """
+        if self._temp is None:
+            return
+        removed = self._temp.cleanup()
+        for attr in ("_export_path", "_lua_path"):
+            path = getattr(self, attr)
+            if path is not None and str(path) in removed:
+                setattr(self, attr, None)
+
+    @property
     def export_path(self):
         """Lazy initialization of the export path."""
         if self._export_path is None:
-            # Try using a different temp directory that might have better permissions
-            temp_dir = (
-                Path.home() / "temp"
-                if (Path.home() / "temp").exists()
-                else Path(tempfile.gettempdir())
-            )
-            self._export_path = temp_dir / "rizomuv_exported.fbx"
+            self._export_path = Path(self._temp_store.path(extension=".fbx"))
         return self._export_path.as_posix()
 
     @export_path.setter
@@ -296,6 +339,12 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             self._transfer_uvs_and_cleanup(imported_transforms, original_transforms)
 
         self._announce_handoff(preset or "script", len(original_transforms))
+
+        # The FBX has been consumed and its UVs are on the originals, so both
+        # payloads can go. A raise above skips this on purpose: the scoped
+        # policy keeps them (logged) so a failure stays debuggable -- the
+        # no-save error tells the user to open that very script in RizomUV.
+        self._release_temp_payloads()
 
     def _import_objects(self):
         """Import the RizomUV-processed FBX and return its transform nodes."""
@@ -600,11 +649,47 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             f"(mtime_changed={post_mtime != pre_mtime})"
         )
         if post_mtime == pre_mtime and post_size == pre_size:
-            raise RuntimeError(
-                "RizomUV exited cleanly but did not modify the FBX. The "
-                "Lua script likely errored before reaching ZomSave -- "
-                "enable debug logging to see the Lua traceback."
-            )
+            raise RuntimeError(self._no_save_diagnosis(full_script_content))
+
+    def _no_save_diagnosis(self, expected_script: str) -> str:
+        """Explain a clean RizomUV exit that never reached ``ZomSave``.
+
+        RizomUV writes nothing to stdout/stderr in ``-cfi`` mode, so there is
+        no Lua traceback to enable -- the script itself is the only evidence.
+        The first thing worth ruling out is a mid-run overwrite of that
+        script (see :meth:`_process_tag` for why that used to happen and how
+        the paths now prevent it), so compare what's on disk against what we
+        handed RizomUV instead of guessing.
+        """
+        # Both rendered OS-native: ``export_path`` is a POSIX string (Rizom's
+        # Lua wants forward slashes) and ``_script_path`` a Path, so quoting
+        # them as-is mixed separators in one message the user has to act on.
+        lines = [
+            "RizomUV exited cleanly but never wrote the FBX -- the Lua "
+            "script stopped before ZomSave.",
+            f"Script: {Path(self._script_path)}",
+            f"FBX:    {Path(self.export_path)}",
+        ]
+        try:
+            on_disk = Path(self._script_path).read_text(encoding="utf-8")
+        except OSError as e:
+            lines.append(f"The script file is no longer readable: {e}")
+        else:
+            if on_disk != expected_script:
+                lines.append(
+                    "The script on disk no longer matches what the bridge "
+                    "wrote -- another process replaced it while RizomUV was "
+                    "running (RizomUV re-reads the -cfi file after launch). "
+                    "Run one bridge at a time."
+                )
+        lines.append(
+            "RizomUV prints no diagnostics in -cfi mode, so no amount of "
+            "debug logging will surface the failing Lua line -- open the "
+            "script above in RizomUV's Script Editor and run it there. "
+            "Degenerate input UVs (every coordinate collapsed onto one "
+            "point) are one known trigger."
+        )
+        return "\n".join(lines)
 
     def _transfer_uvs_and_cleanup(self, imported_objects, original_objects):
         """Transfer UVs from imported objects back to the original objects and clean up.
@@ -833,11 +918,17 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
 
         ``_script_path`` must stay a ``Path`` -- the public ``script_path``
         property calls ``.as_posix()`` on it.
+
+        One store-allocated path per bridge, reused across the two writes a
+        run makes (the raw preset via the ``script_path`` setter, then the
+        wrapped script): the second must *replace* the first, and RizomUV is
+        handed the path only after both have happened.
         """
-        script_path = Path(tempfile.gettempdir(), "riz_uv_script.lua")
-        script_path.write_text(script_contents, encoding="utf-8")
-        self._script_path = script_path
-        return script_path
+        if self._lua_path is None:
+            self._lua_path = Path(self._temp_store.path(extension=".lua"))
+        self._lua_path.write_text(script_contents, encoding="utf-8")
+        self._script_path = self._lua_path
+        return self._lua_path
 
     def _announce_handoff(self, preset: str, transform_count: int) -> None:
         """Log the final success summary at the end of :meth:`process_with_rizomuv`.
@@ -869,11 +960,13 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
           we never re-import, so the FBX can carry the original names.
         * Launches RizomUV detached so Maya isn't blocked while the
           artist works in RizomUV.
-        * Writes to **per-send unique** FBX + Lua paths. Rizom 2020.1's
-          ``-cfi`` mode watches the script's mtime and re-executes on
-          change; a fixed path would let a second send clobber a still-
-          open earlier session. Each send gets its own files so prior
-          sessions stay untouched.
+        * Writes to **per-send unique** FBX + Lua paths (``ptk.TempArtifacts``,
+          ``detached``). Rizom 2020.1's ``-cfi`` mode watches the script's
+          mtime and re-executes on change; a fixed path would let a second
+          send clobber a still-open earlier session. The round-trip uses the
+          same primitive with the ``scoped`` policy (see :meth:`_temp_store`)
+          -- a send can't be scoped, since the session it hands off to may
+          outlive Maya and never signals completion.
 
         Parameters:
             objects: Maya transform nodes to export.
@@ -893,14 +986,23 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
 
         self._params = params or {}
 
-        # Per-send unique paths so prior Rizom sessions (which the -cfi
-        # flag keeps watching via mtime) are not disturbed by a subsequent
-        # send. Local variables -- intentionally not stored on self -- so
-        # the round-trip flow's export_path / script_path state is also
-        # untouched.
-        send_tag = self._make_send_tag()
-        send_fbx_path = self._make_send_fbx_path(send_tag)
-        send_script_path = self._make_send_script_path(send_tag)
+        # Per-send unique paths so prior Rizom sessions (which the -cfi flag
+        # keeps watching via mtime) are not disturbed by a subsequent send.
+        # ``detached`` is the honest policy: the session may outlive us and
+        # there is no completion signal, so nothing here may delete these --
+        # allocation age-sweeps the same prefix instead, which is what keeps
+        # a send-per-click habit from filling the temp dir forever. Local
+        # stores, not kept on self, so the round-trip's export_path /
+        # script_path state stays untouched.
+        base = Path(self.export_path)
+        send_fbx_path = Path(
+            ptk.TempArtifacts(
+                f"{base.stem}_send", policy="detached", dir=str(base.parent)
+            ).path(extension=base.suffix)
+        ).as_posix()
+        send_script_path = Path(
+            ptk.TempArtifacts("riz_send", policy="detached").path(extension=".lua")
+        ).as_posix()
 
         self._export_for_send(original_transforms, send_fbx_path)
 
@@ -932,28 +1034,6 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             raise RuntimeError(f"Failed to launch RizomUV: {exe}")
 
         self._announce_send(len(original_transforms))
-
-    @staticmethod
-    def _make_send_tag() -> str:
-        """Compact unique suffix for per-send file paths.
-
-        Nanosecond resolution -- two sends triggered back-to-back from
-        the same Python interpreter are guaranteed distinct, and across
-        Maya instances the collision window is effectively zero.
-        """
-        import time
-
-        return f"{time.time_ns():x}"
-
-    def _make_send_fbx_path(self, send_tag: str) -> str:
-        """Return a unique-per-send FBX path under the export dir."""
-        base = Path(self.export_path)
-        return (base.parent / f"{base.stem}_send_{send_tag}{base.suffix}").as_posix()
-
-    @staticmethod
-    def _make_send_script_path(send_tag: str) -> str:
-        """Return a unique-per-send Lua path under the system temp dir."""
-        return Path(tempfile.gettempdir(), f"riz_send_{send_tag}.lua").as_posix()
 
     def _export_for_send(self, original_transforms, export_path):
         """Export *original_transforms* directly to FBX at *export_path*.

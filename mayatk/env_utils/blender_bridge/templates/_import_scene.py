@@ -26,6 +26,7 @@ user-pickable send recipe; it belongs to the pull engine).
 
 # Dependency-free Blender Python: no mayatk/blendertk/pythontk imports (only
 # Blender's own bundled modules are guaranteed in the child process).
+import glob
 import json
 import os
 import re
@@ -37,9 +38,19 @@ OUT_FBX = r"__OUT_FBX__"
 EMBED_TEXTURES = __EMBED_TEXTURES__
 INCLUDE_ANIMATION = __INCLUDE_ANIMATION__
 
+# Tiled-image filename tokens -> the glob that finds their tiles on disk.
+# ``<UDIM>`` is Blender's standard (1001-style); ``<UVTILE>`` the u1_v1 style.
+_TILE_TOKENS = (("<UDIM>", "[0-9]" * 4), ("<UVTILE>", "u*_v*"))
+
 
 def _resolved_image_file(bpy, image):
-    """Absolute on-disk path of *image*, or None (packed-only / missing / generated)."""
+    """Absolute on-disk path of *image*, or None (packed-only / missing / generated).
+
+    UDIM/UVTILE sets resolve to their lowest-numbered existing tile: neither FBX
+    nor the manifest's per-file classification has a tiling concept, so one real
+    tile (logged as flattened) beats an unresolvable ``<UDIM>`` token that would
+    otherwise surface as a misleading "packed or needs relinking" warning.
+    """
     if image is None:
         return None
     try:
@@ -49,6 +60,15 @@ def _resolved_image_file(bpy, image):
     if not path:
         return None
     path = os.path.abspath(path)
+    for token, pattern in _TILE_TOKENS:
+        if token in path:
+            # glob.escape the literal parts only -- the path itself may hold
+            # glob-special chars ([ ] * ?); the token survives escaping intact.
+            tiles = sorted(glob.glob(glob.escape(path).replace(token, pattern)))
+            if tiles:
+                print("tiled image flattened to its first tile: " + tiles[0])
+                return tiles[0]
+            return None
     return path if os.path.isfile(path) else None
 
 

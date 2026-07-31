@@ -6,6 +6,16 @@ similarity transforms back.
 Drives the pack-only external engine from Maya. Reached through
 :meth:`mayatk.UvUtils.pack_uvs`; nothing here is called directly.
 
+Pack scope — objects *or* components:
+
+The input is resolved to a per-mesh scope (:meth:`_UvPackInternal._resolve_scope`):
+a mesh named at object level packs whole, while a component entry (faces, UVs,
+verts, edges) packs only the region it covers. Component entries are widened to
+the faces they touch, because the engine's unit of input is a triangle, and the
+arrays handed over are then *compacted* to just the UVs those faces reference —
+so the engine never sees, and no write-back can move, the rest of the map. This
+mirrors the native ``u3dLayout`` path, which packs exactly the UVs it is given.
+
 Write-back strategy — verified mechanics (Maya 2025):
 
 xatlas moves each island rigidly (translate, optional rotation, and — like
@@ -56,6 +66,11 @@ class PackUvsResult:
     failed: List[Tuple[str, str]] = field(default_factory=list)
     atlas_width: int = 0
     atlas_height: int = 0
+    # What was actually packed, for the meshes that succeeded: face components
+    # under a component-scoped pack, else the mesh itself. Measuring the
+    # resulting texel density against ``succeeded`` would read the WHOLE mesh
+    # after a faces-only pack and report a number the run never produced.
+    targets: List[str] = field(default_factory=list)
 
     def __bool__(self) -> bool:
         return bool(self.succeeded)
@@ -96,28 +111,152 @@ class _UvPackInternal:
         return np.column_stack([np.asarray(us), np.asarray(vs)]).astype(np.float64)
 
     @classmethod
-    def _uv_arrays(cls, mesh: str):
-        """Current-UV-set geometry of *mesh* as plain arrays.
+    def _resolve_scope(cls, objects) -> List[Tuple[str, Optional[List[str]]]]:
+        """Input to ``[(mesh, faces or None), ...]`` — the pack's per-mesh scope.
 
-        Returns ``(uvs (N,2) float64, triangles (M,3) uint32, shell_ids (N,))``.
-        Triangles are fan-triangulated per polygon over the assigned UV ids —
-        exact for convex faces, and only chart-connectivity/coverage input for
-        the packer, so concave n-gons cost at most slight pack looseness.
+        ``None`` means "pack the whole mesh"; a list means "pack only these
+        faces". Component entries are widened to the faces they touch (the
+        engine packs triangles, so a partial face can't be an input) and kept
+        as unflattened ranges — expanding ``pCube1.f[0:5000]`` into individual
+        strings costs more than the pack itself on a dense selection.
+
+        A mesh named at object level packs whole even if components of it were
+        also given: the wider request wins, so mixing a stray leftover
+        component selection into an object selection can't silently narrow the
+        pack. Whole-mesh entries keep the caller's order; component-scoped
+        meshes are ordered by Maya's own component ordering and report first.
+
+        Instances need no explicit dedupe, and must not be packed twice — they
+        share one shape, so one UV set, and two entries would make the engine
+        reserve space for the same UVs twice and then write two transforms onto
+        them. `_resolve_meshes`' ``cmds.ls(..., dag=True, type="mesh")`` reports
+        an instanced shape by its FIRST path only, so *every* sibling — whether
+        named as an object or reached through a component — canonicalizes to the
+        same transform and merges into one entry (pinned by test; the same
+        `cmds.ls` quirk that `get_neighbor_shell_bounds` guards *against*).
+        """
+        from mayatk.uv_utils._auto_unwrap import _AutoUnwrapInternal
+
+        if objects is None:
+            objects = cmds.ls(selection=True) or []
+        entries = CoreUtils.as_strings(objects)
+        components = [e for e in entries if "." in e]
+        wholes = [e for e in entries if "." not in e]
+
+        # dict, not a separate order list: insertion order is preserved, and
+        # re-assigning an existing key (component scope -> whole mesh) keeps it.
+        scope: dict = {}
+        if components:
+            # One batched conversion: a call per entry is the same work split
+            # into N round trips through the component parser. Non-mesh
+            # components (curve CVs, lattice points) simply drop out of it.
+            resolved: dict = {}  # node string -> mesh transform (memoized)
+            for comp in cmds.polyListComponentConversion(components, toFace=True) or []:
+                node = comp.rsplit(".", 1)[0]
+                if node not in resolved:
+                    found = _AutoUnwrapInternal._resolve_meshes([node])
+                    resolved[node] = found[0] if found else None
+                mesh = resolved[node]
+                if mesh is None:
+                    continue
+                scope.setdefault(mesh, []).append(comp)
+        # Second, so a mesh named both ways ends up whole rather than narrowed.
+        for mesh in _AutoUnwrapInternal._resolve_meshes(wholes):
+            scope[mesh] = None
+        return list(scope.items())
+
+    @staticmethod
+    def _face_ids(faces: Sequence[str], face_count: int) -> List[int]:
+        """Sorted unique polygon indices named by the *faces* components.
+
+        Read through the API rather than by parsing ``cmds.ls(flatten=True)``
+        strings: a shell selection routinely covers tens of thousands of faces,
+        and the component object hands over its element array directly.
+        """
+        sel = om.MSelectionList()
+        for comp in faces:
+            try:
+                sel.add(str(comp))
+            except RuntimeError:  # stale/renamed component — nothing to pack
+                continue
+        ids: List[int] = []
+        for i in range(sel.length()):
+            _, component = sel.getComponent(i)
+            if component.isNull() or not component.hasFn(
+                om.MFn.kSingleIndexedComponent
+            ):
+                continue
+            ids.extend(om.MFnSingleIndexedComponent(component).getElements())
+        if not ids:
+            return []
+        found = np.unique(np.asarray(ids, dtype=np.int64))
+        return found[(found >= 0) & (found < face_count)].tolist()
+
+    @classmethod
+    def _uv_arrays(cls, mesh: str, faces: Optional[Sequence[str]] = None):
+        """Current-UV-set geometry of *mesh* as plain arrays, optionally scoped.
+
+        Returns ``(uvs (N,2) float64, triangles (M,3) uint32, shell_ids (N,),
+        uv_ids (N,))``, where ``uv_ids`` maps each returned row back to the
+        mesh's own UV index. Triangles are fan-triangulated per polygon over
+        the assigned UV ids — exact for convex faces, and only
+        chart-connectivity/coverage input for the packer, so concave n-gons
+        cost at most slight pack looseness.
+
+        *faces* restricts the triangles to those polygons. Rows are then
+        compacted to just the UVs those triangles reference, so the engine's
+        arrays carry no pass-through coordinates and the write-back cannot
+        reach a UV outside the scope.
         """
         uvs = cls._uv_positions(mesh)
         fn = cls._fn_mesh(mesh)
         counts, uv_ids = fn.getAssignedUVs()
+        # `starts` is what gives a scoped pack random access to a face's UV ids
+        # (``getAssignedUVs`` carries one count per polygon, 0 for an unmapped
+        # one, so the offsets stay aligned with face indices). Both are
+        # materialized as plain Python ints: the loop below touches every
+        # face-vertex, and indexing numpy arrays there boxes each element as an
+        # np.int64. Timing the LOOP alone over a 102k-face plane: 198ms with
+        # plain ints, 296ms indexing numpy arrays, 300ms for the sequential
+        # walk this replaced. (Whole-mesh `_uv_arrays` is ~283ms end to end;
+        # the rest is the two whole-mesh API reads and the compaction. A scope
+        # of 100 faces on that mesh still costs ~103ms, since UV positions and
+        # shell ids are whole-mesh reads either way — proportional-to-scope
+        # extraction would need a branch here and buys nothing next to the
+        # engine's own scale search.)
+        starts = [0, *np.cumsum(np.asarray(counts, dtype=np.int64)).tolist()]
+        uv_ids = list(uv_ids)
+
+        face_ids = (
+            range(len(counts)) if faces is None else cls._face_ids(faces, len(counts))
+        )
         tris = []
-        i = 0
-        for count in counts:
-            ids = uv_ids[i : i + count]
-            for k in range(1, count - 1):
+        for face in face_ids:
+            ids = uv_ids[starts[face] : starts[face + 1]]
+            for k in range(1, len(ids) - 1):
                 tris.append((ids[0], ids[k], ids[k + 1]))
-            i += count
         if not tris:
-            raise ValueError("no UV-mapped faces")
+            raise ValueError(
+                "no UV-mapped faces in the pack scope"
+                if faces is not None
+                else "no UV-mapped faces"
+            )
+        tris = np.asarray(tris, dtype=np.int64)
+
+        used = np.unique(tris.reshape(-1))
+        # -1 for anything outside the scope: every triangle row is in `used` by
+        # construction, so a row that isn't overflows the uint32 cast below into
+        # an out-of-range index the engine rejects, rather than silently
+        # aliasing onto UV 0.
+        remap = np.full(len(uvs), -1, dtype=np.int64)
+        remap[used] = np.arange(len(used))
         _, shell_ids = fn.getUvShellsIds()
-        return uvs, np.asarray(tris, dtype=np.uint32), np.asarray(shell_ids)
+        return (
+            uvs[used],
+            remap[tris].astype(np.uint32),
+            np.asarray(shell_ids)[used],
+            used,
+        )
 
     @staticmethod
     def _solve_similarity(old: np.ndarray, new: np.ndarray):
@@ -181,6 +320,7 @@ class _UvPackInternal:
         new_uvs: np.ndarray,
         shell_ids: np.ndarray,
         written: Optional[np.ndarray] = None,
+        uv_ids: Optional[np.ndarray] = None,
     ) -> None:
         """Move *mesh*'s shells from *old_uvs* to *new_uvs* via polyEditUV.
 
@@ -193,6 +333,10 @@ class _UvPackInternal:
         shell is fitted on those rows only (the rest hold pass-through input
         coordinates, which would corrupt the fit) and the solved transform is
         then applied to the whole shell so it moves as one piece.
+
+        *uv_ids* maps the array rows onto the mesh's own UV indices (None =
+        the rows *are* the UV indices), which is what lets a component-scoped
+        pack address its compacted subset.
         """
         fit_mask = None
         if written is not None:
@@ -222,7 +366,9 @@ class _UvPackInternal:
             solved.append((indices, scale, angle, mirrored, c0, c1))
 
         for indices, scale, angle, mirrored, c0, c1 in solved:
-            comps = cls._component_ranges(mesh, np.sort(indices))
+            comps = cls._component_ranges(
+                mesh, np.sort(indices if uv_ids is None else uv_ids[indices])
+            )
             if mirrored:
                 # Maya's own Flip-U mechanism; centroid pivot keeps c0 fixed.
                 cmds.polyEditUV(
@@ -259,15 +405,16 @@ class _UvPackInternal:
         padding: Optional[float] = None,
     ) -> PackUvsResult:
         """Full pack round-trip. See :meth:`mayatk.UvUtils.pack_uvs`."""
-        from mayatk.uv_utils._auto_unwrap import _AutoUnwrapInternal
-
         cls._check_engine()
 
-        meshes = _AutoUnwrapInternal._resolve_meshes(objects)
-        if not meshes:
+        scope = cls._resolve_scope(objects)
+        if not scope:
             raise ValueError("No mesh objects to pack.")
 
         result = PackUvsResult(engine="xatlas")
+        # Per mesh, what the density pre-pass and the caller's density readout
+        # measure: the scoped faces, or the mesh itself when it packs whole.
+        targets = {mesh: faces or [mesh] for mesh, faces in scope}
 
         # Snapshot BEFORE the density pre-pass: that pass already rewrites the
         # scene's UVs, so a mesh rejected further down is not "untouched" unless
@@ -275,7 +422,7 @@ class _UvPackInternal:
         # equalized-but-unpacked layout and lands on top of the packed ones.
         pre_pass = {}
         if preserve_3d:
-            for mesh in meshes:
+            for mesh, _ in scope:
                 try:
                     pre_pass[mesh] = cls._uv_positions(mesh)
                 except (RuntimeError, ValueError):
@@ -283,23 +430,25 @@ class _UvPackInternal:
 
             # Equalize per-shell texel density (u3dLayout -preScaleMode 1
             # equivalent). xatlas preserves relative input scale, so equal
-            # density in = equal density out.
-            density = uv_utils.get_texel_density(list(meshes), map_size)
+            # density in = equal density out. Runs against the pack scope, so a
+            # faces-only pack neither measures nor rescales the rest of the map.
+            in_scope = [t for group in targets.values() for t in group]
+            density = uv_utils.get_texel_density(in_scope, map_size)
             if density:
                 uv_utils.set_texel_density(
-                    list(meshes), density=density, map_size=map_size
+                    in_scope, density=density, map_size=map_size
                 )
 
         arrays, per_mesh = [], []
-        for mesh in meshes:
+        for mesh, faces in scope:
             try:
-                uvs, tris, shell_ids = cls._uv_arrays(mesh)
+                uvs, tris, shell_ids, uv_ids = cls._uv_arrays(mesh, faces)
             except (RuntimeError, ValueError) as error:
                 result.failed.append((CoreUtils.short_name(mesh), str(error)))
                 cls._restore(mesh, pre_pass.get(mesh))
                 continue
             arrays.append((uvs, tris))
-            per_mesh.append((mesh, uvs, shell_ids))
+            per_mesh.append((mesh, uvs, shell_ids, uv_ids))
         if not arrays:
             return result
 
@@ -344,15 +493,21 @@ class _UvPackInternal:
         cell_size[axis] = step[axis]
         fit = float(cell_size.min())  # square page -> uniform fit into the cell
 
-        for (mesh, old_uvs, shell_ids), unit_uvs, written, page_arr in zip(
+        for (mesh, old_uvs, shell_ids, uv_ids), unit_uvs, written, page_arr in zip(
             per_mesh, packed.uvs, packed.written, packed.pages
         ):
             origins = inner_origin + np.asarray(page_arr).reshape(-1, 1) * step
             try:
                 cls._apply_shell_transforms(
-                    mesh, old_uvs, unit_uvs * fit + origins, shell_ids, written
+                    mesh,
+                    old_uvs,
+                    unit_uvs * fit + origins,
+                    shell_ids,
+                    written,
+                    uv_ids,
                 )
                 result.succeeded.append(mesh)
+                result.targets.extend(targets[mesh])
             except RuntimeError as error:
                 result.failed.append((CoreUtils.short_name(mesh), str(error)))
                 cls._restore(mesh, pre_pass.get(mesh))
@@ -366,11 +521,17 @@ class _UvPackInternal:
         move back is a per-shell similarity — the same machinery the pack
         write-back uses, run in reverse. Best-effort: a mesh that can't be
         restored is left as-is rather than aborting the surviving packs.
+
+        Always whole-mesh, even after a component-scoped pack: the snapshot is
+        whole-mesh, and a shell the pre-pass left alone solves to the identity
+        and is skipped, so the untouched part of the map costs nothing.
         """
         if original_uvs is None:
             return
         try:
-            current, _, shell_ids = cls._uv_arrays(mesh)
+            current = cls._uv_positions(mesh)
+            _, shell_ids = cls._fn_mesh(mesh).getUvShellsIds()
+            shell_ids = np.asarray(shell_ids)
             if len(current) != len(original_uvs):
                 # UV count changed under us — the snapshot no longer describes
                 # this mesh, so restoring from it would corrupt the layout.

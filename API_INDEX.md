@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
-_Generated: 2026-07-29_
+_Generated: 2026-07-31_
 
 ### `anim_utils/_anim_utils.py`
 - `class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`
@@ -209,10 +209,11 @@ _Generated: 2026-07-29_
 
 ### `cam_utils/_cam_utils.py`
 - `class CamUtils(ptk.HelpMixin)`
-  - methods: group_cameras, toggle_safe_frames, get_current_cam, create_camera_from_view, adjust_camera_clipping, switch_viewport_camera
+  - methods: group_cameras, toggle_safe_frames, get_current_cam, create_camera_from_view, get_view_state, set_view_state, fit_camera_clipping, adjust_camera_clipping, switch_viewport_camera
 
 ### `core_utils/_core_utils.py`
 - `class BoundingBox`
+  - methods: corners
 - `class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal)`
   - methods: undo_chunk, suspended_refresh, selected, undoable, reparent, wrap_control, confirm_existence, get_mfn_mesh, get_array_type, convert_array_type, get_parameter_mapping, set_parameter_mapping, build_mesh_similarity_mapping, get_mel_globals, reorder_objects, as_strings, short_name, leaf_name, get_bounding_box
 
@@ -497,7 +498,7 @@ _Generated: 2026-07-29_
 
 ### `env_utils/fbx_utils.py`
 - `class FbxUtils(ptk.HelpMixin)`
-  - methods: load_plugin, set_fbx_options, load_preset, export, import_scene, reset_takes, apply_takes, apply_takes_from_node, run_export_preparers, register_export_preparer, unregister_export_preparer, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
+  - methods: load_plugin, reset_import, set_fbx_options, load_preset, export, import_scene, reset_takes, apply_takes, apply_takes_from_node, run_export_preparers, register_export_preparer, unregister_export_preparer, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
 
 ### `env_utils/handoff_export.py` — Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`
@@ -613,7 +614,7 @@ _Generated: 2026-07-29_
 
 ### `mat_utils/_mat_utils.py`
 - `class MatUtils(_MatUtilsInternal)`
-  - methods: resolve_path, get_mats, group_objects_by_material, get_texture_paths, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, create_stingray_shader, find_by_mat_id, collect_material_paths, remap_file_nodes, remap_texture_paths, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials
+  - methods: resolve_path, get_mats, group_objects_by_material, get_texture_paths, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, create_stingray_shader, find_by_mat_id, find_unassigned, collect_material_paths, remap_file_nodes, remap_texture_paths, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials
 
 ### `mat_utils/arnold_bridge.py` — Arnold render-bridge management.
 - `class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal)`
@@ -740,7 +741,7 @@ _Generated: 2026-07-29_
 
 ### `mat_utils/render_opacity/material_mode.py`
 - `class OpacityMaterialMode(ptk.LoggingMixin)`
-  - methods: get_stingray_mats, ensure_transparent_graph, create, ensure_connections, remove
+  - methods: get_stingray_mats, create, ensure_connections, remove
 
 ### `mat_utils/render_opacity/render_opacity_slots.py` — Switchboard slots for the Render Opacity UI.
 - `class RenderOpacitySlots`
@@ -829,7 +830,7 @@ _Generated: 2026-07-29_
 
 ### `node_utils/_node_utils.py`
 - `class NodeUtils(ptk.HelpMixin)`
-  - methods: get_type, get_inherited_types, is_mesh, is_locator, is_group, is_geometry, is_constraint, is_expression, is_ik_effector, is_driven_key_curve, is_muted, is_motion_path, is_ik_handle, get_constraint_targets, get_groups, get_parent, get_children, get_shapes, get_shape, is_intermediate, node_is, list_transforms, get_unique_children, get_transform_node, get_shape_node, get_history_node, get_classification_tokens, create_render_node, get_connected_nodes, create_assembly, get_instances, replace_with_instances, instance, uninstance, filter_duplicate_instances
+  - methods: get_type, get_inherited_types, is_mesh, is_locator, is_group, is_geometry, is_constraint, is_expression, is_ik_effector, is_driven_key_curve, is_muted, is_motion_path, is_ik_handle, get_constraint_targets, get_groups, get_parent, get_children, get_shapes, get_shape, is_intermediate, node_is, list_transforms, get_unique_children, get_transform_node, get_shape_node, get_history_node, get_classification_tokens, create_render_node, get_connected_nodes, create_assembly, get_instances, replace_with_instances, instance, get_instanced_shapes, uninstance, filter_duplicate_instances
 
 ### `node_utils/attributes/_attributes.py` — Consolidated attribute utilities for Maya.
 - `class AttributeTemplate`
@@ -972,7 +973,7 @@ _Generated: 2026-07-29_
 
 ### `uv_utils/_uv_utils.py`
 - `class UvUtils(ptk.HelpMixin)`
-  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, gather_to_udim, mirror_uvs, flip_uvs, get_uv_shell_sets, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, get_topology_seam_edges, detect_seam_algorithm, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, create_lightmap_uvs, remove_empty_uv_sets
+  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, flip_uvs, get_uv_shell_sets, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, get_topology_seam_edges, detect_seam_algorithm, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, create_lightmap_uvs, remove_empty_uv_sets
 
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 - `class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal)`
@@ -992,7 +993,7 @@ _Generated: 2026-07-29_
 
 ### `xform_utils/_xform_utils.py`
 - `class XformUtils(_XformUtilsInternal, ptk.HelpMixin)`
-  - methods: convert_axis, move_to, drop_to_grid, match_scale, scale_connected_edges, store_transforms, freeze_transforms, freeze_to_opm, unfreeze_to_parent, restore_transforms, clear_stored_transforms, has_stored_transforms, reset_translation, set_translation_to_pivot, get_manip_pivot_matrix, set_manip_pivot_matrix, get_pivot_options, clear_manip_cache, snapshot_manip_pivot, get_operation_axis_matrix, get_operation_axis_pos, align_pivot_to_selection, reset_pivot_transforms, world_align_pivot, bake_pivot, transfer_pivot, aim_object_at_point, orient_to_vector, rotate_axis, get_orientation, get_dist_between_two_objects, get_center_point, get_bounding_box, sort_by_bounding_box_value, align_using_three_points, is_overlapping, check_objects_against_plane, get_vertex_positions, get_matching_verts, order_by_distance, align_vertices, get_translation, get_object_matrix, set_object_matrix
+  - methods: convert_axis, move_to, drop_to_grid, match_scale, scale_connected_edges, store_transforms, freeze_instanced_group, freeze_transforms, freeze_to_opm, unfreeze_to_parent, restore_transforms, clear_stored_transforms, has_stored_transforms, reset_translation, set_translation_to_pivot, get_manip_pivot_matrix, set_manip_pivot_matrix, get_pivot_options, clear_manip_cache, snapshot_manip_pivot, get_operation_axis_matrix, get_operation_axis_pos, align_pivot_to_selection, reset_pivot_transforms, world_align_pivot, bake_pivot, transfer_pivot, aim_object_at_point, orient_to_vector, rotate_axis, get_orientation, get_dist_between_two_objects, get_center_point, get_bounding_box, sort_by_bounding_box_value, align_using_three_points, is_overlapping, check_objects_against_plane, get_vertex_positions, get_matching_verts, order_by_distance, align_vertices, get_translation, get_object_matrix, set_object_matrix
 
 ### `xform_utils/matrices.py` — Matrix utilities for Maya rigging and animation.
 - `class MatricesError(RuntimeError)`

@@ -61,6 +61,7 @@ PLUGIN_CMDS = frozenset(
         "mayaUSDExport",                     # mayaUsdPlugin (USD export; env_utils/usd)
         "FBXExport", "FBXImport",            # FBX plugin
         "FBXImportMode", "FBXUICallBack",    # FBX plugin (UI/import-mode helpers)
+        "FBXResetImport",                    # FBX plugin (import-option reset; fbx_utils)
         "FBXExportBakeComplexAnimation",     # FBX plugin (export-option setter)
         "FBXExportSplitAnimationIntoTakes",  # FBX plugin (take splitting; fbx_utils)
         "arnoldRenderToTexture",             # mtoa (Arnold RTT bake; texture_baker)
