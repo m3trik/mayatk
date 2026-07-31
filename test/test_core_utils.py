@@ -407,5 +407,38 @@ class TestCoreUtilsEdgeCases(MayaTkTestCase):
             pass  # Expected behavior
 
 
+class TestBoundingBox(MayaTkTestCase):
+    """The plain-data BoundingBox (backs clip fitting / frustum work)."""
+
+    def test_corners_are_every_min_max_combination(self):
+        from mayatk.core_utils._core_utils import BoundingBox
+
+        box = BoundingBox((-1, -2, -3), (1, 2, 3))
+        corners = box.corners
+        self.assertEqual(len(corners), 8)
+        self.assertEqual(
+            {(c.x, c.y, c.z) for c in corners},
+            {
+                (x, y, z)
+                for x in (-1.0, 1.0)
+                for y in (-2.0, 2.0)
+                for z in (-3.0, 3.0)
+            },
+        )
+
+    def test_corners_of_a_degenerate_box_are_all_the_same_point(self):
+        from mayatk.core_utils._core_utils import BoundingBox
+
+        corners = BoundingBox((5, 5, 5), (5, 5, 5)).corners
+        self.assertEqual(len(corners), 8)
+        self.assertEqual({(c.x, c.y, c.z) for c in corners}, {(5.0, 5.0, 5.0)})
+
+    def test_bounding_box_of_a_cube_matches_its_corners(self):
+        cube = cmds.polyCube(w=2, h=2, d=2, n="bbox_cube")[0]
+        box = CoreUtils.get_bounding_box(cube)
+        self.assertAlmostEqual(box.diagonal, (2**2 * 3) ** 0.5, places=5)
+        self.assertTrue(all(abs(abs(c.x) - 1) < 1e-5 for c in box.corners))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -41,6 +41,72 @@ _TEXTURE_WALK_SKIP_DIRS = frozenset(
 class _MatUtilsInternal(ptk.HelpMixin):
     """Internal helper utilities shared across MatUtils operations."""
 
+    @classmethod
+    def _find_opacity_map_on_disk(
+        cls, mat: str, dir_cache: Optional[Dict[str, Dict[str, str]]] = None
+    ) -> Optional[str]:
+        """Path to an Opacity map sitting beside the material's other textures.
+
+        Covers the common case where the set ships an opacity map that never
+        made it into the shading network — the material was built before the
+        map existed, or from a shader graph with no opacity slot.
+
+        Parameters:
+            mat (str): Material node.
+            dir_cache (dict): Scan cache, ``{directory: {base name: path}}``.
+                Scene-wide callers should pass one in — every material in a set
+                shares a texture folder, and the scan is a full directory walk.
+        """
+        bases_by_dir: Dict[str, set] = {}
+        for file_node in cmds.ls(cmds.listHistory(mat) or [], type="file") or []:
+            raw = cmds.getAttr(f"{file_node}.fileTextureName") or ""
+            # search=False: we want the folder Maya actually reads this texture
+            # from — the basename hunt could point us at an unrelated same-named
+            # file in some other set's folder.
+            path = cls.resolve_path(raw, search=False) or raw
+            directory = os.path.dirname(path)
+            if not directory or not os.path.isdir(directory):
+                continue
+            base = ptk.MapFactory.get_base_texture_name(path)
+            if base:
+                bases_by_dir.setdefault(directory, set()).add(base)
+
+        cache = {} if dir_cache is None else dir_cache
+        for directory, bases in bases_by_dir.items():
+            if directory not in cache:
+                # base name → the set's Opacity map, one scan per folder.
+                found: Dict[str, str] = {}
+                for entry in sorted(os.listdir(directory)):
+                    full = os.path.join(directory, entry)
+                    if not os.path.isfile(full):
+                        continue
+                    if ptk.MapFactory.resolve_map_type(full) != "Opacity":
+                        continue
+                    base = ptk.MapFactory.get_base_texture_name(full)
+                    if base:
+                        found.setdefault(base, full)
+                cache[directory] = found
+
+            for base in bases:
+                if base in cache[directory]:
+                    return cache[directory][base]
+        return None
+
+    @staticmethod
+    def _slot_inputs(node: str, attr: str) -> List[str]:
+        """Source plugs driving `attr` or any of its channel children."""
+        found: List[str] = []
+        for plug in [attr] + [f"{attr}{s}" for s in ("R", "G", "B", "X", "Y", "Z")]:
+            if not cmds.attributeQuery(plug, node=node, exists=True):
+                continue
+            found += (
+                cmds.listConnections(
+                    f"{node}.{plug}", source=True, destination=False, plugs=True
+                )
+                or []
+            )
+        return found
+
     @staticmethod
     def _unique_ordered(nodes: List[Any]) -> List[Any]:
         """Return nodes with original order preserved and duplicates removed."""
@@ -992,6 +1058,322 @@ class MatUtils(_MatUtilsInternal):
 
         return list(shaders)
 
+    @staticmethod
+    def connect_to_channels(source_plug: str, node: str, attr: str) -> bool:
+        """Connect a single-channel `source_plug` into a (possibly compound) slot.
+
+        Color/vector slots (``TEX_ao_map``, ``opacity``, ``transparency``, …)
+        must be driven per channel when a scalar source feeds them. Any existing
+        input on the parent is broken first, so the parent and its children can
+        never end up driven by two different textures.
+
+        Parameters:
+            source_plug (str): Source plug, e.g. ``"file1.outAlpha"``.
+            node (str): Target node.
+            attr (str): Target attribute (parent name).
+
+        Returns:
+            bool: True if the connection was made.
+        """
+        if not cmds.attributeQuery(attr, node=node, exists=True):
+            return False
+
+        children = [
+            f"{attr}{s}"
+            for s in ("R", "G", "B")
+            if cmds.attributeQuery(f"{attr}{s}", node=node, exists=True)
+        ] or [
+            f"{attr}{s}"
+            for s in ("X", "Y", "Z")
+            if cmds.attributeQuery(f"{attr}{s}", node=node, exists=True)
+        ]
+
+        if len(children) >= 3:
+            # Break the parent so it can't stay bound to a previous texture
+            # while the children are driven by this one.
+            for src in (
+                cmds.listConnections(
+                    f"{node}.{attr}", plugs=True, source=True, destination=False
+                )
+                or []
+            ):
+                cmds.disconnectAttr(src, f"{node}.{attr}")
+            for child in children[:3]:
+                cmds.connectAttr(source_plug, f"{node}.{child}", force=True)
+            return True
+
+        try:  # scalar slot
+            cmds.connectAttr(source_plug, f"{node}.{attr}", force=True)
+            return True
+        except RuntimeError:
+            return False
+
+    @classmethod
+    def get_mats_by_scope(
+        cls, scope: str = "selected", mat_type: Optional[str] = None
+    ) -> List[str]:
+        """Materials in the given scope.
+
+        The scope primitive behind material tools that offer a Selected /
+        Visible / Scene choice, so each one resolves the same way.
+
+        Parameters:
+            scope (str): ``"selected"`` — materials on the current selection.
+                ``"visible"`` — materials on visible geometry.
+                ``"scene"`` — every scene material, assigned or not.
+            mat_type (str, optional): Maya node type filter (e.g.
+                ``"StingrayPBS"``).
+
+        Returns:
+            list[str]: Material names (duplicates removed).
+        """
+        scope = (scope or "selected").strip().lower()
+
+        if scope == "scene":
+            mats = cls.get_scene_mats(node_type=mat_type) or []
+            return [str(m) for m in mats]
+
+        if scope == "visible":
+            from mayatk.display_utils._display_utils import DisplayUtils
+
+            objects = (
+                DisplayUtils.get_visible_geometry(inherit_parent_visibility=True) or []
+            )
+        else:
+            objects = cmds.ls(selection=True, long=True) or []
+
+        if not objects:
+            return []
+        return cls.get_mats(objects, mat_type=mat_type)
+
+    # Shader type → (slot that drives cutout/blend in the viewport, sense).
+    # ``"opacity"`` slots take the alpha straight; anything not listed here
+    # (lambert, blinn, phong, …) drives ``transparency``, which is inverted.
+    OPACITY_INPUTS = {
+        "StingrayPBS": ("opacity", "opacity"),
+        "standardSurface": ("opacity", "opacity"),
+        "openPBRSurface": ("geometryOpacity", "opacity"),
+        "aiStandardSurface": ("opacity", "opacity"),
+        "usdPreviewSurface": ("opacity", "opacity"),
+    }
+
+    # Map types accepted as an opacity source, best first.
+    OPACITY_MAP_TYPES = ("Opacity", "Albedo_Transparency")
+
+    @classmethod
+    def find_opacity_source(cls, mat: str) -> Optional[str]:
+        """The file node in `mat`'s network that carries its opacity.
+
+        Recognizes a dedicated Opacity map, or the packed alpha of an
+        Albedo_Transparency map. Returns None when the material has neither —
+        the test for "is this an opacity material".
+
+        Parameters:
+            mat (str): Material node.
+
+        Returns:
+            str | None: The file node, or None.
+        """
+        file_nodes = cmds.ls(cmds.listHistory(mat) or [], type="file") or []
+        by_type: Dict[str, str] = {}
+        for file_node in file_nodes:
+            path = cmds.getAttr(f"{file_node}.fileTextureName") or ""
+            map_type = ptk.MapFactory.resolve_map_type(path) if path else None
+            if map_type in cls.OPACITY_MAP_TYPES:
+                by_type.setdefault(map_type, file_node)
+
+        for map_type in cls.OPACITY_MAP_TYPES:
+            if map_type in by_type:
+                return by_type[map_type]
+        return None
+
+    @classmethod
+    @CoreUtils.undoable
+    def enable_viewport_opacity(
+        cls,
+        materials=None,
+        transparency_algorithm: Optional[str] = None,
+        search_disk: bool = True,
+    ) -> Dict[str, str]:
+        """Wire every opacity map in `materials` so it shows in the viewport.
+
+        A texture set can carry an opacity map that never reaches the shader —
+        the material was built before the map existed, or from a shader graph
+        with no opacity slot. This finds each material's opacity map and drives
+        the right slot for its shader type: alpha into ``opacity`` for the PBR
+        shaders, inverted into ``transparency`` for the classic ones. StingrayPBS
+        materials are switched to the transparent ShaderFX graph first (their
+        opacity slots don't otherwise exist), preserving existing textures.
+
+        Parameters:
+            materials: Materials **or** objects (objects are resolved to their
+                materials). If None, the current selection is used.
+            transparency_algorithm (str, optional): Viewport 2.0 transparency
+                mode to apply — ``"simple"``, ``"object_sorting"``,
+                ``"weighted_average"`` or ``"depth_peeling"``. Left alone when
+                None. Depth peeling sorts overlapping transparent faces
+                correctly (decals, foliage) at some viewport cost.
+            search_disk (bool): When the network holds no opacity map, look for
+                one beside the material's other textures and import it.
+
+        Returns:
+            dict: ``{material: status}`` where status is ``"enabled"``,
+            ``"already enabled"``, ``"no opacity map"`` or ``"unsupported: …"``.
+        """
+        from mayatk.mat_utils.mat_snapshot import MatSnapshot
+
+        results: Dict[str, str] = {}
+
+        # Materials in a set share a texture folder; scan each folder once.
+        dir_cache: Dict[str, Dict[str, str]] = {}
+
+        for mat in cls.get_mats(materials):
+            mat = str(mat)
+            name = CoreUtils.short_name(mat)
+            source = cls.find_opacity_source(mat)
+            if not source and search_disk:
+                path = cls._find_opacity_map_on_disk(mat, dir_cache)
+                if path:
+                    source = NodeUtils.create_render_node(
+                        "file",
+                        fileTextureName=path,
+                        name=ptk.format_path(path, section="name"),
+                    )
+            if not source:
+                results[mat] = "no opacity map"
+                continue
+
+            node_type = cmds.nodeType(mat)
+            attr, sense = cls.OPACITY_INPUTS.get(
+                node_type, ("transparency", "transparency")
+            )
+
+            # StingrayPBS: the opacity slots live on the transparent graph only,
+            # and loading it wipes the network — snapshot, swap, restore.
+            if node_type == "StingrayPBS" and not cmds.attributeQuery(
+                attr, node=mat, exists=True
+            ):
+                snapshot = MatSnapshot.capture(name)
+                if not cls.ensure_transparent_graph(mat):
+                    results[mat] = "unsupported: no transparent graph available"
+                    continue
+                MatSnapshot.restore(name, snapshot)
+                source = cls.find_opacity_source(mat) or source
+
+            if not cmds.attributeQuery(attr, node=mat, exists=True):
+                results[mat] = f"unsupported: {node_type} has no '{attr}' slot"
+                continue
+
+            # Already driven by this very map (possibly through a reverse) —
+            # leave it be, so a re-run can't stack duplicate conversion nodes.
+            if any(
+                plug.split(".")[0] == source
+                or source in (cmds.listHistory(plug.split(".")[0]) or [])
+                for plug in cls._slot_inputs(mat, attr)
+            ):
+                results[mat] = "already enabled"
+                continue
+
+            # Where the mask lives decides how the file node must read alpha: a
+            # dedicated Opacity map is grayscale (luminance yields a usable mask
+            # even with no alpha channel), while a packed Albedo_Transparency
+            # map carries the real thing — reading luminance there would drive
+            # opacity from the albedo's brightness.
+            if cmds.attributeQuery("alphaIsLuminance", node=source, exists=True):
+                path = cmds.getAttr(f"{source}.fileTextureName") or ""
+                map_type = ptk.MapFactory.resolve_map_type(path)
+                if map_type in cls.OPACITY_MAP_TYPES:
+                    cmds.setAttr(
+                        f"{source}.alphaIsLuminance", int(map_type == "Opacity")
+                    )
+
+            plug = f"{source}.outAlpha"
+            if sense == "transparency":  # classic shaders: 1 - alpha
+                reverse = cmds.shadingNode(
+                    "reverse", asUtility=True, name=f"{name}_invertOpacity"
+                )
+                cmds.connectAttr(plug, f"{reverse}.inputX", force=True)
+                plug = f"{reverse}.outputX"
+
+            if not cls.connect_to_channels(plug, mat, attr):
+                results[mat] = f"unsupported: could not drive '{attr}'"
+                continue
+
+            # StingrayPBS gates the opacity input behind its own toggle.
+            if cmds.attributeQuery("use_opacity_map", node=mat, exists=True):
+                use_plug = f"{mat}.use_opacity_map"
+                if not cmds.getAttr(use_plug, lock=True):
+                    cmds.setAttr(use_plug, 1)
+
+            results[mat] = "enabled"
+
+        if transparency_algorithm:
+            cls.set_transparency_algorithm(transparency_algorithm)
+
+        return results
+
+    # Viewport 2.0 transparency modes, in ``transparencyAlgorithm`` order.
+    TRANSPARENCY_ALGORITHMS = (
+        "simple",
+        "object_sorting",
+        "weighted_average",
+        "depth_peeling",
+    )
+
+    @classmethod
+    def set_transparency_algorithm(cls, algorithm: str) -> bool:
+        """Set the Viewport 2.0 transparency mode.
+
+        Parameters:
+            algorithm (str): One of :attr:`TRANSPARENCY_ALGORITHMS`.
+
+        Returns:
+            bool: True if the mode was applied.
+        """
+        key = str(algorithm).strip().lower().replace(" ", "_")
+        if key not in cls.TRANSPARENCY_ALGORITHMS:
+            return False
+        cmds.setAttr(
+            "hardwareRenderingGlobals.transparencyAlgorithm",
+            cls.TRANSPARENCY_ALGORITHMS.index(key),
+        )
+        return True
+
+    @classmethod
+    def ensure_transparent_graph(cls, mat: str) -> bool:
+        """Load ``Standard_Transparent.sfx`` onto a StingrayPBS node if needed.
+
+        The opacity slots (``opacity`` / ``use_opacity_map``) only exist on the
+        transparent ShaderFX graph — a StingrayPBS built from the standard graph
+        has nowhere to plug an opacity map.
+
+        .. note:: ``loadGraph`` drops the node's existing connections; callers
+           that need them preserved must snapshot first (see ``MatSnapshot``).
+
+        Parameters:
+            mat (str): StingrayPBS material.
+
+        Returns:
+            bool: True if the material now exposes the opacity slots.
+        """
+        if cmds.attributeQuery("use_opacity_map", node=mat, exists=True):
+            return True
+
+        EnvUtils.load_plugin("shaderFXPlugin")
+        graph = os.path.join(
+            EnvUtils.get_env_info("install_path"),
+            "presets",
+            "ShaderFX",
+            "Scenes",
+            "StingrayPBS",
+            "Standard_Transparent.sfx",
+        )
+        if not os.path.exists(graph):
+            return False
+
+        cmds.shaderfx(sfxnode=CoreUtils.short_name(mat), loadGraph=graph)
+        return True
+
     @classmethod
     def get_file_nodes(
         cls,
@@ -1586,6 +1968,74 @@ class MatUtils(_MatUtilsInternal):
                     objs_with_material.append(member)
 
         return objs_with_material
+
+    @classmethod
+    def find_unassigned(
+        cls, objects: Optional[List[str]] = None, include_default: bool = True
+    ) -> List[str]:
+        """Objects carrying no material — the complement of :meth:`find_by_mat_id`.
+
+        Maya has no true "no material" state for renderable geometry: new meshes
+        join ``initialShadingGroup``, so they report the default shader
+        (``standardSurface1`` on 2025+, ``lambert1`` before it) rather than
+        nothing. Two distinct states therefore read as "unassigned" to a user:
+
+        - **Default-shaded** — every shading engine the shape belongs to carries
+          only a default material (``include_default``, the common case: geometry
+          nobody has shaded yet).
+        - **Orphaned** — the shape belongs to no shading engine at all (import
+          artifacts, or an explicit ``sets -remove``). Always included; such
+          geometry renders black and is otherwise hard to find.
+
+        Object-level by design: a *partially* assigned mesh (some faces on a real
+        material, the rest default) counts as assigned — its unshaded faces are a
+        different question than "which objects did I forget to shade".
+
+        Parameters:
+            objects: Transforms, groups, shapes, or components to test. None (or
+                empty) tests every renderable mesh in the scene — same convention
+                as :meth:`find_by_mat_id`.
+            include_default: Count default-shaded geometry as unassigned.
+                False restricts the result to orphaned shapes.
+
+        Returns:
+            list[str]: Full-path transforms, in scene order.
+        """
+        if objects:
+            # ``objectsOnly`` first so a component selection resolves to its object
+            # (like find_by_mat_id, which accepts components); ``dag=True`` then
+            # walks at-or-below each input, so groups reach their shapes.
+            objs = cmds.ls([str(o) for o in objects], objectsOnly=True, long=True) or []
+            if not objs:  # scoped to nothing — an argless ls would scan the scene
+                return []
+            shapes = (
+                cmds.ls(objs, dag=True, type="mesh", noIntermediate=True, long=True)
+                or []
+            )
+        else:
+            shapes = cmds.ls(type="mesh", noIntermediate=True, long=True) or []
+
+        defaults = cls._default_material_names()
+        unassigned = []
+        for shape in shapes:
+            shading_groups = set(
+                cmds.listConnections(shape, type="shadingEngine") or []
+            )
+            if shading_groups and not include_default:
+                continue
+            mats = cls.get_mats(shape)
+            # No materials at all -> orphaned. Otherwise unassigned only when every
+            # material found is one of Maya's built-in defaults.
+            if mats and not all(
+                CoreUtils.short_name(m) in defaults for m in mats
+            ):
+                continue
+            parents = cmds.listRelatives(shape, parent=True, fullPath=True)
+            transform = parents[0] if parents else shape
+            if transform not in unassigned:
+                unassigned.append(transform)
+
+        return unassigned
 
     @staticmethod
     @ptk.filter_results

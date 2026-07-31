@@ -1,6 +1,5 @@
 # !/usr/bin/python
 # coding=utf-8
-import os
 from typing import Dict, Optional
 import pythontk as ptk
 
@@ -11,7 +10,6 @@ except ImportError:
 # From this package:
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.mat_utils.mat_snapshot import MatSnapshot
-from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 
 
@@ -35,30 +33,6 @@ class OpacityMaterialMode(ptk.LoggingMixin):
     def get_stingray_mats(cls, objects: Optional[list] = None) -> list:
         """Return unique StingrayPBS materials assigned to *objects*."""
         return MatUtils.get_mats(objects, mat_type="StingrayPBS", as_strings=True)
-
-    @classmethod
-    def ensure_transparent_graph(cls, mat) -> bool:
-        """Load Standard_Transparent.sfx onto a StingrayPBS node if needed."""
-        if cmds.attributeQuery("use_opacity_map", node=mat, exists=True):
-            return True
-
-        EnvUtils.load_plugin("shaderFXPlugin")
-        maya_path = EnvUtils.get_env_info("install_path")
-        graph = os.path.join(
-            maya_path,
-            "presets",
-            "ShaderFX",
-            "Scenes",
-            "StingrayPBS",
-            "Standard_Transparent.sfx",
-        )
-        if os.path.exists(graph):
-            cmds.shaderfx(sfxnode=mat.split('|')[-1].split(':')[-1], loadGraph=graph)
-            cls.logger.info(f"Loaded Standard_Transparent.sfx onto {mat.split('|')[-1].split(':')[-1]}")
-            return True
-        else:
-            cls.logger.warning(f"Transparent graph not found: {graph}")
-            return False
 
     @classmethod
     def create(
@@ -170,7 +144,7 @@ class OpacityMaterialMode(ptk.LoggingMixin):
 
             # Vital Step: Ensure the graph is loaded on the base material BEFORE we potentially duplicate it further.
             # This ensures duplicates work correctly as transparent materials without needing independent reloading.
-            if cls.ensure_transparent_graph(final_mat):
+            if MatUtils.ensure_transparent_graph(final_mat):
                 cls._expose_attributes(final_mat)
                 # Restore textures and scalar values lost by loadGraph / duplicate.
                 MatSnapshot.restore(

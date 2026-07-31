@@ -18,6 +18,7 @@ from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.display_utils._display_utils import DisplayUtils
+from mayatk.cam_utils._cam_utils import CamUtils
 from mayatk.ui_utils._ui_utils import UiUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 
@@ -1213,66 +1214,90 @@ class DisplayMacros:
         for obj in cmds.ls(exactType="imagePlane"):
             cmds.setAttr(f"{obj}.displayMode", 2 if state else 0)
 
+    # Ideal fit factor per selection kind — the distance that best supports
+    # working on that kind of selection, and the default (single-step) framing.
+    FRAME_FIT_FACTORS = {
+        "vertices": 0.10,
+        "vertex": 0.01,
+        "edge": 0.9,
+        "facet": 0.45,
+        "object": 0.75,
+        "scene": 0.75,
+    }
+    FRAME_STEP_TIMEOUT = 2.0  # seconds a deeper framing step stays reachable
+
     @staticmethod
-    @CoreUtils.selected
-    def m_frame(objects) -> None:
-        """Frame the selection, cycling zoom level on repeated presses.
+    def _frame_element_type(objects) -> str:
+        """The framing profile for `objects`: the active component mask while in
+        component mode, else ``"object"`` (``"scene"`` when nothing is selected)."""
+        if not objects:
+            return "scene"
+        if not cmds.selectMode(q=True, component=True):
+            return "object"
+        if cmds.selectType(q=True, vertex=True):
+            return "vertices" if len(objects) > 1 else "vertex"
+        if cmds.selectType(q=True, edge=True):
+            return "edge"
+        if cmds.selectType(q=True, facet=True):
+            return "facet"
+        return "object"
 
-        Pressing the hotkey repeatedly steps through three progressively
-        tighter / looser fit factors, so one key both frames and fine-tunes
-        the framing. With nothing selected, frames all objects. Honors the
-        active component mask (vertex / edge / face) for component framing.
+    @classmethod
+    def m_frame(cls, steps: int = 2, adjust_clipping: bool = True) -> None:
+        """Frame the selection at the ideal working distance; press again to step in.
+
+        The first press frames the selection the way you'd want it to work on it,
+        honoring the active component mask (vertex / edge / face); with nothing
+        selected it frames the whole scene. Each further press within
+        ``FRAME_STEP_TIMEOUT`` seconds steps *into* the selection, and the press
+        after the last step returns the camera exactly where it started.
+
+        Pausing collapses the cycle: once the timer lapses, the next press just
+        goes back — so framing once and working for a while still leaves the key
+        as a plain there-and-back toggle. Selecting something else restarts the
+        cycle instead of stepping deeper; after a pause that also re-homes it to
+        the view you are leaving, so "back" never teleports you to a stale one.
+
+        Parameters:
+            steps (int): Framing steps before the cycle returns home, i.e. the
+                toggle has ``steps + 1`` states. ``1`` gives frame / restore;
+                the default ``2`` adds a closer step. More steps start the cycle
+                a little further out so the extra presses have somewhere to go.
+            adjust_clipping (bool): Widen the camera's clip planes as needed so
+                the framed selection is never drawn clipped (with slack to orbit
+                and pan around it). The original planes come back with the
+                camera on the final press.
         """
-        # Initialise the MEL global variable used to track the toggle state.
-        mel.eval(
-            'global int $toggleFrame_; if (!`exists "toggleFrame_"`) {$toggleFrame_=0;}'
+        objects = cmds.ls(selection=True) or []
+        element_type = cls._frame_element_type(objects)
+
+        toggle = ptk.StepToggle.get("mtk_m_frame")
+        # A cheap selection signature: framing something else restarts the cycle
+        # rather than stepping deeper into what the user just left.
+        context = (element_type, len(objects), objects[0] if objects else "")
+        state = toggle.advance(
+            steps=steps, context=context, timeout=cls.FRAME_STEP_TIMEOUT
         )
-        mode = cmds.selectMode(q=True, component=True)
-        maskVertex = cmds.selectType(q=True, vertex=True)
-        maskEdge = cmds.selectType(q=True, edge=True)
-        maskFacet = cmds.selectType(q=True, facet=True)
 
-        # Define toggle states and fit factors
-        toggle_states = {
-            "vertices": [(0.10, 1), (0.65, 2), (0.01, 0)],
-            "vertex": [(0.01, 1), (0.15, 2), (0.01, 0)],
-            "edge": [(0.9, 1), (0.3, 2), (0.1, 0)],
-            "facet": [(0.45, 1), (0.9, 2), (0.2, 0)],
-            "object": [(0.75, 1), (0.99, 2), (0.5, 0)],
-        }
+        if state == 0:  # cycle complete -> back where the user started
+            CamUtils.set_view_state(toggle.payload)
+            toggle.payload = None
+            return
 
-        def _get_toggle() -> int:
-            try:
-                return int(mel.eval("$tmp=$toggleFrame_;") or 0)
-            except Exception:
-                return 0
+        if toggle.began_cycle:  # remember the view to come back to
+            toggle.payload = CamUtils.get_view_state()
 
-        def _set_toggle(val: int) -> None:
-            mel.eval(f"global int $toggleFrame_; $toggleFrame_={val};")
+        ideal = cls.FRAME_FIT_FACTORS.get(element_type, 0.75)
+        scale = ptk.StepToggle.scales(steps)[state - 1]
+        fit_factor = min(max(ideal * scale, 0.01), 2.0)
 
-        def frame_element(element_type):
-            current_toggle = _get_toggle()
-            fitFactorVal, next_toggle = toggle_states[element_type][current_toggle]
-            cmds.viewFit(fitFactor=fitFactorVal)
-            _set_toggle(next_toggle)
-            print(f"frame {element_type} {next_toggle}")
-
-        if len(objects) == 0:
-            cmds.viewFit(allObjects=1)
+        if objects:
+            cmds.viewFit(fitFactor=fit_factor)
         else:
-            if mode == 1:
-                if maskVertex == 1:
-                    element_type = "vertices" if len(objects) > 1 else "vertex"
-                elif maskEdge == 1:
-                    element_type = "edge"
-                elif maskFacet == 1:
-                    element_type = "facet"
-                else:
-                    element_type = "object"
-            else:
-                element_type = "object"
+            cmds.viewFit(allObjects=True, fitFactor=fit_factor)
 
-            frame_element(element_type)
+        if adjust_clipping:
+            CamUtils.fit_camera_clipping(objects or None)
 
     @classmethod
     @CoreUtils.selected

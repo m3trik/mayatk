@@ -901,5 +901,67 @@ class TestNodeUtils(MayaTkTestCase):
                 raise e
 
 
+class TestInstancedShapeHelpers(MayaTkTestCase):
+    """Instanced-shape detection and the safe uninstance path."""
+
+    def _make_history_group(self, name="pih"):
+        """An instanced pair whose shape carries a deformer — so both the
+        visible shape AND the intermediate (orig) shape are shared."""
+        src = cmds.polyCube(name=f"{name}_m0")[0]
+        cmds.select(src)
+        cmds.nonLinear(type="bend")
+        sib = cmds.instance(src, name=f"{name}_m1")[0]
+        cmds.setAttr(f"{sib}.translateX", 8)
+        cmds.setAttr(f"{src}.rotateY", 30)
+        cmds.setAttr(f"{src}.scaleX", 2)
+        return cmds.ls([src, sib], long=True)
+
+    def test_get_instanced_shapes_includes_intermediates(self):
+        """Regression: a shared orig shape blocks makeIdentity exactly like a
+        shared visible shape, so it must be reported as instanced."""
+        src, _ = self._make_history_group("gis")
+        all_inst = NodeUtils.get_instanced_shapes(src)
+        visible_inst = NodeUtils.get_instanced_shapes(src, intermediate=False)
+
+        self.assertEqual(len(all_inst), 2)
+        self.assertEqual(len(visible_inst), 1)
+        self.assertTrue(any(NodeUtils.is_intermediate(s) for s in all_inst))
+
+    def test_uninstance_with_delete_history_detaches_and_freezes(self):
+        """Regression: uninstance forked visible shapes only, so the shared
+        orig shape survived and uninstance(freeze=True) silently did
+        nothing. Baking the history away is what actually detaches it."""
+        src, sib = self._make_history_group("uif")
+
+        NodeUtils.uninstance(src, freeze=True, delete_history=True)
+
+        self.assertEqual(NodeUtils.get_instanced_shapes(src), [])
+        for v in cmds.getAttr(f"{src}.scale")[0]:
+            self.assertAlmostEqual(v, 1.0, places=4)
+        # The sibling keeps real geometry (a fork of the orig shape would
+        # have invalidated the deformer's per-instance input and left it
+        # evaluating to an empty mesh).
+        sib_shape = cmds.listRelatives(
+            sib, shapes=True, fullPath=True, noIntermediate=True
+        )[0]
+        self.assertGreater(cmds.polyEvaluate(sib_shape, vertex=True), 0)
+
+    def test_uninstance_leaves_shared_intermediate_alone_by_default(self):
+        """Forking a live-history orig shape empties the remaining
+        instances, so it must be left shared (and reported) unless the
+        caller opts into baking the history away."""
+        src, sib = self._make_history_group("uil")
+
+        NodeUtils.uninstance(src)
+
+        remaining = NodeUtils.get_instanced_shapes(src)
+        self.assertTrue(remaining)
+        self.assertTrue(all(NodeUtils.is_intermediate(s) for s in remaining))
+        sib_shape = cmds.listRelatives(
+            sib, shapes=True, fullPath=True, noIntermediate=True
+        )[0]
+        self.assertGreater(cmds.polyEvaluate(sib_shape, vertex=True), 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import Any, Union, List
+from typing import Any, List, Optional, Union
 
 try:
     import maya.cmds as cmds
@@ -1088,7 +1088,152 @@ class NodeUtils(ptk.HelpMixin):
         return cls.replace_with_instances(*args, **kwargs)
 
     @classmethod
-    def uninstance(cls, objects, freeze=False):
+    def get_instanced_shapes(cls, node, intermediate: bool = True) -> List[str]:
+        """Every shape under *node* that is shared with another transform.
+
+        The counterpart of :meth:`get_instances` (which answers "which
+        OTHER transforms share this object's shapes"): this returns the
+        shared SHAPE nodes themselves — the set any fork / uninstance /
+        freeze decision actually has to act on.
+
+        **Intermediate (orig) shapes count**, and that is load-bearing:
+        ``cmds.makeIdentity`` refuses to freeze while *any* child shape is
+        multiply-instanced, intermediate or not (verified — a shared
+        deformer orig shape blocks the freeze exactly like a shared
+        visible shape, with "Cannot freeze below transform X due to
+        multiply-instanced child XShapeOrig"). A caller that forks only
+        the visible shapes leaves an object that still cannot be frozen,
+        which is precisely how ``uninstance(freeze=True)`` used to fail
+        silently on any object carrying history.
+        """
+        shapes = (
+            cmds.listRelatives(
+                str(node),
+                shapes=True,
+                fullPath=True,
+                noIntermediate=not intermediate,
+            )
+            or []
+        )
+        return [
+            s
+            for s in shapes
+            if len(cmds.listRelatives(s, allParents=True, fullPath=True) or []) > 1
+        ]
+
+    @staticmethod
+    def _fork_instanced_shape(transform_long: str, shape_long: str) -> Optional[str]:
+        """Fork one instanced shape on *transform_long* into a unique copy.
+
+        Grafts a duplicate of *shape_long* under the transform first — the
+        transform is never momentarily shapeless — then surgically removes
+        only the (transform, shape) instance edge via
+        ``MFnDagNode.removeChild``.  ``cmds.parent -rm -s`` does NOT work:
+        it tries to unparent the shape to world, which Maya silently
+        rejects, leaving the instance link intact.  Sibling instance
+        transforms keep the original shape.
+
+        Returns:
+            The new shape's long path, or None on failure (warned).
+        """
+        import maya.api.OpenMaya as om
+
+        shape_short = shape_long.split("|")[-1]
+        dup_xform = None
+        try:
+            # ``cmds.duplicate`` always forks geometry, so the new shape is
+            # unique even when the source was instanced.  Duplicating the
+            # shape (not the transform) avoids walking children.
+            dup_xform = cmds.duplicate(
+                shape_long,
+                returnRootsOnly=True,
+                name=f"{shape_short}__uninst_tmp",
+            )[0]
+            # noIntermediate would hide the duplicate of an INTERMEDIATE
+            # source shape (Maya copies the flag), leaving this looking like
+            # "duplicate produced no shape node".
+            dup_shapes = (
+                cmds.listRelatives(
+                    dup_xform, shapes=True, fullPath=True, noIntermediate=False
+                )
+                or []
+            )
+            if not dup_shapes:
+                raise RuntimeError("duplicate produced no shape node")
+            # ``relative`` keeps the local transform — the shape is
+            # positioned by the transform's matrix, which is unchanged.
+            new_shape = cmds.parent(
+                dup_shapes[0], transform_long, shape=True, relative=True
+            )[0]
+            # Resolve the long path under THIS transform — ``cmds.ls`` on the
+            # returned partial path could match a same-named node elsewhere.
+            new_leaf = str(new_shape).split("|")[-1]
+            resolved = [
+                s
+                for s in (
+                    cmds.listRelatives(
+                        transform_long, shapes=True, fullPath=True
+                    )
+                    or []
+                )
+                if s.split("|")[-1] == new_leaf
+            ]
+            new_shape = (
+                resolved[0]
+                if resolved
+                else (cmds.ls(new_shape, long=True) or [new_shape])[0]
+            )
+            # Keep the fork on the same side of the intermediate divide as
+            # its source, so a forked orig shape stays hidden rather than
+            # rendering on top of the visible one.
+            if NodeUtils.is_intermediate(shape_long) and not NodeUtils.is_intermediate(
+                new_shape
+            ):
+                cmds.setAttr(f"{new_shape}.intermediateObject", True)
+
+            # Name it after its transform, Maya-style. The scratch name is an
+            # implementation detail: left in place it accumulates across runs
+            # ("...__uninst_tmpShape__uninst_tmpShape"), which is how a
+            # production file ended up with 116 of them.
+            leaf = transform_long.split("|")[-1]
+            want = f"{leaf}Shape" + ("Orig" if NodeUtils.is_intermediate(new_shape) else "")
+            try:
+                renamed = cmds.rename(new_shape, want)
+                new_shape = (
+                    cmds.listRelatives(
+                        transform_long, shapes=True, fullPath=True
+                    )
+                    or []
+                )
+                new_shape = next(
+                    (s for s in new_shape if s.split("|")[-1] == renamed.split("|")[-1]),
+                    (cmds.ls(renamed, long=True) or [renamed])[0],
+                )
+            except RuntimeError:
+                pass  # name taken by something else — cosmetic only
+
+            sel = om.MSelectionList()
+            sel.add(transform_long)
+            sel.add(shape_long)
+            om.MFnDagNode(sel.getDependNode(0)).removeChild(sel.getDependNode(1))
+
+            cmds.delete(dup_xform)
+            dup_xform = None
+            return new_shape
+        except (RuntimeError, ValueError) as e:
+            cmds.warning(
+                f"shape fork failed for {transform_long} (shape {shape_long}): {e}"
+            )
+            return None
+        finally:
+            if dup_xform and cmds.objExists(dup_xform):
+                try:
+                    cmds.delete(dup_xform)
+                except RuntimeError:
+                    pass
+
+    @classmethod
+    def uninstance(cls, objects, freeze=False, delete_history=False, quiet=True):
         """Un-Instance the given objects.
 
         ``freeze`` (optional additional step): after breaking the link, bake the
@@ -1104,86 +1249,56 @@ class NodeUtils(ptk.HelpMixin):
         transform itself.  Name, world matrix, parent, children and any
         non-instanced shapes are preserved.  Sibling instance transforms
         retain the original shape.
-        """
-        import maya.api.OpenMaya as om
 
+        ``delete_history`` (opt-in): bake away construction history first
+        when the object shares an INTERMEDIATE (orig) shape.  Such a shape
+        can't be forked — the deformer reads it per instance, so dropping
+        this transform's edge empties the remaining instances — and while
+        it stays shared the object cannot be frozen.  Baking preserves
+        every member's appearance.  Without it, a shared orig shape is
+        left alone and reported.
+        """
         if objects == "all":
             objects = cls.get_instances()
 
         results = []
         for obj in cmds.ls(CoreUtils.as_strings(objects)) or []:
             obj_long = (cmds.ls(obj, long=True) or [obj])[0]
-            shapes = (
-                cmds.listRelatives(
-                    obj_long, shapes=True, fullPath=True, noIntermediate=True
-                )
-                or []
-            )
+            inst_shapes = cls.get_instanced_shapes(obj_long)
 
-            for shape in shapes:
-                instance_parents = (
-                    cmds.listRelatives(shape, allParents=True, fullPath=True) or []
-                )
-                if len(instance_parents) <= 1:
-                    continue  # shape is not instanced on this transform
-
-                shape_short = shape.split("|")[-1]
-                dup_xform = None
-                try:
-                    # Duplicate the shape (not the transform — avoids
-                    # walking children). ``cmds.duplicate`` always forks
-                    # geometry, so the new shape is unique even when the
-                    # source was instanced.
-                    dup_xform = cmds.duplicate(
-                        shape,
-                        returnRootsOnly=True,
-                        name=f"{shape_short}__uninst_tmp",
-                    )[0]
-                    dup_shapes = (
-                        cmds.listRelatives(
-                            dup_xform,
-                            shapes=True,
-                            fullPath=True,
-                            noIntermediate=True,
+            # A shared INTERMEDIATE (orig) shape is live construction
+            # history feeding a deformer, and it keeps the object
+            # un-freezable even once the visible shape is unique. It cannot
+            # simply be forked: the deformer reads the orig shape's
+            # world-space output per instance, so dropping this
+            # transform's instance edge invalidates that index and the
+            # REMAINING instances evaluate to an empty mesh (verified).
+            # Baking the history away is the safe route, and it preserves
+            # every member's appearance — but it is destructive, so it is
+            # opt-in.
+            if any(cls.is_intermediate(s) for s in inst_shapes):
+                if delete_history:
+                    cmds.delete(obj_long, constructionHistory=True)
+                    inst_shapes = cls.get_instanced_shapes(obj_long)
+                else:
+                    # Not a warning: the visible geometry IS detached, which
+                    # is what callers want, and XformUtils.freeze_instanced_group
+                    # bakes without makeIdentity so a shared orig shape no
+                    # longer blocks a freeze. Only a fully independent
+                    # datablock needs delete_history.
+                    if not quiet:
+                        print(
+                            f"uninstance: '{CoreUtils.short_name(obj_long)}' keeps a "
+                            "shared intermediate (history) shape — forking it would "
+                            "empty the other instances. Pass delete_history=True for "
+                            "a fully independent copy."
                         )
-                        or []
-                    )
-                    if not dup_shapes:
-                        raise RuntimeError("duplicate produced no shape node")
-                    new_shape = dup_shapes[0]
+                    inst_shapes = [
+                        s for s in inst_shapes if not cls.is_intermediate(s)
+                    ]
 
-                    # Graft the unique shape under obj_long first so the
-                    # transform is never momentarily shapeless.
-                    # ``relative`` keeps the local transform — the shape
-                    # is positioned by obj_long's matrix, which is
-                    # unchanged.
-                    cmds.parent(new_shape, obj_long, shape=True, relative=True)
-
-                    # Surgically remove this transform's instance link
-                    # to the original shape.  ``cmds.parent -rm -s`` does
-                    # NOT work — it tries to unparent shapes to world,
-                    # which Maya silently rejects, leaving the instance
-                    # link intact.  MFnDagNode.removeChild removes only
-                    # the (parent, child) edge — sibling instance
-                    # transforms keep the shape.
-                    sel = om.MSelectionList()
-                    sel.add(obj_long)
-                    sel.add(shape)
-                    om.MFnDagNode(sel.getDependNode(0)).removeChild(
-                        sel.getDependNode(1)
-                    )
-
-                    cmds.delete(dup_xform)
-                    dup_xform = None
-                except (RuntimeError, ValueError) as e:
-                    cmds.warning(
-                        f"uninstance failed for {obj_long} (shape {shape}): {e}"
-                    )
-                    if dup_xform and cmds.objExists(dup_xform):
-                        try:
-                            cmds.delete(dup_xform)
-                        except RuntimeError:
-                            pass
+            for shape in inst_shapes:
+                cls._fork_instanced_shape(obj_long, shape)
 
             results.append(obj_long)
 

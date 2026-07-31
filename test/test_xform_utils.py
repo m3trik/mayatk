@@ -1373,5 +1373,172 @@ class TestXformUtilsEdgeCases(MayaTkTestCase):
         cmds.delete(cube)
 
 
+class TestFreezeInstanceStrategy(MayaTkTestCase):
+    """freeze_transforms(instance_strategy=...) — skip / preserve / uninstance."""
+
+    def _make_group(self, n=3, name="fis"):
+        src = cmds.polyCube(name=f"{name}_m0")[0]
+        members = [src]
+        for i in range(1, n):
+            members.append(cmds.instance(src, name=f"{name}_m{i}")[0])
+        for i, m in enumerate(members):
+            # Every member non-identity — including the first, so "the master
+            # got frozen" assertions can never pass vacuously.
+            cmds.setAttr(
+                f"{m}.translate", (i + 1) * 3.0, 0.5 * (i + 1), 0.0, type="double3"
+            )
+            cmds.setAttr(f"{m}.rotateY", 25.0 * (i + 1))
+        return cmds.ls(members, long=True)
+
+    def _world_verts(self, obj, count=8):
+        return [
+            cmds.xform(f"{obj}.vtx[{i}]", q=True, ws=True, t=True)
+            for i in range(count)
+        ]
+
+    def _shared_parent_count(self, member):
+        shape = cmds.listRelatives(member, shapes=True, fullPath=True)[0]
+        return len(cmds.listRelatives(shape, allParents=True) or [])
+
+    def test_default_skip_leaves_instances_untouched(self):
+        members = self._make_group()
+        XformUtils.freeze_transforms(members)
+        # Default behavior unchanged: instanced objects are skipped in place.
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{members[1]}.translateX"), 6.0, places=4
+        )
+        for m in members:
+            self.assertEqual(self._shared_parent_count(m), 3)
+
+    def test_preserve_keeps_instancing(self):
+        members = self._make_group(name="fisp")
+        before = {m: self._world_verts(m) for m in members}
+
+        XformUtils.freeze_transforms(members, instance_strategy="preserve")
+
+        for m in cmds.ls(members, long=True):
+            self.assertEqual(self._shared_parent_count(m), 3)
+            for va, vb in zip(before[m], self._world_verts(m)):
+                for x, y in zip(va, vb):
+                    self.assertAlmostEqual(x, y, places=3)
+        # The group's operated member is identity-frozen.
+        master = cmds.ls(members[0], long=True)[0]
+        for v in cmds.getAttr(f"{master}.translate")[0]:
+            self.assertAlmostEqual(v, 0.0, places=4)
+        for v in cmds.getAttr(f"{master}.rotate")[0]:
+            self.assertAlmostEqual(v, 0.0, places=4)
+
+    def test_uninstance_breaks_and_freezes(self):
+        members = self._make_group(name="fisu")
+        before = {m: self._world_verts(m) for m in members}
+
+        XformUtils.freeze_transforms(members, instance_strategy="uninstance")
+
+        for m in cmds.ls(members, long=True):
+            self.assertEqual(self._shared_parent_count(m), 1)
+            for va, vb in zip(before[m], self._world_verts(m)):
+                for x, y in zip(va, vb):
+                    self.assertAlmostEqual(x, y, places=3)
+            for v in cmds.getAttr(f"{m}.translate")[0]:
+                self.assertAlmostEqual(v, 0.0, places=4)
+
+    def test_preserve_keeps_per_instance_shading(self):
+        """Regression (production scene): the fork/relink design renumbered
+        instObjGroups and broke per-instance shading — 'Connection not made
+        … SG.dagSetMembers[n]' — leaving siblings on baked geometry with
+        un-compensated matrices. The in-place bake touches no DAG edge."""
+        members = self._make_group(3, name="fsg")
+        sgs = []
+        for i, m in enumerate(members):
+            mat = cmds.shadingNode("lambert", asShader=True, name=f"fsg_mat{i}")
+            sg = cmds.sets(
+                renderable=True, noSurfaceShader=True, empty=True, name=f"fsg_SG{i}"
+            )
+            cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader")
+            cmds.sets(m, e=True, forceElement=sg)
+            sgs.append(sg)
+
+        XformUtils.freeze_transforms(members, instance_strategy="preserve")
+
+        for m, sg in zip(cmds.ls(members, long=True), sgs):
+            shape = cmds.listRelatives(
+                m, shapes=True, fullPath=True, noIntermediate=True
+            )[0]
+            self.assertIn(sg, cmds.listSets(object=shape, type=1) or [])
+        # No fork happened: no '__uninst_tmp' wreckage in the scene.
+        self.assertEqual(cmds.ls("*__uninst_tmp*") or [], [])
+
+    def test_preserve_freezes_instance_with_shared_intermediate(self):
+        """A shared intermediate (orphaned history) shape used to make the
+        object permanently un-freezable. Baking in place ignores it."""
+        src = cmds.polyCube(name="fsi_m0")[0]
+        sib = cmds.instance(src, name="fsi_m1")[0]
+        cmds.setAttr(f"{sib}.translateX", 8)
+        orig = cmds.createNode("mesh", parent=src, name="fsi_m0ShapeOrig")
+        cmds.setAttr(f"{orig}.intermediateObject", 1)
+        cmds.parent(cmds.ls(orig, long=True)[0], sib, add=True, shape=True)
+        cmds.setAttr(f"{src}.rotateY", 30)
+        cmds.setAttr(f"{src}.scaleX", 2)
+        members = cmds.ls([src, sib], long=True)
+        before = {m: self._world_verts(m) for m in members}
+
+        XformUtils.freeze_transforms(members, instance_strategy="preserve")
+
+        master = cmds.ls(members[0], long=True)[0]
+        for v in cmds.getAttr(f"{master}.rotate")[0]:
+            self.assertAlmostEqual(v, 0.0, places=4)
+        for m in cmds.ls(members, long=True):
+            self.assertEqual(self._shared_parent_count(m), 2)
+            for va, vb in zip(before[m], self._world_verts(m)):
+                for x, y in zip(va, vb):
+                    self.assertAlmostEqual(x, y, places=3)
+
+    def test_driven_sibling_leaves_group_untouched(self):
+        """A driven sibling would have the compensation overwritten on the
+        next evaluation, leaving it displaced against baked geometry — so
+        the whole group is skipped rather than half-applied."""
+        members = self._make_group(2, name="fsd")
+        driver = cmds.spaceLocator(name="fsd_driver")[0]
+        cmds.connectAttr(f"{driver}.translateX", f"{members[1]}.translateX")
+        before = {m: self._world_verts(m) for m in members}
+
+        XformUtils.freeze_transforms(members, instance_strategy="preserve")
+
+        for m in cmds.ls(members, long=True):
+            for va, vb in zip(before[m], self._world_verts(m)):
+                for x, y in zip(va, vb):
+                    self.assertAlmostEqual(x, y, places=3)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{members[0]}.translateX"), 3.0, places=4
+        )
+
+    def test_orphan_intermediate_sharing_does_not_drop_objects(self):
+        """The group is resolved from the shapes a bake writes to. An
+        orphaned intermediate shared more widely than the visible shape must
+        not make unrelated objects count as handled — they would silently
+        never be frozen."""
+        a = cmds.polyCube(name="fso_a")[0]
+        b = cmds.polyCube(name="fso_b")[0]
+        a_inst = cmds.instance(a, name="fso_a2")[0]
+        orphan = cmds.createNode("mesh", parent=a, name="fso_orphanShape")
+        cmds.setAttr(f"{orphan}.intermediateObject", 1)
+        cmds.parent(cmds.ls(orphan, long=True)[0], b, add=True, shape=True)
+        for obj in (a, a_inst, b):
+            cmds.setAttr(f"{obj}.translateY", 4.0)
+        members = cmds.ls([a, a_inst, b], long=True)
+
+        XformUtils.freeze_transforms(members, instance_strategy="preserve")
+
+        # b only ever shared the orphan, so it must have been frozen itself.
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{cmds.ls(b, long=True)[0]}.translateY"), 0.0, places=4
+        )
+
+    def test_invalid_strategy_raises(self):
+        members = self._make_group(name="fisx")
+        with self.assertRaises(ValueError):
+            XformUtils.freeze_transforms(members, instance_strategy="bogus")
+
+
 if __name__ == "__main__":
     unittest.main()

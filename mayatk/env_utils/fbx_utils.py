@@ -52,6 +52,23 @@ class FbxUtils(ptk.HelpMixin):
             cmds.loadPlugin("fbxmaya")
 
     @staticmethod
+    def reset_import():
+        """Reset the FBX plugin's global IMPORT options to factory defaults.
+
+        Import options are sticky across the session -- whatever the last
+        (often interactive) FBX import set silently shapes every later
+        ``cmds.file(i=True, type="FBX")``. Call before applying options so an
+        import starts deterministic: the import twin of ``FBXResetExport``.
+        Note the factory default mode is ``merge`` ("add and update
+        animation"), which can retarget animation onto same-named nodes
+        already in the scene -- pair with ``FBXImportMode: add`` (the
+        :attr:`_DEFAULT_IMPORT_OPTIONS` choice) when pre-existing scene state
+        must never be touched.
+        """
+        FbxUtils.load_plugin()
+        mel.eval("FBXResetImport")
+
+    @staticmethod
     def set_fbx_options(options: Dict[str, Any]):
         """Apply FBX export options via MEL commands.
 
@@ -200,6 +217,12 @@ class FbxUtils(ptk.HelpMixin):
             raise FileNotFoundError(f"FBX not found: {file_path}")
 
         cls.load_plugin()
+        # Factory baseline first: sticky options OUTSIDE the applied dict
+        # (scale factor, axis conversion, ...) must not leak into this import.
+        try:
+            cls.reset_import()
+        except RuntimeError:
+            logger.debug("FBXResetImport unavailable (OK).")
         cls._apply_import_options(
             options if options is not None else cls._DEFAULT_IMPORT_OPTIONS
         )

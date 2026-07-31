@@ -28,6 +28,7 @@ except ImportError as error:
 
 import pythontk as ptk
 from uitk import IconManager
+
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.uv_utils._uv_utils import UvUtils
@@ -61,6 +62,12 @@ class ShellXformSlots(ptk.LoggingMixin):
         "Quarter Tile": 0.25,
         "Selection Bounds": None,
     }
+
+    # Snap modes for the move pad's option-box button, in cycle order (the
+    # indices ARE the cycle positions, so `_snap_states` must list them in this
+    # order). One tri-state button rather than two: the modes are mutually
+    # exclusive answers to a single question — snap to what?
+    _SNAP_OFF, _SNAP_GRID, _SNAP_SHELL = range(3)
 
     # A UV extent at or below this is treated as collapsed: dividing by it would
     # blow the grid math up, so the arrow falls back to a whole tile.
@@ -110,10 +117,14 @@ class ShellXformSlots(ptk.LoggingMixin):
                 steps=[
                     "Select mesh(es), faces, or UVs.",
                     "<b>Move</b> nudges the selection by one <i>scope</i> — a "
-                    "whole tile, a fraction of one, or the selection's own size. "
-                    "The grid button (▦) snaps the result onto that scope's grid "
-                    "instead of offsetting relatively, inset by the border "
-                    "padding so shells never touch a tile border.",
+                    "whole tile, a fraction of one, or the selection's own size.",
+                    "The snap button beside the scope cycles three modes: "
+                    "<b>grey ▦</b> off (offset by the scope, keeping any drift), "
+                    "<b>blue ▦</b> snap to the scope's grid inset by the border "
+                    "padding, and <b>amber ⌖</b> snap to the next <i>shell</i> — "
+                    "park against the nearest neighbour in that direction, "
+                    "skipping gaps too small to fit and falling back to the grid "
+                    "when nothing lies ahead.",
                     "<b>Gather to Tile</b> moves shells sitting outside the "
                     "selection's UDIM tile into it — whole-tile offsets keep "
                     "each shell's sub-tile position (no repack).",
@@ -151,35 +162,60 @@ class ShellXformSlots(ptk.LoggingMixin):
 
     # ------------------------------------------------------------------ move to UV space (b023-b026)
     def cmb_move_scope_init(self, widget):
-        """Move scope — how far one arrow press travels, plus the snap toggle.
+        """Move scope — how far one arrow press travels, plus the snap button.
 
         Items are built from ``_MOVE_SCOPES`` with the step as item data, so the
         step is read straight off the current item — a label edited in one place
         can no longer mean a different distance somewhere else. Snap rides along
-        as an option-box toggle rather than a fifth item, because it composes
-        with every scope instead of replacing one.
+        as an option-box button rather than extra items, because the mode
+        composes with every scope instead of replacing one.
         """
         if widget.is_initialized:
             return
-        from uitk.widgets.optionBox.options.toggle import ToggleOption
-
         widget.add(self._MOVE_SCOPES)
-        widget.option_box.set_toggle(
-            icon="grid",
-            tooltip_on="Snap: on. Arrows land the selection on the scope's grid.",
-            tooltip_off="Snap: off. Arrows offset by the scope, keeping any sub-tile drift.",
-            initial=False,
-            settings_key="shell_xform_move_snap",
+        # The ActionOption owns its own index persistence, so the restored mode
+        # is whatever the user left it on. A fresh key: the old one held a bool
+        # and would restore as a state index.
+        self._snap_action = widget.option_box.set_action(
+            states=self._snap_states(),
+            settings_key="shell_xform_move_snap_mode",
         )
-        # Cache the option here (the toggle owns its own persistence, so this is
-        # the restored state) — the move path then reads it without reaching back
-        # into the option-box internals on every arrow press.
-        self._snap_toggle = widget.option_box.find_option(ToggleOption)
 
-    def _snap_enabled(self) -> bool:
-        """State of the move-scope option-box snap toggle."""
-        toggle = getattr(self, "_snap_toggle", None)
-        return bool(toggle and toggle.is_on)
+    def _snap_states(self):
+        """Option-box cycle states for the snap button, in `_SNAP_*` order.
+
+        Icon *and* tint change per state: two enabled modes are easy to confuse
+        by colour alone, and the off state has to read as inert at a glance.
+        Colours come from the shared status palette so they track the theme.
+        """
+        status = ptk.Palette.status()
+        return [
+            {
+                "icon": "grid",
+                "color": status["locked"][0],
+                "tooltip": "Snap: off. Arrows offset by the scope, keeping any "
+                "sub-tile drift. Click to snap to the grid.",
+            },
+            {
+                "icon": "grid",
+                "color": status["info"][0],
+                "tooltip": "Snap: grid. Arrows land the selection on the scope's "
+                "grid, inset by the tile border padding. Click to snap to shells.",
+            },
+            {
+                "icon": "target",
+                "color": status["warn"][0],
+                "tooltip": "Snap: shell. Arrows park the selection against the "
+                "next shell in that direction, keeping the border padding, and "
+                "skip gaps too small to fit. Falls back to the grid when nothing "
+                "lies ahead. Click to turn snapping off.",
+            },
+        ]
+
+    def _snap_mode(self) -> int:
+        """Current snap mode — `_SNAP_OFF`, `_SNAP_GRID`, or `_SNAP_SHELL`."""
+        action = getattr(self, "_snap_action", None)
+        return self._SNAP_OFF if action is None else int(action.current_state)
 
     def _move_step(self, bounds) -> tuple:
         """Per-axis ``(step_u, step_v)`` for the current scope.
@@ -201,7 +237,14 @@ class ShellXformSlots(ptk.LoggingMixin):
         )
 
     def _move(self, du: int, dv: int):
-        """Nudge the selected UVs one move-scope step along ``(du, dv)``."""
+        """Nudge the selected UVs one step along ``(du, dv)``.
+
+        The snap mode picks the rule: ``_SNAP_OFF`` offsets by the scope,
+        ``_SNAP_GRID`` lands on the scope's padded grid, and ``_SNAP_SHELL``
+        parks against the next neighbouring shell. Shell snap ignores the scope
+        entirely — the neighbour sets the distance — and degrades to the grid
+        rule whenever nothing lies ahead, so the arrow never reads as dead.
+        """
         selection = self._selection_or_warn(
             "<b>Nothing selected.</b><br>Select a mesh, faces, or UVs to move."
         )
@@ -215,23 +258,40 @@ class ShellXformSlots(ptk.LoggingMixin):
             )
             return
 
-        step_u, step_v = self._move_step(bounds)
-        snap = self._snap_enabled()
-        # Snap anchors on the selection's lower-left corner, so "up" means the
-        # shell's bottom edge lands on the next grid line — what the eye expects.
-        # The grid is offset by the tile border padding, so a snapped shell sits
-        # just inside the line rather than on it (a shell exactly on a tile seam
-        # bleeds across it at render time). Snapping the *unpadded* anchor and
-        # adding the margin back keeps the grid uniform in both directions —
-        # padding the result instead would strand the reverse press on the
-        # margin it just added, and the arrow would read as dead.
+        mode = self._snap_mode()
+        snap = mode != self._SNAP_OFF
         margin = self._border_margin() if snap else 0.0
-        u_min, v_min = bounds[0] - margin, bounds[1] - margin
-        UvUtils.move_to_uv_space(
-            selection,
-            ptk.MathUtils.step_offset(u_min, step_u, du, snap=snap),
-            ptk.MathUtils.step_offset(v_min, step_v, dv, snap=snap),
-        )
+
+        offset_u = offset_v = None
+        if mode == self._SNAP_SHELL:
+            blockers = UvUtils.get_neighbor_shell_bounds(selection)
+            # Only the travelled axis can resolve — the other's direction is 0,
+            # which `next_clear_offset` reports as None.
+            offset_u = ptk.MathUtils.next_clear_offset(
+                bounds, blockers, 0, du, margin=margin
+            )
+            offset_v = ptk.MathUtils.next_clear_offset(
+                bounds, blockers, 1, dv, margin=margin
+            )
+
+        if offset_u is None and offset_v is None:
+            # Snap anchors on the selection's lower-left corner, so "up" means the
+            # shell's bottom edge lands on the next grid line — what the eye expects.
+            # The grid is offset by the tile border padding, so a snapped shell sits
+            # just inside the line rather than on it (a shell exactly on a tile seam
+            # bleeds across it at render time). Snapping the *unpadded* anchor and
+            # adding the margin back keeps the grid uniform in both directions —
+            # padding the result instead would strand the reverse press on the
+            # margin it just added, and the arrow would read as dead.
+            step_u, step_v = self._move_step(bounds)
+            offset_u = ptk.MathUtils.step_offset(
+                bounds[0] - margin, step_u, du, snap=snap
+            )
+            offset_v = ptk.MathUtils.step_offset(
+                bounds[1] - margin, step_v, dv, snap=snap
+            )
+
+        UvUtils.move_to_uv_space(selection, offset_u or 0.0, offset_v or 0.0)
 
     def _border_margin(self) -> float:
         """Normalized tile border the snap keeps clear.
@@ -380,8 +440,14 @@ class ShellXformSlots(ptk.LoggingMixin):
             setToolTip="Straighten a UV shell by unfolding UV's around a selected UV's edgeloop.",
         )
 
+    @CoreUtils.undoable
     def tb005(self, widget):
-        """Straighten UV"""
+        """Straighten UV
+
+        Chunked: ``texStraightenUVs`` walks the shells one at a time, moving UVs
+        per edge loop, and ``texStraightenShell`` is a second op on top — so
+        without the chunk one press costs many presses of Ctrl+Z to revert.
+        """
         u = widget.option_box.menu.chk018.isChecked()
         v = widget.option_box.menu.chk019.isChecked()
         angle = widget.option_box.menu.s001.value()
@@ -406,24 +472,37 @@ class ShellXformSlots(ptk.LoggingMixin):
             setText="Distribute U",
             setObjectName="chk023",
             setChecked=True,
-            setToolTip="Distribute along U.",
+            setToolTip="Distribute along U, leaving the panel's tile border "
+            "padding between adjacent shells.",
         )
         widget.option_box.menu.add(
             "QRadioButton",
             setText="Distribute V",
             setObjectName="chk024",
-            setToolTip="Distribute along V.",
+            setToolTip="Distribute along V, leaving the panel's tile border "
+            "padding between adjacent shells.",
         )
 
+    @CoreUtils.undoable
     def tb006(self, widget):
-        """Distribute: evenly space the selected UV shells horizontally or vertically."""
+        """Distribute: evenly space the selected UV shells horizontally or vertically.
+
+        The gap left between adjacent shells is the panel's tile spacing
+        (:meth:`_border_margin`) — the same clearance the move pad's shell snap
+        parks against and Gather insets by; without it the shells butt edge to
+        edge and the row bleeds across its own seams at render time. Chunked
+        because ``texDistributeShells`` moves one shell per command.
+        """
         u = widget.option_box.menu.chk023.isChecked()
         v = widget.option_box.menu.chk024.isChecked()
+        # Fixed notation, not repr: MEL parses the literal, and a small enough
+        # float would reach it as `1.9e-06`.
+        spacing = f"{self._border_margin():.9f}"
 
         if u:
-            mel.eval('texDistributeShells 0 0 "right" {}')  # 'left', 'right'
+            mel.eval(f'texDistributeShells 0 {spacing} "right" {{}}')  # 'left', 'right'
         if v:
-            mel.eval('texDistributeShells 0 0 "down" {}')  # 'up', 'down'
+            mel.eval(f'texDistributeShells 0 {spacing} "down" {{}}')  # 'up', 'down'
 
     # ------------------------------------------------------------------ tb008  Mirror
     def tb008_init(self, widget):

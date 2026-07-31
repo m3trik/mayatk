@@ -962,20 +962,36 @@ class ChannelsSlots:
         # Value-input signals (MMB scrub + wheel scroll).  Column
         # registration lives in ``_setup_scrub_edit`` (one-time per
         # widget); the connections belong here because the widget can
-        # persist across slots rebuilds while ``self`` does not.
-        for sig, slot in (
-            (getattr(widget, "cellScrubStarted", None), self._on_scrub_started),
-            (getattr(widget, "cellScrubMoved", None), self._on_scrub_moved),
-            (getattr(widget, "cellScrubFinished", None), self._on_scrub_finished),
-            (getattr(widget, "cellWheelScrolled", None), self._on_wheel_scrolled),
+        # persist across slots rebuilds while ``self`` does not.  Unlike
+        # the signals above these carry no handlers but ours, so the
+        # stale binding is dropped by tracked reference instead of a
+        # blanket ``disconnect()``: PySide warns ("Failed to disconnect
+        # (None) from signal ...") whenever a signal has nothing
+        # attached — i.e. on every first call against a fresh table.
+        conns = getattr(widget, "_ch_scrub_conns", None)
+        if conns is None:
+            conns = {}
+            widget._ch_scrub_conns = conns
+        for name, slot in (
+            ("cellScrubStarted", self._on_scrub_started),
+            ("cellScrubMoved", self._on_scrub_moved),
+            ("cellScrubFinished", self._on_scrub_finished),
+            ("cellWheelScrolled", self._on_wheel_scrolled),
         ):
+            sig = getattr(widget, name, None)
             if sig is None:
                 continue  # older TableWidget without the signal
-            try:
-                sig.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            sig.connect(slot)
+            old = conns.get(name)
+            # A Connection goes falsy once it breaks (receiver collected on a
+            # reload), and the STATIC QObject.disconnect is the API that takes
+            # one — the signal-instance form expects a *slot* and only warns
+            # when handed a Connection, which no ``except`` can swallow.
+            if old:
+                try:
+                    QtCore.QObject.disconnect(old)
+                except (RuntimeError, TypeError):
+                    pass  # already gone (widget or receiver torn down)
+            conns[name] = sig.connect(slot)
         if self._footer_controller:
             widget.itemSelectionChanged.connect(self._footer_controller.update)
 

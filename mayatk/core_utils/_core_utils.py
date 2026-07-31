@@ -39,6 +39,22 @@ class BoundingBox:
         self.size = self.max - self.min
         self.diagonal = self.size.length()
 
+    @property
+    def corners(self):
+        """The box's 8 corner ``MVector``s (every min/max combination per axis).
+
+        What anything projecting a box into another space needs — clip-plane
+        fitting, frustum tests — instead of rebuilding the combination inline.
+        """
+        import maya.api.OpenMaya as om
+
+        return [
+            om.MVector(x, y, z)
+            for x in (self.min.x, self.max.x)
+            for y in (self.min.y, self.max.y)
+            for z in (self.min.z, self.max.z)
+        ]
+
 
 class _CoreUtilsInternal(object):
     """Internal utilities for Maya CoreUtils."""

@@ -307,6 +307,16 @@ ZomUnfold({PrimType="Edge", MinAngle=1e-05, Mix=1, Iterations=10, PreIterations=
 #   Auto.SkeletonUnoverlap .......... SAFE   (shipped ungated in unwrap_organic)
 #   QuasiDevelopable.FitCones=true .. SAFE   (shipped as FIT_CONES, real effect)
 #   SharpEdges + QuasiDevelopable ... CRASH  (unwrap_hybrid preset-gated >= 2022)
+#
+# Input-data findings (2020.1, probed against the production bridge):
+#   Mesh with NO UVs ................ SAFE   (Rizom generates them)
+#   Two UV sets / renamed UV set .... SAFE
+#   NURBS surface in the selection .. SAFE   (FBX carries no poly for it)
+#   Degenerate UVs (every coord
+#     collapsed onto one point) ..... CRASH  (rc 0xC00000FF, before ZomSave)
+# No output ever reaches stdout/stderr in -cfi mode -- a failing script is only
+# diagnosable by running it in RizomUV's Script Editor, which is what the
+# bridge's no-save error now says instead of promising a Lua traceback.
 
 
 def main() -> int:

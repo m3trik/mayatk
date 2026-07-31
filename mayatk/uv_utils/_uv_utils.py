@@ -214,6 +214,93 @@ class UvUtils(ptk.HelpMixin):
             cmds.refresh(suspend=False)
         return moved
 
+    @staticmethod
+    def get_neighbor_shell_bounds(objects) -> List[Tuple[float, float, float, float]]:
+        """Per-shell UV boxes that share *objects*' UV space, excluding their own.
+
+        The pool is every non-intermediate mesh whose **current UV set name**
+        matches the input's — that name is what makes two meshes share one UV
+        space, so a mesh sitting in a different set (a lightmap channel, say)
+        is not a neighbour even though its UVs occupy the same numbers.
+        Visibility is deliberately not consulted: a hidden mesh still owns its
+        place in the layout.
+
+        Shells are identified by API shell id rather than by bounding box,
+        because stacked shells share a box and would exclude each other.
+
+        Parameters:
+            objects (str/obj/list): Object(s), faces, or UVs — the shells that
+                are about to move.
+
+        Returns:
+            list: ``(u_min, v_min, u_max, v_max)`` per neighbouring shell,
+            unordered. Empty when the input is alone in its UV set.
+        """
+        import maya.api.OpenMaya as om
+
+        objects = CoreUtils.as_strings(objects)
+        components = cmds.polyListComponentConversion(objects, toUV=True) or []
+        if not components:
+            return []
+
+        # Keyed on the shape's MObject, never its path: an instanced shape has
+        # one path per instance, and `cmds.ls` below reports only the first, so
+        # path keys would miss a selection made through any other instance and
+        # leak the input's own shells back as neighbours.
+        def shape_key(dag_path):
+            return om.MObjectHandle(dag_path.node()).hashCode()
+
+        # Ranged components go into the selection list whole — no flatten, so
+        # this stays cheap on dense meshes.
+        selection = om.MSelectionList()
+        for component in components:
+            selection.add(component)
+
+        uv_sets, own = set(), {}
+        for i in range(selection.length()):
+            dag_path, component = selection.getComponent(i)
+            mesh = om.MFnMesh(dag_path)
+            uv_set = mesh.currentUVSetName()
+            uv_sets.add(uv_set)
+            _, shell_ids = mesh.getUvShellsIds(uv_set)
+            elements = (
+                range(len(shell_ids))
+                if component.isNull()
+                else om.MFnSingleIndexedComponent(component).getElements()
+            )
+            own.setdefault(shape_key(dag_path), set()).update(
+                shell_ids[e] for e in elements if e < len(shell_ids)
+            )
+
+        boxes = []
+        for shape in cmds.ls(type="mesh", noIntermediate=True, long=True) or []:
+            shape_list = om.MSelectionList()
+            shape_list.add(shape)
+            dag_path = shape_list.getDagPath(0)
+            mesh = om.MFnMesh(dag_path)
+            uv_set = mesh.currentUVSetName()
+            if uv_set not in uv_sets:
+                continue
+            _, shell_ids = mesh.getUvShellsIds(uv_set)
+            if not len(shell_ids):
+                continue
+            us, vs = mesh.getUVs(uv_set)
+            skip = own.get(shape_key(dag_path), ())
+
+            per_shell = {}
+            for index, shell_id in enumerate(shell_ids):
+                if shell_id in skip:
+                    continue
+                u, v = us[index], vs[index]
+                box = per_shell.get(shell_id)
+                per_shell[shell_id] = (
+                    (min(box[0], u), min(box[1], v), max(box[2], u), max(box[3], v))
+                    if box
+                    else (u, v, u, v)
+                )
+            boxes.extend(per_shell.values())
+        return boxes
+
     @classmethod
     @CoreUtils.undoable
     def mirror_uvs(
@@ -1475,8 +1562,13 @@ class UvUtils(ptk.HelpMixin):
         undoable edit and a mesh either packs whole or reports and stays put.
 
         Parameters:
-            objects (str/obj/list): Mesh(es) to pack. None uses the selection.
-                Instances collapse to one representative (they share a shape).
+            objects (str/obj/list): Mesh(es) *or* components to pack. None uses
+                the selection. Instances collapse to one representative (they
+                share a shape). A component entry (faces, UVs, verts, edges —
+                so a UV-shell selection too) packs only the region it covers,
+                widened to whole faces and leaving the rest of the map exactly
+                where it is; a mesh named at object level packs whole even if
+                components of it were also given.
             map_size (int): Target texture size; sets the engine's page size
                 (so the island gutter is exact pixels) and the tile margin.
             udim (int): Target UDIM tile number, e.g. 1001.
@@ -1502,8 +1594,11 @@ class UvUtils(ptk.HelpMixin):
 
         Returns:
             (PackUvsResult): ``engine``, ``succeeded``, ``failed``
-            ``(mesh, reason)`` pairs and the packed atlas dimensions. Truthy
-            when at least one mesh packed.
+            ``(mesh, reason)`` pairs, the packed atlas dimensions, and
+            ``targets`` — what actually packed (the scoped face components, or
+            the mesh) for the meshes that succeeded, ready to measure the
+            resulting texel density against. Truthy when at least one mesh
+            packed.
 
         Raises:
             RuntimeError: The xatlas Python package isn't installed in this

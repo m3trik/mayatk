@@ -221,6 +221,17 @@ class TestFbxUtilsImport(MayaTkTestCase):
         with self.assertRaises(FileNotFoundError):
             FbxUtils.import_scene(r"C:/__nonexistent__/missing.fbx")
 
+    def test_import_resets_sticky_plugin_state(self):
+        """Import options are global + sticky: a poisoned mode persists across
+        calls (probe-verified) and would silently shape this import. The
+        reset must run even with caller options -- ``options={}`` applies
+        nothing, so only ``reset_import`` explains the mode changing."""
+        import maya.mel as mel
+
+        mel.eval("FBXImportMode -v exmerge")  # sticky poison
+        FbxUtils.import_scene(self.fbx_path, options={})
+        self.assertNotEqual(mel.eval("FBXImportMode -q"), "exmerge")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -195,5 +195,95 @@ class TestCamUtilsEdgeCases(MayaTkTestCase):
         self.assertIsNone(result)
 
 
+class TestViewStateAndClipFitting(MayaTkTestCase):
+    """View snapshot/restore + selection-fitted clip planes (backs the frame macro)."""
+
+    def setUp(self):
+        super().setUp()
+        # Camera at the origin looking down -Z (Maya's camera default aim).
+        self.cam, self.cam_shape = cmds.camera(n="fit_cam")
+
+    def _make_cube_at(self, z, size=2.0):
+        cube = cmds.polyCube(w=size, h=size, d=size, n="fit_cube")[0]
+        cmds.setAttr(f"{cube}.t", 0, 0, z)
+        return cube
+
+    def test_view_state_roundtrip_restores_placement_and_clipping(self):
+        cmds.setAttr(f"{self.cam}.t", 1, 2, 3)
+        cmds.setAttr(f"{self.cam_shape}.nearClipPlane", 0.5)
+        cmds.setAttr(f"{self.cam_shape}.farClipPlane", 500)
+        state = mtk.get_view_state(camera=self.cam)
+
+        cmds.setAttr(f"{self.cam}.t", 50, 50, 50)
+        cmds.setAttr(f"{self.cam_shape}.nearClipPlane", 10)
+        cmds.setAttr(f"{self.cam_shape}.farClipPlane", 99)
+
+        self.assertTrue(mtk.set_view_state(state))
+        self.assertEqual(cmds.getAttr(f"{self.cam}.t")[0], (1.0, 2.0, 3.0))
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cam_shape}.nearClipPlane"), 0.5)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cam_shape}.farClipPlane"), 500)
+
+    def test_set_view_state_handles_missing_state(self):
+        self.assertFalse(mtk.set_view_state(None))
+        self.assertFalse(mtk.set_view_state({"transform": "no_such_camera_xf"}))
+
+    def test_fit_clipping_pushes_the_far_plane_past_the_object(self):
+        cube = self._make_cube_at(-500)  # 499..501 units down the view axis
+        cmds.setAttr(f"{self.cam_shape}.farClipPlane", 100)
+
+        result = mtk.fit_camera_clipping(objects=cube, camera=self.cam)
+        self.assertIsNotNone(result)
+        near, far = result
+        self.assertGreater(far, 501)  # object fully inside, plus buffer
+        self.assertAlmostEqual(near, 0.1)  # already wide enough -> untouched
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cam_shape}.farClipPlane"), far)
+
+    def test_fit_clipping_pulls_the_near_plane_in_front_of_the_object(self):
+        cube = self._make_cube_at(-3)  # 2..4 units away
+        cmds.setAttr(f"{self.cam_shape}.nearClipPlane", 10)
+
+        result = mtk.fit_camera_clipping(objects=cube, camera=self.cam)
+        self.assertIsNotNone(result)
+        near, _far = result
+        self.assertLess(near, 2)
+
+    def test_fit_clipping_is_a_noop_when_nothing_is_clipped(self):
+        cube = self._make_cube_at(-10)
+        cmds.setAttr(f"{self.cam_shape}.nearClipPlane", 0.1)
+        cmds.setAttr(f"{self.cam_shape}.farClipPlane", 10000)
+        self.assertIsNone(mtk.fit_camera_clipping(objects=cube, camera=self.cam))
+
+    def test_fit_clipping_only_widens(self):
+        """A far-away object must never *tighten* the planes around a near one."""
+        cube = self._make_cube_at(-500)
+        cmds.setAttr(f"{self.cam_shape}.nearClipPlane", 0.01)
+        cmds.setAttr(f"{self.cam_shape}.farClipPlane", 100)
+
+        mtk.fit_camera_clipping(objects=cube, camera=self.cam)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cam_shape}.nearClipPlane"), 0.01)
+        self.assertGreater(cmds.getAttr(f"{self.cam_shape}.farClipPlane"), 100)
+
+    def test_fit_clipping_keeps_a_positive_near_when_the_camera_is_inside(self):
+        cube = self._make_cube_at(0, size=20)  # camera sits inside the bbox
+        near, far = mtk.fit_camera_clipping(objects=cube, camera=self.cam)
+        self.assertGreater(near, 0)
+        self.assertGreater(far, near)
+
+    def test_fit_clipping_returns_none_without_geometry(self):
+        self.assertIsNone(mtk.fit_camera_clipping(objects=[], camera=self.cam))
+
+    def test_fit_clipping_fallback_pool_excludes_hidden_geometry(self):
+        """With nothing selected the pool is *visible* geometry — a hidden object
+        far downrange must not drag the far plane out to meet it."""
+        self._make_cube_at(-5)  # visible, comfortably inside the planes
+        hidden = self._make_cube_at(-800)
+        cmds.setAttr(f"{hidden}.visibility", 0)
+        cmds.select(clear=True)
+        cmds.setAttr(f"{self.cam_shape}.farClipPlane", 100)
+
+        self.assertIsNone(mtk.fit_camera_clipping(camera=self.cam))
+        self.assertAlmostEqual(cmds.getAttr(f"{self.cam_shape}.farClipPlane"), 100)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

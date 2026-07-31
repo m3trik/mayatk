@@ -203,6 +203,8 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
         tolerance: Optional[float] = None,
         quiet: bool = False,
         break_connections: bool = False,
+        instance_strategy: str = "preserve",
+        delete_history: bool = False,
     ) -> List[str]:
         """Fix non-orthogonal axes by freezing the offending transforms.
 
@@ -237,10 +239,29 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
         first, so a later ``restore_transforms`` still returns the expected
         values — the freeze/unfreeze contract survives the fix.
 
-        Instanced objects are uninstanced first (freezing an instanced shape
-        would corrupt its siblings) via ``NodeUtils.uninstance``, which swaps
-        in a unique shape while preserving the transform in place. Referenced
-        nodes cannot be frozen and are reported rather than attempted.
+        **Instanced objects** are handled per ``instance_strategy``:
+
+        - ``"preserve"`` (default): when *every* member of the group is itself
+          flagged (the duplicated-instance case), the member is fixed through
+          ``XformUtils.freeze_instanced_group``, which bakes the shared points
+          in place — one freeze clears the whole group, and its instancing,
+          per-instance shading and world geometry all survive. Siblings are
+          reported fixed only once they verify orthogonal: one bake applies one
+          correction, so a sibling skewed *differently* is left flagged and
+          picked up on its own iteration (as a divergent group, below).
+          A group with any *unflagged* member is not baked shared: shared
+          points cannot satisfy differing corrections, so pushing this
+          member's correction onto the others would skew them instead
+          (measured — fixing 1 of 4 broke the other 3).  The flagged member
+          is forked off via ``NodeUtils.uninstance`` and baked alone; the
+          rest stay instanced and untouched.  Groups
+          ``freeze_instanced_group`` refuses (referenced, transform-level
+          instancing, driven members) fall back to the same uninstance path.
+        - ``"uninstance"``: legacy behavior — every flagged member is
+          permanently uninstanced before freezing.
+
+        Referenced nodes cannot be frozen and are reported rather than
+        attempted.
 
         Parameters:
             objects: Transforms to process. None uses the current selection.
@@ -250,12 +271,27 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
             quiet: Suppress console output.
             break_connections: Permanently disconnect drivers on rotate/scale/
                 shear channels instead of skipping the objects they drive.
+            instance_strategy: ``"preserve"`` (default) or ``"uninstance"``
+                — see above.
+            delete_history: Allow the *uninstance* fallback to bake away
+                construction history first when the member shares an
+                intermediate (orig) shape.  Such a shape cannot be forked —
+                the deformer reads it per instance, so dropping one edge
+                empties the remaining instances — and while it stays shared
+                the fork leaves the member un-detached.  Unused by the
+                shared-bake path, which never forks and so is unaffected by
+                a shared intermediate.
 
         Returns:
             list[str]: The transforms fixed (or, on ``dry_run``, the transforms
             that would be fixed — driven objects included only when
             ``break_connections`` is set).
         """
+        if instance_strategy not in ("preserve", "uninstance"):
+            raise ValueError(
+                f"Invalid instance_strategy '{instance_strategy}'. "
+                "Valid options: ['preserve', 'uninstance']"
+            )
         tolerance = cls.SHEAR_TOLERANCE if tolerance is None else tolerance
         diagnosis = cls.get_non_orthogonal(objects, tolerance, detailed=True)
         # Top-down: an ancestor freeze can clear its descendants, so handling
@@ -284,6 +320,54 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
             return fixable
 
         fixed: List[str] = []
+        # get_non_orthogonal reports shortest-unique names; the preserve
+        # machinery reports long paths — one lookup bridges the two.
+        flagged_long = {(cmds.ls(k, long=True) or [k])[0]: k for k in flagged}
+
+        def _bake(node: str) -> bool:
+            """Store bake history, freeze rotate+scale (shear bakes with
+            scale), fall back to direct makeIdentity; True when the node
+            verifies orthogonal afterwards.
+
+            A node still sharing geometry goes through
+            ``freeze_instanced_group``, which bakes the shared points in
+            place via a stand-in instead of ``makeIdentity`` — so a shared
+            (often orphaned) intermediate shape, which Maya refuses to
+            freeze past, stops mattering.
+            """
+            # Keep the freeze/unfreeze contract intact: if the node has
+            # stored bake history, compose the about-to-be-frozen rotate/
+            # scale into it so a later restore returns the full values.
+            if XformUtils.has_stored_transforms(node):
+                XformUtils.store_transforms(
+                    node, accumulate=True, channels=("rotate", "scale")
+                )
+            if NodeUtils.get_instanced_shapes(node):
+                XformUtils.freeze_instanced_group(
+                    node, translate=False, quiet=quiet
+                )
+                return not cls.get_non_orthogonal([node], tolerance)
+            # The driven pre-check above means 'disconnect' only ever fires
+            # when the caller explicitly opted in via break_connections.
+            XformUtils.freeze_transforms(
+                node,
+                r=1,
+                s=1,
+                connection_strategy=(
+                    "disconnect" if break_connections else "preserve"
+                ),
+                force=True,
+            )
+            if cls.get_non_orthogonal([node], tolerance):
+                # freeze_transforms left residual skew; bake it directly.
+                if not quiet:
+                    print(
+                        f"Warning: freeze_transforms failed to fix {node}. "
+                        "Attempting direct makeIdentity..."
+                    )
+                cmds.makeIdentity(node, apply=True, t=0, r=1, s=1, n=0, pn=1)
+            return not cls.get_non_orthogonal([node], tolerance)
+
         for obj in flagged:
             if not cls.get_non_orthogonal([obj], tolerance):
                 # An ancestor's freeze already cleared this one.
@@ -310,45 +394,114 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
                     f"(skew: {info['skew']:.6f}, cause: {info['cause']})"
                 )
             try:
-                if NodeUtils.get_instances(obj):
-                    if not quiet:
-                        print(f"Object {obj} is an instance. Uninstancing before freezing.")
-                    obj = (NodeUtils.uninstance(obj) or [obj])[0]
-
-                # Keep the freeze/unfreeze contract intact: if the object has
-                # stored bake history, compose the about-to-be-frozen rotate/
-                # scale into it so a later restore returns the full values.
-                if XformUtils.has_stored_transforms(obj):
-                    XformUtils.store_transforms(
-                        obj, accumulate=True, channels=("rotate", "scale")
+                obj_ok = None
+                tried_uninstance = False
+                obj_long = (cmds.ls(obj, long=True) or [obj])[0]
+                inst_shapes = NodeUtils.get_instanced_shapes(obj_long)
+                if inst_shapes:
+                    members = sorted(
+                        {
+                            p
+                            for s in inst_shapes
+                            for p in cmds.listRelatives(
+                                s, allParents=True, fullPath=True
+                            )
+                            or []
+                        }
                     )
-
-                # Freeze rotate+scale only (shear bakes with scale) — the
-                # driven pre-check above means 'disconnect' only ever fires
-                # when the caller explicitly opted in via break_connections.
-                XformUtils.freeze_transforms(
-                    obj,
-                    r=1,
-                    s=1,
-                    connection_strategy=(
-                        "disconnect" if break_connections else "preserve"
-                    ),
-                    force=True,
-                )
-
-                if cls.get_non_orthogonal([obj], tolerance):
-                    # freeze_transforms left residual skew; bake it directly.
-                    if not quiet:
-                        print(
-                            f"Warning: freeze_transforms failed to fix {obj}. "
-                            "Attempting direct makeIdentity..."
-                        )
-                    cmds.makeIdentity(obj, apply=True, t=0, r=1, s=1, n=0, pn=1)
-
-                if cls.get_non_orthogonal([obj], tolerance):
-                    if not quiet:
-                        cmds.warning(f"Unable to remove non-orthogonal axes on {obj}.")
+                    unflagged = [
+                        m
+                        for m in members
+                        if m != obj_long and not cls.get_non_orthogonal([m], tolerance)
+                    ]
+                    if instance_strategy == "preserve" and not unflagged:
+                        # Every member needs the same correction, so one bake of
+                        # the shared points fixes the whole group in place.
+                        #
+                        # Refused and baked-but-still-skewed must NOT collapse
+                        # into one falsy result: a False return comes only from
+                        # the up-front triage, every branch of which precedes any
+                        # mutation, so retrying is legal. A True return means the
+                        # shared points and sibling matrices were rewritten, and
+                        # baking a second correction onto that would compound it
+                        # — residual skew there is a failure to report.
+                        if XformUtils.freeze_instanced_group(
+                            obj_long, translate=False, quiet=quiet
+                        ):
+                            obj_ok = not cls.get_non_orthogonal(
+                                [obj_long], tolerance
+                            )
+                            if obj_ok:
+                                # Claim a sibling only once it VERIFIES clean.
+                                # "All members flagged" does not mean all
+                                # members are skewed the SAME way, and one bake
+                                # of shared points applies one correction — a
+                                # divergently skewed sibling comes out still
+                                # flagged, and reporting it fixed would hide
+                                # that. Unclaimed members simply get their own
+                                # iteration, where they now read as a divergent
+                                # group and take the uninstance path.
+                                for m in members:
+                                    orig = flagged_long.get(m)
+                                    if (
+                                        orig is not None
+                                        and orig not in fixed
+                                        and not cls.get_non_orthogonal(
+                                            [m], tolerance
+                                        )
+                                    ):
+                                        fixed.append(orig)
+                        # else: refused, scene untouched — obj_ok stays None so
+                        # the uninstance path below retries. Detaching this
+                        # member alone still fixes it and leaves the rest of the
+                        # group instanced.
+                    if obj_ok is None:
+                        # Divergent group (or the uninstance strategy): baking
+                        # the shared points would push THIS member's shear onto
+                        # the unflagged ones — measured on a production group,
+                        # fixing 1 of 4 broke the other 3. Detach just this
+                        # member instead; the rest stay instanced, untouched.
+                        tried_uninstance = True
+                        if not quiet and unflagged:
+                            print(
+                                f"Object {obj} shares its shape with "
+                                f"{len(unflagged)} object(s) that are NOT skewed — "
+                                "uninstancing this one so the others are left alone."
+                            )
+                        obj = (
+                            NodeUtils.uninstance(obj, delete_history=delete_history)
+                            or [obj]
+                        )[0]
+                        obj_ok = _bake(obj)
                 else:
+                    obj_ok = _bake(obj)
+
+                if not obj_ok:
+                    if not quiet:
+                        # The delete_history advice is only actionable when a
+                        # fork was actually attempted and blocked: the
+                        # shared-bake path never forks, and re-suggesting a flag
+                        # the caller already passed names the wrong cause.
+                        blocked = NodeUtils.get_instanced_shapes(obj)
+                        if (
+                            tried_uninstance
+                            and not delete_history
+                            and any(NodeUtils.is_intermediate(s) for s in blocked)
+                        ):
+                            cmds.warning(
+                                f"Unable to fix {obj}: it still shares an "
+                                "intermediate (construction history) shape, which "
+                                "cannot be forked without emptying the other "
+                                "instances — so it could not be detached. Re-run "
+                                "with delete_history=True to bake the history away "
+                                "first (this member is then fully detached from "
+                                "the group)."
+                            )
+                        else:
+                            cmds.warning(
+                                f"Unable to remove non-orthogonal axes on {obj}."
+                            )
+                elif obj not in fixed:
                     fixed.append(obj)
             except Exception as e:
                 if not quiet:

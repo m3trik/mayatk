@@ -10,8 +10,9 @@ except ImportError as error:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils._core_utils import BoundingBox, CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.ui_utils._ui_utils import UiUtils
 
 
@@ -135,6 +136,180 @@ class CamUtils(ptk.HelpMixin):
             print("No modelPanel found")
 
     @classmethod
+    def _resolve_camera_shapes(cls, camera=None):
+        """Coerce `camera` (name / transform / shape / list) to a list of camera *shape* nodes.
+
+        `camera=None` resolves to the current viewport camera — the one every
+        interactive helper here acts on.
+        """
+        shapes = []
+        if camera:
+            raw = cmds.ls(*CoreUtils.as_strings(camera), long=True) or []
+        else:
+            current = cls.get_current_cam()
+            raw = [current] if current and cmds.objExists(current) else []
+
+        for node in raw:
+            node_type = cmds.nodeType(node)
+            if node_type == "camera":
+                shapes.append(node)
+            elif node_type == "transform":
+                node_shapes = NodeUtils.get_shapes(node)
+                if node_shapes and cmds.nodeType(node_shapes[0]) == "camera":
+                    shapes.append(node_shapes[0])
+        return shapes
+
+    @classmethod
+    def get_view_state(cls, camera=None):
+        """Snapshot a camera's placement and lens clipping, for a later restore.
+
+        The counterpart of :meth:`set_view_state` — together they let a framing
+        tool return the user to exactly the view they had before it moved them.
+
+        Parameters:
+            camera (str/optional): Camera transform or shape. None -> the current
+                viewport camera.
+
+        Returns:
+            dict or None: Opaque state (transform matrix, center of interest,
+            clip planes, orthographic width), or None when no camera resolves.
+        """
+        shapes = cls._resolve_camera_shapes(camera)
+        if not shapes:
+            return None
+        shape = shapes[0]
+        xform = NodeUtils.get_parent(shape)
+        if not xform:
+            return None
+        return {
+            "camera": shape,
+            "transform": xform,
+            "matrix": cmds.xform(xform, q=True, ws=True, matrix=True),
+            "center_of_interest": cmds.getAttr(f"{shape}.centerOfInterest"),
+            "near_clip": cmds.getAttr(f"{shape}.nearClipPlane"),
+            "far_clip": cmds.getAttr(f"{shape}.farClipPlane"),
+            "ortho_width": cmds.getAttr(f"{shape}.orthographicWidth"),
+        }
+
+    @classmethod
+    def set_view_state(cls, state):
+        """Restore a snapshot taken by :meth:`get_view_state`.
+
+        Locked or connected attributes are skipped rather than raising, so a
+        constrained / referenced camera degrades to a partial restore — the lens
+        settings still come back even when the transform itself can't move.
+
+        Parameters:
+            state (dict): A :meth:`get_view_state` result.
+
+        Returns:
+            bool: True when the camera's placement was restored.
+        """
+        if not state:
+            return False
+        xform = state.get("transform")
+        if not xform or not cmds.objExists(xform):
+            return False
+        try:
+            cmds.xform(xform, ws=True, matrix=state["matrix"])
+            moved = True
+        except RuntimeError:  # locked / constrained / referenced transform
+            moved = False
+
+        shape = state.get("camera")
+        if shape and cmds.objExists(shape):
+            for attr, key in (
+                ("centerOfInterest", "center_of_interest"),
+                ("nearClipPlane", "near_clip"),
+                ("farClipPlane", "far_clip"),
+                ("orthographicWidth", "ortho_width"),
+            ):
+                value = state.get(key)
+                if value is None:
+                    continue
+                try:
+                    cmds.setAttr(f"{shape}.{attr}", value)
+                except RuntimeError:  # locked / connected attr
+                    pass
+        return moved
+
+    @classmethod
+    def fit_camera_clipping(cls, objects=None, camera=None, buffer=0.25):
+        """Widen a camera's clip planes until `objects` can't be clipped by them.
+
+        Where :meth:`adjust_camera_clipping` sets planes from the whole scene,
+        this fits them to what you're actually looking at, and only ever *widens*
+        — a camera that already contains the objects is left alone, so it is safe
+        to call on every framing.
+
+        Parameters:
+            objects (str/list/optional): What must stay unclipped. None -> the
+                current selection, else all visible geometry.
+            camera (str/optional): Camera transform or shape. None -> the current
+                viewport camera.
+            buffer (float): Slack either side, as a fraction of the objects'
+                bounding-box diagonal — headroom to dolly / orbit around them
+                before anything clips.
+
+        Returns:
+            tuple or None: The applied ``(near, far)``, or None when nothing
+            needed changing (or no camera / geometry resolved).
+        """
+        shapes = cls._resolve_camera_shapes(camera)
+        if not shapes:
+            return None
+        shape = shapes[0]
+        xform = NodeUtils.get_parent(shape)
+        if not xform:
+            return None
+
+        if objects is None:
+            # inherit_parent_visibility: without it the helper returns every renderable
+            # transform regardless of visibility, so hidden geometry would widen the planes.
+            objects = cmds.ls(selection=True) or DisplayUtils.get_visible_geometry(
+                inherit_parent_visibility=True
+            )
+        objects = CoreUtils.as_strings(objects)
+        if not objects:
+            return None
+        try:
+            bbox = cmds.exactWorldBoundingBox(objects)
+        except (RuntimeError, TypeError):
+            return None
+        box = BoundingBox(bbox[:3], bbox[3:])
+
+        # Depth of every bbox corner along the camera's view axis (Maya cameras
+        # look down their local -Z, so depth is the negated local z).
+        inverse = om.MMatrix(cmds.xform(xform, q=True, ws=True, matrix=True)).inverse()
+        depths = [-(om.MPoint(c) * inverse).z for c in box.corners]
+        # Slack scales with the objects' size, floored against how far away they are so a small
+        # or degenerate selection (a single vertex) still gets usable headroom at any zoom.
+        pad = max(box.diagonal, max(depths) * 0.1, 1e-4) * buffer
+
+        far_target = max(depths) + pad
+        # Floor the near plane to keep the depth buffer's precision usable even
+        # when the camera sits inside the bounding box (negative near depth).
+        near_target = max(min(depths) - pad, far_target / 1e5, 1e-3)
+
+        current_near = cmds.getAttr(f"{shape}.nearClipPlane")
+        current_far = cmds.getAttr(f"{shape}.farClipPlane")
+        new_near = min(current_near, near_target)
+        new_far = max(current_far, far_target)
+        # Relative tolerance: the plugs store 32-bit floats, so comparing a freshly computed
+        # double against the read-back value exactly would "change" them on every call.
+        if ptk.are_similar(
+            new_near, current_near, max(1e-6, abs(current_near) * 1e-5)
+        ) and ptk.are_similar(new_far, current_far, max(1e-6, abs(current_far) * 1e-5)):
+            return None
+
+        try:
+            cmds.setAttr(f"{shape}.nearClipPlane", new_near)
+            cmds.setAttr(f"{shape}.farClipPlane", new_far)
+        except RuntimeError:  # locked / connected attr
+            return None
+        return new_near, new_far
+
+    @classmethod
     @CoreUtils.undoable
     def adjust_camera_clipping(cls, camera=None, near_clip=None, far_clip=None):
         """Adjusts the near and far clipping planes of one or multiple cameras.
@@ -152,30 +327,7 @@ class CamUtils(ptk.HelpMixin):
                 - If 'reset': Resets to default (10000).
                 - If float: Sets to the specific value.
         """
-        # Resolve camera shapes
-        target_cameras = []
-        if camera:
-            raw_cameras = cmds.ls(*CoreUtils.as_strings(camera), long=True) or []
-            for cam in raw_cameras:
-                node_type = cmds.nodeType(cam)
-                if node_type == "transform":
-                    shapes = NodeUtils.get_shapes(cam)
-                    if shapes and cmds.nodeType(shapes[0]) == "camera":
-                        target_cameras.append(shapes[0])
-                elif node_type == "camera":
-                    target_cameras.append(cam)
-        else:
-            # If no camera specified, use the current viewport camera
-            current_cam = cls.get_current_cam()
-            if current_cam and cmds.objExists(current_cam):
-                node_type = cmds.nodeType(current_cam)
-                if node_type == "camera":
-                    target_cameras.append(current_cam)
-                elif node_type == "transform":
-                    shapes = NodeUtils.get_shapes(current_cam)
-                    if shapes and cmds.nodeType(shapes[0]) == "camera":
-                        target_cameras.append(shapes[0])
-
+        target_cameras = cls._resolve_camera_shapes(camera)
         if not target_cameras:
             return
 
@@ -192,18 +344,9 @@ class CamUtils(ptk.HelpMixin):
                 all_geo = cmds.ls(dag=True, geometry=True) or []
 
             if all_geo:
-                bbox = cmds.exactWorldBoundingBox(all_geo)
                 # bbox is [xmin, ymin, zmin, xmax, ymax, zmax]
-                min_pt = om.MVector(bbox[0], bbox[1], bbox[2])
-                max_pt = om.MVector(bbox[3], bbox[4], bbox[5])
-
-                # Calculate 8 corners for far clip calculation
-                bbox_points = [
-                    om.MVector(x, y, z)
-                    for x in (min_pt.x, max_pt.x)
-                    for y in (min_pt.y, max_pt.y)
-                    for z in (min_pt.z, max_pt.z)
-                ]
+                bbox = cmds.exactWorldBoundingBox(all_geo)
+                bbox_points = BoundingBox(bbox[:3], bbox[3:]).corners
 
         for cam in target_cameras:
             # Only get camera position if we are doing auto calculations

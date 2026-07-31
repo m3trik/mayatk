@@ -15,6 +15,7 @@ import unittest
 import pythontk as ptk
 import mayatk as mtk
 from mayatk.uv_utils._uv_utils import UvUtils
+from mayatk.uv_utils._uv_pack import _UvPackInternal
 from mayatk.core_utils._core_utils import CoreUtils
 
 from base_test import MayaTkTestCase
@@ -201,6 +202,107 @@ class TestUvUtils(MayaTkTestCase):
         self.assertAlmostEqual(both[1], min(cube_bounds[1], 3.0), places=5)
         self.assertAlmostEqual(both[2], max(cube_bounds[2], 3.0), places=5)
         self.assertAlmostEqual(both[3], max(cube_bounds[3], 4.0), places=5)
+
+    def _empty_scene(self):
+        """Start from an empty scene.
+
+        The neighbour pool is scene-wide, so this class's second fixture cube
+        would otherwise count as a neighbour and blur what each case proves.
+        """
+        cmds.file(new=True, force=True)
+
+    def test_get_neighbor_shell_bounds_excludes_the_input(self):
+        self._empty_scene()
+        near = cmds.polyPlane(width=1, height=1, sx=1, sy=1)[0]  # UVs 0..1
+        far = cmds.polyPlane(width=1, height=1, sx=1, sy=1)[0]
+        UvUtils.move_to_uv_space(far, 3.0, 0.0)  # UVs 3..4
+
+        # Each mesh sees only the other.
+        self.assertEqual(
+            [tuple(round(v, 4) for v in b) for b in UvUtils.get_neighbor_shell_bounds(near)],
+            [(3.0, 0.0, 4.0, 1.0)],
+        )
+        self.assertEqual(
+            [tuple(round(v, 4) for v in b) for b in UvUtils.get_neighbor_shell_bounds(far)],
+            [(0.0, 0.0, 1.0, 1.0)],
+        )
+
+    def test_get_neighbor_shell_bounds_alone_is_empty(self):
+        """A mesh alone in its UV set has nothing to park against."""
+        self._empty_scene()
+        plane = cmds.polyPlane(width=1, height=1, sx=1, sy=1)[0]
+        self.assertEqual(UvUtils.get_neighbor_shell_bounds(plane), [])
+
+    def test_get_neighbor_shell_bounds_is_scoped_to_the_uv_set(self):
+        """A mesh whose current UV set has a different name is not a neighbour —
+        it does not share the UV space even where its UVs occupy the same numbers.
+        """
+        self._empty_scene()
+        plane = cmds.polyPlane(width=1, height=1, sx=1, sy=1)[0]
+        other = cmds.polyPlane(width=1, height=1, sx=1, sy=1)[0]
+        shape = cmds.listRelatives(other, shapes=True, fullPath=True)[0]
+        self.assertTrue(UvUtils.get_neighbor_shell_bounds(plane))  # shared map1
+
+        cmds.polyUVSet(shape, create=True, uvSet="lightmap")
+        cmds.polyUVSet(shape, currentUVSet=True, uvSet="lightmap")
+        self.assertEqual(UvUtils.get_neighbor_shell_bounds(plane), [])
+
+        cmds.polyUVSet(shape, currentUVSet=True, uvSet="map1")
+        self.assertTrue(UvUtils.get_neighbor_shell_bounds(plane))
+
+    def test_get_neighbor_shell_bounds_excludes_only_touched_shells(self):
+        """A face-subset selection still sees its own mesh's *other* shells.
+
+        Built from two united planes because a default cube is a single UV
+        shell — a one-shell mesh could not tell partial from total exclusion.
+        """
+        self._empty_scene()
+        a = cmds.polyPlane(width=1, height=1, sx=1, sy=1)[0]
+        b = cmds.polyPlane(width=1, height=1, sx=1, sy=1)[0]
+        UvUtils.move_to_uv_space(b, 3.0, 0.0)
+        merged = cmds.polyUnite(a, b, constructionHistory=False)[0]
+
+        shells = UvUtils.get_uv_shell_sets(merged, returned_type="shell")
+        self.assertEqual(len(shells), 2, "expected one mesh carrying two shells")
+
+        # Select only the first shell's faces; the second must remain a blocker.
+        neighbors = UvUtils.get_neighbor_shell_bounds(shells[0])
+        self.assertEqual(len(neighbors), 1, neighbors)
+        own = UvUtils.get_uv_bounds(shells[0])
+        self.assertFalse(
+            all(abs(x - y) < 1e-6 for x, y in zip(neighbors[0], own)),
+            f"own shell leaked into the blocker pool: {neighbors[0]}",
+        )
+
+    def test_get_neighbor_shell_bounds_excludes_own_shells_via_any_instance(self):
+        """Selecting through a *second* instance must still exclude its own shells.
+
+        An instanced shape has one DAG path per instance and `cmds.ls` reports
+        only the first, so keying the exclusion on the path string leaked the
+        input's own shell back as its own neighbour — shell snap would then park
+        a shell against itself.
+        """
+        self._empty_scene()
+        plane = cmds.polyPlane(width=1, height=1, sx=1, sy=1)[0]
+        instance = cmds.instance(plane)[0]
+        cmds.move(3, 0, 0, instance)  # moved in 3D; the UVs are shared
+
+        # Both instances resolve to the same shape, so neither has a neighbour.
+        self.assertEqual(UvUtils.get_neighbor_shell_bounds(plane), [])
+        self.assertEqual(UvUtils.get_neighbor_shell_bounds(instance), [])
+
+        # A genuinely separate mesh is still found through either instance.
+        other = cmds.polyPlane(width=1, height=1, sx=1, sy=1)[0]
+        UvUtils.move_to_uv_space(other, 5.0, 0.0)
+        for target in (plane, instance):
+            with self.subTest(target=target):
+                boxes = UvUtils.get_neighbor_shell_bounds(target)
+                self.assertEqual(len(boxes), 1, boxes)
+                self.assertAlmostEqual(boxes[0][0], 5.0, places=4)
+
+    def test_get_neighbor_shell_bounds_on_input_without_uvs(self):
+        locator = cmds.spaceLocator()[0]
+        self.assertEqual(UvUtils.get_neighbor_shell_bounds(locator), [])
 
     def test_get_uv_bounds_on_input_without_uvs(self):
         """A non-poly input resolves to no UVs -> None (the panel warns, not raises)."""
@@ -1397,6 +1499,32 @@ class TestPackUvs(MayaTkTestCase):
     def _bbox(obj):
         return cmds.polyEvaluate(obj, boundingBox2d=True)
 
+    @staticmethod
+    def _uvs(obj):
+        """Flat ``[u0, v0, u1, v1, ...]`` of the object's current UV set."""
+        return cmds.polyEditUV(f"{obj}.map[*]", query=True) or []
+
+    @classmethod
+    def _moved(cls, before, after):
+        """UV indices whose coordinates differ between the two flat readouts."""
+        return {
+            i
+            for i in range(len(before) // 2)
+            if abs(before[2 * i] - after[2 * i]) > 1e-6
+            or abs(before[2 * i + 1] - after[2 * i + 1]) > 1e-6
+        }
+
+    @staticmethod
+    def _uv_indices(components):
+        """The UV indices *components* resolve to."""
+        return {
+            int(str(c).split("[")[1].rstrip("]"))
+            for c in cmds.ls(
+                cmds.polyListComponentConversion(components, toUV=True) or [],
+                flatten=True,
+            )
+        }
+
     def test_missing_engine_message_carries_install_command(self):
         from unittest import mock
         import pythontk as ptk
@@ -1506,6 +1634,139 @@ class TestPackUvs(MayaTkTestCase):
             self.assertGreaterEqual(min(u0, v0), -1e-4)
             self.assertLessEqual(u1, cov[0] + 1e-4, f"cov={cov} spilled U")
             self.assertLessEqual(v1, cov[1] + 1e-4, f"cov={cov} spilled V")
+
+    def test_face_scope_packs_only_the_selected_faces(self):
+        """User-reported: the engine path resolved its input to whole meshes, so
+        a face / shell selection raised "No mesh objects to pack." and nothing
+        happened. It must pack the selected region into the tile and leave the
+        rest of the map exactly where it is."""
+        cube = cmds.polyCube(name="pk_scope", ch=False)[0]
+        cmds.polyMapCut(f"{cube}.e[*]", ch=False)  # six separate shells
+        cmds.polyEditUV(f"{cube}.map[*]", u=5.0, v=5.0)  # park the map off-tile
+        before = self._uvs(cube)
+        scoped = self._uv_indices(f"{cube}.f[0:2]")
+
+        result = UvUtils.pack_uvs([f"{cube}.f[0:2]"], map_size=1024)
+
+        self.assertEqual(result.failed, [])
+        self.assertEqual(len(result.succeeded), 1)
+        after = self._uvs(cube)
+        self.assertEqual(self._moved(before, after), scoped)
+        for i in sorted(scoped):
+            u, v = after[2 * i], after[2 * i + 1]
+            self.assertGreaterEqual(min(u, v), -1e-4, "packed UV left the tile")
+            self.assertLessEqual(max(u, v), 1.0 + 1e-4, "packed UV left the tile")
+        for i in set(range(len(before) // 2)) - scoped:
+            self.assertGreater(after[2 * i], 4.5, "out-of-scope UV was moved")
+
+    def test_uv_shell_scope_packs_only_that_shell(self):
+        """A UV-shell selection (the Pack tool's other component case) packs the
+        shell into the target tile without disturbing its neighbours."""
+        cyl = cmds.polyCylinder(name="pk_shell", ch=False)[0]
+        cmds.polyAutoProjection(cyl, layoutMethod=0, layout=2, planes=6, ch=False)
+        shells = UvUtils.get_uv_shell_sets(cyl, returned_type="shell")
+        self.assertGreater(len(shells), 1, "test needs a multi-shell map")
+        before = self._uvs(cyl)
+        scoped = self._uv_indices(shells[0])
+
+        result = UvUtils.pack_uvs(shells[0], map_size=1024, udim=1002)
+
+        self.assertEqual(result.failed, [])
+        after = self._uvs(cyl)
+        moved = self._moved(before, after)
+        self.assertTrue(moved)
+        self.assertTrue(moved <= scoped, "the pack reached outside the shell")
+        for i in sorted(moved):  # UDIM 1002 is the u = 1-2 tile
+            self.assertGreaterEqual(after[2 * i], 1.0 - 1e-4)
+            self.assertLessEqual(after[2 * i], 2.0 + 1e-4)
+
+    def test_object_level_entry_wins_over_components_of_the_same_mesh(self):
+        """A leftover component selection mixed into an object selection must not
+        silently narrow the pack — the wider request wins, in either input
+        order (the scope resolves components first, then promotes)."""
+        cube = cmds.polyCube(name="pk_wins", ch=False)[0]
+        cmds.polyMapCut(f"{cube}.e[*]", ch=False)
+
+        for order in ([f"{cube}.f[0]", cube], [cube, f"{cube}.f[0]"]):
+            result = UvUtils.pack_uvs(order, map_size=1024)
+            self.assertEqual(result.failed, [])
+            # targets == succeeded means whole meshes, not face components.
+            self.assertEqual(result.targets, result.succeeded, f"order {order}")
+
+    def test_instances_collapse_to_one_scope_entry(self):
+        """Instances share one shape, so one UV set. Two scope entries would make
+        the engine reserve space for the same UVs twice and then write two
+        transforms onto them, compounding into a garbled layout. This pins the
+        `cmds.ls` behavior the scope relies on to merge them — an instanced shape
+        is reported by its FIRST path, so every sibling canonicalizes to the same
+        transform however it was named."""
+        cube = cmds.polyCube(name="pk_inst", ch=False)[0]
+        cmds.polyMapCut(f"{cube}.e[*]", ch=False)
+        sibling = cmds.instance(cube, name="pk_inst_sib")[0]
+
+        for entries in (
+            [f"{cube}.f[0]", f"{sibling}.f[1]"],  # components on both instances
+            [f"{cube}.f[0]", sibling],  # component on one, object on the other
+            [cube, sibling],  # both at object level
+        ):
+            scope = _UvPackInternal._resolve_scope(entries)
+            self.assertEqual(len(scope), 1, f"{entries} -> {scope}")
+
+        # And the pack itself moves each scoped UV exactly once: a double write
+        # would compound two placements and push UVs out of the tile.
+        before = self._uvs(cube)
+        result = UvUtils.pack_uvs(
+            [f"{cube}.f[0]", f"{sibling}.f[1]"], map_size=1024
+        )
+        self.assertEqual(result.failed, [])
+        after = self._uvs(cube)
+        self.assertEqual(
+            self._moved(before, after), self._uv_indices(f"{cube}.f[0:1]")
+        )
+        for i in sorted(self._moved(before, after)):
+            u, v = after[2 * i], after[2 * i + 1]
+            self.assertGreaterEqual(min(u, v), -1e-4)
+            self.assertLessEqual(max(u, v), 1.0 + 1e-4)
+
+    def test_object_and_component_scopes_pack_together(self):
+        """One engine call, mixed scope: the whole-mesh entry repacks entirely
+        while the component entry moves only its own faces, and both land in the
+        tile without overlapping."""
+        whole = cmds.polyCube(name="pk_mix_whole", ch=False)[0]
+        partial = cmds.polyCube(name="pk_mix_part", ch=False)[0]
+        for obj in (whole, partial):
+            cmds.polyMapCut(f"{obj}.e[*]", ch=False)
+        cmds.polyEditUV(f"{partial}.map[*]", u=5.0, v=5.0)
+        partial_before = self._uvs(partial)
+        scoped = self._uv_indices(f"{partial}.f[0:1]")
+
+        result = UvUtils.pack_uvs([whole, f"{partial}.f[0:1]"], map_size=1024)
+
+        self.assertEqual(result.failed, [])
+        self.assertEqual(len(result.succeeded), 2)
+        self.assertEqual(
+            self._moved(partial_before, self._uvs(partial)),
+            scoped,
+            "the component-scoped mesh was repacked whole",
+        )
+        (u0, u1), (v0, v1) = self._bbox(whole)
+        self.assertGreaterEqual(min(u0, v0), -1e-4)
+        self.assertLessEqual(max(u1, v1), 1.0 + 1e-4)
+
+    def test_component_pack_is_fully_undoable(self):
+        """The scoped write-back goes through polyEditUV like the whole-mesh one,
+        so a component pack is a single undo away from the original layout."""
+        cube = cmds.polyCube(name="pk_undo_scope", ch=False)[0]
+        cmds.polyMapCut(f"{cube}.e[*]", ch=False)
+        before = self._uvs(cube)
+        cmds.undoInfo(openChunk=True)
+        try:
+            UvUtils.pack_uvs([f"{cube}.f[0:2]"], map_size=1024, udim=1005)
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        self.assertTrue(self._moved(before, self._uvs(cube)))
+        cmds.undo()
+        self.assertEqual(self._moved(before, self._uvs(cube)), set())
 
     def test_pack_is_fully_undoable(self):
         plane = cmds.polyPlane(name="pk_undo", sx=1, sy=1, ch=False)[0]
