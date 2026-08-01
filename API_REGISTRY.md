@@ -2,7 +2,7 @@
 
 _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_registry.py`._
 
-_Generated: 2026-07-31_
+_Generated: 2026-08-01_
 
 ## Index
 
@@ -210,7 +210,7 @@ _Generated: 2026-07-31_
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
 
-- **[`class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/anim_utils/_anim_utils.py#L667)** — Animation utilities for Maya.
+- **[`class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/anim_utils/_anim_utils.py#L687)** — Animation utilities for Maya.
   - `AnimUtils.bake(cls, objects: Union[str, List[str]], attributes: Optional[Union[str, List[str]]] = None, time_range: Optional[Tuple[float, float]] = None, sample_by: float = 1.0, preserve_outside_keys: bool = True, simulation: bool = False, destination_layer: Optional[str] = None, remove_baked_attr_from_layer: bool = False, bake_on_override_layer: bool = False, minimize_rotation: bool = True, sparse_anim_curve_bake: bool = False, disable_implicit_control: bool = True, control_points: bool = False, shape: bool = False, only_keyed: bool = False) -> List[str]` *(class)* — Bake animation on specified objects and attributes with smart grouping.
   - `AnimUtils.objects_to_curves(objects: Union[str, List[str]], recursive: bool = False, as_strings: bool = False) -> List[str]` *(static)* — Converts objects into a list of animation curves.
   - `AnimUtils.get_anim_curves(cls, objects: Optional[List[str]] = None, selected_keys_only: bool = False, recursive: bool = False) -> List[str]` *(class)* — Get animation curves from objects, selected keys, or all scene curves.
@@ -235,7 +235,7 @@ _Generated: 2026-07-31_
   - `AnimUtils.invert_keys(objects=None, time=None, relative=True, delete_original=False, mode='horizontal', value_pivot=0.0)` *(static)* — Invert keyframes, preferring selected keys over all keys.
   - `AnimUtils.align_selected_keyframes(objects: Optional[List[str]] = None, target_frame: Optional[float] = None, use_earliest: bool = True) -> bool` *(static)* — Aligns the starting keyframes of selected keyframes in the graph editor across multiple objects.
   - `AnimUtils.set_visibility_keys(objects: Optional[List[str]] = None, visible: bool = True, when: str = 'start', offset: int = 0, group_overlapping: bool = False) -> int` *(static)* — Sets visibility keyframes for objects with options for timing and grouping.
-  - `AnimUtils.snap_keys_to_frames(objects: Optional[List[str]] = None, method: str = 'nearest', selected_only: bool = False, time_range: Optional[Tuple[float, float]] = None) -> int` *(static)* — Snaps keyframes with decimal time values to whole frame numbers.
+  - `AnimUtils.snap_keys_to_frames(objects: Optional[List[str]] = None, method: str = 'nearest', selected_only: bool = False, time_range: Optional[Tuple[float, float]] = None, include_driven: bool = False) -> int` *(static)* — Snaps keyframes with decimal time values to whole frame numbers.
   - `AnimUtils.transfer_keyframes(cls, objects: List[str], relative: bool = False, transfer_tangents: bool = False, optimize: bool = False)` *(class)* — Transfer keyframes from the first selected object to the subsequent objects.
   - `AnimUtils.parse_time_range(time: Union[None, int, str, Tuple, List]) -> Union[Tuple[float, float], None, List]` *(static)* — Parse time specification into a time range tuple for keyframe operations.
   - `AnimUtils.delete_keys(objects=None, *attributes, time=None, channel_box_only=False)` *(static)* — Deletes keyframes for specified attributes on given objects, optionally within a time range.
@@ -1510,8 +1510,9 @@ Procedural draped-cloth (curtain) generator for Maya.
 ### `edit_utils/naming/_naming.py`
 
 - **[`class Naming(ptk.HelpMixin)`](mayatk/mayatk/edit_utils/naming/_naming.py#L20)**
-  - `Naming.rename(cls, objects: Union[str, 'object', List[Union[str, 'object']]], to: str, fltr: str = '', regex: bool = False, ignore_case: bool = False, retain_suffix: bool = False, valid_suffixes: Optional[List[str]] = None) -> List[str]` *(class)* — Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's namin…
+  - `Naming.rename(cls, objects: Union[str, 'object', List[Union[str, 'object']]], to: str, fltr: str = '', regex: bool = False, ignore_case: bool = False, retain_suffix: bool = False, valid_suffixes: Optional[List[str]] = None, collapse_padding: bool = True) -> List[str]` *(class)* — Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's namin…
   - `Naming.generate_unique_name(cls, base_name, suffix='_', padding=3)` *(class)* — Generate a unique name based on the base_name.
+  - `Naming.conform_shape_names(cls, objects: Union[str, 'object', List[Union[str, 'object']], None] = None, force: bool = False) -> List[Tuple[str, str]]` *(class)* — Rename shape nodes to Maya's conventional ``<transform>Shape`` form.
   - `Naming.strip_illegal_chars(input_data, replace_with='_')` *(static)* — Strips illegal characters from a string or a list of strings, replacing them with a specified chara…
   - `Naming.strip_chars(objects: Union[str, object, List[Union[str, object]]], num_chars: int = 1, trailing: bool = False) -> List[str]` *(static)* — Deletes leading or trailing characters from the names of the provided objects,
   - `Naming.set_case(objects=None, case='capitalize')` *(static)* — Rename objects following the given case.
@@ -1750,7 +1751,7 @@ Import the bridged FBX into Blender, with optional clean-slate and frame-on-impo
   - `FbxUtils.load_preset(preset_path: str)` *(static)* — Load an FBX export preset file.
   - `FbxUtils.export(cls, file_path: str, objects: Optional[List] = None, preset_file: Optional[str] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True) -> str` *(class)* — Export geometry to an FBX file.
   - `FbxUtils.import_scene(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True) -> List[str]` *(class)* — Import an FBX file, optionally isolated into a namespace.
-  - `FbxUtils.reset_takes() -> None` *(static)* — Clear all FBX export take definitions (global, sticky exporter state).
+  - `FbxUtils.reset_takes() -> None` *(static)* — Clear FBX take definitions and restore pre-takes bake-complex state.
   - `FbxUtils.apply_takes(takes: Iterable[Any]) -> int` *(static)* — Configure FBX export to emit one AnimStack (Unity clip) per take.
   - `FbxUtils.apply_takes_from_node(node: Optional[str] = None, attr: Optional[str] = None) -> int` *(static)* — Read take defs from a JSON string channel on *node* and apply them.
   - `FbxUtils.run_export_preparers(include_known: bool = True) -> None` *(static)* — Refresh every producer's ``data_export`` channel once, right now.
@@ -1841,7 +1842,7 @@ Maya-side selection + FBX-export hooks shared by the hand-off bridge engines.
 
 Scene-data sidecar manifest management.
 
-- **[`class SceneDataSidecar`](mayatk/mayatk/env_utils/hierarchy_sync/scene_data_sidecar.py#L45)** — Manages scene-data sidecar files stored alongside export files.
+- **[`class SceneDataSidecar`](mayatk/mayatk/env_utils/hierarchy_sync/scene_data_sidecar.py#L46)** — Manages scene-data sidecar files stored alongside export files.
   - `SceneDataSidecar.base_stem(cls, export_path: str) -> str` *(class)* — Return the export stem with any trailing ``_vNN`` suffix stripped.
   - `SceneDataSidecar.manifest_path_for(cls, export_path: str, *, base_stem: bool = False) -> str` *(class)* — Return the sidecar manifest path for an export file.
   - `SceneDataSidecar.diff_report_path_for(cls, export_path: str, *, base_stem: bool = False) -> str` *(class)* — Return the sidecar diff report path for an export file.
@@ -1910,9 +1911,10 @@ Maya Connection Module
   - `MayaConnection.toggle_command_ports(mel_port: int = 7001, python_port: int = 7002) -> tuple` *(static)* — Toggle Maya command ports on or off.
   - `MayaConnection.reload_modules(modules: Union[str, List[str]], include_submodules: bool = True, verbose: bool = True) -> List[str]` *(static)* — Reload specified modules and their submodules using pythontk.ModuleReloader.
   - `MayaConnection.connect(self, mode: ConnectionMode = 'auto', port: int = 7002, host: str = 'localhost', launch: bool = True, app_path: Optional[str] = None, force_new_instance: bool = True, launch_args: Optional[List[str]] = None, confirm_existing: bool = True, auto_cleanup: bool = False) -> bool` — Connect to Maya using the specified mode.
-  - `MayaConnection.get_pid_from_port(port: int) -> Optional[int]` *(static)* — Find the process ID (PID) listening on the given TCP port.
+  - `MayaConnection.get_pid_from_port(cls, port: int) -> Optional[int]` *(class)* — Find the process ID (PID) listening on the given TCP port.
+  - `MayaConnection.get_port_from_pid(cls, pid: int, start_port: Optional[int] = None, span: Optional[int] = None) -> Optional[int]` *(class)* — Find a TCP port the given PID is LISTENING on (inverse of
   - `MayaConnection.close_instance(port: Optional[int] = None, pid: Optional[int] = None, force: bool = False) -> bool` *(static)* — Close a Maya instance identified by Port or PID.
-  - `MayaConnection.get_available_port(start_port: int = 7002, max_check: int = 100) -> int` *(static)* — Find an available port starting from start_port.
+  - `MayaConnection.get_available_port(cls, start_port: int = 7002, max_check: int = 100) -> int` *(class)* — Find an available port starting from start_port.
   - `MayaConnection.ensure_connection(self, launch: bool = True, app_path: Optional[str] = None, launch_args: Optional[List[str]] = None) -> bool` — Verify the port is reachable;
   - `MayaConnection.execute(self, code: str, timeout: int = 30, capture_output: bool = False, wait_for_response: bool = False, output_callback: Optional[Callable[[str], None]] = None) -> Optional[str]` — Execute Python code in Maya.
   - `MayaConnection.get_script_editor_output(self, last_n_chars: Optional[int] = None) -> Optional[str]` — Get the full content of the Maya Script Editor history.
@@ -2040,7 +2042,7 @@ Maya Connection Module
   - `SceneExporter.close_file_handlers(self)` — Close and remove file handlers after logging is complete.
   - `SceneExporter.load_fbx_export_preset(self, preset_file: str = None, verify: bool = False) -> Optional[dict]` — Load an FBX export preset and optionally verify it.
   - `SceneExporter.verify_fbx_preset(self) -> dict` — Verify a set of predefined FBX export settings and log their values.
-- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L639)**
+- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L666)**
   - `SceneExporterSlots.workspace(self) -> Optional[str]` *(property)*
   - `SceneExporterSlots.presets(self) -> Dict[str, Optional[str]]` *(property)* — Return available presets, using cached values if the preset directory has not changed.
   - `SceneExporterSlots.header_init(self, widget)` — Initialize the header widget.
@@ -2064,11 +2066,44 @@ Maya Connection Module
 <a id="env_utils--scene_exporter--task_manager"></a>
 ### `env_utils/scene_exporter/task_manager.py`
 
-- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L1443)** — Contains all task-related UI definitions for the Scene Exporter.
+- **[`class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`](mayatk/mayatk/env_utils/scene_exporter/task_manager.py#L1679)** — Contains all task-related UI definitions for the Scene Exporter.
   - `TaskManager.objects(self)` *(property)*
   - `TaskManager.task_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the task definitions for the UI.
   - `TaskManager.check_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the check definitions for the UI.
   - `TaskManager.definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return all definitions combined for backward compatibility.
+  - `TaskManager.set_workspace(self, enable=True)` — Switch to the workspace matching the scene path for the export.
+  - `TaskManager.set_linear_unit(self, linear_unit)` — Set Maya's working linear unit for the export.
+  - `TaskManager.conform_shape_names(self)` — Rename export-set shape nodes to ``<transform>Shape`` form.
+  - `TaskManager.convert_to_relative_paths(self)` — Copy external textures into sourceimages, then convert paths to relative.
+  - `TaskManager.reassign_duplicate_materials(self)` — Reassign duplicate materials in the scene.
+  - `TaskManager.resolve_invalid_texture_paths(self)` — Attempt to resolve missing texture paths via a gated sourceimages hunt.
+  - `TaskManager.smart_bake(self)` — Pre-bake constrained and driven channels before export.
+  - `TaskManager.optimize_keys(self)` — Optimize baked animation keys.
+  - `TaskManager.set_bake_animation_range(self)` — Set the animation export range to the first and last keyframes of the specified objects if baking i…
+  - `TaskManager.tie_all_keyframes(self)` — Use AnimUtils to tie all keyframes for the specified objects.
+  - `TaskManager.snap_keys_to_frame(self)` — Snap all keyframes to the nearest whole frame.
+  - `TaskManager.create_glb(self, fbx_path: Optional[str] = None, announce: bool = True)` — Convert an exported FBX to a GLB sidecar via pythontk's MeshConvert.
+  - `TaskManager.export_data_node(self)` — Include the shared ``data_export`` carrier in the export (default on).
+  - `TaskManager.apply_declared_takes(self)` — Export each declared take as a named Unity clip.
+  - `TaskManager.check_geometry_lod_suffix(self) -> tuple` — Check for geometry whose names end with '_LOD' or '_LOD' followed by digits.
+  - `TaskManager.ignore_groups(self, names: str) -> None` — Exclude top-level groups matching *names* (case-insensitive) and all
+  - `TaskManager.exclude_hdr(self) -> None` — Remove Arnold HDR environment lights (``aiSkyDomeLight``) from the export set.
+  - `TaskManager.check_root_default_transforms(self) -> tuple` — Check if all root group nodes have default transforms.
+  - `TaskManager.check_absolute_paths(self) -> tuple` — Check for stored-absolute (or project-escaping) texture paths.
+  - `TaskManager.check_valid_paths(self) -> tuple` — Check that every export texture and scene reference resolves on disk.
+  - `TaskManager.check_texture_file_size(self, max_size_mb: Optional[float] = 16.0) -> tuple` — Check that no export texture exceeds a maximum on-disk file size.
+  - `TaskManager.check_mangled_names(self) -> tuple` — Check the export set (including shapes) for scratch/mangled names.
+  - `TaskManager.check_duplicate_locator_names(self) -> tuple` — Check for duplicate locator short names among the specified objects.
+  - `TaskManager.check_duplicate_materials(self) -> tuple` — Check if any duplicate materials are present in the scene.
+  - `TaskManager.check_referenced_objects(self) -> tuple` — Check if any referenced objects are present in the scene.
+  - `TaskManager.check_framerate(self, target_framerate: Optional[str]) -> tuple` — Check if the scene's current framerate matches the target framerate.
+  - `TaskManager.check_objects_below_floor(self, tolerance: float = _DEFAULT_FLOOR_TOLERANCE) -> tuple` — Check if any object's geometry is below the floor plane (Y=0).
+  - `TaskManager.check_overlapping_duplicate_mesh(self) -> tuple` — Check for duplicate overlapping geometry among the export objects.
+  - `TaskManager.check_hidden_geometry(self) -> tuple` — Check for geometry that will ship in the FBX while hidden.
+  - `TaskManager.check_untied_keyframes(self) -> tuple` — Check if there are any untied keyframes on the specified objects.
+  - `TaskManager.check_floating_point_keys(self) -> tuple` — Check if there are any floating point keyframes on the specified objects.
+  - `TaskManager.write_scene_data_sidecar(self) -> None` — Write the sidecar JSON recording what shipped in the export.
+  - `TaskManager.check_hierarchy_vs_existing_fbx(self) -> tuple` — Check export objects against the hierarchy manifest of the previous export.
 
 <a id="env_utils--script_output"></a>
 ### `env_utils/script_output.py`
@@ -2228,9 +2263,10 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
   - `LightmapBaker.revert_unlit(self, objects: Optional[List[str]] = None) -> List[str]` — Undo :meth:`commit_unlit` -- restore the source material + UV order.
   - `LightmapBaker.pack_atlas(self, mapping: Dict[str, str], output_dir: Optional[str] = None, prefix: str = '', suffix: str = '_Lightmap') -> Dict[str, Tuple[str, List[float]]]` — Consolidate per-object lightmaps into one atlas EXR per primary material.
   - `LightmapBaker.commit_lightmap(self, mapping: Dict[str, str], intensity: float = 1.0, scale_offsets: Optional[Dict[str, List[float]]] = None, uv_rects: Optional[Dict[str, List[float]]] = None) -> Dict[str, str]` — Record a lighting-only bake for the engine (fully non-destructive).
+  - `LightmapBaker.refresh_export_metadata(cls) -> Optional[str]` *(class)* — Rebuild the ``lightmap_metadata`` export channel from the scene's markers.
   - `LightmapBaker.revert_lightmap(self, objects: Optional[List[str]] = None) -> List[str]` — Undo :meth:`commit_lightmap` -- drop the markers + republish.
   - `LightmapBaker.revert(self, objects: Optional[List[str]] = None) -> List[str]` — Undo any lightmap wiring -- fused commit and/or lighting-only marker.
-- **[`class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L1351)** — Switchboard slots for the ``lightmap_baker.ui`` panel.
+- **[`class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L1362)** — Switchboard slots for the ``lightmap_baker.ui`` panel.
   - `LightmapBakerSlots.header_init(self, widget) -> None` — Configure the header menu and help text.
   - `LightmapBakerSlots.cmb000_init(self, widget) -> None` — Populate the Quality combobox from the shared preset store.
   - `LightmapBakerSlots.cmb000(self, index, widget) -> None` — Apply the selected preset's dials to the Resolution / Samples fields.
@@ -2246,9 +2282,9 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 <a id="mat_utils--_mat_utils"></a>
 ### `mat_utils/_mat_utils.py`
 
-- **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L406)**
+- **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L555)**
   - `MatUtils.resolve_path(path: str, search: bool = True) -> Union[str, None]` *(static)* — Resolve a texture path, expanding env vars and ``<UDIM>`` tokens.
-  - `MatUtils.get_mats(objs=None, as_strings=True, mat_type=None) -> List[str]` *(static)* — Returns the set of materials assigned to a given list of objects or components.
+  - `MatUtils.get_mats(objs=None, as_strings=True, mat_type=None, include_displacement=False) -> List[str]` *(static)* — Returns the set of materials assigned to a given list of objects or components.
   - `MatUtils.group_objects_by_material(objects, cluster_by_distance=False, threshold=10000.0)` *(static)* — Groups objects based on their assigned material(s).
   - `MatUtils.get_texture_paths(cls, objects: Optional[List[Any]] = None, materials: Optional[List[Any]] = None, file_nodes: Optional[List[Any]] = None, texture_names: Optional[List[str]] = None, absolute: bool = True) -> List[str]` *(class)* — Resolve unique texture file paths for the given scope.
   - `MatUtils.get_texture_info(cls, objects=None, materials=None, file_nodes=None, texture_names=None)` *(class)* — Get image metadata (size, mode, format) for texture files in scope.
@@ -2281,10 +2317,11 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
   - `MatUtils.collect_material_paths(materials: Optional[List[str]] = None, attributes: Optional[List[str]] = None, inc_mat_name: bool = False, inc_path_type: bool = False, resolve_full_path: bool = False) -> Union[List[str], List[Tuple[str, ...]]]` *(static)* — Collects specified attributes file paths for given materials.
   - `MatUtils.remap_file_nodes(file_paths: List[str], target_dir: str, silent: bool = False, limit_to_nodes: Optional[List[str]] = None, as_strings: bool = True) -> List[str]` *(static)* — Internal helper to remap file nodes to target_dir, preserving relative subfolders inside sourceimag…
   - `MatUtils.remap_texture_paths(cls, materials: Optional[List[str]] = None, new_dir: Optional[str] = None, silent: bool = False, file_nodes: Optional[List[str]] = None, objects: Optional[List[str]] = None, as_strings: bool = True) -> None` *(class)* — Remaps file texture paths for materials to new_dir.
+  - `MatUtils.stage_textures_relative(cls, file_nodes: List[str], sourceimages: Optional[str] = None) -> Dict[str, str]` *(class)* — Stage textures under sourceimages and store project-relative paths.
   - `MatUtils.is_duplicate_material(material1: str, material2: str) -> bool` *(static)* — Check if two materials are duplicates based on their textures.
-  - `MatUtils.find_materials_with_duplicate_textures(cls, materials: Optional[List[str]] = None, strict: bool = False) -> Dict[str, List[str]]` *(class)* — Find duplicate materials based on their texture file names or full paths.
-  - `MatUtils.reassign_duplicate_materials(cls, materials: Optional[List[str]] = None, delete: bool = False, strict: bool = False) -> None` *(class)* — Find duplicate materials, remove duplicates, and reassign them to the original material.
-  - `MatUtils.filter_materials_by_objects(objects: List[str], as_strings: bool = True) -> List[str]` *(static)* — Filter materials assigned to the given objects.
+  - `MatUtils.find_materials_with_duplicate_textures(cls, materials: Optional[List[str]] = None, strict: bool = False, verify: bool = True) -> Dict[str, List[str]]` *(class)* — Find duplicate materials based on their texture file names or full paths.
+  - `MatUtils.reassign_duplicate_materials(cls, materials: Optional[List[str]] = None, delete: bool = False, strict: bool = False, verify: bool = True) -> None` *(class)* — Find duplicate materials, remove duplicates, and reassign them to the original material.
+  - `MatUtils.filter_materials_by_objects(objects: List[str], as_strings: bool = True, include_displacement: bool = False) -> List[str]` *(static)* — Filter materials assigned to the given objects.
   - `MatUtils.reload_textures(materials=None, inc=None, exc=None, log=False, refresh_viewport=False, refresh_hypershade=False, texture_types: Optional[List[str]] = None)` *(static)* — Reloads textures connected to specified materials with inclusion/exclusion filters.
   - `MatUtils.move_texture_files(cls, found_files: List[Union[str, Tuple[str, str]]], new_dir: str, delete_old: bool = False, create_dir: bool = True, per_file_timeout: float = 120.0, max_workers: int = 8, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> List[Tuple[str, str]]` *(class)* — Move or copy found texture files to a new directory.
   - `MatUtils.copy_textures_to_sourceimages(cls, objects: Optional[List[str]] = None, materials: Optional[List[str]] = None, file_nodes: Optional[List[str]] = None, sourceimages_dir: Optional[str] = None, delete_old: bool = False) -> List[Tuple[str, str]]` *(class)* — Copy referenced textures that live outside ``sourceimages`` into it.
@@ -2295,6 +2332,7 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
   - `MatUtils.convert_bump_to_normal(bump_file_node, output_path: Optional[str] = None, intensity: float = 1.0, format_type: str = 'opengl', create_file_node: bool = True, node_name: Optional[str] = None) -> Optional[str]` *(static)* — Convert a bump/height file node's texture to a normal map on disk.
   - `MatUtils.validate_normal_map_setup(normal_file_node, material=None) -> Dict[str, Any]` *(static)* — Validate normal map file node setup and provide recommendations.
   - `MatUtils.graph_materials(materials: Union[str, List[str], object], mode: str = 'showUpAndDownstream') -> None` *(static)* — Open the Hypershade and graph the specified materials.
+  - `MatUtils.get_texture_file_node(material, attr_name, _depth=0)` *(static)* — Locate the file texture node feeding a material attribute.
 
 <a id="mat_utils--arnold_bridge"></a>
 ### `mat_utils/arnold_bridge.py`
@@ -3262,7 +3300,7 @@ Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
   - `WheelRig.get_expressions(self, filter_by_rig: bool = False) -> List[object]` — Return all expression nodes connected to the control.
   - `WheelRig.delete_expressions(self, filter_by_rig: bool = True) -> None` — Delete expression nodes associated with this rig.
   - `WheelRig.rig_rotation(self, movement_axis: str = 'translateZ', rotation_axis: Optional[str] = None, wheel_height: float = 1.0, wheels: Optional[List['object']] = None, use_world_space: bool = False) -> None` — Rig wheels to rotate based on control movement.
-- **[`class WheelRigSlots`](mayatk/mayatk/rig_utils/wheel_rig.py#L312)**
+- **[`class WheelRigSlots`](mayatk/mayatk/rig_utils/wheel_rig.py#L313)**
   - `WheelRigSlots.header_init(self, widget)` — Configure header menu with mode toggle and instructions.
   - `WheelRigSlots.rig_name(self) -> str` *(property)* — Get the rig name from the text box.
   - `WheelRigSlots.movement_axis(self) -> str` *(property)* — Get the movement axis from the combo box.
@@ -3525,7 +3563,7 @@ Dedicated UV shell-transform panel.
 <a id="xform_utils--_xform_utils"></a>
 ### `xform_utils/_xform_utils.py`
 
-- **[`class XformUtils(_XformUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L574)** — Transform utilities for Maya objects.
+- **[`class XformUtils(_XformUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L811)** — Transform utilities for Maya objects.
   - `XformUtils.convert_axis(value, invert=False, ortho=False, to_integer=False)` *(static)* — Converts between axis representations and optionally inverts the axis or returns an orthogonal axis.
   - `XformUtils.move_to(cls, source, target, pivot='center', group_move=False)` *(class)* — Move source object(s) to align with the target object(s).
   - `XformUtils.drop_to_grid(objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)` *(static)* — Align objects to Y origin on the grid using a helper plane.
@@ -3533,11 +3571,12 @@ Dedicated UV shell-transform panel.
   - `XformUtils.scale_connected_edges(objects, scale_factor=1.1) -> None` *(static)* — Scales each set of connected edges separately, either uniformly or non-uniformly.
   - `XformUtils.store_transforms(objects, prefix='original', accumulate=True, traverse=False, channels=None)` *(static)* — Capture the current local TRS as a cumulative per-channel bake history.
   - `XformUtils.freeze_instanced_group(cls, master: str, translate: bool = True, rotate: bool = True, scale: bool = True, quiet: bool = True) -> bool` *(class)* — Freeze *master* while keeping its instance group intact.
-  - `XformUtils.freeze_transforms(cls, objects, center_pivot=0, force=True, delete_history=False, freeze_children=False, unlock_children=True, connection_strategy='preserve', instance_strategy='skip', from_channel_box=False, **kwargs)` *(class)* — Freezes transformations on the given objects.
+  - `XformUtils.freeze_transforms(cls, objects, center_pivot=0, force=True, delete_history=False, freeze_children=False, unlock_children=True, connection_strategy='preserve', instance_strategy='skip', from_channel_box=False, store=True, **kwargs)` *(class)* — Freezes transformations on the given objects.
   - `XformUtils.freeze_to_opm(objects, reset_rotate_axis: bool = False, reset_joint_orient: bool = False) -> None` *(static)* — Freeze transforms into offsetParentMatrix while preserving pivot placement.
   - `XformUtils.unfreeze_to_parent(objects, traverse: bool = False, preserve_root: bool = True) -> List[str]` *(static)* — Push a child transform's local matrix up into its parent and zero the child.
   - `XformUtils.restore_transforms(objects, prefix='original', delete_attrs=True, channels=None, traverse=False)` *(static)* — Compose stored bake history with current local TRS, per channel.
   - `XformUtils.clear_stored_transforms(objects, prefix='original') -> List[str]` *(static)* — Delete the per-channel bake attrs without restoring.
+  - `XformUtils.repair_stored_transforms(cls, objects=None, prefix='original', dry_run=False, clear_stale=False, tolerance=0.0001)` *(class)* — Triage bake history left by earlier tool versions, restore only
   - `XformUtils.has_stored_transforms(objects, prefix='original')` *(static)* — Check if objects have any stored bake history.
   - `XformUtils.reset_translation(cls, objects)` *(class)* — Reset the translation transformations on the given object(s).
   - `XformUtils.set_translation_to_pivot(node)` *(static)* — Set an object's translation value from its pivot location.
@@ -3578,9 +3617,30 @@ Dedicated UV shell-transform panel.
 Matrix utilities for Maya rigging and animation.
 
 - **[`class MatricesError(RuntimeError)`](mayatk/mayatk/xform_utils/matrices.py#L72)** — Base exception for matrix utility operations.
-- **[`class Matrices(_MatrixMath, _DagTransforms, _NodeBuilders, ptk.HelpMixin, _MatricesInternal)`](mayatk/mayatk/xform_utils/matrices.py#L837)** — Matrix utilities for Maya rigging and animation.
+- **[`class Matrices(_MatrixMath, _DagTransforms, _NodeBuilders, ptk.HelpMixin, _MatricesInternal)`](mayatk/mayatk/xform_utils/matrices.py#L878)** — Matrix utilities for Maya rigging and animation.
   - `Matrices.get_matrix(node: str, attr: str = 'worldMatrix', index: int = 0) -> List[float]` *(static)* — Return a 16-element flat list for a matrix attribute on *node*.
   - `Matrices.set_matrix(node: str, attr: str, value, index: int = 0) -> None` *(static)* — Set a matrix attribute on *node* from an MMatrix or 16-element iterable.
+  - `Matrices.identity() -> 'MMatrix'` *(static)* — Return a 4x4 identity matrix.
+  - `Matrices.to_mmatrix(matrix_like: Union[str, 'MMatrix', list]) -> 'MMatrix'` *(static)* — Convert various matrix representations to MMatrix.
+  - `Matrices.local_matrix(node: str) -> 'MMatrix'` *(static)* — Get a transform's local matrix as MMatrix.
+  - `Matrices.from_srt(translate: Iterable[float] = (0.0, 0.0, 0.0), rotate_euler_deg: Iterable[float] = (0.0, 0.0, 0.0), scale: Iterable[float] = (1.0, 1.0, 1.0), rotate_order: str = 'xyz') -> 'MMatrix'` *(static)* — Compose an MMatrix from separate scale, rotation, and translation components.
+  - `Matrices.decompose(m: 'MMatrix', rotate_order: str = 'xyz') -> Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[float, float, float]]` *(static)* — Decompose an MMatrix into translation, rotation (degrees), and scale components.
+  - `Matrices.inverse(m: 'MMatrix') -> 'MMatrix'` *(static)* — Calculate the inverse of a matrix.
+  - `Matrices.safe_inverse(m: 'MMatrix', tolerance: float = 1e-12) -> Optional['MMatrix']` *(static)* — Inverse of *m*, or None when it is singular or non-finite.
+  - `Matrices.mult(*mats: 'MMatrix') -> 'MMatrix'` *(static)* — Multiply matrices right-to-left.
+  - `Matrices.world_to_local(world_matrix: 'MMatrix', parent_world_matrix: 'MMatrix') -> 'MMatrix'` *(static)* — Convert a world-space matrix to local space relative to a parent.
+  - `Matrices.local_to_world(local_matrix: 'MMatrix', parent_world_matrix: 'MMatrix') -> 'MMatrix'` *(static)* — Convert a local-space matrix to world space.
+  - `Matrices.extract_translation(m: 'MMatrix') -> Tuple[float, float, float]` *(static)* — Extract just the translation component from a matrix.
+  - `Matrices.is_identity(m: 'MMatrix', tolerance: float = 1e-09) -> bool` *(static)* — Check if a matrix is approximately equal to the identity matrix.
+  - `Matrices.set_offset_parent_matrix(node: str, m: 'MMatrix') -> None` *(static)* — Apply a matrix to a node's offsetParentMatrix attribute.
+  - `Matrices.bake_world_matrix_to_transform(node: str, m: Union['MMatrix', list], reset_offset_parent_matrix: bool = True) -> None` *(static)* — Set a node's translate, rotate, and scale so its worldMatrix matches the given matrix.
+  - `Matrices.freeze_to_offset_parent_matrix(node: str) -> None` *(static)* — Zero a node's translate, rotate, and scale by baking current world transform into offsetParentMatri…
+  - `Matrices.ensure_node(node_type: str, name: Optional[str] = None) -> str` *(static)* — Create a node of the specified type.
+  - `Matrices.build_mult_matrix_chain(mats: List[str], name: str = 'mmx_chain') -> Tuple[str, str]` *(static)* — Create a multMatrix node chain that multiplies matrices and decomposes the result.
+  - `Matrices.drive_with_offset_parent_matrix(driver_world: str, driven_ctl: str, name: str = 'drive_opm') -> str` *(static)* — Drive a control's offsetParentMatrix from another transform's world matrix.
+  - `Matrices.build_space_switch(control: str, space_parents: List[str], attr_owner: Optional[str] = None, attr_name: str = 'space', name: str = 'space_switch') -> str` *(static)* — Create a multi-space switch system using blendMatrix.
+  - `Matrices.build_aim_matrix(source: str, target: str, up_object: Optional[str] = None, primary_axis: Tuple[float, float, float] = (1.0, 0.0, 0.0), secondary_axis: Tuple[float, float, float] = (0.0, 1.0, 0.0), secondary_mode: str = 'align', name: str = 'aim_mx') -> str` *(static)* — Create a node-based aim constraint using aimMatrix.
+  - `Matrices.build_ikfk_blend(ik_mx_attr: str, fk_mx_attr: str, parent_inv_attr: str, out_target_ctl: str, switch_attr_owner: str, switch_attr: str = 'ikFk', name: str = 'ikfk_blend') -> str` *(static)* — Create an IK/FK blend system using blendMatrix in local space.
 
 <a id="xform_utils--pivot_watcher"></a>
 ### `xform_utils/pivot_watcher.py`

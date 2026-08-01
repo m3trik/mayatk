@@ -56,6 +56,18 @@ class _TaskDataMixin:
         self._key_times = set(times)
         return times
 
+    def _invalidate_keyframe_cache(self) -> None:
+        """Drop the cached keyframe times (``_key_times``).
+
+        Every task that moves or deletes keys must call this: a later task
+        reading the cache would otherwise act on pre-edit times — e.g.
+        ``tie_all_keyframes`` bookending to the fractional extremes
+        ``snap_keys_to_frame`` just removed, re-creating the exact keys the
+        snap existed to fix (and then failing ``check_floating_point_keys``).
+        """
+        if hasattr(self, "_key_times"):
+            delattr(self, "_key_times")
+
     def _invalidate_material_caches(self) -> None:
         """Drop the derived material/texture caches.
 
@@ -74,8 +86,12 @@ class _TaskDataMixin:
         ``objects`` is reassigned via ``_initialize_objects``.
         """
         if not hasattr(self, "_cached_materials") or self._cached_materials is None:
+            # include_displacement: displacement/volume/aiSurfaceShader maps
+            # must be validated, sized, and staged like every other texture —
+            # the surface-shader-only default left them invisible to the
+            # whole pipeline.
             self._cached_materials = MatUtils.filter_materials_by_objects(
-                self.objects, as_strings=True
+                self.objects, as_strings=True, include_displacement=True
             )
         return self._cached_materials
 
@@ -177,6 +193,23 @@ class _TaskActionsMixin(_TaskDataMixin):
         cmds.currentUnit(linear=original)
         self.logger.debug(f"Reverted linear unit to: {original}")
 
+    def conform_shape_names(self):
+        """Rename export-set shape nodes to ``<transform>Shape`` form.
+
+        Repairs shapes carrying imported/scratch names (accumulated
+        ``__uninst_tmp`` tokens, underscore runs, FBXASC escapes) that Maya's
+        transform-rename never conforms — a shared (instanced) shape keeps a
+        stale name forever and spreads it to every instance path.  Permanent
+        scene improvement (deliberately not reverted after export).
+        """
+        from mayatk.edit_utils.naming._naming import Naming
+
+        # `or []` — a None/empty export set must stay a no-op; passing None
+        # through would ask Naming.conform_shape_names for the WHOLE scene.
+        pairs = Naming.conform_shape_names(self.objects or [])
+        if pairs:
+            self.logger.info(f"Conformed {len(pairs)} shape name(s).")
+
     def convert_to_relative_paths(self):
         """Copy external textures into sourceimages, then convert paths to relative.
 
@@ -187,27 +220,42 @@ class _TaskActionsMixin(_TaskDataMixin):
         isn't there and silently break the material on import.  Textures
         already under sourceimages are left in place.
 
-        The copy is a real, persistent asset consolidation — it intentionally
-        survives the post-export scene restore (the perform_export undo chunk
-        only rolls back the node *path* edits below, not the files on disk).
+        The staged copies are a real, persistent asset consolidation, and the
+        node *path* edits persist too — the exporter has no automatic
+        post-export rollback (the undo-chunk restore was removed with the
+        smart_bake redesign), so both survive the export by design.  The
+        user's undo queue can back the path edits out (each write is
+        undo-anchored inside ``stage_textures_relative``).
+
+        Single per-node pass via ``MatUtils.stage_textures_relative`` — the
+        old copy-then-remap pair coupled two functions through basename keys
+        and could rebind a node to an unrelated same-named file the copy step
+        had refused, flatten valid ``sourceimages/sub/…`` paths, or remap
+        UDIM sets whose tiles were never copied.
         """
         self.logger.debug("Converting absolute paths to relative")
-        materials = self._get_all_materials()
+        file_nodes = self._get_export_file_nodes()
+        if not file_nodes:
+            self.logger.debug("No export texture file nodes — nothing to convert.")
+            return
 
-        # Stage the actual files under sourceimages before remapping so the
-        # resulting relative paths resolve instead of breaking the links.
-        copied = MatUtils.copy_textures_to_sourceimages(materials=materials)
+        results = MatUtils.stage_textures_relative(file_nodes)
+
+        copied = [n for n, s in results.items() if s == "copied+relativized"]
+        converted = [n for n, s in results.items() if s.endswith("relativized")]
         if copied:
             self.logger.info(
-                f"Copied {len(copied)} external texture(s) into sourceimages "
-                "before relative-path conversion."
+                f"Copied {len(copied)} external texture(s) into sourceimages."
             )
-
-        # Pass silent=True and as_strings=True to avoid om.MGlobal.displayInfo
-        # and cmds.node overhead.  Do NOT disable undo here — the
-        # perform_export undo chunk needs to capture these changes so
-        # the scene can be restored after export.
-        MatUtils.remap_texture_paths(materials, silent=True, as_strings=True)
+        if converted:
+            self.logger.info(
+                f"Stored project-relative paths on {len(converted)} file node(s)."
+            )
+        for node, status in results.items():
+            if status in ("skipped:name-collision", "skipped:copy-failed"):
+                self.logger.warning(
+                    f"{node}: {status.split(':', 1)[1]} — path left unchanged."
+                )
         self.logger.debug("Path conversion completed.")
 
     def reassign_duplicate_materials(self):
@@ -220,12 +268,16 @@ class _TaskActionsMixin(_TaskDataMixin):
         self.logger.debug("Reassignment completed.")
 
     def resolve_invalid_texture_paths(self):
-        """Attempt to resolve missing texture paths using workspace and sourceimages lookup.
+        """Attempt to resolve missing texture paths via a gated sourceimages hunt.
 
-        Scoped to materials assigned to the export objects. Uses
-        ``MatUtils.resolve_path`` which checks env-var expansion,
-        workspace-relative resolution, sourceimages directory, and
-        basename-in-sourceimages as fallbacks.
+        Scoped to the file nodes feeding the export materials.  A rebind by
+        name is inherently a guess — the original file is gone, so nothing
+        can verify content — which is why the hunt is gated: the broken
+        basename must match exactly ONE file under the sourceimages tree
+        (recursive; the old hunt only saw the root).  A unique match is
+        rebound and logged at WARNING (old → new, auditable); an ambiguous
+        name is reported instead of guessed at.  ``<UDIM>``/``<f>`` token
+        names match by pattern and rebind with the token preserved.
         """
         file_nodes = self._get_export_file_nodes()
         if not file_nodes:
@@ -233,6 +285,18 @@ class _TaskActionsMixin(_TaskDataMixin):
                 "No export texture file nodes found. Skipping texture path resolution."
             )
             return
+
+        import fnmatch
+
+        _TOKEN_RE = re.compile(r"<udim>|<f>|<uvtile>", re.IGNORECASE)
+        index: Dict[str, List[str]] = {}
+        src_dir = EnvUtils.get_env_info("sourceimages")
+        if src_dir and os.path.isdir(src_dir):
+            for walk_root, _dirs, files in os.walk(src_dir):
+                for f in files:
+                    index.setdefault(f.lower(), []).append(
+                        os.path.join(walk_root, f).replace("\\", "/")
+                    )
 
         resolved_count = 0
         unresolved = []
@@ -245,19 +309,45 @@ class _TaskActionsMixin(_TaskDataMixin):
             if not path:
                 continue
 
-            expanded = os.path.expandvars(path)
-            # Handle UDIM patterns
-            check_path = (
-                expanded.replace("<UDIM>", "1001") if "<UDIM>" in expanded else expanded
-            )
-            if os.path.exists(check_path):
+            # "Already valid" must mean what check_valid_paths means: env-var
+            # + workspace expansion with <UDIM> handling (resolve_path,
+            # search=False).  The previous bare os.path.exists test resolved
+            # workspace-relative paths against the process CWD, so every valid
+            # relative path failed the guard and was rewritten back to
+            # absolute on each run.
+            if MatUtils.resolve_path(path, search=False):
                 continue  # Path is already valid
 
-            resolved = MatUtils.resolve_path(path)
-            if resolved:
-                cmds.setAttr(f"{node}.fileTextureName", resolved, type="string")
+            basename = os.path.basename(os.path.expandvars(path))
+            if _TOKEN_RE.search(basename):
+                pattern = _TOKEN_RE.sub("*", basename).lower()
+                tile_dirs = sorted(
+                    {
+                        os.path.dirname(p)
+                        for name, paths in index.items()
+                        if fnmatch.fnmatchcase(name, pattern)
+                        for p in paths
+                    }
+                )
+                candidates = [f"{d}/{basename}" for d in tile_dirs]
+            else:
+                candidates = index.get(basename.lower(), [])
+
+            if len(candidates) == 1:
+                new_path = candidates[0]
+                cmds.setAttr(f"{node}.fileTextureName", new_path, type="string")
                 resolved_count += 1
-                self.logger.info(f"Resolved texture: {node} -> {resolved}")
+                # WARNING, not INFO: a rebind by name is a guess the user
+                # should be able to audit after the export.
+                self.logger.warning(
+                    f"Rebound texture by unique name match: {node}: "
+                    f"{path} -> {new_path}"
+                )
+            elif candidates:
+                unresolved.append(
+                    f"{node} -> {path} (ambiguous: {len(candidates)} same-named "
+                    "files under sourceimages — not guessing)"
+                )
             else:
                 unresolved.append(f"{node} -> {path}")
 
@@ -286,11 +376,17 @@ class _TaskActionsMixin(_TaskDataMixin):
         from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
         self.logger.info("Analyzing scene for bake requirements...")
+        # Honor the UI contract ("Optimize Keys … also controls key
+        # optimization inside Smart Bake"): baked override-layer curves sit
+        # behind animBlendNodes that listConnections can't traverse, so the
+        # separate optimize_keys task can never reach them — SmartBake must
+        # optimize its own output.  _optimize_keys_enabled is set per run by
+        # _execute_tasks_and_checks.
         baker = SmartBake(
             objects=self.objects,
             sample_by=1,
             preserve_outside_keys=True,
-            optimize_keys=False,  # Handled by the separate optimize_keys task in _task_config()
+            optimize_keys=getattr(self, "_optimize_keys_enabled", False),
             use_override_layer=True,  # Non-destructive: bake to override layer
             delete_inputs=False,  # Keep constraints — layer overrides them
         )
@@ -339,9 +435,14 @@ class _TaskActionsMixin(_TaskDataMixin):
             return
 
         self.logger.info("Optimizing baked animation keys...")
-        # Optimizes base-layer curves only.  Override-layer curves from
-        # smart_bake are optimized internally by SmartBake.optimize_keys.
+        # Optimizes base-layer curves only — the layer blend nodes smart_bake
+        # creates aren't traversed by listConnections, so baked override-layer
+        # curves can't be reached from here.  SmartBake optimizes those itself
+        # (the smart_bake task passes this run's optimize_keys setting through).
         AnimUtils.optimize_keys(self.objects, recursive=True, quiet=True)
+        # Static curves may have been deleted — drop the cached key times so
+        # later tasks (tie/snap/range) re-query the surviving curves.
+        self._invalidate_keyframe_cache()
         self.logger.info("Optimization completed.")
 
     def set_bake_animation_range(self):
@@ -392,6 +493,9 @@ class _TaskActionsMixin(_TaskDataMixin):
 
         self.logger.info("Snapping keyframes to nearest whole frame.")
         AnimUtils.snap_keys_to_frames(self.objects)
+        # Key times just changed — a stale cache would make tie_all_keyframes
+        # re-insert the fractional bookends this task removed.
+        self._invalidate_keyframe_cache()
         self.logger.info("Keyframes have been snapped.")
 
     def create_glb(self, fbx_path: Optional[str] = None, announce: bool = True):
@@ -429,16 +533,20 @@ class _TaskActionsMixin(_TaskDataMixin):
     def export_data_node(self):
         """Include the shared ``data_export`` carrier in the export (default on).
 
-        ``data_export`` is the single hidden node every metadata system stamps
+        ``data_export`` is the single node every metadata system stamps
         (Shots → ``shot_metadata`` + ``fbx_takes``; Audio → ``audio_manifest``;
-        …).  Because it's hidden, the ``visible`` / ``selected`` export modes
-        omit it and the metadata silently wouldn't ship.  This refreshes the
-        carrier from the live producers, then appends it to the export set so the
-        data rides into the FBX regardless of export mode — independent of any
-        one subsystem, so a scene with only audio still carries its manifest.
+        …).  The ``visible`` mode's object set is geometry-only and the
+        ``selected`` mode ships only what the user picked, so in both the
+        carrier would silently never ship.  This refreshes the carrier from the
+        live producers, then appends it to the export set so the data rides
+        into the FBX regardless of export mode — independent of any one
+        subsystem, so a scene with only audio still carries its manifest.
         """
         self._refresh_scene_data_node()
         self._include_data_export_node()
+        # Mark AFTER _include_data_export_node — assigning self.objects there
+        # re-clears the flag via the setter.
+        self._data_node_refreshed = True
         self._log_data_node_summary()
 
     def _log_data_node_summary(self):
@@ -521,33 +629,36 @@ class _TaskActionsMixin(_TaskDataMixin):
             self.logger.debug("data_export refresh skipped.", exc_info=True)
 
     def apply_declared_takes(self):
-        """Export each shot as a named Unity clip, plus embed shot metadata.
+        """Export each declared take as a named Unity clip.
 
-        Publishes the active shot store's export view onto the shared
-        ``data_export`` node, ensures that node is in the export selection (so
-        the metadata rides along inside the FBX), then realizes the declared
-        takes into FBX export state.  The apply step is shot-agnostic — it acts
-        on whatever takes the scene declares.  Runs after
+        Producer-agnostic: refreshes every producer's ``data_export`` channel
+        (skipped when ``export_data_node`` already did so this run — the two
+        tasks are default-on neighbors, and one refresh per export is enough),
+        ensures the carrier is in the export selection, then realizes whatever
+        ``fbx_takes`` the scene declares into FBX export state.  Runs after
         ``set_bake_animation_range`` so its union range wins.
         """
-        from mayatk.anim_utils.shots._shots import ShotStore
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        store = ShotStore.active()
-        if not store.shots:
-            self.logger.debug("No shots defined. Skipping animation takes.")
-            return
-
-        # Republish so the channels reflect the live store, then make sure the
-        # carrier node travels with the selection.
-        store.publish_export_view()
+        if not getattr(self, "_data_node_refreshed", False):
+            self._refresh_scene_data_node()
         self._include_data_export_node()
 
         count = FbxUtils.apply_takes_from_node()
-        self.logger.info(
-            f"Animation takes: {count} clip(s) from {len(store.shots)} shot(s); "
-            "shot metadata embedded on data_export."
-        )
+        if count:
+            # Take splits + bake-complex are sticky global FBX exporter state
+            # that must live THROUGH the write, so the cleanup is staged
+            # deferred (post-write) rather than revert-paired.  Without it, a
+            # session with no auto-export hook installed kept the splits and
+            # bake range armed for every later export.  Idempotent alongside
+            # the hook's own kAfterExport reset.
+            self.stage_deferred_restore("fbx_takes", FbxUtils.reset_takes)
+            self.logger.info(
+                f"Animation takes: {count} clip(s) realized from the declared "
+                "fbx_takes; shot metadata embedded on data_export."
+            )
+        else:
+            self.logger.debug("No takes declared. Skipping animation takes.")
 
 
 class _TaskChecksMixin(_TaskDataMixin):
@@ -613,6 +724,11 @@ class _TaskChecksMixin(_TaskDataMixin):
             for n in sorted(matches):
                 link = self._obj_link(matches[n], "reveal")
                 messages.append(f"  - {link}")
+            # The runner only surfaces messages from FAILING checks; this one
+            # always passes, so its listing must be logged directly or the
+            # check is a silent no-op.
+            for line in messages:
+                self.logger.info(line)
 
         return True, messages
 
@@ -770,26 +886,46 @@ class _TaskChecksMixin(_TaskDataMixin):
         return True, log_messages  # All checks passed, no non-default transforms
 
     def check_absolute_paths(self) -> tuple:
-        """Check if any absolute material paths are present in the scene."""
-        all_relative = True
+        """Check for stored-absolute (or project-escaping) texture paths.
+
+        Classifies by PATH FORM (``os.path.isabs`` / drive / UNC), not by
+        where the file happens to live: an absolute path into sourceimages
+        still ships a machine-specific string in the FBX (the old
+        location-based test read those as "Relative"), and a legitimately
+        relative ``..`` path was misread as absolute.  Relative paths that
+        resolve OUTSIDE the project root are flagged separately — they won't
+        travel with the project.  Scope matches ``check_valid_paths``: the
+        file nodes feeding the export materials via full shading history, so
+        bump/normal/utility-chained textures are covered too.
+        """
         log_messages = []
 
-        materials = self._get_all_materials()
-        material_paths = MatUtils.collect_material_paths(
-            materials,
-            inc_mat_name=True,
-            inc_path_type=True,
-            nested_as_unit=True,
-        )
+        project_root = cmds.workspace(query=True, rootDirectory=True) or ""
+        root_cased = os.path.normcase(os.path.normpath(project_root))
 
-        for mat, typ, pth in material_paths:
-            if typ == "Absolute":
-                all_relative = False
-                mat_name = str(mat).split("|")[-1].split(":")[-1]
-                link = self._obj_link(mat_name, "select")
-                log_messages.append(f"Absolute path - {link} - {pth}")
+        for node in self._get_export_file_nodes():
+            if not cmds.attributeQuery("fileTextureName", node=node, exists=True):
+                continue
+            path = cmds.getAttr(f"{node}.fileTextureName")
+            if not path:
+                continue
 
-        return all_relative, log_messages
+            expanded = os.path.expandvars(path)
+            link = self._obj_link(node, "select")
+            if os.path.isabs(expanded) or os.path.splitdrive(expanded)[0]:
+                log_messages.append(f"Absolute path - {link} - {path}")
+            elif project_root:
+                # Maya resolves relative paths against the project root; a
+                # `..` path that lands outside it won't travel.
+                resolved = os.path.normcase(
+                    os.path.normpath(os.path.join(project_root, expanded))
+                )
+                if resolved != root_cased and not resolved.startswith(
+                    root_cased + os.sep
+                ):
+                    log_messages.append(f"Escapes project root - {link} - {path}")
+
+        return (not log_messages), log_messages
 
     def check_valid_paths(self) -> tuple:
         """Check that every export texture and scene reference resolves on disk.
@@ -939,6 +1075,55 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return True, []
 
+    # Scratch/mangled name signatures: uninstance scratch tokens, Rizom
+    # round-trip temp suffixes, FBX-import escapes, and runs of 3+
+    # underscores (the residue of stripping scratch tokens from names).
+    MANGLED_NAME_RE = re.compile(r"__uninst|__RZTMP|FBXASC\d{3}|_{3,}")
+
+    def check_mangled_names(self) -> tuple:
+        """Check the export set (including shapes) for scratch/mangled names.
+
+        Catches names no tool should ever ship: uninstance ``__uninst_tmp``
+        scratch tokens, Rizom ``__RZTMP`` round-trip suffixes, ``FBXASC###``
+        import escapes, and underscore runs.  Instanced shapes make one bad
+        node fan out across every instance path in the exported hierarchy
+        (and its scene_data.json sidecar), so a single offender is worth
+        failing on.
+
+        Returns:
+            tuple: (status: bool, messages: list)
+        """
+        log_messages = []
+        nodes = [str(o) for o in (self.objects or [])]
+        if not nodes:  # listRelatives([]) would fall back to the selection
+            return True, log_messages
+        nodes += cmds.listRelatives(nodes, allDescendents=True, fullPath=True) or []
+
+        offenders = []
+        seen = set()
+        for node in nodes:
+            if node in seen:
+                continue
+            seen.add(node)
+            leaf = node.split("|")[-1].split(":")[-1]
+            if self.MANGLED_NAME_RE.search(leaf):
+                offenders.append(leaf)
+
+        if not offenders:
+            return True, log_messages
+
+        log_messages.append(f"{len(offenders)} node(s) carry scratch/mangled names:")
+        for leaf in offenders[:20]:
+            link = self._obj_link(leaf, "select")
+            log_messages.append(f"  - {link}")
+        if len(offenders) > 20:
+            log_messages.append(f"  … and {len(offenders) - 20} more")
+        log_messages.append(
+            "Repair via the 'Conform Shape Names' task "
+            "(or Naming.conform_shape_names)."
+        )
+        return False, log_messages
+
     def check_duplicate_locator_names(self) -> tuple:
         """Check for duplicate locator short names among the specified objects.
 
@@ -1046,10 +1231,15 @@ class _TaskChecksMixin(_TaskDataMixin):
         tolerance = 0.0 if tolerance is None else max(0.0, float(tolerance))
         limit = -tolerance
 
+        geometry_types = NodeUtils.SURFACE_TYPES
         for obj in self.objects:
-            # Check if geometry (has shapes)
-            shapes = cmds.listRelatives(obj, shapes=True)
+            # Surface geometry only — the check is named "geometry below
+            # floor", but the old any-shape guard also failed control curves
+            # and locators dipping under Y=0 in 'selected'/'all' modes.
+            shapes = cmds.listRelatives(obj, shapes=True, fullPath=True)
             if not shapes:
+                continue
+            if not any(cmds.nodeType(s) in geometry_types for s in shapes):
                 continue
 
             bbox = cmds.xform(obj, query=True, ws=True, bb=True)
@@ -1073,11 +1263,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         return True, []  # All checks passed, no objects below the floor
 
     def check_overlapping_duplicate_mesh(self) -> tuple:
-        """Check if there are any duplicate overlapping geometry objects in the current selection.
-
-        Parameters:
-            select (bool): Select any found duplicate objects.
-            verbose (bool): Print found duplicates to the console.
+        """Check for duplicate overlapping geometry among the export objects.
 
         Returns:
             tuple: (status: bool, messages: list)
@@ -1092,7 +1278,16 @@ class _TaskChecksMixin(_TaskDataMixin):
         return True, []  # Passed, no duplicates
 
     def check_hidden_geometry(self) -> tuple:
-        """Check if any geometry objects are hidden."""
+        """Check for geometry that will ship in the FBX while hidden.
+
+        Beyond the plain ``.visibility`` flag this also reads DISPLAY-LAYER
+        hiding (the old check's blind spot — layer-hidden geometry shipped
+        unflagged in every mode).  Objects whose visibility has an incoming
+        connection are deliberately NOT flagged: the 'visible' export mode
+        includes animated-visibility objects on purpose (the animation is
+        baked and ships), so flagging them made the check fail exactly the
+        content that mode exists to carry.
+        """
         hidden_objects = []
         geometry_types = NodeUtils.SURFACE_TYPES
 
@@ -1112,14 +1307,33 @@ class _TaskChecksMixin(_TaskDataMixin):
             if not is_geometry:
                 continue
 
-            # Check visibility
-            if not cmds.getAttr(f"{obj}.visibility"):
-                hidden_objects.append(obj)
+            # Animated/driven visibility is intentional export content, not
+            # hidden geometry — skip regardless of the current-frame value.
+            if cmds.listConnections(
+                f"{obj}.visibility", source=True, destination=False
+            ):
+                continue
+
+            layer_hidden = False
+            for layer in set(cmds.listConnections(obj, type="displayLayer") or []):
+                if layer == "defaultLayer":
+                    continue
+                try:
+                    if not cmds.getAttr(f"{layer}.visibility"):
+                        layer_hidden = True
+                        break
+                except ValueError:
+                    continue
+
+            if layer_hidden:
+                hidden_objects.append((obj, "display layer"))
+            elif not cmds.getAttr(f"{obj}.visibility"):
+                hidden_objects.append((obj, "visibility off"))
 
         if hidden_objects:
             return False, [
-                f"Hidden geometry detected: {self._obj_link(obj)}"
-                for obj in hidden_objects
+                f"Hidden geometry detected ({reason}): {self._obj_link(obj)}"
+                for obj, reason in hidden_objects
             ]
         return True, []
 
@@ -1147,14 +1361,25 @@ class _TaskChecksMixin(_TaskDataMixin):
             or []
         )
 
+        # Drop unitless (set-driven-key) curves: their first/last "keys" are
+        # driver values, not frames, so comparing them against the object's
+        # time range false-positives on every SDK-rigged object.
+        pairs = list(zip(connections[::2], connections[1::2]))
+        time_curves = set(
+            cmds.ls(
+                [c.split(".")[0] for _, c in pairs],
+                type=list(AnimUtils.TIME_CURVE_TYPES),
+            )
+            or []
+        )
+
         # Parse into a dict: obj_name -> set(curves)
         obj_curves = {}
-        for i in range(0, len(connections), 2):
-            obj_plug = connections[i]  # e.g. "pCube1.translateX"
-            curve_plug = connections[i + 1]  # e.g. "animCurveTL1.output"
-
-            obj_name = obj_plug.split(".")[0]
-            curve_name = curve_plug.split(".")[0]
+        for obj_plug, curve_plug in pairs:
+            obj_name = obj_plug.split(".")[0]  # e.g. "pCube1.translateX"
+            curve_name = curve_plug.split(".")[0]  # e.g. "animCurveTL1.output"
+            if curve_name not in time_curves:
+                continue
 
             if obj_name not in obj_curves:
                 obj_curves[obj_name] = set()
@@ -1216,7 +1441,12 @@ class _TaskChecksMixin(_TaskDataMixin):
             )
             or []
         )
-        all_curves = list(set(all_curves))
+        # Time-driven curves only: a set-driven key's inbetweens (driver
+        # values like 0.25/0.5) would otherwise read as "floating point keys".
+        all_curves = (
+            cmds.ls(list(set(all_curves)), type=list(AnimUtils.TIME_CURVE_TYPES))
+            or []
+        )
 
         for curve in all_curves:
             times = cmds.keyframe(curve, query=True, timeChange=True)
@@ -1328,7 +1558,13 @@ class _TaskChecksMixin(_TaskDataMixin):
             SceneDataSidecar.write_manifest(export_path, paths, data=data, **sk)
             is None
         ):
-            self.logger.debug("Could not write scene-data sidecar")
+            # A silently-stale baseline corrupts the next run's hierarchy
+            # diff (false diffs, or a masked revert) — this must be visible
+            # at the default WARNING log level, not buried at DEBUG.
+            self.logger.warning(
+                "Could not write the scene-data sidecar — the hierarchy-diff "
+                "baseline for the next export was NOT updated."
+            )
 
     def check_hierarchy_vs_existing_fbx(self) -> tuple:
         """Check export objects against the hierarchy manifest of the previous export.
@@ -1455,6 +1691,8 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         # Phase 2 — Object filtering
         "ignore_groups",
         "exclude_hdr",
+        # Phase 2.5 — Name hygiene (before checks/sidecar record the names)
+        "conform_shape_names",
         # Phase 3 — Material cleanup (reassign THEN resolve THEN convert)
         "reassign_duplicate_materials",
         "resolve_invalid_texture_paths",
@@ -1509,6 +1747,17 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         self._objects = None
         self._invalidate_material_caches()
 
+    def _execute_tasks_and_checks(self, tasks_only, checks_only):
+        # smart_bake needs its sibling's setting: baked override-layer curves
+        # sit behind animBlendNodes that listConnections can't traverse, so
+        # the separate optimize_keys task can never reach them — SmartBake
+        # must optimize its own output, gated by the same UI toggle ("Also
+        # controls key optimization inside Smart Bake").  The generic
+        # TaskFactory knows nothing about either task, so the flag is set
+        # here, in the consumer that reads it (same idiom as blendertk).
+        self._optimize_keys_enabled = bool(tasks_only.get("optimize_keys", False))
+        return super()._execute_tasks_and_checks(tasks_only, checks_only)
+
     @property
     def objects(self):
         return self._objects
@@ -1518,8 +1767,15 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
         """Invalidate the materials and keyframe caches whenever objects change."""
         self._objects = value
         self._invalidate_material_caches()
-        if hasattr(self, "_key_times"):
-            delattr(self, "_key_times")
+        # Each export run re-seeds the object set before tasks execute, so this
+        # doubles as the per-run reset of the producer-refresh marker
+        # (export_data_node sets it; apply_declared_takes reads it) and of the
+        # hierarchy-check marker — without the latter, one hierarchy-checked
+        # export makes every later export in the session write sidecar
+        # baselines the user didn't ask for.
+        self._data_node_refreshed = False
+        self._hierarchy_check_ran = False
+        self._invalidate_keyframe_cache()
 
     _export_mode_options: Dict[str, Any] = {
         "Export: All Scene Objects": "all",
@@ -1655,6 +1911,20 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "widget_type": "Separator",
                 "title": "Hierarchy",
             },
+            "conform_shape_names": {
+                "widget_type": "QCheckBox",
+                "setText": "Conform Shape Names",
+                "setToolTip": (
+                    "Rename export shape nodes to Maya's '<transform>Shape' "
+                    "convention.\nRepairs stale imported/scratch shape names "
+                    "(accumulated '__uninst_tmp' tokens, underscore runs, "
+                    "FBXASC escapes) that transform renames never fix — a "
+                    "shared instanced shape spreads one bad name to every "
+                    "instance path.\nPermanent scene change (not reverted "
+                    "after export)."
+                ),
+                "setChecked": False,
+            },
             "ignore_groups": {
                 "widget_type": "QLineEdit",
                 "setPlaceholderText": "Group names to ignore (comma-separated)",
@@ -1723,6 +1993,18 @@ class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin):
                 "widget_type": "QCheckBox",
                 "setText": "Check For Duplicate Locator Names",
                 "setToolTip": "Check for duplicate locator names.",
+                "setChecked": True,
+            },
+            "check_mangled_names": {
+                "widget_type": "QCheckBox",
+                "setText": "Check For Mangled Names",
+                "setToolTip": (
+                    "Fail when any export node (including shapes) carries a "
+                    "scratch or mangled name:\naccumulated '__uninst_tmp' "
+                    "scratch tokens, '__RZTMP' Rizom round-trip suffixes, "
+                    "'FBXASC###' import escapes, or runs of 3+ underscores.\n"
+                    "Repair with the 'Conform Shape Names' task."
+                ),
                 "setChecked": True,
             },
             "check_root_default_transforms": {

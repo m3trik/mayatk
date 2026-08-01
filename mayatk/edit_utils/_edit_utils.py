@@ -1609,45 +1609,59 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             bbox_min = (round(bbox[0], _R), round(bbox[1], _R), round(bbox[2], _R))
             bbox_max = (round(bbox[3], _R), round(bbox[4], _R), round(bbox[5], _R))
 
-            # Single polyEvaluate call — reuse for both topo hash and vtx count
+            # Single polyEvaluate call — reuse for both topo hash and vtx count.
+            # Only the INTEGER counts go into the fingerprint: the flagless
+            # dict also carries unrounded object-space floats (boundingBox,
+            # area), which differ between a duplicate and its frozen-transform
+            # twin even when the world-space geometry is identical — the old
+            # str(dict) hash silently missed exactly those duplicates.
             poly_eval = cmds.polyEvaluate(obj)
-            topo = str(poly_eval)
+            if not isinstance(poly_eval, dict):
+                continue
+            topo = tuple(
+                poly_eval.get(k, 0)
+                for k in ("vertex", "edge", "face", "triangle", "uvcoord", "shell")
+            )
 
-            # Sample vertex positions for a stronger fingerprint.
-            vtx_sample = ()
+            # Sample vertex positions for a stronger fingerprint.  The sample
+            # is the ONLY thing distinguishing same-bbox/same-count different
+            # meshes, so an object whose sampling fails is EXCLUDED from
+            # grouping (loudly) rather than degraded to a bbox+counts match —
+            # the degraded mode was this check's false-positive path.
             try:
-                vtx_count = (
-                    poly_eval.get("vertex", 0) if isinstance(poly_eval, dict) else 0
+                vtx_count = poly_eval.get("vertex", 0)
+                if vtx_count <= 0:
+                    continue
+                # Pick up to 8 evenly-spaced vertex indices
+                sample_count = min(8, vtx_count)
+                step = max(1, vtx_count // sample_count)
+                components = [f"{obj}.vtx[{i * step}]" for i in range(sample_count)]
+                # Batch query — single Maya round-trip for all vertices
+                flat = (
+                    cmds.xform(
+                        components,
+                        query=True,
+                        worldSpace=True,
+                        translation=True,
+                    )
+                    or []
                 )
-                if vtx_count > 0:
-                    # Pick up to 8 evenly-spaced vertex indices
-                    sample_count = min(8, vtx_count)
-                    step = max(1, vtx_count // sample_count)
-                    components = [f"{obj}.vtx[{i * step}]" for i in range(sample_count)]
-                    # Batch query — single Maya round-trip for all vertices
-                    flat = (
-                        cmds.xform(
-                            components,
-                            query=True,
-                            worldSpace=True,
-                            translation=True,
-                        )
-                        or []
+                vtx_sample = tuple(
+                    (
+                        round(flat[i], _R),
+                        round(flat[i + 1], _R),
+                        round(flat[i + 2], _R),
                     )
-                    vtx_sample = tuple(
-                        (
-                            round(flat[i], _R),
-                            round(flat[i + 1], _R),
-                            round(flat[i + 2], _R),
-                        )
-                        for i in range(0, len(flat), 3)
-                    )
+                    for i in range(0, len(flat), 3)
+                )
+                if not vtx_sample:
+                    raise RuntimeError("empty vertex sample")
             except Exception as exc:
-                import logging
-
-                logging.getLogger(__name__).debug(
-                    "Vertex sampling failed for %s: %s", obj, exc
+                cmds.warning(
+                    f"Overlap check skipped '{obj}' — vertex sampling failed "
+                    f"({exc}); it cannot be safely compared."
                 )
+                continue
 
             obj_fingerprints[obj] = (bbox_min, bbox_max, topo, vtx_sample)
 

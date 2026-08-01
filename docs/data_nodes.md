@@ -11,7 +11,7 @@ transform.
 | Node | Type | Role |
 |---|---|---|
 | `data_internal` | `network` | **Single source of truth.** Every tool authors its attributes here. A `network` node never serialises into an FBX, so authoring state stays in the `.ma`/`.mb` and out of game-engine exports. |
-| `data_export` | locked, hidden `transform` (zero-scale `locator` shape) | **The FBX export surface.** This is the only node that travels into an FBX; downstream importers (Unity, etc.) read its user properties. |
+| `data_export` | locked, viewport-invisible `transform` (zero-scale `locator` shape) | **The FBX export surface.** This is the only node that travels into an FBX; downstream importers (Unity, etc.) read its user properties. |
 
 The split keeps *authored state* (internal) cleanly separated from the
 *export projection* (export): tools author on `data_internal`, and only the
@@ -21,11 +21,13 @@ Implementation details that matter:
 
 - **`data_internal`** has its **name locked** (no accidental rename) but stays
   otherwise unlocked so tools can freely add/write attributes.
-- **`data_export`** is a hidden transform whose nine transform channels are all
-  locked + hidden. It carries a **zero-scale locator shape** purely so
-  *Optimize Scene Size* won't delete it as an "empty" transform.
-- Because `data_export` is **hidden**, the Scene Exporter's `Visible`/`Selected`
-  modes omit it by default — see [Getting it into the FBX](#getting-it-into-the-fbx).
+- **`data_export`** is a transform whose nine transform channels are all
+  locked + hidden. It carries a **zero-scale locator shape** — it draws nothing
+  in the viewport, and *Optimize Scene Size* won't delete it as an "empty"
+  transform.
+- The Scene Exporter's `Visible` mode collects **geometry only** and `Selected`
+  ships just the user's picks, so neither includes the carrier by default — see
+  [Getting it into the FBX](#getting-it-into-the-fbx).
 
 Both nodes are created on demand and idempotently:
 
@@ -88,7 +90,9 @@ FBX. Attr names are distinct, so producers compose without collision.
 | `fbx_takes` | plain string (`set_export_string`) | Shots — `ShotStore.publish_export_view` | `FbxUtils.apply_takes_from_node` → one **AnimStack / Unity AnimationClip** per shot |
 | `shot_metadata` | plain string (`set_export_string`) | Shots — `ShotStore.publish_export_view` | engine-side scripts (Unity `ShotMetadataController`) |
 | `audio_manifest` | plain string (`set_export_string`) | Audio — `AudioClips.prepare_for_export` | engine-side scripts (Unity `AudioEventController`) |
-| `lightmap_metadata` | plain string (`set_export_string`) | Lightmap Baker — `commit_lightmap` / `revert_lightmap` | engine-side scripts (Unity `LightmapMetadataController`) |
+| `lightmap_metadata` | plain string (`set_export_string`) | Lightmap Baker — `refresh_export_metadata` (also republished by `commit_lightmap` / `revert_lightmap`) | engine-side scripts (Unity `LightmapMetadataController`) |
+| `shadow_metadata` | plain string (`set_export_string`) | Shadow Rig — `ShadowRig.refresh_export_metadata` | engine-side scripts (Unity `ShadowPlaneController`) |
+| `emissive_groups` | plain string (`set_export_string`) + per-group keyable `emissiveGroup_<name>` floats (the one authored-state exception — FBX can only carry animation on attrs of the exported node itself) | Emissive Groups — `EmissiveGroups.refresh_export_metadata` | engine-side scripts (Unity `EmissiveGroupController`) |
 
 `FBX_TAKES` (`"fbx_takes"`) and `SHOT_METADATA` (`"shot_metadata"`) are name
 constants on `DataNodes`. Audio's authoring state — the keyed `audio_clip_<id>`
@@ -134,8 +138,9 @@ State on `data_internal` only — persists with the scene, never exports:
 
 ## Getting it into the FBX
 
-`data_export` is hidden, so it only auto-exports with **export-all**. Three ways
-to make sure it ships:
+Only **export-all** picks the carrier up automatically (`Visible` collects
+geometry only; `Selected` ships the user's picks). Three ways to make sure it
+ships:
 
 1. **Scene Exporter** (recommended) — the default-on **"Export Scene Data Node"**
    option calls `FbxUtils.run_export_preparers()` (every registered session

@@ -12,12 +12,14 @@ Tests for XformUtils class functionality including:
 - Scaling operations (match scale, connected edges)
 - Orientation (aim, orient to vector, get orientation)
 """
+import math
 import unittest
 import mayatk as mtk
 from mayatk.xform_utils._xform_utils import XformUtils, _XformUtilsInternal
 
 from base_test import MayaTkTestCase, skipIfBatch
 import maya.cmds as cmds
+from maya.api import OpenMaya as om
 
 
 class TestXformUtils(MayaTkTestCase):
@@ -666,6 +668,483 @@ class TestXformUtils(MayaTkTestCase):
             )
         finally:
             for n in (grp, loc):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+    def test_restore_group_root_only_does_not_move_descendant_geometry(self):
+        """Unfreezing a parent GROUP alone must not displace the mesh under it.
+
+        ``makeIdentity`` on a group flattens the WHOLE subtree — every
+        descendant's channels are zeroed and the composed matrix is baked
+        into the leaf shape points. The restore used to counter-shift only
+        the restored node's OWN shapes, and a group has none, so writing the
+        group's channels back applied the matrix a second time: the mesh
+        jumped and rescaled (~19.7 units on this scene).
+        """
+        geo = cmds.polyCube(name="grp_geo", ch=False)[0]
+        grp = cmds.group(geo, name="moving_GRP")
+        cmds.setAttr(f"{grp}.translate", 10, 0, 0)
+        cmds.setAttr(f"{grp}.rotateY", 30)
+        cmds.setAttr(f"{grp}.scale", 2, 2, 2)
+        try:
+            XformUtils.freeze_transforms(grp, t=True, r=True, s=True, force=True)
+            frozen_bbox = cmds.exactWorldBoundingBox(geo)
+
+            # Root only — no traverse. This is the reported failure mode.
+            XformUtils.restore_transforms(grp)
+
+            for a, b in zip(frozen_bbox, cmds.exactWorldBoundingBox(geo)):
+                self.assertAlmostEqual(a, b, delta=1e-3)
+            # The channels must still come back.
+            self.assertAlmostEqual(cmds.getAttr(f"{grp}.translateX"), 10.0, delta=1e-3)
+            self.assertAlmostEqual(cmds.getAttr(f"{grp}.rotateY"), 30.0, delta=1e-3)
+            self.assertAlmostEqual(cmds.getAttr(f"{grp}.scaleX"), 2.0, delta=1e-3)
+        finally:
+            if cmds.objExists(grp):
+                cmds.delete(grp)
+
+    def test_restore_skipping_intermediate_transform_keeps_geometry(self):
+        """Restoring a grandparent + leaf while skipping the middle transform.
+
+        The leaf's target world has to absorb the grandparent's restore;
+        resolving only the DIRECT parent left it planned against a stale
+        parent world.
+        """
+        geo = cmds.polyCube(name="skip_geo", ch=False)[0]
+        inner = cmds.group(geo, name="skip_inner")
+        cmds.setAttr(f"{inner}.translate", 2, 0, 0)
+        outer = cmds.group(inner, name="skip_outer")
+        cmds.setAttr(f"{outer}.translate", 10, 0, 0)
+        cmds.setAttr(f"{outer}.scale", 2, 2, 2)
+        try:
+            XformUtils.freeze_transforms(outer, t=True, r=True, s=True, force=True)
+            frozen_bbox = cmds.exactWorldBoundingBox(geo)
+
+            geo_path = (cmds.ls(geo, long=True) or [geo])[0]
+            outer_path = (cmds.ls(outer, long=True) or [outer])[0]
+            XformUtils.restore_transforms([outer_path, geo_path])
+
+            for a, b in zip(frozen_bbox, cmds.exactWorldBoundingBox(geo)):
+                self.assertAlmostEqual(a, b, delta=1e-3)
+        finally:
+            if cmds.objExists(outer):
+                cmds.delete(outer)
+
+    def test_freeze_transforms_stores_bake_history_by_default(self):
+        """freeze_transforms(store=True) is the default, and spans the subtree.
+
+        A group freeze zeroes every descendant's channels, so storing only
+        the roots would lose them irrecoverably — the stamp must traverse
+        regardless of ``freeze_children``.
+        """
+        geo = cmds.polyCube(name="stored_geo", ch=False)[0]
+        cmds.setAttr(f"{geo}.translate", 1, 2, 3)
+        grp = cmds.group(geo, name="stored_GRP")
+        cmds.setAttr(f"{grp}.translate", 10, 0, 0)
+        try:
+            XformUtils.freeze_transforms(grp, t=True, r=True, s=True, force=True)
+
+            for node in (grp, geo):
+                for attr in ("original_T_bake", "original_R_bake", "original_S_bake"):
+                    self.assertTrue(
+                        cmds.attributeQuery(attr, node=node, exists=True),
+                        f"{node} should carry '{attr}' after a default freeze",
+                    )
+            # The descendant's pre-freeze translate must be recoverable.
+            self.assertAlmostEqual(
+                cmds.getAttr(f"{geo}.original_T_bake")[0][0], 1.0, delta=1e-4
+            )
+        finally:
+            if cmds.objExists(grp):
+                cmds.delete(grp)
+
+    def test_skipped_freeze_stamps_no_bake_history(self):
+        """A freeze that SKIPS an object must not leave bake history on it.
+
+        The stamp is committed after the freeze, only for what actually
+        froze. Stamping up front gave a connection-blocked or instanced
+        object a bake matching its untouched channels, so a later unfreeze
+        added a transform that was never baked out — doubling it.
+        """
+        blocked = cmds.polyCube(name="blocked_freeze", ch=False)[0]
+        cmds.setAttr(f"{blocked}.translate", 7, 0, 0)
+        drv = cmds.spaceLocator(name="blocked_drv")[0]
+        cmds.connectAttr(f"{drv}.translateX", f"{blocked}.translateX", force=True)
+        try:
+            # connection_strategy defaults to "preserve" -> warn and skip.
+            XformUtils.freeze_transforms(blocked, t=True, force=True)
+            self.assertFalse(
+                cmds.attributeQuery("original_T_bake", node=blocked, exists=True),
+                "A connection-blocked skip must not stamp bake history",
+            )
+        finally:
+            for n in (blocked, drv):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+    def test_instanced_skip_stamps_no_bake_history(self):
+        """Same for the instanced skip — it keeps its channels untouched."""
+        mesh = cmds.polyCube(name="inst_skip", ch=False)[0]
+        cmds.setAttr(f"{mesh}.translate", 5, 0, 0)
+        inst = cmds.instance(mesh)[0]
+        try:
+            XformUtils.freeze_transforms(
+                mesh, t=True, force=True, instance_strategy="skip"
+            )
+            self.assertAlmostEqual(
+                cmds.getAttr(f"{mesh}.translateX"), 5.0, delta=1e-4
+            )
+            self.assertFalse(
+                cmds.attributeQuery("original_T_bake", node=mesh, exists=True),
+                "An instanced skip must not stamp bake history",
+            )
+        finally:
+            for n in (inst, mesh):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+    def test_restore_transforms_skips_driven_node_without_raising(self):
+        """A driven TRS channel must warn-and-skip, not abort the batch.
+
+        ``_apply_clean_local`` rewrites translate/rotate/scale wholesale, so
+        a connected channel raised "a child attribute … is locked or
+        connected" mid-batch — leaving earlier objects restored and their
+        geometry already shifted.
+        """
+        clean = cmds.polyCube(name="restore_clean", ch=False)[0]
+        driven = cmds.polyCube(name="restore_driven", ch=False)[0]
+        cmds.setAttr(f"{clean}.translate", 2, 0, 0)
+        cmds.setAttr(f"{driven}.translate", 3, 0, 0)
+        try:
+            XformUtils.freeze_transforms([clean, driven], t=True, force=True)
+            drv = cmds.spaceLocator(name="restore_drv")[0]
+            cmds.connectAttr(f"{drv}.translateX", f"{driven}.translateX", force=True)
+
+            restored = XformUtils.restore_transforms([clean, driven])
+
+            self.assertEqual(
+                [cmds.ls(r, long=False)[0].split("|")[-1] for r in restored], [clean]
+            )
+            self.assertAlmostEqual(
+                cmds.getAttr(f"{clean}.translateX"), 2.0, delta=1e-3
+            )
+        finally:
+            for n in (clean, driven, "restore_drv"):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+    def test_nearest_known_ancestor_terminates_on_short_name(self):
+        """A name with no '|' must return None, not spin forever."""
+        self.assertIsNone(
+            XformUtils._nearest_known_ancestor("pCube1", {"pCube1", "|grp"})
+        )
+        self.assertEqual(
+            XformUtils._nearest_known_ancestor("|grp|loc|geo", {"|grp"}), "|grp"
+        )
+        # Strict ancestor only — never the path itself.
+        self.assertIsNone(
+            XformUtils._nearest_known_ancestor("|grp|geo", {"|grp|geo"})
+        )
+
+    def test_safe_inverse_rejects_singular_matrix(self):
+        """MMatrix.inverse() returns garbage rather than raising on det 0."""
+        from mayatk.xform_utils.matrices import Matrices
+
+        singular = om.MMatrix([0] * 12 + [0, 0, 0, 1])
+        self.assertIsNone(Matrices.safe_inverse(singular))
+        self.assertIsNone(Matrices.safe_inverse(None))
+        self.assertIsNotNone(Matrices.safe_inverse(om.MMatrix()))
+
+    def test_safe_inverse_rejects_non_finite_matrix(self):
+        """abs(inf/nan) <= tol is False, so a determinant-only guard passes
+        corrupt matrices straight through to a garbage inverse (measured:
+        identity-like). A corrupt bake attr upstream must yield None, not
+        silently corrupt every derived write."""
+        from mayatk.xform_utils.matrices import Matrices
+
+        for bad in (float("inf"), float("nan")):
+            m = om.MMatrix([bad, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+            self.assertIsNone(Matrices.safe_inverse(m), f"{bad} matrix must be rejected")
+
+    def test_restore_skips_zero_scaled_node_instead_of_corrupting_it(self):
+        """A singular (zero-scale) target must warn-and-skip, not bake NaNs."""
+        geo = cmds.polyCube(name="zero_scale_geo", ch=False)[0]
+        cmds.setAttr(f"{geo}.translate", 4, 0, 0)
+        try:
+            XformUtils.freeze_transforms(geo, t=True, s=True, force=True)
+            cmds.setAttr(f"{geo}.scale", 0, 0, 0)  # singular local matrix
+
+            XformUtils.restore_transforms(geo)
+
+            for v in cmds.pointPosition(f"{geo}.vtx[0]", world=True):
+                self.assertFalse(math.isnan(v), "restore wrote NaN geometry")
+        finally:
+            if cmds.objExists(geo):
+                cmds.delete(geo)
+
+    def test_normal_is_a_modifier_not_a_channel_selector(self):
+        """``normal=True`` must still freeze every channel.
+
+        ``normal`` maps to ``makeIdentity -normal`` (freeze vertex normals).
+        It used to be counted as a channel flag, which suppressed the
+        freeze-everything default while contributing no axes — so
+        ``freeze_transforms(obj, normal=True)`` silently froze nothing.
+        """
+        mesh = cmds.polyCube(name="normal_flag", ch=False)[0]
+        cmds.setAttr(f"{mesh}.translate", 4, 1, 0)
+        cmds.setAttr(f"{mesh}.rotateY", 25)
+        cmds.setAttr(f"{mesh}.scale", -1, 2, 2)  # mirrored: normals matter
+        try:
+            XformUtils.freeze_transforms(mesh, normal=True, force=True, store=False)
+
+            for attr, expected in (
+                ("translateX", 0.0),
+                ("rotateY", 0.0),
+                ("scaleX", 1.0),
+                ("scaleY", 1.0),
+            ):
+                self.assertAlmostEqual(
+                    cmds.getAttr(f"{mesh}.{attr}"),
+                    expected,
+                    delta=1e-4,
+                    msg=f"normal=True must not suppress the freeze of {attr}",
+                )
+        finally:
+            if cmds.objExists(mesh):
+                cmds.delete(mesh)
+
+    def test_normal_modifier_does_not_narrow_an_explicit_channel_set(self):
+        """``normal`` alongside an explicit channel leaves that channel set alone."""
+        mesh = cmds.polyCube(name="normal_partial", ch=False)[0]
+        cmds.setAttr(f"{mesh}.translate", 4, 1, 0)
+        cmds.setAttr(f"{mesh}.rotateY", 25)
+        try:
+            XformUtils.freeze_transforms(
+                mesh, t=True, normal=True, force=True, store=False
+            )
+            self.assertAlmostEqual(cmds.getAttr(f"{mesh}.translateX"), 0.0, delta=1e-4)
+            # rotate was not requested — it must survive.
+            self.assertAlmostEqual(cmds.getAttr(f"{mesh}.rotateY"), 25.0, delta=1e-4)
+        finally:
+            if cmds.objExists(mesh):
+                cmds.delete(mesh)
+
+    def test_freeze_transforms_store_false_stamps_nothing(self):
+        """store=False is the opt-out for construction-time freezes."""
+        cmds.move(5, 0, 0, self.cube1)
+        XformUtils.freeze_transforms(self.cube1, t=True, force=True, store=False)
+        for attr in ("original_T_bake", "original_R_bake", "original_S_bake"):
+            self.assertFalse(
+                cmds.attributeQuery(attr, node=self.cube1, exists=True),
+                f"store=False must not stamp '{attr}'",
+            )
+
+    def test_freeze_unfreeze_cycles_compose_without_drift(self):
+        """Repeated freeze/unfreeze on a group returns the same channels."""
+        geo = cmds.polyCube(name="cycle_geo", ch=False)[0]
+        grp = cmds.group(geo, name="cycle_GRP")
+        cmds.setAttr(f"{grp}.translate", 10, 0, 0)
+        cmds.setAttr(f"{grp}.rotateY", 30)
+        cmds.setAttr(f"{grp}.scale", 2, 2, 2)
+        try:
+            start_bbox = cmds.exactWorldBoundingBox(geo)
+            for _ in range(3):
+                XformUtils.freeze_transforms(grp, t=True, r=True, s=True, force=True)
+                XformUtils.restore_transforms(grp, traverse=True)
+
+            for a, b in zip(start_bbox, cmds.exactWorldBoundingBox(geo)):
+                self.assertAlmostEqual(a, b, delta=1e-3)
+            self.assertAlmostEqual(cmds.getAttr(f"{grp}.translateX"), 10.0, delta=1e-3)
+            self.assertAlmostEqual(cmds.getAttr(f"{grp}.rotateY"), 30.0, delta=1e-3)
+            self.assertAlmostEqual(cmds.getAttr(f"{grp}.scaleX"), 2.0, delta=1e-3)
+        finally:
+            if cmds.objExists(grp):
+                cmds.delete(grp)
+
+    def test_restore_boundary_preserves_instanced_children_world(self):
+        """Un-freezing a group must not drag instanced-shape children along.
+
+        Shared points cannot be counter-baked (every other instance would
+        move), so the instanced-shape owner absorbs the group's restore delta
+        into its own local matrix instead — its world (and its subtree's) is
+        preserved.  The old warn-but-move behaviour displaced 314 instanced
+        meshes on a production module scene.
+        """
+        grp = cmds.group(empty=True, name="bnd_GRP")
+        plain = cmds.polyCube(name="bnd_plain", ch=False)[0]
+        cmds.parent(plain, grp)
+        cmds.setAttr(f"{grp}.translate", 10, 5, 0)
+        cmds.setAttr(f"{grp}.scale", 2, 2, 2)
+        try:
+            XformUtils.freeze_transforms(grp, t=True, r=True, s=True, force=True)
+
+            # Instanced pair added AFTER the freeze — live channels, no bakes.
+            src = cmds.polyCube(name="bnd_inst0", ch=False)[0]
+            inst = cmds.instance(src, name="bnd_inst1")[0]
+            cmds.setAttr(f"{src}.translate", 3, 0, 0)
+            cmds.setAttr(f"{inst}.translate", -3, 0, 0)
+            src = cmds.parent(src, grp)[0]
+            inst = cmds.parent(inst, grp)[0]
+
+            # Invariants differ by mechanism: a plain child keeps its world
+            # GEOMETRY (points are counter-baked; its world matrix changes by
+            # design), an instanced-shape child keeps its world MATRIX (its
+            # local absorbs the delta; shared points are never touched).
+            plain_long = cmds.ls(plain, long=True)[0]
+            plain_vtx_before = cmds.pointPosition(f"{plain_long}.vtx[0]", world=True)
+            inst_worlds_before = {
+                n: cmds.xform(n, q=True, ws=True, matrix=True)
+                for n in (
+                    cmds.ls(src, long=True)[0],
+                    cmds.ls(inst, long=True)[0],
+                )
+            }
+            src_local_before = cmds.getAttr(
+                cmds.ls(src, long=True)[0] + ".translate"
+            )[0]
+
+            XformUtils.restore_transforms(grp)
+
+            # The group's channels came back...
+            self.assertAlmostEqual(cmds.getAttr(f"{grp}.translateX"), 10.0, delta=1e-3)
+            self.assertAlmostEqual(cmds.getAttr(f"{grp}.scaleX"), 2.0, delta=1e-3)
+            # ...the plain child's geometry did not move...
+            for a, b in zip(
+                plain_vtx_before,
+                cmds.pointPosition(f"{plain_long}.vtx[0]", world=True),
+            ):
+                self.assertAlmostEqual(a, b, delta=1e-3, msg="plain child geo moved")
+            # ...and each instanced child's world matrix is unchanged.
+            for n, before in inst_worlds_before.items():
+                after = cmds.xform(n, q=True, ws=True, matrix=True)
+                for a, b in zip(before, after):
+                    self.assertAlmostEqual(a, b, delta=1e-3, msg=f"{n} moved")
+            # The instanced child absorbed the delta into its channels.
+            src_local_after = cmds.getAttr(
+                cmds.ls(src, long=True)[0] + ".translate"
+            )[0]
+            self.assertNotEqual(
+                [round(v, 4) for v in src_local_before],
+                [round(v, 4) for v in src_local_after],
+                "boundary child should absorb the restore delta locally",
+            )
+        finally:
+            if cmds.objExists(grp):
+                cmds.delete(grp)
+
+    def test_restore_skips_instanced_owner_with_nontrivial_bake(self):
+        """Restoring an instanced-shape owner's channels would displace every
+        other instance — it must warn-and-skip, retaining the bake."""
+        src = cmds.polyCube(name="iskip_m0", ch=False)[0]
+        inst = cmds.instance(src, name="iskip_m1")[0]
+        cmds.setAttr(f"{inst}.translate", 6, 0, 0)
+        try:
+            # Hand-stamp a non-trivial bake (the shapes are shared, so a real
+            # freeze would refuse; this models legacy-stamped scenes).
+            XformUtils.store_transforms(src)
+            cmds.setAttr(f"{src}.translate", 2, 0, 0)
+            XformUtils.store_transforms(src, channels=("translate",))
+
+            world_before = cmds.xform(inst, q=True, ws=True, matrix=True)
+            restored = XformUtils.restore_transforms(src)
+
+            self.assertEqual(restored, [])
+            self.assertTrue(
+                cmds.attributeQuery("original_T_bake", node=src, exists=True),
+                "the un-consumed bake must be retained",
+            )
+            for a, b in zip(world_before, cmds.xform(inst, q=True, ws=True, matrix=True)):
+                self.assertAlmostEqual(a, b, delta=1e-4, msg="sibling instance moved")
+        finally:
+            for n in (inst, src):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+    def test_partial_flatten_never_stamps_skipped_descendants(self):
+        """makeIdentity on a group can flatten PARTIALLY — a multiply-instanced
+        descendant is skipped with a warning while the rest zeroes.  The bake
+        stamp must track what actually flattened: any node carrying a bake
+        must have identity channels afterwards (stamping a skipped leaf
+        recreates the stale-bake corruption this design prevents).
+        """
+        grp = cmds.group(empty=True, name="pf_GRP")
+        plain = cmds.polyCube(name="pf_plain", ch=False)[0]
+        cmds.setAttr(f"{plain}.translate", 1, 2, 3)
+        src = cmds.polyCube(name="pf_inst0", ch=False)[0]
+        inst = cmds.instance(src, name="pf_inst1")[0]
+        cmds.setAttr(f"{src}.translate", 3, 0, 0)
+        cmds.setAttr(f"{inst}.translate", -3, 0, 0)
+        cmds.parent(plain, grp)
+        cmds.parent(src, grp)
+        cmds.parent(inst, grp)
+        cmds.setAttr(f"{grp}.translate", 10, 0, 0)
+        try:
+            XformUtils.freeze_transforms(grp, t=True, r=True, s=True, force=True)
+
+            for node in [grp] + (
+                cmds.listRelatives(grp, ad=True, type="transform", fullPath=True) or []
+            ):
+                if not cmds.attributeQuery("original_T_bake", node=node, exists=True):
+                    continue
+                t = cmds.getAttr(f"{node}.translate")[0]
+                s = cmds.getAttr(f"{node}.scale")[0]
+                self.assertTrue(
+                    all(abs(v) < 1e-4 for v in t)
+                    and all(abs(v - 1) < 1e-4 for v in s),
+                    f"{node} carries a bake but its channels were never zeroed "
+                    "— a stale stamp",
+                )
+        finally:
+            if cmds.objExists(grp):
+                cmds.delete(grp)
+
+    def test_repair_stored_transforms_triage(self):
+        """repair: restore only provably-frozen bakes; clear stale/degenerate."""
+        # Genuinely frozen (identity channels + bake).
+        frozen = cmds.polyCube(name="rep_frozen", ch=False)[0]
+        cmds.setAttr(f"{frozen}.translate", 4, 0, 0)
+        XformUtils.freeze_transforms(frozen, t=True, r=True, s=True, force=True)
+        # Stale: bake stamped, channels live (old store-then-skip flow).
+        stale = cmds.polyCube(name="rep_stale", ch=False)[0]
+        cmds.setAttr(f"{stale}.translate", 7, 0, 0)
+        XformUtils.store_transforms(stale)
+        # Degenerate: zero scale bake.
+        degen = cmds.polyCube(name="rep_degen", ch=False)[0]
+        XformUtils.store_transforms(degen)
+        cmds.setAttr(f"{degen}.original_S_bake", 0.0, 0.0, 0.0, type="double3")
+        try:
+            report = XformUtils.repair_stored_transforms(
+                [frozen, stale, degen], dry_run=True
+            )
+            self.assertEqual(len(report["frozen"]), 1)
+            self.assertEqual(len(report["stale"]), 1)
+            self.assertEqual(len(report["degenerate"]), 1)
+            self.assertEqual(report["restored"], [])
+            # dry_run must not touch the scene
+            self.assertTrue(
+                cmds.attributeQuery("original_T_bake", node=frozen, exists=True)
+            )
+
+            stale_bbox = cmds.exactWorldBoundingBox(stale)
+            report = XformUtils.repair_stored_transforms(
+                [frozen, stale, degen], clear_stale=True
+            )
+            self.assertEqual(len(report["restored"]), 1)
+            # frozen recovered its channels
+            self.assertAlmostEqual(
+                cmds.getAttr(f"{frozen}.translateX"), 4.0, delta=1e-3
+            )
+            # stale kept its channels AND its position; residue cleared
+            self.assertAlmostEqual(cmds.getAttr(f"{stale}.translateX"), 7.0, delta=1e-4)
+            for a, b in zip(stale_bbox, cmds.exactWorldBoundingBox(stale)):
+                self.assertAlmostEqual(a, b, delta=1e-4)
+            for n in (stale, degen):
+                self.assertFalse(
+                    cmds.attributeQuery("original_T_bake", node=n, exists=True),
+                    f"{n} residue should be cleared",
+                )
+        finally:
+            for n in (frozen, stale, degen):
                 if cmds.objExists(n):
                     cmds.delete(n)
 
@@ -1399,6 +1878,68 @@ class TestFreezeInstanceStrategy(MayaTkTestCase):
     def _shared_parent_count(self, member):
         shape = cmds.listRelatives(member, shapes=True, fullPath=True)[0]
         return len(cmds.listRelatives(shape, allParents=True) or [])
+
+    def _face_normal(self, obj, face=0):
+        shape = cmds.listRelatives(obj, shapes=True, ni=True, fullPath=True)[0]
+        sel = om.MSelectionList()
+        sel.add(shape)
+        return list(om.MFnMesh(sel.getDagPath(0)).getPolygonNormal(face, om.MSpace.kWorld))
+
+    def test_preserve_mirrored_group_keeps_normals_outward(self):
+        """A MIRRORED instance group must not come out inside-out.
+
+        ``freeze_instanced_group`` bakes the shared points by ``B`` itself.
+        When ``B`` mirrors (negative determinant) the point set changes
+        handedness, so the untouched face winding then faces inward and the
+        whole group renders inverted — master and siblings alike.
+        ``makeIdentity`` fixes this for itself on the normal freeze path;
+        the hand-rolled bake has to reverse the winding to match.
+        """
+        src = cmds.polyCube(name="mir_m0")[0]
+        inst = cmds.instance(src, name="mir_m1")[0]
+        cmds.setAttr(f"{src}.scale", -1, 1, 1)
+        cmds.setAttr(f"{inst}.translate", 6, 0, 0)
+        try:
+            before_src = self._face_normal(src)
+            before_inst = self._face_normal(inst)
+
+            XformUtils.freeze_transforms(
+                src, s=True, force=True, store=False, instance_strategy="preserve"
+            )
+
+            for label, before, obj in (
+                ("master", before_src, src),
+                ("sibling", before_inst, inst),
+            ):
+                with self.subTest(member=label):
+                    for a, b in zip(before, self._face_normal(obj)):
+                        self.assertAlmostEqual(
+                            a, b, delta=1e-4, msg=f"{label} normals inverted"
+                        )
+            # The freeze still happened.
+            self.assertAlmostEqual(cmds.getAttr(f"{src}.scaleX"), 1.0, delta=1e-4)
+        finally:
+            for n in (inst, src):
+                if cmds.objExists(n):
+                    cmds.delete(n)
+
+    def test_preserve_non_mirrored_group_does_not_flip_winding(self):
+        """The winding reversal must fire only for a mirroring bake."""
+        src = cmds.polyCube(name="nomir_m0")[0]
+        inst = cmds.instance(src, name="nomir_m1")[0]
+        cmds.setAttr(f"{src}.scale", 2, 2, 2)
+        cmds.setAttr(f"{inst}.translate", 6, 0, 0)
+        try:
+            before = self._face_normal(src)
+            XformUtils.freeze_transforms(
+                src, s=True, force=True, store=False, instance_strategy="preserve"
+            )
+            for a, b in zip(before, self._face_normal(src)):
+                self.assertAlmostEqual(a, b, delta=1e-4)
+        finally:
+            for n in (inst, src):
+                if cmds.objExists(n):
+                    cmds.delete(n)
 
     def test_default_skip_leaves_instances_untouched(self):
         members = self._make_group()

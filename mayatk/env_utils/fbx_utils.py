@@ -29,6 +29,9 @@ class FbxUtils(ptk.HelpMixin):
     _auto_takes_ids = None  # (before_id, after_id) when the hook is active
     _export_preparers = {}  # name -> callable, run before each auto FBX export
     _explicit_auto_takes = False  # enable_auto_takes() called with no preparers
+    # Bake-complex exporter state captured by apply_takes, restored by
+    # reset_takes: (enabled, start, end), or None when nothing is pending.
+    _saved_bake_state = None
 
     # Sensible defaults applied by import_scene when no options are supplied.
     # Only commands that exist on Maya 2025 are listed — materials/textures
@@ -295,9 +298,24 @@ class FbxUtils(ptk.HelpMixin):
 
     @staticmethod
     def reset_takes() -> None:
-        """Clear all FBX export take definitions (global, sticky exporter state)."""
+        """Clear FBX take definitions and restore pre-takes bake-complex state.
+
+        Take splits *and* the bake-complex enable/range are global, sticky
+        exporter options: without the restore, the ``-v true`` + union range
+        that :meth:`apply_takes` set would leak into every later export this
+        session (and flip ``set_bake_animation_range``'s enabled check).
+        """
         FbxUtils.load_plugin()
         mel.eval("FBXExportSplitAnimationIntoTakes -c")
+        saved = FbxUtils._saved_bake_state
+        if saved is not None:
+            FbxUtils._saved_bake_state = None
+            enabled, start, end = saved
+            mel.eval(
+                f"FBXExportBakeComplexAnimation -v {'true' if enabled else 'false'}"
+            )
+            mel.eval(f"FBXExportBakeComplexStart -v {start}")
+            mel.eval(f"FBXExportBakeComplexEnd -v {end}")
 
     @staticmethod
     def apply_takes(takes: Iterable[Any]) -> int:
@@ -329,6 +347,15 @@ class FbxUtils(ptk.HelpMixin):
 
         union_start = min(s for _, s, _ in norm)
         union_end = max(e for _, _, e in norm)
+        # Capture the user's bake-complex settings once (reset_takes restores
+        # them); reset_takes above already consumed any prior capture, so a
+        # repeated apply never overwrites the true pre-takes state.
+        if FbxUtils._saved_bake_state is None:
+            FbxUtils._saved_bake_state = (
+                bool(mel.eval("FBXExportBakeComplexAnimation -q")),
+                mel.eval("FBXExportBakeComplexStart -q"),
+                mel.eval("FBXExportBakeComplexEnd -q"),
+            )
         mel.eval("FBXExportBakeComplexAnimation -v true")
         mel.eval(f"FBXExportBakeComplexStart -v {union_start}")
         mel.eval(f"FBXExportBakeComplexEnd -v {union_end}")
@@ -411,6 +438,11 @@ class FbxUtils(ptk.HelpMixin):
             "EmissiveGroups",
             "refresh_export_metadata",
         ),
+        "lightmap": (
+            "mayatk.light_utils.lightmap_baker.lightmap_baker",
+            "LightmapBaker",
+            "refresh_export_metadata",
+        ),
     }
 
     @staticmethod
@@ -452,9 +484,17 @@ class FbxUtils(ptk.HelpMixin):
                 continue
             try:
                 producer = getattr(importlib.import_module(module_path), cls_name)
-                getattr(producer, method)()
+                refresh = getattr(producer, method)
             except Exception:
-                logger.debug("Producer %r refresh skipped.", name, exc_info=True)
+                # Producers are speculative — an uninstalled subsystem is fine.
+                logger.debug("Producer %r unavailable; skipped.", name, exc_info=True)
+                continue
+            try:
+                refresh()
+            except Exception:
+                # But a resolvable producer that fails would silently ship
+                # stale channels — surface it like a registered preparer.
+                logger.warning("Producer %r refresh failed.", name, exc_info=True)
 
     @staticmethod
     def register_export_preparer(name: str, prepare: Callable[[], Any]) -> None:
@@ -523,6 +563,10 @@ class FbxUtils(ptk.HelpMixin):
         import maya.api.OpenMaya as om
 
         mgr = ScriptJobManager.instance()
+        # Reload guard: reloading this module resets _auto_takes_ids while the
+        # manager may still hold the previous pair under this stable owner key
+        # — installing on top would double-run every preparer per export.
+        mgr.unsubscribe_all(FbxUtils._AUTO_TAKES_OWNER)
         before = mgr.add_om_callback(
             om.MSceneMessage.addCallback,
             om.MSceneMessage.kBeforeExport,

@@ -46,6 +46,26 @@ scene-content animation from custom trigger/marker attributes.
 class _AnimUtilsInternal:
     """Helper mixin that contains internal shared logic for AnimUtils"""
 
+    # Time-driven animCurve node types.  ``listConnections(type="animCurve")``
+    # also matches the UNITLESS subtypes (animCurveUU/UA/UL/UT) that
+    # set-driven keys use — for those, "keyframe times" are DRIVER VALUES,
+    # so time operations (snap-to-frame, tie-bookends, untied/fractional
+    # checks) silently corrupt the rig's driven-key mapping or false-positive.
+    TIME_CURVE_TYPES = ("animCurveTL", "animCurveTA", "animCurveTU", "animCurveTT")
+
+    @classmethod
+    def _filter_time_curves(
+        cls, curves: List[str], include_driven: bool = False
+    ) -> List[str]:
+        """Restrict *curves* to time-driven animCurves (see TIME_CURVE_TYPES).
+
+        ``include_driven=True`` returns the list unchanged — the escape hatch
+        for a caller that genuinely wants unitless (set-driven-key) curves.
+        """
+        if include_driven or not curves:
+            return curves
+        return cmds.ls(curves, type=list(cls.TIME_CURVE_TYPES)) or []
+
     @staticmethod
     def _parse_ignore_patterns(
         ignore: Optional[Union[str, List[str]]],
@@ -4018,6 +4038,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         method: str = "nearest",
         selected_only: bool = False,
         time_range: Optional[Tuple[float, float]] = None,
+        include_driven: bool = False,
     ) -> int:
         """Snaps keyframes with decimal time values to whole frame numbers.
 
@@ -4090,7 +4111,12 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 or []
             )
 
-        all_curves = list(set(all_curves))
+        # Unitless (set-driven-key) curves are excluded by default — their
+        # "times" are driver values, and snapping those rewrites the rig's
+        # driven-key mapping.  include_driven=True opts back in deliberately.
+        all_curves = _AnimUtilsInternal._filter_time_curves(
+            list(set(all_curves)), include_driven
+        )
 
         keys_snapped = 0
 
@@ -4843,13 +4869,19 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         tie_start_frame = start_frame - padding
         tie_end_frame = end_frame + padding
 
-        # Collect unique animation curves
-        all_keyed_curves = list(
-            set(
-                cmds.listConnections(
-                    objects, type="animCurve", source=True, destination=False
+        # Collect unique animation curves.  Unitless (set-driven-key) curves
+        # are excluded: bookends belong at time-range extremes, and an SDK
+        # curve's x-axis is a driver value, not a frame (om2's
+        # MFnAnimCurve.input() even returns a bare float there, which would
+        # crash the MTime path below).
+        all_keyed_curves = _AnimUtilsInternal._filter_time_curves(
+            list(
+                set(
+                    cmds.listConnections(
+                        objects, type="animCurve", source=True, destination=False
+                    )
+                    or []
                 )
-                or []
             )
         )
 

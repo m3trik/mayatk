@@ -49,6 +49,25 @@ from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
 from base_test import MayaTkTestCase
 
 
+def _assign_shader(objects, shader):
+    """Assign *shader* via its shading-engine set.
+
+    Reliable in bare mayapy, where ``cmds.hyperShade(assign=...)`` silently
+    no-ops (connectWindow.mel ``addContextHelpProc`` error) and leaves the
+    geometry on initialShadingGroup — making texture-scoped tests pass
+    vacuously (no file nodes found → nothing exercised).
+    """
+    sgs = cmds.listConnections(shader, type="shadingEngine") or []
+    if sgs:
+        sg = sgs[0]
+    else:
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{shader}SG"
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+    cmds.sets(objects, edit=True, forceElement=sg)
+
+
 class TestSceneExporter(MayaTkTestCase):
     """Comprehensive tests for SceneExporter class."""
 
@@ -250,8 +269,7 @@ class TestSceneExporter(MayaTkTestCase):
         file_node = cmds.shadingNode("file", asTexture=True)
         cmds.connectAttr(f"{file_node}.outColor", f"{shader}.color")
         cmds.setAttr(f"{file_node}.fileTextureName", "C:/absolute/path/texture.png", type="string")
-        cmds.select(self.cube)
-        cmds.hyperShade(assign=shader)
+        _assign_shader(self.cube, shader)
 
         tasks = {"check_absolute_paths": True}
         self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
@@ -270,8 +288,7 @@ class TestSceneExporter(MayaTkTestCase):
         Fixed: 2026-02-22
         """
         shader = cmds.shadingNode("lambert", asShader=True)
-        cmds.select(self.cube)
-        cmds.hyperShade(assign=shader)
+        _assign_shader(self.cube, shader)
 
         self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
@@ -290,8 +307,7 @@ class TestSceneExporter(MayaTkTestCase):
         Fixed: 2026-02-22
         """
         shader = cmds.shadingNode("lambert", asShader=True)
-        cmds.select(self.cube)
-        cmds.hyperShade(assign=shader)
+        _assign_shader(self.cube, shader)
 
         self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
         self.exporter.task_manager._get_all_materials()
@@ -456,8 +472,7 @@ class TestSceneExporter(MayaTkTestCase):
         file_node = cmds.shadingNode("file", asTexture=True)
         cmds.connectAttr(f"{file_node}.outColor", f"{shader}.color")
         cmds.setAttr(f"{file_node}.fileTextureName", tex_path, type="string")
-        cmds.select(self.cube)
-        cmds.hyperShade(assign=shader)
+        _assign_shader(self.cube, shader)
 
         self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
@@ -491,8 +506,7 @@ class TestSceneExporter(MayaTkTestCase):
             "/nonexistent/path/missing_texture.png",
             type="string",
         )
-        cmds.select(self.cube)
-        cmds.hyperShade(assign=shader)
+        _assign_shader(self.cube, shader)
 
         self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
 
@@ -534,8 +548,7 @@ class TestSceneExporter(MayaTkTestCase):
         cmds.setAttr(
             f"{file_node}.fileTextureName", tex_path.replace("\\", "/"), type="string"
         )
-        cmds.select(node_path)
-        cmds.hyperShade(assign=shader)
+        _assign_shader(node_path, shader)
         return file_node
 
     def test_convert_to_relative_copies_external_textures(self):
@@ -834,8 +847,7 @@ class TestSceneExporter(MayaTkTestCase):
             cmds.setAttr(f"{file_node}.fileTextureName", missing, type="string")
             cmds.connectAttr(f"{file_node}.outColor", f"{shader}.{attr}")
             nodes.append(file_node)
-        cmds.select(self.cube)
-        cmds.hyperShade(assign=shader)
+        _assign_shader(self.cube, shader)
 
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
@@ -1783,6 +1795,411 @@ class TestExcludeHdrOption(MayaTkTestCase):
 
         self.assertIn(cube_long, self.tm.objects)
         self.assertNotIn(skydome_transform, self.tm.objects)
+
+
+class TestTaskStateHygiene(MayaTkTestCase):
+    """Per-run task-state regressions: stale caches and cross-run markers.
+
+    Added: 2026-08-01 (scene-exporter robustness audit).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.exporter = SceneExporter(log_level="DEBUG")
+        self.tm = self.exporter.task_manager
+        self.cube = cmds.polyCube(name="StateHygieneCube")[0]
+        self.cube_long = cmds.ls(self.cube, long=True)[0]
+
+    def test_snap_then_tie_does_not_recreate_fractional_keys(self):
+        """snap_keys_to_frame must invalidate _key_times before tie runs.
+
+        Repro: fractional bookend keys are snapped to whole frames, then
+        tie_all_keyframes read the STALE cached range and re-inserted keys at
+        the exact fractional times the snap just removed — the pipeline then
+        failed its own check_floating_point_keys.  Must fail pre-fix.
+        """
+        cmds.setKeyframe(self.cube, attribute="translateX", time=0.4, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=99.6, value=5)
+        # A second, inner-range curve so the tie task has bookends to insert.
+        cmds.setKeyframe(self.cube, attribute="translateY", time=10, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateY", time=90, value=2)
+
+        self.tm.objects = [self.cube_long]
+        # Seed the cache the way the real pipeline does (snap's own
+        # _has_keyframes gate populates _key_times with pre-snap times).
+        self.assertTrue(self.tm._has_keyframes)
+
+        self.tm.snap_keys_to_frame()
+        self.tm.tie_all_keyframes()
+
+        times = cmds.keyframe(self.cube, query=True, timeChange=True) or []
+        fractional = [t for t in times if abs(t - round(t)) > 1e-4]
+        self.assertEqual(
+            fractional,
+            [],
+            f"tie re-created fractional keys from a stale cache: {fractional}",
+        )
+        status, _ = self.tm.check_floating_point_keys()
+        self.assertTrue(status, "pipeline failed its own floating-point check")
+
+    def test_objects_setter_resets_hierarchy_check_marker(self):
+        """One hierarchy-checked export must not leak baseline writes into
+        later runs — the objects setter (per-run reseed) clears the marker."""
+        self.tm._hierarchy_check_ran = True
+        self.tm.objects = [self.cube_long]
+        self.assertFalse(self.tm._hierarchy_check_ran)
+
+    def test_run_tasks_sets_optimize_keys_flag_for_smart_bake(self):
+        """run_tasks forwards the optimize_keys toggle to the flag smart_bake
+        reads for its internal override-layer optimization (the UI documents
+        that coupling; blendertk uses the same idiom)."""
+        self.tm.objects = [self.cube_long]
+        self.tm.run_tasks({"optimize_keys": True})
+        self.assertTrue(self.tm._optimize_keys_enabled)
+        self.tm.run_tasks({"set_linear_unit": "cm"})
+        self.assertFalse(self.tm._optimize_keys_enabled)
+
+    def test_resolve_invalid_texture_paths_keeps_valid_relative_paths(self):
+        """A workspace-relative texture path that resolves must be left untouched.
+
+        The old "already valid" guard was a bare os.path.exists, which
+        resolves relative paths against the process CWD — a valid
+        workspace-relative path failed the guard and was rewritten (via the
+        basename hunt) on every run.  The path is set while the file does not
+        exist yet: Maya's file node stores a non-resolving relative path
+        verbatim, but auto-expands a resolving one to absolute at setAttr time
+        (verified in mayapy) — the stored-relative shape is the production
+        case (path authored under one workspace, exported under another).
+        Must fail pre-fix.
+        """
+        rel_path = "sourceimages/state_hygiene_rel.png"
+        shader = cmds.shadingNode("lambert", asShader=True)
+        file_node = cmds.shadingNode("file", asTexture=True)
+        cmds.connectAttr(f"{file_node}.outColor", f"{shader}.color")
+        cmds.setAttr(f"{file_node}.fileTextureName", rel_path, type="string")
+
+        ws = cmds.workspace(query=True, rootDirectory=True)
+        src_dir = os.path.join(ws, "sourceimages")
+        os.makedirs(src_dir, exist_ok=True)
+        tex_abs = os.path.join(src_dir, "state_hygiene_rel.png")
+        with open(tex_abs, "w") as f:
+            f.write("dummy")
+        self.addCleanup(os.remove, tex_abs)
+        _assign_shader(self.cube, shader)
+
+        self.tm.objects = [self.cube_long]
+        # Guard against a vacuous pass: the task must actually see the node.
+        self.assertIn(file_node, self.tm._get_export_file_nodes())
+        self.tm.resolve_invalid_texture_paths()
+
+        self.assertEqual(
+            cmds.getAttr(f"{file_node}.fileTextureName"),
+            rel_path,
+            "valid workspace-relative path was rewritten",
+        )
+
+
+class TestMangledNameGuards(MayaTkTestCase):
+    """check_mangled_names + conform_shape_names guard the export set against
+    scratch/mangled node names (regression: VDATS_module.ma shipped shapes
+    like 'vdat____Shape702__uninst_tmp____Shape' in scene_data.json)."""
+
+    def setUp(self):
+        super().setUp()
+        self.exporter = SceneExporter(log_level="DEBUG")
+        self.cube = cmds.polyCube(name="GuardCube")[0]
+        self.tm = self.exporter.task_manager
+        self.tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+    def _mangle_shape(self, name):
+        shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
+        return cmds.rename(shape, name)
+
+    def test_check_flags_uninst_scratch_name(self):
+        self._mangle_shape("vdatShape1__uninst_tmpShape380")
+        ok, messages = self.tm.check_mangled_names()
+        self.assertFalse(ok)
+        self.assertTrue(any("uninst" in m for m in messages))
+
+    def test_check_flags_underscore_run(self):
+        self._mangle_shape("vdat____Shape702")
+        ok, _ = self.tm.check_mangled_names()
+        self.assertFalse(ok)
+
+    def test_check_passes_clean_names(self):
+        ok, messages = self.tm.check_mangled_names()
+        self.assertTrue(ok, messages)
+
+    def test_check_empty_export_set_passes(self):
+        """No objects → pass, without falling back to the live selection."""
+        self._mangle_shape("vdatShape1__uninst_tmpShape380")
+        cmds.select(self.cube)  # a selection fallback would wrongly flag it
+        self.tm.objects = []
+        ok, messages = self.tm.check_mangled_names()
+        self.assertTrue(ok, messages)
+
+    def test_check_is_registered(self):
+        self.assertIn("check_mangled_names", self.tm.check_definitions)
+
+    def test_conform_task_repairs_shape(self):
+        self._mangle_shape("vdat____Shape702__uninst_tmp____Shape")
+        self.tm.conform_shape_names()
+        leaf = cmds.listRelatives(self.cube, shapes=True)[0].split("|")[-1]
+        self.assertEqual(leaf, "GuardCubeShape")
+        ok, messages = self.tm.check_mangled_names()
+        self.assertTrue(ok, messages)
+
+    def test_conform_task_is_registered(self):
+        self.assertIn("conform_shape_names", self.tm.task_definitions)
+
+
+class TestTexturePathPipeline(MayaTkTestCase):
+    """stage_textures_relative + reworked path/geometry/anim checks.
+
+    Added: 2026-08-01 (scene-exporter robustness audit, implementation pass).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.exporter = SceneExporter(log_level="DEBUG")
+        self.tm = self.exporter.task_manager
+        self.temp_dir = tempfile.mkdtemp()
+        self.cube = cmds.polyCube(name="PipelineCube")[0]
+        self.cube_long = cmds.ls(self.cube, long=True)[0]
+        self.ws_src = os.path.join(
+            cmds.workspace(query=True, rootDirectory=True), "sourceimages"
+        )
+        os.makedirs(self.ws_src, exist_ok=True)
+
+    def tearDown(self):
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+        super().tearDown()
+
+    def _textured_shader(self, tex_path, name="pipeMat"):
+        from mayatk.mat_utils._mat_utils import MatUtils  # noqa: F401
+
+        shader = cmds.shadingNode("lambert", asShader=True, name=name)
+        file_node = cmds.shadingNode("file", asTexture=True, name=f"{name}_file")
+        cmds.connectAttr(f"{file_node}.outColor", f"{shader}.color")
+        cmds.setAttr(f"{file_node}.fileTextureName", tex_path, type="string")
+        _assign_shader(self.cube, shader)
+        return shader, file_node
+
+    # -- stage_textures_relative ---------------------------------------
+
+    def test_stage_external_texture_copies_and_stores_relative(self):
+        """External absolute path → copied into sourceimages, node stores a
+        genuinely RELATIVE path (om-write past Maya's setAttr auto-expand)."""
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        tex = os.path.join(self.temp_dir, "pipe_ext.png").replace("\\", "/")
+        with open(tex, "w") as f:
+            f.write("external payload")
+        staged = os.path.join(self.ws_src, "pipe_ext.png")
+        self.addCleanup(lambda: os.path.exists(staged) and os.remove(staged))
+
+        _, file_node = self._textured_shader(tex)
+        results = MatUtils.stage_textures_relative([file_node])
+
+        self.assertEqual(results[file_node], "copied+relativized")
+        self.assertEqual(
+            cmds.getAttr(f"{file_node}.fileTextureName"), "sourceimages/pipe_ext.png"
+        )
+        self.assertTrue(os.path.isfile(staged))
+
+    def test_stage_name_collision_keeps_absolute_path(self):
+        """A DIFFERENT same-named file already in sourceimages must skip the
+        node — never rebind it to the wrong texture (old copy/remap bug)."""
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        staged = os.path.join(self.ws_src, "pipe_coll.png")
+        with open(staged, "w") as f:
+            f.write("resident content")
+        self.addCleanup(os.remove, staged)
+        tex = os.path.join(self.temp_dir, "pipe_coll.png").replace("\\", "/")
+        with open(tex, "w") as f:
+            f.write("completely different external content")
+
+        _, file_node = self._textured_shader(tex, name="pipeMatColl")
+        results = MatUtils.stage_textures_relative([file_node])
+
+        self.assertEqual(results[file_node], "skipped:name-collision")
+        self.assertEqual(cmds.getAttr(f"{file_node}.fileTextureName"), tex)
+        with open(staged) as f:
+            self.assertEqual(f.read(), "resident content")
+
+    def test_stage_preserves_sourceimages_subfolder(self):
+        """Absolute path into sourceimages/sub → relativized IN PLACE with the
+        subfolder kept (the old remap flattened it to the root)."""
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        sub = os.path.join(self.ws_src, "pipesub")
+        os.makedirs(sub, exist_ok=True)
+        staged = os.path.join(sub, "pipe_sub.png").replace("\\", "/")
+        with open(staged, "w") as f:
+            f.write("sub payload")
+        self.addCleanup(shutil.rmtree, sub)
+
+        _, file_node = self._textured_shader(staged, name="pipeMatSub")
+        results = MatUtils.stage_textures_relative([file_node])
+
+        self.assertEqual(results[file_node], "relativized")
+        self.assertEqual(
+            cmds.getAttr(f"{file_node}.fileTextureName"),
+            "sourceimages/pipesub/pipe_sub.png",
+        )
+
+    # -- check_absolute_paths (form-based) ------------------------------
+
+    def test_check_absolute_paths_form_semantics(self):
+        """Relative passes; absolute-under-sourceimages FAILS (old false
+        negative); a `..` escape is flagged as such (old false positive
+        called it 'Absolute')."""
+        staged = os.path.join(self.ws_src, "pipe_abs.png").replace("\\", "/")
+        with open(staged, "w") as f:
+            f.write("x")
+        self.addCleanup(os.remove, staged)
+
+        _, file_node = self._textured_shader(
+            "sourceimages/pipe_missing_rel.png", name="pipeMatAbs"
+        )
+        self.tm.objects = [self.cube_long]
+        status, _msgs = self.tm.check_absolute_paths()
+        self.assertTrue(status, "plain relative path should pass the form check")
+
+        cmds.setAttr(f"{file_node}.fileTextureName", staged, type="string")
+        self.tm._invalidate_material_caches()
+        status, msgs = self.tm.check_absolute_paths()
+        self.assertFalse(status, "absolute path under sourceimages must fail")
+        self.assertTrue(any("Absolute path" in m for m in msgs))
+
+        cmds.setAttr(
+            f"{file_node}.fileTextureName", "../pipe_escape.png", type="string"
+        )
+        self.tm._invalidate_material_caches()
+        status, msgs = self.tm.check_absolute_paths()
+        self.assertFalse(status, "project-escaping relative path must fail")
+        self.assertTrue(any("Escapes project root" in m for m in msgs))
+
+    # -- GLB-only sidecar ordering --------------------------------------
+
+    def test_glb_only_failed_conversion_writes_no_sidecar(self):
+        """A failed FBX→GLB conversion has no deliverable — the hierarchy
+        baseline must NOT roll forward (old ordering wrote it first)."""
+        try:
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
+        except Exception:
+            self.skipTest("FBX plugin not available")
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
+        )
+
+        self.tm.create_glb = lambda **kw: None
+        result = self.exporter.perform_export(
+            export_dir=self.temp_dir,
+            objects=[self.cube],
+            file_format="FBX export",
+            tasks={"output_format": "glb"},
+        )
+        self.assertFalse(result)
+        manifest = SceneDataSidecar.manifest_path_for(self.exporter.export_path)
+        self.assertFalse(
+            os.path.exists(manifest),
+            "failed GLB-only export must not roll the sidecar baseline forward",
+        )
+
+    # -- SDK (unitless) curve exclusion ----------------------------------
+
+    def _make_sdk_cube(self):
+        driver = cmds.polyCube(name="SdkDriver")[0]
+        cmds.setKeyframe(self.cube, attribute="translateX", time=0, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=1)
+        for drv_val, driven_val in ((0.25, 0.0), (0.75, 5.0)):
+            cmds.setAttr(f"{driver}.translateX", drv_val)
+            cmds.setAttr(f"{self.cube}.translateY", driven_val)
+            cmds.setDrivenKeyframe(
+                f"{self.cube}.translateY", currentDriver=f"{driver}.translateX"
+            )
+        return driver
+
+    def test_keyframe_checks_ignore_set_driven_keys(self):
+        """SDK driver values (0.25/0.75) are not frame times — neither check
+        may flag them (both false-positived pre-fix)."""
+        self._make_sdk_cube()
+        self.tm.objects = [self.cube_long]
+
+        status, msgs = self.tm.check_floating_point_keys()
+        self.assertTrue(status, f"SDK inbetweens flagged as fractional: {msgs}")
+        status, msgs = self.tm.check_untied_keyframes()
+        self.assertTrue(status, f"SDK curve flagged as untied: {msgs}")
+
+    def test_snap_keys_leaves_sdk_driver_values(self):
+        """snap_keys_to_frames must not rewrite driven-key driver values —
+        that permanently corrupts the rig mapping."""
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        self._make_sdk_cube()
+        sdk_curve = cmds.listConnections(
+            f"{self.cube}.translateY", source=True, destination=False, type="animCurve"
+        )[0]
+        before = cmds.keyframe(sdk_curve, query=True, floatChange=True)
+
+        AnimUtils.snap_keys_to_frames([self.cube])
+
+        after = cmds.keyframe(sdk_curve, query=True, floatChange=True)
+        self.assertEqual(before, after, "SDK driver values were rewritten")
+
+    def test_tie_keyframes_survives_sdk_curves(self):
+        """tie_keyframes crashed outright on unitless curves pre-fix (om2's
+        MFnAnimCurve.input() returns a bare float there) and must now skip
+        them, leaving the driven-key mapping untouched."""
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        self._make_sdk_cube()
+        sdk_curve = cmds.listConnections(
+            f"{self.cube}.translateY", source=True, destination=False, type="animCurve"
+        )[0]
+        before = cmds.keyframe(sdk_curve, query=True, floatChange=True)
+
+        AnimUtils.tie_keyframes([self.cube], absolute=True)  # must not raise
+
+        after = cmds.keyframe(sdk_curve, query=True, floatChange=True)
+        self.assertEqual(before, after, "tie touched the SDK curve")
+
+    # -- hidden geometry / below floor -----------------------------------
+
+    def test_check_hidden_geometry_sees_display_layers(self):
+        """Display-layer hiding was invisible to the check — layer-hidden
+        geometry shipped unflagged in every mode."""
+        layer = cmds.createDisplayLayer(name="pipeHideLayer", empty=True)
+        cmds.editDisplayLayerMembers(layer, self.cube)
+        cmds.setAttr(f"{layer}.visibility", 0)
+
+        self.tm.objects = [self.cube_long]
+        status, msgs = self.tm.check_hidden_geometry()
+        self.assertFalse(status)
+        self.assertTrue(any("display layer" in m for m in msgs))
+
+    def test_check_hidden_geometry_skips_animated_visibility(self):
+        """Animated visibility is deliberate export content (the 'visible'
+        mode includes it for baking) — currently-off must NOT flag."""
+        cmds.setKeyframe(self.cube, attribute="visibility", time=1, value=0)
+
+        self.tm.objects = [self.cube_long]
+        status, msgs = self.tm.check_hidden_geometry()
+        self.assertTrue(status, f"animated-visibility object flagged: {msgs}")
+
+    def test_check_objects_below_floor_ignores_curves(self):
+        """A control curve below Y=0 is not 'geometry below floor'."""
+        circle = cmds.circle(name="pipeFloorCurve")[0]
+        cmds.setAttr(f"{circle}.translateY", -5)
+        cmds.setAttr(f"{self.cube}.translateY", 5)
+
+        self.tm.objects = cmds.ls([self.cube, circle], long=True)
+        status, msgs = self.tm.check_objects_below_floor()
+        self.assertTrue(status, f"non-surface shape flagged below floor: {msgs}")
 
 
 if __name__ == "__main__":

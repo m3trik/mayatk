@@ -65,8 +65,9 @@ class WheelRig(ptk.LoggingMixin):
             # Freeze translate only — rotation must be preserved so the
             # auto-flip pass can read mirrored-wheel orientation from the
             # world matrix.
-            XformUtils.freeze_transforms(self.control, translate=True)
-            XformUtils.freeze_transforms(self.wheels, translate=True)
+            # store=False: rig construction, not a user-reversible freeze.
+            XformUtils.freeze_transforms(self.control, translate=True, store=False)
+            XformUtils.freeze_transforms(self.wheels, translate=True, store=False)
 
     @property
     def rig_name(self) -> str:

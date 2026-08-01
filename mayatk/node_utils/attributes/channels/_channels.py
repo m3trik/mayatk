@@ -1224,31 +1224,17 @@ class Channels:
         from mayatk.xform_utils._xform_utils import XformUtils
 
         kwargs = cls._freeze_kwargs_for_attrs(attrs or [])
-        freezing_groups = cls._groups_from_attrs(attrs or [])
 
         cmds.undoInfo(openChunk=True, chunkName="Freeze Transforms")
         try:
-            if store:
-                cls._store_pre_freeze(nodes, freezing_groups)
-            XformUtils.freeze_transforms(nodes, **kwargs)
+            # The bake history is stamped by XformUtils.freeze_transforms
+            # itself (store=True), which also traverses the subtree a group
+            # freeze flattens — stamping it here as well would double-compose
+            # the history and make a later unfreeze overshoot.
+            XformUtils.freeze_transforms(nodes, store=store, **kwargs)
         finally:
             cmds.undoInfo(closeChunk=True)
         return True
-
-    @classmethod
-    def _store_pre_freeze(cls, nodes, freezing_groups):
-        """Accumulate the current local TRS onto the per-channel bake history.
-
-        ``freezing_groups`` (empty for full freeze, otherwise a subset of
-        ``{"translate", "rotate", "scale"}``) selects which channels to
-        update.  Delegates to ``XformUtils.store_transforms`` with
-        ``accumulate=True`` so repeated freezes compose instead of
-        overwriting.
-        """
-        from mayatk.xform_utils._xform_utils import XformUtils
-
-        channels = freezing_groups if freezing_groups else None
-        XformUtils.store_transforms(nodes, accumulate=True, channels=channels)
 
     @classmethod
     def unfreeze_transforms(cls, nodes, attrs=None):

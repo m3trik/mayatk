@@ -1,5 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
+import hashlib
 import os
 import re
 from typing import List, Tuple, Union, Dict, Any, Optional, Callable
@@ -40,6 +41,154 @@ _TEXTURE_WALK_SKIP_DIRS = frozenset(
 
 class _MatUtilsInternal(ptk.HelpMixin):
     """Internal helper utilities shared across MatUtils operations."""
+
+    # UV-placement attrs that change how a texture reads on the surface —
+    # the axes the duplicate-material fingerprint is blind to.
+    _PLACE2D_SIG_ATTRS = (
+        "repeatU",
+        "repeatV",
+        "offsetU",
+        "offsetV",
+        "rotateUV",
+        "mirrorU",
+        "mirrorV",
+        "wrapU",
+        "wrapV",
+        "stagger",
+        "coverageU",
+        "coverageV",
+        "translateFrameU",
+        "translateFrameV",
+        "rotateFrame",
+    )
+
+    @classmethod
+    def _placement_signature(cls, file_node: str) -> tuple:
+        """UV-placement signature of the place2dTexture feeding *file_node*.
+
+        Two file nodes reading the same image with different tiling/offset
+        produce visually different materials — this is what lets the
+        duplicate verifier tell a shared atlas apart from a true duplicate.
+        Empty tuple when no place2d is connected (two bare nodes match).
+        """
+        p2d = (
+            cmds.listConnections(
+                file_node, source=True, destination=False, type="place2dTexture"
+            )
+            or []
+        )
+        if not p2d:
+            return ()
+        sig = []
+        for attr in cls._PLACE2D_SIG_ATTRS:
+            try:
+                sig.append(round(cmds.getAttr(f"{p2d[0]}.{attr}"), 5))
+            except Exception:
+                sig.append(None)
+        return tuple(sig)
+
+    @staticmethod
+    def _texture_content_id(path: str) -> Optional[tuple]:
+        """(size, partial-hash) identity of the file behind *path*.
+
+        Resolves the way Maya does (env vars + workspace, ``<UDIM>``
+        collapsed to the 1001 probe tile) and hashes the first and last
+        64 KB — enough to tell same-named different-content textures apart
+        without reading multi-hundred-MB maps whole.  None when the file
+        doesn't resolve on disk.
+        """
+        resolved = MatUtils.resolve_path(path, search=False)
+        if not resolved:
+            return None
+        probe = (
+            resolved.replace("<UDIM>", "1001") if "<UDIM>" in resolved else resolved
+        )
+        try:
+            size = os.path.getsize(probe)
+            h = hashlib.md5()
+            with open(probe, "rb") as f:
+                h.update(f.read(65536))
+                if size > 131072:
+                    f.seek(-65536, os.SEEK_END)
+                    h.update(f.read(65536))
+            return (size, h.hexdigest())
+        except OSError:
+            return None
+
+    @classmethod
+    def _textures_identical(cls, path_a: str, path_b: str) -> bool:
+        """True when two stored texture paths denote the same image CONTENT.
+
+        Same normalized path is trivially identical; different paths are
+        identical only when both resolve and their (size, partial-hash) ids
+        match — the consolidation case (external copy vs sourceimages copy)
+        the loose basename fingerprint exists for, minus its false positives.
+        """
+
+        def norm(p):
+            return os.path.normcase(os.path.normpath(p))
+
+        if norm(path_a) == norm(path_b):
+            return True
+        id_a = cls._texture_content_id(path_a)
+        return id_a is not None and id_a == cls._texture_content_id(path_b)
+
+    @classmethod
+    def _materials_are_verified_duplicates(
+        cls, mat_a: str, mat_b: str, slots_a: dict, slots_b: dict
+    ) -> bool:
+        """Pairwise proof that two fingerprint-matched materials are truly
+        interchangeable: equal unconnected scalar attribute values, and per
+        texture slot identical placement, color space, and image content.
+
+        The fingerprint is a cheap GROUPING heuristic (node type + attr →
+        basename); this gate is what makes feeding the result to a
+        destructive merge safe.  Conservative by design: anything that can't
+        be positively verified fails the pair.
+        """
+        # 1. Unconnected scalar attributes — generic: both materials are the
+        #    same nodeType, so the attribute lists are identical.  Connected
+        #    plugs are skipped (their value is texture-driven; the slot check
+        #    below owns those).
+        for attr in cmds.listAttr(mat_a, settable=True, scalar=True) or []:
+            plug_a, plug_b = f"{mat_a}.{attr}", f"{mat_b}.{attr}"
+            try:
+                if cmds.listConnections(
+                    plug_a, source=True, destination=False
+                ) or cmds.listConnections(plug_b, source=True, destination=False):
+                    continue
+                va, vb = cmds.getAttr(plug_a), cmds.getAttr(plug_b)
+            except Exception:
+                continue  # multi/message/unreadable plug — not comparable
+            if isinstance(va, (int, float)) and isinstance(vb, (int, float)):
+                if abs(va - vb) > 1e-5:
+                    return False
+            elif va != vb:
+                return False
+
+        # 2. Per-slot texture verification.
+        if set(slots_a) != set(slots_b):
+            return False
+
+        def profile(nodes):
+            out = []
+            for n in nodes:
+                path = cmds.getAttr(f"{n}.fileTextureName") or ""
+                try:
+                    cspace = cmds.getAttr(f"{n}.colorSpace")
+                except Exception:
+                    cspace = None
+                out.append((path, cspace, cls._placement_signature(n)))
+            return sorted(out, key=repr)
+
+        for slot, nodes_a in slots_a.items():
+            nodes_b = slots_b[slot]
+            if len(nodes_a) != len(nodes_b):
+                return False
+            for (pa, ca, sa), (pb, cb, sb) in zip(profile(nodes_a), profile(nodes_b)):
+                if sa != sb or ca != cb or not cls._textures_identical(pa, pb):
+                    return False
+        return True
 
     @classmethod
     def _find_opacity_map_on_disk(
@@ -467,6 +616,7 @@ class MatUtils(_MatUtilsInternal):
         objs=None,
         as_strings=True,
         mat_type=None,
+        include_displacement=False,
     ) -> List[str]:
         """Returns the set of materials assigned to a given list of objects or components.
 
@@ -478,10 +628,31 @@ class MatUtils(_MatUtilsInternal):
             mat_type (str, optional): Maya node type to filter by
                 (e.g. ``"StingrayPBS"``, ``"lambert"``, ``"aiStandardSurface"``).
                 If None, all material types are returned.
+            include_displacement (bool): Also follow each shading engine's
+                ``displacementShader`` / ``volumeShader`` / ``aiSurfaceShader``
+                connections.  Default False keeps the historical
+                surface-shader-only contract; the scene exporter opts in so
+                displacement/volume textures are validated and staged like
+                every other map.
 
         Returns:
             list[str]: Materials assigned to the objects or components (duplicates removed).
         """
+        sg_slots = ["surfaceShader"]
+        if include_displacement:
+            sg_slots += ["displacementShader", "volumeShader", "aiSurfaceShader"]
+
+        def _sg_mats(sg):
+            found = []
+            for slot in sg_slots:
+                plug = f"{sg}.{slot}"
+                if not cmds.objExists(plug):
+                    continue  # aiSurfaceShader only exists with mtoa loaded
+                found.extend(
+                    cmds.listConnections(plug, source=True, destination=False) or []
+                )
+            return found
+
         if objs is None:
             objs = cmds.ls(selection=True, long=True) or []
 
@@ -522,26 +693,14 @@ class MatUtils(_MatUtilsInternal):
                     shading_engines.update(sgs)
 
                 for sg in shading_engines:
-                    connections = (
-                        cmds.listConnections(
-                            f"{sg}.surfaceShader", source=True, destination=False
-                        )
-                        or []
-                    )
-                    mats.update(connections)
+                    mats.update(_sg_mats(sg))
 
         if faces:
             for face in faces:
                 face_sgs = cmds.listSets(object=face, type=1) or []
                 if face_sgs:
                     for sg in face_sgs:
-                        connections = (
-                            cmds.listConnections(
-                                f"{sg}.surfaceShader", source=True, destination=False
-                            )
-                            or []
-                        )
-                        mats.update(connections)
+                        mats.update(_sg_mats(sg))
                 else:
                     obj_name = face.split(".")[0]
                     obj_shapes = (
@@ -558,15 +717,7 @@ class MatUtils(_MatUtilsInternal):
                             or []
                         )
                         for sg in sgs:
-                            connections = (
-                                cmds.listConnections(
-                                    f"{sg}.surfaceShader",
-                                    source=True,
-                                    destination=False,
-                                )
-                                or []
-                            )
-                            mats.update(connections)
+                            mats.update(_sg_mats(sg))
 
         if mat_type:
             mats = {m for m in mats if m and cmds.nodeType(m) == mat_type}
@@ -2240,6 +2391,148 @@ class MatUtils(_MatUtilsInternal):
                 f"// Result: Remapped {len(remapped_nodes)}/{len(textures)} texture paths."
             )
 
+    @classmethod
+    @CoreUtils.undoable
+    def stage_textures_relative(
+        cls,
+        file_nodes: List[str],
+        sourceimages: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """Stage textures under sourceimages and store project-relative paths.
+
+        Single per-node pass replacing the old copy-then-remap pair, whose
+        basename-keyed handshake could rebind a node to an unrelated
+        same-named file the copy step had refused, flattened valid
+        ``sourceimages/sub/…`` paths, and remapped UDIM sets whose tiles were
+        never copied.  Here every decision is made per node, atomically:
+
+        - already-relative paths are left untouched;
+        - absolute paths under sourceimages are relativized IN PLACE, with
+          subfolders preserved;
+        - external files (UDIM tile sets included, via token glob) are copied
+          into sourceimages first — a destination collision is only reused
+          when the CONTENT matches (size + partial hash); a different file
+          with the same name skips the node entirely, loudly, rather than
+          rebinding it to the wrong texture.
+
+        The relative form is written with ``om.MPlug.setString`` — plain
+        ``cmds.setAttr`` auto-expands a resolvable relative path back to
+        absolute (verified in mayapy), which is why the old remap never
+        actually stored relative paths.  A ``cmds.setAttr`` of the original
+        value runs first as the undo anchor, so undo still restores the
+        pre-conversion path.
+
+        Parameters:
+            file_nodes: ``file`` nodes to process.
+            sourceimages: Override the project's sourceimages directory.
+
+        Returns:
+            {file_node: status} where status is one of ``relativized``,
+            ``copied+relativized``, ``already-relative``, or
+            ``skipped:<reason>``.
+        """
+        import shutil
+        import glob as _glob
+        import maya.api.OpenMaya as om
+
+        results: Dict[str, str] = {}
+        src_dir = sourceimages or EnvUtils.get_env_info("sourceimages")
+        if not src_dir:
+            cmds.warning("No sourceimages directory resolved — nothing staged.")
+            return {n: "skipped:no-sourceimages" for n in file_nodes}
+        src_dir = os.path.normpath(src_dir)
+        os.makedirs(src_dir, exist_ok=True)
+        src_dir_cased = os.path.normcase(src_dir)
+
+        _TOKEN_RE = re.compile(r"<udim>|<f>|<uvtile>", re.IGNORECASE)
+
+        def _store_relative(node: str, rel_form: str) -> bool:
+            """Returns False when the plug can't be written (locked /
+            referenced) — a per-node skip, never a task abort."""
+            plug_name = f"{node}.fileTextureName"
+            try:
+                # Undo anchor: capture the original value on the queue…
+                cmds.setAttr(plug_name, cmds.getAttr(plug_name), type="string")
+                # …then force the relative form past the file node's
+                # auto-expand.
+                sel = om.MSelectionList()
+                sel.add(node)
+                plug = om.MFnDependencyNode(sel.getDependNode(0)).findPlug(
+                    "fileTextureName", False
+                )
+                plug.setString(rel_form)
+                return True
+            except RuntimeError as e:
+                cmds.warning(f"Cannot write '{plug_name}' (locked/referenced?): {e}")
+                return False
+
+        for node in file_nodes:
+            if not cmds.attributeQuery("fileTextureName", node=node, exists=True):
+                results[node] = "skipped:no-attribute"
+                continue
+            path = cmds.getAttr(f"{node}.fileTextureName")
+            if not path:
+                results[node] = "skipped:empty-path"
+                continue
+
+            expanded = os.path.expandvars(path)
+            if not (os.path.isabs(expanded) or os.path.splitdrive(expanded)[0]):
+                results[node] = "already-relative"
+                continue
+
+            norm = os.path.normpath(expanded)
+            if os.path.normcase(norm).startswith(src_dir_cased + os.sep):
+                # Inside sourceimages — relativize in place, subfolders kept.
+                rel = os.path.relpath(norm, src_dir).replace("\\", "/")
+                _store_relative(node, f"sourceimages/{rel}")
+                results[node] = "relativized"
+                continue
+
+            # External — stage the file(s) into the sourceimages root first.
+            basename = os.path.basename(norm)
+            directory = os.path.dirname(norm)
+            has_token = bool(_TOKEN_RE.search(basename))
+            if has_token:
+                pattern = _TOKEN_RE.sub("*", basename)
+                sources = sorted(_glob.glob(os.path.join(directory, pattern)))
+            else:
+                sources = [norm] if os.path.isfile(norm) else []
+
+            if not sources:
+                results[node] = "skipped:missing-source"
+                continue
+
+            skip_reason = None
+            for src in sources:
+                dst = os.path.join(src_dir, os.path.basename(src))
+                if os.path.normcase(src) == os.path.normcase(dst):
+                    continue
+                if os.path.exists(dst):
+                    if cls._texture_content_id(src) == cls._texture_content_id(dst):
+                        continue  # identical content already staged
+                    cmds.warning(
+                        f"Not staging '{src}': a DIFFERENT '{os.path.basename(src)}' "
+                        f"already exists in sourceimages — '{node}' keeps its "
+                        "absolute path instead of being rebound to the wrong file."
+                    )
+                    skip_reason = "skipped:name-collision"
+                    break
+                try:
+                    shutil.copy2(src, dst)
+                except OSError as e:
+                    cmds.warning(f"Copy failed for '{src}': {e}")
+                    skip_reason = "skipped:copy-failed"
+                    break
+
+            if skip_reason:
+                results[node] = skip_reason
+                continue
+
+            _store_relative(node, f"sourceimages/{basename}")
+            results[node] = "copied+relativized"
+
+        return results
+
     @staticmethod
     def is_duplicate_material(material1: str, material2: str) -> bool:
         """Check if two materials are duplicates based on their textures."""
@@ -2256,8 +2549,30 @@ class MatUtils(_MatUtilsInternal):
         cls,
         materials: Optional[List[str]] = None,
         strict: bool = False,
+        verify: bool = True,
     ) -> Dict[str, List[str]]:
-        """Find duplicate materials based on their texture file names or full paths."""
+        """Find duplicate materials based on their texture file names or full paths.
+
+        Two-phase.  Phase 1 groups CANDIDATES by a cheap fingerprint —
+        ``(node type, {(attribute, texture id)})`` where the non-strict
+        texture id is the lowercased basename stem, so same-named textures
+        from different folders (``brick/albedo.png`` vs ``wood/albedo.png``)
+        and same-texture-different-tiling setups land in one group.  Phase 2
+        (``verify=True``, the default) pairwise-verifies every candidate
+        against its group's keeper before it is reported: equal unconnected
+        scalar attribute values, identical place2d placement and color space
+        per texture slot, and texture CONTENT identity (size + partial hash)
+        when the stored paths differ.  Only verified duplicates are returned
+        — the verification is what makes the result safe to feed
+        :meth:`reassign_duplicate_materials`' destructive merge.
+
+        Parameters:
+            materials: Materials to scan.  None scans every scene material.
+            strict: Fingerprint on the full lowercased path instead of the
+                basename stem (narrows phase 1's candidate net).
+            verify: Skip phase 2 when False — candidates are returned
+                unverified (the pre-2026-08 behavior; false-positive-prone).
+        """
 
         def _texture_id(path: str) -> str:
             if strict:
@@ -2281,6 +2596,7 @@ class MatUtils(_MatUtilsInternal):
             materials = cmds.ls(materials, mat=True) or []
 
         material_data = {}
+        slot_maps: Dict[str, Dict[tuple, List[str]]] = {}
         for material in materials:
             mat_type = cmds.nodeType(material)
 
@@ -2292,6 +2608,7 @@ class MatUtils(_MatUtilsInternal):
             history_set = set(history)
 
             attr_texture_pairs = []
+            slots: Dict[tuple, List[str]] = {}
             for file_node in file_nodes:
                 if not cmds.objExists(f"{file_node}.fileTextureName"):
                     continue
@@ -2327,14 +2644,17 @@ class MatUtils(_MatUtilsInternal):
                 if mat_attrs:
                     for attr in mat_attrs:
                         attr_texture_pairs.append((attr, tex_id))
+                        slots.setdefault((attr, tex_id), []).append(file_node)
                 else:
                     attr_texture_pairs.append(("_unresolved", tex_id))
+                    slots.setdefault(("_unresolved", tex_id), []).append(file_node)
 
             if not attr_texture_pairs:
                 continue
 
             fingerprint = (mat_type, frozenset(attr_texture_pairs))
             material_data[material] = fingerprint
+            slot_maps[material] = slots
 
         seen = {}
         for material, fingerprint in material_data.items():
@@ -2352,11 +2672,22 @@ class MatUtils(_MatUtilsInternal):
             if len(materials_list) > 1:
                 materials_list.sort(key=lambda x: (len(x), x))
                 original = materials_list[0]
-                duplicates[original] = materials_list[1:]
+                dups = materials_list[1:]
+                if verify:
+                    dups = [
+                        d
+                        for d in dups
+                        if cls._materials_are_verified_duplicates(
+                            original, d, slot_maps[original], slot_maps[d]
+                        )
+                    ]
+                if dups:
+                    duplicates[original] = dups
 
-        print(f"{len(duplicates)} Duplicate material groups found:")
-        for original, dup_list in duplicates.items():
-            print(f"Original: {original}, Duplicates: {dup_list}")
+        if duplicates:
+            print(f"{len(duplicates)} Duplicate material groups found:")
+            for original, dup_list in duplicates.items():
+                print(f"Original: {original}, Duplicates: {dup_list}")
         return duplicates
 
     @classmethod
@@ -2366,8 +2697,16 @@ class MatUtils(_MatUtilsInternal):
         materials: Optional[List[str]] = None,
         delete: bool = False,
         strict: bool = False,
+        verify: bool = True,
     ) -> None:
-        """Find duplicate materials, remove duplicates, and reassign them to the original material."""
+        """Find duplicate materials, remove duplicates, and reassign them to the original material.
+
+        ``verify`` (default True) gates the merge on the pairwise
+        verification pass — see :meth:`find_materials_with_duplicate_textures`.
+        Only pass False deliberately: unverified candidates include
+        same-basename-different-content and same-texture-different-tiling
+        near-misses, and this method deletes what it merges.
+        """
         if materials is not None:
             valid_objects = []
             for m in materials:
@@ -2385,7 +2724,7 @@ class MatUtils(_MatUtilsInternal):
             collected_materials = cmds.ls(mat=True) or []
 
         duplicate_to_original = cls.find_materials_with_duplicate_textures(
-            collected_materials, strict=strict
+            collected_materials, strict=strict, verify=verify
         )
         duplicates_to_delete = []
         for original, duplicates in duplicate_to_original.items():
@@ -2425,10 +2764,14 @@ class MatUtils(_MatUtilsInternal):
 
     @staticmethod
     def filter_materials_by_objects(
-        objects: List[str], as_strings: bool = True
+        objects: List[str],
+        as_strings: bool = True,
+        include_displacement: bool = False,
     ) -> List[str]:
         """Filter materials assigned to the given objects."""
-        return MatUtils.get_mats(objects, as_strings=True)
+        return MatUtils.get_mats(
+            objects, as_strings=as_strings, include_displacement=include_displacement
+        )
 
     @staticmethod
     def reload_textures(

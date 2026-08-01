@@ -946,6 +946,22 @@ class TestEditUtils(MayaTkTestCase):
         EditUtils.dissolve_coplanar([sphere], angle_tolerance=0.5)
         self.assertEqual(cmds.polyEvaluate(sphere, face=True), before)
 
+    def test_overlapping_duplicates_catches_frozen_transform_twin(self):
+        """A coincident duplicate whose transforms were frozen must still be
+        detected — the old fingerprint hashed polyEvaluate's full dict, whose
+        OBJECT-SPACE floats differ between the twins even though the
+        world-space geometry is identical.  Added: 2026-08-01.
+        """
+        src = cmds.polyCube(name="frozenTwinSrc")[0]
+        cmds.setAttr(f"{src}.translate", 5, 1, 2)
+        dup = cmds.duplicate(src, name="frozenTwinDup")[0]
+        cmds.makeIdentity(dup, apply=True, translate=True, rotate=True, scale=True)
+
+        duplicates = EditUtils.get_overlapping_duplicates(objects=[src, dup])
+        self.assertTrue(
+            duplicates, "frozen-transform coincident duplicate was not detected"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

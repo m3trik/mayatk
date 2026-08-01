@@ -239,6 +239,11 @@ class _MatrixMath:
 
         Use inverse to "subtract" a parent space or convert between coordinate systems.
 
+        Note:
+            ``MMatrix.inverse()`` does **not** raise on a singular matrix — it
+            silently returns garbage.  Use :meth:`safe_inverse` when the input
+            can be singular (a zero-scaled node is the common case).
+
         Parameters:
             m: MMatrix to invert.
 
@@ -249,6 +254,42 @@ class _MatrixMath:
             >>> parent_world = Matrices.to_mmatrix("parent")
             >>> parent_world_inv = Matrices.inverse(parent_world)
         """
+        return m.inverse()
+
+    @staticmethod
+    def safe_inverse(m: "MMatrix", tolerance: float = 1e-12) -> Optional["MMatrix"]:
+        """Inverse of *m*, or None when it is singular or non-finite.
+
+        ``MMatrix.inverse()`` has no failure mode: on a singular matrix it
+        returns an identity-like result rather than raising (measured:
+        ``det4x4() == 0`` → ``result[0][0] == 1.0``), so a ``try/except``
+        around it is dead code and a zero-scaled node silently bakes nonsense
+        into everything derived from it.  Check the determinant instead.
+
+        The finite check matters as much as the singular one: ``abs(inf) <=
+        tol`` and ``abs(nan) <= tol`` are both False, so an inf/NaN matrix
+        (a corrupt bake attr, a broken constraint upstream) would fall
+        straight through a determinant-only guard and ``inverse()`` returns
+        garbage for those too (measured: identity-like).
+
+        Parameters:
+            m: MMatrix to invert (None is accepted and returns None).
+            tolerance: ``abs(det4x4())`` at or below which *m* counts as
+                singular.
+
+        Returns:
+            The inverted MMatrix, or None.
+
+        Example:
+            >>> inv = Matrices.safe_inverse(Matrices.to_mmatrix("parent"))
+            >>> if inv is None:  # zero scale somewhere up the chain
+            ...     cmds.warning("singular — skipped")
+        """
+        if m is None:
+            return None
+        det = m.det4x4()
+        if not math.isfinite(det) or abs(det) <= tolerance:
+            return None
         return m.inverse()
 
     @staticmethod

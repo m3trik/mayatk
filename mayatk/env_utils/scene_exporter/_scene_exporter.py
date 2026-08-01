@@ -206,6 +206,16 @@ class SceneExporter(ptk.LoggingMixin):
             if tasks:
                 tasks_successful = self.task_manager.run_tasks(tasks)
                 if not tasks_successful:  # If any tasks failed, return them
+                    # Checks run AFTER tasks, and tasks mutate the scene with no
+                    # automatic rollback (the undo-chunk restore was removed with
+                    # the smart_bake redesign) — a blocked export must say so
+                    # instead of leaving the mutation silent.
+                    self.logger.warning(
+                        "Export blocked by failed checks, but export tasks already "
+                        "ran — task edits (material cleanup, key snapping/tying, "
+                        "texture path rewrites, …) remain in the scene. Undo or "
+                        "revert to the saved file if that is not what you want."
+                    )
                     return False
 
             # Select objects to export
@@ -259,12 +269,6 @@ class SceneExporter(ptk.LoggingMixin):
                 )
                 export_succeeded = True
 
-                # Write the scene-data sidecar (hierarchy baseline for future
-                # diff checks + data_export snapshot). Keyed off the logical
-                # export path (output dir + stem), independent of where the
-                # FBX was actually written.
-                self.task_manager.write_scene_data_sidecar()
-
                 # GLB conversion. For GLB-only, convert the temp FBX then move the
                 # .glb into the output dir; the banner reports it as the
                 # deliverable. A failed conversion has no deliverable, so the
@@ -285,6 +289,16 @@ class SceneExporter(ptk.LoggingMixin):
                     deliverable_path = os.path.splitext(self.export_path)[0] + ".glb"
                     shutil.move(glb_path, deliverable_path)
                     self.logger.success(f"GLB created: {deliverable_path}")
+
+                # Write the scene-data sidecar (hierarchy baseline for future
+                # diff checks + data_export snapshot) only now that a
+                # deliverable exists — in GLB-only mode a failed conversion
+                # returns above, and rolling the baseline forward for an
+                # export that shipped nothing would make the next run's
+                # hierarchy diff compare against a phantom. Keyed off the
+                # logical export path (output dir + stem), independent of
+                # where the FBX was actually written.
+                self.task_manager.write_scene_data_sidecar()
 
                 # Build the single, consolidated success banner. Measure the
                 # duration here (vs. right after the FBX write) so GLB-only
@@ -344,6 +358,19 @@ class SceneExporter(ptk.LoggingMixin):
                             f"Restored pre-bake scene state (session '{_session}')."
                         )
                         self.task_manager._bake_override_layer = None
+                    else:
+                        # SmartBake reports non-restorable sessions via
+                        # cmds.warning only (script editor) — surface it in the
+                        # export log too, with the session id so a manual
+                        # SmartBake.restore('<id>') retry is possible. The
+                        # layer-delete fallback below still runs, but IK blend
+                        # and visibility state may need that manual restore.
+                        self.logger.warning(
+                            f"SmartBake restore failed for session '{_session}' — "
+                            "the bake override layer is deleted as a fallback, but "
+                            "IK/visibility state may need a manual "
+                            f"SmartBake.restore('{_session}')."
+                        )
                 except Exception as e:
                     # Never mask an export exception from inside finally —
                     # the layer-delete fallback below still runs.
