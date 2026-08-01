@@ -2,4 +2,60 @@
 
 _Diff vs prior baseline. Generated 2026-08-01._
 
-No public API changes since last refresh.
+## Added (55)
+
+- `env_utils/scene_exporter/task_manager.py::TaskManager.apply_declared_takes(self)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_absolute_paths(self) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_duplicate_locator_names(self) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_duplicate_materials(self) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_floating_point_keys(self) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_framerate(self, target_framerate: Optional[str]) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_geometry_lod_suffix(self) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_hidden_geometry(self) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_hierarchy_vs_existing_fbx(self) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_mangled_names(self) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_objects_below_floor(self, tolerance: float = _DEFAULT_FLOOR_TOLERANCE) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_overlapping_duplicate_mesh(self) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_referenced_objects(self) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_root_default_transforms(self) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_texture_file_size(self, max_size_mb: Optional[float] = 16.0) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_untied_keyframes(self) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.check_valid_paths(self) -> tuple`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.conform_shape_names(self)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.convert_to_relative_paths(self)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.create_glb(self, fbx_path: Optional[str] = None, announce: bool = True)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.exclude_hdr(self) -> None`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.export_data_node(self)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.ignore_groups(self, names: str) -> None`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.optimize_keys(self)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.reassign_duplicate_materials(self)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.resolve_invalid_texture_paths(self)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.set_bake_animation_range(self)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.set_linear_unit(self, linear_unit)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.set_workspace(self, enable=True)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.smart_bake(self)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.snap_keys_to_frame(self)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.tie_all_keyframes(self)`
+- `env_utils/scene_exporter/task_manager.py::TaskManager.write_scene_data_sidecar(self) -> None`
+- `mat_utils/_mat_utils.py::MatUtils.get_texture_file_node(material, attr_name, _depth=0)`
+- `xform_utils/matrices.py::Matrices.bake_world_matrix_to_transform(node: str, m: Union['MMatrix', list], reset_offset_parent_matrix: bool = True) -> None`
+- `xform_utils/matrices.py::Matrices.build_aim_matrix(source: str, target: str, up_object: Optional[str] = None, primary_axis: Tuple[float, float, float] = (1.0, 0.0, 0.0), secondary_axis: Tuple[float, float, float] = (0.0, 1.0, 0.0), secondary_mode: str = 'align', name: str = 'aim_mx') -> str`
+- `xform_utils/matrices.py::Matrices.build_ikfk_blend(ik_mx_attr: str, fk_mx_attr: str, parent_inv_attr: str, out_target_ctl: str, switch_attr_owner: str, switch_attr: str = 'ikFk', name: str = 'ikfk_blend') -> str`
+- `xform_utils/matrices.py::Matrices.build_mult_matrix_chain(mats: List[str], name: str = 'mmx_chain') -> Tuple[str, str]`
+- `xform_utils/matrices.py::Matrices.build_space_switch(control: str, space_parents: List[str], attr_owner: Optional[str] = None, attr_name: str = 'space', name: str = 'space_switch') -> str`
+- `xform_utils/matrices.py::Matrices.decompose(m: 'MMatrix', rotate_order: str = 'xyz') -> Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[float, float, float]]`
+- `xform_utils/matrices.py::Matrices.drive_with_offset_parent_matrix(driver_world: str, driven_ctl: str, name: str = 'drive_opm') -> str`
+- `xform_utils/matrices.py::Matrices.ensure_node(node_type: str, name: Optional[str] = None) -> str`
+- `xform_utils/matrices.py::Matrices.extract_translation(m: 'MMatrix') -> Tuple[float, float, float]`
+- `xform_utils/matrices.py::Matrices.freeze_to_offset_parent_matrix(node: str) -> None`
+- `xform_utils/matrices.py::Matrices.from_srt(translate: Iterable[float] = (0.0, 0.0, 0.0), rotate_euler_deg: Iterable[float] = (0.0, 0.0, 0.0), scale: Iterable[float] = (1.0, 1.0, 1.0), rotate_order: str = 'xyz') -> 'MMatrix'`
+- `xform_utils/matrices.py::Matrices.identity() -> 'MMatrix'`
+- `xform_utils/matrices.py::Matrices.inverse(m: 'MMatrix') -> 'MMatrix'`
+- `xform_utils/matrices.py::Matrices.is_identity(m: 'MMatrix', tolerance: float = 1e-09) -> bool`
+- `xform_utils/matrices.py::Matrices.local_matrix(node: str) -> 'MMatrix'`
+- `xform_utils/matrices.py::Matrices.local_to_world(local_matrix: 'MMatrix', parent_world_matrix: 'MMatrix') -> 'MMatrix'`
+- `xform_utils/matrices.py::Matrices.mult(*mats: 'MMatrix') -> 'MMatrix'`
+- `xform_utils/matrices.py::Matrices.safe_inverse(m: 'MMatrix', tolerance: float = 1e-12) -> Optional['MMatrix']`
+- `xform_utils/matrices.py::Matrices.set_offset_parent_matrix(node: str, m: 'MMatrix') -> None`
+- `xform_utils/matrices.py::Matrices.to_mmatrix(matrix_like: Union[str, 'MMatrix', list]) -> 'MMatrix'`
+- `xform_utils/matrices.py::Matrices.world_to_local(world_matrix: 'MMatrix', parent_world_matrix: 'MMatrix') -> 'MMatrix'`

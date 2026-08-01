@@ -563,7 +563,7 @@ _Generated: 2026-08-01_
 
 ### `env_utils/scene_exporter/task_manager.py`
 - `class TaskManager(TaskFactory, _TaskActionsMixin, _TaskChecksMixin)`
-  - methods: objects, task_definitions, check_definitions, definitions
+  - methods: objects, task_definitions, check_definitions, definitions, set_workspace, set_linear_unit, conform_shape_names, convert_to_relative_paths, reassign_duplicate_materials, resolve_invalid_texture_paths, smart_bake, optimize_keys, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, create_glb, export_data_node, apply_declared_takes, check_geometry_lod_suffix, ignore_groups, exclude_hdr, check_root_default_transforms, check_absolute_paths, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_locator_names, check_duplicate_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_untied_keyframes, check_floating_point_keys, write_scene_data_sidecar, check_hierarchy_vs_existing_fbx
 
 ### `env_utils/script_output.py`
 - `class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog)`
@@ -614,7 +614,7 @@ _Generated: 2026-08-01_
 
 ### `mat_utils/_mat_utils.py`
 - `class MatUtils(_MatUtilsInternal)`
-  - methods: resolve_path, get_mats, group_objects_by_material, get_texture_paths, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, create_stingray_shader, find_by_mat_id, find_unassigned, collect_material_paths, remap_file_nodes, remap_texture_paths, stage_textures_relative, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials
+  - methods: resolve_path, get_mats, group_objects_by_material, get_texture_paths, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, create_stingray_shader, find_by_mat_id, find_unassigned, collect_material_paths, remap_file_nodes, remap_texture_paths, stage_textures_relative, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials, get_texture_file_node
 
 ### `mat_utils/arnold_bridge.py` — Arnold render-bridge management.
 - `class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal)`
@@ -998,7 +998,7 @@ _Generated: 2026-08-01_
 ### `xform_utils/matrices.py` — Matrix utilities for Maya rigging and animation.
 - `class MatricesError(RuntimeError)`
 - `class Matrices(_MatrixMath, _DagTransforms, _NodeBuilders, ptk.HelpMixin, _MatricesInternal)`
-  - methods: get_matrix, set_matrix
+  - methods: get_matrix, set_matrix, identity, to_mmatrix, local_matrix, from_srt, decompose, inverse, safe_inverse, mult, world_to_local, local_to_world, extract_translation, is_identity, set_offset_parent_matrix, bake_world_matrix_to_transform, freeze_to_offset_parent_matrix, ensure_node, build_mult_matrix_chain, drive_with_offset_parent_matrix, build_space_switch, build_aim_matrix, build_ikfk_blend
 
 ### `xform_utils/pivot_watcher.py` — Real-time pivot-change notifier built on :class:`ScriptJobManager`.
 - `class PivotWatcher(_PivotWatcherInternal)`
