@@ -226,8 +226,10 @@ class TestMayaConnectionMocked(unittest.TestCase):
         mock_socket.connect.side_effect = ConnectionRefusedError("Connection refused")
 
         conn = MayaConnection()
+        # launch=False: without it this test LAUNCHED A REAL MAYA — the
+        # default launch fallback is real when only sockets are mocked.
         result = conn.connect(
-            mode="port", force_new_instance=False, confirm_existing=False
+            mode="port", force_new_instance=False, confirm_existing=False, launch=False
         )
 
         self.assertFalse(result)
@@ -569,6 +571,306 @@ class TestMayaConnectionMocked(unittest.TestCase):
             # Must not raise — atexit handlers should swallow errors so the
             # interpreter can finish exiting cleanly.
             captured_handler[0]()
+
+
+class TestPortCollisionResilience(unittest.TestCase):
+    """Regression tests for WSAEADDRINUSE (10048) on launched-Maya command ports.
+
+    Root causes covered (all mock-only — no Maya session required):
+    1. The pre-launch port probe races Maya's slow boot: another process can
+       grab the port during the 15-60s window, so the startup MEL must
+       self-heal by scanning forward for a bindable port.
+    2. The runner's wait loop connect-probed the requested port blindly, so
+       when the port was stolen it "succeeded" against a STRANGER's Maya
+       (session-safety hazard). It must only accept a port owned by the PID
+       it launched.
+    3. The force_new_instance=False launch fallback reused a port the
+       connect just failed on without checking bindability (guaranteed 10048
+       when a zombie squats it bound-but-not-listening).
+    4. ensure_connection() killed ALL maya.exe processes (taskkill /IM) —
+       including the user's interactive session — violating the session
+       safety hard rule. It may only kill the PID it launched.
+    """
+
+    NETSTAT_ROWS = [(7002, 9999), (7003, 4242), (7050, 4242), (80, 5678)]
+
+    # ---- netstat inverse lookup -----------------------------------------
+
+    @patch.object(MayaConnection, "_iter_listening_tcp")
+    def test_get_port_from_pid_returns_lowest_owned_port(self, mock_rows):
+        mock_rows.return_value = self.NETSTAT_ROWS
+        self.assertEqual(MayaConnection.get_port_from_pid(4242), 7003)
+
+    @patch.object(MayaConnection, "_iter_listening_tcp")
+    def test_get_port_from_pid_respects_scan_range(self, mock_rows):
+        mock_rows.return_value = self.NETSTAT_ROWS
+        # 7050 is owned by 4242 but outside [7002, 7002 + span)
+        self.assertEqual(
+            MayaConnection.get_port_from_pid(4242, start_port=7002, span=10), 7003
+        )
+        self.assertIsNone(
+            MayaConnection.get_port_from_pid(4242, start_port=7010, span=10)
+        )
+
+    @patch.object(MayaConnection, "_iter_listening_tcp")
+    def test_get_port_from_pid_none_for_unknown_pid(self, mock_rows):
+        mock_rows.return_value = self.NETSTAT_ROWS
+        self.assertIsNone(MayaConnection.get_port_from_pid(1111))
+
+    def test_get_pid_from_port_still_parses_netstat(self):
+        """The shared netstat parse must keep get_pid_from_port working.
+
+        Listening rows are identified by the locale-independent foreign
+        address ``:0`` — the state token is localized on non-English
+        Windows (e.g. German ABHOEREN), so it must not be relied on.
+        An ESTABLISHED row for the same local port must not match.
+        """
+        with patch("subprocess.check_output") as mock_out:
+            mock_out.return_value = (
+                "  TCP    127.0.0.1:7003 127.0.0.1:52345   ESTABLISHED   7777\n"
+                "  TCP    0.0.0.0:7003   0.0.0.0:0   LISTENING   1234\n"
+                "  TCP    0.0.0.0:70031  0.0.0.0:0   LISTENING   9999\n"
+                "  TCP    [::]:7004      [::]:0      ABHOEREN    4321\n"
+            )
+            self.assertEqual(MayaConnection.get_pid_from_port(7003), 1234)
+            self.assertEqual(MayaConnection.get_pid_from_port(7004), 4321)
+
+    def test_find_port_pair_skips_bound_but_not_listening(self):
+        """Same zombie-blindness as get_available_port's 2026-07-09
+        regression, in the in-session pair scan: a bound-but-not-listening
+        squatter read as "free" by the connect probe, so
+        toggle_command_ports handed Maya a dead-on-arrival pair."""
+        import socket
+
+        squatter = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        squatter.bind(("127.0.0.1", 0))  # bound, deliberately NOT listening
+        squatted = squatter.getsockname()[1]
+        try:
+            mel_p, py_p = MayaConnection._find_port_pair(
+                mel_start=squatted, python_start=squatted + 1
+            )
+            self.assertNotEqual(mel_p, f":{squatted}")
+            self.assertNotEqual(py_p, f":{squatted + 1}")
+        finally:
+            squatter.close()
+
+    # ---- startup MEL self-heals a taken port ----------------------------
+
+    @patch("pythontk.AppLauncher")
+    def test_startup_command_scans_for_bindable_port(self, MockAppLauncher):
+        """The -command MEL must scan forward for a bindable port instead of
+        binding the requested port once and erroring (10048) if it's taken,
+        and must stamp the ACTUAL port into the window title."""
+        MockAppLauncher.launch.return_value = MagicMock(pid=4242)
+        MockAppLauncher.wait_for_ready.return_value = True
+
+        conn = MayaConnection()
+        conn._launch_maya_gui(port=7002)
+
+        args = MockAppLauncher.launch.call_args[1]["args"]
+        cmd = args[args.index("-command") + 1]
+
+        # A scan loop over [port, port + span), not a single fixed bind.
+        self.assertIn("for (", cmd)
+        self.assertIn(str(7002 + MayaConnection.PORT_SCAN_SPAN), cmd)
+        # Bind failures are caught (so the scan continues) …
+        self.assertIn("catch(`commandPort", cmd)
+        # … and the title reflects the port actually bound, not the request.
+        self.assertIn('"Maya [Port: " + $', cmd)
+        # The old fixed-title stamp must be gone (it lied after self-heal).
+        self.assertNotIn('"Maya [Port: 7002]"', cmd)
+
+    # ---- runner adopts only the port owned by the launched PID ----------
+
+    @staticmethod
+    def _wait_calls_check_fn(process, timeout=None, check_fn=None):
+        return check_fn(process)
+
+    @patch("pythontk.AppLauncher")
+    def test_launch_adopts_pid_owned_port(self, MockAppLauncher):
+        """When the requested port was stolen, the runner must discover the
+        self-healed port via PID ownership and return it."""
+        proc = MagicMock(pid=4242)
+        proc.poll.return_value = None
+        MockAppLauncher.launch.return_value = proc
+        MockAppLauncher.wait_for_ready.side_effect = self._wait_calls_check_fn
+
+        conn = MayaConnection()
+        with patch.object(
+            MayaConnection,
+            "_iter_listening_tcp",
+            return_value=[(7002, 9999), (7003, 4242)],
+        ):
+            actual = conn._launch_maya_gui(port=7002)
+
+        self.assertEqual(actual, 7003)
+
+    @patch("pythontk.AppLauncher")
+    def test_launch_never_adopts_foreign_port(self, MockAppLauncher):
+        """A port opened by a DIFFERENT process (e.g. the user's Maya) must
+        never satisfy the wait — the old connect-probe accepted it."""
+        proc = MagicMock(pid=4242)
+        proc.poll.return_value = None
+        MockAppLauncher.launch.return_value = proc
+        MockAppLauncher.wait_for_ready.side_effect = self._wait_calls_check_fn
+
+        conn = MayaConnection()
+        with patch.object(
+            MayaConnection,
+            "_iter_listening_tcp",
+            return_value=[(7002, 9999)],  # stranger owns the requested port
+        ):
+            actual = conn._launch_maya_gui(port=7002)
+
+        self.assertFalse(actual)
+
+    @patch("pythontk.AppLauncher")
+    def test_launch_prefers_title_stamped_port(self, MockAppLauncher):
+        """userSetup can open its own command ports in the launched session
+        (e.g. tentacle's mel/python pair), so lowest-PID-owned-port discovery
+        would adopt a MEL-source port and break python execution. The
+        window-title tag stamped by the startup MEL is authoritative."""
+        proc = MagicMock(pid=4242)
+        proc.poll.return_value = None
+        MockAppLauncher.launch.return_value = proc
+        MockAppLauncher.wait_for_ready.side_effect = self._wait_calls_check_fn
+        MockAppLauncher.get_window_titles.return_value = [
+            "untitled - Autodesk MAYA 2025.3: untitled [Port: 7004]"
+        ]
+
+        conn = MayaConnection()
+        with patch.object(
+            MayaConnection,
+            "_iter_listening_tcp",
+            return_value=[(7002, 4242), (7003, 4242), (7004, 4242)],
+        ):
+            actual = conn._launch_maya_gui(port=7002)
+
+        self.assertEqual(actual, 7004)
+
+    @patch("pythontk.AppLauncher")
+    def test_launch_waits_while_title_unstamped(self, MockAppLauncher):
+        """A window without the port tag means the startup MEL hasn't run
+        yet — the PID-owned netstat fallback must not fire early and adopt a
+        userSetup-opened port."""
+        proc = MagicMock(pid=4242)
+        proc.poll.return_value = None
+        MockAppLauncher.launch.return_value = proc
+        MockAppLauncher.wait_for_ready.side_effect = self._wait_calls_check_fn
+        MockAppLauncher.get_window_titles.return_value = [
+            "untitled - Autodesk MAYA 2025.3: untitled"
+        ]
+
+        conn = MayaConnection()
+        with patch.object(
+            MayaConnection,
+            "_iter_listening_tcp",
+            return_value=[(7002, 4242)],  # userSetup port, already open
+        ):
+            actual = conn._launch_maya_gui(port=7002)
+
+        self.assertFalse(actual)
+
+    @patch("pythontk.AppLauncher")
+    def test_launch_failed_title_reports_failure(self, MockAppLauncher):
+        """The FAILED title stamp (scan exhausted) must never be adopted."""
+        proc = MagicMock(pid=4242)
+        proc.poll.return_value = None
+        MockAppLauncher.launch.return_value = proc
+        MockAppLauncher.wait_for_ready.side_effect = self._wait_calls_check_fn
+        MockAppLauncher.get_window_titles.return_value = ["Maya [Port: FAILED]"]
+
+        conn = MayaConnection()
+        actual = conn._launch_maya_gui(port=7002)
+
+        self.assertFalse(actual)
+
+    @patch("pythontk.AppLauncher")
+    def test_launch_records_launched_pid(self, MockAppLauncher):
+        proc = MagicMock(pid=4242)
+        MockAppLauncher.launch.return_value = proc
+        MockAppLauncher.wait_for_ready.return_value = True
+
+        conn = MayaConnection()
+        conn._launch_maya_gui(port=7002)
+        self.assertEqual(conn._launched_pid, 4242)
+
+    # ---- connect() launch fallback re-picks an unbindable port ----------
+
+    def test_connect_launch_fallback_repicks_port_and_connects_to_actual(self):
+        conn = MayaConnection()
+
+        with (
+            patch.object(MayaConnection, "_is_port_free", return_value=True),
+            patch.object(
+                MayaConnection, "get_available_port", return_value=7007
+            ) as mock_avail,
+            patch.object(
+                MayaConnection, "_connect_via_port", side_effect=[False, True]
+            ) as mock_connect,
+            patch.object(
+                MayaConnection, "_launch_maya_gui", return_value=7007
+            ) as mock_launch,
+        ):
+            result = conn.connect(
+                mode="port",
+                port=7002,
+                force_new_instance=False,
+                confirm_existing=False,
+            )
+
+        self.assertTrue(result)
+        # The fallback must re-probe rather than launch on the dead port …
+        mock_avail.assert_called_with(start_port=7002)
+        self.assertEqual(mock_launch.call_args[0][0], 7007)
+        # … and the post-launch connect must target the ACTUAL port.
+        self.assertEqual(mock_connect.call_args_list[-1][0], ("localhost", 7007))
+
+    # ---- ensure_connection must not kill Mayas it didn't launch ---------
+
+    @patch("time.sleep")
+    @patch("subprocess.run")
+    @patch("pythontk.AppLauncher")
+    def test_ensure_connection_never_taskkills_all_mayas(
+        self, MockAppLauncher, mock_run, _sleep
+    ):
+        conn = MayaConnection()
+        conn.mode = "port"
+        conn.is_connected = True
+        conn.port = 7002
+
+        with (
+            patch.object(MayaConnection, "_port_alive", return_value=False),
+            patch.object(MayaConnection, "get_available_port", return_value=7002),
+            patch.object(MayaConnection, "_launch_maya_gui", return_value=7002),
+            patch.object(MayaConnection, "_connect_via_port", return_value=True),
+        ):
+            # No launched PID recorded → nothing may be killed.
+            conn.ensure_connection()
+            MockAppLauncher.close_process.assert_not_called()
+
+            # A recorded launched PID that is still a running Maya →
+            # exactly that PID is killed.
+            conn.is_connected = True
+            conn._launched_pid = 555
+            MockAppLauncher.get_running_processes.return_value = [555]
+            conn.ensure_connection()
+            MockAppLauncher.close_process.assert_called_once_with(555, force=True)
+            self.assertIsNone(conn._launched_pid)
+
+            # A recorded PID that is NO LONGER a Maya (process died and
+            # Windows recycled the PID) → must not be killed.
+            conn.is_connected = True
+            conn._launched_pid = 777
+            MockAppLauncher.get_running_processes.return_value = [555]
+            MockAppLauncher.close_process.reset_mock()
+            conn.ensure_connection()
+            MockAppLauncher.close_process.assert_not_called()
+            self.assertIsNone(conn._launched_pid)
+
+        # The indiscriminate `taskkill /F /IM maya.exe` must be gone.
+        for call in mock_run.call_args_list:
+            self.assertNotIn("taskkill", " ".join(map(str, call[0][0])))
 
 
 if __name__ == "__main__":

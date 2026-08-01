@@ -335,14 +335,15 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
             (often orphaned) intermediate shape, which Maya refuses to
             freeze past, stops mattering.
             """
-            # Keep the freeze/unfreeze contract intact: if the node has
-            # stored bake history, compose the about-to-be-frozen rotate/
-            # scale into it so a later restore returns the full values.
-            if XformUtils.has_stored_transforms(node):
+            if NodeUtils.get_instanced_shapes(node):
+                # freeze_instanced_group bakes without going through
+                # freeze_transforms, so it carries no store step of its own —
+                # stamp the bake history here to keep the freeze/unfreeze
+                # contract intact. (The freeze_transforms branch below stores
+                # on its own; storing here too would double-compose it.)
                 XformUtils.store_transforms(
                     node, accumulate=True, channels=("rotate", "scale")
                 )
-            if NodeUtils.get_instanced_shapes(node):
                 XformUtils.freeze_instanced_group(
                     node, translate=False, quiet=quiet
                 )

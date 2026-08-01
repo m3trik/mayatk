@@ -31,6 +31,12 @@ class MayaConnection:
     ConnectionMode = Literal["port", "standalone", "interactive"]
     _instance = None
     _open_command_ports: dict = {}  # {":7001": "mel", ":7002": "python"}
+    # Width of the port window a launched Maya may self-heal into when its
+    # requested port turns out to be taken at bind time (the pre-launch probe
+    # races Maya's slow boot). The startup MEL scans [port, port + SPAN) and
+    # the runner's wait loop accepts any port in that window owned by the
+    # launched PID.
+    PORT_SCAN_SPAN: int = 20
 
     @staticmethod
     def get_instance() -> "MayaConnection":
@@ -121,7 +127,13 @@ class MayaConnection:
 
     @staticmethod
     def _is_port_free(port_num: int) -> bool:
-        """Check whether a TCP port is free on localhost."""
+        """Connect-probe: True if nothing is LISTENING on localhost:port.
+
+        The right question when DETECTING an existing session to connect
+        to. When CHOOSING a port to open a listener on, use
+        :meth:`_tcp_port_bindable` instead — this probe reads a zombie's
+        bound-but-not-listening socket as free.
+        """
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             result = s.connect_ex(("localhost", port_num))
@@ -179,11 +191,36 @@ class MayaConnection:
                 )
                 return False
 
-    @staticmethod
+    @classmethod
+    def _tcp_port_bindable(cls, port: int) -> bool:
+        """Could a NEW listener bind this TCP port?
+
+        The right question when CHOOSING a port to open: a connect probe
+        (:meth:`_is_port_free`) reads a hung process's bound-but-not-
+        listening socket as free, and anything then launched on that port
+        can never open it (root cause of the 2026-07-09 launch hangs).
+        """
+        try:
+            from pythontk import NetUtils
+
+            return NetUtils.is_port_bindable(port)
+        except AttributeError:
+            # Published pythontk without is_port_bindable yet (wheel lag):
+            # fall back to the legacy connect probe. Fail OPEN — failing
+            # closed reads EVERY port as busy and kills port-mode use
+            # outright (worse than missing only the rare zombie-squatter
+            # case the bind probe exists for).
+            from pythontk import NetUtils
+
+            return not NetUtils.is_port_open("127.0.0.1", port)
+        except Exception:
+            return False
+
+    @classmethod
     def _find_port_pair(
-        mel_start: int = 7001, python_start: int = 7002, max_offset: int = 50
+        cls, mel_start: int = 7001, python_start: int = 7002, max_offset: int = 50
     ) -> tuple:
-        """Find two free consecutive ports starting from the given defaults.
+        """Find two bindable consecutive ports starting from the given defaults.
 
         Returns:
             tuple: (mel_port_str, python_port_str) e.g. (':7001', ':7002').
@@ -192,18 +229,14 @@ class MayaConnection:
             RuntimeError: If no pair of free ports can be found.
         """
         # First, try the exact requested pair
-        if MayaConnection._is_port_free(mel_start) and MayaConnection._is_port_free(
-            python_start
-        ):
+        if cls._tcp_port_bindable(mel_start) and cls._tcp_port_bindable(python_start):
             return (f":{mel_start}", f":{python_start}")
 
         # Fall back: search from mel_start upward in steps of 2
         for offset in range(2, max_offset * 2, 2):
             mel_p = mel_start + offset
             py_p = mel_p + 1
-            if MayaConnection._is_port_free(mel_p) and MayaConnection._is_port_free(
-                py_p
-            ):
+            if cls._tcp_port_bindable(mel_p) and cls._tcp_port_bindable(py_p):
                 return (f":{mel_p}", f":{py_p}")
 
         raise RuntimeError(
@@ -385,6 +418,9 @@ class MayaConnection:
         # Port-mode target. IMPORTANT: _execute_via_port must use these.
         self.host: str = "localhost"
         self.port: int = 7002
+        # PID of the Maya instance THIS connection launched (None if we only
+        # ever attached). Session safety: it is the only PID we may kill.
+        self._launched_pid: Optional[int] = None
 
     def connect(
         self,
@@ -413,7 +449,11 @@ class MayaConnection:
         Parameters:
             mode: Connection mode - "port", "standalone", "interactive", or "auto"
             port: Port number for command port connection (default: 7002).
-                  If force_new_instance is True, this acts as the starting port to scan from.
+                  When a launch happens this is a STARTING port, not a
+                  guarantee: the launch fallback re-picks a bindable port,
+                  and the launched Maya may self-heal to a nearby port if
+                  its requested port is taken at bind time. The port
+                  actually connected to is stored on ``self.port``.
             host: Hostname for command port connection (default: "localhost")
             launch: If True, attempts to launch Maya GUI with the command port open if connection fails.
             app_path: Optional path to the Maya executable to use when launching.
@@ -466,11 +506,26 @@ class MayaConnection:
         if mode == "port":
             connected = self._connect_via_port(host, port)
             if not connected and launch:
+                # Re-probe just before launching: in the reuse path the port
+                # was never bind-checked (a zombie can hold it bound-but-not-
+                # listening — the connect probe above reads that as "free"),
+                # and in the force-new path it may have been taken since the
+                # initial scan. Launching on an unbindable port guarantees a
+                # 10048 in the new Maya.
+                launch_port = self.get_available_port(start_port=port)
+                if launch_port != port:
+                    print(
+                        f"[MayaConnection] Port {port} is not bindable — "
+                        f"launching on {launch_port} instead."
+                    )
                 print(
-                    f"[MayaConnection] Connection failed. Launching Maya on port {port}..."
+                    f"[MayaConnection] Connection failed. Launching Maya on port {launch_port}..."
                 )
-                if self._launch_maya_gui(port, app_path, extra_args=launch_args):
-                    connected = self._connect_via_port(host, port)
+                actual = self._launch_maya_gui(
+                    launch_port, app_path, extra_args=launch_args
+                )
+                if actual:
+                    connected = self._connect_via_port(host, actual)
             if connected and auto_cleanup:
                 self._register_atexit_cleanup()
             return connected
@@ -515,19 +570,45 @@ class MayaConnection:
         port: int,
         app_path: Optional[str] = None,
         extra_args: Optional[List[str]] = None,
-    ) -> bool:
-        """Launch Maya GUI with command port enabled."""
+    ) -> Optional[int]:
+        """Launch Maya GUI with command port enabled.
+
+        Returns:
+            The port the launched Maya actually opened (it may self-heal to a
+            nearby port if the requested one was taken at bind time), or
+            ``None`` on failure. Truthiness matches the old bool contract.
+        """
         from pythontk import AppLauncher
 
-        # Command to open port on startup and configure UI
-        # 1. Open TCP port for external connection (check if not already open to avoid "Name in use" error)
-        # 2. Open unique named pipe (mayatk_PORT). Use catch to ignore OS-level pipe collisions (zombie pipes).
-        # 3. Update Window Title to identify this instance
-        # Note: Using braces in MEL statements to ensure valid syntax for nested ifs.
+        scan_end = port + self.PORT_SCAN_SPAN
+
+        # The pre-launch port probe races Maya's slow boot: another process
+        # can grab the port during the 15-60s startup window, and a fixed
+        # bind then died with WSAEADDRINUSE (10048). Instead the startup
+        # command scans [port, scan_end) for the first port that binds a
+        # fresh PYTHON-source port (a bind failure — taken by another process
+        # OR by a name userSetup already opened in this session — just
+        # advances the scan), then opens the matching named pipe and stamps
+        # the ACTUAL port into the window title. The title is stamped in both
+        # branches, so a bind failure no longer aborts the title stamp and
+        # leaves an anonymous Maya window; it is also the runner's
+        # authoritative discovery channel (see check_port_open below).
         startup_cmds = [
-            f'if (!`commandPort -q -name ":{port}"`) commandPort -name ":{port}" -sourceType "python"',
-            f'if (!`commandPort -q -name "mayatk_{port}"`) {{ if (catch(`commandPort -name "mayatk_{port}" -sourceType "python"`)) {{ }} }}',
-            f'window -e -title "Maya [Port: {port}]" $gMainWindow',
+            "int $mtkPort",
+            "int $mtkOpen = 0",
+            (
+                f"for ($mtkPort = {port}; $mtkPort < {scan_end}; $mtkPort++) {{ "
+                'if (!catch(`commandPort -name (":" + $mtkPort) -sourceType "python"`)) { $mtkOpen = 1; break; } '
+                "}"
+            ),
+            (
+                "if ($mtkOpen) { "
+                'catch(`commandPort -name ("mayatk_" + $mtkPort) -sourceType "python"`); '
+                'window -e -title ("Maya [Port: " + $mtkPort + "]") $gMainWindow; '
+                "} else { "
+                'window -e -title "Maya [Port: FAILED]" $gMainWindow; '
+                "}"
+            ),
         ]
         startup_cmd = ";".join(startup_cmds)
 
@@ -557,23 +638,75 @@ class MayaConnection:
 
         if not process:
             print("[MayaConnection] Failed to launch Maya executable.")
-            return False
+            return None
 
+        self._launched_pid = process.pid
         print(
-            f"[MayaConnection] Maya launched (PID: {process.pid}). Waiting for Command Port {port} to open..."
+            f"[MayaConnection] Maya launched (PID: {process.pid}). "
+            f"Waiting for a Command Port in {port}-{scan_end - 1} to open..."
         )
 
+        import re
+
+        discovered = {"port": None}
+        port_tag = re.compile(r"\[Port: (\d+)\]")
+
         def check_port_open(proc):
-            """Callback to check if command port is listening."""
+            """True once OUR launched Maya's python command port is open.
+
+            A bare connect probe on the requested port is not enough: if
+            another process stole the port, the probe "succeeds" against a
+            stranger's Maya — possibly the user's interactive session.
+
+            1. Authoritative: the window-title tag the startup MEL stamps
+               with the port it actually bound. PID-owned netstat rows alone
+               can't disambiguate — userSetup may open its own command ports
+               (e.g. tentacle's mel/python pair) in the same window, and
+               adopting a mel-source port would break python execution.
+            2. If no window info is available (mocked runs / probe edge
+               cases): accept a scan-window port owned by the launched PID.
+            3. If netstat itself is unavailable: legacy connect probe on the
+               requested port only.
+            """
+            titles = []
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(0.5)
-                # socket.connect_ex returns 0 on success
-                result = sock.connect_ex(("localhost", port))
-                sock.close()
-                return result == 0
+                titles = list(AppLauncher.get_window_titles(proc.pid) or [])
             except Exception:
-                return False
+                titles = []
+            if titles:
+                for t in titles:
+                    if "[Port: FAILED]" in t:
+                        return False  # scan exhausted — timeout reports it
+                    match = port_tag.search(t)
+                    if match and port <= int(match.group(1)) < scan_end:
+                        discovered["port"] = int(match.group(1))
+                        return True
+                return False  # window is up, stamp not applied yet — wait
+
+            try:
+                # via self, not the class name: the in-session test harness
+                # reloads this module, and a hard MayaConnection reference
+                # would resolve to the reloaded class, escaping test patches.
+                rows = self._iter_listening_tcp()
+            except Exception:
+                # netstat unavailable — legacy connect probe. Identity can't
+                # be verified, so only the requested port is accepted.
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(0.5)
+                    ok = sock.connect_ex(("localhost", port)) == 0
+                    sock.close()
+                except Exception:
+                    return False
+                if ok:
+                    discovered["port"] = port
+                return ok
+
+            for p, owner in rows:
+                if owner == proc.pid and port <= p < scan_end:
+                    discovered["port"] = p
+                    return True
+            return False
 
         # Wait for port to be actually listening. Maya takes a while to load
         # (UI + UserSetup + plugin autoload); a cold start on a laptop can
@@ -587,8 +720,14 @@ class MayaConnection:
         if AppLauncher.wait_for_ready(
             process, timeout=port_timeout, check_fn=check_port_open
         ):
-            print("[MayaConnection] Maya Command Port is ready.")
-            return True
+            actual = discovered["port"] or port
+            if actual != port:
+                print(
+                    f"[MayaConnection] Requested port {port} was taken — "
+                    f"Maya self-healed to port {actual}."
+                )
+            print(f"[MayaConnection] Maya Command Port {actual} is ready.")
+            return actual
 
         # If we got here, we timed out or process died
         if process.poll() is not None:
@@ -598,38 +737,77 @@ class MayaConnection:
         else:
             print("[MayaConnection] Timeout waiting for Maya Command Port.")
 
-        return False
+        return None
 
     @staticmethod
-    def get_pid_from_port(port: int) -> Optional[int]:
-        """
-        Find the process ID (PID) listening on the given TCP port.
-        Works on Windows using netstat.
+    def _iter_listening_tcp() -> List[tuple]:
+        """Return ``[(local_port, pid), ...]`` for every LISTENING TCP socket
+        (Windows ``netstat -ano`` parse; handles IPv4 and IPv6 rows).
+
+        Raises on netstat failure so callers can distinguish "netstat is
+        unavailable" from "no matching socket" and choose their fallback.
         """
         import subprocess
         import re
 
-        try:
-            # Run netstat -ano to get all connections and PIDs
-            output = subprocess.check_output(
-                ["netstat", "-ano"], universal_newlines=True
-            )
-            # Look for: TCP    0.0.0.0:PORT    ...    LISTENING    PID
-            # Use strict regex to avoid partial matches (e.g. 7002 matches 70021)
-            # Regex: TCP \s+ IP:PORT \s+ ... \s+ PID
-            pattern = re.compile(
-                r"TCP\s+(?:\d{1,3}\.){3}\d{1,3}:" + str(port) + r"\s+.*\s+(\d+)\s*$"
-            )
+        output = subprocess.check_output(["netstat", "-ano"], universal_newlines=True)
+        # e.g. "  TCP    0.0.0.0:7002    0.0.0.0:0    LISTENING    1234"
+        # Listening rows are identified by the foreign address ":0" — the
+        # state token is LOCALIZED on non-English Windows (e.g. German
+        # "ABHÖREN"), so it must not be matched literally. Anchoring on the
+        # LOCAL address field means an ESTABLISHED row (foreign port != 0)
+        # never matches.
+        pattern = re.compile(r"^\s*TCP\s+\S+:(\d+)\s+\S+:0\s+\S+\s+(\d+)\s*$")
+        rows = []
+        for line in output.splitlines():
+            match = pattern.match(line)
+            if match:
+                rows.append((int(match.group(1)), int(match.group(2))))
+        return rows
 
-            for line in output.splitlines():
-                if f":{port}" in line:
-                    match = pattern.search(line.strip())
-                    if match:
-                        return int(match.group(1))
+    @classmethod
+    def get_pid_from_port(cls, port: int) -> Optional[int]:
+        """
+        Find the process ID (PID) listening on the given TCP port.
+        Works on Windows using netstat.
+        """
+        try:
+            for p, pid in cls._iter_listening_tcp():
+                if p == int(port):
+                    return pid
         except Exception as e:
             print(f"[MayaConnection] Failed to resolve PID from port {port}: {e}")
 
         return None
+
+    @classmethod
+    def get_port_from_pid(
+        cls, pid: int, start_port: Optional[int] = None, span: Optional[int] = None
+    ) -> Optional[int]:
+        """Find a TCP port the given PID is LISTENING on (inverse of
+        :meth:`get_pid_from_port`). Used to discover which port a launched
+        Maya actually bound after its startup MEL self-healed a collision.
+
+        Parameters:
+            pid: Process ID to look up.
+            start_port: If given, only ports in ``[start_port, start_port +
+                span)`` are considered.
+            span: Window width (defaults to :attr:`PORT_SCAN_SPAN`).
+
+        Returns:
+            The lowest matching port, or None.
+        """
+        try:
+            rows = cls._iter_listening_tcp()
+        except Exception as e:
+            print(f"[MayaConnection] Failed to resolve port from PID {pid}: {e}")
+            return None
+
+        matches = [p for p, owner in rows if owner == int(pid)]
+        if start_port is not None:
+            end = start_port + (span or cls.PORT_SCAN_SPAN)
+            matches = [p for p in matches if start_port <= p < end]
+        return min(matches) if matches else None
 
     @staticmethod
     def close_instance(
@@ -667,8 +845,8 @@ class MayaConnection:
 
         return False
 
-    @staticmethod
-    def get_available_port(start_port: int = 7002, max_check: int = 100) -> int:
+    @classmethod
+    def get_available_port(cls, start_port: int = 7002, max_check: int = 100) -> int:
         """
         Find an available port starting from start_port.
         Checks both the TCP port and the potential named pipe 'mayatk_{port}'.
@@ -678,28 +856,9 @@ class MayaConnection:
         import os
 
         for port in range(start_port, start_port + max_check):
-            # 1. Check TCP Port: try to BIND it, not connect to it. A hung
-            #    (zombie) Maya can hold a bound-but-not-listening socket that a
-            #    connect probe reads as "free", yet the new Maya's commandPort
-            #    still fails to bind — the runner then waits on a port that can
-            #    never open (root cause of the 2026-07-09 launch hangs: one
-            #    zombie squatted 7002 across three consecutive launches). If
-            #    this bind succeeds, a new Maya can bind it too.
-            try:
-                from pythontk import NetUtils
-
-                is_tcp_free = NetUtils.is_port_bindable(port)
-            except AttributeError:
-                # Published pythontk without is_port_bindable yet (wheel
-                # lag): fall back to the legacy connect probe. Fail OPEN —
-                # failing closed here reads EVERY port as busy and kills
-                # port-mode launching outright (worse than missing only the
-                # rare zombie-squatter case the bind probe exists for).
-                is_tcp_free = not NetUtils.is_port_open("127.0.0.1", port)
-            except Exception:
-                is_tcp_free = False
-
-            if not is_tcp_free:
+            # 1. TCP port — bind-probe, not connect-probe (see
+            #    _tcp_port_bindable for why).
+            if not cls._tcp_port_bindable(port):
                 continue
 
             # 2. Check Named Pipe (Windows)
@@ -806,24 +965,39 @@ class MayaConnection:
         if not launch:
             return False
 
-        # Kill stale Maya process if one exists so we get a clean launch
-        import subprocess
-
-        try:
-            subprocess.run(
-                ["taskkill", "/F", "/IM", "maya.exe"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+        # Close the stale instance so the relaunch is clean — but ONLY the
+        # Maya THIS connection launched. Session safety hard rule: never
+        # kill Maya processes we did not launch (the previous
+        # `taskkill /F /IM maya.exe` nuked the user's interactive session
+        # along with the stale one). Guard against PID reuse too: if our
+        # Maya died long ago, Windows may have recycled the PID onto an
+        # unrelated process — kill only if it is still a running Maya.
+        if self._launched_pid:
             import time
 
-            time.sleep(2)
-        except Exception:
-            pass
+            from pythontk import AppLauncher
 
-        print(f"[MayaConnection] Relaunching Maya on port {self.port}...")
-        if self._launch_maya_gui(self.port, app_path, extra_args=launch_args):
-            return self._connect_via_port(self.host, self.port)
+            try:
+                still_maya = self._launched_pid in AppLauncher.get_running_processes(
+                    "maya"
+                )
+            except Exception:
+                still_maya = False
+            if still_maya:
+                try:
+                    AppLauncher.close_process(self._launched_pid, force=True)
+                    time.sleep(2)
+                except Exception:
+                    pass
+            self._launched_pid = None
+
+        # Re-probe: the dead port may be squatted (zombie / stranger), in
+        # which case relaunching on it guarantees another failure.
+        launch_port = self.get_available_port(start_port=self.port)
+        print(f"[MayaConnection] Relaunching Maya on port {launch_port}...")
+        actual = self._launch_maya_gui(launch_port, app_path, extra_args=launch_args)
+        if actual:
+            return self._connect_via_port(self.host, actual)
         return False
 
     def _connect_standalone(self) -> bool:
@@ -1195,6 +1369,9 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
                 self.close_instance(port=self.port, force=force)
             except Exception as e:
                 print(f"[MayaConnection] Error closing Maya instance: {e}")
+            # The instance is gone (or unfindable) — drop the PID so a later
+            # ensure_connection can't act on a recycled PID.
+            self._launched_pid = None
 
         elif mode == "standalone":
             try:

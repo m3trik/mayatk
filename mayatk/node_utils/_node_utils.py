@@ -1308,7 +1308,9 @@ class NodeUtils(ptk.HelpMixin):
             # replace_with_instances).
             from mayatk import XformUtils
 
-            XformUtils.freeze_transforms(results, scale=True, force=True)
+            # store=False: uninstance already rewrote the DAG, so a bake
+            # history pointing back at the instanced state is meaningless.
+            XformUtils.freeze_transforms(results, scale=True, force=True, store=False)
 
         return results
 

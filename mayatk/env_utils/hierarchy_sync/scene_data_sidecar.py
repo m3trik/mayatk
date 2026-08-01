@@ -37,6 +37,7 @@ current name.
 """
 import hashlib
 import json
+import logging
 import os
 import re
 from typing import Optional, Set, Tuple
@@ -148,6 +149,25 @@ class SceneDataSidecar:
         _, _, name = max(matches, key=lambda t: (t[0], t[1]))
         return os.path.join(directory, name)
 
+    @staticmethod
+    def _safe_replace(src: str, dst: str) -> bool:
+        """``os.replace`` that survives transient locks (cloud-sync, AV scans).
+
+        A failed sidecar rename must never abort the export that triggered
+        the migration — a locked file here used to propagate up and mislabel
+        a *successful* FBX write as "Failed to export objects".  The caller
+        keeps working with whichever file still exists; returns True when
+        the rename actually happened.
+        """
+        try:
+            os.replace(src, dst)
+            return True
+        except OSError as e:
+            logging.getLogger(__name__).warning(
+                "Sidecar rename failed (%s -> %s): %s", src, dst, e
+            )
+            return False
+
     @classmethod
     def _promote_stem(cls, export_path: str, *, base_stem: bool) -> Optional[str]:
         """Rename a same-stem v1-named manifest (and its ``.prev``) to the
@@ -157,14 +177,14 @@ class SceneDataSidecar:
         new_path = cls.manifest_path_for(export_path, base_stem=base_stem)
         old_path = cls._legacy_manifest_path_for(export_path, base_stem=base_stem)
         if not os.path.exists(new_path) and os.path.exists(old_path):
-            os.replace(old_path, new_path)
+            cls._safe_replace(old_path, new_path)
         # Carry the .prev backup too — even when orphaned (manifest deleted,
         # backup intact): compare() falls back to .prev, and that protection
         # must survive the name migration.
         if os.path.exists(old_path + ".prev") and not os.path.exists(
             new_path + ".prev"
         ):
-            os.replace(old_path + ".prev", new_path + ".prev")
+            cls._safe_replace(old_path + ".prev", new_path + ".prev")
         return new_path if os.path.exists(new_path) else None
 
     @classmethod
@@ -186,9 +206,13 @@ class SceneDataSidecar:
         if not legacy:
             return None
         new_path = cls.manifest_path_for(export_path, base_stem=True)
-        os.replace(legacy, new_path)
+        if not cls._safe_replace(legacy, new_path):
+            # Locked mid-migration — behave as if the legacy manifest wasn't
+            # found (the check reports "no manifest" and a fresh one is
+            # written after export) rather than raising into the exporter.
+            return None
         if os.path.exists(legacy + ".prev"):
-            os.replace(legacy + ".prev", new_path + ".prev")
+            cls._safe_replace(legacy + ".prev", new_path + ".prev")
         return new_path
 
     @classmethod
@@ -432,6 +456,12 @@ class SceneDataSidecar:
             os.replace(tmp_path, manifest_path)
             return manifest_path
         except OSError:
+            # Don't leave the orphaned .tmp behind — it would sit next to
+            # the deliverable forever (nothing else ever cleans it up).
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
             return None
 
     @classmethod

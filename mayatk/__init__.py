@@ -45,6 +45,15 @@ DEFAULT_INCLUDE = {
     "anim_utils.shots.shot_sequencer._shot_sequencer": ["ShotSequencer", "ShotBlock"],
     "anim_utils.shots._shots": "ShotStore",
     "anim_utils.blendshape_animator._blendshape_animator": "BlendshapeAnimator",
+    # Playblast exporter engine + its result records. Class-only (no "*"): the
+    # co-located ``PlayblastExporterSlots`` panel is name-discovered by
+    # MayaUiHandler, like the other tool panels.
+    "anim_utils.playblast_exporter": [
+        "PlayblastExporter",
+        "ExportTarget",
+        "CaptureResult",
+        "ExportResult",
+    ],
     # Attribute utils
     "node_utils.attributes._attributes": ["Attributes"],
     "audio_utils.audio_clips._audio_clips": "AudioClips",
@@ -112,7 +121,12 @@ DEFAULT_INCLUDE = {
     "env_utils.workspace_map": "WorkspaceMap",
     "env_utils.namespace_sandbox": "NamespaceSandbox",
     "env_utils.reference_manager": "ReferenceManager",
-    "env_utils.script_output": "ScriptOutput",
+    # ``ScriptConsole`` is the class this module DEFINES; the previous
+    # "ScriptOutput" entry named uitk's widget, which the module merely imports
+    # — so ``mtk.ScriptOutput`` resolved to a uitk class leaking through this
+    # namespace while ``mtk.ScriptConsole`` (what the editors slot calls) did
+    # not resolve at all. Mirrors blendertk's ``env_utils.script_output`` entry.
+    "env_utils.script_output": "ScriptConsole",
     "env_utils.hierarchy_sync._hierarchy_sync": [
         "HierarchySync",
         "ObjectSwapper",

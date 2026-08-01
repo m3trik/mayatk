@@ -147,7 +147,9 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
     @staticmethod
     def _safe_freeze(node: str) -> None:
         try:
-            XformUtils.freeze_transforms(node, t=True, r=True, s=True)
+            # store=False: a control is frozen while it is being built, so
+            # there is no pre-freeze state worth making restorable.
+            XformUtils.freeze_transforms(node, t=True, r=True, s=True, store=False)
         except Exception:
             try:
                 cmds.makeIdentity(node, apply=True, t=True, r=True, s=True, pn=True)

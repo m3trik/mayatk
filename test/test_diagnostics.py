@@ -412,11 +412,15 @@ class TestTransformDiagnosticsConnections(MayaTkTestCase):
         )
 
     def test_store_restore_contract_survives_the_fix(self):
-        """A stored-then-frozen object later fixed still restores fully."""
+        """A frozen object later fixed still restores fully.
+
+        ``freeze_transforms`` stamps the bake history itself (store=True by
+        default), so the panel flow no longer calls ``store_transforms``
+        alongside it — doing both would double-compose the history.
+        """
         cube = cmds.polyCube(name="tdc_store")[0]
         cmds.setAttr(f"{cube}.rotateZ", 25.0)
         cmds.xform(cube, shear=(0.4, 0.0, 0.0))
-        XformUtils.store_transforms(cube, accumulate=True)
         XformUtils.freeze_transforms(cube, force=True)
         # New shear + rotation for the fix to bake.
         cmds.xform(cube, shear=(0.3, 0.0, 0.0))

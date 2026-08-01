@@ -287,3 +287,106 @@ class TestMatUtilsExtended(MayaTkTestCase):
         cmds.setAttr(f"{normal_file}.colorSpace", "sRGB", type="string")
         result = MatUtils.validate_normal_map_setup(normal_file, mat)
         self.assertTrue(any("Color space" in w for w in result["warnings"]))
+
+
+class TestDuplicateMaterialVerification(MayaTkTestCase):
+    """Two-phase duplicate detection: the fingerprint groups candidates, the
+    verification pass rejects near-misses before the destructive merge.
+
+    Added: 2026-08-01 (scene-exporter robustness audit) — these are the two
+    false-positive axes the fingerprint does not track: texture path/content
+    identity and place2d placement.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.temp_dir = os.path.join(os.environ["TEMP"], "mayatk_dupverify_textures")
+        os.makedirs(self.temp_dir, exist_ok=True)
+
+    def tearDown(self):
+        super().tearDown()
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def _write(self, rel_path, content):
+        path = os.path.join(self.temp_dir, rel_path).replace("\\", "/")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
+        return path
+
+    def _mat(self, name, texture_path):
+        mat = cmds.shadingNode("lambert", asShader=True, name=name)
+        file_node = cmds.shadingNode("file", asTexture=True, name=f"{name}_file")
+        cmds.setAttr(f"{file_node}.fileTextureName", texture_path, type="string")
+        cmds.connectAttr(f"{file_node}.outColor", f"{mat}.color")
+        return mat, file_node
+
+    @staticmethod
+    def _grouped_together(duplicates, a, b):
+        for original, dups in duplicates.items():
+            combined = [str(original)] + [str(d) for d in dups]
+            if str(a) in combined and str(b) in combined:
+                return True
+        return False
+
+    def test_same_basename_different_content_not_duplicate(self):
+        """brick/albedo.jpg vs wood/albedo.jpg (different pixels) must NOT
+        merge — the loose fingerprint's headline false positive."""
+        tex_a = self._write("brick/albedo.jpg", "brick pixels")
+        tex_b = self._write("wood/albedo.jpg", "completely different wood pixels")
+        mat_a, _ = self._mat("dupvA", tex_a)
+        mat_b, _ = self._mat("dupvB", tex_b)
+
+        duplicates = MatUtils.find_materials_with_duplicate_textures([mat_a, mat_b])
+        self.assertFalse(self._grouped_together(duplicates, mat_a, mat_b))
+
+    def test_same_content_different_folders_is_duplicate(self):
+        """Byte-identical copies in different folders ARE duplicates — the
+        consolidation case the loose basename matching existed for."""
+        tex_a = self._write("ext/albedo.jpg", "identical pixel payload")
+        tex_b = self._write("proj/albedo.jpg", "identical pixel payload")
+        mat_a, _ = self._mat("dupvC", tex_a)
+        mat_b, _ = self._mat("dupvD", tex_b)
+
+        duplicates = MatUtils.find_materials_with_duplicate_textures([mat_a, mat_b])
+        self.assertTrue(self._grouped_together(duplicates, mat_a, mat_b))
+
+    def test_same_texture_different_tiling_not_duplicate(self):
+        """One shared atlas, two place2d tilings — visually different
+        materials, must NOT merge."""
+        tex = self._write("shared/atlas.jpg", "atlas payload")
+        mat_a, file_a = self._mat("dupvE", tex)
+        mat_b, file_b = self._mat("dupvF", tex)
+        for fn, repeat in ((file_a, 1.0), (file_b, 10.0)):
+            p2d = cmds.shadingNode("place2dTexture", asUtility=True)
+            cmds.connectAttr(f"{p2d}.outUV", f"{fn}.uvCoord")
+            cmds.setAttr(f"{p2d}.repeatU", repeat)
+
+        duplicates = MatUtils.find_materials_with_duplicate_textures([mat_a, mat_b])
+        self.assertFalse(self._grouped_together(duplicates, mat_a, mat_b))
+
+    def test_different_scalar_attr_not_duplicate(self):
+        """Same texture but a differing unconnected scalar (diffuse weight)
+        must NOT merge."""
+        tex = self._write("shared/detail.jpg", "detail payload")
+        mat_a, _ = self._mat("dupvG", tex)
+        mat_b, _ = self._mat("dupvH", tex)
+        cmds.setAttr(f"{mat_b}.diffuse", 0.2)  # default is 0.8
+
+        duplicates = MatUtils.find_materials_with_duplicate_textures([mat_a, mat_b])
+        self.assertFalse(self._grouped_together(duplicates, mat_a, mat_b))
+
+    def test_verify_false_restores_loose_candidates(self):
+        """verify=False documents the escape hatch: the same different-content
+        basename pair IS grouped loose — proving the verify gate is what
+        protects the destructive merge."""
+        tex_a = self._write("brick/albedo.jpg", "brick pixels")
+        tex_b = self._write("wood/albedo.jpg", "completely different wood pixels")
+        mat_a, _ = self._mat("dupvI", tex_a)
+        mat_b, _ = self._mat("dupvJ", tex_b)
+
+        loose = MatUtils.find_materials_with_duplicate_textures(
+            [mat_a, mat_b], verify=False
+        )
+        self.assertTrue(self._grouped_together(loose, mat_a, mat_b))

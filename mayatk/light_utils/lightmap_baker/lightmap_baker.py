@@ -1051,6 +1051,17 @@ class LightmapBaker(ptk.LoggingMixin):
                     e,
                 )
 
+    @classmethod
+    def refresh_export_metadata(cls) -> Optional[str]:
+        """Rebuild the ``lightmap_metadata`` export channel from the scene's markers.
+
+        The no-arg producer entry point (``FbxUtils._KNOWN_PRODUCERS``): the
+        manifest is regenerated purely from the per-shape
+        :attr:`LIGHTMAP_INFO_ATTR` markers, so bake settings are irrelevant —
+        a default-configured instance is just a namespace here.
+        """
+        return cls()._publish_lightmap_metadata()
+
     def _publish_lightmap_metadata(self) -> Optional[str]:
         """(Re)build the lightmap manifest on the shared ``data_export`` carrier.
 

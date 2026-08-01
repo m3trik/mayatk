@@ -274,6 +274,106 @@ class TestNaming(MayaTkTestCase):
         )
         self.assertEqual(_name(u), "CleanName_GEO")
 
+    # ------------------------------------------------------------------
+    # rename: strip-residue collapse
+    # ------------------------------------------------------------------
+
+    def test_rename_strip_collapses_underscore_residue(self):
+        """Stripping a token collapses the leftover separator runs.
+
+        Regression: stripping accumulated '__uninst_tmp' scratch tokens
+        (VDATS_module.ma) left runs of orphaned underscores behind
+        ('vdat__uninst_tmp__uninst_tmpShape702' -> 'vdat____Shape702').
+        """
+        cube = cmds.polyCube(n="vdat__uninst_tmp__uninst_tmpShape702")[0]
+        u = _uuid(cube)
+        Naming.rename([cube], "", "*uninst_tmp*")
+        self.assertEqual(_name(u), "vdat_Shape702")
+
+    def test_rename_strip_trailing_residue(self):
+        """Stripping a trailing token leaves no orphaned trailing underscores."""
+        cube = cmds.polyCube(n="Crate__RZTMP")[0]
+        u = _uuid(cube)
+        Naming.rename([cube], "", "*RZTMP*")
+        self.assertEqual(_name(u), "Crate")
+
+    def test_rename_explicit_double_underscore_preserved(self):
+        """An explicit '__' in the requested name is honored, not collapsed."""
+        cube = cmds.polyCube(n="PlainCube")[0]
+        u = _uuid(cube)
+        Naming.rename([cube], "foo__bar")
+        self.assertEqual(_name(u), "foo__bar")
+
+    def test_rename_collapse_padding_off_preserves_residue(self):
+        """collapse_padding=False keeps every underscore run untouched."""
+        cube = cmds.polyCube(n="vdat__uninst_tmpShape7")[0]
+        u = _uuid(cube)
+        Naming.rename([cube], "", "*uninst_tmp*", collapse_padding=False)
+        self.assertEqual(_name(u), "vdat__Shape7")
+
+
+class TestConformShapeNames(MayaTkTestCase):
+    """Tests for Naming.conform_shape_names."""
+
+    def test_conform_mangled_shape(self):
+        """A mangled shape is renamed to '<transform>Shape'."""
+        cube = cmds.polyCube(n="vdat1")[0]
+        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+        cmds.rename(shape, "vdatShape1__uninst_tmpShape380")
+        pairs = Naming.conform_shape_names([cube])
+        self.assertEqual(len(pairs), 1)
+        leaf = cmds.listRelatives(cube, shapes=True)[0].split("|")[-1]
+        self.assertEqual(leaf, "vdatShape1")
+
+    def test_conform_skips_already_conforming(self):
+        """A conventionally named shape is left untouched."""
+        cube = cmds.polyCube(n="Crate")[0]
+        pairs = Naming.conform_shape_names([cube])
+        self.assertEqual(pairs, [])
+
+    def test_conform_empty_objects_is_noop(self):
+        """An empty (non-None) object list must not fall back to selection/scene."""
+        cube = cmds.polyCube(n="untouched")[0]
+        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+        mangled = cmds.rename(shape, "untouched____badShape")
+        cmds.select(cube)  # a selection fallback would wrongly repair it
+        self.assertEqual(Naming.conform_shape_names([]), [])
+        self.assertTrue(cmds.objExists(mangled))
+
+    def test_conform_instanced_shape_renamed_once(self):
+        """A shared (instanced) shape is renamed exactly once, fixing every path."""
+        cube = cmds.polyCube(n="proto")[0]
+        inst = cmds.instance(cube)[0]
+        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+        cmds.rename(shape, "vdat____Shape770__uninst_tmp____Shape")
+        pairs = Naming.conform_shape_names([cube, inst])
+        self.assertEqual(len(pairs), 1)
+        for t in (cube, inst):
+            leafs = [
+                s.split("|")[-1]
+                for s in cmds.listRelatives(t, shapes=True, fullPath=True)
+            ]
+            self.assertEqual(leafs, ["protoShape"])
+
+    def test_conform_intermediate_gets_orig_suffix(self):
+        """A mangled intermediate (orig) shape conforms to '<transform>ShapeOrig'."""
+        cube = cmds.polyCube(n="smoothy")[0]
+        cmds.cluster(cube)  # deformer → intermediate orig shape
+        all_shapes = (
+            cmds.listRelatives(cube, shapes=True, fullPath=True, noIntermediate=False)
+            or []
+        )
+        orig = [s for s in all_shapes if cmds.getAttr(f"{s}.intermediateObject")]
+        self.assertTrue(orig, "polySmooth should have produced an orig shape")
+        cmds.rename(orig[0], "junk__uninst_tmpShapeOrig999")
+        Naming.conform_shape_names([cube])
+        all_shapes = (
+            cmds.listRelatives(cube, shapes=True, fullPath=True, noIntermediate=False)
+            or []
+        )
+        leafs = sorted(s.split("|")[-1] for s in all_shapes)
+        self.assertIn("smoothyShapeOrig", leafs)
+
 
 if __name__ == "__main__":
     unittest.main()

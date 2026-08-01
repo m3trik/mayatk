@@ -329,7 +329,10 @@ class RigUtils(ptk.HelpMixin):
                 obj = cmds.parent(obj, loc)[0]
 
                 if freeze_locator:
-                    XformUtils.freeze_transforms(loc, normal=True)
+                    # store=False: rig construction. The LOC is already at
+                    # identity here (the GRP was parent-constrained to it
+                    # before the reparent), so this is a guard, not a move.
+                    XformUtils.freeze_transforms(loc, normal=True, store=False)
 
                 if orig_parent:
                     grp = cmds.parent(grp, orig_parent)[0]
@@ -348,7 +351,8 @@ class RigUtils(ptk.HelpMixin):
 
             # Freeze object after hierarchy is set up (but not groups)
             if freeze_object and not is_group:
-                XformUtils.freeze_transforms(obj, normal=True)
+                # store=False: rig construction, as above.
+                XformUtils.freeze_transforms(obj, normal=True, store=False)
 
             # Rename group, locator, and object using the clean base name.
             # Capture UUIDs first — while every path is still valid — then
@@ -366,7 +370,9 @@ class RigUtils(ptk.HelpMixin):
                 obj = rename_by_uuid(obj_uuid, f"{base_name_stripped}{obj_suffix}")
 
             if parent and grp:
-                XformUtils.freeze_transforms(grp, scale=True)
+                # store=False: the GRP is created identity here, so its
+                # "pre-freeze" state is not something a user would unfreeze to.
+                XformUtils.freeze_transforms(grp, scale=True, store=False)
 
             Attributes.set_lock_state(
                 obj,

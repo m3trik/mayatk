@@ -22,6 +22,7 @@ from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.components import Components
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
+from mayatk.xform_utils.matrices import Matrices
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +65,7 @@ class _XformUtilsInternal:
     """
 
     @staticmethod
-    def _apply_freeze_deltas(obj, axes_to_freeze):
+    def _apply_freeze_deltas(obj, axes_to_freeze, normal=0):
         """Apply freeze transformations using Maya's native makeIdentity.
 
         Maya's makeIdentity automatically preserves world-space pivot positions
@@ -73,6 +74,10 @@ class _XformUtilsInternal:
         Parameters:
             obj: The transform node to freeze.
             axes_to_freeze (set): Set of axes to freeze (e.g., {'tx', 'ty', 'tz', 'rx', ...}).
+            normal (int/bool): ``makeIdentity -normal`` — 0 leave normals
+                alone, 1 freeze them, 2 freeze only when the transform
+                mirrors.  Matters for negatively-scaled geometry, whose
+                normals invert when the scale is baked out.
 
         Returns:
             bool: True if successful, False if skipped due to error.
@@ -80,6 +85,7 @@ class _XformUtilsInternal:
         freeze_t = not axes_to_freeze.isdisjoint({"tx", "ty", "tz"})
         freeze_r = not axes_to_freeze.isdisjoint({"rx", "ry", "rz"})
         freeze_s = not axes_to_freeze.isdisjoint({"sx", "sy", "sz"})
+        normal = int(normal)
 
         # Note: We let RuntimeError bubble up so freeze_transforms can handle
         # connection/locking strategies.
@@ -91,7 +97,7 @@ class _XformUtilsInternal:
                 r=freeze_r,
                 s=freeze_s,
                 pn=True,
-                normal=False,
+                normal=normal,
             )
         except RuntimeError:
             cmds.makeIdentity(
@@ -101,7 +107,7 @@ class _XformUtilsInternal:
                 r=freeze_r,
                 s=freeze_s,
                 pn=False,
-                normal=False,
+                normal=normal,
             )
         return True
 
@@ -208,15 +214,22 @@ class _XformUtilsInternal:
             return False
 
     @staticmethod
-    def _transform_is_driven(transform: str) -> bool:
-        """True when anything feeds *transform*'s TRS/shear channels.
+    def _transform_is_driven(
+        transform: str, channels=("translate", "rotate", "scale", "shear")
+    ) -> bool:
+        """True when anything feeds *transform*'s *channels*.
 
         Compact yes/no twin of ``transform_diag._driving_connections``,
         which returns per-driver tags for its diagnosis dict; it can't be
         reused here because that module imports this one.
+
+        *channels* defaults to TRS + shear (what a freeze has to bake).
+        Narrow it to what a given caller actually writes — reporting a
+        driven shear to a caller that only touches T/R/S is a false
+        positive that costs a node its restore.
         """
         plugs = []
-        for ch in ("translate", "rotate", "scale", "shear"):
+        for ch in channels:
             if cmds.attributeQuery(ch, node=transform, exists=True):
                 plugs.append(f"{transform}.{ch}")
                 plugs.extend(
@@ -388,6 +401,33 @@ class _XformUtilsInternal:
         """``(t_attr, r_attr, s_attr)`` triple used by store/restore/clear/has."""
         return f"{prefix}_T_bake", f"{prefix}_R_bake", f"{prefix}_S_bake"
 
+    @classmethod
+    def _accumulate_bake(cls, node, local, channels, accumulate=True, prefix="original"):
+        """Compose *local* ``(t_vec, r_quat, s_vec)`` onto ``node``'s bake
+        history, for each channel named in *channels*.
+
+        Single source of truth for the cumulative contract, shared by
+        :meth:`XformUtils.store_transforms` — which passes the node's CURRENT
+        local — and :meth:`XformUtils.freeze_transforms`, which passes a
+        PRE-freeze snapshot committed only for the transforms that actually
+        froze.
+        """
+        t_attr, r_attr, s_attr = cls._bake_attr_names(prefix)
+        cur_t, cur_r, cur_s = local
+
+        if "translate" in channels:
+            old_t = cls._read_bake_t(node, t_attr) if accumulate else om.MVector(0, 0, 0)
+            new_t = old_t + cur_t
+            cls._write_bake_t(node, t_attr, [new_t.x, new_t.y, new_t.z])
+
+        if "rotate" in channels:
+            old_r = cls._read_bake_r(node, r_attr) if accumulate else om.MQuaternion()
+            cls._write_bake_r(node, r_attr, old_r * cur_r)
+
+        if "scale" in channels:
+            old_s = cls._read_bake_s(node, s_attr) if accumulate else [1.0, 1.0, 1.0]
+            cls._write_bake_s(node, s_attr, [old_s[i] * cur_s[i] for i in range(3)])
+
     @staticmethod
     def _apply_clean_local(node, t_vec, r_quat, s_vec):
         """Write target T/R/S to ``node`` and zero any pivot offsets.
@@ -482,6 +522,203 @@ class _XformUtilsInternal:
         else:  # MFnNurbsSurface
             fn.setCVPositions(points, om.MSpace.kObject)
             fn.updateSurface()
+
+    @staticmethod
+    def _nearest_known_ancestor(path: str, known) -> Optional[str]:
+        """Nearest STRICT ancestor of *path* present in *known*, or None.
+
+        Loops on ``"|"`` rather than on truthiness: a name with no separator
+        (a short name reaching here by mistake) re-``rsplit``\\s to itself
+        forever, hanging Maya.
+        """
+        parent = path.rsplit("|", 1)[0]
+        while "|" in parent:
+            if parent in known:
+                return parent
+            parent = parent.rsplit("|", 1)[0]
+        return None
+
+    @staticmethod
+    def _owns_instanced_shape(transform: str) -> bool:
+        """True when any non-intermediate shape under *transform* has several
+        DAG parents (is shared with other transforms)."""
+        for shape in (
+            cmds.listRelatives(transform, shapes=True, noIntermediate=True, fullPath=True)
+            or []
+        ):
+            if len(cmds.listRelatives(shape, allParents=True, fullPath=True) or []) > 1:
+                return True
+        return False
+
+    @classmethod
+    def _plan_restore_geometry(cls, restored, current_worlds, final_worlds, boundaries):
+        """Plan the compensation that keeps every world position fixed across
+        a restore: point writes for ordinary shapes, LOCAL-MATRIX writes for
+        instanced-shape owners.
+
+        Not merely each restored node's OWN shapes.  ``makeIdentity`` on a
+        group flattens the WHOLE subtree — every descendant transform's
+        channels are zeroed and the composed matrix is baked into the leaf
+        shape points.  Restoring the group's channels without
+        counter-shifting those leaves therefore applies the restored matrix
+        a *second* time: the mesh visibly jumps and rescales.  A group has no
+        shapes of its own, so the own-shapes-only sweep compensated nothing
+        at all.
+
+        Each shape is carried by its nearest restored ancestor-or-self, whose
+        world delta is ``A_cur⁻¹ · A_new``: an unrestored descendant keeps its
+        local chain ``L``, so in Maya's row-vector convention
+        ``W_new = L · A_new = (W_cur · A_cur⁻¹) · A_new``.
+
+        A shape on several DAG paths cannot be point-baked — writing shared
+        points would drag every other instance along.  Its owning transform
+        becomes a *boundary* instead: the ancestor delta is absorbed into the
+        boundary's local matrix (``L' = W_cur · A_new⁻¹ · A_cur · W_P_cur⁻¹``,
+        preserving its world exactly), and its whole subtree is pruned from
+        the sweep — nothing below a world-preserved transform moves.  Measured
+        on a production module scene, the previous warn-but-move behaviour
+        displaced 314 instanced meshes by the restored group's full delta.
+
+        Every read here is world-space and must happen in phase 1, before
+        any transform is written — a mid-restore read would fold an
+        already-restored ancestor back into the descendant's snapshot.
+
+        Parameters:
+            restored: Long paths whose channels phase 2 will rewrite.
+            current_worlds / final_worlds: Their world matrices, now / target.
+            boundaries: Instanced-shape owners (targets demoted in the main
+                loop + non-target owners found by this walk's caller).
+
+        Returns:
+            tuple: ``(point_writes, boundary_writes)`` —
+            ``[(shape, world_points, inverse_new_world), ...]`` and
+            ``[(transform, local_matrix_flat), ...]``.
+        """
+        if not restored:
+            return [], []
+
+        # One batched descendant query for the whole set rather than one per
+        # restored node — a traverse restore of a deep rig would otherwise
+        # re-walk the same subtree once per node.
+        subtree = list(restored) + (
+            cmds.listRelatives(restored, ad=True, type="transform", fullPath=True) or []
+        )
+
+        claim = set(final_worlds) | boundaries
+        deltas = {}
+
+        def claim_delta(anchor):
+            """``A_cur⁻¹ · A_new`` for a restored anchor (cached), else None."""
+            if anchor not in deltas:
+                inv_cur = Matrices.safe_inverse(current_worlds[anchor])
+                if inv_cur is None:
+                    cmds.warning(
+                        f"restore_transforms: '{anchor}' has a singular world matrix — "
+                        "its subtree geometry was left uncompensated."
+                    )
+                deltas[anchor] = (
+                    None if inv_cur is None else inv_cur * final_worlds[anchor]
+                )
+            return deltas[anchor]
+
+        point_writes = []
+        boundary_writes = []
+        seen: Set[str] = set()
+        for xf in subtree:
+            if xf in seen:
+                continue
+            seen.add(xf)
+
+            if xf in boundaries:
+                # Absorb the nearest restored ancestor's delta into this
+                # transform's local matrix so its world (and its entire
+                # subtree, skipped via the claim search) stays put.  If the
+                # nearest claim above is itself a boundary, that one already
+                # preserves everything below it — including this transform.
+                anchor = cls._nearest_known_ancestor(xf, claim)
+                if anchor is None or anchor in boundaries:
+                    continue  # nothing above it moves — nothing to absorb
+                delta = claim_delta(anchor)
+                if delta is None or delta.isEquivalent(om.MMatrix(), 1e-9):
+                    continue
+                if cls._transform_is_driven(xf):
+                    cmds.warning(
+                        f"restore_transforms: '{xf}' owns an instanced shape and "
+                        "has driven transform channels — its subtree was left "
+                        "uncompensated."
+                    )
+                    continue
+                w_cur = om.MMatrix(cmds.xform(xf, q=True, matrix=True, worldSpace=True))
+                parent_path = xf.rsplit("|", 1)[0]
+                w_parent = om.MMatrix(
+                    cmds.xform(parent_path, q=True, matrix=True, worldSpace=True)
+                )
+                inv_parent = Matrices.safe_inverse(w_parent)
+                inv_new_anchor = Matrices.safe_inverse(final_worlds[anchor])
+                if inv_parent is None or inv_new_anchor is None:
+                    cmds.warning(
+                        f"restore_transforms: '{xf}' — singular matrix in its "
+                        "chain; subtree left uncompensated."
+                    )
+                    continue
+                new_local = (
+                    w_cur * inv_new_anchor * current_worlds[anchor] * inv_parent
+                )
+                boundary_writes.append(
+                    (xf, cls._mmatrix_to_flat(new_local))
+                )
+                continue
+
+            shapes = (
+                cmds.listRelatives(xf, shapes=True, noIntermediate=True, fullPath=True)
+                or []
+            )
+            if not shapes:
+                continue
+
+            # The nearest restored ancestor-or-self carries this shape; its
+            # delta already accounts for any restored node above it, because
+            # phase 1 resolved final worlds top-down.  A boundary in between
+            # means this subtree's world is preserved — nothing to bake.
+            if xf in final_worlds:
+                anchor = xf
+            else:
+                anchor = cls._nearest_known_ancestor(xf, claim)
+                if anchor is None or anchor in boundaries:
+                    continue
+            delta = claim_delta(anchor)
+            if delta is None or delta.isEquivalent(om.MMatrix(), 1e-9):
+                # Identity delta (a trivial restore): nothing moves, so
+                # rewriting every point would be wasted work — and on a
+                # shared shape it would trip the instanced safety net below
+                # for an operation that needs no compensation at all.
+                continue
+
+            w_cur = om.MMatrix(cmds.xform(xf, q=True, matrix=True, worldSpace=True))
+            inverse_new_world = Matrices.safe_inverse(w_cur * delta)
+            if inverse_new_world is None:
+                cmds.warning(
+                    f"restore_transforms: '{xf}' has a singular target matrix — "
+                    "its geometry was left uncompensated."
+                )
+                continue
+
+            for shape in shapes:
+                # Safety net — instanced-shape owners are demoted to
+                # boundaries before this walk, so this should never fire.
+                if (
+                    len(cmds.listRelatives(shape, allParents=True, fullPath=True) or [])
+                    > 1
+                ):
+                    cmds.warning(
+                        f"restore_transforms: '{shape}' is instanced — geometry "
+                        "left uncompensated (it would move every instance)."
+                    )
+                    continue
+                pts = cls._get_shape_points_world(shape)
+                if pts is not None:
+                    point_writes.append((shape, pts, inverse_new_world))
+        return point_writes, boundary_writes
 
     @staticmethod
     def _resolve_transforms(objects) -> List[str]:
@@ -895,39 +1132,14 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                         targets.append(child)
                         seen.add(child)
 
-        t_attr, r_attr, s_attr = _XformUtilsInternal._bake_attr_names(prefix)
-
         for obj in targets:
-            cur_t, cur_r, cur_s = _XformUtilsInternal._decompose_local(obj)
-
-            if "translate" in target_channels:
-                old_t = (
-                    _XformUtilsInternal._read_bake_t(obj, t_attr)
-                    if accumulate
-                    else om.MVector(0, 0, 0)
-                )
-                new_t = old_t + cur_t
-                _XformUtilsInternal._write_bake_t(
-                    obj, t_attr, [new_t.x, new_t.y, new_t.z]
-                )
-
-            if "rotate" in target_channels:
-                old_r = (
-                    _XformUtilsInternal._read_bake_r(obj, r_attr)
-                    if accumulate
-                    else om.MQuaternion()
-                )
-                new_r = old_r * cur_r
-                _XformUtilsInternal._write_bake_r(obj, r_attr, new_r)
-
-            if "scale" in target_channels:
-                old_s = (
-                    _XformUtilsInternal._read_bake_s(obj, s_attr)
-                    if accumulate
-                    else [1.0, 1.0, 1.0]
-                )
-                new_s = [old_s[i] * cur_s[i] for i in range(3)]
-                _XformUtilsInternal._write_bake_s(obj, s_attr, new_s)
+            _XformUtilsInternal._accumulate_bake(
+                obj,
+                _XformUtilsInternal._decompose_local(obj),
+                target_channels,
+                accumulate=accumulate,
+                prefix=prefix,
+            )
 
     @classmethod
     def freeze_instanced_group(
@@ -1049,6 +1261,13 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
             if B.isEquivalent(om.MMatrix(), 1e-12):
                 return False
 
+            # A mirroring bake (negative determinant) reverses the handedness
+            # of the point set, so the existing face winding now faces inward
+            # — the whole group renders inside-out.  ``makeIdentity`` fixes
+            # this for itself on the normal path; baking the points by hand
+            # here does not, so the winding has to be reversed to match.
+            mirrored = B.det3x3() < 0
+
             for shape in shapes:
                 sel = om.MSelectionList()
                 sel.add(shape)
@@ -1059,6 +1278,12 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                     ),
                     om.MSpace.kObject,
                 )
+                if mirrored:
+                    # Edit the SHARED shape once — every member sees it, which
+                    # is exactly what the whole in-place design relies on.
+                    cmds.polyNormal(
+                        shape, normalMode=0, userNormalMode=0, constructionHistory=False
+                    )
 
             with Attributes.temporarily_unlock([master]):
                 for attr in cls._FREEZE_CHANNEL_ATTRS:
@@ -1100,9 +1325,34 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         connection_strategy="preserve",
         instance_strategy="skip",
         from_channel_box=False,
+        store=True,
         **kwargs,
     ):
         """Freezes transformations on the given objects.
+
+        ``store`` (default True) records the pre-freeze local TRS as bake
+        history, so the freeze is always reversible via
+        ``XformUtils.restore_transforms``.  It is three attributes per
+        transform and is what makes this safe to call from any tool — pass
+        ``store=False`` only for construction-time freezes whose pre-freeze
+        state is meaningless (building a rig control, uninstancing).
+
+        The snapshot always spans the subtree, independent of
+        ``freeze_children``: ``makeIdentity`` on a group zeroes EVERY
+        descendant transform's channels, so recording only the roots would
+        lose the descendants' values irrecoverably.  It is *committed* after
+        the freeze and only for the transforms that actually froze — an
+        object skipped as instanced or connection-blocked keeps its channels,
+        so stamping it would make a later unfreeze add a transform that was
+        never baked out.
+
+        Per-channel kwargs (``translate``/``t``, ``rotate``/``r``,
+        ``scale``/``s``, or per-axis ``tx``…``sz``) restrict the freeze; with
+        none of them the whole transform is frozen, matching Maya's
+        ``makeIdentity -apply true``.  ``normal`` is a **modifier**, not a
+        channel: it maps to ``makeIdentity -normal`` (freeze vertex normals,
+        which matters for negatively-scaled geometry) and does not narrow the
+        channel set.
 
         ``instance_strategy`` decides what happens to instanced objects:
 
@@ -1185,8 +1435,12 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 "sy",
                 "scaleZ",
                 "sz",
-                "normal",
             }
+            # ``normal`` is deliberately NOT in this set. It is a makeIdentity
+            # MODIFIER (freeze vertex normals), not a channel selector —
+            # counting it here made ``freeze_transforms(obj, normal=True)``
+            # suppress the freeze-everything default while contributing no
+            # axes of its own, so the call silently froze nothing at all.
             any_channel_flag = any(k in kwargs for k in channel_keys)
 
             if not any_channel_flag:
@@ -1240,6 +1494,91 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 f"Valid options: {sorted(valid_inst_strategies)}"
             )
 
+        # ``makeIdentity -normal``: 0 leave alone, 1 freeze, 2 freeze only on
+        # a mirroring transform. A modifier, not a channel — see the note on
+        # ``channel_keys`` above.
+        freeze_normals = int(kwargs.get("normal") or 0)
+
+        freeze_channels: Set[str] = set()
+        if not axes_to_freeze.isdisjoint({"tx", "ty", "tz"}):
+            freeze_channels.add("translate")
+        if not axes_to_freeze.isdisjoint({"rx", "ry", "rz"}):
+            freeze_channels.add("rotate")
+        if not axes_to_freeze.isdisjoint({"sx", "sy", "sz"}):
+            freeze_channels.add("scale")
+
+        # Snapshot the pre-freeze locals of every transform this call could
+        # touch — the whole subtree, because ``makeIdentity`` on a group zeroes
+        # every descendant's channels.  Read here, before the instance
+        # strategies fork off; COMMITTED as bake history after the freeze, and
+        # only for transforms that actually froze.  Stamping up front would
+        # give every skipped object (instanced, connection-blocked) a bake
+        # matching its untouched channels, so a later unfreeze would add a
+        # transform that was never baked out and double it.
+        pre_freeze: Dict[str, tuple] = {}
+        if store:
+            for obj in objects:
+                for node in [obj] + (
+                    cmds.listRelatives(obj, ad=True, type="transform", fullPath=True)
+                    or []
+                ):
+                    if node not in pre_freeze:
+                        pre_freeze[node] = cls._decompose_local(node)
+
+        # Long paths of what actually froze. ``flattened`` freezes ran through
+        # makeIdentity, which flattens the subtree, so their descendants are
+        # stamped too; ``baked_in_place`` came from freeze_instanced_group,
+        # which rewrites shape points and channels without touching the
+        # subtree (and whose compensated siblings must NOT be stamped — their
+        # channels were rewritten, not zeroed).
+        flattened: List[str] = []
+        baked_in_place: List[str] = []
+
+        def _channels_zeroed(node) -> bool:
+            """True when *node*'s freeze channels now sit at identity —
+            proof ``makeIdentity`` actually flattened it.
+
+            ``makeIdentity`` on a group is not all-or-nothing: a descendant
+            whose shape is multiply-instanced is skipped with a *warning*
+            (``Cannot freeze below transform X …``) while the rest of the
+            subtree flattens (measured on a production module scene).
+            Stamping such a skipped leaf would recreate exactly the stale
+            bake this commit-after-freeze design exists to prevent.
+            """
+            if "translate" in freeze_channels and any(
+                abs(v) > 1e-5 for v in cmds.getAttr(f"{node}.translate")[0]
+            ):
+                return False
+            if "rotate" in freeze_channels and any(
+                abs(v) > 1e-5 for v in cmds.getAttr(f"{node}.rotate")[0]
+            ):
+                return False
+            if "scale" in freeze_channels and any(
+                abs(v - 1.0) > 1e-5 for v in cmds.getAttr(f"{node}.scale")[0]
+            ):
+                return False
+            return True
+
+        def commit_bakes():
+            if not store or not pre_freeze:
+                return
+            exact = set(flattened) | set(baked_in_place)
+            flat_roots = set(flattened)
+            for node, local in pre_freeze.items():
+                # Ancestor lookup walks the path (O(depth)) rather than
+                # testing every frozen root (O(roots)) — freeze_children over
+                # a deep hierarchy puts every node in both collections.
+                if node in exact:
+                    cls._accumulate_bake(node, local, freeze_channels)
+                elif (
+                    cls._nearest_known_ancestor(node, flat_roots) is not None
+                    and cmds.objExists(node)
+                    and _channels_zeroed(node)
+                ):
+                    # Descendant of a flattened root: stamp only on PROOF the
+                    # flatten reached it — see _channels_zeroed.
+                    cls._accumulate_bake(node, local, freeze_channels)
+
         if inst_strategy != "skip" and objects:
             instanced = [o for o in objects if NodeUtils.get_instanced_shapes(o)]
             if instanced:
@@ -1275,6 +1614,10 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                             # to the normal loop, which reports it as an
                             # instanced skip instead of dropping it silently.
                             handled.update(members or [obj])
+                            # Only the operated member ends at identity; the
+                            # siblings absorbed a compensating matrix, so a
+                            # bake of their pre-freeze local would be wrong.
+                            baked_in_place.append(obj)
                             frozen_groups += 1
                     objects = [o for o in objects if o not in handled]
                     if frozen_groups:
@@ -1283,6 +1626,7 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                             f"{frozen_groups} instance group(s) frozen in place."
                         )
                     if not objects:
+                        commit_bakes()
                         return
 
         if freeze_children:
@@ -1296,14 +1640,6 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                     if child not in objects_set:
                         objects.append(child)
                         objects_set.add(child)
-
-        freeze_channels: Set[str] = set()
-        if not axes_to_freeze.isdisjoint({"tx", "ty", "tz"}):
-            freeze_channels.add("translate")
-        if not axes_to_freeze.isdisjoint({"rx", "ry", "rz"}):
-            freeze_channels.add("rotate")
-        if not axes_to_freeze.isdisjoint({"sx", "sy", "sz"}):
-            freeze_channels.add("scale")
 
         skipped_connections: List[Tuple[str, Dict[str, List[str]]]] = []
         instanced_skips: List[str] = []
@@ -1398,8 +1734,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                     if delete_history:
                         cmds.delete(obj, constructionHistory=True)
 
-                    if cls._apply_freeze_deltas(obj, axes_to_freeze):
+                    if cls._apply_freeze_deltas(obj, axes_to_freeze, normal=freeze_normals):
                         frozen_objects.append(CoreUtils.short_name(obj))
+                        flattened.append(obj)
 
                 except RuntimeError as exc:
                     msg = str(exc).lower()
@@ -1446,8 +1783,9 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                             cmds.delete(list(nodes_to_delete))
 
                         try:
-                            if cls._apply_freeze_deltas(obj, axes_to_freeze):
+                            if cls._apply_freeze_deltas(obj, axes_to_freeze, normal=freeze_normals):
                                 frozen_objects.append(CoreUtils.short_name(obj))
+                                flattened.append(obj)
                         except RuntimeError as retry_exc:
                             skipped_connections.append(
                                 (CoreUtils.short_name(obj), blockers)
@@ -1458,6 +1796,8 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
 
                     else:
                         raise
+
+        commit_bakes()
 
         total_processed = (
             len(frozen_objects) + len(skipped_connections) + len(instanced_skips)
@@ -1709,6 +2049,11 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         is preserved across the operation, and each object's rotate/scale
         pivot is re-anchored at its pre-restore world position.
 
+        The geometry shift spans the whole SUBTREE of each restored node,
+        not just its own shapes: ``makeIdentity`` on a group flattens every
+        descendant into the leaf shape points, and a group has no shapes of
+        its own — compensating only direct shapes would move the meshes.
+
         Counterpart of ``store_transforms`` under the cumulative
         freeze/unfreeze contract — repeated freeze + transform + unfreeze
         cycles compose, never snap back.
@@ -1718,6 +2063,11 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
             * Skips referenced nodes with a warning.
             * Skips nodes with no stored bake attributes with a warning.
             * Vectorizes per-vertex updates via the OpenMaya 2.0 API.
+            * Instancing-safe: a transform owning a SHARED shape is never
+              restored non-trivially (its channels would displace every other
+              instance) and never dragged along by a restored ancestor — the
+              ancestor's delta is absorbed into its local matrix instead, so
+              its world position (and its whole subtree's) is preserved.
 
         Parameters:
             objects (str/obj/list): Transforms to restore.
@@ -1775,8 +2125,36 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         # BEFORE any transform is written: restoring an ancestor moves its
         # descendants, so a mid-restore world read would fold the ancestor's
         # restored transform back into the descendant's geometry.
+        #
+        # ``boundaries`` — transforms owning an INSTANCED shape.  Shared
+        # points cannot be counter-baked (every other instance would move),
+        # so these absorb a restored ancestor's delta into their local matrix
+        # instead, and their subtrees need no compensation at all.  Seeded
+        # here with non-target owners inside the restore's reach; targets that
+        # turn out to own instanced shapes are demoted into it below.
         plans = []
         final_worlds = {}
+        current_worlds = {}
+        boundaries: Set[str] = set()
+        target_set = set(targets)
+        for xf in targets + (
+            cmds.listRelatives(targets, ad=True, type="transform", fullPath=True) or []
+        ):
+            if xf not in target_set and _XformUtilsInternal._owns_instanced_shape(xf):
+                boundaries.add(xf)
+
+        # Ancestor-lookup universe (restored nodes + boundaries), maintained
+        # incrementally — a per-target union of the two key sets would be
+        # quadratic over large restores.
+        known: Set[str] = set(boundaries)
+
+        def _drop(obj):
+            """A target that won't be restored still needs boundary status if
+            it owns an instanced shape — the pre-scan skipped all targets."""
+            if _XformUtilsInternal._owns_instanced_shape(obj):
+                boundaries.add(obj)
+                known.add(obj)
+
         for obj in targets:
             has_t = cmds.attributeQuery(t_attr, node=obj, exists=True)
             has_r = cmds.attributeQuery(r_attr, node=obj, exists=True)
@@ -1785,6 +2163,7 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 cmds.warning(
                     f"restore_transforms: '{obj}' has no stored bake history. Skipping."
                 )
+                _drop(obj)
                 continue
 
             try:
@@ -1793,9 +2172,28 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                         f"restore_transforms: '{obj}' is a referenced node "
                         "(can't modify). Skipping."
                     )
+                    _drop(obj)
                     continue
             except Exception:
                 pass
+
+            # ``_apply_clean_local`` rewrites translate/rotate/scale wholesale
+            # (unrestored channels are written back at their current value),
+            # so ANY driven TRS channel makes the write raise "a child
+            # attribute … is locked or connected" — unlocking can't help, the
+            # plug is connected. Skip coherently instead of aborting the batch
+            # partway through, which would leave earlier objects restored and
+            # their geometry already shifted.
+            if _XformUtilsInternal._transform_is_driven(
+                obj, channels=("translate", "rotate", "scale")
+            ):
+                cmds.warning(
+                    f"restore_transforms: '{obj}' has driven transform channels "
+                    "(the restore would be overwritten on the next evaluation). "
+                    "Skipping."
+                )
+                _drop(obj)
+                continue
 
             local_current = om.MMatrix(
                 cmds.xform(obj, q=True, matrix=True, objectSpace=True)
@@ -1829,73 +2227,114 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
             else:
                 target_s = cur_s
 
+            # A restore that would actually change the channels cannot run on
+            # a transform whose own shape is shared or whose transform sits on
+            # several DAG paths — writing the channels would displace every
+            # other instance (their compensation cannot be per-path).  A
+            # TRIVIAL restore (identity bake) is fine and still consumes the
+            # attrs.  Demoted instanced-shape owners become boundaries so the
+            # ancestors' deltas still can't move them.
+            rot_diff = target_r * cur_r.conjugate()  # identity ⇔ |w| ≈ 1
+            trivial = (
+                (target_t - cur_t).length() < 1e-6
+                and abs(rot_diff.w) > 1.0 - 1e-9
+                and max(abs(target_s[i] - cur_s[i]) for i in range(3)) < 1e-6
+            )
+            if not trivial and _XformUtilsInternal._owns_instanced_shape(obj):
+                cmds.warning(
+                    f"restore_transforms: '{obj}' owns an instanced (shared) shape — "
+                    "restoring its channels would displace the other instances. "
+                    "Skipped; bake history retained. (Uninstance first, or restore "
+                    "the whole group's layout by other means.)"
+                )
+                boundaries.add(obj)
+                known.add(obj)
+                continue
+            if not trivial and _XformUtilsInternal._is_multi_path(obj):
+                cmds.warning(
+                    f"restore_transforms: '{obj}' is instanced (several DAG paths) — "
+                    "one set of channels cannot restore every path. Skipped."
+                )
+                _drop(obj)
+                continue
+
             # The new clean local matrix is just T * R * S with zero
             # pivots and zero pivot translates — that's the state the
             # user expects after unfreeze.
             new_local = _XformUtilsInternal._compose_local(target_t, target_r, target_s)
 
             # In Maya's row-vector convention: world = local * parent.  The
-            # parent's FINAL world is its computed restore target when the
-            # parent is part of this call (top-down order guarantees it's
-            # already in final_worlds), else its current world recovered
-            # from this node's matrix pair.
-            parent_path = obj.rsplit("|", 1)[0]
-            if parent_path in final_worlds:
-                parent_world = final_worlds[parent_path]
-            else:
-                try:
-                    parent_world = local_current.inverse() * world_current
-                except Exception:
-                    parent_world = om.MMatrix()
+            # parent's CURRENT world is recovered from this node's matrix
+            # pair; it then has to absorb the restore of the nearest
+            # ancestor that is part of this call (top-down order guarantees
+            # that ancestor is already resolved).  Looking only at the
+            # DIRECT parent is not enough — restoring a grandparent while
+            # skipping the transform in between would leave this node
+            # planned against a stale parent world.  A BOUNDARY in between
+            # absorbs the ancestor's delta into its own local, so everything
+            # below it — including this node's parent chain — keeps its
+            # current world: no composition.
+            inv_local = Matrices.safe_inverse(local_current)
+            parent_world = om.MMatrix() if inv_local is None else inv_local * world_current
+            ancestor = _XformUtilsInternal._nearest_known_ancestor(obj, known)
+            if ancestor is not None and ancestor not in boundaries:
+                inv_anc = Matrices.safe_inverse(current_worlds[ancestor])
+                if inv_anc is not None:
+                    parent_world = parent_world * (inv_anc * final_worlds[ancestor])
             new_world = new_local * parent_world
 
-            try:
-                inverse_new_world = new_world.inverse()
-            except Exception:
+            if Matrices.safe_inverse(new_world) is None:
                 cmds.warning(
                     f"restore_transforms: '{obj}' has singular target matrix. Skipping."
                 )
+                _drop(obj)
                 continue
             final_worlds[obj] = new_world
-
-            shapes = (
-                cmds.listRelatives(obj, shapes=True, noIntermediate=True, fullPath=True)
-                or []
-            )
-            shape_snapshots = [
-                (shape, pts)
-                for shape in shapes
-                for pts in [_XformUtilsInternal._get_shape_points_world(shape)]
-                if pts is not None
-            ]
+            current_worlds[obj] = world_current
+            known.add(obj)
 
             plans.append(
                 (
                     obj,
                     (has_t, has_r, has_s),
                     (target_t, target_r, target_s),
-                    inverse_new_world,
-                    shape_snapshots,
                     (world_rp, world_sp),
                 )
             )
 
-        # Phase 2 — apply top-down.
+        # Still phase 1 (reads only): every shape the restore will displace,
+        # across the whole subtree — not just each node's own shapes — plus
+        # the local-matrix compensation for instanced-shape boundaries.  Must
+        # run after every final world is known and before any write.
+        point_writes, boundary_writes = _XformUtilsInternal._plan_restore_geometry(
+            [p[0] for p in plans], current_worlds, final_worlds, boundaries
+        )
+
+        # Phase 2 — apply.  Compensation first, as one block: the writes are
+        # absolute (object-space points / local matrices) against matrices
+        # already resolved in phase 1, so they are order-independent, whereas
+        # the channel loop below must stay strictly top-down for its
+        # world-space pivot re-anchor (which reads the live parent chain).
+        for shape, pts, inverse_new_world in point_writes:
+            _XformUtilsInternal._set_shape_points_object(shape, pts, inverse_new_world)
+
+        for xf, local_flat in boundary_writes:
+            try:
+                with Attributes.temporarily_unlock([xf]):
+                    cmds.xform(xf, objectSpace=True, matrix=local_flat)
+            except Exception as exc:
+                cmds.warning(
+                    f"restore_transforms: could not compensate instanced-shape "
+                    f"owner '{xf}' ({exc}) — its subtree will move with the "
+                    "restored ancestor."
+                )
+
         for (
             obj,
             (has_t, has_r, has_s),
             (target_t, target_r, target_s),
-            inverse_new_world,
-            shape_snapshots,
             (world_rp, world_sp),
         ) in plans:
-            # Writing the snapshotted world points transformed into the
-            # final world's object space preserves visual world position.
-            for shape, pts in shape_snapshots:
-                _XformUtilsInternal._set_shape_points_object(
-                    shape, pts, inverse_new_world
-                )
-
             # Set channels directly so Maya doesn't fold lingering
             # ``rotatePivotTranslate`` / ``scalePivotTranslate`` (left by
             # ``makeIdentity``) into the new translate values.
@@ -1969,6 +2408,123 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 f"{len(cleared)} object(s)."
             )
         return cleared
+
+    @classmethod
+    @CoreUtils.undoable
+    def repair_stored_transforms(
+        cls,
+        objects=None,
+        prefix="original",
+        dry_run=False,
+        clear_stale=False,
+        tolerance=1e-4,
+    ):
+        """Triage bake history left by earlier tool versions, restore only
+        what is provably clean, and (optionally) clear the residue.
+
+        Earlier versions of the freeze tooling stamped the bake history
+        BEFORE the freeze ran, so every object the freeze then skipped —
+        instanced, connection-blocked — kept its live channels *and* gained a
+        bake claiming those same values.  Un-freezing such a scene composes
+        that bake on top of channels that were never zeroed: objects fly.
+        (Measured on a production module scene: 481 baked transforms, 305 of
+        them never actually frozen, drifts up to ~18,000 units.)  Freezing
+        again doesn't help — the new stamp composes onto the stale history.
+
+        Classification per baked transform:
+            * ``frozen`` — channels at identity (within *tolerance*): the
+              freeze demonstrably ran, the bake is trustworthy.  Restored.
+            * ``stale`` — live (non-identity) channels: either a stamp whose
+              freeze was skipped (residue), or a legitimate freeze the user
+              moved afterwards.  The two are indistinguishable from scene
+              state, so these are NEVER restored here; they are cleared only
+              with ``clear_stale=True``.  (For the frozen-then-moved case,
+              call :meth:`restore_transforms` directly — it composes.)
+            * ``degenerate`` — a bake no restore could apply (zero or
+              non-finite scale component): cleared with ``clear_stale=True``.
+
+        Parameters:
+            objects (str/obj/list): Transforms to triage.  ``None`` (default)
+                sweeps every transform in the scene.
+            prefix (str): Bake-attr prefix used by ``store_transforms``.
+            dry_run (bool): Classify and report only — no scene writes.
+            clear_stale (bool): Also delete the bake attrs of ``stale`` and
+                ``degenerate`` nodes (their channels are left untouched —
+                a skipped freeze never zeroed them, so they are already
+                correct).  Explicit opt-in because it discards history.
+            tolerance (float): Channel-identity tolerance for ``frozen``.
+
+        Returns:
+            dict: ``{"frozen": [...], "stale": [...], "degenerate": [...],
+            "restored": [...], "cleared": [...]}`` (long names).
+        """
+        t_attr, r_attr, s_attr = _XformUtilsInternal._bake_attr_names(prefix)
+        if objects is None:
+            pool = cmds.ls(type="transform", long=True) or []
+        else:
+            pool = (
+                cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True)
+                or []
+            )
+
+        result = {
+            "frozen": [],
+            "stale": [],
+            "degenerate": [],
+            "restored": [],
+            "cleared": [],
+        }
+        for obj in pool:
+            if not any(
+                cmds.attributeQuery(a, node=obj, exists=True)
+                for a in (t_attr, r_attr, s_attr)
+            ):
+                continue
+
+            degenerate = False
+            if cmds.attributeQuery(s_attr, node=obj, exists=True):
+                stored_s = _XformUtilsInternal._read_bake_s(obj, s_attr)
+                degenerate = any(
+                    (not math.isfinite(v)) or abs(v) < 1e-6 for v in stored_s
+                )
+            if not degenerate and cmds.attributeQuery(t_attr, node=obj, exists=True):
+                stored_t = _XformUtilsInternal._read_bake_t(obj, t_attr)
+                degenerate = any(
+                    not math.isfinite(v) for v in (stored_t.x, stored_t.y, stored_t.z)
+                )
+            if degenerate:
+                result["degenerate"].append(obj)
+                continue
+
+            t = cmds.getAttr(f"{obj}.translate")[0]
+            r = cmds.getAttr(f"{obj}.rotate")[0]
+            s = cmds.getAttr(f"{obj}.scale")[0]
+            identity = (
+                all(abs(v) < tolerance for v in t)
+                and all(abs(v) < tolerance for v in r)
+                and all(abs(v - 1.0) < tolerance for v in s)
+            )
+            result["frozen" if identity else "stale"].append(obj)
+
+        if not dry_run:
+            if result["frozen"]:
+                result["restored"] = cls.restore_transforms(
+                    result["frozen"], prefix=prefix
+                )
+            if clear_stale and (result["stale"] or result["degenerate"]):
+                result["cleared"] = cls.clear_stored_transforms(
+                    result["stale"] + result["degenerate"], prefix=prefix
+                )
+
+        print(
+            "repair_stored_transforms: "
+            f"{len(result['frozen'])} frozen (trustworthy), "
+            f"{len(result['stale'])} stale, "
+            f"{len(result['degenerate'])} degenerate — "
+            f"{len(result['restored'])} restored, {len(result['cleared'])} cleared"
+            f"{' [dry run]' if dry_run else ''}."
+        )
+        return result
 
     @staticmethod
     def has_stored_transforms(objects, prefix="original"):

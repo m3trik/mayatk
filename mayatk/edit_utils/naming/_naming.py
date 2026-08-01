@@ -5,7 +5,7 @@ try:
 except ImportError:
     cmds = None
 
-from typing import List, Union, Optional, Dict
+from typing import List, Union, Optional, Dict, Tuple
 import re
 import string
 
@@ -31,6 +31,7 @@ class Naming(ptk.HelpMixin):
         ignore_case: bool = False,
         retain_suffix: bool = False,
         valid_suffixes: Optional[List[str]] = None,
+        collapse_padding: bool = True,
     ) -> List[str]:
         """Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's naming conventions.
 
@@ -55,6 +56,11 @@ class Naming(ptk.HelpMixin):
             retain_suffix (bool): If True, append the original object's suffix (e.g., _GEO) to the new name unless already present.
             valid_suffixes (Optional[List[str]]): List of valid suffixes to retain. If provided, only these suffixes will be retained.
                 If None, any suffix (text after last underscore) will be retained. Default is None.
+            collapse_padding (bool): Collapse runs of 2+ underscores in the result and strip
+                trailing ones — the separator residue strip/replace formatting leaves behind
+                (removing a token from 'a__tok__tokB' yields 'a____B' -> 'a_B'). Skipped
+                automatically when the 'to' pattern itself contains '__'. Pass False to
+                preserve every underscore run in names the operation touches.
 
         Returns:
             list[str]: The new names of the renamed objects (parallel to ``objects``).
@@ -171,6 +177,15 @@ class Naming(ptk.HelpMixin):
             # Strip illegal characters from newName
             newName = cls.strip_illegal_chars(newName)
 
+            # Collapse the separator residue that strip/replace formatting
+            # leaves behind (removing a token from 'a__tok__tokB' yields
+            # 'a____B'). An explicit '__' typed in the pattern is honored.
+            # Mirrors blendertk's Naming.rename.
+            if collapse_padding and "__" not in to:
+                collapsed = ptk.collapse_delimiter_runs(newName)
+                if collapsed:
+                    newName = collapsed
+
             # Map short name to the object for renaming
             # Using the object reference instead of cached paths prevents issues
             # when earlier renames in the batch change the hierarchy
@@ -233,6 +248,80 @@ class Naming(ptk.HelpMixin):
             if not cmds.objExists(new_name_clean):
                 return new_name_clean
             counter += 1
+
+    @classmethod
+    @CoreUtils.undoable
+    def conform_shape_names(
+        cls,
+        objects: Union[str, "object", List[Union[str, "object"]], None] = None,
+        force: bool = False,
+    ) -> List[Tuple[str, str]]:
+        """Rename shape nodes to Maya's conventional ``<transform>Shape`` form.
+
+        Maya only auto-renames a shape alongside its transform when the
+        shape is uniquely parented and already follows the convention — a
+        shared (instanced) shape, or one carrying an imported/scratch name,
+        keeps its stale name forever and spreads it to every instance path.
+        This conforms each shape to ``<parentBase>Shape<parentDigits>``
+        (Maya's own spelling: ``vdat1`` → ``vdatShape1``), with ``Orig``
+        appended for intermediate shapes.  Instanced shapes are renamed
+        once, via their first instance parent.
+
+        Parameters:
+            objects: Transforms (or shapes) to conform.  None conforms
+                every shape in the scene.
+            force: Also re-derive names that already conform (e.g. after
+                re-parenting under a differently named transform).
+
+        Returns:
+            list[tuple[str, str]]: ``(old_leaf, new_leaf)`` per rename.
+        """
+        if objects is None:
+            shapes = cmds.ls(shapes=True, long=True) or []
+        else:
+            objs = cmds.ls(CoreUtils.as_strings(objects), long=True) or []
+            if not objs:  # listRelatives([]) would fall back to the selection
+                return []
+            shapes = [o for o in objs if cmds.ls(o, shapes=True)]
+            shapes += (
+                cmds.listRelatives(
+                    objs, allDescendents=True, fullPath=True, type="shape"
+                )
+                or []
+            )
+
+        pairs = []
+        seen = set()
+        for shape in shapes:
+            uuid = (cmds.ls(shape, uuid=True) or [None])[0]
+            if not uuid or uuid in seen:
+                continue
+            seen.add(uuid)
+            # Re-resolve — an earlier rename in this batch never changes an
+            # ancestor path (only leaves are renamed), but resolving via the
+            # UUID keeps the path authoritative regardless.
+            path = (cmds.ls(uuid, long=True) or [shape])[0]
+            leaf = path.split("|")[-1].split(":")[-1]
+            parents = cmds.listRelatives(path, allParents=True, fullPath=True) or []
+            if not parents:
+                continue
+            parent_leaf = parents[0].split("|")[-1].split(":")[-1]
+            base = re.sub(r"\d+$", "", parent_leaf)
+            digits = parent_leaf[len(base) :]
+            want = f"{base}Shape{digits}" + (
+                "Orig" if NodeUtils.is_intermediate(path) else ""
+            )
+            # Already conforming (allowing Maya's clash-digit suffix)?
+            if not force and re.fullmatch(
+                re.escape(base) + r"Shape\d*(Orig)?\d*", leaf
+            ):
+                continue
+            try:
+                renamed = cmds.rename(path, want)
+                pairs.append((leaf, str(renamed).split("|")[-1]))
+            except RuntimeError as e:
+                cmds.warning(f"Could not conform shape '{leaf}': {e}")
+        return pairs
 
     @staticmethod
     def strip_illegal_chars(input_data, replace_with="_"):
