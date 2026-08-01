@@ -2071,39 +2071,6 @@ Maya Connection Module
   - `TaskManager.task_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the task definitions for the UI.
   - `TaskManager.check_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the check definitions for the UI.
   - `TaskManager.definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return all definitions combined for backward compatibility.
-  - `TaskManager.set_workspace(self, enable=True)` — Switch to the workspace matching the scene path for the export.
-  - `TaskManager.set_linear_unit(self, linear_unit)` — Set Maya's working linear unit for the export.
-  - `TaskManager.conform_shape_names(self)` — Rename export-set shape nodes to ``<transform>Shape`` form.
-  - `TaskManager.convert_to_relative_paths(self)` — Copy external textures into sourceimages, then convert paths to relative.
-  - `TaskManager.reassign_duplicate_materials(self)` — Reassign duplicate materials in the scene.
-  - `TaskManager.resolve_invalid_texture_paths(self)` — Attempt to resolve missing texture paths via a gated sourceimages hunt.
-  - `TaskManager.smart_bake(self)` — Pre-bake constrained and driven channels before export.
-  - `TaskManager.optimize_keys(self)` — Optimize baked animation keys.
-  - `TaskManager.set_bake_animation_range(self)` — Set the animation export range to the first and last keyframes of the specified objects if baking i…
-  - `TaskManager.tie_all_keyframes(self)` — Use AnimUtils to tie all keyframes for the specified objects.
-  - `TaskManager.snap_keys_to_frame(self)` — Snap all keyframes to the nearest whole frame.
-  - `TaskManager.create_glb(self, fbx_path: Optional[str] = None, announce: bool = True)` — Convert an exported FBX to a GLB sidecar via pythontk's MeshConvert.
-  - `TaskManager.export_data_node(self)` — Include the shared ``data_export`` carrier in the export (default on).
-  - `TaskManager.apply_declared_takes(self)` — Export each declared take as a named Unity clip.
-  - `TaskManager.check_geometry_lod_suffix(self) -> tuple` — Check for geometry whose names end with '_LOD' or '_LOD' followed by digits.
-  - `TaskManager.ignore_groups(self, names: str) -> None` — Exclude top-level groups matching *names* (case-insensitive) and all
-  - `TaskManager.exclude_hdr(self) -> None` — Remove Arnold HDR environment lights (``aiSkyDomeLight``) from the export set.
-  - `TaskManager.check_root_default_transforms(self) -> tuple` — Check if all root group nodes have default transforms.
-  - `TaskManager.check_absolute_paths(self) -> tuple` — Check for stored-absolute (or project-escaping) texture paths.
-  - `TaskManager.check_valid_paths(self) -> tuple` — Check that every export texture and scene reference resolves on disk.
-  - `TaskManager.check_texture_file_size(self, max_size_mb: Optional[float] = 16.0) -> tuple` — Check that no export texture exceeds a maximum on-disk file size.
-  - `TaskManager.check_mangled_names(self) -> tuple` — Check the export set (including shapes) for scratch/mangled names.
-  - `TaskManager.check_duplicate_locator_names(self) -> tuple` — Check for duplicate locator short names among the specified objects.
-  - `TaskManager.check_duplicate_materials(self) -> tuple` — Check if any duplicate materials are present in the scene.
-  - `TaskManager.check_referenced_objects(self) -> tuple` — Check if any referenced objects are present in the scene.
-  - `TaskManager.check_framerate(self, target_framerate: Optional[str]) -> tuple` — Check if the scene's current framerate matches the target framerate.
-  - `TaskManager.check_objects_below_floor(self, tolerance: float = _DEFAULT_FLOOR_TOLERANCE) -> tuple` — Check if any object's geometry is below the floor plane (Y=0).
-  - `TaskManager.check_overlapping_duplicate_mesh(self) -> tuple` — Check for duplicate overlapping geometry among the export objects.
-  - `TaskManager.check_hidden_geometry(self) -> tuple` — Check for geometry that will ship in the FBX while hidden.
-  - `TaskManager.check_untied_keyframes(self) -> tuple` — Check if there are any untied keyframes on the specified objects.
-  - `TaskManager.check_floating_point_keys(self) -> tuple` — Check if there are any floating point keyframes on the specified objects.
-  - `TaskManager.write_scene_data_sidecar(self) -> None` — Write the sidecar JSON recording what shipped in the export.
-  - `TaskManager.check_hierarchy_vs_existing_fbx(self) -> tuple` — Check export objects against the hierarchy manifest of the previous export.
 
 <a id="env_utils--script_output"></a>
 ### `env_utils/script_output.py`
@@ -2332,7 +2299,6 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
   - `MatUtils.convert_bump_to_normal(bump_file_node, output_path: Optional[str] = None, intensity: float = 1.0, format_type: str = 'opengl', create_file_node: bool = True, node_name: Optional[str] = None) -> Optional[str]` *(static)* — Convert a bump/height file node's texture to a normal map on disk.
   - `MatUtils.validate_normal_map_setup(normal_file_node, material=None) -> Dict[str, Any]` *(static)* — Validate normal map file node setup and provide recommendations.
   - `MatUtils.graph_materials(materials: Union[str, List[str], object], mode: str = 'showUpAndDownstream') -> None` *(static)* — Open the Hypershade and graph the specified materials.
-  - `MatUtils.get_texture_file_node(material, attr_name, _depth=0)` *(static)* — Locate the file texture node feeding a material attribute.
 
 <a id="mat_utils--arnold_bridge"></a>
 ### `mat_utils/arnold_bridge.py`
@@ -3620,27 +3586,6 @@ Matrix utilities for Maya rigging and animation.
 - **[`class Matrices(_MatrixMath, _DagTransforms, _NodeBuilders, ptk.HelpMixin, _MatricesInternal)`](mayatk/mayatk/xform_utils/matrices.py#L878)** — Matrix utilities for Maya rigging and animation.
   - `Matrices.get_matrix(node: str, attr: str = 'worldMatrix', index: int = 0) -> List[float]` *(static)* — Return a 16-element flat list for a matrix attribute on *node*.
   - `Matrices.set_matrix(node: str, attr: str, value, index: int = 0) -> None` *(static)* — Set a matrix attribute on *node* from an MMatrix or 16-element iterable.
-  - `Matrices.identity() -> 'MMatrix'` *(static)* — Return a 4x4 identity matrix.
-  - `Matrices.to_mmatrix(matrix_like: Union[str, 'MMatrix', list]) -> 'MMatrix'` *(static)* — Convert various matrix representations to MMatrix.
-  - `Matrices.local_matrix(node: str) -> 'MMatrix'` *(static)* — Get a transform's local matrix as MMatrix.
-  - `Matrices.from_srt(translate: Iterable[float] = (0.0, 0.0, 0.0), rotate_euler_deg: Iterable[float] = (0.0, 0.0, 0.0), scale: Iterable[float] = (1.0, 1.0, 1.0), rotate_order: str = 'xyz') -> 'MMatrix'` *(static)* — Compose an MMatrix from separate scale, rotation, and translation components.
-  - `Matrices.decompose(m: 'MMatrix', rotate_order: str = 'xyz') -> Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[float, float, float]]` *(static)* — Decompose an MMatrix into translation, rotation (degrees), and scale components.
-  - `Matrices.inverse(m: 'MMatrix') -> 'MMatrix'` *(static)* — Calculate the inverse of a matrix.
-  - `Matrices.safe_inverse(m: 'MMatrix', tolerance: float = 1e-12) -> Optional['MMatrix']` *(static)* — Inverse of *m*, or None when it is singular or non-finite.
-  - `Matrices.mult(*mats: 'MMatrix') -> 'MMatrix'` *(static)* — Multiply matrices right-to-left.
-  - `Matrices.world_to_local(world_matrix: 'MMatrix', parent_world_matrix: 'MMatrix') -> 'MMatrix'` *(static)* — Convert a world-space matrix to local space relative to a parent.
-  - `Matrices.local_to_world(local_matrix: 'MMatrix', parent_world_matrix: 'MMatrix') -> 'MMatrix'` *(static)* — Convert a local-space matrix to world space.
-  - `Matrices.extract_translation(m: 'MMatrix') -> Tuple[float, float, float]` *(static)* — Extract just the translation component from a matrix.
-  - `Matrices.is_identity(m: 'MMatrix', tolerance: float = 1e-09) -> bool` *(static)* — Check if a matrix is approximately equal to the identity matrix.
-  - `Matrices.set_offset_parent_matrix(node: str, m: 'MMatrix') -> None` *(static)* — Apply a matrix to a node's offsetParentMatrix attribute.
-  - `Matrices.bake_world_matrix_to_transform(node: str, m: Union['MMatrix', list], reset_offset_parent_matrix: bool = True) -> None` *(static)* — Set a node's translate, rotate, and scale so its worldMatrix matches the given matrix.
-  - `Matrices.freeze_to_offset_parent_matrix(node: str) -> None` *(static)* — Zero a node's translate, rotate, and scale by baking current world transform into offsetParentMatri…
-  - `Matrices.ensure_node(node_type: str, name: Optional[str] = None) -> str` *(static)* — Create a node of the specified type.
-  - `Matrices.build_mult_matrix_chain(mats: List[str], name: str = 'mmx_chain') -> Tuple[str, str]` *(static)* — Create a multMatrix node chain that multiplies matrices and decomposes the result.
-  - `Matrices.drive_with_offset_parent_matrix(driver_world: str, driven_ctl: str, name: str = 'drive_opm') -> str` *(static)* — Drive a control's offsetParentMatrix from another transform's world matrix.
-  - `Matrices.build_space_switch(control: str, space_parents: List[str], attr_owner: Optional[str] = None, attr_name: str = 'space', name: str = 'space_switch') -> str` *(static)* — Create a multi-space switch system using blendMatrix.
-  - `Matrices.build_aim_matrix(source: str, target: str, up_object: Optional[str] = None, primary_axis: Tuple[float, float, float] = (1.0, 0.0, 0.0), secondary_axis: Tuple[float, float, float] = (0.0, 1.0, 0.0), secondary_mode: str = 'align', name: str = 'aim_mx') -> str` *(static)* — Create a node-based aim constraint using aimMatrix.
-  - `Matrices.build_ikfk_blend(ik_mx_attr: str, fk_mx_attr: str, parent_inv_attr: str, out_target_ctl: str, switch_attr_owner: str, switch_attr: str = 'ikFk', name: str = 'ikfk_blend') -> str` *(static)* — Create an IK/FK blend system using blendMatrix in local space.
 
 <a id="xform_utils--pivot_watcher"></a>
 ### `xform_utils/pivot_watcher.py`
